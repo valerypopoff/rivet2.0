@@ -80,7 +80,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         id: 'state' as PortId,
         title: 'State',
         dataType: ['string', 'object', 'object[]', 'any', 'any[]'],
-        required: true,
+        required: false,
         splitRunBehavior: 'preserve-array',
       },
     ];
@@ -271,7 +271,8 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       inputs,
       providerId: provider.id,
     });
-    const state = inputs['state' as PortId]?.value;
+    const stateInput = inputs['state' as PortId];
+    const state = stateInput === undefined ? '' : stateInput.value;
     assertClassifierState(state);
     const modelValue = this.data.useModelInput
       ? inputs['model' as PortId]?.value

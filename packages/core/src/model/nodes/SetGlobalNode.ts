@@ -71,15 +71,17 @@ export class SetGlobalNodeImpl extends NodeImpl<SetGlobalNode> {
   }
 
   getOutputDefinitions(): NodeOutputDefinition[] {
+    const { id, useIdInput } = this.data;
+    const fixedId = !useIdInput && typeof id === 'string' && id.trim() ? id : undefined;
     return [
       {
         id: 'saved-value' as PortId,
-        title: 'Value',
+        title: fixedId ?? 'Value',
         dataType: this.data.dataType,
       },
       {
         id: 'previous-value' as PortId,
-        title: 'Previous Value',
+        title: fixedId ? `Prev value of: ${fixedId}` : 'Previous Value',
         dataType: this.data.dataType,
       },
       {
@@ -110,7 +112,7 @@ export class SetGlobalNodeImpl extends NodeImpl<SetGlobalNode> {
 
   getBody(): string | NodeBodySpec | undefined {
     return dedent`
-      ${this.data.id}
+      ${this.data.useIdInput ? '(ID from input)' : this.data.id}
       Type: ${this.data.dataType}
     `;
   }

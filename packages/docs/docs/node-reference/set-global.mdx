@@ -43,10 +43,13 @@ Interpolation-capable nodes can read the current value directly with `{{@globals
 
 ## Outputs
 
-| Title          | Data Type | Description                                                             | Notes                                                                                                                       |
-| -------------- | --------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Value          | Any       | The value that was set as the global value.                             | The output will be of the same data type as the `Value` input.                                                              |
-| Previous Value | Any       | The previous value of the global variable before the new value was set. | If the ID comes from the input port, the previous value is read from that supplied ID. If there was no previous value, Rivet returns the selected data type's default value. |
+| Title | Data Type | Description | Notes |
+| ----- | --------- | ----------- | ----- |
+| `<variable ID>` (or `Value` when input-driven) | Any | The value that was set as the global value. | A fixed ID such as `Foobar` appears as `Foobar`. The output uses the same data type as the `Value` input. |
+| `Prev value of: <variable ID>` (or `Previous Value` when input-driven) | Any | The previous value of the global variable before the new value was set. | A fixed ID such as `Foobar` appears as `Prev value of: Foobar`. If there was no previous value, Rivet returns the selected data type's default value. |
+| Variable ID | `string` | The variable ID that was set. | Useful when the ID is supplied through the input port. |
+
+The displayed output titles follow a fixed ID when you edit it. Existing wires stay attached because the ports keep their saved IDs. When the ID comes from the input port, the output titles remain `Value` and `Previous Value` and the node body says `ID from input`, because the runtime ID is not known in the editor.
 
 </TabItem>
 
@@ -68,7 +71,7 @@ Interpolation-capable nodes can read the current value directly with `{{@globals
 1. Create a [Text Node](./text.mdx) and set the value to `Hello, World!`.
 2. Create a Set Global Node and set the ID to `greeting`.
 3. Connect the Text Node to the `Value` input of the Set Global Node.
-4. Run the graph. The `Value` output of the Set Global Node should contain the value `Hello, World!`.
+4. Run the graph. The `greeting` output of the Set Global Node should contain the value `Hello, World!`.
 
 ![Set Global Node Example 1](./assets/set-global-node-example-01.png)
 

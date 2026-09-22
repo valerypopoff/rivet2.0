@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { GetGlobalNodeImpl, type Inputs, type InternalProcessContext } from '../../../src/index.js';
+import { GetGlobalNodeImpl, type Inputs, type InternalProcessContext, type NodeConnection } from '../../../src/index.js';
+import { deserializeConnection, serializeConnection } from '../../../src/utils/serialization/serializationHelpers.js';
 
 describe('GetGlobalNode', () => {
   it('waits by default instead of returning an on-demand function', () => {
@@ -70,6 +71,36 @@ describe('GetGlobalNode', () => {
         dataType: 'string',
       },
     ]);
+  });
+
+  it('labels a fixed value output with its variable ID without changing saved connection IDs', () => {
+    const source = GetGlobalNodeImpl.create();
+    source.data.id = 'Foobar';
+    const target = GetGlobalNodeImpl.create();
+    target.data.useIdInput = true;
+    const connection: NodeConnection = {
+      outputNodeId: source.id,
+      outputId: 'value' as NodeConnection['outputId'],
+      inputNodeId: target.id,
+      inputId: 'id' as NodeConnection['inputId'],
+    };
+    const restoredConnection = deserializeConnection(serializeConnection(connection, [source, target]), source.id);
+
+    assert.deepEqual(restoredConnection, connection);
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.title, 'Foobar');
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.id, restoredConnection.outputId);
+
+    source.data.id = 'Renamed';
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.title, 'Renamed');
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.id, restoredConnection.outputId);
+
+    source.data.useIdInput = true;
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.title, 'Value');
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.id, restoredConnection.outputId);
+
+    source.data.useIdInput = false;
+    source.data.id = ' ';
+    assert.equal(new GetGlobalNodeImpl(source).getOutputDefinitions()[0]?.title, 'Value');
   });
 
   it('uses one searchable Variable ID editor with the existing input-port toggle', () => {
