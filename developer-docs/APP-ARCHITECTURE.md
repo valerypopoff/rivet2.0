@@ -765,10 +765,11 @@ not show a misleading `...` at the right edge of the body.
 Markdown body previews should avoid formatting-only blank lines. The app overrides `PromptNode`
 with [`packages/app/src/components/nodes/PromptNode.tsx`](../packages/app/src/components/nodes/PromptNode.tsx)
 so its role label and prompt preview live in one compact DOM block with no spacer line while
-preserving user-authored blank prompt lines; that custom prompt preview uses a lightweight inline
-interpolation-token highlighter instead of Monaco colorization, because Monaco preserves code spaces
-in a way that prevents normal word wrapping. Empty prompt lines render as real line boxes so blank
-lines in the middle of a prompt remain visible in the card preview.
+preserving internal blank prompt lines. The prompt preview now uses the same
+`ColorizedNodeBody` and `prompt-interpolation-markdown` Monaco theme as Text, so Markdown syntax
+and interpolation tokens receive matching colors. The shared colorized renderer normalizes Monaco's
+non-breaking spaces for normal word wrapping, and Prompt uses the same bounded text preview helper
+as Text. Keep the role and colorized preview in one block without a Markdown-renderer spacer.
 `ToolNode` renders a `Name:` field with a muted label, then a separator and a
 description using the same clipped, colorized prompt preview as Text nodes.
 Its render tests exercise the actual component markup, escaping, and clipping;

@@ -5,6 +5,7 @@ export * from './nodes/UserInputNode.js';
 
 import { textNode } from './nodes/TextNode.js';
 export * from './nodes/TextNode.js';
+export { buildNodeBodyPreview } from './nodes/nodeBodyPreview.js';
 
 import { chatNode } from './nodes/ChatNode.js';
 export * from './nodes/ChatNode.js';

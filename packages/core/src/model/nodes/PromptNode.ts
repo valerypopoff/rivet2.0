@@ -23,6 +23,7 @@ import { getInputOrData } from '../../utils/index.js';
 import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
 import { match } from 'ts-pattern';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
+import { buildNodeBodyPreview } from './nodeBodyPreview.js';
 
 export type PromptNode = ChartNode<'prompt', PromptNodeData>;
 
@@ -214,7 +215,7 @@ export class PromptNodeImpl extends NodeImpl<PromptNode> {
       },
       {
         type: 'colorized',
-        text: this.data.promptText.split('\n').slice(0, 15).join('\n').trim(),
+        text: buildNodeBodyPreview(this.data.promptText),
         language: 'prompt-interpolation-markdown',
         theme: 'prompt-interpolation',
       },

@@ -34,6 +34,22 @@ describe('PromptNode', () => {
     },
   } as InternalProcessContext;
 
+  it('uses the same bounded colorized Markdown preview as Text', () => {
+    const promptText = `# Heading\n\nUse **bold** and {{name}}.\n${'long '.repeat(80)}\n${'hidden\n'.repeat(20)}`;
+    const body = createNode({ promptText }).getBody();
+
+    assert.ok(Array.isArray(body));
+    assert.deepEqual(body[0], { type: 'markdown', text: '_User_' });
+    const preview = body[1];
+    assert.ok(preview?.type === 'colorized');
+    assert.equal(preview.language, 'prompt-interpolation-markdown');
+    assert.equal(preview.theme, 'prompt-interpolation');
+    assert.match(preview.text, /^# Heading\n\nUse \*\*bold\*\* and \{\{name\}\}\./);
+    assert.ok(preview.text.length <= 3_000);
+    assert.equal((preview.text.match(/hidden/g) ?? []).length, 11);
+    assert.match(preview.text, /\.\.\.$/);
+  });
+
   it('interpolates connected prompt text values without reparsing braces in values', async () => {
     const node = createNode({
       promptText: 'Prompt: {{input}}',
