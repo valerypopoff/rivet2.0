@@ -46,22 +46,9 @@ import { fields } from '../settingsPageStyles.js';
 import { LabeledToggle } from '../../LabeledToggle.js';
 import { FieldHelperMessage } from '../../FieldHelperMessage.js';
 import { SegmentedEditor } from '../../editors/SegmentedEditor.js';
-import { TripleBarColorPicker } from '../../TripleBarColorPicker.js';
+import { CompactColorPicker } from '../../CompactColorPicker.js';
 
 const uiSettingsPageStyles = css`
-  .settings-color-picker {
-    background: var(--grey-darker);
-    border: 1px solid var(--grey-darkish);
-    border-radius: 8px;
-    corner-shape: squircle;
-    max-width: 260px;
-    padding: 10px;
-
-    @supports not (corner-shape: squircle) {
-      border-radius: 4px;
-    }
-  }
-
   .custom-theme-color-pickers {
     display: flex;
     flex-wrap: wrap;
@@ -70,12 +57,7 @@ const uiSettingsPageStyles = css`
   }
 
   .custom-theme-color-pickers > * {
-    flex: 0 1 260px;
-    min-width: min(100%, 220px);
-  }
-
-  .custom-theme-color-pickers .settings-color-picker {
-    width: 100%;
+    flex: 0 1 180px;
   }
 `;
 
@@ -126,40 +108,38 @@ export const UiSettingsPage: FC = () => {
             <div className="custom-theme-color-pickers">
               <Field name="customThemePrimaryColor" label="Custom primary color">
                 {() => (
-                  <div className="settings-color-picker">
-                    <TripleBarColorPicker
-                      color={normalizedCustomThemePrimaryColor}
-                      onChange={(newColor) => {
-                        setCustomThemePrimaryColor(
-                          formatCustomThemePrimaryColor({
-                            r: newColor.rgb.r,
-                            g: newColor.rgb.g,
-                            b: newColor.rgb.b,
-                            a: newColor.rgb.a ?? 1,
-                          }),
-                        );
-                      }}
-                    />
-                  </div>
+                  <CompactColorPicker
+                    label="Choose custom primary color"
+                    color={normalizedCustomThemePrimaryColor}
+                    onChange={(newColor) => {
+                      setCustomThemePrimaryColor(
+                        formatCustomThemePrimaryColor({
+                          r: newColor.rgb.r,
+                          g: newColor.rgb.g,
+                          b: newColor.rgb.b,
+                          a: newColor.rgb.a ?? 1,
+                        }),
+                      );
+                    }}
+                  />
                 )}
               </Field>
               <Field name="customThemeSecondaryColor" label="Custom secondary color">
                 {() => (
-                  <div className="settings-color-picker">
-                    <TripleBarColorPicker
-                      color={normalizedCustomThemeSecondaryColor}
-                      onChange={(newColor) => {
-                        setCustomThemeSecondaryColor(
-                          formatCustomThemeSecondaryColor({
-                            r: newColor.rgb.r,
-                            g: newColor.rgb.g,
-                            b: newColor.rgb.b,
-                            a: newColor.rgb.a ?? 1,
-                          }),
-                        );
-                      }}
-                    />
-                  </div>
+                  <CompactColorPicker
+                    label="Choose custom secondary color"
+                    color={normalizedCustomThemeSecondaryColor}
+                    onChange={(newColor) => {
+                      setCustomThemeSecondaryColor(
+                        formatCustomThemeSecondaryColor({
+                          r: newColor.rgb.r,
+                          g: newColor.rgb.g,
+                          b: newColor.rgb.b,
+                          a: newColor.rgb.a ?? 1,
+                        }),
+                      );
+                    }}
+                  />
                 )}
               </Field>
             </div>
@@ -212,21 +192,20 @@ export const UiSettingsPage: FC = () => {
           {normalizedCanvasBackgroundColorMode === 'custom' && (
             <Field name="canvasCustomColor" label="Custom canvas color">
               {() => (
-                <div className="settings-color-picker">
-                  <TripleBarColorPicker
-                    color={normalizedCanvasBackgroundCustomColor}
-                    onChange={(newColor) => {
-                      setCanvasBackgroundCustomColor(
-                        formatCanvasBackgroundCustomColor({
-                          r: newColor.rgb.r,
-                          g: newColor.rgb.g,
-                          b: newColor.rgb.b,
-                          a: newColor.rgb.a ?? 1,
-                        }),
-                      );
-                    }}
-                  />
-                </div>
+                <CompactColorPicker
+                  label="Choose custom canvas color"
+                  color={normalizedCanvasBackgroundCustomColor}
+                  onChange={(newColor) => {
+                    setCanvasBackgroundCustomColor(
+                      formatCanvasBackgroundCustomColor({
+                        r: newColor.rgb.r,
+                        g: newColor.rgb.g,
+                        b: newColor.rgb.b,
+                        a: newColor.rgb.a ?? 1,
+                      }),
+                    );
+                  }}
+                />
               )}
             </Field>
           )}
