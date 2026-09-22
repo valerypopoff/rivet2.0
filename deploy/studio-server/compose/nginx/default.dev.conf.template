@@ -37,6 +37,10 @@ server {
     set $executor_internal_upstream http://executor:21889/internal;
     set $executor_upstream http://executor:21889/;
 
+    # Private API routes are reachable through the API service, never the public proxy.
+    location = /internal { return 404; }
+    location ^~ /internal/ { return 404; }
+
     location / {
         auth_request /__rivet_ui_auth_check;
 

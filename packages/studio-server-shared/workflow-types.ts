@@ -1,4 +1,5 @@
 export type WorkflowProjectStatus = 'unpublished' | 'published' | 'unpublished_changes';
+export type WorkflowEndpointAccess = 'public' | 'internal';
 export type WorkflowProjectDownloadVersion = 'live' | 'published';
 
 export const WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH = 240;
@@ -101,13 +102,19 @@ export type WorkflowProjectSettings = {
   status: WorkflowProjectStatus;
   publicationStatus?: WorkflowProjectStatus;
   endpointName: string;
+  publishedEndpointName?: string;
+  endpointAccess?: WorkflowEndpointAccess;
   lastPublishedAt: string | null;
   publishedWebApps: WorkflowPublishedWebAppSummary[];
 };
 
 export type WorkflowProjectSettingsDraft = {
   endpointName: string;
+  expectedRevisionId?: string;
 };
+
+export const WORKFLOW_PUBLICATION_CONFLICT_MESSAGE =
+  'Publishing failed because the project changed. Click Publish/Update again to publish the latest saved version.';
 
 export type WorkflowPublishedWebAppSummary = {
   uiGraphId: string;

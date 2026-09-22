@@ -85,6 +85,7 @@ import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-serv
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
 export const latestWorkflowsRouter = Router();
+export const internalLatestWorkflowsRouter = Router();
 export const publishedWebAppsRouter = Router();
 export const latestWebAppsRouter = Router();
 
@@ -1725,7 +1726,7 @@ async function executeWorkflowEndpoint(
 async function handlePublishedWorkflowRequest(
   req: Request,
   res: Response,
-  options: { requireApiKey: boolean },
+  options: { internalRoute: boolean },
 ): Promise<void> {
   const requestStartedAt = performance.now();
 
@@ -1734,14 +1735,10 @@ async function handlePublishedWorkflowRequest(
     if (!endpointName) {
       throw badRequest('Endpoint name is required');
     }
-    if (options.requireApiKey) {
-      // Only the immutable published route recognizes the short-lived capacity
-      // capability. Latest execution keeps requiring the normal operator key.
-      requirePublishedWorkflowApiKey(req, { capacityEndpointName: endpointName });
-    }
-
-    const executionProject = await resolvePublishedExecutionProject(endpointName);
-    if (!executionProject) {
+    // Public access must reflect the committed policy even before another replica
+    // receives its asynchronous cache invalidation notification.
+    const executionProject = await resolvePublishedExecutionProject(endpointName, !options.internalRoute);
+    if (!executionProject || (!options.internalRoute && executionProject.endpointAccess === 'internal')) {
       sendJsonWithDuration(res, 404, { error: 'Published workflow not found' }, requestStartedAt);
       return;
     }
@@ -1769,7 +1766,7 @@ publishedWorkflowsRouter.post(
   authorizePublishedWorkflowBeforeBody,
   createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
   asyncHandler(async (req, res) => {
-    await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
+    await handlePublishedWorkflowRequest(req, res, { internalRoute: false });
   }),
 );
 
@@ -1777,44 +1774,52 @@ internalPublishedWorkflowsRouter.post(
   '/:endpointName',
   createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
   asyncHandler(async (req, res) => {
-    await handlePublishedWorkflowRequest(req, res, { requireApiKey: false });
+    await handlePublishedWorkflowRequest(req, res, { internalRoute: true });
   }),
 );
+
+async function handleLatestWorkflowRequest(req: Request, res: Response, internalRoute: boolean): Promise<void> {
+  const requestStartedAt = performance.now();
+
+  try {
+    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+    if (!endpointName) {
+      throw badRequest('Endpoint name is required');
+    }
+
+    const executionProject = await resolveLatestExecutionProject(endpointName, !internalRoute);
+    if (!executionProject || (!internalRoute && executionProject.endpointAccess === 'internal')) {
+      sendJsonWithDuration(res, 404, { error: 'Latest workflow not found' }, requestStartedAt);
+      return;
+    }
+
+    const activeExecution = registerActiveHttpExecution();
+    try {
+      await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
+        abortSignal: activeExecution.signal,
+        enableRemoteDebugger: true,
+        endpointName,
+        runKind: 'latest',
+      });
+    } finally {
+      activeExecution.release();
+    }
+  } catch (error) {
+    sendWorkflowErrorWithDuration(res, error, requestStartedAt);
+  }
+}
 
 latestWorkflowsRouter.post(
   '/:endpointName',
   authorizeLatestWorkflowBeforeBody,
   createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
-  asyncHandler(async (req, res) => {
-    const requestStartedAt = performance.now();
+  asyncHandler(async (req, res) => handleLatestWorkflowRequest(req, res, false)),
+);
 
-    try {
-      const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
-      if (!endpointName) {
-        throw badRequest('Endpoint name is required');
-      }
-
-      const executionProject = await resolveLatestExecutionProject(endpointName);
-      if (!executionProject) {
-        sendJsonWithDuration(res, 404, { error: 'Latest workflow not found' }, requestStartedAt);
-        return;
-      }
-
-      const activeExecution = registerActiveHttpExecution();
-      try {
-        await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
-          abortSignal: activeExecution.signal,
-          enableRemoteDebugger: true,
-          endpointName,
-          runKind: 'latest',
-        });
-      } finally {
-        activeExecution.release();
-      }
-    } catch (error) {
-      sendWorkflowErrorWithDuration(res, error, requestStartedAt);
-    }
-  }),
+internalLatestWorkflowsRouter.post(
+  '/:endpointName',
+  createJsonBodyParser(() => WORKFLOW_JSON_BODY_LIMIT_BYTES),
+  asyncHandler(async (req, res) => handleLatestWorkflowRequest(req, res, true)),
 );
 
 async function handleWebAppHtmlRequest(req: Request, res: Response, routeKind: WebAppRouteKind): Promise<void> {

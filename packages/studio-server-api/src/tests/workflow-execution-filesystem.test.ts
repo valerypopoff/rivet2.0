@@ -153,6 +153,38 @@ test('workflow request headers context is normalized to a safe string object', (
   assert.ok(Object.values(headers).every((value) => typeof value === 'string'));
 });
 
+test('internal endpoint access blocks both public routes while retaining private published and draft routes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Network Access');
+  await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+    endpointName: 'network-access',
+  });
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
+    const post = (baseUrl: string) => fetch(`${baseUrl}/network-access`, { method: 'POST' });
+    assert.equal((await post(publishedBaseUrl)).status, 200);
+
+    const accessResponse = await fetch(`${apiBaseUrl}/projects/endpoint-access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relativePath: created.relativePath, access: 'internal' }),
+    });
+    assert.equal(accessResponse.status, 200);
+    assert.equal((await post(publishedBaseUrl)).status, 404);
+    assert.equal((await post(latestBaseUrl)).status, 404);
+    assert.equal((await post(internalPublishedBaseUrl)).status, 200);
+    assert.equal((await post(internalLatestBaseUrl)).status, 200);
+
+    await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+      endpointName: 'network-access',
+    });
+    assert.equal((await post(publishedBaseUrl)).status, 404);
+
+    await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'public');
+    assert.equal((await post(publishedBaseUrl)).status, 200);
+    assert.equal((await post(latestBaseUrl)).status, 200);
+  });
+});
+
 test('filesystem execution emits per-stage debug headers only when explicitly enabled', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Measured');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {

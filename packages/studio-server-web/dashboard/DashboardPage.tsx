@@ -42,6 +42,8 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   remoteDebuggerDefaultWs: RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
   publishedWorkflowsBasePath: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
   latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  internalPublishedWorkflowsBaseUrl: 'http://api/internal/workflows',
+  internalLatestWorkflowsBaseUrl: 'http://api/internal/workflows-latest',
   publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
   latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
   webAppsAuthMode: 'ui-gate',
@@ -54,6 +56,10 @@ function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRou
     publishedWorkflowsBasePath:
       config.publishedWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedWorkflowsBasePath,
     latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
+    internalPublishedWorkflowsBaseUrl:
+      config.internalPublishedWorkflowsBaseUrl || DEFAULT_HOSTED_ROUTE_CONFIG.internalPublishedWorkflowsBaseUrl,
+    internalLatestWorkflowsBaseUrl:
+      config.internalLatestWorkflowsBaseUrl || DEFAULT_HOSTED_ROUTE_CONFIG.internalLatestWorkflowsBaseUrl,
     publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,
     latestAppsBasePath: config.latestAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestAppsBasePath,
     webAppsAuthMode: config.webAppsAuthMode || DEFAULT_HOSTED_ROUTE_CONFIG.webAppsAuthMode,

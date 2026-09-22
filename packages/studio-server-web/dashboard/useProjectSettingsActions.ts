@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'react-toastify';
 import {
   deleteWorkflowProject,
@@ -6,17 +6,20 @@ import {
   publishWorkflowProject,
   publishWorkflowProjectWebApps,
   unpublishWorkflowProject,
+  updateWorkflowEndpointAccess,
   unpublishWorkflowProjectWebApp,
   updateWorkflowProjectWebAppAccess,
 } from './workflowApi';
 import { WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE } from '../../studio-server-shared/workflow-types';
 import { ENDPOINT_NAME_PATTERN, validateEndpointName } from './projectSettingsForm';
+import { flattenProjects } from './workflowLibraryHelpers';
 import type {
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
+  WorkflowTreeResponse,
 } from './types';
 
 type UseProjectSettingsActionsOptions = {
@@ -25,7 +28,8 @@ type UseProjectSettingsActionsOptions = {
   isOpen: boolean;
   onClose: () => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
-  onRefresh: () => void | Promise<void>;
+  // Tree refresh returns null on failure or when superseded by another refresh.
+  onRefresh: () => Promise<WorkflowTreeResponse | null>;
 };
 
 function createSlugFromWebAppName(name: string, fallback: string): string {
@@ -103,8 +107,15 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     onDeleteProject,
     onRefresh,
   } = options;
-  const [settingsDraft, setSettingsDraft] = useState<WorkflowProjectSettingsDraft>({ endpointName: '' });
+  const [settingsDraft, setSettingsDraft] = useState<WorkflowProjectSettingsDraft>({
+    endpointName: activeProject.settings.endpointName,
+  });
+  const previousServerEndpointName = useRef(activeProject.settings.endpointName);
+  // The modal is keyed by project and unmounted on close. Background tree
+  // updates must not silently approve a newer draft for publication.
+  const [publicationRevision, setPublicationRevision] = useState(activeProject.revisionId);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [savingEndpointAccess, setSavingEndpointAccess] = useState(false);
   const [webApps, setWebApps] = useState<WorkflowProjectWebAppSummary[]>([]);
   const [webAppSlugDrafts, setWebAppSlugDrafts] = useState<Record<string, string>>({});
   const [webAppAllowedEmailDrafts, setWebAppAllowedEmailDrafts] = useState<Record<string, string>>({});
@@ -114,8 +125,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const [deletingProject, setDeletingProject] = useState(false);
 
   useEffect(() => {
-    setSettingsDraft({ endpointName: activeProject.settings.endpointName });
-  }, [activeProject.relativePath, activeProject.settings.endpointName, activeProject.settings.status, isOpen]);
+    const previous = previousServerEndpointName.current;
+    const current = activeProject.settings.endpointName;
+    previousServerEndpointName.current = current;
+    setSettingsDraft((draft) => draft.endpointName === previous ? { endpointName: current } : draft);
+  }, [activeProject.settings.endpointName]);
 
   const reloadWebApps = useCallback(async () => {
     setLoadingWebApps(true);
@@ -285,6 +299,21 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }));
     };
 
+  const refreshAfterPublication = async (failureMessage: string) => {
+    try {
+      const tree = await onRefresh();
+      const refreshedProject = tree && [...tree.projects, ...flattenProjects(tree.folders)]
+        .find((project) => project.id === activeProject.id);
+      if (!refreshedProject?.revisionId) {
+        toast.error(failureMessage);
+        return;
+      }
+      setPublicationRevision(refreshedProject.revisionId);
+    } catch {
+      toast.error(failureMessage);
+    }
+  };
+
   const handlePublishProject = async () => {
     if (endpointValidationError) {
       return;
@@ -293,12 +322,24 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingSettings(true);
 
     try {
-      await publishWorkflowProject(activeProject.relativePath, {
-        endpointName: settingsDraft.endpointName,
-      });
-      await onRefresh();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update project publication state');
+      if (!publicationRevision) {
+        toast.error('Project revision was unavailable. Click Publish/Update again after refreshing.');
+        await refreshAfterPublication('Could not refresh the project. Refresh before trying to publish again.');
+        return;
+      }
+      try {
+        await publishWorkflowProject(activeProject.relativePath, {
+          endpointName: settingsDraft.endpointName,
+          expectedRevisionId: publicationRevision,
+        });
+      } catch (err: any) {
+        toast.error(err.message || 'Failed to update project publication state');
+        if (err.status === 409) {
+          await refreshAfterPublication('Could not refresh the project. Refresh before trying to publish again.');
+        }
+        return;
+      }
+      await refreshAfterPublication('Publishing succeeded, but the project list could not refresh. Refresh to see the published state.');
     } finally {
       setSavingSettings(false);
     }
@@ -319,6 +360,19 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       toast.error(err.message || 'Failed to update project publication state');
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleEndpointAccessChange = async (access: 'public' | 'internal') => {
+    if (activeProject.settings.status === 'unpublished' || access === (activeProject.settings.endpointAccess ?? 'public')) return;
+    setSavingEndpointAccess(true);
+    try {
+      await updateWorkflowEndpointAccess(activeProject.relativePath, access);
+      await onRefresh();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update endpoint access');
+    } finally {
+      setSavingEndpointAccess(false);
     }
   };
 
@@ -453,6 +507,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   return {
     settingsDraft,
     savingSettings,
+    savingEndpointAccess,
     webApps,
     webAppSlugDrafts,
     webAppAllowedEmailDrafts,
@@ -468,6 +523,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     handleWebAppAllowedEmailsDraftChange,
     handlePublishProject,
     handleUnpublishProject,
+    handleEndpointAccessChange,
     handlePublishWebApps,
     handleUnpublishWebApp,
     handleSaveWebAppAccess,

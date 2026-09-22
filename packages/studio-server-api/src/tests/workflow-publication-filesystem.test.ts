@@ -36,6 +36,7 @@ async function writeSettings(
 ): Promise<void> {
   await workflowPublication.writeStoredWorkflowProjectSettings(projectPath, {
     endpointName: '',
+    endpointAccess: 'public',
     publishedEndpointName: '',
     publishedSnapshotId: null,
     publishedStateHash: null,
@@ -120,7 +121,7 @@ test('publish rejects a saved project without a selected Main Graph', async () =
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: 'NoMainGraph.rivet-project',
-        settings: { endpointName: 'missing-main-graph' },
+        settings: { endpointName: 'missing-main-graph', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, projectPath)).revisionId },
       }),
     });
 
@@ -131,6 +132,35 @@ test('publish rejects a saved project without a selected Main Graph', async () =
   });
 
   assert.equal(await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'missing-main-graph'), null);
+});
+
+test('HTTP publishing rejects missing and stale revisions and accepts a deliberate refreshed retry', async () => {
+  const projectPath = await writeBlankProject('ConcurrentPublish');
+  const original = await workflowStorageBackend.publishWorkflowProjectItemWithBackend('ConcurrentPublish.rivet-project', {
+    endpointName: 'original-endpoint',
+  });
+  const originalSettings = await workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'ConcurrentPublish');
+  await withWorkflowApiServer(async (baseUrl) => {
+    const publish = (expectedRevisionId?: string | null) => fetch(`${baseUrl}/projects/publish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relativePath: 'ConcurrentPublish.rivet-project', settings: { endpointName: 'new-endpoint', expectedRevisionId } }),
+    });
+    for (const invalidRevision of [undefined, null, '', '   ']) {
+      assert.equal((await publish(invalidRevision)).status, 400);
+    }
+    // Dataset-only edits are changes too; the project bytes are unchanged.
+    await fs.writeFile(workflowFs.getWorkflowDatasetPath(projectPath), '[]', 'utf8');
+    const conflict = await publish(original.revisionId);
+    assert.equal(conflict.status, 409);
+    assert.match((await conflict.json() as { error: string }).error, /Publishing failed because the project changed/);
+    assert.deepEqual(await workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'ConcurrentPublish'), originalSettings);
+    const refreshed = await workflowQuery.getWorkflowProject(workflowsRoot, projectPath);
+    // Another intervening edit must conflict again rather than bypassing protection.
+    await fs.appendFile(projectPath, '\n');
+    assert.equal((await publish(refreshed.revisionId)).status, 409);
+    const latest = await workflowQuery.getWorkflowProject(workflowsRoot, projectPath);
+    assert.equal((await publish(latest.revisionId)).status, 200);
+  });
 });
 
 test('workflow publish and unpublish routes preserve publication state over HTTP', async () => {
@@ -147,7 +177,7 @@ test('workflow publish and unpublish routes preserve publication state over HTTP
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
-          settings: { endpointName: 'http-endpoint' },
+          settings: { endpointName: 'http-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, path.join(workflowsRoot, createdProject.project.relativePath))).revisionId },
         }),
       }),
     );

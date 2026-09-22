@@ -1,5 +1,6 @@
 import type {
   WorkflowFolderItem,
+  WorkflowEndpointAccess,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
   WorkflowProjectPathMove,
@@ -277,6 +278,10 @@ export class ManagedWorkflowBackend {
     return this.#publication.publishWorkflowProjectItem(relativePath, settings);
   }
 
+  async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess): Promise<WorkflowProjectItem> {
+    return this.#publication.updateWorkflowEndpointAccess(relativePath, access);
+  }
+
   async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
     return this.#publication.listWorkflowProjectWebApps(relativePath);
   }
@@ -307,14 +312,14 @@ export class ManagedWorkflowBackend {
     return this.#catalog.deleteWorkflowProjectItem(relativePath);
   }
 
-  async loadPublishedExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
+  async loadPublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
-    return this.#executionService.loadPublishedExecutionProject(endpointName);
+    return this.#executionService.loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
 
-  async loadLatestExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
+  async loadLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
-    return this.#executionService.loadLatestExecutionProject(endpointName);
+    return this.#executionService.loadLatestExecutionProject(endpointName, requireFreshPointer);
   }
 
   async loadPublishedWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {

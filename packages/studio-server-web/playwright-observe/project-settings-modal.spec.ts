@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type {
   HostedRouteConfig,
   WorkflowProjectItem,
@@ -11,7 +11,8 @@ import type {
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
-  endpointPublishRequests: Array<{ relativePath?: string; settings?: { endpointName?: string } }>;
+  endpointPublishRequests: Array<{ relativePath?: string; settings?: { endpointName?: string; expectedRevisionId?: string } }>;
+  endpointAccessRequests: Array<{ relativePath: string; access: 'public' | 'internal' }>;
   webAppPublishRequests: Array<{
     relativePath: string;
     publications: Array<{ uiGraphId: string; slug: string; allowedEmails?: string[] }>;
@@ -48,6 +49,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   return {
     projectLoadRequests: [],
     endpointPublishRequests: [],
+    endpointAccessRequests: [],
     webAppPublishRequests: [],
     webAppUnpublishRequests: [],
     publishedVersionCommentRequests: [],
@@ -60,6 +62,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
 function createProjectSettingsFixture(name: string): ProjectSettingsFixtureProject {
   return {
     id: `project-settings-fixture-${name}`,
+    revisionId: 'revision-1',
     name,
     fileName: `${name}.rivet-project`,
     relativePath: `${name}.rivet-project`,
@@ -110,6 +113,7 @@ async function installProjectSettingsRoutes(
   trackers: ProjectSettingsRouteTrackers,
   options: { routeConfig?: Partial<HostedRouteConfig> } = {},
 ): Promise<void> {
+  await mockHostedEditorBootstrap(page);
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
   const project = projects[0]!;
   const routeConfig = {
@@ -176,13 +180,21 @@ async function installProjectSettingsRoutes(
 
     const requestBody = route.request().postDataJSON() as {
       relativePath?: string;
-      settings?: { endpointName?: string };
+      settings?: { endpointName?: string; expectedRevisionId?: string };
     };
     trackers.endpointPublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (requestBody.settings?.expectedRevisionId !== targetProject.revisionId) {
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({
+        error: 'Publishing failed because the project changed. Click Publish/Update again to publish the latest saved version.',
+      }) });
+      return;
+    }
     targetProject.settings = {
       status: 'published',
       endpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
+      publishedEndpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
+      endpointAccess: targetProject.settings.endpointAccess ?? 'public',
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
       publishedWebApps: targetProject.settings.publishedWebApps,
     };
@@ -206,6 +218,8 @@ async function installProjectSettingsRoutes(
     targetProject.settings = {
       status: 'unpublished',
       endpointName: targetProject.settings.endpointName,
+      publishedEndpointName: '',
+      endpointAccess: targetProject.settings.endpointAccess ?? 'public',
       lastPublishedAt: targetProject.settings.lastPublishedAt,
       publishedWebApps: targetProject.settings.publishedWebApps,
     };
@@ -214,6 +228,18 @@ async function installProjectSettingsRoutes(
       contentType: 'application/json',
       body: JSON.stringify({ project: targetProject }),
     });
+  });
+
+  await page.route('**/api/workflows/projects/endpoint-access', async (route) => {
+    if (!isRouteRequest(route.request(), 'POST', '/api/workflows/projects/endpoint-access')) {
+      await route.fallback();
+      return;
+    }
+    const requestBody = route.request().postDataJSON() as { relativePath: string; access: 'public' | 'internal' };
+    trackers.endpointAccessRequests.push(requestBody);
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    targetProject.settings.endpointAccess = requestBody.access;
+    await route.fulfill({ json: { project: targetProject } });
   });
 
   await page.route('**/api/workflows/projects/web-apps**', async (route) => {
@@ -493,7 +519,7 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
   const projectRow = page.locator('.project-row', { hasText: project.name });
   await expect(projectRow).toBeVisible({ timeout: 30_000 });
   await projectRow.click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.active-project-more-button').click();
 
   const modal = page.getByTestId('workflow-project-settings-modal');
   await expect(modal).toBeVisible();
@@ -503,6 +529,135 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
+  test('unrelated tree refresh does not silently advance the publication revision', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-pinned-publication');
+    project.settings = {
+      ...project.settings, status: 'published', endpointName: 'pinned-endpoint',
+      publishedEndpointName: 'pinned-endpoint', endpointAccess: 'public',
+    };
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    const endpointInput = modal.locator('#workflow-project-endpoint-name');
+    await endpointInput.fill('my-edited-endpoint');
+    project.revisionId = 'revision-2';
+    project.settings.status = 'unpublished_changes';
+    project.settings.endpointName = 'colleague-endpoint';
+    // Access changes refresh the same tree used by remote/background updates.
+    await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Internal network only', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(endpointInput).toHaveValue('my-edited-endpoint');
+    const update = modal.getByRole('button', { name: 'Update', exact: true });
+    await update.click();
+    await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toBeVisible();
+    await expect(update).toBeEnabled();
+    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBe('revision-1');
+    await update.click();
+    await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+    expect(trackers.endpointPublishRequests[1]?.settings?.expectedRevisionId).toBe('revision-2');
+    expect(trackers.endpointPublishRequests[1]?.settings?.endpointName).toBe('my-edited-endpoint');
+    expect(project.settings.endpointAccess).toBe('internal');
+    // Once the edit is saved, the clean field should follow later server updates.
+    project.settings.endpointName = 'later-server-endpoint';
+    await modal.getByRole('button', { name: 'External', exact: true }).click();
+    await expect(endpointInput).toHaveValue('later-server-endpoint');
+  });
+
+  for (const conflict of [false, true]) {
+    test(`reports refresh failure separately after ${conflict ? 'conflicting' : 'successful'} publishing`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`codex-publish-refresh-${conflict}`);
+      project.settings.endpointName = 'refresh-endpoint';
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(page, project, trackers);
+      const { modal } = await openProjectSettingsModal(page, project);
+      let failRefresh = false;
+      await page.route('**/api/workflows/tree', async (route) => {
+        if (!failRefresh) return route.fallback();
+        await route.fulfill({ status: 503, json: { error: 'Temporary tree failure' } });
+      });
+      await page.route('**/api/workflows/projects/publish', async (route) => {
+        failRefresh = true;
+        if (conflict) project.revisionId = 'revision-2';
+        await route.fallback();
+      }, { times: 1 });
+      await modal.getByRole('button', { name: 'Publish', exact: true }).click();
+      await expect(page.getByText(conflict
+        ? 'Could not refresh the project. Refresh before trying to publish again.'
+        : 'Publishing succeeded, but the project list could not refresh. Refresh to see the published state.', { exact: true })).toBeVisible();
+      await expect(modal).toBeVisible();
+      await expect(page.locator('.workflow-library-panel')).toContainText(project.name);
+      expect(trackers.endpointPublishRequests).toHaveLength(1);
+      expect(project.settings.status).toBe(conflict ? 'unpublished' : 'published');
+      if (!conflict) {
+        await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toHaveCount(0);
+      }
+    });
+  }
+
+  test('stale publishing fails and refreshes for a deliberate retry', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-publish-conflict');
+    project.settings.endpointName = 'conflict-endpoint';
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    // Commit the competing save after the browser has sent its reviewed revision.
+    await page.route('**/api/workflows/projects/publish', async (route) => {
+      project.revisionId = 'revision-2';
+      await route.fallback();
+    }, { times: 1 });
+    const publish = modal.getByRole('button', { name: 'Publish', exact: true });
+    await publish.click();
+    await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toBeVisible();
+    await expect(publish).toBeEnabled();
+    expect(trackers.endpointPublishRequests).toHaveLength(1);
+    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBe('revision-1');
+    expect(project.settings.status).toBe('unpublished');
+    await publish.click();
+    await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+    expect(trackers.endpointPublishRequests).toHaveLength(2);
+    expect(trackers.endpointPublishRequests[1]?.settings?.expectedRevisionId).toBe('revision-2');
+  });
+
+  test('changes endpoint access immediately even with unpublished graph changes', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-endpoint-access');
+    project.settings = {
+      status: 'unpublished_changes',
+      endpointName: 'draft-endpoint',
+      publishedEndpointName: 'existing-endpoint',
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: [],
+    };
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers, { routeConfig: {
+      internalPublishedWorkflowsBaseUrl: 'http://rivet-execution.internal:80/internal/workflows',
+      internalLatestWorkflowsBaseUrl: 'http://rivet-api.internal:80/internal/workflows-latest',
+    } });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    const access = modal.getByRole('group', { name: 'Endpoint access' });
+    await expect(modal.getByText('Changes take effect immediately', { exact: true })).toBeVisible();
+    await expect(modal.getByText('Endpoint access', { exact: true })).toHaveAttribute(
+      'title',
+      'Controls where the endpoint can be reached. Bearer-key requirements are configured separately in Rivet Server settings.',
+    );
+    await expect(access.getByRole('button', { name: 'External', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await access.getByRole('button', { name: 'Internal network only' }).click();
+    await expect(access.getByRole('button', { name: 'Internal network only' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal).toContainText('http://rivet-execution.internal:80/internal/workflows/existing-endpoint');
+    await expect(modal).toContainText('The unpublished changes are accessible on');
+    await expect(modal).toContainText('http://rivet-api.internal:80/internal/workflows-latest/draft-endpoint');
+    await expect(modal.locator('.project-settings-endpoint-access')).toHaveCSS('border-bottom-style', 'solid');
+    await expect(modal).toContainText('Unpublished changes');
+    expect(trackers.endpointAccessRequests).toEqual([{ relativePath: project.relativePath, access: 'internal' }]);
+    expect(trackers.endpointPublishRequests).toEqual([]);
+
+    await access.getByRole('button', { name: 'External', exact: true }).click();
+    await expect(access.getByRole('button', { name: 'External', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal).toContainText('/workflows/existing-endpoint');
+    await expect(modal).toContainText('/workflows-latest/draft-endpoint');
+    expect(trackers.endpointAccessRequests).toHaveLength(2);
+  });
+
   test('distinguishes active LLM profile suspensions from recovery states', async ({ page }) => {
     const project = createProjectSettingsFixture('codex-project-settings-llm-health');
     const now = Date.now();

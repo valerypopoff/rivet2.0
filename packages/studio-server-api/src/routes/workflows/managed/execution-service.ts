@@ -82,12 +82,12 @@ export class ManagedWorkflowExecutionService {
     this.#resolveWebAppAccessPolicyFromDatabase = dependencies.context.queries.resolveWebAppAccessPolicyFromDatabase;
   }
 
-  async loadPublishedExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
-    return this.#loadExecutionProjectByEndpoint('published', endpointName);
+  async loadPublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
+    return this.#loadExecutionProjectByEndpoint('published', endpointName, requireFreshPointer);
   }
 
-  async loadLatestExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
-    return this.#loadExecutionProjectByEndpoint('latest', endpointName);
+  async loadLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
+    return this.#loadExecutionProjectByEndpoint('latest', endpointName, requireFreshPointer);
   }
 
   async loadPublishedWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
@@ -138,8 +138,16 @@ export class ManagedWorkflowExecutionService {
   async #loadExecutionProjectByEndpoint(
     runKind: ManagedWorkflowRunKind,
     endpointName: string,
+    requireFreshPointer = false,
   ): Promise<ManagedExecutionProjectResult | null> {
     const lookupName = normalizeWorkflowEndpointLookupName(endpointName);
+    if (requireFreshPointer) {
+      // A request arriving after an access change must not join a lookup that
+      // began before the commit, even if cache invalidation is still in flight.
+      return this.#loadExecutionProjectByEndpointOnce(runKind, lookupName, {
+        forceBypassPointerCache: true,
+      });
+    }
     const endpointCacheKey = `${runKind}:${lookupName}`;
     const resolveSnapshot = this.#invalidationController.captureResolveSnapshot();
     const endpointLoadInflightKey = `${endpointCacheKey}:${resolveSnapshot.anyGeneration}`;
@@ -284,6 +292,7 @@ export class ManagedWorkflowExecutionService {
         datasetProvider,
         projectVirtualPath: getManagedWorkflowProjectVirtualPath(pointer.relativePath),
         revisionKey: `managed:${pointer.revisionId}`,
+        endpointAccess: pointer.endpointAccess,
         webAppUiGraphId: pointer.webAppUiGraphId,
         webAppAllowedEmails: pointer.webAppAllowedEmails,
         webAppBindingId: pointer.webAppId == null

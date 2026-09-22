@@ -47,6 +47,8 @@ configRouter.get('/config', (req, res) => {
     apiBaseUrl: '/api',
     publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),
     latestWorkflowsBasePath: getLatestWorkflowsBasePath(),
+    internalPublishedWorkflowsBaseUrl: process.env.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows',
+    internalLatestWorkflowsBaseUrl: process.env.RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows-latest',
     publishedAppsBasePath: getPublishedWebAppsBasePath(),
     latestAppsBasePath: getLatestWebAppsBasePath(),
     webAppsAuthMode: getWebAppAuthMode(),

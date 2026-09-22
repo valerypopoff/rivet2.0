@@ -660,6 +660,7 @@ export async function restoreWorkflowPublishedVersion(
     });
     await writeStoredWorkflowProjectSettings(projectPath, {
       endpointName: record.endpointName,
+      endpointAccess: existingSettings.endpointAccess,
       publishedEndpointName: record.endpointName,
       publishedSnapshotId: restoredSnapshotId,
       publishedStateHash,

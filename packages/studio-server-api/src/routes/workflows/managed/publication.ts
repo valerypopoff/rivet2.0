@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 
 import type {
+  WorkflowEndpointAccess,
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppAccessDraft,
@@ -12,7 +13,7 @@ import type {
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
 } from '../../../../../studio-server-shared/workflow-types.js';
-import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../studio-server-shared/workflow-types.js';
+import { WORKFLOW_PUBLICATION_CONFLICT_MESSAGE, WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../studio-server-shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import { hasProjectMainGraph, requireProjectMainGraphForEndpoint } from '../main-graph.js';
@@ -810,12 +811,28 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       });
     },
 
+    async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess): Promise<WorkflowProjectItem> {
+      const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
+      return deps.withTransaction(async (client, hooks) => {
+        const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!workflow) throw createHttpError(404, 'Project not found');
+        if (!workflow.published_revision_id) throw conflict('Publish the workflow before changing endpoint access');
+
+        await client.query('UPDATE workflows SET endpoint_access = $2 WHERE workflow_id = $1', [workflow.workflow_id, access]);
+        const updated = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!updated) throw createHttpError(500, 'Updated workflow could not be loaded');
+        await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+        return deps.mapWorkflowRowToProjectItem(updated);
+      });
+    },
+
     async publishWorkflowProjectItem(relativePath: unknown, settings: unknown): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedSettings = (() => {
         const raw = (settings ?? {}) as WorkflowProjectSettingsDraft;
         return {
           endpointName: normalizeStoredEndpointName(String(raw.endpointName ?? '')),
+          expectedRevisionId: raw.expectedRevisionId,
         };
       })();
 
@@ -829,6 +846,12 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Project not found');
         }
 
+        if (
+          normalizedSettings.expectedRevisionId !== undefined &&
+          normalizedSettings.expectedRevisionId !== workflow.current_draft_revision_id
+        ) {
+          throw conflict(WORKFLOW_PUBLICATION_CONFLICT_MESSAGE);
+        }
         const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
         if (!currentDraftRevision) {
           throw createHttpError(500, 'Current workflow revision could not be loaded');

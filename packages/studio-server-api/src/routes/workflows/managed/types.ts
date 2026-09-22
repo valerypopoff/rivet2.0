@@ -25,6 +25,7 @@ export type WorkflowRow = {
   published_revision_id: string | null;
   published_version_id: string | null;
   endpoint_name: string;
+  endpoint_access?: 'public' | 'internal';
   published_endpoint_name: string;
   last_published_at: TimestampValue | null;
 };

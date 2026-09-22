@@ -12,6 +12,7 @@ import type {
   HostedRouteConfig,
   WorkflowProjectItem,
   WorkflowProjectStatus,
+  WorkflowTreeResponse,
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
@@ -20,18 +21,28 @@ import { useProjectSettingsActions } from './useProjectSettingsActions';
 const renderWorkflowEndpointHelp = (
   routeConfig: HostedRouteConfig,
   status: WorkflowProjectStatus,
-  endpointName: string,
+  publishedEndpointName: string,
+  draftEndpointName: string,
+  endpointAccess: 'public' | 'internal',
 ): ReactNode => {
+  const publishedRoute = endpointAccess === 'internal'
+    ? `${routeConfig.internalPublishedWorkflowsBaseUrl ?? 'http://api/internal/workflows'}/${publishedEndpointName}`
+    : `${routeConfig.publishedWorkflowsBasePath}/${publishedEndpointName}`;
+  const latestRoute = endpointAccess === 'internal'
+    ? `${routeConfig.internalLatestWorkflowsBaseUrl ?? 'http://api/internal/workflows-latest'}/${draftEndpointName}`
+    : `${routeConfig.latestWorkflowsBasePath}/${draftEndpointName}`;
   switch (status) {
     case 'unpublished':
       return null;
     case 'published':
       return (
         <>
-          The workflow is accessible via the endpoint on 
+          {endpointAccess === 'internal'
+            ? 'The published workflow is available only inside the server network at'
+            : 'The workflow is accessible via the endpoint on'}
           <br />
           <code className="project-settings-endpoint-code">
-            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
+            {publishedRoute}
           </code>
         </>
       );
@@ -42,17 +53,19 @@ const renderWorkflowEndpointHelp = (
           Workflow has changes that are not live. 
           <br />
           <br />
-          The published workflow version is still accessible on 
+          {endpointAccess === 'internal'
+            ? 'The published workflow version is available only inside the server network at'
+            : 'The published workflow version is still accessible on'}
           <br />
           <code className="project-settings-endpoint-code">
-            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
+            {publishedRoute}
           </code>
           <br />
           <br />
           The unpublished changes are accessible on 
           <br />
           <code className="project-settings-endpoint-code">
-            {`${routeConfig.latestWorkflowsBasePath}/${endpointName}`}
+            {latestRoute}
           </code>
         </>
       );
@@ -112,7 +125,7 @@ type ProjectSettingsModalProps = {
   allProjects: WorkflowProjectItem[];
   isOpen: boolean;
   onClose: () => void;
-  onRefresh: () => void | Promise<void>;
+  onRefresh: () => Promise<WorkflowTreeResponse | null>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onOpenPublishedHistory: (project: WorkflowProjectItem) => void;
   onOpenRecording: (recordingId: string) => void;
@@ -139,6 +152,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   const {
     settingsDraft,
     savingSettings,
+    savingEndpointAccess,
     webApps,
     webAppSlugDrafts,
     webAppAllowedEmailDrafts,
@@ -152,6 +166,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     handleWebAppAllowedEmailsDraftChange,
     handlePublishProject,
     handleUnpublishProject,
+    handleEndpointAccessChange,
     handlePublishWebApps,
     handleUnpublishWebApp,
     handleSaveWebAppAccess,
@@ -168,8 +183,9 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
 
   const displayedProjectStatus: WorkflowProjectStatus = activeProject.settings.status;
   const baseFileName = useMemo(() => activeProject.fileName.replace(/\.[^.]+$/, ''), [activeProject.fileName]);
-  const publishedEndpointName = activeProject.settings.endpointName || 'endpoint-name';
+  const publishedEndpointName = activeProject.settings.publishedEndpointName || activeProject.settings.endpointName || 'endpoint-name';
   const isUnpublishedProject = displayedProjectStatus === 'unpublished';
+  const endpointAccess = activeProject.settings.endpointAccess ?? 'public';
   const hasWorkflowChangesToPublish = displayedProjectStatus === 'unpublished_changes';
   const hasWorkflowEndpointDraftChange = settingsDraft.endpointName.trim() !== activeProject.settings.endpointName.trim();
   const hasWebApps = webApps.length > 0;
@@ -179,14 +195,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     () => formatLastPublishedAtLabel(displayedProjectStatus, activeProject.settings.lastPublishedAt),
     [activeProject.settings.lastPublishedAt, displayedProjectStatus],
   );
-  const canCloseModal = !savingSettings && !savingWebApps && !deletingProject;
+  const canCloseModal = !savingSettings && !savingEndpointAccess && !savingWebApps && !deletingProject;
   const disablePublishAction =
     savingSettings ||
+    savingEndpointAccess ||
     loadingWebApps ||
     deletingProject ||
     endpointValidationError != null ||
     (!isUnpublishedProject && !hasWorkflowChangesToPublish && !hasWorkflowEndpointDraftChange);
-  const disableUnpublishAction = savingSettings || deletingProject;
+  const disableUnpublishAction = savingSettings || savingEndpointAccess || deletingProject;
   const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !canDeleteProject;
   const disableWebAppActions = savingSettings || savingWebApps || deletingProject || loadingWebApps;
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
@@ -286,8 +303,29 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         </div>
         {endpointValidationError ? <div className="project-settings-error">{endpointValidationError}</div> : null}
         {!isUnpublishedProject ? (
+          <div className="project-settings-endpoint-access">
+            <span
+              className="project-settings-access-label"
+              title="Controls where the endpoint can be reached. Bearer-key requirements are configured separately in Rivet Server settings."
+            >Endpoint access</span>
+            <SegmentedControl label="Endpoint access">
+              <SegmentedControlButton
+                selected={endpointAccess === 'public'}
+                disabled={savingEndpointAccess || savingSettings || deletingProject}
+                onClick={() => void handleEndpointAccessChange('public')}
+              >External</SegmentedControlButton>
+              <SegmentedControlButton
+                selected={endpointAccess === 'internal'}
+                disabled={savingEndpointAccess || savingSettings || deletingProject}
+                onClick={() => void handleEndpointAccessChange('internal')}
+              >Internal network only</SegmentedControlButton>
+            </SegmentedControl>
+            <span className="project-settings-help">Changes take effect immediately</span>
+          </div>
+        ) : null}
+        {!isUnpublishedProject ? (
           <div className="project-settings-help project-settings-status-help">
-            {renderWorkflowEndpointHelp(routeConfig, displayedProjectStatus, publishedEndpointName)}
+            {renderWorkflowEndpointHelp(routeConfig, displayedProjectStatus, publishedEndpointName, activeProject.settings.endpointName, endpointAccess)}
           </div>
         ) : null}
       </div>

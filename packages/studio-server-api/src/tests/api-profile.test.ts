@@ -121,6 +121,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/auth/dummy',
     '/apps/auth/logout',
     '/workflows-latest/:endpointName',
+    '/internal/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/apps-latest/:slug/actions/ws',
     '/api/native/*',
@@ -156,6 +157,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/auth/dummy',
     '/apps/auth/logout',
     '/workflows-latest/:endpointName',
+    '/internal/workflows-latest/:endpointName',
     '/apps-latest/:slug',
     '/apps-latest/:slug/actions/ws',
     '/api/native/*',
@@ -482,10 +484,14 @@ test('control profile exposes control-plane routes and does not expose published
         executorWsUrl: string;
         publishedAppsBasePath: string;
         latestAppsBasePath: string;
+        internalPublishedWorkflowsBaseUrl: string;
+        internalLatestWorkflowsBaseUrl: string;
       };
       assert.equal(configPayload.executorWsUrl, 'wss://rivet.example.test/ws/executor/internal');
       assert.equal(configPayload.publishedAppsBasePath, '/apps');
       assert.equal(configPayload.latestAppsBasePath, '/apps-latest');
+      assert.equal(configPayload.internalPublishedWorkflowsBaseUrl, 'http://api/internal/workflows');
+      assert.equal(configPayload.internalLatestWorkflowsBaseUrl, 'http://api/internal/workflows-latest');
 
       const unauthenticatedProxySettings = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`);
       assert.equal(unauthenticatedProxySettings.status, 403);
@@ -537,6 +543,13 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(internalResponse.status, 404);
       assert.equal(internalResponse.headers.get('x-duration-ms'), null);
       assert.deepEqual(await internalResponse.json(), { error: 'Not found' });
+
+      const internalLatestResponse = await fetch(`${server.baseUrl}/internal/workflows-latest/phase4-missing`, {
+        method: 'POST',
+      });
+      assert.equal(internalLatestResponse.status, 404);
+      assert.match(internalLatestResponse.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      assert.equal((await internalLatestResponse.json()).error, 'Latest workflow not found');
     } finally {
       await server.close();
     }
@@ -554,6 +567,7 @@ test('evaluation profile exposes neither control nor published execution routes'
         { path: '/apps/phase4-missing', init: {} },
         { path: '/apps-latest/phase4-missing', init: {} },
         { path: '/internal/workflows/phase4-missing', init: { method: 'POST' } },
+        { path: '/internal/workflows-latest/phase4-missing', init: { method: 'POST' } },
       ] as const;
       for (const route of routes) {
         const response = await fetch(`${server.baseUrl}${route.path}`, route.init);
@@ -620,6 +634,13 @@ test('execution profile exposes published execution routes and hides control-pla
       assert.equal(latestWebAppResponse.status, 404);
       assert.equal(latestWebAppResponse.headers.get('x-duration-ms'), null);
       assert.deepEqual(await latestWebAppResponse.json(), { error: 'Not found' });
+
+      const internalLatestResponse = await fetch(`${server.baseUrl}/internal/workflows-latest/phase4-missing`, {
+        method: 'POST',
+      });
+      assert.equal(internalLatestResponse.status, 404);
+      assert.equal(internalLatestResponse.headers.get('x-duration-ms'), null);
+      assert.deepEqual(await internalLatestResponse.json(), { error: 'Not found' });
 
       const internalResponse = await fetch(`${server.baseUrl}/internal/workflows/phase4-missing`, {
         method: 'POST',

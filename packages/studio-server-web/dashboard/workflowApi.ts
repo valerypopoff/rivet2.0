@@ -566,7 +566,7 @@ export async function moveWorkflowItem(
 
 export async function publishWorkflowProject(
   relativePath: string,
-  settings: WorkflowProjectSettingsDraft,
+  settings: WorkflowProjectSettingsDraft & { expectedRevisionId: string },
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/publish`, {
     method: 'POST',
@@ -585,6 +585,19 @@ export async function unpublishWorkflowProject(relativePath: string): Promise<Wo
     body: JSON.stringify({ relativePath }),
   });
 
+  const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
+  return data.project;
+}
+
+export async function updateWorkflowEndpointAccess(
+  relativePath: string,
+  access: 'public' | 'internal',
+): Promise<WorkflowProjectItem> {
+  const response = await fetch(`${API}/workflows/projects/endpoint-access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
+    body: JSON.stringify({ relativePath, access }),
+  });
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
   return data.project;
 }

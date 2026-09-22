@@ -15,6 +15,7 @@ import { shellRouter } from './routes/shell.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { projectsRouter } from './routes/projects.js';
 import {
+  internalLatestWorkflowsRouter,
   internalPublishedWorkflowsRouter,
   latestWebAppsRouter,
   latestWorkflowsRouter,
@@ -77,7 +78,7 @@ function getMetricsHttpRoute(req: Request): MetricsHttpRoute {
   if (matchesPath(pathname, getPublishedWebAppsBasePath())) return 'published_web_app';
   if (matchesPath(pathname, getLatestWorkflowsBasePath())) return 'latest_workflow';
   if (matchesPath(pathname, getLatestWebAppsBasePath())) return 'latest_web_app';
-  if (matchesPath(pathname, '/internal/workflows')) return 'internal_workflow';
+  if (matchesPath(pathname, '/internal/workflows') || matchesPath(pathname, '/internal/workflows-latest')) return 'internal_workflow';
   if (matchesPath(pathname, '/api')) return 'api';
   return 'other';
 }
@@ -217,6 +218,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       `${publishedAppsBasePath}/auth/dummy`,
       `${publishedAppsBasePath}/auth/logout`,
       `${latestWorkflowsBasePath}/:endpointName`,
+      '/internal/workflows-latest/:endpointName',
       `${latestAppsBasePath}/:slug`,
       `${latestAppsBasePath}/:slug/actions/ws`,
       '/api/native/*',
@@ -290,6 +292,7 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   });
   app.use('/', uiAuthRouter);
   app.use(dispatchDynamicBasePath(getLatestWorkflowsBasePath, latestWorkflowsRouter));
+  app.use('/internal/workflows-latest', internalLatestWorkflowsRouter);
   app.use(dispatchDynamicBasePath(getLatestWebAppsBasePath, latestWebAppsRouter));
   // Authenticate the control-plane boundary before individual routers parse
   // their own request bodies. Unknown routes and unsupported methods never

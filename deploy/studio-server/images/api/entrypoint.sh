@@ -14,6 +14,8 @@ deployment_published_execution_admission_mode="${RIVET_DEPLOYMENT_PUBLISHED_EXEC
 deployment_published_execution_max_active_runs="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS:-}"
 deployment_published_execution_retry_after_seconds="${RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS:-}"
 deployment_metrics_enabled="${RIVET_DEPLOYMENT_METRICS_ENABLED:-}"
+deployment_internal_published_workflows_base_url="${RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-}"
+deployment_internal_latest_workflows_base_url="${RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-}"
 load_optional_dotenv /vault/dotenv
 append_proxy_bootstrap_node_options
 
@@ -46,6 +48,8 @@ apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "$deployme
 apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS "$deployment_published_execution_max_active_runs"
 apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS "$deployment_published_execution_retry_after_seconds"
 apply_deployment_owned_value RIVET_METRICS_ENABLED "$deployment_metrics_enabled"
+apply_deployment_owned_value RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL "$deployment_internal_published_workflows_base_url"
+apply_deployment_owned_value RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL "$deployment_internal_latest_workflows_base_url"
 
 export PORT="${PORT:-8080}"
 export RIVET_WORKSPACE_ROOT="${RIVET_WORKSPACE_ROOT:-/workspace}"

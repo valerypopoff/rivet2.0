@@ -9,14 +9,17 @@ import {
   type AttachedData,
   type Project,
 } from '@valerypopoff/rivet2-node';
-import type { WorkflowProjectDownloadVersion } from '../../../../studio-server-shared/workflow-types.js';
+import type { WorkflowEndpointAccess, WorkflowProjectDownloadVersion } from '../../../../studio-server-shared/workflow-types.js';
 
 import { validatePath } from '../../security.js';
+import { WORKFLOW_PUBLICATION_CONFLICT_MESSAGE } from '../../../../studio-server-shared/workflow-types.js';
+import { getFilesystemProjectRevisionId } from './project-stats.js';
 import { conflict, createHttpError } from '../../utils/httpError.js';
 import {
   createBlankProjectFile,
   deleteProjectWithSidecars,
   ensureWorkflowsRoot,
+  getWorkflowDatasetPath,
   listProjectPathsRecursive,
   moveProjectWithSidecars,
   pathExists,
@@ -444,6 +447,17 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const normalizedSettings = normalizeWorkflowProjectSettingsDraft(settings);
+  if (normalizedSettings.expectedRevisionId !== undefined) {
+    const contents = await fs.readFile(projectPath, 'utf8');
+    const datasetPath = getWorkflowDatasetPath(projectPath);
+    const datasets = await fs.readFile(datasetPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (getFilesystemProjectRevisionId(contents, datasets) !== normalizedSettings.expectedRevisionId) {
+      throw conflict(WORKFLOW_PUBLICATION_CONFLICT_MESSAGE);
+    }
+  }
   requireProjectMainGraphForEndpoint(await loadProjectFromFile(projectPath));
   await ensureWorkflowEndpointNameIsUnique(root, projectPath, normalizedSettings.endpointName);
   const publishedSnapshotId = randomUUID();
@@ -471,6 +485,7 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
     });
     await writeStoredWorkflowProjectSettings(projectPath, {
       endpointName: normalizedSettings.endpointName,
+      endpointAccess: existingSettings.endpointAccess,
       publishedEndpointName: normalizedSettings.endpointName,
       publishedSnapshotId,
       publishedStateHash,
@@ -500,6 +515,7 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
   });
   await writeStoredWorkflowProjectSettings(projectPath, {
     endpointName: existingSettings.endpointName,
+    endpointAccess: existingSettings.endpointAccess,
     publishedEndpointName: '',
     publishedSnapshotId: null,
     publishedStateHash: null,
@@ -507,6 +523,18 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
     publishedWebApps: existingSettings.publishedWebApps,
   });
 
+  return getWorkflowProject(root, projectPath);
+}
+
+export async function updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess) {
+  const root = await ensureWorkflowsRoot();
+  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, { allowProjectFile: true }));
+  const settings = await readStoredWorkflowProjectSettings(projectPath, path.basename(projectPath, PROJECT_EXTENSION));
+  if (!hasPublishedWorkflowLineage(settings)) {
+    throw conflict('Publish the workflow before changing endpoint access');
+  }
+
+  await writeStoredWorkflowProjectSettings(projectPath, { ...settings, endpointAccess: access });
   return getWorkflowProject(root, projectPath);
 }
 

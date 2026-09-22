@@ -307,7 +307,7 @@ export const ProjectInfoModal: FC<{
   return (
     <ModalTransition>
       {isOpen && (
-        <Modal onClose={onClose} width="40%" height={SETTINGS_MODAL_HEIGHT} testId="project-settings-modal">
+        <Modal onClose={onClose} width="max(700px, 40%)" height={SETTINGS_MODAL_HEIGHT} testId="project-settings-modal">
           <Global styles={projectSettingsModalScrollContainerOverrides} />
           <AppModalHeader title="Project settings" onClose={onClose} />
           <ModalBody>

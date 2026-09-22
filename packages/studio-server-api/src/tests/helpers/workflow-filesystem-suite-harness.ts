@@ -48,7 +48,9 @@ export async function createFilesystemWorkflowSuiteHarness() {
     latestWebAppsRouter: workflowRoutes.latestWebAppsRouter,
     publishedWebAppsRouter: workflowRoutes.publishedWebAppsRouter,
     publishedWorkflowsRouter: workflowRoutes.publishedWorkflowsRouter,
+    internalPublishedWorkflowsRouter: workflowRoutes.internalPublishedWorkflowsRouter,
     latestWorkflowsRouter: workflowRoutes.latestWorkflowsRouter,
+    internalLatestWorkflowsRouter: workflowRoutes.internalLatestWorkflowsRouter,
   });
 
   async function resetWorkflowsRoot() {

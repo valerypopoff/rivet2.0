@@ -204,6 +204,74 @@ test('warm pointer hit does not re-run joined DB resolution', async () => {
   assert.equal(fixture.readRevisionContentsCount, 1);
 });
 
+test('public workflow lookup sees committed access changes before cache invalidation arrives', async () => {
+  let access: 'public' | 'internal' = 'public';
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => ({
+      pointer: {
+        workflowId: 'workflow-a',
+        relativePath: 'Managed Cache.rivet-project',
+        revisionId: 'revision-a',
+        endpointAccess: access,
+      },
+      revision: {
+        revision_id: 'revision-a',
+        workflow_id: 'workflow-a',
+        project_blob_key: 'project-blob',
+        dataset_blob_key: null,
+        created_at: new Date(),
+      },
+    }),
+  });
+  await fixture.controller.initialize();
+
+  assert.equal((await fixture.service.loadPublishedExecutionProject('hello-world'))?.endpointAccess, 'public');
+  assert.equal((await fixture.service.loadLatestExecutionProject('hello-world'))?.endpointAccess, 'public');
+  access = 'internal';
+  assert.equal((await fixture.service.loadPublishedExecutionProject('hello-world'))?.endpointAccess, 'public');
+  assert.equal((await fixture.service.loadLatestExecutionProject('hello-world'))?.endpointAccess, 'public');
+  assert.equal((await fixture.service.loadPublishedExecutionProject('hello-world', true))?.endpointAccess, 'internal');
+  assert.equal((await fixture.service.loadLatestExecutionProject('hello-world', true))?.endpointAccess, 'internal');
+  assert.equal(fixture.resolveCount, 4);
+  assert.equal(fixture.readRevisionContentsCount, 1);
+});
+
+test('fresh public lookups do not join a pre-change lookup still in flight', async () => {
+  const oldLookup = createDeferred<ManagedExecutionPointerLookupResult>();
+  let lookupCount = 0;
+  const fixture = createExecutionServiceFixture({
+    resolveExecutionPointerFromDatabase: async () => {
+      lookupCount += 1;
+      if (lookupCount === 1) return oldLookup.promise;
+      return {
+        pointer: {
+          workflowId: 'workflow-a',
+          relativePath: 'Managed Cache.rivet-project',
+          revisionId: 'revision-a',
+          endpointAccess: 'internal',
+        },
+        revision: fixture.revision,
+      };
+    },
+  });
+  await fixture.controller.initialize();
+
+  const beforeChange = fixture.service.loadPublishedExecutionProject('hello-world', true);
+  const afterChange = fixture.service.loadPublishedExecutionProject('hello-world', true);
+  assert.equal((await afterChange)?.endpointAccess, 'internal');
+  oldLookup.resolve({
+    pointer: {
+      workflowId: 'workflow-a',
+      relativePath: 'Managed Cache.rivet-project',
+      revisionId: 'revision-a',
+      endpointAccess: 'public',
+    },
+    revision: fixture.revision,
+  });
+  assert.equal((await beforeChange)?.endpointAccess, 'public');
+  assert.equal(lookupCount, 2);
+});
+
 test('reads current web app access policy without loading an executable revision', async () => {
   const fixture = createExecutionServiceFixture({});
   await fixture.controller.initialize();

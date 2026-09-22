@@ -55,6 +55,12 @@
 {{- fail "env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX is chart-owned; configure postgres.poolMaxPerApiPod instead" -}}
 {{- end -}}
 
+{{- range $key := list "RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL" "RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; internal endpoint URLs come from the API and execution Services" $key) -}}
+{{- end -}}
+{{- end -}}
+
 {{- range $key := list "RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS" "RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS" -}}
 {{- if hasKey $.Values.env $key -}}
 {{- fail (printf "env.%s is chart-owned; configure publishedExecutionAdmission instead" $key) -}}

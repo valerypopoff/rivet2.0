@@ -136,6 +136,38 @@ The settings sidecar stores endpoint publication fields plus any web-app publica
 
 Important current behavior:
 
+- Endpoint access help reads "Changes take effect immediately". This is concise
+  UI copy only: access changes still apply to both endpoint routes without
+  publishing draft changes. The segmented control says "External"
+  rather than "Public" because it controls network reachability, not whether
+  callers need a bearer key. The "Endpoint access" tooltip points to the
+  separate `Settings` -> `Workflow endpoints` -> `Access control` setting.
+
+- Endpoint publishing over HTTP requires `settings.expectedRevisionId`, taken from
+  the project tree item used for the action. Both backends compare it before any
+  publication mutation: managed storage holds the workflow row lock; filesystem
+  storage holds the workflow write coordinator and hashes the actual project and
+  dataset bytes (not the stats cache). A mismatch returns 409 without publishing.
+  The dashboard shows the error and refreshes the project, but never retries
+  automatically. A second Publish/Update click uses the refreshed revision and
+  may conflict again if another save intervenes. Missing HTTP revisions return
+  400; trusted in-process callers may omit the check. This protects endpoint
+  publication of drafts, not web-app publishing or other publication mutations.
+  In particular, an endpoint-only publication or access change by another
+  administrator does not change the draft revision and needs a separate
+  publication-state precondition to reject a stale modal action.
+  Failed refreshes preserve the visible project list and show a separate warning;
+  they never count as a successful revision refresh. A refresh failure after a
+  committed publish reports that publishing succeeded, rather than inviting a
+  duplicate publish by reporting the mutation as failed.
+  The modal pins its publication revision when opened. Background tree updates
+  cannot advance it; only a successful action-triggered refresh of that same
+  project arms a deliberate retry. Closing/reopening the modal selects the new
+  baseline. Key the modal by project identity so switching projects resets it.
+  Tree refreshes update an untouched endpoint-name field, but preserve a local
+  endpoint-name edit. Publication-status changes alone must never reset that
+  draft; conflict refresh and deliberate retry retain the user's chosen name.
+
 - publishing updates both `endpointName` and `publishedEndpointName`
 - publishing also updates `lastPublishedAt`
 - unpublishing clears only the `published*` fields and keeps `endpointName` as the saved draft/default
@@ -184,6 +216,8 @@ In Project Settings:
 - `Delete project` is in a separated lower section that remains visible regardless of the selected Project Settings tab; it is enabled only when the workflow endpoint is unpublished and no web apps remain published. On the `Endpoint` tab only, that same lower section also shows the `Published version history` secondary action as a visible button.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
 - Project Settings is split into `Endpoint` and `Web apps` tabs. The `Endpoint` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
+
+The Endpoint tab separates the access control from the route help with a thin divider. Internal-only access applies to both published and latest-draft routes: when the project has unpublished changes, the help shows the private latest-draft URL below the private published URL. Both URLs come from deployment configuration (`http://api/internal/...` in Docker Compose; separate control-plane and execution Service URLs in Kubernetes).
 
 ## Publish flow
 
@@ -911,7 +945,7 @@ The main recordings routes are:
 
 Plain Tab toggles the sidebar belonging to the focused document: the server sidebar in the dashboard, or the graph sidebar inside the editor iframe. Text/code entry and open dashboard dialogs retain normal Tab navigation; Shift+Tab and modified Tab are unchanged. The editor also retains Ctrl+Q/Cmd+Q. Hosted modal focus retains keyboard navigation, trapping, and restoration without decorative focus outlines on dialogs or their controls; close buttons highlight on pointer hover only. Published-catalog browser coverage verifies the rendered close glyph, corner placement, content insets, and fixed header during list scrolling.
 
-The dashboard exposes `Run recordings` in the left-panel footer. Runtime-library administration lives separately under `Settings` -> `Runtime libraries`. The text-only `Published` action opens a live catalog derived from the authoritative workflow tree. It lists every currently published workflow endpoint and web app in separate modal-level `Endpoints (n)` and `Web apps (n)` tabs, where each counter is derived from that same live catalog. The title, description, tabs, and corner close control occupy the fixed modal header; only the selected tab's inset item list scrolls. Each row presents the configured public route as a copy control that writes the absolute current-server URL to the clipboard, reveals a copy icon immediately before that route on hover or keyboard focus, and provides a separate `Project: ...` reference: the `Project:` label is muted and the project name is bright. Activating that project reference closes the catalog and opens the project persistently in the editor through the normal project-opening path. Rows do not repeat their publication type. Their names and project references share a consistent left edge, with the labeled freshness badge below both: green means the item is published from the current draft, while amber means it remains published but the project has unpublished changes. The workflow tree carries freshness for each web-app publication independently, so a stale endpoint or sibling app cannot mislabel another app. Older tree responses without per-app freshness are displayed conservatively as published. Endpoint drafts whose endpoint publication status is `unpublished` are excluded even when the same project owns published web apps; the tree's `publishedWebApps` entries remain independently visible. The dashboard does not cache a second publication index or infer endpoint publication from the aggregate project status.
+The dashboard exposes `Run recordings` in the left-panel footer. Runtime-library administration lives separately under `Settings` -> `Runtime libraries`. The text-only `Published` action opens a live catalog derived from the authoritative workflow tree. It lists every currently published workflow endpoint and web app in separate modal-level `Endpoints (n)` and `Web apps (n)` tabs, where each counter is derived from that same live catalog. The title, description, tabs, and corner close control occupy the fixed modal header; only the selected tab's inset item list scrolls. Each endpoint row uses the currently published endpoint name, not a renamed but unpublished draft; an internal-only endpoint shows and copies its deployment-specific private URL, while public endpoints and web apps show their configured public routes. The copy control writes an absolute URL to the clipboard, reveals a copy icon immediately before that route on hover or keyboard focus, and provides a separate `Project: ...` reference: the `Project:` label is muted and the project name is bright. Activating that project reference closes the catalog and opens the project persistently in the editor through the normal project-opening path. Rows do not repeat their publication type. Their names and project references share a consistent left edge, with the labeled freshness badge below both: green means the item is published from the current draft, while amber means it remains published but the project has unpublished changes. The workflow tree carries freshness for each web-app publication independently, so a stale endpoint or sibling app cannot mislabel another app. Older tree responses without per-app freshness are displayed conservatively as published. Endpoint drafts whose endpoint publication status is `unpublished` are excluded even when the same project owns published web apps; the tree's `publishedWebApps` entries remain independently visible. The dashboard does not cache a second publication index or infer endpoint publication from the aggregate project status.
 
 It also exposes a separate `Run statistics` action. It uses indexed recording metadata only; it never reads or decompresses replay bundles just to calculate timings. Its target dropdown is the complete retained endpoint or web-app action catalog for the selected surface, independent of period, version, and outcome filters. The modal defaults to the last seven days of successful published runs and lets a developer switch among those targets, choose 24-hour/7-day/30-day/90-day/custom periods, include failed or warning (`suspicious`) runs, and select Published, Latest, or Both. When the selected target has no runs under those filters, it stays selected and the modal says so below the filters. It reports count, median, P95, average, fastest, and slowest processor execution time for the selected period only. A colored Run outcomes section always shows the succeeded, error, and warning counts and percentages for every matching run, even when errors or warnings are excluded from duration metrics. The chart uses hour/day/week/month buckets according to the selected span.
 

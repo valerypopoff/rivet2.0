@@ -15,6 +15,7 @@ import {
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../studio-server-shared/workflow-types.js';
 import { PROJECT_EXTENSION } from './fs-helpers.js';
 import {
+  internalLatestWorkflowsRouter,
   internalPublishedWorkflowsRouter,
   latestWebAppsRouter,
   latestWorkflowsRouter,
@@ -39,6 +40,7 @@ import {
   moveWorkflowItemWithBackend,
   publishWorkflowProjectWebAppsWithBackend,
   publishWorkflowProjectItemWithBackend,
+  updateWorkflowEndpointAccessWithBackend,
   listWorkflowPublishedVersionsWithBackend,
   readWorkflowProjectDownloadWithBackend,
   readWorkflowPublishedVersionDownloadWithBackend,
@@ -137,7 +139,15 @@ const renameProjectSchema = z.object({
 
 const publishProjectSchema = z.object({
   relativePath: z.unknown(),
-  settings: z.unknown().optional(),
+  settings: z.object({
+    endpointName: z.string(),
+    expectedRevisionId: z.string().trim().min(1),
+  }),
+});
+
+const endpointAccessSchema = z.object({
+  relativePath: z.unknown(),
+  access: z.enum(['public', 'internal']),
 });
 
 workflowsRouter.use('/llm-profile-health', llmProfileHealthRouter);
@@ -676,6 +686,18 @@ workflowsRouter.post(
   }),
 );
 
+workflowsRouter.post(
+  '/projects/endpoint-access',
+  jsonBody,
+  validateBody(endpointAccessSchema),
+  asyncHandler(async (req, res) => {
+    const { relativePath, access } = req.body as z.infer<typeof endpointAccessSchema>;
+    const project = await updateWorkflowEndpointAccessWithBackend(relativePath, access);
+    notifyWorkflowTreeChanged(req);
+    res.json({ project });
+  }),
+);
+
 workflowsRouter.delete(
   '/projects',
   jsonBody,
@@ -689,6 +711,7 @@ workflowsRouter.delete(
 );
 
 export {
+  internalLatestWorkflowsRouter,
   internalPublishedWorkflowsRouter,
   latestWebAppsRouter,
   latestWorkflowsRouter,

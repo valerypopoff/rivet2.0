@@ -160,7 +160,7 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
   return (
     <ModalTransition>
       {isOpen && (
-        <Modal onClose={() => setIsOpen(false)} width="45vw" height={SETTINGS_MODAL_HEIGHT} testId="settings-modal">
+        <Modal onClose={() => setIsOpen(false)} width="max(700px, 45vw)" height={SETTINGS_MODAL_HEIGHT} testId="settings-modal">
           <Global styles={settingsModalScrollContainerOverrides} />
           <AppModalHeader title="Rivet settings" onClose={() => setIsOpen(false)} />
           <ModalBody>

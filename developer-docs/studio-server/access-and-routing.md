@@ -45,7 +45,7 @@ The nginx configs keep a `100 MiB` server-wide body limit for API/editor payload
 The API does not install a catch-all body parser. Each body-consuming route owns its parser and places authentication or request preflight before it:
 
 - control-plane routes authenticate the trusted proxy header before their route-local JSON parser. Their ordinary limit is `100 MiB`; local-editor recording uploads use `48 MiB`; evaluation recording uploads use `24 MiB`.
-- published and latest workflow endpoints validate their bearer/trusted-client credential before JSON parsing. The private `/internal/workflows/*` route remains a network-isolated intra-stack route and has no bearer requirement.
+- published and latest workflow endpoints validate their bearer/trusted-client credential before JSON parsing. The private `/internal/workflows/*` and `/internal/workflows-latest/*` routes remain network-isolated intra-stack routes and have no bearer requirement.
 - web-app actions resolve the app's existing gate, OAuth/session, origin, and project allowlist policy before parsing the action payload.
 - the intentionally unauthenticated UI-key and dummy-OAuth forms accept only small (`64 KiB`) JSON or URL-encoded request bodies.
 
@@ -407,8 +407,13 @@ All three workflow execution handlers are `POST`-only:
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}/:endpointName`
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}/:endpointName`
 - `/internal/workflows/:endpointName`
+- `/internal/workflows-latest/:endpointName`
 
 Public route exposure rules:
+
+- Workflow endpoint access is `public` by default, including all pre-existing publications. Project Settings → Endpoint shows the access control whenever a published version exists, even with unpublished draft changes. Switching to `internal` updates publication metadata immediately, without republishing the draft: both browser-facing `/workflows/:publishedEndpointName` and `/workflows-latest/:draftEndpointName` return 404. The published snapshot remains executable on `/internal/workflows/:publishedEndpointName`; the latest draft remains executable on `/internal/workflows-latest/:draftEndpointName` inside the private server network. Both deployment-specific internal URLs remain visible in the settings help when draft changes exist. Docker Compose defaults both to the `http://api` service alias; Helm supplies separate execution and control-plane Service URLs through the authenticated `/api/config` response. Switching back restores both public routes. Web-app routes are separate and unaffected.
+- The internal routes have no bearer check because network isolation is their security boundary. The public proxy explicitly returns 404 for `/internal` and `/internal/*`; never expose the API or execution Services through a separate public ingress or load balancer. In Kubernetes, ClusterIP means cluster-internal, not restricted to a particular Pod or namespace; apply NetworkPolicy when other cluster workloads must not call these routes. The per-workflow access setting is enforced by both filesystem and managed execution lookups, not by a browser-only switch.
+- Managed public workflow requests re-read the endpoint pointer from PostgreSQL before admission and do not join an older in-flight pointer lookup, so an execution replica cannot keep serving a newly internal-only endpoint while its cross-replica cache notification is in flight. Private routes continue using the cached pointer; immutable revision payloads remain cached on both paths. Requests already admitted before the access update may finish.
 
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` resolves only the actively published endpoint identity
 - `${RIVET_PUBLISHED_APPS_BASE_PATH}` resolves only actively published web-app slugs and serves their pinned UI graph from the frozen project snapshot/revision
@@ -417,6 +422,8 @@ Public route exposure rules:
 - workflow unpublish closes only the workflow route families even though the saved draft `endpointName` remains in project settings for later republish convenience
 - web-app route families stay open until each web-app publication is explicitly unpublished
 - endpoint uniqueness follows those same active public identities; a fully unpublished saved draft endpoint does not block another workflow from publishing on that name
+
+Filesystem settings sidecars normalize missing `endpointAccess` to `public` for compatibility and reject unknown values; managed schema migration 12 adds a checked `workflows.endpoint_access` column with a `public` default. Republish and published-version restore preserve an existing access choice. Changing access invalidates execution pointers so the next request uses the new policy. No project-file or published-snapshot format changes are required.
 
 Current request/response behavior:
 

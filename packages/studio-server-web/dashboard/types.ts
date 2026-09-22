@@ -105,6 +105,8 @@ export type HostedRouteConfig = {
   remoteDebuggerDefaultWs: string;
   publishedWorkflowsBasePath: string;
   latestWorkflowsBasePath: string;
+  internalPublishedWorkflowsBaseUrl?: string;
+  internalLatestWorkflowsBaseUrl?: string;
   publishedAppsBasePath: string;
   latestAppsBasePath: string;
   webAppsAuthMode: 'ui-gate' | 'oauth' | 'none';

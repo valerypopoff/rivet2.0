@@ -61,6 +61,7 @@ import {
   deleteWorkflowProjectItem,
   duplicateWorkflowProjectItem,
   publishWorkflowProjectItem,
+  updateWorkflowEndpointAccess,
   renameWorkflowFolderItem,
   renameWorkflowProjectItem,
   uploadWorkflowProjectItem,
@@ -234,6 +235,7 @@ type ExecutionProjectResult = {
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
   revisionKey: string;
+  endpointAccess?: 'public' | 'internal';
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
   /** Immutable identity of the published app binding, independent of its executable revision. */
@@ -1041,6 +1043,17 @@ export async function publishWorkflowProjectItemWithBackend(
   );
 }
 
+export async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal') {
+  return delegate(
+    async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access),
+    async () => withFilesystemWorkflowStorageWrite(async () => {
+      const project = await updateWorkflowEndpointAccess(relativePath, access);
+      markFilesystemExecutionStructureDirty([project.absolutePath]);
+      return project;
+    }),
+  );
+}
+
 export async function listWorkflowProjectWebAppsWithBackend(
   relativePath: unknown,
 ): Promise<WorkflowProjectWebAppsResponse> {
@@ -1130,9 +1143,9 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown
   );
 }
 
-export async function resolvePublishedExecutionProject(endpointName: string): Promise<ExecutionProjectResult | null> {
+export async function resolvePublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ExecutionProjectResult | null> {
   if (isManagedWorkflowStorageEnabled()) {
-    return (await getManagedBackend()).loadPublishedExecutionProject(endpointName);
+    return (await getManagedBackend()).loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
 
   return withFilesystemWorkflowStorageRead(() =>
@@ -1189,9 +1202,9 @@ export async function resolveWebAppAccessPolicy(
   );
 }
 
-export async function resolveLatestExecutionProject(endpointName: string): Promise<ExecutionProjectResult | null> {
+export async function resolveLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ExecutionProjectResult | null> {
   if (isManagedWorkflowStorageEnabled()) {
-    return (await getManagedBackend()).loadLatestExecutionProject(endpointName);
+    return (await getManagedBackend()).loadLatestExecutionProject(endpointName, requireFreshPointer);
   }
 
   return withFilesystemWorkflowStorageRead(() =>

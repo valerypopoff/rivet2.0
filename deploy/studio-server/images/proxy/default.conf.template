@@ -54,6 +54,10 @@ server {
     set $executor_internal_upstream http://${RIVET_EXECUTOR_UPSTREAM_HOST}:${RIVET_EXECUTOR_UPSTREAM_PORT}/internal;
     set $executor_upstream http://${RIVET_EXECUTOR_UPSTREAM_HOST}:${RIVET_EXECUTOR_UPSTREAM_PORT}/;
 
+    # Private API routes are reachable through cluster Services, never ingress.
+    location = /internal { return 404; }
+    location ^~ /internal/ { return 404; }
+
     location / {
         auth_request /__rivet_ui_auth_check;
 

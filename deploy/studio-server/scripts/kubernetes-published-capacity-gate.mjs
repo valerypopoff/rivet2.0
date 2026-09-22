@@ -609,7 +609,7 @@ export class PublishedCapacityGate {
       await requestJson(this.config.baseUrl, '/api/workflows/projects/publish', {
         method: 'POST',
         headers: this.config.requestHeaders,
-        body: { relativePath, settings: { endpointName } },
+        body: { relativePath, settings: { endpointName, expectedRevisionId: upload.project?.revisionId } },
       });
     }
   }

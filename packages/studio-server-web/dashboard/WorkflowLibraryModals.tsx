@@ -69,11 +69,12 @@ export const WorkflowLibraryModals: FC<{
     <>
       {settingsModalOpen && settingsModalProject ? (
         <ProjectSettingsModal
+          key={settingsModalProject.id}
           activeProject={settingsModalProject}
           allProjects={allProjects}
           isOpen={settingsModalOpen}
           onClose={closeSettingsModal}
-          onRefresh={() => refresh(false)}
+          onRefresh={() => refresh(false, { preserveVisibleTreeOnError: true })}
           onDeleteProject={onDeleteProject}
           onOpenPublishedHistory={openPublishedHistoryModal}
           onOpenRecording={onOpenRecording}

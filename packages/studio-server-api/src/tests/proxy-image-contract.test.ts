@@ -71,7 +71,11 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(latestDebuggerLocation, /proxy_set_header Upgrade \$http_upgrade;/);
   assert.match(latestDebuggerLocation, /proxy_set_header Connection \$connection_upgrade;/);
 
-  assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
+  for (const proxyTemplate of readProxyTemplates()) {
+    assert.doesNotMatch(proxyTemplate, /location\s+[^\{]*\/internal\/workflows(?:-latest)?\b/);
+    assert.match(proxyPublicLocation(proxyTemplate, /location = \/internal\s*\{/), /return 404;/);
+    assert.match(proxyPublicLocation(proxyTemplate, /location \^~ \/internal\/\s*\{/), /return 404;/);
+  }
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
   assert.match(proxyBootstrap, /fetch_proxy_settings\(\)/);
   assert.match(proxyBootstrap, /X-Rivet-Proxy-Auth: \$\{RIVET_PROXY_AUTH_TOKEN\}/);

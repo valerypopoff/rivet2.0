@@ -234,7 +234,7 @@ async function main() {
     await request(baseUrl, '/api/workflows/projects/publish', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath, settings: { endpointName: 'candidate-smoke' } }),
+      body: JSON.stringify({ relativePath, settings: { endpointName: 'candidate-smoke', expectedRevisionId: uploaded.project?.revisionId } }),
     });
     const execution = await request(baseUrl, '/workflows/candidate-smoke', {
       method: 'POST',

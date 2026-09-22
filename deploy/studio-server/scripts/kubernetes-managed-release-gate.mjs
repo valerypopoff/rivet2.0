@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -949,9 +950,28 @@ class ManagedReleaseGate {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
-        settings: { endpointName: 'managed-release-workflow' },
+        settings: { endpointName: 'managed-release-workflow', expectedRevisionId: upload.project?.revisionId },
       }),
     });
+    const historyRoute = `/api/workflows/projects/published-versions?relativePath=${encodeURIComponent(relativePath)}`;
+    const historyBeforeConflict = await requestJson(baseUrl, historyRoute);
+    const stalePublish = await fetch(`${baseUrl}/api/workflows/projects/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        relativePath,
+        settings: { endpointName: 'managed-release-workflow', expectedRevisionId: randomUUID() },
+      }),
+    });
+    assert.equal(stalePublish.status, 409, 'Deployed API must reject a stale publication revision');
+    assert.match((await stalePublish.json()).error, /Publishing failed because the project changed/);
+    assert.deepEqual(
+      await requestJson(baseUrl, historyRoute),
+      historyBeforeConflict,
+      'Rejected publication must leave the current version and publication history unchanged',
+    );
+
     await requestJson(baseUrl, '/api/workflows/projects/web-apps/publish', {
       method: 'POST',
       body: JSON.stringify({

@@ -71,6 +71,8 @@ export async function getWorkflowProjectSettings(
       ? { publicationStatus: getAggregateWorkflowProjectStatus(status, webAppStatuses) }
       : {}),
     endpointName: storedSettings.endpointName,
+    publishedEndpointName: storedSettings.publishedEndpointName,
+    endpointAccess: storedSettings.endpointAccess,
     lastPublishedAt: await resolveWorkflowLastPublishedAt(projectPath, storedSettings, status),
     publishedWebApps: storedSettings.publishedWebApps.map((webApp, index) => ({
       uiGraphId: webApp.uiGraphId,
@@ -150,6 +152,7 @@ export async function writeStoredWorkflowProjectSettings(projectPath: string, se
 export function createDefaultStoredWorkflowProjectSettings(): StoredWorkflowProjectSettings {
   return {
     endpointName: '',
+    endpointAccess: 'public',
     publishedEndpointName: '',
     publishedSnapshotId: null,
     publishedStateHash: null,
@@ -165,6 +168,7 @@ export function normalizeWorkflowProjectSettingsDraft(value: unknown): WorkflowP
 
   return {
     endpointName: normalizeStoredEndpointName(endpointName),
+    ...(typeof raw.expectedRevisionId === 'string' ? { expectedRevisionId: raw.expectedRevisionId } : {}),
   };
 }
 
@@ -176,6 +180,9 @@ export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWo
   const publishedStateHash = coerceNullableString(raw.publishedStateHash, defaults.publishedStateHash);
   const lastPublishedAt = coerceNullableString(raw.lastPublishedAt, defaults.lastPublishedAt);
   const legacyStatus = typeof raw.status === 'string' ? raw.status : undefined;
+  if (raw.endpointAccess != null && raw.endpointAccess !== 'public' && raw.endpointAccess !== 'internal') {
+    throw badRequest('Invalid endpoint access');
+  }
 
   if (
     legacyStatus != null &&
@@ -188,6 +195,7 @@ export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWo
 
   return {
     endpointName,
+    endpointAccess: raw.endpointAccess ?? 'public',
     publishedEndpointName: normalizeStoredEndpointName(
       coerceString(raw.publishedEndpointName, defaults.publishedEndpointName) || (publishedStateHash ? endpointName : ''),
     ),

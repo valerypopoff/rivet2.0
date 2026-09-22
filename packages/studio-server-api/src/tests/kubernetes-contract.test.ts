@@ -157,11 +157,34 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
 
   assert.match(
     renderedChart,
-    /name: RIVET_API_PROFILE\s*\n\s*value: "control"\s*\n\s*- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "none"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "true"/,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "control"[\s\S]*?- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "none"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "true"/,
   );
   assert.match(
     renderedChart,
-    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"\s*\n\s*- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
+    /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
+  );
+  assert.match(renderedChart, /name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-execution\.[^\"]+:80\/internal\/workflows"/);
+  assert.match(renderedChart, /name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-api\.[^\"]+:80\/internal\/workflows-latest"/);
+  assert.equal((renderedChart.match(/name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL/g) ?? []).length, 1);
+  assert.equal((renderedChart.match(/name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL/g) ?? []).length, 1);
+  const customInternalRoutes = await renderLocalKubernetesChartWithOverrides([
+    'fullnameOverride=custom-rivet',
+    'clusterDomain=corp.local',
+    'service.execution.port=8181',
+    'service.api.port=8282',
+  ]);
+  assert.match(customInternalRoutes, /value: "http:\/\/custom-rivet-execution\.default\.svc\.corp\.local:8181\/internal\/workflows"/);
+  assert.match(customInternalRoutes, /value: "http:\/\/custom-rivet-api\.default\.svc\.corp\.local:8282\/internal\/workflows-latest"/);
+  const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
+  assert.match(apiEntrypoint, /deployment_internal_published_workflows_base_url="\$\{RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL "\$deployment_internal_published_workflows_base_url"/);
+  assert.match(apiEntrypoint, /deployment_internal_latest_workflows_base_url="\$\{RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL "\$deployment_internal_latest_workflows_base_url"/);
+  await assertHelmTemplateFails(
+    ['env.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL=http://wrong-service/internal/workflows'],
+    /env\.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL is chart-owned/,
+  );
+  await assertHelmTemplateFails(
+    ['env.RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL=http://wrong-service/internal/workflows-latest'],
+    /env\.RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL is chart-owned/,
   );
   assert.match(
     renderedChart,
@@ -659,11 +682,11 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="11" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="11" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="12" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="12" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="11" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="11" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="12" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="12" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -948,7 +971,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=11',
+    'release.production.database.managedWorkflowSchemaVersion=12',
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {
