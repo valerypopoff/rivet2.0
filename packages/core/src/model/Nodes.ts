@@ -189,6 +189,9 @@ export * from './nodes/RaceInputsNode.js';
 import { toJsonNode } from './nodes/ToJsonNode.js';
 export * from './nodes/ToJsonNode.js';
 
+import { toBase64Node } from './nodes/ToBase64Node.js';
+export * from './nodes/ToBase64Node.js';
+
 import { joinNode } from './nodes/JoinNode.js';
 export * from './nodes/JoinNode.js';
 
@@ -397,6 +400,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(abortGraphNode)
     .register(raceInputsNode)
     .register(toJsonNode)
+    .register(toBase64Node)
     .register(joinNode)
     .register(filterNode)
     .register(jsFilterNode)

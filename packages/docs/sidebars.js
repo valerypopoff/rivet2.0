@@ -181,6 +181,7 @@ const sidebars = {
         'node-reference/to-tree',
         'node-reference/to-yaml',
         'node-reference/to-json',
+        'node-reference/to-base64',
       ],
     },
     {

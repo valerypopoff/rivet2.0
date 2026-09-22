@@ -1043,6 +1043,15 @@ export const nodeStyles = css`
     z-index: 0;
   }
 
+  .node[data-contextmenutype='node-image'] .node-output img {
+    display: block;
+    height: auto;
+    max-height: 200px;
+    max-width: 100%;
+    object-fit: contain;
+    width: auto;
+  }
+
   .node.isComment .node-output {
     display: none;
   }
