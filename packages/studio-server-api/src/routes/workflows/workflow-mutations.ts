@@ -31,7 +31,9 @@ import {
   sanitizeWorkflowName,
 } from './fs-helpers.js';
 import {
-  createWorkflowPublicationStateHash,
+  createPublishedWorkflowSnapshotChanges,
+  createStoredWorkflowProjectSettingsChange,
+  createWorkflowPublicationStateHashFromContents,
   deletePublishedWorkflowSnapshot,
   ensureWorkflowEndpointNameIsUnique,
   getWorkflowProjectSettings,
@@ -39,14 +41,13 @@ import {
   normalizeWorkflowProjectSettingsDraft,
   readStoredWorkflowProjectSettings,
   resolvePublishedWorkflowProjectPath,
-  writePublishedWorkflowSnapshot,
-  writeStoredWorkflowProjectSettings,
 } from './publication.js';
 import {
   deleteWorkflowPublishedVersionsByProjectId,
-  ensureCurrentPublishedWorkflowVersionMetadata,
-  writePublishedWorkflowVersionMetadata,
+  createPublishedWorkflowVersionMetadataChange,
+  getCurrentPublishedWorkflowVersionMetadataChange,
 } from './published-versions.js';
+import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
 import { requireProjectMainGraphForEndpoint } from './main-graph.js';
 import { getWorkflowDuplicateProjectName } from './workflow-project-naming.js';
 import { deleteWorkflowRecordingsBySourceProjectPath, deleteWorkflowRecordingsByWorkflowId } from './recordings.js';
@@ -463,39 +464,43 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
   const publishedSnapshotId = randomUUID();
   const lastPublishedAt = new Date().toISOString();
 
-  try {
-    await ensureCurrentPublishedWorkflowVersionMetadata({
-      root,
-      projectPath,
-      settings: existingSettings,
-    });
-    const publishedSnapshotPath = await writePublishedWorkflowSnapshot(root, projectPath, publishedSnapshotId);
-    requireProjectMainGraphForEndpoint(await loadProjectFromFile(publishedSnapshotPath));
-    const publishedStateHash = await createWorkflowPublicationStateHash(
-      publishedSnapshotPath,
-      normalizedSettings.endpointName,
-    );
-    await writePublishedWorkflowVersionMetadata({
-      root,
-      projectPath,
-      snapshotId: publishedSnapshotId,
-      endpointName: normalizedSettings.endpointName,
-      stateHash: publishedStateHash,
-      publishedAt: lastPublishedAt,
-    });
-    await writeStoredWorkflowProjectSettings(projectPath, {
-      endpointName: normalizedSettings.endpointName,
-      endpointAccess: existingSettings.endpointAccess,
-      publishedEndpointName: normalizedSettings.endpointName,
-      publishedSnapshotId,
-      publishedStateHash,
-      lastPublishedAt,
-      publishedWebApps: existingSettings.publishedWebApps,
-    });
-  } catch (error) {
-    await deletePublishedWorkflowSnapshot(root, publishedSnapshotId).catch(() => {});
-    throw error;
-  }
+  const legacyMetadataChange = await getCurrentPublishedWorkflowVersionMetadataChange({
+    root,
+    projectPath,
+    settings: existingSettings,
+  });
+  const snapshot = await createPublishedWorkflowSnapshotChanges(root, projectPath, publishedSnapshotId);
+  const publishedStateHash = createWorkflowPublicationStateHashFromContents(
+    snapshot.contents,
+    snapshot.datasetsContents,
+    normalizedSettings.endpointName,
+  );
+  const metadataChange = await createPublishedWorkflowVersionMetadataChange({
+    root,
+    projectPath,
+    snapshotId: publishedSnapshotId,
+    endpointName: normalizedSettings.endpointName,
+    stateHash: publishedStateHash,
+    publishedAt: lastPublishedAt,
+  });
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [
+      ...(legacyMetadataChange ? [legacyMetadataChange] : []),
+      ...snapshot.changes,
+      metadataChange,
+      createStoredWorkflowProjectSettingsChange(projectPath, {
+        endpointName: normalizedSettings.endpointName,
+        endpointAccess: existingSettings.endpointAccess,
+        publishedEndpointName: normalizedSettings.endpointName,
+        publishedSnapshotId,
+        publishedStateHash,
+        lastPublishedAt,
+        publishedWebApps: existingSettings.publishedWebApps,
+      }),
+    ],
+  });
 
   return getWorkflowProject(root, projectPath);
 }
@@ -508,19 +513,26 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
 
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  await ensureCurrentPublishedWorkflowVersionMetadata({
+  const legacyMetadataChange = await getCurrentPublishedWorkflowVersionMetadataChange({
     root,
     projectPath,
     settings: existingSettings,
   });
-  await writeStoredWorkflowProjectSettings(projectPath, {
-    endpointName: existingSettings.endpointName,
-    endpointAccess: existingSettings.endpointAccess,
-    publishedEndpointName: '',
-    publishedSnapshotId: null,
-    publishedStateHash: null,
-    lastPublishedAt: existingSettings.lastPublishedAt,
-    publishedWebApps: existingSettings.publishedWebApps,
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [
+      ...(legacyMetadataChange ? [legacyMetadataChange] : []),
+      createStoredWorkflowProjectSettingsChange(projectPath, {
+        endpointName: existingSettings.endpointName,
+        endpointAccess: existingSettings.endpointAccess,
+        publishedEndpointName: '',
+        publishedSnapshotId: null,
+        publishedStateHash: null,
+        lastPublishedAt: existingSettings.lastPublishedAt,
+        publishedWebApps: existingSettings.publishedWebApps,
+      }),
+    ],
   });
 
   return getWorkflowProject(root, projectPath);
@@ -534,7 +546,11 @@ export async function updateWorkflowEndpointAccess(relativePath: unknown, access
     throw conflict('Publish the workflow before changing endpoint access');
   }
 
-  await writeStoredWorkflowProjectSettings(projectPath, { ...settings, endpointAccess: access });
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [createStoredWorkflowProjectSettingsChange(projectPath, { ...settings, endpointAccess: access })],
+  });
   return getWorkflowProject(root, projectPath);
 }
 

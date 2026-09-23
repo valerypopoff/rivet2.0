@@ -11,6 +11,7 @@ import {
   getPublishedWorkflowSnapshotPath,
   getWorkflowDatasetPath,
   getWorkflowProjectSettingsPath,
+  isSafePublishedSnapshotId,
   listProjectPathsRecursive,
   pathExists,
   PROJECT_EXTENSION,
@@ -25,6 +26,7 @@ import type {
   WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
 } from './types.js';
+import type { PublicationFileChange } from './filesystem-publication-transactions.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
 
 export { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
@@ -130,23 +132,27 @@ async function getPublishedWebAppPublicationStatuses(
 
 export async function readStoredWorkflowProjectSettings(projectPath: string, _projectName: string): Promise<StoredWorkflowProjectSettings> {
   const settingsPath = getWorkflowProjectSettingsPath(projectPath);
-
+  let settingsText: string;
   try {
-    const settingsText = await fs.readFile(settingsPath, 'utf8');
-    const parsedSettings = JSON.parse(settingsText) as unknown;
-    return normalizeStoredWorkflowProjectSettings(parsedSettings);
+    settingsText = await fs.readFile(settingsPath, 'utf8');
   } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === 'ENOENT' || error instanceof SyntaxError) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return createDefaultStoredWorkflowProjectSettings();
     }
-
     throw error;
+  }
+  try {
+    return normalizeStoredWorkflowProjectSettings(JSON.parse(settingsText) as unknown);
+  } catch (error) {
+    throw new Error(`Corrupt workflow publication settings for ${projectPath}; operator repair is required`, { cause: error });
   }
 }
 
-export async function writeStoredWorkflowProjectSettings(projectPath: string, settings: StoredWorkflowProjectSettings): Promise<void> {
-  await fs.writeFile(getWorkflowProjectSettingsPath(projectPath), `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+export function createStoredWorkflowProjectSettingsChange(
+  projectPath: string,
+  settings: StoredWorkflowProjectSettings,
+): PublicationFileChange {
+  return { path: getWorkflowProjectSettingsPath(projectPath), contents: `${JSON.stringify(settings, null, 2)}\n` };
 }
 
 export function createDefaultStoredWorkflowProjectSettings(): StoredWorkflowProjectSettings {
@@ -173,10 +179,24 @@ export function normalizeWorkflowProjectSettingsDraft(value: unknown): WorkflowP
 }
 
 export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWorkflowProjectSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid workflow publication settings object');
+  }
   const defaults = createDefaultStoredWorkflowProjectSettings();
-  const raw = (value ?? {}) as Record<string, unknown>;
+  const raw = value as Record<string, unknown>;
+  for (const field of ['endpointName', 'publishedEndpointName', 'publishedSnapshotId', 'publishedStateHash', 'lastPublishedAt']) {
+    if (raw[field] != null && typeof raw[field] !== 'string') {
+      throw new Error(`Invalid workflow publication settings field ${field}`);
+    }
+  }
+  if (raw.publishedWebApps != null && !Array.isArray(raw.publishedWebApps)) {
+    throw new Error('Invalid workflow publication web apps');
+  }
   const endpointName = normalizeStoredEndpointName(coerceString(raw.endpointName, defaults.endpointName));
   const publishedSnapshotId = coerceNullableString(raw.publishedSnapshotId, defaults.publishedSnapshotId);
+  if (publishedSnapshotId != null && !isSafePublishedSnapshotId(publishedSnapshotId)) {
+    throw new Error('Invalid published snapshot ID');
+  }
   const publishedStateHash = coerceNullableString(raw.publishedStateHash, defaults.publishedStateHash);
   const lastPublishedAt = coerceNullableString(raw.lastPublishedAt, defaults.lastPublishedAt);
   const legacyStatus = typeof raw.status === 'string' ? raw.status : undefined;
@@ -216,15 +236,26 @@ function normalizeStoredWorkflowPublishedWebApps(value: unknown): StoredWorkflow
   const normalized: StoredWorkflowPublishedWebApp[] = [];
 
   for (const item of value) {
-    const raw = (item ?? {}) as Record<string, unknown>;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Invalid published web app entry');
+    }
+    const raw = item as Record<string, unknown>;
+    if (
+      (raw.appId != null && typeof raw.appId !== 'string') ||
+      (raw.uiGraphName != null && typeof raw.uiGraphName !== 'string') ||
+      (raw.allowedEmails != null && typeof raw.allowedEmails !== 'string' &&
+        (!Array.isArray(raw.allowedEmails) || !raw.allowedEmails.every((email) => typeof email === 'string')))
+    ) {
+      throw new Error('Invalid published web app access metadata');
+    }
     const uiGraphId = coerceString(raw.uiGraphId, '').trim();
     const appId = coerceString(raw.appId, '').trim();
     const publishedSnapshotId = coerceString(raw.publishedSnapshotId, '').trim();
     const slug = normalizeStoredEndpointName(coerceString(raw.slug, ''));
     const publishedAt = coerceString(raw.publishedAt, '').trim();
 
-    if (!uiGraphId || !publishedSnapshotId || !slug || !publishedAt || seenUiGraphIds.has(uiGraphId)) {
-      continue;
+    if (!uiGraphId || !isSafePublishedSnapshotId(publishedSnapshotId) || !slug || !publishedAt || seenUiGraphIds.has(uiGraphId)) {
+      throw new Error('Invalid or duplicate published web app entry');
     }
 
     seenUiGraphIds.add(uiGraphId);
@@ -413,6 +444,22 @@ export async function createWorkflowPublicationStateHash(projectPath: string, en
   return hash.digest('hex');
 }
 
+export function createWorkflowPublicationStateHashFromContents(
+  projectContents: string,
+  datasetsContents: string | Buffer | null,
+  endpointName: string,
+): string {
+  const hash = createHash('sha256').update(endpointName).update('\n').update(projectContents);
+  if (datasetsContents == null) {
+    hash.update('\n--dataset-missing--\n');
+  } else {
+    // Keep the existing UTF-8 state-hash contract while the snapshot itself
+    // preserves the source sidecar bytes exactly.
+    hash.update('\n--dataset--\n').update(typeof datasetsContents === 'string' ? datasetsContents : datasetsContents.toString('utf8'));
+  }
+  return hash.digest('hex');
+}
+
 export async function createWorkflowProjectContentHash(projectPath: string): Promise<string> {
   const projectContents = await fs.readFile(projectPath, 'utf8');
   const hash = createHash('sha256').update(projectContents);
@@ -422,20 +469,35 @@ export async function createWorkflowProjectContentHash(projectPath: string): Pro
   return hash.digest('hex');
 }
 
-export async function writePublishedWorkflowSnapshot(root: string, projectPath: string, snapshotId: string): Promise<string> {
+export async function createPublishedWorkflowSnapshotChanges(
+  root: string,
+  projectPath: string,
+  snapshotId: string,
+): Promise<{ contents: string; datasetsContents: Buffer | null; changes: PublicationFileChange[] }> {
   const publishedProjectPath = getPublishedWorkflowSnapshotPath(root, snapshotId);
   const sourceDatasetPath = getWorkflowDatasetPath(projectPath);
   const publishedDatasetPath = getPublishedWorkflowSnapshotDatasetPath(root, snapshotId);
-  await fs.mkdir(path.dirname(publishedProjectPath), { recursive: true });
-  await fs.copyFile(projectPath, publishedProjectPath);
+  const contents = await fs.readFile(projectPath, 'utf8');
+  const datasetsContents = await fs.readFile(sourceDatasetPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  return {
+    contents,
+    datasetsContents,
+    changes: [
+      { path: publishedProjectPath, contents },
+      ...(datasetsContents == null ? [] : [{ path: publishedDatasetPath, contents: datasetsContents }]),
+    ],
+  };
+}
 
-  if (await pathExists(sourceDatasetPath)) {
-    await fs.copyFile(sourceDatasetPath, publishedDatasetPath);
-  } else if (await pathExists(publishedDatasetPath)) {
-    await fs.rm(publishedDatasetPath, { force: false });
-  }
-
-  return publishedProjectPath;
+export function getPublishedWorkflowSnapshotArtifactPaths(root: string, snapshotId: string): string[] {
+  return [
+    getPublishedWorkflowSnapshotPath(root, snapshotId),
+    getPublishedWorkflowSnapshotDatasetPath(root, snapshotId),
+    getPublishedWorkflowSnapshotMetadataPath(root, snapshotId),
+  ];
 }
 
 export async function deletePublishedWorkflowSnapshot(root: string, snapshotId: string | null): Promise<void> {

@@ -28,6 +28,10 @@ export type RivetAppHostUiConfig = {
     /** Show the backing file name beside the project title in active tabs. */
     showFileNames?: boolean;
   };
+  projectSettings?: {
+    /** Hide the project-reference editor without changing saved references or execution. */
+    showProjectReferences?: boolean;
+  };
   webApps?: {
     desktopPreview?: boolean;
   };

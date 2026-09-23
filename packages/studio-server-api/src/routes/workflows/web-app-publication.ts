@@ -9,15 +9,16 @@ import type {
 } from '../../../../studio-server-shared/workflow-types.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import {
+  createPublishedWorkflowSnapshotChanges,
+  createStoredWorkflowProjectSettingsChange,
   createWorkflowProjectContentHash,
-  deletePublishedWorkflowSnapshot,
   ensureWorkflowWebAppSlugIsUnique,
+  getPublishedWorkflowSnapshotArtifactPaths,
   normalizeEmailList,
   normalizeStoredEndpointName,
   readStoredWorkflowProjectSettings,
-  writePublishedWorkflowSnapshot,
-  writeStoredWorkflowProjectSettings,
 } from './publication.js';
+import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
 import {
   ensureWorkflowsRoot,
   getPublishedWorkflowSnapshotPath,
@@ -318,24 +319,25 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
     }),
   ];
 
-  try {
-    await writePublishedWorkflowSnapshot(root, projectPath, publishedSnapshotId);
-    await writeStoredWorkflowProjectSettings(projectPath, {
-      ...existingSettings,
-      publishedWebApps: nextPublishedWebApps,
-    });
-  } catch (error) {
-    await deletePublishedWorkflowSnapshot(root, publishedSnapshotId).catch(() => {});
-    throw error;
-  }
-
   const unusedSnapshotIds = getUnusedPublishedWebAppSnapshotIds({
     previousSnapshotIds,
     nextSnapshotIds: nextPublishedWebApps.map((webApp) => webApp.publishedSnapshotId),
     endpointSnapshotId: existingSettings.publishedSnapshotId,
   });
-  await Promise.all(unusedSnapshotIds.map((snapshotId) =>
-    deletePublishedWorkflowSnapshot(root, snapshotId).catch(() => {})));
+  const snapshot = await createPublishedWorkflowSnapshotChanges(root, projectPath, publishedSnapshotId);
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [
+      ...snapshot.changes,
+      createStoredWorkflowProjectSettingsChange(projectPath, {
+        ...existingSettings,
+        publishedWebApps: nextPublishedWebApps,
+      }),
+    ],
+    cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
+      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
+  });
 
   return getWorkflowProject(root, projectPath);
 }
@@ -356,22 +358,23 @@ export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, a
     throw createHttpError(404, 'Published web app not found');
   }
 
-  await writeStoredWorkflowProjectSettings(projectPath, {
-    ...existingSettings,
-    publishedWebApps: existingSettings.publishedWebApps.map((webApp) => {
-      if (!accessByUiGraphId.has(webApp.uiGraphId)) {
-        return webApp;
-      }
-
-      return {
-        ...webApp,
-        appId: getPersistedWebAppBindingId(webApp, webApp.uiGraphId),
-        // This endpoint updates only the explicitly selected web apps. Keep
-        // every other published app's access list intact instead of silently
-        // turning it into an empty allowlist.
-        allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
-      };
-    }),
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [createStoredWorkflowProjectSettingsChange(projectPath, {
+      ...existingSettings,
+      publishedWebApps: existingSettings.publishedWebApps.map((webApp) => {
+        if (!accessByUiGraphId.has(webApp.uiGraphId)) return webApp;
+        return {
+          ...webApp,
+          appId: getPersistedWebAppBindingId(webApp, webApp.uiGraphId),
+          // This endpoint updates only the explicitly selected web apps. Keep
+          // every other published app's access list intact instead of silently
+          // turning it into an empty allowlist.
+          allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
+        };
+      }),
+    })],
   });
 
   return getWorkflowProject(root, projectPath);
@@ -395,18 +398,21 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
   }
 
   const nextPublishedWebApps = existingSettings.publishedWebApps.filter((webApp) => webApp.uiGraphId !== normalizedUiGraphId);
-  await writeStoredWorkflowProjectSettings(projectPath, {
-    ...existingSettings,
-    publishedWebApps: nextPublishedWebApps,
-  });
-
   const unusedSnapshotIds = getUnusedPublishedWebAppSnapshotIds({
     previousSnapshotIds: [removedWebApp.publishedSnapshotId],
     nextSnapshotIds: nextPublishedWebApps.map((webApp) => webApp.publishedSnapshotId),
     endpointSnapshotId: existingSettings.publishedSnapshotId,
   });
-  await Promise.all(unusedSnapshotIds.map((snapshotId) =>
-    deletePublishedWorkflowSnapshot(root, snapshotId).catch(() => {})));
+  await saveFilesystemPublicationTransaction({
+    root,
+    projectPath,
+    changes: [createStoredWorkflowProjectSettingsChange(projectPath, {
+      ...existingSettings,
+      publishedWebApps: nextPublishedWebApps,
+    })],
+    cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
+      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
+  });
 
   return getWorkflowProject(root, projectPath);
 }

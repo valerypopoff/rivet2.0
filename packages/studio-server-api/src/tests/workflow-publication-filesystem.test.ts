@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { readJson } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import { saveFilesystemPublicationTransaction, setFilesystemPublicationTransactionCheckpointForTests } from '../routes/workflows/filesystem-publication-transactions.js';
 
 const {
   workflowsRoot,
@@ -34,15 +35,19 @@ async function writeSettings(
   projectPath: string,
   settings: Partial<StoredWorkflowProjectSettings>,
 ): Promise<void> {
-  await workflowPublication.writeStoredWorkflowProjectSettings(projectPath, {
-    endpointName: '',
-    endpointAccess: 'public',
-    publishedEndpointName: '',
-    publishedSnapshotId: null,
-    publishedStateHash: null,
-    lastPublishedAt: null,
-    publishedWebApps: [],
-    ...settings,
+  await saveFilesystemPublicationTransaction({
+    root: workflowsRoot,
+    projectPath,
+    changes: [workflowPublication.createStoredWorkflowProjectSettingsChange(projectPath, {
+      endpointName: '',
+      endpointAccess: 'public',
+      publishedEndpointName: '',
+      publishedSnapshotId: null,
+      publishedStateHash: null,
+      lastPublishedAt: null,
+      publishedWebApps: [],
+      ...settings,
+    })],
   });
 }
 
@@ -81,6 +86,94 @@ test('filesystem web-app access changes persist an opaque binding for a legacy s
   const appId = persisted.publishedWebApps[0]?.appId;
   assert.ok(typeof appId === 'string');
   assert.match(appId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+
+  await workflowStorageBackend.unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId);
+  assert.equal((await workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'LegacyWebAppBindingMigration')).publishedWebApps.length, 0);
+});
+
+test('malformed publication settings fail visibly instead of making an endpoint appear unpublished', async () => {
+  const projectPath = await writeBlankProject('CorruptPublicationSettings');
+  await fs.writeFile(workflowFs.getWorkflowProjectSettingsPath(projectPath), '{broken', 'utf8');
+  await assert.rejects(
+    workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'CorruptPublicationSettings'),
+    /Corrupt workflow publication settings/,
+  );
+  await assert.rejects(workflowStorageBackend.initializeWorkflowStorage(), /Corrupt workflow publication settings/);
+});
+
+test('malformed published web-app entries fail visibly instead of disappearing', async () => {
+  const projectPath = await writeBlankProject('CorruptWebAppSettings');
+  await fs.writeFile(workflowFs.getWorkflowProjectSettingsPath(projectPath), JSON.stringify({
+    publishedWebApps: [{ uiGraphId: 'web-app', publishedSnapshotId: 'legacy-snapshot', publishedAt: '2026-01-01T00:00:00.000Z' }],
+  }));
+  await assert.rejects(
+    workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'CorruptWebAppSettings'),
+    /Corrupt workflow publication settings/,
+  );
+  await assert.rejects(workflowStorageBackend.initializeWorkflowStorage(), /Corrupt workflow publication settings/);
+
+  await fs.writeFile(workflowFs.getWorkflowProjectSettingsPath(projectPath), JSON.stringify({
+    publishedWebApps: [{
+      uiGraphId: 'web-app', publishedSnapshotId: 'legacy-snapshot', slug: 'web-app',
+      publishedAt: '2026-01-01T00:00:00.000Z', allowedEmails: 42,
+    }],
+  }));
+  await assert.rejects(
+    workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'CorruptWebAppSettings'),
+    /Corrupt workflow publication settings/,
+  );
+});
+
+test('byte-preserved dataset snapshots keep the legacy publication state hash', async () => {
+  const projectPath = await writeBlankProject('LegacyDatasetHash');
+  const dataset = Buffer.from([0, 255, 254, 13, 10]);
+  await fs.writeFile(workflowFs.getWorkflowDatasetPath(projectPath), dataset);
+  const projectContents = await fs.readFile(projectPath, 'utf8');
+  assert.equal(
+    workflowPublication.createWorkflowPublicationStateHashFromContents(projectContents, dataset, 'dataset-hash'),
+    await workflowPublication.createWorkflowPublicationStateHash(projectPath, 'dataset-hash'),
+  );
+});
+
+test('published snapshot IDs cannot escape the frozen snapshot namespace', async () => {
+  const projectPath = await writeBlankProject('InvalidSnapshotId');
+  await fs.writeFile(workflowFs.getWorkflowProjectSettingsPath(projectPath), JSON.stringify({
+    publishedSnapshotId: '../Other Project',
+  }));
+  await assert.rejects(
+    workflowPublication.readStoredWorkflowProjectSettings(projectPath, 'InvalidSnapshotId'),
+    /Corrupt workflow publication settings/,
+  );
+  assert.throws(() => workflowFs.getPublishedWorkflowSnapshotPath(workflowsRoot, '../Other Project'), /Invalid published snapshot ID/);
+});
+
+test('failed publication does not invalidate the tree, while a committed retry does once', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublicationInvalidation');
+  await withWorkflowApiServer(async (baseUrl) => {
+    const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    const publish = () => fetch(`${baseUrl}/projects/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        settings: { endpointName: 'publication-invalidation', expectedRevisionId: created.revisionId },
+      }),
+    });
+    try {
+      setFilesystemPublicationTransactionCheckpointForTests((checkpoint) => {
+        if (checkpoint === 'promoted') throw new Error('injected publication failure');
+      });
+      assert.equal((await publish()).status, 500);
+      const afterFailure = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+      assert.equal(afterFailure.sync.revision, initial.sync.revision);
+      assert.equal((await workflowPublication.readStoredWorkflowProjectSettings(created.absolutePath, created.name)).publishedSnapshotId, null);
+    } finally {
+      setFilesystemPublicationTransactionCheckpointForTests(null);
+    }
+    assert.equal((await publish()).status, 200);
+    const afterCommit = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    assert.equal(afterCommit.sync.revision, initial.sync.revision + 1);
+  });
 });
 
 test('publish and unpublish keep workflow project behavior stable', async () => {

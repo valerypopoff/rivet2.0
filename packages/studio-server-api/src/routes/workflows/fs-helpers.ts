@@ -13,6 +13,7 @@ export const PROJECT_EXTENSION = '.rivet-project';
 export const PROJECT_SETTINGS_SUFFIX = '.wrapper-settings.json';
 export const PROJECT_STATS_SUFFIX = '.wrapper-stats.json';
 export const PUBLISHED_SNAPSHOTS_DIR = '.published';
+const PUBLISHED_SNAPSHOT_ID = /^[a-z0-9_-]{1,128}$/i;
 export const WORKFLOW_RECORDINGS_DIR = '.recordings';
 export const WORKFLOW_DATASET_SUFFIX = '.rivet-data';
 export const WORKFLOW_RECORDING_FILE_NAME = 'recording.rivet-recording.gz';
@@ -194,7 +195,12 @@ export function getWorkflowRecordingReplayDatasetPath(
 }
 
 export function getPublishedWorkflowSnapshotPath(root: string, snapshotId: string): string {
+  if (!isSafePublishedSnapshotId(snapshotId)) throw badRequest('Invalid published snapshot ID');
   return validatePath(path.join(getPublishedSnapshotsRoot(root), `${snapshotId}${PROJECT_EXTENSION}`));
+}
+
+export function isSafePublishedSnapshotId(snapshotId: unknown): snapshotId is string {
+  return typeof snapshotId === 'string' && PUBLISHED_SNAPSHOT_ID.test(snapshotId);
 }
 
 export function getPublishedWorkflowSnapshotDatasetPath(root: string, snapshotId: string): string {
@@ -202,6 +208,7 @@ export function getPublishedWorkflowSnapshotDatasetPath(root: string, snapshotId
 }
 
 export function getPublishedWorkflowSnapshotMetadataPath(root: string, snapshotId: string): string {
+  if (!isSafePublishedSnapshotId(snapshotId)) throw badRequest('Invalid published snapshot ID');
   return validatePath(path.join(getPublishedSnapshotsRoot(root), `${snapshotId}.json`));
 }
 

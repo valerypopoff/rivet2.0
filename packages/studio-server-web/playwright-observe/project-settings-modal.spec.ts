@@ -1190,7 +1190,7 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.projectLoadRequests[0]).toEqual({
       path: project.absolutePath,
     });
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('.active-project-more-button').click();
     await expect(modal).toBeVisible();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
 

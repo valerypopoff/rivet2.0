@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
-test('project settings uses the shared settings-style navigation rail', async ({ page }) => {
+test('hosted project settings keeps the shared navigation and hides project references', async ({ page }) => {
   const projectId = 'project-settings-sections-project';
   const graphId = 'project-settings-sections-graph';
 
@@ -84,7 +84,8 @@ test('project settings uses the shared settings-style navigation rail', async ({
   await expect(modal.getByRole('button', { name: 'Add Context Value' })).toBeVisible();
 
   await navigation.getByRole('button', { name: 'Other' }).click();
-  await expect(modal.locator('.project-info-section')).toContainText('Project References');
+  await expect(modal.getByText('Project References')).toHaveCount(0);
+  await expect(modal.getByRole('button', { name: 'Add Project Reference' })).toHaveCount(0);
   await expect(modal.locator('.project-info-section')).toContainText('Project compare');
   await expect(modal.locator('.project-info-section')).toContainText('Revisions');
   await expect(modal.locator('.project-info-foldable')).toHaveCount(0);

@@ -33,6 +33,9 @@ const HOSTED_RIVET_UI = {
   projectTabs: {
     showFileNames: false,
   },
+  projectSettings: {
+    showProjectReferences: false,
+  },
 } satisfies RivetAppHostUiConfig;
 
 export const HostedEditorApp: FC = () => {

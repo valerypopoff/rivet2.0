@@ -7,6 +7,10 @@ import { deserializeDatasets, loadProjectAndAttachedDataFromString } from '@vale
 
 import { getWorkflowsRoot } from '../../security.js';
 import { getWorkflowDatasetPath, PROJECT_EXTENSION, WORKFLOW_DATASET_SUFFIX } from './fs-helpers.js';
+import {
+  probeFilesystemPublicationStorage,
+  recoverFilesystemPublicationTransactions,
+} from './filesystem-publication-transactions.js';
 
 export const FILESYSTEM_PROJECT_TRANSACTIONS_DIR = '.rivet-transactions';
 
@@ -684,7 +688,9 @@ export async function initializeFilesystemProjectTransactions(root: string): Pro
     fatalRecoveryErrors.delete(getRootKey(root));
     try {
       await runStorageCapabilityProbe(root);
+      await probeFilesystemPublicationStorage(root);
       await recoverTransactionsUnlocked(root);
+      await recoverFilesystemPublicationTransactions(root);
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'startup', null, error);
     }
@@ -708,14 +714,25 @@ export async function withFilesystemWorkflowStorageWrite<T>(operation: () => Pro
     const root = getWorkflowsRoot();
     checkFilesystemProjectTransactionHealth(root);
     try {
-      if (await recoverTransactionsUnlocked(root)) {
+      const projectCleanupPending = await recoverTransactionsUnlocked(root);
+      const publicationCleanupPending = await recoverFilesystemPublicationTransactions(root);
+      if (projectCleanupPending || publicationCleanupPending) {
         throw new FilesystemProjectTransactionCleanupPendingError();
       }
     } catch (error) {
       if (error instanceof FilesystemProjectTransactionCleanupPendingError) throw error;
       throw rememberFatalRecoveryError(root, 'defensive-write', null, error);
     }
-    return operation();
+    try {
+      return await operation();
+    } catch (error) {
+      try {
+        await recoverFilesystemPublicationTransactions(root);
+      } catch (recoveryError) {
+        throw rememberFatalRecoveryError(root, 'publication-rollback', null, recoveryError);
+      }
+      throw error;
+    }
   });
 }
 
@@ -728,6 +745,7 @@ export async function withFilesystemWorkflowProjectRead<T>(
     checkFilesystemProjectTransactionHealth(root);
     try {
       await recoverTransactionsUnlocked(root, projectPath);
+      await recoverFilesystemPublicationTransactions(root);
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'defensive-read', projectPath, error);
     }
@@ -743,6 +761,7 @@ export async function recoverFilesystemProjectTransactions(root: string): Promis
   await operationCoordinator.withWrite(async () => {
     try {
       await recoverTransactionsUnlocked(root);
+      await recoverFilesystemPublicationTransactions(root);
       fatalRecoveryErrors.delete(getRootKey(root));
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'recovery', null, error);

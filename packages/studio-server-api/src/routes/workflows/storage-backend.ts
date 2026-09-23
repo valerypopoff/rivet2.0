@@ -524,6 +524,11 @@ export async function initializeWorkflowStorage(): Promise<void> {
     async () => {
       const root = await ensureWorkflowsRoot();
       await initializeFilesystemProjectTransactions(root);
+      // A corrupt sidecar must not silently make a published endpoint disappear.
+      // Check existing settings before readiness and execution-cache construction.
+      for (const projectPath of await listProjectPathsRecursive(root)) {
+        await readStoredWorkflowProjectSettings(projectPath, path.basename(projectPath, PROJECT_EXTENSION));
+      }
       await getFilesystemExecutionCache().initialize(root);
       await initializeWorkflowRecordingStorage(root);
     },
@@ -1010,20 +1015,15 @@ export async function restoreWorkflowPublishedVersionWithBackend(
     async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        let projectPath: string | null = null;
-        try {
-          const root = await ensureWorkflowsRoot();
-          projectPath = requireProjectPath(
-            resolveWorkflowRelativePath(root, relativePath, {
-              allowProjectFile: true,
-            }),
-          );
-          return await restoreWorkflowPublishedVersion(relativePath, versionId);
-        } finally {
-          if (projectPath) {
-            markFilesystemExecutionStructureDirty([projectPath]);
-          }
-        }
+        const root = await ensureWorkflowsRoot();
+        const projectPath = requireProjectPath(
+          resolveWorkflowRelativePath(root, relativePath, {
+            allowProjectFile: true,
+          }),
+        );
+        return restoreWorkflowPublishedVersion(relativePath, versionId, () => {
+          markFilesystemExecutionStructureDirty([projectPath]);
+        });
       }),
   );
 }
