@@ -9,7 +9,7 @@ import {
   type AttachedData,
   type Project,
 } from '@valerypopoff/rivet2-node';
-import type { WorkflowEndpointAccess, WorkflowProjectDownloadVersion } from '../../../../studio-server-shared/workflow-types.js';
+import type { WorkflowEndpointAccess, WorkflowProjectDownloadVersion, WorkflowPublicationPreconditions } from '../../../../studio-server-shared/workflow-types.js';
 
 import { validatePath } from '../../security.js';
 import { WORKFLOW_PUBLICATION_CONFLICT_MESSAGE } from '../../../../studio-server-shared/workflow-types.js';
@@ -48,6 +48,7 @@ import {
   getCurrentPublishedWorkflowVersionMetadataChange,
 } from './published-versions.js';
 import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
+import { assertFilesystemPublicationPreconditions } from './publication-preconditions.js';
 import { requireProjectMainGraphForEndpoint } from './main-graph.js';
 import { getWorkflowDuplicateProjectName } from './workflow-project-naming.js';
 import { deleteWorkflowRecordingsBySourceProjectPath, deleteWorkflowRecordingsByWorkflowId } from './recordings.js';
@@ -440,13 +441,14 @@ export async function renameWorkflowProjectItem(relativePath: unknown, newName: 
   };
 }
 
-export async function publishWorkflowProjectItem(relativePath: unknown, settings: unknown) {
+export async function publishWorkflowProjectItem(relativePath: unknown, settings: unknown, preconditions?: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
   }));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: true });
   const normalizedSettings = normalizeWorkflowProjectSettingsDraft(settings);
   if (normalizedSettings.expectedRevisionId !== undefined) {
     const contents = await fs.readFile(projectPath, 'utf8');
@@ -498,14 +500,14 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
         publishedStateHash,
         lastPublishedAt,
         publishedWebApps: existingSettings.publishedWebApps,
-      }),
+      }, existingSettings),
     ],
   });
 
   return getWorkflowProject(root, projectPath);
 }
 
-export async function unpublishWorkflowProjectItem(relativePath: unknown) {
+export async function unpublishWorkflowProjectItem(relativePath: unknown, preconditions?: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
@@ -513,6 +515,7 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
 
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: false });
   const legacyMetadataChange = await getCurrentPublishedWorkflowVersionMetadataChange({
     root,
     projectPath,
@@ -531,17 +534,18 @@ export async function unpublishWorkflowProjectItem(relativePath: unknown) {
         publishedStateHash: null,
         lastPublishedAt: existingSettings.lastPublishedAt,
         publishedWebApps: existingSettings.publishedWebApps,
-      }),
+      }, existingSettings),
     ],
   });
 
   return getWorkflowProject(root, projectPath);
 }
 
-export async function updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess) {
+export async function updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess, preconditions?: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, { allowProjectFile: true }));
   const settings = await readStoredWorkflowProjectSettings(projectPath, path.basename(projectPath, PROJECT_EXTENSION));
+  await assertFilesystemPublicationPreconditions(projectPath, settings, preconditions, { publishesDraft: false });
   if (!hasPublishedWorkflowLineage(settings)) {
     throw conflict('Publish the workflow before changing endpoint access');
   }
@@ -549,7 +553,7 @@ export async function updateWorkflowEndpointAccess(relativePath: unknown, access
   await saveFilesystemPublicationTransaction({
     root,
     projectPath,
-    changes: [createStoredWorkflowProjectSettingsChange(projectPath, { ...settings, endpointAccess: access })],
+    changes: [createStoredWorkflowProjectSettingsChange(projectPath, { ...settings, endpointAccess: access }, settings)],
   });
   return getWorkflowProject(root, projectPath);
 }

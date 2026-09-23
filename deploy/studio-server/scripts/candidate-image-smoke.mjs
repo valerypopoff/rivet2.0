@@ -231,10 +231,34 @@ async function main() {
       throw new Error('Candidate smoke project upload did not return a relativePath.');
     }
 
+    const publicationSnapshotResponse = await request(
+      baseUrl,
+      `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+      { headers: { Cookie: cookie } },
+    );
+    const publicationSnapshot = await publicationSnapshotResponse.json();
+    const { projectId, draftRevisionId, publicationVersion, project } = publicationSnapshot;
+    if (
+      !projectId || !draftRevisionId || !publicationVersion ||
+      project?.projectMetadataId !== projectId ||
+      project.revisionId !== draftRevisionId ||
+      project.settings?.publicationVersion !== publicationVersion
+    ) {
+      throw new Error('Candidate smoke did not receive a coherent publication snapshot.');
+    }
+
     await request(baseUrl, '/api/workflows/projects/publish', {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath, settings: { endpointName: 'candidate-smoke', expectedRevisionId: uploaded.project?.revisionId } }),
+      body: JSON.stringify({
+        relativePath,
+        settings: { endpointName: 'candidate-smoke', expectedRevisionId: draftRevisionId },
+        preconditions: {
+          expectedProjectId: projectId,
+          expectedDraftRevisionId: draftRevisionId,
+          expectedPublicationVersion: publicationVersion,
+        },
+      }),
     });
     const execution = await request(baseUrl, '/workflows/candidate-smoke', {
       method: 'POST',

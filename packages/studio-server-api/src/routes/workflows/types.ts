@@ -16,6 +16,7 @@ export type {
 } from '../../../../studio-server-shared/workflow-types.js';
 
 export type StoredWorkflowProjectSettings = {
+  publicationVersion?: string;
   endpointName: string;
   endpointAccess: WorkflowEndpointAccess;
   publishedEndpointName: string;

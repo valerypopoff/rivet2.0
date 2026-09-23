@@ -31,7 +31,7 @@ test('parseJsonResponse throws the proxy guidance error when HTML is returned', 
 });
 
 test('parseJsonResponse preserves JSON error status and message', async () => {
-  const response = new Response(JSON.stringify({ error: 'Bad request' }), {
+  const response = new Response(JSON.stringify({ error: 'Bad request', code: 'publication_state_changed' }), {
     status: 400,
     statusText: 'Bad Request',
     headers: { 'content-type': 'application/json; charset=utf-8' },
@@ -42,6 +42,7 @@ test('parseJsonResponse preserves JSON error status and message', async () => {
     (error: unknown) => {
       assert.equal(typeof error, 'object');
       assert.equal((error as { status?: number }).status, 400);
+      assert.equal((error as { code?: string }).code, 'publication_state_changed');
       assert.equal((error as Error).message, 'Bad request');
       return true;
     },

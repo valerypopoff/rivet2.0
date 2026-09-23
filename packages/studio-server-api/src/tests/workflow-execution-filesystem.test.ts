@@ -155,7 +155,7 @@ test('workflow request headers context is normalized to a safe string object', (
 
 test('internal endpoint access blocks both public routes while retaining private published and draft routes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Network Access');
-  await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+  const published = await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
     endpointName: 'network-access',
   });
 
@@ -166,7 +166,14 @@ test('internal endpoint access blocks both public routes while retaining private
     const accessResponse = await fetch(`${apiBaseUrl}/projects/endpoint-access`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath: created.relativePath, access: 'internal' }),
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        access: 'internal',
+        preconditions: {
+          expectedProjectId: published.projectMetadataId,
+          expectedPublicationVersion: published.settings.publicationVersion,
+        },
+      }),
     });
     assert.equal(accessResponse.status, 200);
     assert.equal((await post(publishedBaseUrl)).status, 404);

@@ -43,6 +43,7 @@ function createWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
     published_revision_id: null,
     published_version_id: null,
     endpoint_name: 'draft-endpoint',
+    publication_version: '0',
     published_endpoint_name: '',
     last_published_at: null,
     ...overrides,
@@ -136,6 +137,10 @@ function createPublicationHarness(options: {
   const client = {
     async query(sql: string, params: unknown[] = []) {
       clientQueries.push({ sql, params });
+      if (normalizeSql(sql).startsWith('UPDATE workflows SET publication_version = publication_version + 1')) {
+        workflow.publication_version = (BigInt(workflow.publication_version ?? '0') + 1n).toString();
+        return { rows: [{ publication_version: workflow.publication_version }] };
+      }
       if (normalizeSql(sql).startsWith('INSERT INTO workflow_published_versions')) {
         latestInsertedPublishedVersionId = String(params[0]);
       }
@@ -345,6 +350,9 @@ test('managed web app publication list exposes revision-based statuses', async (
   const response = await service.listWorkflowProjectWebApps('Main.rivet-project');
 
   assert.equal(response.hasMainGraph, true);
+  assert.equal(response.project.projectMetadataId, response.projectId);
+  assert.equal(response.project.revisionId, response.draftRevisionId);
+  assert.equal(response.project.settings.publicationVersion, response.publicationVersion);
   assert.deepEqual(
     response.webApps.map((webApp) => [
       webApp.uiGraphId,
@@ -451,6 +459,29 @@ test('managed publishing rejects a stale revision under the row lock without mut
   assert.deepEqual(endpointSyncCalls, []);
   assert.deepEqual(invalidationRequests, []);
   assert.equal(workflowLookups[0]?.forUpdate, true);
+});
+
+test('managed web-app publishing rejects stale draft, publication, and project identity under the row lock', async () => {
+  const harness = createPublicationHarness({
+    workflow: createWorkflow({ publication_version: '3' }),
+    revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current Web App']]) },
+  });
+  const publish = (preconditions: { expectedProjectId: string; expectedDraftRevisionId: string; expectedPublicationVersion: string }) =>
+    harness.service.publishWorkflowProjectWebApps('Main.rivet-project', [{ uiGraphId: 'ui-current', slug: 'current-app' }], preconditions);
+  const expected = { expectedProjectId: 'workflow-a', expectedDraftRevisionId: 'draft-revision', expectedPublicationVersion: '3' };
+
+  await assert.rejects(publish({ ...expected, expectedDraftRevisionId: 'old-revision' }), { status: 409, code: 'publication_draft_changed' });
+  await assert.rejects(publish({ ...expected, expectedPublicationVersion: '2' }), { status: 409, code: 'publication_state_changed' });
+  await assert.rejects(publish({ ...expected, expectedProjectId: 'other-project' }), { status: 409, code: 'publication_project_changed' });
+  assert.deepEqual(harness.clientQueries, []);
+  assert.deepEqual(harness.invalidationRequests, []);
+  assert.ok(harness.workflowLookups.every(({ forUpdate }) => forUpdate));
+
+  const published = await publish(expected);
+  assert.equal(published.settings.publicationVersion, '4');
+  assert.deepEqual(harness.invalidationRequests, ['workflow-a']);
+  await assert.rejects(publish(expected), { status: 409, code: 'publication_state_changed' });
+  assert.deepEqual(harness.invalidationRequests, ['workflow-a']);
 });
 
 test('managed published version restore republishes a stored revision as a new current history entry', async () => {

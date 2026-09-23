@@ -12,13 +12,15 @@ import {
 } from './workflowApi';
 import { WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE } from '../../studio-server-shared/workflow-types';
 import { ENDPOINT_NAME_PATTERN, validateEndpointName } from './projectSettingsForm';
-import { flattenProjects } from './workflowLibraryHelpers';
+import { isNextPublicationVersion, isPublicationVersion } from './publicationVersion';
 import type {
+  WorkflowPublicationPreconditions,
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppSummary,
+  WorkflowProjectWebAppsResponse,
   WorkflowTreeResponse,
 } from './types';
 
@@ -98,6 +100,30 @@ function validateAllowedEmails(emails: readonly string[]): string | null {
   return invalidEmail ? `Invalid email: ${invalidEmail}` : null;
 }
 
+function carryEditedWebAppDrafts(
+  drafts: Record<string, string>,
+  previousServerValues: Record<string, string>,
+  nextServerValues: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(Object.entries(nextServerValues).map(([id, value]) => [
+    id,
+    Object.hasOwn(previousServerValues, id) && Object.hasOwn(drafts, id) && drafts[id] !== previousServerValues[id]
+      ? drafts[id]
+      : value,
+  ]));
+}
+
+function publicationSnapshotFromProject(
+  project: WorkflowProjectItem,
+): WorkflowPublicationPreconditions {
+  return {
+    // Missing server tokens must never re-arm the modal after a mutation.
+    expectedProjectId: project.projectMetadataId ?? '',
+    expectedDraftRevisionId: project.revisionId ?? '',
+    expectedPublicationVersion: project.settings.publicationVersion ?? '',
+  };
+}
+
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
   const {
     activeProject,
@@ -113,49 +139,115 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const previousServerEndpointName = useRef(activeProject.settings.endpointName);
   // The modal is keyed by project and unmounted on close. Background tree
   // updates must not silently approve a newer draft for publication.
-  const [publicationRevision, setPublicationRevision] = useState(activeProject.revisionId);
+  const [reviewedPublication, setReviewedPublication] = useState<WorkflowPublicationPreconditions | null>(null);
+  const [snapshotProject, setSnapshotProject] = useState<WorkflowProjectItem | null>(null);
+  const [publicationConflict, setPublicationConflict] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingEndpointAccess, setSavingEndpointAccess] = useState(false);
   const [webApps, setWebApps] = useState<WorkflowProjectWebAppSummary[]>([]);
   const [webAppSlugDrafts, setWebAppSlugDrafts] = useState<Record<string, string>>({});
   const [webAppAllowedEmailDrafts, setWebAppAllowedEmailDrafts] = useState<Record<string, string>>({});
+  const serverWebAppSlugs = useRef<Record<string, string>>({});
+  const serverWebAppAllowedEmails = useRef<Record<string, string>>({});
   const [hasMainGraph, setHasMainGraph] = useState<boolean | null>(null);
   const [loadingWebApps, setLoadingWebApps] = useState(false);
   const [savingWebApps, setSavingWebApps] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
 
   useEffect(() => {
+    if (!snapshotProject) return;
     const previous = previousServerEndpointName.current;
-    const current = activeProject.settings.endpointName;
+    const current = snapshotProject.settings.endpointName;
     previousServerEndpointName.current = current;
     setSettingsDraft((draft) => draft.endpointName === previous ? { endpointName: current } : draft);
-  }, [activeProject.settings.endpointName]);
+  }, [snapshotProject?.settings.endpointName]);
 
-  const reloadWebApps = useCallback(async () => {
+  const applyWebAppSnapshot = useCallback((
+    response: WorkflowProjectWebAppsResponse,
+    preserveDrafts: boolean,
+    expectedAfterMutation?: WorkflowPublicationPreconditions,
+    reviewedDraftRevisionId?: string,
+  ) => {
+    const consistentProject = response.project?.relativePath === activeProject.relativePath &&
+      response.project.projectMetadataId === response.projectId &&
+      response.project.revisionId === response.draftRevisionId &&
+      response.project.settings.publicationVersion === response.publicationVersion &&
+      isPublicationVersion(response.publicationVersion);
+    if (!consistentProject) {
+      setReviewedPublication(null);
+      setPublicationConflict(true);
+      toast.error('Publication state is inconsistent. Review the latest project before publishing.');
+      return;
+    }
+    setWebApps(response.webApps);
+    setHasMainGraph(response.hasMainGraph);
+    setSnapshotProject(response.project);
+    const matchesMutation = !expectedAfterMutation || (
+      response.projectId === expectedAfterMutation.expectedProjectId &&
+      response.draftRevisionId === expectedAfterMutation.expectedDraftRevisionId &&
+      response.publicationVersion === expectedAfterMutation.expectedPublicationVersion &&
+      response.draftRevisionId === reviewedDraftRevisionId
+    );
+    if (response.projectId && response.draftRevisionId && matchesMutation) {
+      setReviewedPublication({
+        expectedProjectId: response.projectId,
+        expectedDraftRevisionId: response.draftRevisionId,
+        expectedPublicationVersion: response.publicationVersion,
+      });
+      setPublicationConflict(false);
+    } else {
+      setReviewedPublication(null);
+      setPublicationConflict(Boolean(expectedAfterMutation));
+      if (!expectedAfterMutation) toast.error('Publication state is unavailable. Refresh the project before publishing.');
+    }
+    const slugs = createInitialWebAppSlugDrafts(response.webApps);
+    const emails = createInitialWebAppAllowedEmailDrafts(response.webApps);
+    const previousSlugs = serverWebAppSlugs.current;
+    const previousEmails = serverWebAppAllowedEmails.current;
+    serverWebAppSlugs.current = slugs;
+    serverWebAppAllowedEmails.current = emails;
+    setWebAppSlugDrafts((drafts) => preserveDrafts ? carryEditedWebAppDrafts(drafts, previousSlugs, slugs) : slugs);
+    setWebAppAllowedEmailDrafts((drafts) => preserveDrafts ? carryEditedWebAppDrafts(drafts, previousEmails, emails) : emails);
+  }, [activeProject.relativePath]);
+
+  const reloadWebApps = useCallback(async (
+    project: WorkflowProjectItem,
+    previous: WorkflowPublicationPreconditions,
+  ) => {
+    const expectedAfterMutation = publicationSnapshotFromProject(project);
+    if (project.relativePath !== activeProject.relativePath ||
+        expectedAfterMutation.expectedProjectId !== previous.expectedProjectId ||
+        !expectedAfterMutation.expectedDraftRevisionId ||
+        !isNextPublicationVersion(previous.expectedPublicationVersion, expectedAfterMutation.expectedPublicationVersion)) {
+      setReviewedPublication(null);
+      setPublicationConflict(true);
+      toast.error('The change succeeded, but publication state could not be verified. Review the latest state before trying again.');
+      return;
+    }
     setLoadingWebApps(true);
 
     try {
       const response = await fetchWorkflowProjectWebApps(activeProject.relativePath);
-      setWebApps(response.webApps);
-      setHasMainGraph(response.hasMainGraph);
-      setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
-      setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to load project web apps');
-      setWebApps([]);
-      setHasMainGraph(null);
-      setWebAppSlugDrafts({});
-      setWebAppAllowedEmailDrafts({});
+      applyWebAppSnapshot(response, true, expectedAfterMutation, previous.expectedDraftRevisionId);
+    } catch {
+      toast.error('The change succeeded, but publication state could not refresh. Review the latest state before trying again.');
+      setReviewedPublication(null);
+      setPublicationConflict(true);
     } finally {
       setLoadingWebApps(false);
     }
-  }, [activeProject.relativePath]);
+  }, [activeProject.relativePath, applyWebAppSnapshot]);
 
   useEffect(() => {
     setWebApps([]);
     setHasMainGraph(null);
+    setSnapshotProject(null);
     setWebAppSlugDrafts({});
     setWebAppAllowedEmailDrafts({});
+    serverWebAppSlugs.current = {};
+    serverWebAppAllowedEmails.current = {};
+    setReviewedPublication(null);
+    setPublicationConflict(false);
 
     if (!isOpen) {
       setLoadingWebApps(false);
@@ -171,10 +263,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
           return;
         }
 
-        setWebApps(response.webApps);
-        setHasMainGraph(response.hasMainGraph);
-        setWebAppSlugDrafts(createInitialWebAppSlugDrafts(response.webApps));
-        setWebAppAllowedEmailDrafts(createInitialWebAppAllowedEmailDrafts(response.webApps));
+        applyWebAppSnapshot(response, false);
       })
       .catch((err: any) => {
         if (!cancelled) {
@@ -190,7 +279,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     return () => {
       cancelled = true;
     };
-  }, [activeProject.relativePath, isOpen]);
+  }, [activeProject.relativePath, applyWebAppSnapshot, isOpen]);
 
   const trimmedDraftEndpointName = useMemo(() => settingsDraft.endpointName.trim(), [settingsDraft.endpointName]);
   const endpointLookupName = useMemo(() => trimmedDraftEndpointName.toLowerCase(), [trimmedDraftEndpointName]);
@@ -299,53 +388,93 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }));
     };
 
-  const refreshAfterPublication = async (failureMessage: string) => {
-    try {
-      const tree = await onRefresh();
-      const refreshedProject = tree && [...tree.projects, ...flattenProjects(tree.folders)]
-        .find((project) => project.id === activeProject.id);
-      if (!refreshedProject?.revisionId) {
-        toast.error(failureMessage);
-        return;
-      }
-      setPublicationRevision(refreshedProject.revisionId);
-    } catch {
-      toast.error(failureMessage);
+  const requireReviewedPublication = (): WorkflowPublicationPreconditions | null => {
+    if (reviewedPublication) return reviewedPublication;
+    toast.error('Review the latest project and publication state before trying again.');
+    return null;
+  };
+
+  const handlePublicationError = (error: { status?: number; code?: string; message?: string }, fallback: string) => {
+    if (error.status === 409 && error.code?.startsWith('publication_')) {
+      setReviewedPublication(null);
+      setPublicationConflict(true);
     }
+    toast.error(error.message || fallback);
+  };
+
+  const reviewLatestPublication = async () => {
+    setLoadingWebApps(true);
+    try {
+      const snapshot = await fetchWorkflowProjectWebApps(activeProject.relativePath);
+      const tree = await onRefresh();
+      if (!tree) throw new Error('Could not refresh the project list. Try again.');
+      applyWebAppSnapshot(snapshot, true);
+    } catch (error: any) {
+      toast.error(error.message || 'Could not review the latest publication state.');
+    } finally {
+      setLoadingWebApps(false);
+    }
+  };
+
+  const refreshTreeAfterSuccess = async () => {
+    try {
+      if (!await onRefresh()) toast.error('The change succeeded, but the project list could not refresh. Refresh to see the latest state.');
+    } catch {
+      toast.error('The change succeeded, but the project list could not refresh. Refresh to see the latest state.');
+    }
+  };
+
+  const acceptReturnedPublication = (project: WorkflowProjectItem, previous: WorkflowPublicationPreconditions) => {
+    const next = publicationSnapshotFromProject(project);
+    if (
+      project.relativePath !== activeProject.relativePath ||
+      next.expectedProjectId !== previous.expectedProjectId ||
+      !next.expectedDraftRevisionId ||
+      !isNextPublicationVersion(previous.expectedPublicationVersion, next.expectedPublicationVersion)
+    ) {
+      setReviewedPublication(null);
+      setPublicationConflict(true);
+      toast.error('The change succeeded, but publication state could not be verified. Review the latest state before trying again.');
+      return;
+    }
+    setSnapshotProject(project);
+    if (next.expectedDraftRevisionId !== previous.expectedDraftRevisionId) {
+      setReviewedPublication(null);
+      setPublicationConflict(true);
+      toast.error('The change succeeded, but the project draft changed. Review the latest state before publishing.');
+      return;
+    }
+    // Access and unpublish commands do not review the graph draft. A newer
+    // revision in their response must require explicit review, not re-arm it.
+    setReviewedPublication({ ...previous, expectedPublicationVersion: next.expectedPublicationVersion });
   };
 
   const handlePublishProject = async () => {
     if (endpointValidationError) {
       return;
     }
+    const preconditions = requireReviewedPublication();
+    if (!preconditions?.expectedDraftRevisionId) return;
 
     setSavingSettings(true);
 
     try {
-      if (!publicationRevision) {
-        toast.error('Project revision was unavailable. Click Publish/Update again after refreshing.');
-        await refreshAfterPublication('Could not refresh the project. Refresh before trying to publish again.');
-        return;
-      }
-      try {
-        await publishWorkflowProject(activeProject.relativePath, {
-          endpointName: settingsDraft.endpointName,
-          expectedRevisionId: publicationRevision,
-        });
-      } catch (err: any) {
-        toast.error(err.message || 'Failed to update project publication state');
-        if (err.status === 409) {
-          await refreshAfterPublication('Could not refresh the project. Refresh before trying to publish again.');
-        }
-        return;
-      }
-      await refreshAfterPublication('Publishing succeeded, but the project list could not refresh. Refresh to see the published state.');
+      const project = await publishWorkflowProject(activeProject.relativePath, {
+        endpointName: settingsDraft.endpointName,
+        expectedRevisionId: preconditions.expectedDraftRevisionId,
+      }, preconditions);
+      acceptReturnedPublication(project, preconditions);
+      await refreshTreeAfterSuccess();
+    } catch (err: any) {
+      handlePublicationError(err, 'Failed to update project publication state');
     } finally {
       setSavingSettings(false);
     }
   };
 
   const handleUnpublishProject = async () => {
+    const preconditions = requireReviewedPublication();
+    if (!preconditions) return;
     const shouldProceed = window.confirm(`Unpublish project "${activeProject.fileName}"?`);
     if (!shouldProceed) {
       return;
@@ -354,23 +483,28 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingSettings(true);
 
     try {
-      await unpublishWorkflowProject(activeProject.relativePath);
-      await onRefresh();
+      const project = await unpublishWorkflowProject(activeProject.relativePath, preconditions);
+      acceptReturnedPublication(project, preconditions);
+      await refreshTreeAfterSuccess();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update project publication state');
+      handlePublicationError(err, 'Failed to update project publication state');
     } finally {
       setSavingSettings(false);
     }
   };
 
   const handleEndpointAccessChange = async (access: 'public' | 'internal') => {
-    if (activeProject.settings.status === 'unpublished' || access === (activeProject.settings.endpointAccess ?? 'public')) return;
+    const currentProject = snapshotProject ?? activeProject;
+    if (currentProject.settings.status === 'unpublished' || access === (currentProject.settings.endpointAccess ?? 'public')) return;
+    const preconditions = requireReviewedPublication();
+    if (!preconditions) return;
     setSavingEndpointAccess(true);
     try {
-      await updateWorkflowEndpointAccess(activeProject.relativePath, access);
-      await onRefresh();
+      const project = await updateWorkflowEndpointAccess(activeProject.relativePath, access, preconditions);
+      acceptReturnedPublication(project, preconditions);
+      await refreshTreeAfterSuccess();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update endpoint access');
+      handlePublicationError(err, 'Failed to update endpoint access');
     } finally {
       setSavingEndpointAccess(false);
     }
@@ -425,6 +559,8 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   };
 
   const handlePublishWebApps = async (uiGraphId?: string) => {
+    const preconditions = requireReviewedPublication();
+    if (!preconditions?.expectedDraftRevisionId) return;
     const validationError = uiGraphId
       ? webAppSlugValidationErrors[uiGraphId]
       : Object.values(webAppSlugValidationErrors)[0];
@@ -450,11 +586,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingWebApps(true);
 
     try {
-      await publishWorkflowProjectWebApps(activeProject.relativePath, publications);
-      await reloadWebApps();
-      await onRefresh();
+      const project = await publishWorkflowProjectWebApps(activeProject.relativePath, publications, preconditions);
+      await reloadWebApps(project, preconditions);
+      await refreshTreeAfterSuccess();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to publish web app');
+      handlePublicationError(err, 'Failed to publish web app');
     } finally {
       setSavingWebApps(false);
     }
@@ -466,6 +602,8 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   });
 
   const handleSaveWebAppAccess = async (webApp: WorkflowProjectWebAppSummary) => {
+    const preconditions = requireReviewedPublication();
+    if (!preconditions) return;
     const validationError = webAppAccessValidationErrors[webApp.uiGraphId];
     if (validationError) {
       toast.error(validationError);
@@ -475,17 +613,19 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingWebApps(true);
 
     try {
-      await updateWorkflowProjectWebAppAccess(activeProject.relativePath, [createWebAppAccessDraft(webApp)]);
-      await reloadWebApps();
-      await onRefresh();
+      const project = await updateWorkflowProjectWebAppAccess(activeProject.relativePath, [createWebAppAccessDraft(webApp)], preconditions);
+      await reloadWebApps(project, preconditions);
+      await refreshTreeAfterSuccess();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to update web app access');
+      handlePublicationError(err, 'Failed to update web app access');
     } finally {
       setSavingWebApps(false);
     }
   };
 
   const handleUnpublishWebApp = async (webApp: WorkflowProjectWebAppSummary) => {
+    const preconditions = requireReviewedPublication();
+    if (!preconditions) return;
     const shouldProceed = window.confirm(`Unpublish web app "${webApp.name}"?`);
     if (!shouldProceed) {
       return;
@@ -494,11 +634,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingWebApps(true);
 
     try {
-      await unpublishWorkflowProjectWebApp(activeProject.relativePath, webApp.uiGraphId);
-      await reloadWebApps();
-      await onRefresh();
+      const project = await unpublishWorkflowProjectWebApp(activeProject.relativePath, webApp.uiGraphId, preconditions);
+      await reloadWebApps(project, preconditions);
+      await refreshTreeAfterSuccess();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to unpublish web app');
+      handlePublicationError(err, 'Failed to unpublish web app');
     } finally {
       setSavingWebApps(false);
     }
@@ -506,6 +646,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
   return {
     settingsDraft,
+    snapshotProject,
     savingSettings,
     savingEndpointAccess,
     webApps,
@@ -514,6 +655,9 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     webAppSlugValidationErrors,
     webAppAccessValidationErrors,
     loadingWebApps,
+    reviewedPublication,
+    publicationConflict,
+    reviewLatestPublication,
     savingWebApps,
     deletingProject,
     trimmedDraftEndpointName,

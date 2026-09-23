@@ -57,18 +57,21 @@ Wait for the Helm upgrade to complete before switching an endpoint to internal-o
 
 Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
 
-Endpoint publishing requires `settings.expectedRevisionId` from the project tree
-or upload response. In managed storage, publishing and in-place saving acquire
-the same PostgreSQL workflow row lock; the revision comparison happens inside
-the publication transaction, not against a Pod-local cache. A competing save
-that wins the lock causes publishing to return 409 without changing the live
-version. If publishing wins, it commits the reviewed revision before that save.
-No schema migration or sticky sessions are needed for this revision guard.
-Old browser tabs or API clients that omit the revision receive 400 and must
-reload/update; do not weaken this validation during rollout. The candidate,
-managed-release, and capacity smoke callers send the uploaded revision. The
-managed release gate also checks stale-revision rejection and unchanged history
-through the deployed proxy/API before exercising workflow execution.
+Publication commands use the project identity and publication version from the
+single Project Settings read; commands that publish or restore executable draft
+content also use its draft revision. Endpoint publish additionally retains
+`settings.expectedRevisionId` for the existing request format. Managed schema
+migration 13 adds the project-scoped `publication_version` counter and must run
+before the new API starts accepting publication writes. All comparisons happen
+under the PostgreSQL workflow row lock, before changing publication state. A
+competing save or publication that wins the lock causes 409 without changing the
+live version. No sticky session or Pod-local publication cache is involved.
+Old browser tabs or API clients that omit preconditions receive 400 and must
+reload/update; do not weaken validation during rollout. The candidate,
+managed-release, and capacity smoke callers supply reviewed preconditions. The
+managed release gate checks stale-command rejection, unchanged history, and
+concurrent publication updates against PostgreSQL through the deployed
+proxy/API before exercising workflow execution.
 
 The chart enforces `backend=1` and disables backend autoscaling. The backend is a StatefulSet, so Kubernetes does not offer the Deployment-only `Recreate` strategy named in some deployment guidance. Its `OrderedReady` plus single-ordinal `RollingUpdate` is the equivalent single-writer replacement here: ordinal `0` is terminated before its replacement is created, accepting a short control-plane interruption and preventing an old and new backend from serving together. Execution replicas remain independently scalable.
 
@@ -534,7 +537,7 @@ Set `workflowSchema.migrationJob.enabled=false` only when an external delivery p
 
 ### Managed maintenance
 
-Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. Migration 12 adds the checked, public-by-default workflow endpoint access column. A normal release verifies exactly the current schema version, presently `12`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
+Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. Migration 12 adds the checked, public-by-default workflow endpoint access column. Migration 13 adds a nonnegative publication-version counter, defaulting existing projects to `0`; it does not republish existing artifacts. Endpoint and web-app publication commands compare the reviewed version under the workflow row lock and increment it in the same transaction as the change. A normal release verifies exactly the current schema version, presently `13`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
 
 Only the singleton `control` API pod receives `RIVET_MANAGED_MAINTENANCE_ENABLED=true`. The scalable `execution` Deployment receives `false`, so published endpoint traffic cannot create one global retention scan per replica or allocate the reconciliation-only runtime-library S3 client. Helm owns this boundary and the `managedMaintenance.intervalMs` (default `300000`), `leaseMs` (default `60000`), and `batchSize` (default `100`) values; `env` overrides for those variables are rejected. The worker uses a PostgreSQL fencing token, so a stale control pod cannot commit the recording-retention mutation after a successor owns the lease. Each pass selects candidates in PostgreSQL and removes at most `batchSize` recording rows while holding the fence, so a large backlog converges without loading its history into the API process or using one unbounded transaction. Recording/replay object keys are queued in the same transaction as removed metadata, then deleted only after a fresh database-reference recheck. Temporary blob-store failures retry with exponential backoff; still-referenced keys become `blocked` rather than being removed. A later deletion intent reopens a blocked key, because its final reference may have been removed after the earlier safety check.
 

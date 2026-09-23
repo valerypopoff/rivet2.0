@@ -2,15 +2,17 @@ import Button, { LoadingButton } from '@atlaskit/button';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { type FC, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
-import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../studio-server-shared/workflow-types';
+import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH, type WorkflowPublicationPreconditions } from '../../studio-server-shared/workflow-types';
 
 import type {
   WorkflowProjectItem,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionSummary,
 } from './types';
+import { isNextPublicationVersion, isPublicationVersion } from './publicationVersion';
 import {
   downloadWorkflowPublishedVersion,
+  fetchWorkflowProjectWebApps,
   fetchWorkflowPublishedVersions,
   restoreWorkflowPublishedVersion,
   setWorkflowPublishedVersionComment,
@@ -57,6 +59,9 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [preconditions, setPreconditions] = useState<WorkflowPublicationPreconditions | null>(null);
+  const [reviewRequested, setReviewRequested] = useState(0);
+  const projectRelativePath = project?.relativePath;
   const skipCommentSaveVersionIdRef = useRef<string | null>(null);
   const canClose = !downloadingVersionId && !starringVersionId && !commentingVersionId && !restoringVersionId;
   const projectTitle = useMemo(() => project?.name ?? 'Published version history', [project?.name]);
@@ -69,7 +74,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   const shouldShowPagination = versions.length > PUBLISHED_VERSION_HISTORY_PAGE_SIZE;
 
   useEffect(() => {
-    if (!isOpen || !project) {
+    if (!isOpen || !projectRelativePath) {
       setVersions([]);
       setError(null);
       setLoading(false);
@@ -80,6 +85,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       setCommentDrafts({});
       setRestoringVersionId(null);
       setPage(1);
+      setPreconditions(null);
       return;
     }
 
@@ -87,9 +93,26 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
     setLoading(true);
     setError(null);
     setEditingCommentVersionId(null);
-    void fetchWorkflowPublishedVersions(project.relativePath)
-      .then((response) => {
+    void Promise.all([
+      fetchWorkflowPublishedVersions(projectRelativePath),
+      fetchWorkflowProjectWebApps(projectRelativePath),
+    ])
+      .then(([response, snapshot]) => {
         if (!cancelled) {
+          if (
+            !snapshot.projectId || !snapshot.draftRevisionId || !isPublicationVersion(snapshot.publicationVersion) ||
+            snapshot.project?.relativePath !== projectRelativePath ||
+            snapshot.project?.projectMetadataId !== snapshot.projectId ||
+            snapshot.project.revisionId !== snapshot.draftRevisionId ||
+            snapshot.project.settings.publicationVersion !== snapshot.publicationVersion
+          ) {
+            throw new Error('Publication state is unavailable. Refresh before restoring.');
+          }
+          setPreconditions({
+            expectedProjectId: snapshot.projectId,
+            expectedDraftRevisionId: snapshot.draftRevisionId,
+            expectedPublicationVersion: snapshot.publicationVersion,
+          });
           setVersions(response.versions);
           setCommentDrafts(createCommentDrafts(response.versions));
           setPage(1);
@@ -97,6 +120,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       })
       .catch((err: any) => {
         if (!cancelled) {
+          setPreconditions(null);
           setError(err.message || 'Failed to load published version history');
         }
       })
@@ -109,7 +133,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
     return () => {
       cancelled = true;
     };
-  }, [isOpen, project]);
+  }, [isOpen, projectRelativePath, reviewRequested]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -256,7 +280,7 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
   };
 
   const handleRestoreVersion = async (version: WorkflowPublishedVersionSummary) => {
-    if (!project || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
+    if (!project || !preconditions || downloadingVersionId || starringVersionId || commentingVersionId || restoringVersionId) {
       return;
     }
 
@@ -269,7 +293,25 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
 
     setRestoringVersionId(version.id);
     try {
-      const response = await restoreWorkflowPublishedVersion(project.relativePath, version.id);
+      const response = await restoreWorkflowPublishedVersion(project.relativePath, version.id, preconditions);
+      const returnedProjectId = response.project.projectMetadataId;
+      const returnedRevisionId = response.project.revisionId;
+      const returnedPublicationVersion = response.project.settings.publicationVersion;
+      if (
+        response.project.relativePath !== project.relativePath ||
+        returnedProjectId !== preconditions.expectedProjectId ||
+        !returnedRevisionId ||
+        !isNextPublicationVersion(preconditions.expectedPublicationVersion, returnedPublicationVersion)
+      ) {
+        setPreconditions(null);
+        setError('The restore succeeded, but publication state could not be verified. Review the latest state before restoring again.');
+      } else {
+        setPreconditions({
+          expectedProjectId: returnedProjectId,
+          expectedDraftRevisionId: returnedRevisionId,
+          expectedPublicationVersion: returnedPublicationVersion,
+        });
+      }
       setVersions((currentVersions) => [
         response.version,
         ...currentVersions
@@ -290,6 +332,10 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       });
     } catch (err: any) {
       toast.error(err.message || 'Failed to restore published version');
+      if (err.status === 409 && err.code?.startsWith('publication_')) {
+        setPreconditions(null);
+        setError('The project or publication changed. Review the latest state before restoring.');
+      }
     } finally {
       setRestoringVersionId((currentId) => currentId === version.id ? null : currentId);
     }
@@ -330,7 +376,9 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
                 {loading ? (
                   <div className="published-version-history-state">Loading published versions...</div>
                 ) : error ? (
-                  <div className="published-version-history-state published-version-history-error">{error}</div>
+                  <div className="published-version-history-state published-version-history-error">
+                    {error} <Button appearance="subtle" onClick={() => setReviewRequested((count) => count + 1)}>Review latest</Button>
+                  </div>
                 ) : versions.length === 0 ? (
                   <div className="published-version-history-state">
                     No published versions have been saved for this project yet.

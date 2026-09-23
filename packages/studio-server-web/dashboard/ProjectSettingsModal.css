@@ -202,6 +202,17 @@
   gap: 6px;
 }
 
+.project-settings-publication-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning-color, #b99148);
+  border-radius: 6px;
+  color: var(--grey-lightest);
+}
+
 .project-settings-endpoint-access {
   display: flex;
   flex-direction: column;

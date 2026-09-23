@@ -8,6 +8,7 @@ import type {
   WorkflowFolderItem,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppAccessDraft,
@@ -1010,9 +1011,10 @@ export async function setWorkflowPublishedVersionCommentWithBackend(
 export async function restoreWorkflowPublishedVersionWithBackend(
   relativePath: unknown,
   versionId: unknown,
+  preconditions?: WorkflowPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   return delegate(
-    async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId),
+    async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
         const root = await ensureWorkflowsRoot();
@@ -1023,7 +1025,7 @@ export async function restoreWorkflowPublishedVersionWithBackend(
         );
         return restoreWorkflowPublishedVersion(relativePath, versionId, () => {
           markFilesystemExecutionStructureDirty([projectPath]);
-        });
+        }, preconditions);
       }),
   );
 }
@@ -1031,23 +1033,24 @@ export async function restoreWorkflowPublishedVersionWithBackend(
 export async function publishWorkflowProjectItemWithBackend(
   relativePath: unknown,
   settings: WorkflowProjectSettingsDraft | unknown,
+  preconditions?: WorkflowPublicationPreconditions,
 ) {
   return delegate(
-    async (backend) => backend.publishWorkflowProjectItem(relativePath, settings),
+    async (backend) => backend.publishWorkflowProjectItem(relativePath, settings, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        const project = await publishWorkflowProjectItem(relativePath, settings);
+        const project = await publishWorkflowProjectItem(relativePath, settings, preconditions);
         markFilesystemExecutionStructureDirty([project.absolutePath]);
         return project;
       }),
   );
 }
 
-export async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal') {
+export async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal', preconditions?: WorkflowPublicationPreconditions) {
   return delegate(
-    async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access),
+    async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
     async () => withFilesystemWorkflowStorageWrite(async () => {
-      const project = await updateWorkflowEndpointAccess(relativePath, access);
+      const project = await updateWorkflowEndpointAccess(relativePath, access, preconditions);
       markFilesystemExecutionStructureDirty([project.absolutePath]);
       return project;
     }),
@@ -1066,12 +1069,13 @@ export async function listWorkflowProjectWebAppsWithBackend(
 export async function publishWorkflowProjectWebAppsWithBackend(
   relativePath: unknown,
   publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+  preconditions?: WorkflowPublicationPreconditions,
 ) {
   return delegate(
-    async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications),
+    async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        const project = await publishWorkflowProjectWebApps(relativePath, publications);
+        const project = await publishWorkflowProjectWebApps(relativePath, publications, preconditions);
         markFilesystemExecutionStructureDirty([project.absolutePath]);
         return project;
       }),
@@ -1081,36 +1085,37 @@ export async function publishWorkflowProjectWebAppsWithBackend(
 export async function updateWorkflowProjectWebAppAccessWithBackend(
   relativePath: unknown,
   accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+  preconditions?: WorkflowPublicationPreconditions,
 ) {
   return delegate(
-    async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates),
+    async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        const project = await updateWorkflowProjectWebAppAccess(relativePath, accessUpdates);
+        const project = await updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
         markFilesystemExecutionStructureDirty([project.absolutePath]);
         return project;
       }),
   );
 }
 
-export async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown) {
+export async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown, preconditions?: WorkflowPublicationPreconditions) {
   return delegate(
-    async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId),
+    async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        const project = await unpublishWorkflowProjectWebApp(relativePath, uiGraphId);
+        const project = await unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
         markFilesystemExecutionStructureDirty([project.absolutePath]);
         return project;
       }),
   );
 }
 
-export async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown) {
+export async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown, preconditions?: WorkflowPublicationPreconditions) {
   return delegate(
-    async (backend) => backend.unpublishWorkflowProjectItem(relativePath),
+    async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
     async () =>
       withFilesystemWorkflowStorageWrite(async () => {
-        const project = await unpublishWorkflowProjectItem(relativePath);
+        const project = await unpublishWorkflowProjectItem(relativePath, preconditions);
         markFilesystemExecutionStructureDirty([project.absolutePath]);
         return project;
       }),

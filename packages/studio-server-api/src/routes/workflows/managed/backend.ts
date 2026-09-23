@@ -3,6 +3,7 @@ import type {
   WorkflowEndpointAccess,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
@@ -270,16 +271,17 @@ export class ManagedWorkflowBackend {
   async restoreWorkflowPublishedVersion(
     relativePath: unknown,
     versionId: unknown,
+    preconditions?: WorkflowPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse> {
-    return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId);
+    return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions);
   }
 
-  async publishWorkflowProjectItem(relativePath: unknown, settings: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.publishWorkflowProjectItem(relativePath, settings);
+  async publishWorkflowProjectItem(relativePath: unknown, settings: unknown, preconditions?: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.publishWorkflowProjectItem(relativePath, settings, preconditions);
   }
 
-  async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess): Promise<WorkflowProjectItem> {
-    return this.#publication.updateWorkflowEndpointAccess(relativePath, access);
+  async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess, preconditions?: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.updateWorkflowEndpointAccess(relativePath, access, preconditions);
   }
 
   async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
@@ -289,23 +291,25 @@ export class ManagedWorkflowBackend {
   async publishWorkflowProjectWebApps(
     relativePath: unknown,
     publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+    preconditions?: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
-    return this.#publication.publishWorkflowProjectWebApps(relativePath, publications);
+    return this.#publication.publishWorkflowProjectWebApps(relativePath, publications, preconditions);
   }
 
   async updateWorkflowProjectWebAppAccess(
     relativePath: unknown,
     accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+    preconditions?: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
-    return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates);
+    return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
   }
 
-  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId);
+  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions?: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
   }
 
-  async unpublishWorkflowProjectItem(relativePath: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.unpublishWorkflowProjectItem(relativePath);
+  async unpublishWorkflowProjectItem(relativePath: unknown, preconditions?: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.unpublishWorkflowProjectItem(relativePath, preconditions);
   }
 
   async deleteWorkflowProjectItem(relativePath: unknown): Promise<string | null> {

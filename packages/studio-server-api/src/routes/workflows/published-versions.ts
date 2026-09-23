@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import type {
+  WorkflowPublicationPreconditions,
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionSummary,
@@ -36,6 +37,7 @@ import {
   type PublicationFileChange,
 } from './filesystem-publication-transactions.js';
 import type { StoredWorkflowProjectSettings } from './types.js';
+import { assertFilesystemPublicationPreconditions } from './publication-preconditions.js';
 import { getWorkflowProject } from './workflow-query.js';
 
 type StoredPublishedVersionMetadata = {
@@ -626,6 +628,7 @@ export async function restoreWorkflowPublishedVersion(
   relativePath: unknown,
   versionId: unknown,
   onCommitted?: () => void,
+  preconditions?: WorkflowPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   if (typeof versionId !== 'string' || !versionId.trim()) {
     throw createHttpError(400, 'Missing versionId');
@@ -642,6 +645,7 @@ export async function restoreWorkflowPublishedVersion(
 
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: true });
   const record = await resolveFilesystemPublishedVersion(root, projectPath, versionId.trim());
   if (!record) {
     throw createHttpError(404, 'Published version not found');
@@ -691,7 +695,7 @@ export async function restoreWorkflowPublishedVersion(
         publishedStateHash,
         lastPublishedAt,
         publishedWebApps: existingSettings.publishedWebApps,
-      }),
+      }, existingSettings),
     ],
   });
   onCommitted?.();

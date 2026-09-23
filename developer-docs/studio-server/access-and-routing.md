@@ -165,11 +165,12 @@ The wrapper API currently exposes these groups behind `/api`:
   - `POST /api/workflows/projects/publish`
   - `POST /api/workflows/projects/unpublish`
   - `GET /api/workflows/projects/web-apps?relativePath=...`
-    - returns current and still-published-missing web apps with per-row `Not published`, `Published`, or `Unpublished changes` status derived from the web app's own pinned `/apps` snapshot/revision versus the latest saved `/apps-latest` draft
+    - returns one coherent project/settings and web-app publication snapshot, including `projectId`, `draftRevisionId`, and `publicationVersion`; current and still-published-missing web apps have per-row `Not published`, `Published`, or `Unpublished changes` status derived from the app's pinned `/apps` snapshot/revision versus the latest saved `/apps-latest` draft
   - `POST /api/workflows/projects/web-apps/publish`
   - `PATCH /api/workflows/projects/web-apps/access`
     - updates wrapper-owned allowed-email access lists for already-published web apps without republishing or changing the app's pinned snapshot/revision
   - `POST /api/workflows/projects/web-apps/unpublish`
+    - all publication/access writes (including endpoint publish/unpublish/access and published-version restore) require `preconditions: { expectedProjectId, expectedPublicationVersion }` from that GET; endpoint/web-app publish and restore also require `expectedDraftRevisionId`. Endpoint publish additionally sends `settings.expectedRevisionId`. Missing tokens return 400; stale identity, draft, or publication state returns 409 without changing publication. Clients must fetch, let the user review, then issue a new command rather than automatically retrying.
   - `GET /api/workflows/recordings/workflows`
   - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed`
     - optional input filter query: `inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`; modern continuations additionally send the opaque `inputAfter` returned as `nextInputAfter`

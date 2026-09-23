@@ -14,6 +14,7 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowMoveResponse,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
@@ -486,11 +487,12 @@ export async function setWorkflowPublishedVersionComment(
 export async function restoreWorkflowPublishedVersion(
   relativePath: string,
   versionId: string,
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   const response = await fetch(`${API}/workflows/projects/published-versions/restore`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, versionId }),
+    body: JSON.stringify({ relativePath, versionId, preconditions }),
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionRestoreResponse>(response);
@@ -507,11 +509,12 @@ export async function fetchWorkflowProjectWebApps(relativePath: string): Promise
 export async function publishWorkflowProjectWebApps(
   relativePath: string,
   publications: WorkflowProjectWebAppPublicationDraft[],
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/web-apps/publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, publications }),
+    body: JSON.stringify({ relativePath, publications, preconditions }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
@@ -521,11 +524,12 @@ export async function publishWorkflowProjectWebApps(
 export async function updateWorkflowProjectWebAppAccess(
   relativePath: string,
   accessUpdates: WorkflowProjectWebAppAccessDraft[],
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/web-apps/access`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, accessUpdates }),
+    body: JSON.stringify({ relativePath, accessUpdates, preconditions }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
@@ -535,11 +539,12 @@ export async function updateWorkflowProjectWebAppAccess(
 export async function unpublishWorkflowProjectWebApp(
   relativePath: string,
   uiGraphId: string,
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/web-apps/unpublish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, uiGraphId }),
+    body: JSON.stringify({ relativePath, uiGraphId, preconditions }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
@@ -567,22 +572,23 @@ export async function moveWorkflowItem(
 export async function publishWorkflowProject(
   relativePath: string,
   settings: WorkflowProjectSettingsDraft & { expectedRevisionId: string },
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, settings }),
+    body: JSON.stringify({ relativePath, settings, preconditions }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
   return data.project;
 }
 
-export async function unpublishWorkflowProject(relativePath: string): Promise<WorkflowProjectItem> {
+export async function unpublishWorkflowProject(relativePath: string, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/unpublish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath }),
+    body: JSON.stringify({ relativePath, preconditions }),
   });
 
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
@@ -592,11 +598,12 @@ export async function unpublishWorkflowProject(relativePath: string): Promise<Wo
 export async function updateWorkflowEndpointAccess(
   relativePath: string,
   access: 'public' | 'internal',
+  preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/endpoint-access`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
-    body: JSON.stringify({ relativePath, access }),
+    body: JSON.stringify({ relativePath, access, preconditions }),
   });
   const data = await workflowJsonResponse<{ project: WorkflowProjectItem }>(response);
   return data.project;

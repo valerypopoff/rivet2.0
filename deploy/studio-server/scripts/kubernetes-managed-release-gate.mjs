@@ -439,6 +439,27 @@ async function requestJson(baseUrl, route, options = {}) {
   return body;
 }
 
+async function readPublicationPreconditions(baseUrl, relativePath) {
+  const snapshot = await requestJson(
+    baseUrl,
+    `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+  );
+  const { projectId, draftRevisionId, publicationVersion, project } = snapshot ?? {};
+  if (
+    !projectId || !draftRevisionId || !publicationVersion ||
+    project?.projectMetadataId !== projectId ||
+    project.revisionId !== draftRevisionId ||
+    project.settings?.publicationVersion !== publicationVersion
+  ) {
+    throw new Error('Managed release gate did not receive a coherent publication snapshot');
+  }
+  return {
+    expectedProjectId: projectId,
+    expectedDraftRevisionId: draftRevisionId,
+    expectedPublicationVersion: publicationVersion,
+  };
+}
+
 async function waitFor(description, operation, timeoutMs, intervalMs = 500) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -946,15 +967,18 @@ class ManagedReleaseGate {
     });
     const relativePath = upload.project?.relativePath;
     if (typeof relativePath !== 'string') throw new Error('Project upload did not return relativePath');
+    const initialPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
     await requestJson(baseUrl, '/api/workflows/projects/publish', {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
         settings: { endpointName: 'managed-release-workflow', expectedRevisionId: upload.project?.revisionId },
+        preconditions: initialPreconditions,
       }),
     });
     const historyRoute = `/api/workflows/projects/published-versions?relativePath=${encodeURIComponent(relativePath)}`;
     const historyBeforeConflict = await requestJson(baseUrl, historyRoute);
+    const currentPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
     const stalePublish = await fetch(`${baseUrl}/api/workflows/projects/publish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -962,6 +986,7 @@ class ManagedReleaseGate {
       body: JSON.stringify({
         relativePath,
         settings: { endpointName: 'managed-release-workflow', expectedRevisionId: randomUUID() },
+        preconditions: { ...currentPreconditions, expectedDraftRevisionId: randomUUID() },
       }),
     });
     assert.equal(stalePublish.status, 409, 'Deployed API must reject a stale publication revision');
@@ -976,6 +1001,7 @@ class ManagedReleaseGate {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
+        preconditions: await readPublicationPreconditions(baseUrl, relativePath),
         publications: [{ uiGraphId: 'release-gate-web-app', slug: 'release-gate-web-app' }],
       }),
     });
@@ -1092,6 +1118,36 @@ class ManagedReleaseGate {
     return { environmentVariableId, publishedRevision, relativePath, replayRecordingId };
   }
 
+  async verifyManagedPublicationConflict(baseUrl, relativePath) {
+    const preconditions = await readPublicationPreconditions(baseUrl, relativePath);
+    const sendUpdate = async (email) => {
+      const response = await fetch(`${baseUrl}/api/workflows/projects/web-apps/access`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          relativePath,
+          preconditions,
+          accessUpdates: [{ uiGraphId: 'release-gate-web-app', allowedEmails: [email] }],
+        }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const results = await Promise.all([
+      sendUpdate('race-a@release-gate.example.test'),
+      sendUpdate('race-b@release-gate.example.test'),
+    ]);
+    const statuses = results.map(({ status }) => status).sort((a, b) => a - b);
+    if (statuses[0] !== 200 || statuses[1] !== 409 ||
+        results.find(({ status }) => status === 409)?.body?.code !== 'publication_state_changed') {
+      throw new Error(`Managed concurrent publication updates did not produce one success and one state conflict: ${JSON.stringify(results)}`);
+    }
+    const next = await readPublicationPreconditions(baseUrl, relativePath);
+    if (next.expectedPublicationVersion !== (BigInt(preconditions.expectedPublicationVersion) + 1n).toString()) {
+      throw new Error('Managed concurrent publication updates did not advance the publication version exactly once');
+    }
+  }
+
   /**
    * Exercises a publication update on the control-plane API against sockets
    * served by the separately replicated execution API. Those processes share
@@ -1134,6 +1190,7 @@ class ManagedReleaseGate {
         method: 'PATCH',
         body: JSON.stringify({
           relativePath: state.relativePath,
+          preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
           accessUpdates: [{
             uiGraphId: 'release-gate-web-app',
             allowedEmails: [removedEmail, retainedEmail],
@@ -1189,6 +1246,7 @@ class ManagedReleaseGate {
         method: 'PATCH',
         body: JSON.stringify({
           relativePath: state.relativePath,
+          preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
           accessUpdates: [{
             uiGraphId: 'release-gate-web-app',
             allowedEmails: [retainedEmail],
@@ -1723,6 +1781,7 @@ async function main() {
     const baseUrl = await gate.openProxy();
     await requestJson(baseUrl, '/api/config');
     const persistedState = await gate.exercisePersistence(baseUrl);
+    await gate.verifyManagedPublicationConflict(baseUrl, persistedState.relativePath);
     await gate.verifyManagedWebAppAccessRevocation(baseUrl, persistedState);
     await gate.verifyAfterReplacement(baseUrl, persistedState);
     if (config.mode === 'release') {

@@ -5,7 +5,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 12;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 13;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -312,6 +312,11 @@ ALTER TABLE workflows
   ADD COLUMN endpoint_access TEXT NOT NULL DEFAULT 'public'
   CHECK (endpoint_access IN ('public', 'internal'));
 `;
+const MANAGED_WORKFLOW_PUBLICATION_VERSION_SQL = `
+ALTER TABLE workflows
+  ADD COLUMN publication_version BIGINT NOT NULL DEFAULT 0
+  CHECK (publication_version >= 0);
+`;
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaMigration[] = [
   {
@@ -385,6 +390,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     name: 'workflow-endpoint-access',
     sql: MANAGED_WORKFLOW_ENDPOINT_ACCESS_SQL,
     checksum: '2b8c3a78b5079be2c4f5309c154c9b1c95f35e7df97f3b46da78cc9fe799edb8',
+  },
+  {
+    version: 13,
+    name: 'workflow-publication-version',
+    sql: MANAGED_WORKFLOW_PUBLICATION_VERSION_SQL,
+    checksum: '52960353c63c8783aa3962301561f77f12622789ae12dae2c58b61f7ce8f59fa',
   },
 ];
 
@@ -646,6 +657,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['workflows', 'published_version_id', 'text', 'YES'],
   ['workflows', 'endpoint_name', 'text', 'NO'],
   ['workflows', 'endpoint_access', 'text', 'NO'],
+  ['workflows', 'publication_version', 'int8', 'NO'],
   ['workflows', 'published_endpoint_name', 'text', 'NO'],
   ['workflows', 'last_published_at', 'timestamptz', 'YES'],
 ] as const;
@@ -708,6 +720,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
   ['workflows', 'updated_at', 'now()'],
   ['workflows', 'endpoint_name', `''::text`],
   ['workflows', 'endpoint_access', `'public'::text`],
+  ['workflows', 'publication_version', '0'],
   ['workflows', 'published_endpoint_name', `''::text`],
 ] as const;
 
@@ -956,6 +969,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['workflow_web_apps', 'u', 'UNIQUE (workflow_id, ui_graph_id)'],
   ['workflows', 'p', 'PRIMARY KEY (workflow_id)'],
   ['workflows', 'c', "CHECK ((endpoint_access = ANY (ARRAY['public'::text, 'internal'::text])))"],
+  ['workflows', 'c', 'CHECK ((publication_version >= 0))'],
   ['workflows', 'u', 'UNIQUE (relative_path)'],
 ] as const;
 

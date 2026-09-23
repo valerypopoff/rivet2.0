@@ -47,8 +47,17 @@ async function writeSettings(
       lastPublishedAt: null,
       publishedWebApps: [],
       ...settings,
-    })],
+    }, workflowPublication.createDefaultStoredWorkflowProjectSettings())],
   });
+}
+
+async function publicationPreconditions(relativePath: string) {
+  const project = await workflowQuery.getWorkflowProject(workflowsRoot, path.join(workflowsRoot, relativePath));
+  return {
+    expectedProjectId: project.projectMetadataId!,
+    expectedDraftRevisionId: project.revisionId!,
+    expectedPublicationVersion: project.settings.publicationVersion!,
+  };
 }
 
 test('filesystem web-app access changes persist an opaque binding for a legacy sidecar entry', async () => {
@@ -151,11 +160,12 @@ test('failed publication does not invalidate the tree, while a committed retry d
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublicationInvalidation');
   await withWorkflowApiServer(async (baseUrl) => {
     const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
-    const publish = () => fetch(`${baseUrl}/projects/publish`, {
+    const publish = async () => fetch(`${baseUrl}/projects/publish`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(created.relativePath),
         settings: { endpointName: 'publication-invalidation', expectedRevisionId: created.revisionId },
       }),
     });
@@ -214,6 +224,7 @@ test('publish rejects a saved project without a selected Main Graph', async () =
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: 'NoMainGraph.rivet-project',
+        preconditions: await publicationPreconditions('NoMainGraph.rivet-project'),
         settings: { endpointName: 'missing-main-graph', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, projectPath)).revisionId },
       }),
     });
@@ -236,11 +247,31 @@ test('HTTP publishing rejects missing and stale revisions and accepts a delibera
   await withWorkflowApiServer(async (baseUrl) => {
     const publish = (expectedRevisionId?: string | null) => fetch(`${baseUrl}/projects/publish`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath: 'ConcurrentPublish.rivet-project', settings: { endpointName: 'new-endpoint', expectedRevisionId } }),
+      body: JSON.stringify({
+        relativePath: 'ConcurrentPublish.rivet-project',
+        preconditions: {
+          expectedProjectId: original.projectMetadataId,
+          expectedPublicationVersion: original.settings.publicationVersion,
+          expectedDraftRevisionId: expectedRevisionId,
+        },
+        settings: { endpointName: 'new-endpoint', expectedRevisionId },
+      }),
     });
     for (const invalidRevision of [undefined, null, '', '   ']) {
       assert.equal((await publish(invalidRevision)).status, 400);
     }
+    const restoreWithoutReviewedDraft = await fetch(`${baseUrl}/projects/published-versions/restore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: 'ConcurrentPublish.rivet-project',
+        versionId: 'not-a-version',
+        preconditions: {
+          expectedProjectId: original.projectMetadataId,
+          expectedPublicationVersion: original.settings.publicationVersion,
+        },
+      }),
+    });
+    assert.equal(restoreWithoutReviewedDraft.status, 400);
     // Dataset-only edits are changes too; the project bytes are unchanged.
     await fs.writeFile(workflowFs.getWorkflowDatasetPath(projectPath), '[]', 'utf8');
     const conflict = await publish(original.revisionId);
@@ -270,6 +301,7 @@ test('workflow publish and unpublish routes preserve publication state over HTTP
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
+          preconditions: await publicationPreconditions(createdProject.project.relativePath),
           settings: { endpointName: 'http-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, path.join(workflowsRoot, createdProject.project.relativePath))).revisionId },
         }),
       }),
@@ -283,7 +315,7 @@ test('workflow publish and unpublish routes preserve publication state over HTTP
       await fetch(`${baseUrl}/projects/unpublish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ relativePath: createdProject.project.relativePath }),
+        body: JSON.stringify({ relativePath: createdProject.project.relativePath, preconditions: await publicationPreconditions(createdProject.project.relativePath) }),
       }),
     );
 
@@ -324,7 +356,7 @@ test('full unpublish closes both published and latest execution routes while kee
     }>(await fetch(`${apiBaseUrl}/projects/unpublish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ relativePath: created.relativePath }),
+      body: JSON.stringify({ relativePath: created.relativePath, preconditions: await publicationPreconditions(created.relativePath) }),
     }));
 
     assert.equal(unpublished.project.settings.status, 'unpublished');

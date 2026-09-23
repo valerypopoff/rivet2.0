@@ -137,8 +137,18 @@ const renameProjectSchema = z.object({
   newName: z.unknown(),
 });
 
+const publicationPreconditionsSchema = z.object({
+  expectedProjectId: z.string().trim().min(1),
+  expectedPublicationVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+  expectedDraftRevisionId: z.string().trim().min(1).optional(),
+}).strict();
+const draftPublicationPreconditionsSchema = publicationPreconditionsSchema.extend({
+  expectedDraftRevisionId: z.string().trim().min(1),
+});
+
 const publishProjectSchema = z.object({
   relativePath: z.unknown(),
+  preconditions: draftPublicationPreconditionsSchema,
   settings: z.object({
     endpointName: z.string(),
     expectedRevisionId: z.string().trim().min(1),
@@ -147,6 +157,7 @@ const publishProjectSchema = z.object({
 
 const endpointAccessSchema = z.object({
   relativePath: z.unknown(),
+  preconditions: publicationPreconditionsSchema,
   access: z.enum(['public', 'internal']),
 });
 
@@ -169,6 +180,7 @@ workflowsRouter.get(
 
 const publishProjectWebAppsSchema = z.object({
   relativePath: z.unknown(),
+  preconditions: draftPublicationPreconditionsSchema,
   publications: z.array(
     z.object({
       uiGraphId: z.string(),
@@ -180,6 +192,7 @@ const publishProjectWebAppsSchema = z.object({
 
 const updateProjectWebAppAccessSchema = z.object({
   relativePath: z.unknown(),
+  preconditions: publicationPreconditionsSchema,
   accessUpdates: z.array(
     z.object({
       uiGraphId: z.string(),
@@ -191,11 +204,14 @@ const updateProjectWebAppAccessSchema = z.object({
 const unpublishProjectWebAppSchema = z.object({
   relativePath: z.unknown(),
   uiGraphId: z.unknown(),
+  preconditions: publicationPreconditionsSchema,
 });
 
 const pathOnlySchema = z.object({
   relativePath: z.unknown(),
 });
+
+const publicationPathSchema = pathOnlySchema.extend({ preconditions: publicationPreconditionsSchema });
 
 const duplicateProjectSchema = z.object({
   relativePath: z.unknown(),
@@ -215,6 +231,8 @@ const publishedVersionDownloadSchema = z.object({
   relativePath: z.unknown(),
   versionId: z.unknown(),
 });
+
+const publishedVersionRestoreSchema = publishedVersionDownloadSchema.extend({ preconditions: draftPublicationPreconditionsSchema });
 
 const publishedVersionStarSchema = z.object({
   relativePath: z.unknown(),
@@ -609,10 +627,10 @@ workflowsRouter.patch(
 workflowsRouter.post(
   '/projects/published-versions/restore',
   jsonBody,
-  validateBody(publishedVersionDownloadSchema),
+  validateBody(publishedVersionRestoreSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, versionId } = req.body as z.infer<typeof publishedVersionDownloadSchema>;
-    const result = await restoreWorkflowPublishedVersionWithBackend(relativePath, versionId);
+    const { relativePath, versionId, preconditions } = req.body as z.infer<typeof publishedVersionRestoreSchema>;
+    const result = await restoreWorkflowPublishedVersionWithBackend(relativePath, versionId, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json(result);
   }),
@@ -631,8 +649,8 @@ workflowsRouter.post(
   jsonBody,
   validateBody(publishProjectWebAppsSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, publications } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
-    const project = await publishWorkflowProjectWebAppsWithBackend(relativePath, publications);
+    const { relativePath, publications, preconditions } = req.body as z.infer<typeof publishProjectWebAppsSchema>;
+    const project = await publishWorkflowProjectWebAppsWithBackend(relativePath, publications, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),
@@ -643,8 +661,8 @@ workflowsRouter.patch(
   jsonBody,
   validateBody(updateProjectWebAppAccessSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, accessUpdates } = req.body as z.infer<typeof updateProjectWebAppAccessSchema>;
-    const project = await updateWorkflowProjectWebAppAccessWithBackend(relativePath, accessUpdates);
+    const { relativePath, accessUpdates, preconditions } = req.body as z.infer<typeof updateProjectWebAppAccessSchema>;
+    const project = await updateWorkflowProjectWebAppAccessWithBackend(relativePath, accessUpdates, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),
@@ -655,8 +673,8 @@ workflowsRouter.post(
   jsonBody,
   validateBody(unpublishProjectWebAppSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, uiGraphId } = req.body as z.infer<typeof unpublishProjectWebAppSchema>;
-    const project = await unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId);
+    const { relativePath, uiGraphId, preconditions } = req.body as z.infer<typeof unpublishProjectWebAppSchema>;
+    const project = await unpublishWorkflowProjectWebAppWithBackend(relativePath, uiGraphId, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),
@@ -667,8 +685,8 @@ workflowsRouter.post(
   jsonBody,
   validateBody(publishProjectSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, settings } = req.body as z.infer<typeof publishProjectSchema>;
-    const project = await publishWorkflowProjectItemWithBackend(relativePath, settings);
+    const { relativePath, settings, preconditions } = req.body as z.infer<typeof publishProjectSchema>;
+    const project = await publishWorkflowProjectItemWithBackend(relativePath, settings, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),
@@ -677,10 +695,10 @@ workflowsRouter.post(
 workflowsRouter.post(
   '/projects/unpublish',
   jsonBody,
-  validateBody(pathOnlySchema),
+  validateBody(publicationPathSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
-    const project = await unpublishWorkflowProjectItemWithBackend(relativePath);
+    const { relativePath, preconditions } = req.body as z.infer<typeof publicationPathSchema>;
+    const project = await unpublishWorkflowProjectItemWithBackend(relativePath, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),
@@ -691,8 +709,8 @@ workflowsRouter.post(
   jsonBody,
   validateBody(endpointAccessSchema),
   asyncHandler(async (req, res) => {
-    const { relativePath, access } = req.body as z.infer<typeof endpointAccessSchema>;
-    const project = await updateWorkflowEndpointAccessWithBackend(relativePath, access);
+    const { relativePath, access, preconditions } = req.body as z.infer<typeof endpointAccessSchema>;
+    const project = await updateWorkflowEndpointAccessWithBackend(relativePath, access, preconditions);
     notifyWorkflowTreeChanged(req);
     res.json({ project });
   }),

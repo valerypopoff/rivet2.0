@@ -27,6 +27,7 @@ import type {
   WorkflowProjectStatus,
 } from './types.js';
 import type { PublicationFileChange } from './filesystem-publication-transactions.js';
+import { nextPublicationVersion, normalizePublicationVersion } from './publication-preconditions.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
 
 export { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
@@ -84,6 +85,7 @@ export async function getWorkflowProjectSettings(
       allowedEmails: webApp.allowedEmails,
       ...(webAppStatuses[index] ? { status: webAppStatuses[index] } : {}),
     })),
+    publicationVersion: storedSettings.publicationVersion ?? '0',
   };
 }
 
@@ -151,12 +153,17 @@ export async function readStoredWorkflowProjectSettings(projectPath: string, _pr
 export function createStoredWorkflowProjectSettingsChange(
   projectPath: string,
   settings: StoredWorkflowProjectSettings,
+  previousSettings: StoredWorkflowProjectSettings,
 ): PublicationFileChange {
-  return { path: getWorkflowProjectSettingsPath(projectPath), contents: `${JSON.stringify(settings, null, 2)}\n` };
+  return {
+    path: getWorkflowProjectSettingsPath(projectPath),
+    contents: `${JSON.stringify({ ...settings, publicationVersion: nextPublicationVersion(previousSettings.publicationVersion) }, null, 2)}\n`,
+  };
 }
 
 export function createDefaultStoredWorkflowProjectSettings(): StoredWorkflowProjectSettings {
   return {
+    publicationVersion: '0',
     endpointName: '',
     endpointAccess: 'public',
     publishedEndpointName: '',
@@ -214,6 +221,7 @@ export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWo
   }
 
   return {
+    publicationVersion: raw.publicationVersion == null ? '0' : normalizePublicationVersion(raw.publicationVersion),
     endpointName,
     endpointAccess: raw.endpointAccess ?? 'public',
     publishedEndpointName: normalizeStoredEndpointName(

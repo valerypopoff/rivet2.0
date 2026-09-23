@@ -133,6 +133,9 @@ The settings sidecar stores endpoint publication fields plus any web-app publica
 - `publishedWebApps`
   - array of published web-app entries keyed by `uiGraphId`
   - each entry stores an opaque app-binding ID, the web app display name, public slug, published snapshot id, publish timestamp, and optional OAuth allowed-email list
+- `publicationVersion`
+  - decimal string, initially `0` for existing projects; increments once with each committed endpoint or web-app publication/access/restore command
+  - written in the same recoverable filesystem transaction as the publication sidecar and snapshots; managed mode stores a `BIGINT` counter on the workflow row
 
 Important current behavior:
 
@@ -143,30 +146,76 @@ Important current behavior:
   callers need a bearer key. The "Endpoint access" tooltip points to the
   separate `Settings` -> `Workflow endpoints` -> `Access control` setting.
 
-- Endpoint publishing over HTTP requires `settings.expectedRevisionId`, taken from
-  the project tree item used for the action. Both backends compare it before any
-  publication mutation: managed storage holds the workflow row lock; filesystem
-  storage holds the workflow write coordinator and hashes the actual project and
-  dataset bytes (not the stats cache). A mismatch returns 409 without publishing.
-  The dashboard shows the error and refreshes the project, but never retries
-  automatically. A second Publish/Update click uses the refreshed revision and
-  may conflict again if another save intervenes. Missing HTTP revisions return
-  400; trusted in-process callers may omit the check. This protects endpoint
-  publication of drafts, not web-app publishing or other publication mutations.
-  In particular, an endpoint-only publication or access change by another
-  administrator does not change the draft revision and needs a separate
-  publication-state precondition to reject a stale modal action.
-  Failed refreshes preserve the visible project list and show a separate warning;
-  they never count as a successful revision refresh. A refresh failure after a
-  committed publish reports that publishing succeeded, rather than inviting a
-  duplicate publish by reporting the mutation as failed.
-  The modal pins its publication revision when opened. Background tree updates
-  cannot advance it; only a successful action-triggered refresh of that same
-  project arms a deliberate retry. Closing/reopening the modal selects the new
-  baseline. Key the modal by project identity so switching projects resets it.
-  Tree refreshes update an untouched endpoint-name field, but preserve a local
-  endpoint-name edit. Publication-status changes alone must never reset that
-  draft; conflict refresh and deliberate retry retain the user's chosen name.
+- All HTTP commands that change executable publication or access require a
+  `preconditions` object with `expectedProjectId` and
+  `expectedPublicationVersion`. Endpoint and web-app publish, and published
+  version restore, additionally require `expectedDraftRevisionId`; endpoint
+  publish retains `settings.expectedRevisionId` for the existing request
+  format. Missing tokens return 400. The authoritative Project Settings read is
+  `GET /api/workflows/projects/web-apps`, which returns these three current
+  values, the full endpoint project/settings view, and the web-app rows in one
+  coordinated snapshot. The modal renders endpoint settings from that view,
+  not from an independently refreshed tree item. The tree also exposes the
+  publication version but does not silently re-arm an open modal. During a mixed-version
+  Kubernetes rollout, a new browser disables publication against an old API
+  that omits these tokens; an old browser receives 400 from a new API. Reload
+  after rollout rather than permitting an unchecked publication.
+- Both backends compare identity, draft revision, and publication version
+  inside their serialized write operation. Filesystem mode hashes actual
+  project and dataset bytes under the workflow storage coordinator; managed
+  mode locks the workflow row in its transaction. A mismatch returns 409 with
+  `publication_project_changed`, `publication_draft_changed`, or
+  `publication_state_changed` before creating snapshots, changing rows, or
+  emitting a tree invalidation. Slug/name collisions remain separate conflicts.
+  Trusted in-process callers may omit preconditions for administrative work;
+  browser HTTP callers may not.
+
+  For example, an endpoint publish client must first read that snapshot and
+  send its tokens unchanged with the reviewed endpoint name:
+
+  ```json
+  {
+    "relativePath": "example.rivet-project",
+    "settings": { "endpointName": "example", "expectedRevisionId": "<draftRevisionId>" },
+    "preconditions": {
+      "expectedProjectId": "<projectId>",
+      "expectedDraftRevisionId": "<draftRevisionId>",
+      "expectedPublicationVersion": "<publicationVersion>"
+    }
+  }
+  ```
+
+  Do not substitute tokens from an earlier tree read. The candidate-image,
+  managed-release, and published-capacity deployment smoke callers also fetch
+  the coherent snapshot before publishing. The managed release gate races two
+  access updates against one PostgreSQL publication version and requires one
+  success, one `publication_state_changed` response, and exactly one version
+  increment.
+- The modal pins the read snapshot. A stale response keeps unsaved endpoint,
+  slug, and allowed-email drafts, disables further publication commands, and
+  offers **Review latest**. Only that explicit action refreshes both the
+  publication read and project tree before retrying; no automatic retry or
+  passive tree update approves another administrator's changes. On review,
+  untouched web-app fields adopt the latest server values while locally edited
+  fields remain intact; removed web-app fields are dropped. After a
+  successful access-only command whose response reveals a newer graph draft,
+  the modal shows the committed access change but keeps publishing disabled
+  until that graph draft is reviewed. The browser also requires a successful
+  command response to advance the canonical decimal publication version by
+  exactly one; a malformed, unchanged, or nonsequential version cannot re-arm
+  publication. A response for a different project path is rejected as well.
+  An incoherent settings read is discarded without replacing locally edited
+  web-app fields. After a successful web-app command, the follow-up read re-arms the modal only if it
+  still matches the command's returned project, draft, and publication version
+  **and** the draft revision the user reviewed before the command. Endpoint
+  access and unpublish responses likewise advance only the publication token
+  when the reviewed draft is unchanged; an intervening colleague's save requires
+  review. A network or tree-refresh failure after a successful mutation preserves drafts and is
+  reported as a refresh failure, not as a failed publication. Endpoint commands
+  and published-version restore likewise require a complete, advanced version
+  token in their success response before permitting another command; an
+  incomplete response requires explicit review. Published-version restore uses
+  the same version checks and explicit review behavior.
 
 - publishing updates both `endpointName` and `publishedEndpointName`
 - publishing also updates `lastPublishedAt`
@@ -253,7 +302,7 @@ Rivet web apps are stored in project YAML under `Project.uiGraphs`. They are pub
 
 1. Project Settings loads the project's web-app list from `GET /api/workflows/projects/web-apps?relativePath=...`.
 2. The user assigns a slug for one or more web apps. Slugs use the same public-name rule as workflow endpoints: letters, numbers, and hyphens only.
-3. The dashboard posts `{ relativePath, publications: [{ uiGraphId, slug, allowedEmails? }] }` to `POST /api/workflows/projects/web-apps/publish`.
+3. The dashboard posts `{ relativePath, preconditions: { expectedProjectId, expectedDraftRevisionId, expectedPublicationVersion }, publications: [{ uiGraphId, slug, allowedEmails? }] }` to `POST /api/workflows/projects/web-apps/publish`, using the reviewed settings snapshot rather than a later tree item.
 4. The server validates that every `uiGraphId` exists in the current saved project, that every slug is globally unique across published web apps case-insensitively, and that `auth` is not used as an app slug because `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/*` belongs to OAuth callback/logout routes.
 5. The server pins the selected web apps to the current saved project snapshot/revision and exposes each as `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/<slug>`.
 6. The same published app slug also opens `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/<slug>`, which serves the latest saved draft/current server-side project for that app's UI graph.

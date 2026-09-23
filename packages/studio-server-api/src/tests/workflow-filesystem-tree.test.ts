@@ -897,6 +897,11 @@ test('workflow duplicate route can duplicate the published snapshot for projects
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
+          preconditions: {
+            expectedProjectId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).projectMetadataId,
+            expectedPublicationVersion: '0',
+            expectedDraftRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId,
+          },
           settings: { endpointName: 'http-duplicate-published-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId },
         }),
       }),
@@ -1100,6 +1105,11 @@ test('workflow download route streams published and unpublished-changes variants
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
+          preconditions: {
+            expectedProjectId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).projectMetadataId,
+            expectedPublicationVersion: '0',
+            expectedDraftRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId,
+          },
           settings: { endpointName: 'http-download-changed-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId },
         }),
       }),

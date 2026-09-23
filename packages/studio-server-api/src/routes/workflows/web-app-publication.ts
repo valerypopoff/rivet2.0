@@ -3,6 +3,7 @@ import path from 'node:path';
 import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import type {
+  WorkflowPublicationPreconditions,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
@@ -19,6 +20,7 @@ import {
   readStoredWorkflowProjectSettings,
 } from './publication.js';
 import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
+import { assertFilesystemPublicationPreconditions, readFilesystemPublicationState } from './publication-preconditions.js';
 import {
   ensureWorkflowsRoot,
   getPublishedWorkflowSnapshotPath,
@@ -225,6 +227,15 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
     loadProjectFromFile(projectPath),
     readStoredWorkflowProjectSettings(projectPath, projectName),
   ]);
+  const publicationState = await readFilesystemPublicationState(projectPath, settings);
+  const projectItem = await getWorkflowProject(root, projectPath);
+  if (
+    projectItem.projectMetadataId !== publicationState.projectId ||
+    projectItem.revisionId !== publicationState.draftRevisionId ||
+    projectItem.settings.publicationVersion !== publicationState.publicationVersion
+  ) {
+    throw new Error('Project settings and publication state could not be read consistently');
+  }
   const currentUiGraphs = getProjectUiGraphSummaries(project);
   const currentUiGraphIds = new Set(currentUiGraphs.map((uiGraph) => uiGraph.uiGraphId));
   const publishedByUiGraphId = new Map(settings.publishedWebApps.map((webApp) => [webApp.uiGraphId, webApp]));
@@ -236,6 +247,10 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   const publishedContentHashBySnapshotId = new Map<string, Promise<string>>();
 
   return {
+    project: projectItem,
+    projectId: publicationState.projectId,
+    draftRevisionId: publicationState.draftRevisionId,
+    publicationVersion: publicationState.publicationVersion,
     hasMainGraph: hasProjectMainGraph(project),
     webApps: [
       ...(await Promise.all(currentUiGraphs.map(async (uiGraph) => {
@@ -270,7 +285,7 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   };
 }
 
-export async function publishWorkflowProjectWebApps(relativePath: unknown, publications: unknown) {
+export async function publishWorkflowProjectWebApps(relativePath: unknown, publications: unknown, preconditions?: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
@@ -280,6 +295,7 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
     loadProjectFromFile(projectPath),
     readStoredWorkflowProjectSettings(projectPath, projectName),
   ]);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: true });
   const availableUiGraphs = new Map(getProjectUiGraphSummaries(project).map((uiGraph) => [uiGraph.uiGraphId, uiGraph]));
   const normalizedPublications = normalizeWebAppPublicationDrafts(publications, existingSettings.publishedWebApps);
   const replacedUiGraphIds = new Set(normalizedPublications.map((publication) => publication.uiGraphId));
@@ -333,7 +349,7 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
       createStoredWorkflowProjectSettingsChange(projectPath, {
         ...existingSettings,
         publishedWebApps: nextPublishedWebApps,
-      }),
+      }, existingSettings),
     ],
     cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
       getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
@@ -342,13 +358,14 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
   return getWorkflowProject(root, projectPath);
 }
 
-export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, accessUpdates: unknown) {
+export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, accessUpdates: unknown, preconditions?: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
   }));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: false });
   const normalizedAccessUpdates = normalizeWebAppAccessDrafts(accessUpdates);
   const accessByUiGraphId = new Map(normalizedAccessUpdates.map((access) => [access.uiGraphId, access.allowedEmails]));
   const missingUiGraphIds = normalizedAccessUpdates
@@ -374,13 +391,13 @@ export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, a
           allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
         };
       }),
-    })],
+    }, existingSettings)],
   });
 
   return getWorkflowProject(root, projectPath);
 }
 
-export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown) {
+export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions?: WorkflowPublicationPreconditions) {
   if (typeof uiGraphId !== 'string' || !uiGraphId.trim()) {
     throw badRequest('Web app selection is required');
   }
@@ -391,6 +408,7 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
   }));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: false });
   const normalizedUiGraphId = uiGraphId.trim();
   const removedWebApp = existingSettings.publishedWebApps.find((webApp) => webApp.uiGraphId === normalizedUiGraphId);
   if (!removedWebApp) {
@@ -409,7 +427,7 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
     changes: [createStoredWorkflowProjectSettingsChange(projectPath, {
       ...existingSettings,
       publishedWebApps: nextPublishedWebApps,
-    })],
+    }, existingSettings)],
     cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
       getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
   });
