@@ -61,6 +61,26 @@ async function assertGeneration(value: Awaited<ReturnType<typeof fixture>>, gene
   assert.equal(await readOptional(value.newMetadata) == null, generation === 'old');
 }
 
+test('publication rejects parseable but invalid settings before committing', async () => {
+  const value = await fixture();
+  try {
+    for (const invalidSettings of [
+      { endpointName: 'new', endpointAccess: 'unknown' },
+      { endpointName: 'new', publishedWebApps: [{ uiGraphId: 'app' }] },
+    ]) {
+      await assert.rejects(saveFilesystemPublicationTransaction({
+        root: value.root,
+        projectPath: value.projectPath,
+        changes: [{ path: value.settingsPath, contents: `${JSON.stringify(invalidSettings)}\n` }],
+      }), /Invalid/);
+      await assertGeneration(value, 'old');
+      assert.deepEqual(await fs.readdir(path.join(value.root, FILESYSTEM_PUBLICATION_TRANSACTIONS_DIR)), []);
+    }
+  } finally {
+    await fs.rm(value.temp, { recursive: true, force: true });
+  }
+});
+
 for (const checkpoint of ['staged', 'journal-staged', 'prepared', 'backed-up', 'promoted', 'validated', 'marker-staged', 'committed', 'cleanup'] as PublicationTransactionCheckpoint[]) {
   test(`publication crash at ${checkpoint} recovers the complete generation`, async () => {
     const value = await fixture();

@@ -8,8 +8,10 @@ import {
   getWorkflowDatasetPath,
   getWorkflowProjectSettingsPath,
   PROJECT_EXTENSION,
+  PROJECT_SETTINGS_SUFFIX,
 } from './fs-helpers.js';
 import { syncDirectory, writeDurableExclusive as writeExclusive } from './filesystem-transaction-primitives.js';
+import { normalizeStoredWorkflowProjectSettings } from './publication.js';
 
 export const FILESYSTEM_PUBLICATION_TRANSACTIONS_DIR = '.rivet-publication-transactions';
 
@@ -197,6 +199,9 @@ async function validateContents(filePath: string, canonicalFilePath = filePath):
   else {
     const value: unknown = JSON.parse(contents);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid publication JSON object');
+    if (canonicalFilePath.endsWith(`${PROJECT_EXTENSION}${PROJECT_SETTINGS_SUFFIX}`)) {
+      normalizeStoredWorkflowProjectSettings(value);
+    }
   }
 }
 
