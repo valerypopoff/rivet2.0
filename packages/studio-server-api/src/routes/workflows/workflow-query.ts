@@ -5,13 +5,13 @@ import { validatePath } from '../../security.js';
 import { badRequest, conflict } from '../../utils/httpError.js';
 import {
   listProjectPathsRecursive,
-  moveProjectWithSidecars,
   pathExists,
   PROJECT_EXTENSION,
   renamePathHandlingCaseChange,
   requireProjectPath,
   resolveWorkflowRelativePath,
 } from './fs-helpers.js';
+import { moveProjectWithSidecars } from './filesystem-project-move-transactions.js';
 import { getWorkflowProjectIndexDataFromFileCached } from './project-stats.js';
 import { getWorkflowProjectSettings } from './publication.js';
 import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectPathMove } from './types.js';
@@ -119,7 +119,7 @@ export async function moveWorkflowProject(
   if (await pathExists(targetProjectPath)) {
     throw conflict(`Project already exists: ${path.basename(targetProjectPath)}`);
   }
-  await moveProjectWithSidecars(sourceProjectPath, targetProjectPath);
+  await moveProjectWithSidecars(root, sourceProjectPath, targetProjectPath);
 
   return {
     project: await getWorkflowProject(root, targetProjectPath),

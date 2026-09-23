@@ -571,7 +571,7 @@ export async function moveWorkflowItem(
 
 export async function publishWorkflowProject(
   relativePath: string,
-  settings: WorkflowProjectSettingsDraft & { expectedRevisionId: string },
+  settings: WorkflowProjectSettingsDraft,
   preconditions: WorkflowPublicationPreconditions,
 ): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/publish`, {

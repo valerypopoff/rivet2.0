@@ -181,7 +181,6 @@ export function normalizeWorkflowProjectSettingsDraft(value: unknown): WorkflowP
 
   return {
     endpointName: normalizeStoredEndpointName(endpointName),
-    ...(typeof raw.expectedRevisionId === 'string' ? { expectedRevisionId: raw.expectedRevisionId } : {}),
   };
 }
 

@@ -9,6 +9,7 @@ import type {
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
   WorkflowPublicationPreconditions,
+  WorkflowDraftPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppAccessDraft,
@@ -38,6 +39,7 @@ import {
   isManagedWorkflowStorageEnabled,
 } from './storage-config.js';
 import { ManagedWorkflowBackend } from './managed/backend.js';
+import type { WorkflowPublicationCommand } from './publication-command.js';
 import type { ManagedReconciliationFindingDetailQuery } from './managed/reconciliation.js';
 import {
   ensureWorkflowsRoot,
@@ -1008,10 +1010,10 @@ export async function setWorkflowPublishedVersionCommentWithBackend(
   );
 }
 
-export async function restoreWorkflowPublishedVersionWithBackend(
+async function restoreWorkflowPublishedVersionWithBackend(
   relativePath: unknown,
   versionId: unknown,
-  preconditions?: WorkflowPublicationPreconditions,
+  preconditions: WorkflowDraftPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   return delegate(
     async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
@@ -1023,17 +1025,17 @@ export async function restoreWorkflowPublishedVersionWithBackend(
             allowProjectFile: true,
           }),
         );
-        return restoreWorkflowPublishedVersion(relativePath, versionId, () => {
+        return restoreWorkflowPublishedVersion(relativePath, versionId, preconditions, () => {
           markFilesystemExecutionStructureDirty([projectPath]);
-        }, preconditions);
+        });
       }),
   );
 }
 
-export async function publishWorkflowProjectItemWithBackend(
+async function publishWorkflowProjectItemWithBackend(
   relativePath: unknown,
   settings: WorkflowProjectSettingsDraft | unknown,
-  preconditions?: WorkflowPublicationPreconditions,
+  preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.publishWorkflowProjectItem(relativePath, settings, preconditions),
@@ -1046,7 +1048,7 @@ export async function publishWorkflowProjectItemWithBackend(
   );
 }
 
-export async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal', preconditions?: WorkflowPublicationPreconditions) {
+async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal', preconditions: WorkflowPublicationPreconditions) {
   return delegate(
     async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
     async () => withFilesystemWorkflowStorageWrite(async () => {
@@ -1066,10 +1068,10 @@ export async function listWorkflowProjectWebAppsWithBackend(
   );
 }
 
-export async function publishWorkflowProjectWebAppsWithBackend(
+async function publishWorkflowProjectWebAppsWithBackend(
   relativePath: unknown,
   publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
-  preconditions?: WorkflowPublicationPreconditions,
+  preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
@@ -1082,10 +1084,10 @@ export async function publishWorkflowProjectWebAppsWithBackend(
   );
 }
 
-export async function updateWorkflowProjectWebAppAccessWithBackend(
+async function updateWorkflowProjectWebAppAccessWithBackend(
   relativePath: unknown,
   accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
-  preconditions?: WorkflowPublicationPreconditions,
+  preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
@@ -1098,7 +1100,7 @@ export async function updateWorkflowProjectWebAppAccessWithBackend(
   );
 }
 
-export async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown, preconditions?: WorkflowPublicationPreconditions) {
+async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
     async () =>
@@ -1110,7 +1112,7 @@ export async function unpublishWorkflowProjectWebAppWithBackend(relativePath: un
   );
 }
 
-export async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown, preconditions?: WorkflowPublicationPreconditions) {
+async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown, preconditions: WorkflowPublicationPreconditions) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
     async () =>
@@ -1120,6 +1122,36 @@ export async function unpublishWorkflowProjectItemWithBackend(relativePath: unkn
         return project;
       }),
   );
+}
+
+type RestorePublicationCommand = Extract<WorkflowPublicationCommand, { kind: 'restore-version' }>;
+type ProjectPublicationCommand = Exclude<WorkflowPublicationCommand, RestorePublicationCommand>;
+
+export function executeWorkflowPublicationCommandWithBackend(command: RestorePublicationCommand): Promise<WorkflowPublishedVersionRestoreResponse>;
+export function executeWorkflowPublicationCommandWithBackend(command: ProjectPublicationCommand): Promise<WorkflowProjectItem>;
+export async function executeWorkflowPublicationCommandWithBackend(
+  command: WorkflowPublicationCommand,
+): Promise<WorkflowProjectItem | WorkflowPublishedVersionRestoreResponse> {
+  switch (command.kind) {
+    case 'publish-endpoint':
+      return publishWorkflowProjectItemWithBackend(command.relativePath, { endpointName: command.endpointName }, command.preconditions);
+    case 'publish-web-apps':
+      return publishWorkflowProjectWebAppsWithBackend(command.relativePath, command.publications, command.preconditions);
+    case 'restore-version':
+      return restoreWorkflowPublishedVersionWithBackend(command.relativePath, command.versionId, command.preconditions);
+    case 'unpublish-endpoint':
+      return unpublishWorkflowProjectItemWithBackend(command.relativePath, command.preconditions);
+    case 'set-endpoint-access':
+      return updateWorkflowEndpointAccessWithBackend(command.relativePath, command.access, command.preconditions);
+    case 'set-web-app-access':
+      return updateWorkflowProjectWebAppAccessWithBackend(command.relativePath, command.accessUpdates, command.preconditions);
+    case 'unpublish-web-app':
+      return unpublishWorkflowProjectWebAppWithBackend(command.relativePath, command.uiGraphId, command.preconditions);
+    default: {
+      const unsupportedCommand: never = command;
+      throw createHttpError(400, `Unsupported publication command: ${String(unsupportedCommand)}`);
+    }
+  }
 }
 
 export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown) {

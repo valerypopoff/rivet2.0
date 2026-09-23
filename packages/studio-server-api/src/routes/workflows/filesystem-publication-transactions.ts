@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { fsync as fsyncCallback } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -10,6 +9,7 @@ import {
   getWorkflowProjectSettingsPath,
   PROJECT_EXTENSION,
 } from './fs-helpers.js';
+import { syncDirectory, writeDurableExclusive as writeExclusive } from './filesystem-transaction-primitives.js';
 
 export const FILESYSTEM_PUBLICATION_TRANSACTIONS_DIR = '.rivet-publication-transactions';
 
@@ -156,30 +156,6 @@ function parseJournal(root: string, id: string, value: unknown): Journal {
     return { path: item.path, state: parseState(item.state) };
   });
   return { version: VERSION, id, project: raw.project, artifacts, garbage };
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(directory, 'r');
-    await new Promise<void>((resolve, reject) => fsyncCallback(handle!.fd, (error) => error ? reject(error) : resolve()));
-  } catch (error) {
-    if (process.platform !== 'win32' || !['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      throw error;
-    }
-  } finally {
-    await handle?.close();
-  }
-}
-
-async function writeExclusive(filePath: string, contents: string | Buffer): Promise<void> {
-  const handle = await fs.open(filePath, 'wx');
-  try {
-    await handle.writeFile(contents);
-    await new Promise<void>((resolve, reject) => fsyncCallback(handle.fd, (error) => error ? reject(error) : resolve()));
-  } finally {
-    await handle.close();
-  }
 }
 
 async function unlinkIfPresent(filePath: string): Promise<void> {

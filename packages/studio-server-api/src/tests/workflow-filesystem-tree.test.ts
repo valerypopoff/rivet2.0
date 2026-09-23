@@ -3,6 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { getExpectedProxyAuthToken } from '../auth.js';
+import {
+  FILESYSTEM_PROJECT_MOVE_TRANSACTIONS_DIR,
+  setFilesystemProjectMoveCheckpointForTests,
+} from '../routes/workflows/filesystem-project-move-transactions.js';
+import {
+  initializeFilesystemProjectTransactions,
+  withFilesystemWorkflowStorageWrite,
+} from '../routes/workflows/filesystem-project-transactions.js';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import { readJson, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
@@ -124,6 +132,108 @@ test('workflow project rename and move preserve wrapper sidecars', async () => {
   assert.equal(await workflowFs.pathExists(movedSidecars.stats), true);
 });
 
+test('renaming a project to its current name is a no-op', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Unchanged');
+  const renamed = await workflowMutations.renameWorkflowProjectItem(created.relativePath, 'Unchanged');
+  assert.equal(renamed.project.absolutePath, created.absolutePath);
+  assert.deepEqual(renamed.movedProjectPaths, []);
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    const response = await fetch(`${baseUrl}/projects`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relativePath: created.relativePath, newName: 'Unchanged' }),
+    });
+    assert.equal(response.status, 200);
+    const result = await readJson<{ movedProjectPaths: unknown[] }>(response);
+    assert.deepEqual(result.movedProjectPaths, []);
+    const unchanged = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    assert.equal(unchanged.sync.revision, initial.sync.revision);
+  });
+});
+
+test('failed project move leaves publication and tree unchanged; committed retry invalidates once', async () => {
+  await workflowMutations.createWorkflowFolderItem('Destination', '');
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MoveEvents');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'move-events-endpoint' });
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    const move = () => fetch(`${baseUrl}/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        itemType: 'project',
+        sourceRelativePath: created.relativePath,
+        destinationFolderRelativePath: 'Destination',
+      }),
+    });
+
+    try {
+      setFilesystemProjectMoveCheckpointForTests((checkpoint) => {
+        if (checkpoint === 'promoted') throw new Error('injected move failure');
+      });
+      assert.equal((await move()).status, 500);
+      assert.equal(await workflowFs.pathExists(created.absolutePath), true);
+      assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath, created.absolutePath);
+      const failedTree = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+      assert.equal(failedTree.sync.revision, initial.sync.revision);
+    } finally {
+      setFilesystemProjectMoveCheckpointForTests(null);
+    }
+
+    const response = await move();
+    assert.equal(response.status, 200);
+    const moved = await readJson<{ project: { absolutePath: string; settings: { status: string } } }>(response);
+    assert.equal(moved.project.settings.status, 'published');
+    assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath, moved.project.absolutePath);
+    const committedTree = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    assert.equal(committedTree.sync.revision, initial.sync.revision + 1);
+  });
+});
+
+test('a committed move with deferred cleanup survives the API rebuilding its destination stats cache', async () => {
+  await workflowMutations.createWorkflowFolderItem('Destination', '');
+  const created = await workflowMutations.createWorkflowProjectItem('', 'DeferredMoveCleanup');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'deferred-move-endpoint' });
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    try {
+      setFilesystemProjectMoveCheckpointForTests((checkpoint) => {
+        if (checkpoint === 'cleanup') throw new Error('injected cleanup failure');
+      });
+      const response = await fetch(`${baseUrl}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          itemType: 'project',
+          sourceRelativePath: created.relativePath,
+          destinationFolderRelativePath: 'Destination',
+        }),
+      });
+      assert.equal(response.status, 200);
+      const moved = await readJson<{ project: { absolutePath: string } }>(response);
+      assert.equal(await workflowFs.pathExists(workflowFs.getProjectSidecarPaths(moved.project.absolutePath).stats), true);
+      assert.equal((await fs.readdir(path.join(workflowsRoot, FILESYSTEM_PROJECT_MOVE_TRANSACTIONS_DIR))).length, 1);
+      setFilesystemProjectMoveCheckpointForTests(null);
+
+      // A later mutation retries cleanup; startup recovery must also remain
+      // idempotent after that retry and must not invalidate the tree twice.
+      await withFilesystemWorkflowStorageWrite(async () => undefined);
+      await initializeFilesystemProjectTransactions(workflowsRoot);
+      assert.deepEqual(await fs.readdir(path.join(workflowsRoot, FILESYSTEM_PROJECT_MOVE_TRANSACTIONS_DIR)), []);
+      assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'deferred-move-endpoint'))?.projectPath, moved.project.absolutePath);
+      const tree = await readJson<{ sync: { revision: number }; folders: Array<{ projects: Array<{ absolutePath: string }> }> }>(await fetch(`${baseUrl}/tree`));
+      assert.equal(tree.sync.revision, initial.sync.revision + 1);
+      assert.equal(tree.folders[0]?.projects[0]?.absolutePath, moved.project.absolutePath);
+    } finally {
+      setFilesystemProjectMoveCheckpointForTests(null);
+    }
+  });
+});
+
 test('workflow project rename rejects hidden names and does not expose hidden workflow paths', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Visible');
 
@@ -176,7 +286,7 @@ test('workflow project move refuses conflicting sidecar targets without moving t
   assert.equal(await workflowFs.pathExists(conflictingTargetPath), false);
 });
 
-test('workflow project move replaces stale generated stats sidecar without treating it as a conflict', async () => {
+test('workflow project move refuses an orphan generated stats sidecar without deleting it', async () => {
   await workflowMutations.createWorkflowFolderItem('Destination', '');
   const created = await workflowMutations.createWorkflowProjectItem('', 'Source');
   const sourceSidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
@@ -186,15 +296,16 @@ test('workflow project move replaces stale generated stats sidecar without treat
   await fs.writeFile(sourceSidecars.stats, 'source-stats', 'utf8');
   await fs.writeFile(targetSidecars.stats, 'stale-target-stats', 'utf8');
 
-  const moved = await workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination');
-  const movedSidecars = workflowFs.getProjectSidecarPaths(moved.project.absolutePath);
-
-  assert.equal(await workflowFs.pathExists(created.absolutePath), false);
-  assert.equal(await workflowFs.pathExists(sourceSidecars.stats), false);
-  assert.notEqual(await fs.readFile(movedSidecars.stats, 'utf8'), 'stale-target-stats');
+  await assert.rejects(
+    workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination'),
+    /Stats file already exists/,
+  );
+  assert.equal(await workflowFs.pathExists(created.absolutePath), true);
+  assert.equal(await fs.readFile(sourceSidecars.stats, 'utf8'), 'source-stats');
+  assert.equal(await fs.readFile(targetSidecars.stats, 'utf8'), 'stale-target-stats');
 });
 
-test('workflow project move drops stale generated stats sidecar when the source has no stats cache', async () => {
+test('workflow project move refuses an orphan stats sidecar even when the source has no stats cache', async () => {
   await workflowMutations.createWorkflowFolderItem('Destination', '');
   const created = await workflowMutations.createWorkflowProjectItem('', 'Source');
   const sourceSidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
@@ -204,12 +315,13 @@ test('workflow project move drops stale generated stats sidecar when the source 
   await fs.rm(sourceSidecars.stats, { force: true });
   await fs.writeFile(targetSidecars.stats, 'stale-target-stats', 'utf8');
 
-  const moved = await workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination');
-  const movedSidecars = workflowFs.getProjectSidecarPaths(moved.project.absolutePath);
-
-  assert.equal(await workflowFs.pathExists(created.absolutePath), false);
+  await assert.rejects(
+    workflowQuery.moveWorkflowProject(workflowsRoot, created.relativePath, 'Destination'),
+    /Stats file already exists/,
+  );
+  assert.equal(await workflowFs.pathExists(created.absolutePath), true);
   assert.equal(await workflowFs.pathExists(sourceSidecars.stats), false);
-  assert.notEqual(await fs.readFile(movedSidecars.stats, 'utf8'), 'stale-target-stats');
+  assert.equal(await fs.readFile(targetSidecars.stats, 'utf8'), 'stale-target-stats');
 });
 
 test('workflow folder rename handles case-only renames', async () => {

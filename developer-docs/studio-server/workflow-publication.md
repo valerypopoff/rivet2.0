@@ -149,9 +149,18 @@ Important current behavior:
 - All HTTP commands that change executable publication or access require a
   `preconditions` object with `expectedProjectId` and
   `expectedPublicationVersion`. Endpoint and web-app publish, and published
-  version restore, additionally require `expectedDraftRevisionId`; endpoint
-  publish retains `settings.expectedRevisionId` for the existing request
-  format. Missing tokens return 400. The authoritative Project Settings read is
+  version restore, additionally require `expectedDraftRevisionId`. The
+  backend uses one discriminated publication-command contract for these
+  actions; its exhaustive command policy requires a deliberate classification
+  whenever a new action is added. The draft-token requirement is defined once
+  for commands that replace executable content. The storage-backend module
+  exports the command dispatcher, while its positional storage adapters remain
+  private. Missing tokens return 400 even for direct in-process backend callers.
+  The former endpoint
+  `settings.expectedRevisionId` is accepted temporarily at the HTTP edge for
+  older clients only when it matches `preconditions.expectedDraftRevisionId`;
+  it is not forwarded to either storage backend. New clients omit it. The
+  authoritative Project Settings read is
   `GET /api/workflows/projects/web-apps`, which returns these three current
   values, the full endpoint project/settings view, and the web-app rows in one
   coordinated snapshot. The modal renders endpoint settings from that view,
@@ -167,8 +176,15 @@ Important current behavior:
   `publication_project_changed`, `publication_draft_changed`, or
   `publication_state_changed` before creating snapshots, changing rows, or
   emitting a tree invalidation. Slug/name collisions remain separate conflicts.
-  Trusted in-process callers may omit preconditions for administrative work;
-  browser HTTP callers may not.
+  Direct test and maintenance callers must obtain the same coherent settings
+  snapshot and pass its tokens; there is no implicit trusted-caller bypass. The
+  benchmark fixture and deployment smoke/release/capacity gates use the same
+  command and draft precondition as the editor.
+  Web-app slug, selection, and allowed-email input validation is shared by
+  filesystem and managed publication. An omitted allowed-email list on a
+  republish retains that app's stored access list; an explicit empty list
+  clears it. Each backend resolves that omission against its own stored state
+  inside the publication operation, after checking the reviewed-state tokens.
 
   For example, an endpoint publish client must first read that snapshot and
   send its tokens unchanged with the reviewed endpoint name:
@@ -176,7 +192,7 @@ Important current behavior:
   ```json
   {
     "relativePath": "example.rivet-project",
-    "settings": { "endpointName": "example", "expectedRevisionId": "<draftRevisionId>" },
+    "settings": { "endpointName": "example" },
     "preconditions": {
       "expectedProjectId": "<projectId>",
       "expectedDraftRevisionId": "<draftRevisionId>",
@@ -263,7 +279,23 @@ Workflow-storage initialization probes flush and same-device rename support for 
 
 For published-version history, an absent metadata file remains a supported legacy case and may be backfilled from its snapshot. A *present but corrupt current* metadata file is not a legacy absence: history and publication commands surface an error and preserve it for operator repair instead of overwriting stars/comments with defaults. A current metadata file claiming another project is likewise rejected, not treated as an absent entry. Corrupt noncurrent metadata is logged and omitted from history so an unrelated project's history remains available; its file is preserved for repair. Naming that exact older version in a download, preview, star/comment, or restore request reports corruption instead of a misleading 404. Legacy backfill verifies that the snapshot belongs to the current project before assigning ownership. Resolving a version for download, preview, star/comment editing, or restore also verifies the snapshot's embedded project ID; a replaced foreign snapshot cannot be exposed through a valid metadata file. Restore invalidates the filesystem execution cache only after the publication transaction commits; a validation failure leaves its cache state unchanged.
 
-This journal is intentionally separate from the older project-save journal so existing `.rivet-transactions` entries remain readable. The currently supported Kubernetes Helm chart requires managed/PostgreSQL workflow storage, so its publication path does not use this filesystem journal. A separately operated filesystem control plane must retain one writer and mount projects, datasets, `.published`, and both journal directories on one rename-capable persistent filesystem; scaling filesystem API writers horizontally remains unsupported. Project/folder move and rename crash safety is a distinct multi-file concern and is not implied by this publication-command guarantee.
+This journal is intentionally separate from the older project-save journal so existing `.rivet-transactions` entries remain readable. The currently supported Kubernetes Helm chart requires managed/PostgreSQL workflow storage, so its publication path does not use this filesystem journal. A separately operated filesystem control plane must retain one writer and mount projects, datasets, `.published`, and the hidden transaction directories on one rename-capable persistent filesystem; scaling filesystem API writers horizontally remains unsupported.
+
+### Crash-safe filesystem project moves
+
+Project rename and drag/drop project move both use `.rivet-move-transactions` beneath the workflow root. A move stages byte-for-byte copies of the project, optional dataset, and optional publication settings at the destination, retaining their file modes on Unix; it journals the old and new path, embedded project ID, and checksummed file states before touching the source. Staged checksums are verified before backup and promotion. It then moves the old files into transaction-owned backups, promotes the staged destination files, verifies the complete generation, and durably writes a committed marker. That marker alone decides success. The derived stats sidecar is removed at the old path and rebuilt at the destination; it is not carried forward as an authoritative cache. Published snapshots and history remain in `.published`, and endpoint names, access policy, publication version, and web-app bindings do not change during a move.
+
+The save, publication, and move journals share the same exclusive-create/file-flush/directory-flush primitives; each journal retains its own artifact validation and recovery rules because its commit unit differs.
+
+The filesystem coordinator excludes API readers during the individual renames. A pre-marker error restores the complete old location; a committed move leaves the complete new location even if cleanup fails. A marker rename whose directory flush fails is **not** reported as success: the filesystem API fails closed until restart recovery determines the surviving generation, preventing a stale execution cache from serving a move that the request reported as failed. Startup recovers move journals before building the execution cache or reporting ready; later writes retry cleanup before any new mutation. Recovery verifies all backups and authoritative canonical artifacts before removing any promoted file, as well as exact directory-entry names for case-only renames on Windows. A destination stats cache may be rebuilt for the successful API response while committed-journal cleanup is deferred; recovery accepts that regular derived file without treating it as a new project generation. Cleanup validates backup checksums and permitted transaction entries separately from retryable file deletion: corrupt or unexpected evidence fails readiness closed, while a deletion I/O error leaves a verified journal for a later cleanup retry. It keeps questionable evidence intact and emits a transaction-ID/source/target diagnostic. The move preflight rejects destination orphan sidecars, including stale stats caches, rather than attaching them to the moving project. Destination parents and the move journal must be real directories on the same filesystem device, with no symlink traversal. Case-only renames are treated as one physical file per artifact rather than as independent source and destination files.
+
+Recovery rechecks the hidden move-journal directory before scanning it, so a replaced symlink cannot redirect cleanup outside the workflow root.
+
+Moves temporarily require free space for staged copies of the project, dataset, and settings sidecar. If staging runs out of space, the source remains at its original path and the incomplete staging directory is removed during rollback or startup recovery.
+
+Move regression tests interrupt each durable checkpoint, exercise Windows case-only renames and concurrent coordinated readers/writers, and verify that corrupt settings, modified canonical files or backups, and disk/permission failures cannot silently produce a mixed generation. The execution-route test restarts storage after a committed-but-uncleaned move and checks that the endpoint name and internal-only access policy still work from the new project path.
+
+The API response still reports the same `movedProjectPaths` and emits one tree invalidation after commit. Both old and new paths invalidate execution materializations. If a process stops after the marker but before notification, startup reconstructs its execution cache from the recovered new location, and reconnecting clients refresh the tree. Folder rename/move remains a single directory rename and does not split contained project sidecars; project deletion is a separate, still nontransactional operation. A move journal cannot infer how to repair files already split by an older unjournaled move. Operators should preserve orphan sidecars and investigate their ownership rather than automatically reattaching them.
 
 Project files, dataset sidecars, and `.rivet-transactions` must resolve beneath the same workflow root and filesystem device. The transaction helper accepts only `.rivet-project` targets, verifies the target path before it invokes save callbacks or creates a target directory, then checks every newly traversed directory's real path before using it. Object-storage mounts or FUSE implementations that cannot provide the probed semantics are rejected rather than treated as transactional. The guarantee covers Rivet Server API access only; manual processes are not tree-notified, but an in-place API save hashes the current canonical project and dataset immediately before its transaction and rejects a supplied stale revision. That prevents a mixed generation or a blind overwrite; it deliberately does not merge concurrent project edits.
 
@@ -1068,10 +1100,11 @@ When a project or folder is renamed, moved, duplicated, uploaded, downloaded, or
   - succeeds only when the folder is empty
   - never implicitly deletes child projects, snapshots, sidecars, or recordings
 - **Rename/move**
-  - `moveProjectWithSidecars()` renames the project, `.rivet-data`, and `.wrapper-settings.json`
+  - `moveProjectWithSidecars()` commits the project, `.rivet-data`, and `.wrapper-settings.json` at the destination through the recoverable move journal
   - folder moves calculate all affected absolute project paths so the dashboard/editor bridge can retarget open tabs
   - a project rename changes only the catalog name and storage path; it does not
     rewrite project YAML, create a draft revision, or alter a published snapshot
+  - renaming or moving a project to its existing location is a no-op, with no move journal or tree invalidation
   - published endpoints and web apps retain the same immutable revision, so a
     rename alone leaves them callable and published
   - hosted editor titles are derived from normal project paths, so open and
@@ -1118,6 +1151,10 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `packages/studio-server-api/src/routes/workflows/endpoint-names.ts` - shared endpoint-name validation and case-insensitive lookup normalization
 - `packages/studio-server-api/src/routes/workflows/publication.ts` - filesystem publication logic, status derivation, and endpoint lookup
 - `packages/studio-server-api/src/routes/workflows/web-app-publication.ts` - filesystem web-app publication, republish, and per-app unpublish mutations
+- `packages/studio-server-api/src/routes/workflows/web-app-publication-drafts.ts` - web-app slug, selection, and allowed-email validation shared by both storage backends
+- `packages/studio-server-api/src/routes/workflows/publication-command.ts` - exhaustive reviewed-state requirements for active-publication commands
+- `packages/studio-server-api/src/routes/workflows/filesystem-project-move-transactions.ts` - crash-safe project-and-sidecar moves and restart recovery
+- `packages/studio-server-api/src/routes/workflows/filesystem-transaction-primitives.ts` - shared durable filesystem transaction operations
 - `packages/studio-server-api/src/routes/workflows/local-editor-recordings.ts` - authenticated replay import/outcome resolution for health-correlated hosted editor runs
 - `packages/studio-server-api/src/routes/workflows/published-versions.ts` - filesystem published-version history metadata, star state, listing, download, preview, restore, and cleanup
 - `packages/studio-server-api/src/routes/workflows/execution.ts` - public/latest/internal execution handlers and recording enqueue path

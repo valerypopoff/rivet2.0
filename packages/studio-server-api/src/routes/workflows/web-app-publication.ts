@@ -3,9 +3,8 @@ import path from 'node:path';
 import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import type {
+  WorkflowDraftPublicationPreconditions,
   WorkflowPublicationPreconditions,
-  WorkflowProjectWebAppAccessDraft,
-  WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
 } from '../../../../studio-server-shared/workflow-types.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
@@ -15,10 +14,9 @@ import {
   createWorkflowProjectContentHash,
   ensureWorkflowWebAppSlugIsUnique,
   getPublishedWorkflowSnapshotArtifactPaths,
-  normalizeEmailList,
-  normalizeStoredEndpointName,
   readStoredWorkflowProjectSettings,
 } from './publication.js';
+import { normalizeWebAppAccessDrafts, normalizeWebAppPublicationDrafts } from './web-app-publication-drafts.js';
 import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
 import { assertFilesystemPublicationPreconditions, readFilesystemPublicationState } from './publication-preconditions.js';
 import {
@@ -48,20 +46,6 @@ function getProjectUiGraphSummaries(project: Awaited<ReturnType<typeof loadProje
   }));
 }
 
-function validateAllowedEmailList(allowedEmails: string[]): void {
-  for (const email of allowedEmails) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw badRequest(`Invalid allowed email: ${email}`);
-    }
-  }
-}
-
-function assertUsableWebAppSlug(slug: string): void {
-  if (slug.toLowerCase() === 'auth') {
-    throw badRequest('Web app URL slug "auth" is reserved');
-  }
-}
-
 /**
  * Filesystem sidecars written before stable app bindings existed normalize to
  * `legacy:<uiGraphId>` in memory. Persist an opaque binding the first time
@@ -76,98 +60,6 @@ function getPersistedWebAppBindingId(
     return randomUUID();
   }
   return publication.appId;
-}
-
-function normalizeWebAppPublicationDrafts(
-  value: unknown,
-  existingWebApps: readonly StoredWorkflowPublishedWebApp[] = [],
-): WorkflowProjectWebAppPublicationDraft[] {
-  const rawPublications = (value ?? []) as unknown;
-  if (!Array.isArray(rawPublications)) {
-    throw badRequest('Web app publications must be an array');
-  }
-
-  const existingByUiGraphId = new Map(existingWebApps.map((webApp) => [webApp.uiGraphId, webApp]));
-  const normalized = rawPublications.map((item) => {
-    const raw = (item ?? {}) as Record<string, unknown>;
-    const uiGraphId = typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '';
-    const allowedEmails = Object.prototype.hasOwnProperty.call(raw, 'allowedEmails')
-      ? normalizeEmailList(raw.allowedEmails)
-      : existingByUiGraphId.get(uiGraphId)?.allowedEmails ?? [];
-    validateAllowedEmailList(allowedEmails);
-    return {
-      uiGraphId,
-      slug: normalizeStoredEndpointName(typeof raw.slug === 'string' ? raw.slug : ''),
-      allowedEmails,
-    };
-  });
-
-  if (normalized.length === 0) {
-    throw badRequest('At least one web app must be selected');
-  }
-
-  const seenUiGraphIds = new Set<string>();
-  const seenSlugs = new Set<string>();
-  for (const publication of normalized) {
-    if (!publication.uiGraphId) {
-      throw badRequest('Web app selection is required');
-    }
-
-    if (!publication.slug) {
-      throw badRequest('Web app URL slug is required');
-    }
-    assertUsableWebAppSlug(publication.slug);
-
-    const slugLookup = publication.slug.toLowerCase();
-    if (seenUiGraphIds.has(publication.uiGraphId)) {
-      throw badRequest('Each web app can only be published once per request');
-    }
-
-    if (seenSlugs.has(slugLookup)) {
-      throw badRequest('Each web app URL slug must be unique');
-    }
-
-    seenUiGraphIds.add(publication.uiGraphId);
-    seenSlugs.add(slugLookup);
-  }
-
-  return normalized;
-}
-
-function normalizeWebAppAccessDrafts(value: unknown): WorkflowProjectWebAppAccessDraft[] {
-  const rawAccess = (value ?? []) as unknown;
-  if (!Array.isArray(rawAccess)) {
-    throw badRequest('Web app access updates must be an array');
-  }
-
-  const normalized = rawAccess.map((item) => {
-    const raw = (item ?? {}) as Record<string, unknown>;
-    const allowedEmails = normalizeEmailList(raw.allowedEmails);
-    validateAllowedEmailList(allowedEmails);
-    return {
-      uiGraphId: typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '',
-      allowedEmails,
-    };
-  });
-
-  if (normalized.length === 0) {
-    throw badRequest('At least one web app access update is required');
-  }
-
-  const seenUiGraphIds = new Set<string>();
-  for (const access of normalized) {
-    if (!access.uiGraphId) {
-      throw badRequest('Web app selection is required');
-    }
-
-    if (seenUiGraphIds.has(access.uiGraphId)) {
-      throw badRequest('Each web app access policy can only be updated once per request');
-    }
-
-    seenUiGraphIds.add(access.uiGraphId);
-  }
-
-  return normalized;
 }
 
 function getUnusedPublishedWebAppSnapshotIds(options: {
@@ -285,7 +177,7 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   };
 }
 
-export async function publishWorkflowProjectWebApps(relativePath: unknown, publications: unknown, preconditions?: WorkflowPublicationPreconditions) {
+export async function publishWorkflowProjectWebApps(relativePath: unknown, publications: unknown, preconditions: WorkflowDraftPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
@@ -295,9 +187,9 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
     loadProjectFromFile(projectPath),
     readStoredWorkflowProjectSettings(projectPath, projectName),
   ]);
-  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: true });
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'publish-web-apps');
   const availableUiGraphs = new Map(getProjectUiGraphSummaries(project).map((uiGraph) => [uiGraph.uiGraphId, uiGraph]));
-  const normalizedPublications = normalizeWebAppPublicationDrafts(publications, existingSettings.publishedWebApps);
+  const normalizedPublications = normalizeWebAppPublicationDrafts(publications);
   const replacedUiGraphIds = new Set(normalizedPublications.map((publication) => publication.uiGraphId));
 
   for (const publication of normalizedPublications) {
@@ -330,7 +222,7 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
         slug: publication.slug,
         publishedSnapshotId,
         publishedAt,
-        allowedEmails: publication.allowedEmails ?? [],
+        allowedEmails: publication.allowedEmails ?? previousPublication?.allowedEmails ?? [],
       };
     }),
   ];
@@ -358,14 +250,14 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
   return getWorkflowProject(root, projectPath);
 }
 
-export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, accessUpdates: unknown, preconditions?: WorkflowPublicationPreconditions) {
+export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, accessUpdates: unknown, preconditions: WorkflowPublicationPreconditions) {
   const root = await ensureWorkflowsRoot();
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
     allowProjectFile: true,
   }));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: false });
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'set-web-app-access');
   const normalizedAccessUpdates = normalizeWebAppAccessDrafts(accessUpdates);
   const accessByUiGraphId = new Map(normalizedAccessUpdates.map((access) => [access.uiGraphId, access.allowedEmails]));
   const missingUiGraphIds = normalizedAccessUpdates
@@ -397,7 +289,7 @@ export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, a
   return getWorkflowProject(root, projectPath);
 }
 
-export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions?: WorkflowPublicationPreconditions) {
+export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions) {
   if (typeof uiGraphId !== 'string' || !uiGraphId.trim()) {
     throw badRequest('Web app selection is required');
   }
@@ -408,7 +300,7 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
   }));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, { publishesDraft: false });
+  await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'unpublish-web-app');
   const normalizedUiGraphId = uiGraphId.trim();
   const removedWebApp = existingSettings.publishedWebApps.find((webApp) => webApp.uiGraphId === normalizedUiGraphId);
   if (!removedWebApp) {

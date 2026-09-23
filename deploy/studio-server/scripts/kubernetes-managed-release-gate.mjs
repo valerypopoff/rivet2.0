@@ -972,7 +972,7 @@ class ManagedReleaseGate {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
-        settings: { endpointName: 'managed-release-workflow', expectedRevisionId: upload.project?.revisionId },
+        settings: { endpointName: 'managed-release-workflow' },
         preconditions: initialPreconditions,
       }),
     });
@@ -985,7 +985,7 @@ class ManagedReleaseGate {
       signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         relativePath,
-        settings: { endpointName: 'managed-release-workflow', expectedRevisionId: randomUUID() },
+        settings: { endpointName: 'managed-release-workflow' },
         preconditions: { ...currentPreconditions, expectedDraftRevisionId: randomUUID() },
       }),
     });

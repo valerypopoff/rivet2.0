@@ -117,13 +117,13 @@ export type WorkflowPublicationPreconditions = {
   expectedDraftRevisionId?: string;
 };
 
-export type WorkflowProjectSettingsDraft = {
-  endpointName: string;
-  expectedRevisionId?: string;
+export type WorkflowDraftPublicationPreconditions = WorkflowPublicationPreconditions & {
+  expectedDraftRevisionId: string;
 };
 
-export const WORKFLOW_PUBLICATION_CONFLICT_MESSAGE =
-  'Publishing failed because the project changed. Click Publish/Update again to publish the latest saved version.';
+export type WorkflowProjectSettingsDraft = {
+  endpointName: string;
+};
 
 export type WorkflowPublishedWebAppSummary = {
   uiGraphId: string;

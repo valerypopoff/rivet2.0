@@ -7,7 +7,7 @@ import {
   getWorkflowsRoot,
   validatePath,
 } from '../../security.js';
-import { badRequest, conflict } from '../../utils/httpError.js';
+import { badRequest } from '../../utils/httpError.js';
 
 export const PROJECT_EXTENSION = '.rivet-project';
 export const PROJECT_SETTINGS_SUFFIX = '.wrapper-settings.json';
@@ -222,68 +222,6 @@ export function getProjectSidecarPaths(projectPath: string): { dataset: string; 
     settings: getWorkflowProjectSettingsPath(projectPath),
     stats: getWorkflowProjectStatsPath(projectPath),
   };
-}
-
-export async function moveProjectWithSidecars(sourceProjectPath: string, targetProjectPath: string): Promise<void> {
-  const sourceSidecars = getProjectSidecarPaths(sourceProjectPath);
-  const targetSidecars = getProjectSidecarPaths(targetProjectPath);
-  const sourceDatasetExists = await pathExists(sourceSidecars.dataset);
-  const sourceSettingsExists = await pathExists(sourceSidecars.settings);
-  const sourceStatsExists = await pathExists(sourceSidecars.stats);
-  const projectRename = (fromPath: string, toPath: string) => renamePathHandlingCaseChange(fromPath, toPath);
-
-  if (sourceProjectPath !== targetProjectPath && await pathExists(targetProjectPath)) {
-    throw conflict(`Project already exists: ${path.basename(targetProjectPath)}`);
-  }
-
-  if (sourceDatasetExists && sourceSidecars.dataset !== targetSidecars.dataset && await pathExists(targetSidecars.dataset)) {
-    throw conflict(`Dataset file already exists for project: ${path.basename(targetProjectPath)}`);
-  }
-
-  if (sourceSettingsExists && sourceSidecars.settings !== targetSidecars.settings && await pathExists(targetSidecars.settings)) {
-    throw conflict(`Settings file already exists for project: ${path.basename(targetProjectPath)}`);
-  }
-
-  let datasetMoved = false;
-  let settingsMoved = false;
-
-  try {
-    await projectRename(sourceProjectPath, targetProjectPath);
-
-    if (sourceDatasetExists && sourceSidecars.dataset !== targetSidecars.dataset) {
-      await projectRename(sourceSidecars.dataset, targetSidecars.dataset);
-      datasetMoved = true;
-    }
-
-    if (sourceSettingsExists && sourceSidecars.settings !== targetSidecars.settings) {
-      await projectRename(sourceSidecars.settings, targetSidecars.settings);
-      settingsMoved = true;
-    }
-
-    if (sourceSidecars.stats !== targetSidecars.stats) {
-      if (!pathsDifferOnlyByCase(sourceSidecars.stats, targetSidecars.stats) && await pathExists(targetSidecars.stats)) {
-        await fs.rm(targetSidecars.stats, { force: true }).catch(() => {});
-      }
-
-      if (sourceStatsExists) {
-        await projectRename(sourceSidecars.stats, targetSidecars.stats).catch(() => {});
-      }
-    }
-  } catch (error) {
-    if (settingsMoved) {
-      await renamePathHandlingCaseChange(targetSidecars.settings, sourceSidecars.settings).catch(() => {});
-    }
-
-    if (datasetMoved) {
-      await renamePathHandlingCaseChange(targetSidecars.dataset, sourceSidecars.dataset).catch(() => {});
-    }
-
-    if (sourceProjectPath !== targetProjectPath && await pathExists(targetProjectPath) && !await pathExists(sourceProjectPath)) {
-      await renamePathHandlingCaseChange(targetProjectPath, sourceProjectPath).catch(() => {});
-    }
-
-    throw error;
-  }
 }
 
 export async function deleteProjectWithSidecars(projectPath: string): Promise<void> {

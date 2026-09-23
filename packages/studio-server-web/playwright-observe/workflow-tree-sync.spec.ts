@@ -199,6 +199,52 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
   }, path);
 }
 
+test('dragging a project into a folder sends the move and follows the new project path', async ({ page }) => {
+  const project = createProjectFixture('Drag move project');
+  const folder: WorkflowFolderItem = {
+    id: 'drag-destination',
+    name: 'Drag destination',
+    relativePath: 'Drag destination',
+    absolutePath: '/managed/workflows/Drag destination',
+    updatedAt: '2026-09-16T00:00:00.000Z',
+    folders: [],
+    projects: [],
+  };
+  const state: TreeState = { folders: [folder], projects: [project], revision: 0 };
+  const moveRequests: unknown[] = [];
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/workflows/move', async (route) => {
+    moveRequests.push(route.request().postDataJSON());
+    const movedProject = {
+      ...project,
+      relativePath: `${folder.relativePath}/${project.fileName}`,
+      absolutePath: `${folder.absolutePath}/${project.fileName}`,
+    };
+    folder.projects = [movedProject];
+    state.projects = [];
+    state.revision += 1;
+    await route.fulfill({ status: 200, json: {
+      project: movedProject,
+      movedProjectPaths: [{ fromAbsolutePath: project.absolutePath, toAbsolutePath: movedProject.absolutePath }],
+    } });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: project.name }).dragTo(page.locator('.folder-row', { hasText: folder.name }));
+
+  await expect.poll(() => moveRequests).toEqual([{
+    itemType: 'project',
+    sourceRelativePath: project.relativePath,
+    destinationFolderRelativePath: folder.relativePath,
+  }]);
+  await page.locator('.folder-row', { hasText: folder.name }).click();
+  await expect(page.locator('.folder-row', { hasText: folder.name })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.folder', { has: page.locator('.folder-row', { hasText: folder.name }) }).locator('.project-row', { hasText: project.name })).toBeVisible();
+});
+
 test('folder context menu creates a nested folder inside the selected folder', async ({ page }) => {
   const parentFolder: WorkflowFolderItem = {
     id: 'parent-folder',

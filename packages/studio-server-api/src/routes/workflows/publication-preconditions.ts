@@ -6,6 +6,7 @@ import type { WorkflowPublicationPreconditions } from '../../../../studio-server
 import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowDatasetPath } from './fs-helpers.js';
 import { getFilesystemProjectRevisionId } from './project-stats.js';
+import { publicationCommandPublishesDraft, type WorkflowPublicationCommandKind } from './publication-command.js';
 import type { StoredWorkflowProjectSettings } from './types.js';
 
 const VERSION_PATTERN = /^(0|[1-9][0-9]*)$/;
@@ -22,17 +23,23 @@ export function nextPublicationVersion(current: string | undefined): string {
 }
 
 export function assertPublicationPreconditions(
-  expected: WorkflowPublicationPreconditions | undefined,
+  expected: WorkflowPublicationPreconditions,
   actual: { projectId: string; publicationVersion: string; draftRevisionId?: string },
-  options: { publishesDraft: boolean },
+  kind: WorkflowPublicationCommandKind,
 ): void {
-  // Only trusted in-process callers may omit preconditions. HTTP schemas
-  // require them before reaching either storage backend.
-  if (!expected) return;
+  const publishesDraft = publicationCommandPublishesDraft(kind);
+  // Check runtime callers as well as typed HTTP callers: an internal JavaScript
+  // caller must never acquire an implicit unchecked publication path.
+  if (!expected || typeof expected.expectedProjectId !== 'string' || !expected.expectedProjectId.trim() ||
+    typeof expected.expectedPublicationVersion !== 'string' || !VERSION_PATTERN.test(expected.expectedPublicationVersion) ||
+    (publishesDraft &&
+      (typeof expected.expectedDraftRevisionId !== 'string' || !expected.expectedDraftRevisionId.trim()))) {
+    throw createHttpError(400, 'Publication preconditions are required');
+  }
   if (expected.expectedProjectId !== actual.projectId) {
     throw createHttpError(409, 'The project at this path changed. Refresh before trying again.', { code: 'publication_project_changed' });
   }
-  if (options.publishesDraft && expected.expectedDraftRevisionId !== actual.draftRevisionId) {
+  if (publishesDraft && expected.expectedDraftRevisionId !== actual.draftRevisionId) {
     throw createHttpError(409, 'Publishing failed because the project changed. Review the latest saved version before trying again.', { code: 'publication_draft_changed' });
   }
   if (expected.expectedPublicationVersion !== actual.publicationVersion) {
@@ -43,12 +50,11 @@ export function assertPublicationPreconditions(
 export async function assertFilesystemPublicationPreconditions(
   projectPath: string,
   settings: StoredWorkflowProjectSettings,
-  expected: WorkflowPublicationPreconditions | undefined,
-  options: { publishesDraft: boolean },
+  expected: WorkflowPublicationPreconditions,
+  kind: WorkflowPublicationCommandKind,
 ): Promise<void> {
-  if (!expected) return;
   const actual = await readFilesystemPublicationState(projectPath, settings);
-  assertPublicationPreconditions(expected, actual, options);
+  assertPublicationPreconditions(expected, actual, kind);
 }
 
 export async function readFilesystemPublicationState(

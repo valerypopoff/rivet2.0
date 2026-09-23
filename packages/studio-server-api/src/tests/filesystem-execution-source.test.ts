@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
+import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
 
 import {
   createRootPublishedProjectFactory,
@@ -38,7 +39,7 @@ process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
 
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
-const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
+const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../routes/workflows/workflow-mutations.js'));
 const workflowPublication = await import('../routes/workflows/publication.js');
 const executionSource = await import('../routes/workflows/filesystem-execution-source.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');

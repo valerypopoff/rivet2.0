@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { readJson } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { saveFilesystemPublicationTransaction, setFilesystemPublicationTransactionCheckpointForTests } from '../routes/workflows/filesystem-publication-transactions.js';
+import { normalizeWebAppAccessDrafts, normalizeWebAppPublicationDrafts } from '../routes/workflows/web-app-publication-drafts.js';
 
 const {
   workflowsRoot,
@@ -24,6 +25,26 @@ type StoredWorkflowProjectSettings = Awaited<ReturnType<typeof workflowPublicati
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+test('web-app publication and access drafts share strict slug, identity, and email policy', () => {
+  assert.deepEqual(normalizeWebAppPublicationDrafts([
+    { uiGraphId: ' graph ', slug: ' Example ', allowedEmails: [' OWNER@EXAMPLE.COM ', 'owner@example.com'] },
+  ]), [{ uiGraphId: 'graph', slug: 'Example', allowedEmails: ['owner@example.com'] }]);
+  assert.deepEqual(normalizeWebAppPublicationDrafts([{ uiGraphId: 'graph', slug: 'Example' }]), [
+    { uiGraphId: 'graph', slug: 'Example', allowedEmails: undefined },
+  ]);
+  assert.throws(() => normalizeWebAppPublicationDrafts([
+    { uiGraphId: 'one', slug: 'Example' }, { uiGraphId: 'two', slug: 'example' },
+  ]), /unique/);
+  assert.throws(() => normalizeWebAppPublicationDrafts([{ uiGraphId: 'one', slug: 'AUTH' }]), /reserved/);
+  assert.throws(() => normalizeWebAppPublicationDrafts([{ uiGraphId: 'one', slug: 'one', allowedEmails: ['invalid'] }]), /Invalid allowed email/);
+  assert.deepEqual(normalizeWebAppAccessDrafts([{ uiGraphId: ' graph ', allowedEmails: 'OWNER@EXAMPLE.COM' }]), [
+    { uiGraphId: 'graph', allowedEmails: ['owner@example.com'] },
+  ]);
+  assert.throws(() => normalizeWebAppAccessDrafts([
+    { uiGraphId: 'one', allowedEmails: [] }, { uiGraphId: 'one', allowedEmails: [] },
+  ]), /only be updated once/);
+});
 
 async function writeBlankProject(projectName: string): Promise<string> {
   const projectPath = path.join(workflowsRoot, `${projectName}.rivet-project`);
@@ -206,6 +227,24 @@ test('publish and unpublish keep workflow project behavior stable', async () => 
   assert.equal(await workflowPublication.findLatestWorkflowByEndpoint(workflowsRoot, 'demo-endpoint'), null);
 });
 
+test('filesystem publication methods reject omitted reviewed state without mutating publication', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'RequiredBackendTokens');
+  const rawMutations = await import('../routes/workflows/workflow-mutations.js');
+  const rawBackend = await import('../routes/workflows/storage-backend.js');
+  await assert.rejects(
+    rawMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'unchecked-endpoint' }, undefined as never),
+    { status: 400 },
+  );
+  await assert.rejects(rawMutations.unpublishWorkflowProjectItem(created.relativePath, undefined as never), { status: 400 });
+  await assert.rejects(rawBackend.executeWorkflowPublicationCommandWithBackend({
+    kind: 'publish-endpoint', relativePath: created.relativePath, endpointName: 'unchecked-endpoint', preconditions: undefined,
+  } as never), { status: 400 });
+  await assert.rejects(rawBackend.executeWorkflowPublicationCommandWithBackend({ kind: 'unknown' } as never), { status: 400 });
+  const settings = await workflowPublication.readStoredWorkflowProjectSettings(created.absolutePath, created.name);
+  assert.equal(settings.publishedSnapshotId, null);
+  assert.equal(settings.publicationVersion, '0');
+});
+
 test('publish rejects a saved project without a selected Main Graph', async () => {
   const projectPath = await writeBlankProject('NoMainGraph');
   const contents = await fs.readFile(projectPath, 'utf8');
@@ -254,12 +293,25 @@ test('HTTP publishing rejects missing and stale revisions and accepts a delibera
           expectedPublicationVersion: original.settings.publicationVersion,
           expectedDraftRevisionId: expectedRevisionId,
         },
-        settings: { endpointName: 'new-endpoint', expectedRevisionId },
+        settings: { endpointName: 'new-endpoint' },
       }),
     });
     for (const invalidRevision of [undefined, null, '', '   ']) {
       assert.equal((await publish(invalidRevision)).status, 400);
     }
+    const disagreeingLegacyRevision = await fetch(`${baseUrl}/projects/publish`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: 'ConcurrentPublish.rivet-project',
+        preconditions: {
+          expectedProjectId: original.projectMetadataId,
+          expectedPublicationVersion: original.settings.publicationVersion,
+          expectedDraftRevisionId: original.revisionId,
+        },
+        settings: { endpointName: 'new-endpoint', expectedRevisionId: 'other-revision' },
+      }),
+    });
+    assert.equal(disagreeingLegacyRevision.status, 400);
     const restoreWithoutReviewedDraft = await fetch(`${baseUrl}/projects/published-versions/restore`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

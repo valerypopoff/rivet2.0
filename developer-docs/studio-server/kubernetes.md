@@ -59,8 +59,9 @@ Do not scale `backend` horizontally in the current chart shape. Latest workflow 
 
 Publication commands use the project identity and publication version from the
 single Project Settings read; commands that publish or restore executable draft
-content also use its draft revision. Endpoint publish additionally retains
-`settings.expectedRevisionId` for the existing request format. Managed schema
+content also use its draft revision. The old duplicate endpoint
+`settings.expectedRevisionId` is accepted only as a matching HTTP compatibility
+field; the backend uses the draft precondition alone. Managed schema
 migration 13 adds the project-scoped `publication_version` counter and must run
 before the new API starts accepting publication writes. All comparisons happen
 under the PostgreSQL workflow row lock, before changing publication state. A
@@ -68,9 +69,10 @@ competing save or publication that wins the lock causes 409 without changing the
 live version. No sticky session or Pod-local publication cache is involved.
 Old browser tabs or API clients that omit preconditions receive 400 and must
 reload/update; do not weaken validation during rollout. The candidate,
-managed-release, and capacity smoke callers supply reviewed preconditions. The
-managed release gate checks stale-command rejection, unchanged history, and
-concurrent publication updates against PostgreSQL through the deployed
+managed-release, and capacity smoke callers supply reviewed preconditions
+without the duplicate endpoint revision field. The managed release gate changes
+the draft precondition itself to test a genuine stale-command 409, then checks
+unchanged history and concurrent publication updates against PostgreSQL through the deployed
 proxy/API before exercising workflow execution.
 
 The chart enforces `backend=1` and disables backend autoscaling. The backend is a StatefulSet, so Kubernetes does not offer the Deployment-only `Recreate` strategy named in some deployment guidance. Its `OrderedReady` plus single-ordinal `RollingUpdate` is the equivalent single-writer replacement here: ordinal `0` is terminated before its replacement is created, accepting a short control-plane interruption and preventing an old and new backend from serving together. Execution replicas remain independently scalable.

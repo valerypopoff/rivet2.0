@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { fsync as fsyncCallback, type Dirent } from 'node:fs';
+import { type Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -7,10 +7,16 @@ import { deserializeDatasets, loadProjectAndAttachedDataFromString } from '@vale
 
 import { getWorkflowsRoot } from '../../security.js';
 import { getWorkflowDatasetPath, PROJECT_EXTENSION, WORKFLOW_DATASET_SUFFIX } from './fs-helpers.js';
+import { syncDirectory, writeDurableExclusive } from './filesystem-transaction-primitives.js';
 import {
   probeFilesystemPublicationStorage,
   recoverFilesystemPublicationTransactions,
 } from './filesystem-publication-transactions.js';
+import {
+  FilesystemProjectMoveCommitUncertainError,
+  probeFilesystemProjectMoveStorage,
+  recoverFilesystemProjectMoveTransactions,
+} from './filesystem-project-move-transactions.js';
 
 export const FILESYSTEM_PROJECT_TRANSACTIONS_DIR = '.rivet-transactions';
 
@@ -319,41 +325,6 @@ function parseJournal(root: string, transactionId: string, value: unknown): Proj
     project,
     dataset,
   };
-}
-
-function isUnsupportedDirectorySyncError(error: unknown): boolean {
-  return (
-    process.platform === 'win32' &&
-    ['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')
-  );
-}
-
-function syncFileDescriptor(fileDescriptor: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    fsyncCallback(fileDescriptor, (error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function syncDirectory(directoryPath: string): Promise<void> {
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(directoryPath, 'r');
-    await syncFileDescriptor(handle.fd);
-  } catch (error) {
-    if (!isUnsupportedDirectorySyncError(error)) throw error;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
-async function writeDurableExclusive(filePath: string, contents: Buffer | string): Promise<void> {
-  const handle = await fs.open(filePath, 'wx');
-  try {
-    await handle.writeFile(contents);
-    await syncFileDescriptor(handle.fd);
-  } finally {
-    await handle.close();
-  }
 }
 
 async function unlinkIfPresent(filePath: string): Promise<void> {
@@ -689,8 +660,10 @@ export async function initializeFilesystemProjectTransactions(root: string): Pro
     try {
       await runStorageCapabilityProbe(root);
       await probeFilesystemPublicationStorage(root);
+      await probeFilesystemProjectMoveStorage(root);
       await recoverTransactionsUnlocked(root);
       await recoverFilesystemPublicationTransactions(root);
+      await recoverFilesystemProjectMoveTransactions(root);
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'startup', null, error);
     }
@@ -716,7 +689,8 @@ export async function withFilesystemWorkflowStorageWrite<T>(operation: () => Pro
     try {
       const projectCleanupPending = await recoverTransactionsUnlocked(root);
       const publicationCleanupPending = await recoverFilesystemPublicationTransactions(root);
-      if (projectCleanupPending || publicationCleanupPending) {
+      const moveCleanupPending = await recoverFilesystemProjectMoveTransactions(root);
+      if (projectCleanupPending || publicationCleanupPending || moveCleanupPending) {
         throw new FilesystemProjectTransactionCleanupPendingError();
       }
     } catch (error) {
@@ -726,10 +700,14 @@ export async function withFilesystemWorkflowStorageWrite<T>(operation: () => Pro
     try {
       return await operation();
     } catch (error) {
+      if (error instanceof FilesystemProjectMoveCommitUncertainError) {
+        throw rememberFatalRecoveryError(root, error.transactionId, error.sourceProjectPath, error);
+      }
       try {
         await recoverFilesystemPublicationTransactions(root);
+        await recoverFilesystemProjectMoveTransactions(root);
       } catch (recoveryError) {
-        throw rememberFatalRecoveryError(root, 'publication-rollback', null, recoveryError);
+        throw rememberFatalRecoveryError(root, 'mutation-rollback', null, recoveryError);
       }
       throw error;
     }
@@ -746,6 +724,7 @@ export async function withFilesystemWorkflowProjectRead<T>(
     try {
       await recoverTransactionsUnlocked(root, projectPath);
       await recoverFilesystemPublicationTransactions(root);
+      await recoverFilesystemProjectMoveTransactions(root);
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'defensive-read', projectPath, error);
     }
@@ -762,6 +741,7 @@ export async function recoverFilesystemProjectTransactions(root: string): Promis
     try {
       await recoverTransactionsUnlocked(root);
       await recoverFilesystemPublicationTransactions(root);
+      await recoverFilesystemProjectMoveTransactions(root);
       fatalRecoveryErrors.delete(getRootKey(root));
     } catch (error) {
       throw rememberFatalRecoveryError(root, 'recovery', null, error);

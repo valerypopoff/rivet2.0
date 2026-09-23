@@ -252,7 +252,7 @@ async function main() {
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath,
-        settings: { endpointName: 'candidate-smoke', expectedRevisionId: draftRevisionId },
+        settings: { endpointName: 'candidate-smoke' },
         preconditions: {
           expectedProjectId: projectId,
           expectedDraftRevisionId: draftRevisionId,

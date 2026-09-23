@@ -4,6 +4,7 @@ import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import { once } from 'node:events';
 import test from 'node:test';
+import { createReviewedBackendPublicationFixtures, createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
 import WebSocket from 'ws';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
@@ -72,8 +73,8 @@ const {
   resetLatestWorkflowRemoteDebuggerForTests,
 } = await import('../latestWorkflowRemoteDebugger.js');
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
-const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
-const workflowStorageBackend = await import('../routes/workflows/storage-backend.js');
+const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../routes/workflows/workflow-mutations.js'));
+const workflowStorageBackend = createReviewedBackendPublicationFixtures(await import('../routes/workflows/storage-backend.js'));
 const filesystemExecutionCache = await import('../routes/workflows/filesystem-execution-cache.js');
 const workflowEndpointAuthSettings = await import('../workflow-endpoint-auth-settings.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');

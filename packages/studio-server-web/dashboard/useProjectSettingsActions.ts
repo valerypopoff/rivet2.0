@@ -461,7 +461,6 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     try {
       const project = await publishWorkflowProject(activeProject.relativePath, {
         endpointName: settingsDraft.endpointName,
-        expectedRevisionId: preconditions.expectedDraftRevisionId,
       }, preconditions);
       acceptReturnedPublication(project, preconditions);
       await refreshTreeAfterSuccess();

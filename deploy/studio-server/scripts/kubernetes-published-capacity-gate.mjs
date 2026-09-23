@@ -625,7 +625,7 @@ export class PublishedCapacityGate {
         headers: this.config.requestHeaders,
         body: {
           relativePath,
-          settings: { endpointName, expectedRevisionId: draftRevisionId },
+          settings: { endpointName },
           preconditions: {
             expectedProjectId: projectId,
             expectedDraftRevisionId: draftRevisionId,

@@ -11,7 +11,11 @@ import type {
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
-  endpointPublishRequests: Array<{ relativePath?: string; settings?: { endpointName?: string; expectedRevisionId?: string } }>;
+  endpointPublishRequests: Array<{
+    relativePath?: string;
+    settings?: { endpointName?: string; expectedRevisionId?: string };
+    preconditions?: { expectedProjectId?: string; expectedDraftRevisionId?: string; expectedPublicationVersion?: string };
+  }>;
   endpointAccessRequests: Array<{ relativePath: string; access: 'public' | 'internal' }>;
   webAppPublishRequests: Array<{
     relativePath: string;
@@ -204,7 +208,7 @@ async function installProjectSettingsRoutes(
     };
     trackers.endpointPublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
-    if (!preconditionsMatch(targetProject, requestBody.preconditions, true) || requestBody.settings?.expectedRevisionId !== targetProject.revisionId) {
+    if (!preconditionsMatch(targetProject, requestBody.preconditions, true)) {
       await rejectStale(route);
       return;
     }
@@ -630,7 +634,8 @@ test.describe('Project settings modal', () => {
     await expect(update).toBeEnabled();
     await update.click();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible();
-    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBe('revision-2');
+    expect(trackers.endpointPublishRequests[0]?.preconditions?.expectedDraftRevisionId).toBe('revision-2');
+    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBeUndefined();
     expect(trackers.endpointPublishRequests[0]?.settings?.endpointName).toBe('my-edited-endpoint');
     expect(project.settings.endpointAccess).toBe('internal');
     // Once the edit is saved, the clean field should follow later server updates.
@@ -686,14 +691,14 @@ test.describe('Project settings modal', () => {
     await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toBeVisible();
     await expect(publish).toBeDisabled();
     expect(trackers.endpointPublishRequests).toHaveLength(1);
-    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBe('revision-1');
+    expect(trackers.endpointPublishRequests[0]?.preconditions?.expectedDraftRevisionId).toBe('revision-1');
     expect(project.settings.status).toBe('unpublished');
     await modal.getByRole('button', { name: 'Review latest' }).click();
     await expect(publish).toBeEnabled();
     await publish.click();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible();
     expect(trackers.endpointPublishRequests).toHaveLength(2);
-    expect(trackers.endpointPublishRequests[1]?.settings?.expectedRevisionId).toBe('revision-2');
+    expect(trackers.endpointPublishRequests[1]?.preconditions?.expectedDraftRevisionId).toBe('revision-2');
   });
 
   test('a newer publication found after web-app publish requires review', async ({ page }) => {
