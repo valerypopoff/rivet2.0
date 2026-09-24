@@ -218,11 +218,16 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
           throw error;
         }
 
-        await this.#client.send(
-          new CreateBucketCommand({
-            Bucket: this.#bucket,
-          }),
-        );
+        try {
+          await this.#client.send(new CreateBucketCommand({ Bucket: this.#bucket }));
+        } catch (createError) {
+          // A second process can win the initial bucket-creation race.
+          try {
+            await this.#client.send(new HeadBucketCommand({ Bucket: this.#bucket }));
+          } catch {
+            throw createError;
+          }
+        }
       }
     });
   }

@@ -278,7 +278,8 @@ spec:
           effect: NoSchedule
       containers:
         - name: minio
-          image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+          image: alpine/minio:RELEASE.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4
+          securityContext: { runAsUser: 0 } # Disposable hostPath is root-owned.
           args: ["server", "/data", "--console-address", ":9001"]
           ports: [{ containerPort: 9000 }]
           env:
@@ -303,33 +304,6 @@ metadata:
 spec:
   selector: { app: release-gate-minio }
   ports: [{ port: 9000, targetPort: 9000 }]
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: release-gate-create-bucket
-  namespace: ${namespace}
-  labels: { app.kubernetes.io/part-of: rivet-managed-release-gate }
-spec:
-  backoffLimit: 30
-  template:
-    metadata:
-      labels: { app.kubernetes.io/part-of: rivet-managed-release-gate }
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: create-bucket
-          image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
-          command: ["sh", "-ec"]
-          args:
-            - >-
-              until mc alias set release-gate http://release-gate-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD";
-              do sleep 2; done; mc mb --ignore-existing release-gate/rivet-release-gate
-          env:
-            - name: MINIO_ROOT_USER
-              valueFrom: { secretKeyRef: { name: rivet-release-gate-object-storage, key: accessKeyId } }
-            - name: MINIO_ROOT_PASSWORD
-              valueFrom: { secretKeyRef: { name: rivet-release-gate-object-storage, key: secretAccessKey } }
 `;
 }
 
@@ -815,14 +789,6 @@ class ManagedReleaseGate {
       '-n',
       this.config.namespace,
       '--timeout=180s',
-    ]);
-    await this.waitForDependency('MinIO bucket initialization', 'job-name=release-gate-create-bucket', [
-      'wait',
-      '--for=condition=complete',
-      'job/release-gate-create-bucket',
-      '-n',
-      this.config.namespace,
-      '--timeout=240s',
     ]);
   }
   async installChart() {

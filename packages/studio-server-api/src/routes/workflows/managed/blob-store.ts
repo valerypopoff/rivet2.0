@@ -131,11 +131,17 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
           throw error;
         }
 
-        await this.#client.send(
-          new CreateBucketCommand({
-            Bucket: this.#bucket,
-          }),
-        );
+        try {
+          await this.#client.send(new CreateBucketCommand({ Bucket: this.#bucket }));
+        } catch (createError) {
+          // Another API process may have created the bucket after HeadBucket.
+          // Only a successful read proves this create failure is harmless.
+          try {
+            await this.#client.send(new HeadBucketCommand({ Bucket: this.#bucket }));
+          } catch {
+            throw createError;
+          }
+        }
       }
     });
   }

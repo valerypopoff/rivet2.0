@@ -6,7 +6,9 @@ import type { ManagedRuntimeLibrariesConfig } from '../runtime-libraries/config.
 import {
   deleteRuntimeLibrariesBlobObjects,
   listRuntimeLibrariesBlobObjects,
+  S3RuntimeLibrariesBlobStore,
 } from '../runtime-libraries/managed/blob-store.js';
+import { S3ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
 
 function createConfig(endpoint: string): ManagedRuntimeLibrariesConfig {
@@ -29,6 +31,48 @@ function createConfig(endpoint: string): ManagedRuntimeLibrariesConfig {
     jobWorkerEnabled: true,
   };
 }
+
+test('managed blob stores accept a bucket created by another process after their first HEAD', async () => {
+  let headRequests = 0;
+  let createRequests = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.once('end', () => {
+      if (request.method === 'HEAD') {
+        response.writeHead(++headRequests === 1 ? 404 : 200);
+        response.end();
+      } else if (request.method === 'PUT') {
+        createRequests += 1;
+        response.writeHead(409, { 'content-type': 'application/xml' });
+        response.end('<Error><Code>BucketAlreadyOwnedByYou</Code></Error>');
+      } else {
+        response.writeHead(500);
+        response.end();
+      }
+    });
+  });
+  const listener = await listenTestServer(server);
+
+  try {
+    for (const makeStore of [
+      () => new S3ManagedWorkflowBlobStore(createConfig(listener.baseUrl)),
+      () => new S3RuntimeLibrariesBlobStore(createConfig(listener.baseUrl)),
+    ]) {
+      headRequests = 0;
+      createRequests = 0;
+      const store = makeStore();
+      try {
+        await store.initialize();
+        assert.equal(headRequests, 2);
+        assert.equal(createRequests, 1);
+      } finally {
+        store.dispose();
+      }
+    }
+  } finally {
+    await listener.close();
+  }
+});
 
 test('managed runtime-library deletion fails visibly when S3 partially rejects a batch', async () => {
   const server = http.createServer((request, response) => {

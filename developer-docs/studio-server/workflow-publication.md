@@ -70,7 +70,11 @@ Additional acceptance entrypoints:
   the same real API process fixture. It reads and replays the persisted object
   artifacts, including late failure. No deployment database or bucket is accepted.
   This command is included in CI deployment contracts and requires Docker.
-  Its MinIO default matches the existing managed-services compose fixture.
+  Its MinIO default matches the managed-services Compose and Kubernetes fixtures:
+  a release-and-digest-pinned community-built image from Docker Hub. The test
+  uses an unprivileged, container-local data directory; the managed API creates
+  its own bucket. The external image pull remains required for a fresh Docker
+  host, and a failed pull is an infrastructure failure before API assertions run.
   `RIVET_ASYNC_TEST_MINIO_IMAGE` can select a locally cached image by digest when
   the registry is unreachable; this affects only the disposable test service.
 - `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe workflow-async-recording.spec.ts`

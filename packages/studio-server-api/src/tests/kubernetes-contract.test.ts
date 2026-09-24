@@ -1032,10 +1032,12 @@ test('self-contained Minikube dependencies stay isolated and match the local lau
   assert.match(dependencies, /name: rivet-local-postgres/);
   assert.match(dependencies, /image: postgres:16\.8-alpine/);
   assert.match(dependencies, /name: rivet-local-minio/);
-  assert.match(dependencies, /image: quay\.io\/minio\/minio:RELEASE\.2025-04-22T22-12-26Z/);
-  assert.match(dependencies, /image: quay\.io\/minio\/mc:RELEASE\.2025-04-16T18-13-26Z/);
-  assert.doesNotMatch(dependencies, /image: minio\/(?:minio|mc):/);
-  assert.match(dependencies, /mc mb --ignore-existing local\/rivet-workflows/);
+  assert.match(
+    dependencies,
+    /image: alpine\/minio:RELEASE\.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4/,
+  );
+  assert.doesNotMatch(dependencies, /quay\.io\/minio|kind: Job/);
+  assert.match(dependencies, /runAsUser: 0/);
   assert.match(dependencies, /storage: 2Gi/);
   assert.doesNotMatch(dependencies, /example\.invalid|ghcr\.io|digitaloceanspaces\.com/);
 

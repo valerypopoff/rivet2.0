@@ -43,9 +43,10 @@ try {
     'MINIO_ROOT_USER=asyncfixture',
     '-e',
     'MINIO_ROOT_PASSWORD=asyncfixturesecret',
-    process.env.RIVET_ASYNC_TEST_MINIO_IMAGE || 'quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z',
+    process.env.RIVET_ASYNC_TEST_MINIO_IMAGE ||
+      'alpine/minio:RELEASE.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4',
     'server',
-    '/data',
+    '/tmp/minio',
   );
   const databaseConnectionString = `postgres://postgres@127.0.0.1:${dbPort}/rivet_async`;
   pool = new Pool({ connectionString: databaseConnectionString, connectionTimeoutMillis: 1_000 });
