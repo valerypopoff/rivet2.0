@@ -9,6 +9,7 @@ import {
   readJson,
   waitForRecordingWorkflows,
   waitForWorkflowRecordingRunCount,
+  withEnvOverride,
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 
@@ -143,6 +144,89 @@ for (const isSplitSequential of [false, true]) {
   });
 }
 
+test('a published cross-project Subgraph records searchable passed inputs under the called project', async () => {
+  const called = await workflowMutations.createWorkflowProjectItem('', 'CalledTarget');
+  const calledProject = await rivetNode.loadProjectFromFile(called.absolutePath);
+  const calledGraphId = calledProject.metadata.mainGraphId!;
+  const calledGraph = calledProject.graphs[calledGraphId]!;
+  const prompt = rivetNode.graphInputNode.impl.create();
+  prompt.data = { id: 'prompt', dataType: 'any' };
+  const response = rivetNode.graphOutputNode.impl.create();
+  response.data = { id: 'response', dataType: 'any' };
+  calledGraph.nodes = [prompt, response];
+  calledGraph.connections = [{
+    outputNodeId: prompt.id,
+    outputId: 'data' as PortId,
+    inputNodeId: response.id,
+    inputId: 'value' as PortId,
+  }];
+  const calledContents = rivetNode.serializeProject(calledProject);
+  assert.ok(typeof calledContents === 'string');
+  await fs.writeFile(called.absolutePath, calledContents, 'utf8');
+
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'PublishedCaller');
+  const callerProject = await rivetNode.loadProjectFromFile(caller.absolutePath);
+  const callerGraph = callerProject.graphs[callerProject.metadata.mainGraphId!]!;
+  const input = rivetNode.graphInputNode.impl.create();
+  input.data = { id: 'input', dataType: 'any' };
+  const call = rivetNode.subGraphNode.impl.create();
+  call.data = {
+    graphId: calledGraphId,
+    targetScope: 'other-projects',
+    targetProjectId: calledProject.metadata.id,
+    targetVersion: 'latest',
+    targetBoundary: rivetNode.getGraphBoundary(calledProject, calledGraphId),
+  };
+  const result = rivetNode.graphOutputNode.impl.create();
+  result.data = { id: 'result', dataType: 'any' };
+  callerGraph.nodes = [input, call, result];
+  callerGraph.connections = [
+    { outputNodeId: input.id, outputId: 'data' as PortId, inputNodeId: call.id, inputId: 'prompt' as PortId },
+    { outputNodeId: call.id, outputId: 'response' as PortId, inputNodeId: result.id, inputId: 'value' as PortId },
+  ];
+  const callerContents = rivetNode.serializeProject(callerProject);
+  assert.ok(typeof callerContents === 'string');
+  await fs.writeFile(caller.absolutePath, callerContents, 'utf8');
+  await workflowMutations.publishWorkflowProjectItem(caller.relativePath, { endpointName: 'published-cross-project' });
+
+  await withWorkflowExecutionServer(async ({ publishedBaseUrl, apiBaseUrl }) => {
+    const requestId = 'called-project-input-123';
+    const execution = await fetch(`${publishedBaseUrl}/published-cross-project`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId }),
+    });
+    assert.equal(execution.status, 200);
+    assert.deepEqual((await execution.json()).result?.value, { requestId });
+
+    const targetRuns = await waitForWorkflowRecordingRunCount(
+      workflowRecordings.listWorkflowRecordingRunsPage,
+      workflowsRoot,
+      calledProject.metadata.id,
+      1,
+    );
+    assert.equal(targetRuns.runs[0]?.executionIdentity?.surface, 'subgraph_project');
+    const callerRuns = await waitForWorkflowRecordingRunCount(
+      workflowRecordings.listWorkflowRecordingRunsPage,
+      workflowsRoot,
+      callerProject.metadata.id,
+      1,
+    );
+    assert.equal(callerRuns.runs[0]?.executionIdentity?.surface, 'workflow_endpoint');
+
+    const query = new URLSearchParams({
+      inputPath: '$.prompt.requestId',
+      inputOperator: '==',
+      inputValue: requestId,
+    });
+    const filtered = await fetch(
+      `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(calledProject.metadata.id)}/runs?${query}`,
+    );
+    assert.equal(filtered.status, 200);
+    assert.deepEqual((await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id), [targetRuns.runs[0]!.id]);
+  });
+});
+
 test('published and latest workflow execution create replayable recordings that are listed over HTTP', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'Recorded');
   await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
@@ -168,10 +252,10 @@ test('published and latest workflow execution create replayable recordings that 
 
     const latestCorrelationId = latestResponse.headers.get('x-rivet-correlation-id');
     assert.match(latestCorrelationId ?? '', /^rvt-[a-f0-9-]{36}$/);
-    const workflowsResponse = await waitForRecordingWorkflows(
+    const workflowsResponse = (await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 2,
-    ) as {
+    )) as {
       workflows: Array<{
         workflowId: string;
         project: { absolutePath: string; settings: { endpointName: string } };
@@ -193,21 +277,25 @@ test('published and latest workflow execution create replayable recordings that 
         status: string;
         executionIdentity?: { correlationId?: string };
       }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
 
     assert.equal(runsResponse.totalRuns, 2);
     assert.equal(runsResponse.runs.length, 2);
-    assert.deepEqual(
-      runsResponse.runs.map((recording) => recording.runKind).sort(),
-      ['latest', 'published'],
-    );
+    assert.deepEqual(runsResponse.runs.map((recording) => recording.runKind).sort(), ['latest', 'published']);
     assert.deepEqual(
       runsResponse.runs.map((recording) => recording.status),
       ['succeeded', 'succeeded'],
     );
 
     const sourceProject = await rivetNode.loadProjectFromFile(created.absolutePath);
-    const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), sourceProject.metadata.id);
+    const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+      workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+      sourceProject.metadata.id,
+    );
 
     assert.deepEqual(
       runsResponse.runs.map((recording) => recording.executionIdentity?.correlationId).sort(),
@@ -224,7 +312,11 @@ test('published and latest workflow execution create replayable recordings that 
       const replayProject = rivetNode.loadProjectFromString(
         await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, recording.id, 'replay-project'),
       );
-      const serializedRecording = await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, recording.id, 'recording');
+      const serializedRecording = await workflowRecordings.readWorkflowRecordingArtifact(
+        workflowsRoot,
+        recording.id,
+        'recording',
+      );
       const recorder = rivetNode.ExecutionRecorder.deserializeFromString(serializedRecording);
 
       assert.notEqual(replayProject.metadata.id, sourceProject.metadata.id);
@@ -266,9 +358,11 @@ test('recordings list keeps once-published workflows after unpublish', async () 
 
     const runsResponse = await readJson<{
       runs: Array<{ runKind: string; status: string }>;
-    }>(await fetch(
-      `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowsResponse.workflows[0]!.workflowId)}/runs?page=1&pageSize=20&status=all`,
-    ));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowsResponse.workflows[0]!.workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
 
     assert.equal(runsResponse.runs.length, 1);
     assert.equal(runsResponse.runs[0]?.runKind, 'published');
@@ -292,10 +386,10 @@ test('workflow recording runs endpoint paginates and filters failed runs server-
       assert.equal(response.ok, true);
     }
 
-    const workflowsResponse = await waitForRecordingWorkflows(
+    const workflowsResponse = (await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 3,
-    ) as {
+    )) as {
       workflows: Array<{ workflowId: string }>;
     };
     const workflowId = workflowsResponse.workflows[0]!.workflowId;
@@ -305,7 +399,11 @@ test('workflow recording runs endpoint paginates and filters failed runs server-
       pageSize: number;
       totalRuns: number;
       runs: Array<{ id: string }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=2&status=all`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=2&status=all`,
+      ),
+    );
 
     assert.equal(pageOne.page, 1);
     assert.equal(pageOne.pageSize, 2);
@@ -315,7 +413,11 @@ test('workflow recording runs endpoint paginates and filters failed runs server-
     const failedOnly = await readJson<{
       totalRuns: number;
       runs: Array<{ status: string }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=failed`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=failed`,
+      ),
+    );
 
     assert.equal(failedOnly.totalRuns, 0);
     assert.equal(failedOnly.runs.length, 0);
@@ -390,13 +492,7 @@ test('workflow recording failed filter includes suspicious runs', async () => {
     durationMs: 2,
   });
 
-  const failedOnly = await workflowRecordings.listWorkflowRecordingRunsPage(
-    workflowsRoot,
-    workflowId,
-    1,
-    20,
-    'failed',
-  );
+  const failedOnly = await workflowRecordings.listWorkflowRecordingRunsPage(workflowsRoot, workflowId, 1, 20, 'failed');
   const workflowsResponse = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
 
   assert.equal(failedOnly.totalRuns, 1);
@@ -409,13 +505,7 @@ test('workflow recording failed filter includes suspicious runs', async () => {
     /suspicious-recording/,
   );
 
-  const allRuns = await workflowRecordings.listWorkflowRecordingRunsPage(
-    workflowsRoot,
-    workflowId,
-    1,
-    20,
-    'all',
-  );
+  const allRuns = await workflowRecordings.listWorkflowRecordingRunsPage(workflowsRoot, workflowId, 1, 20, 'all');
   const succeededRun = allRuns.runs.find((run) => run.status === 'succeeded');
   assert.ok(succeededRun);
   assert.match(
@@ -472,14 +562,11 @@ test('workflow recording input filter evaluates JSON paths against the request i
   await persistRecording('input-filter-bar', { foo: 'bar', score: 5 }, 1);
   await persistRecording('input-filter-baz', { foo: 'baz', score: 12 }, 2);
 
-  const equalsBar = await workflowRecordings.listWorkflowRecordingRunsPage(
-    workflowsRoot,
-    workflowId,
-    1,
-    20,
-    'all',
-    { path: '$.foo', operator: '==', value: 'bar' },
-  );
+  const equalsBar = await workflowRecordings.listWorkflowRecordingRunsPage(workflowsRoot, workflowId, 1, 20, 'all', {
+    path: '$.foo',
+    operator: '==',
+    value: 'bar',
+  });
 
   assert.equal(equalsBar.totalRuns, 1);
   assert.match(
@@ -556,12 +643,13 @@ test('filesystem recording statistics use indexed identities for endpoint and we
   const created = await workflowMutations.createWorkflowProjectItem('', 'Statistics');
   const [loadedProject, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
   const workflowId = loadedProject.metadata.id!;
-  const recordingSerialized = (recordingId: string) => JSON.stringify({
-    version: 1,
-    recording: { recordingId, events: [], startTs: 1, finishTs: 1 },
-    assets: {},
-    strings: {},
-  });
+  const recordingSerialized = (recordingId: string) =>
+    JSON.stringify({
+      version: 1,
+      recording: { recordingId, events: [], startTs: 1, finishTs: 1 },
+      assets: {},
+      strings: {},
+    });
 
   await workflowRecordings.persistWorkflowExecutionRecording({
     workflowsRoot,
@@ -619,28 +707,45 @@ test('filesystem recording statistics use indexed identities for endpoint and we
       uiGraphId: 'ui-statistics',
     },
   });
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: loadedProject,
+    sourceProjectPath: created.absolutePath,
+    executedProject: loadedProject,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: 'Subgraph: Child',
+    recordingSerialized: recordingSerialized('statistics-subgraph'),
+    runKind: 'published',
+    status: 'succeeded',
+    durationMs: 50,
+    executionIdentity: { surface: 'subgraph_project', graphId: 'child' },
+  });
 
   const now = new Date();
   const period = {
     from: new Date(now.getTime() - 60_000).toISOString(),
     to: new Date(now.getTime() + 60_000).toISOString(),
   };
-  const endpointCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
-    workflowsRoot,
-    'endpoint',
-  );
-  const webAppCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(
-    workflowsRoot,
-    'web_app',
+  const endpointCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(workflowsRoot, 'endpoint');
+  const webAppCatalog = await workflowRecordings.listWorkflowRunStatisticsCatalog(workflowsRoot, 'web_app');
+  const runs = await workflowRecordings.listWorkflowRecordingRunsPage(workflowsRoot, workflowId, 1, 20, 'all');
+  assert.equal(
+    runs.runs.find((run) => run.endpointNameAtExecution === 'Subgraph: Child')?.executionIdentity?.surface,
+    'subgraph_project',
   );
 
-  assert.deepEqual(endpointCatalog.targets.map((target) => target.target), [
-    { surface: 'endpoint', workflowId },
-  ]);
-  assert.deepEqual(webAppCatalog.targets.map((target) => target.target), [
-    { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
-    { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
-  ]);
+  assert.deepEqual(
+    endpointCatalog.targets.map((target) => target.target),
+    [{ surface: 'endpoint', workflowId }],
+  );
+  assert.deepEqual(
+    webAppCatalog.targets.map((target) => target.target),
+    [
+      { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
+      { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
+    ],
+  );
 
   const stableWebAppTarget = webAppCatalog.targets.find((entry) => 'uiGraphId' in entry.target);
   const partialWebAppTarget = webAppCatalog.targets.find((entry) => 'legacyEndpointName' in entry.target);
@@ -683,10 +788,13 @@ test('filesystem recording statistics use indexed identities for endpoint and we
         };
       }>;
     }>(targetsResponse);
-    assert.deepEqual(targets.targets.map((entry) => entry.target), [
-      { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
-      { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
-    ]);
+    assert.deepEqual(
+      targets.targets.map((entry) => entry.target),
+      [
+        { surface: 'web_app', workflowId, legacyEndpointName: '/apps/statistics-partial' },
+        { surface: 'web_app', workflowId, uiGraphId: 'ui-statistics', componentId: 'run-button' },
+      ],
+    );
 
     const stableTarget = targets.targets.find((entry) => entry.target.uiGraphId)?.target;
     assert.ok(stableTarget);
@@ -704,7 +812,9 @@ test('filesystem recording statistics use indexed identities for endpoint and we
       }),
     });
     assert.equal(statisticsResponse.ok, true);
-    const statistics = await readJson<{ current: { runCount: number; medianDurationMs: number | null } }>(statisticsResponse);
+    const statistics = await readJson<{ current: { runCount: number; medianDurationMs: number | null } }>(
+      statisticsResponse,
+    );
     assert.equal(statistics.current.runCount, 1);
     assert.equal(statistics.current.medianDurationMs, 250);
 
@@ -740,10 +850,10 @@ test('workflow recording delete route removes a single recording and updates tot
       assert.equal(response.ok, true);
     }
 
-    const workflowsResponse = await waitForRecordingWorkflows(
+    const workflowsResponse = (await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 2,
-    ) as {
+    )) as {
       workflows: Array<{ workflowId: string; totalRuns: number }>;
     };
     const workflowId = workflowsResponse.workflows[0]!.workflowId;
@@ -751,19 +861,25 @@ test('workflow recording delete route removes a single recording and updates tot
     const runsResponse = await readJson<{
       totalRuns: number;
       runs: Array<{ id: string }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
 
     assert.equal(runsResponse.totalRuns, 2);
     assert.equal(runsResponse.runs.length, 2);
     const deletedRecordingId = runsResponse.runs[0]!.id;
-    const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), workflowId);
+    const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+      workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+      workflowId,
+    );
     const deletedBundlePath = path.join(recordingsRoot, deletedRecordingId);
     assert.equal(await workflowFs.pathExists(deletedBundlePath), true);
 
-    const deleteResponse = await fetch(
-      `${apiBaseUrl}/recordings/${encodeURIComponent(deletedRecordingId)}`,
-      { method: 'DELETE' },
-    );
+    const deleteResponse = await fetch(`${apiBaseUrl}/recordings/${encodeURIComponent(deletedRecordingId)}`, {
+      method: 'DELETE',
+    });
 
     assert.equal(deleteResponse.ok, true);
 
@@ -773,7 +889,11 @@ test('workflow recording delete route removes a single recording and updates tot
     const updatedRuns = await readJson<{
       totalRuns: number;
       runs: Array<{ id: string }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
 
     assert.equal(updatedWorkflows.workflows[0]?.totalRuns, 1);
     assert.equal(updatedRuns.totalRuns, 1);
@@ -804,10 +924,10 @@ test('workflow recording delete route removes the last unpublished recording fro
 
     await workflowMutations.unpublishWorkflowProjectItem(created.relativePath);
 
-    const workflowsResponse = await waitForRecordingWorkflows(
+    const workflowsResponse = (await waitForRecordingWorkflows(
       apiBaseUrl,
       (workflows) => workflows[0]?.totalRuns === 1,
-    ) as {
+    )) as {
       workflows: Array<{ workflowId: string; totalRuns: number }>;
     };
     const workflowId = workflowsResponse.workflows[0]!.workflowId;
@@ -815,20 +935,26 @@ test('workflow recording delete route removes the last unpublished recording fro
     const runsResponse = await readJson<{
       totalRuns: number;
       runs: Array<{ id: string }>;
-    }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
 
     assert.equal(runsResponse.totalRuns, 1);
     const deletedRecordingId = runsResponse.runs[0]!.id;
-    const workflowRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), workflowId);
+    const workflowRecordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+      workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+      workflowId,
+    );
     const deletedBundlePath = path.join(workflowRecordingsRoot, deletedRecordingId);
 
     assert.equal(await workflowFs.pathExists(deletedBundlePath), true);
     assert.equal(await workflowFs.pathExists(workflowRecordingsRoot), true);
 
-    const deleteResponse = await fetch(
-      `${apiBaseUrl}/recordings/${encodeURIComponent(deletedRecordingId)}`,
-      { method: 'DELETE' },
-    );
+    const deleteResponse = await fetch(`${apiBaseUrl}/recordings/${encodeURIComponent(deletedRecordingId)}`, {
+      method: 'DELETE',
+    });
     assert.equal(deleteResponse.ok, true);
 
     const updatedWorkflows = await readJson<{
@@ -882,7 +1008,10 @@ test('workflow recording persistence snapshots the executed in-memory project st
     durationMs: 1,
   });
 
-  const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), loadedProject.metadata.id);
+  const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+    workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+    loadedProject.metadata.id,
+  );
   const bundles = await fs.readdir(recordingsRoot);
   assert.equal(bundles.length, 1);
 
@@ -945,7 +1074,10 @@ test('workflow recording cleanup keeps only the newest configured runs per endpo
     [3, 2],
   );
 
-  const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(workflowFs.getWorkflowRecordingsRoot(workflowsRoot), workflowId);
+  const recordingsRoot = workflowFs.getWorkflowProjectRecordingsRoot(
+    workflowFs.getWorkflowRecordingsRoot(workflowsRoot),
+    workflowId,
+  );
   const bundles = (await fs.readdir(recordingsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -1093,5 +1225,91 @@ test('local editor replay persistence resolves a nested relative path when the t
     const persisted = await readJson<{ availability: string; recordingId?: string }>(persistResponse);
     assert.equal(persisted.availability, 'available');
     assert.ok(persisted.recordingId);
+  });
+});
+
+test('a hosted editor Subgraph run is recorded under the called project', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'CalledReplay');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const projectContents = rivetNode.serializeProject(project, attachedData);
+  assert.equal(typeof projectContents, 'string');
+  const datasetsContents = rivetNode.serializeDatasets([
+    {
+      meta: { id: 'called-dataset' as never, projectId: project.metadata.id, name: 'Private', description: '' },
+      data: { id: 'called-dataset' as never, rows: [{ id: 'row-1', data: ['private-row'] }] },
+    },
+  ]);
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const persist = async (datasetMode: 'none' | 'all') => {
+      let recordingId = '';
+      await withEnvOverride('RIVET_RECORDINGS_DATASET_MODE', datasetMode, async () => {
+        const response = await fetch(`${apiBaseUrl}/local-editor-recordings/subgraph-run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId: project.metadata.id,
+            projectContents,
+            datasetsContents,
+            graphId: project.metadata.mainGraphId,
+            correlationId: 'rvt-called-project-related-12345',
+            recordingSerialized: JSON.stringify({
+              version: 1,
+              recording: {
+                recordingId: `called-subgraph-replay-${datasetMode}`,
+                events: [{
+                  type: 'graphStart',
+                  data: { graphId: project.metadata.mainGraphId, inputs: {
+                    prompt: { type: 'object', value: { requestId: datasetMode } },
+                  } },
+                  ts: 1,
+                }],
+                startTs: 1,
+                finishTs: 2,
+              },
+              assets: {},
+              strings: {},
+            }),
+            status: 'succeeded',
+            durationMs: 8,
+          }),
+        });
+        assert.equal(response.status, 201);
+        recordingId = (await readJson<{ recordingId: string }>(response)).recordingId;
+      });
+      return recordingId;
+    };
+    const withoutDataset = await persist('none');
+    assert.equal((await fetch(`${apiBaseUrl}/recordings/${withoutDataset}/replay-dataset`)).status, 404);
+    const withDataset = await persist('all');
+    const replayDataset = await fetch(`${apiBaseUrl}/recordings/${withDataset}/replay-dataset`);
+    assert.equal(replayDataset.status, 200);
+    assert.match(await replayDataset.text(), /private-row/);
+    const runs = await readJson<{
+      runs: Array<{ id: string; runKind: string; executionIdentity?: { surface: string; correlationId?: string } }>;
+    }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
+    assert.deepEqual(runs.runs.map((run) => run.id).sort(), [withoutDataset, withDataset].sort());
+    assert.ok(runs.runs.every((run) => run.runKind === 'editor'));
+    assert.ok(
+      runs.runs.every(
+        (run) =>
+          run.executionIdentity?.surface === 'subgraph_project' &&
+          run.executionIdentity.correlationId === 'rvt-called-project-related-12345',
+      ),
+    );
+    const query = new URLSearchParams({
+      inputPath: '$.prompt.requestId',
+      inputOperator: '==',
+      inputValue: 'all',
+    });
+    const filtered = await fetch(
+      `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs?${query}`,
+    );
+    assert.equal(filtered.status, 200);
+    assert.deepEqual((await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id), [withDataset]);
   });
 });

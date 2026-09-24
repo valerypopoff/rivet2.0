@@ -155,6 +155,8 @@ export type WorkflowProjectWebAppsResponse = {
   draftRevisionId: string;
   publicationVersion: string;
   hasMainGraph: boolean;
+  /** Project IDs whose saved-latest graphs can change a published caller without republishing it. */
+  savedLatestSubgraphProjectIds?: string[];
   webApps: WorkflowProjectWebAppSummary[];
 };
 

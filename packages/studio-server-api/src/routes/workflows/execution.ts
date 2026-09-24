@@ -65,6 +65,7 @@ import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
   createExecutionProjectReferenceLoader,
+  createExecutionSubgraphProjectLoader,
   getLLMProfileHealthStore,
   persistWorkflowExecutionRecordingWithBackend,
   resolveLatestExecutionProject,
@@ -81,6 +82,7 @@ import {
 } from './recordings-config.js';
 import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
+import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -1355,8 +1357,8 @@ export type WebAppSocketExecutionResolution =
   | {
       code: string;
       message: string;
-    statusCode: number;
-  };
+      statusCode: number;
+    };
 
 /**
  * `revoked` means the credentials that opened the socket are no longer valid.
@@ -1451,8 +1453,8 @@ export async function resolveWebAppSocketExecution(
       ? 'authorized'
       : 'policy-revoked';
   };
-  const accessPolicyInvalidationKey = executionProject.webAppPolicyInvalidationKey ??
-    `web-app:${routeKind}:${executionProject.projectVirtualPath}`;
+  const accessPolicyInvalidationKey =
+    executionProject.webAppPolicyInvalidationKey ?? `web-app:${routeKind}:${executionProject.projectVirtualPath}`;
 
   return {
     executionProject,
@@ -1493,6 +1495,13 @@ export async function createWebAppProcessorOptions(
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
+    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
+    ...(isWorkflowRecordingEnabled()
+      ? {
+          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
+          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
+        }
+      : {}),
     llmProfileHealthStore: await getLLMProfileHealthStore(),
     ...(options?.llmProfileHealthExecutionCorrelationId == null
       ? {}
@@ -1646,6 +1655,13 @@ async function executeWorkflowEndpoint(
     projectPath: projectVirtualPath,
     datasetProvider,
     projectReferenceLoader,
+    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
+    ...(isWorkflowRecordingEnabled()
+      ? {
+          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
+          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
+        }
+      : {}),
     llmProfileHealthStore: await getLLMProfileHealthStore(),
     llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
     executionEnvironment,

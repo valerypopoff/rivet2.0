@@ -510,6 +510,8 @@ Managed runtime-library sync is part of that execution path too:
 
 ## Workflow execution auth
 
+Hosted Subgraph project selection uses authenticated `GET /api/workflows/subgraph-projects/:projectId/preview?version=latest|published`; the response contains only graph names and the boundary IDs, types, and editor hints needed for the picker, never Graph Input defaults or other executable configuration. Execution uses the corresponding `/execution` route to obtain an exact saved artifact and dataset snapshot. The packaged Node editor executor alone may call `/execution` with its service credential; it cannot call the operator-only preview. Both endpoints reject a missing Published target and ambiguous filesystem project IDs. The control-plane route is not a public workflow endpoint. Editor child-run replays use `POST /api/workflows/local-editor-recordings/subgraph-run`; the executor's service credential is allowlisted only for this upload and the execution fetch. API-hosted endpoint and web-app child runs persist through the ordinary recording backend without an HTTP round trip. Cross-project Subgraph targets retain the caller's endpoint authentication boundary: choosing a project does not publish it as a separate public endpoint.
+
 Workflow execution auth is separate from server UI auth:
 
 - `Settings` -> `Workflow endpoints` -> `Access control` enables or disables bearer-token checks on the public workflow routes; it is enabled by default

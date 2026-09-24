@@ -6,11 +6,11 @@ import {
   type PointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { type GraphId, type PortId, type SubGraphNode } from '@valerypopoff/rivet2-core';
+import { type PortId, type SubGraphNode } from '@valerypopoff/rivet2-core';
 import { type NodeComponentDescriptor } from '../../hooks/useNodeTypes.js';
 import { type OutputRenderMode } from '../RenderDataValue.js';
 import { RenderDataOutputs } from '../nodeOutput/RenderDataOutputs.js';
-import { omit } from 'lodash-es';
+import { isEqual, omit } from 'lodash-es';
 import { type InputsOrOutputsWithRefs } from '../../state/dataFlow';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { tryRestoreStoredDataValue } from '../../utils/executionDataStorage.js';
@@ -24,7 +24,7 @@ import {
 } from '../../utils/subGraphOutputMetrics.js';
 import { hasVisibleStoredPortMapValues } from '../../utils/outputPortVisibility.js';
 import { useEditNodeCommand } from '../../commands/editNodeCommand.js';
-import { GraphSelectorSelect } from '../editors/GraphSelectorEditor.js';
+import { SubgraphTargetControl } from './SubgraphTargetControl.js';
 
 const subGraphBodyCss = css`
   color: var(--foreground-bright);
@@ -77,18 +77,17 @@ export const SubGraphNodeBody: FC<{
 }> = ({ node }) => {
   const editNode = useEditNodeCommand();
 
-  const handleSelectGraph = (graphId: GraphId) => {
-    if (!graphId || graphId === node.data.graphId) {
+  const handleSelectGraph = (next: SubGraphNode) => {
+    // Re-selecting the same target can accept a changed saved boundary. Only
+    // ignore a selection when the complete authored node data is unchanged.
+    if (isEqual(next.data, node.data)) {
       return;
     }
 
     editNode({
       nodeId: node.id,
       newNode: {
-        data: {
-          ...node.data,
-          graphId,
-        },
+        data: next.data,
       },
     });
   };
@@ -123,13 +122,7 @@ export const SubGraphNodeBody: FC<{
         onPointerDown={handleControlPointerDown}
         onWheel={handleMenuWheel}
       >
-        <GraphSelectorSelect
-          ariaLabel="Subgraph graph"
-          className="subgraph-node-body-select"
-          includeMissingSelectedGraph
-          value={node.data.graphId}
-          onChange={handleSelectGraph}
-        />
+        <SubgraphTargetControl node={node} onChange={handleSelectGraph} />
       </div>
       {node.data.skipUnusedOutputs === true && (
         <div className="subgraph-node-body-setting" data-testid="subgraph-skip-unused-outputs">

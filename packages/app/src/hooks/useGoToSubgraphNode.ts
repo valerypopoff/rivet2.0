@@ -12,12 +12,14 @@ import {
 import { getSubgraphCallerRunSelection } from '../state/selectors/executionSelectors.js';
 import { useLoadGraph } from './useLoadGraph.js';
 import { useStableCallback } from './useStableCallback.js';
+import { useSubgraphProjectCatalog } from '../providers/ProvidersContext.js';
 
 export function useGoToSubgraphNode() {
   const loadGraph = useLoadGraph();
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphMetadataState);
   const store = useStore();
+  const catalog = useSubgraphProjectCatalog();
 
   return useStableCallback((node: ChartNode | undefined) => {
     if (node?.type !== 'subGraph') {
@@ -25,6 +27,14 @@ export function useGoToSubgraphNode() {
     }
 
     const subGraphNode = node as SubGraphNode;
+    // The Studio Server host owns project tabs and resolves the stable project ID
+    // to its current path before opening the selected graph.
+    if (subGraphNode.data.targetProjectId) {
+      if (subGraphNode.data.graphId) {
+        catalog?.openGraph({ projectId: subGraphNode.data.targetProjectId, graphId: subGraphNode.data.graphId });
+      }
+      return;
+    }
     const graphId = subGraphNode.data.graphId;
     const subgraph = project.graphs[graphId];
 

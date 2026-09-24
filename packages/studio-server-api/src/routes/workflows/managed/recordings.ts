@@ -102,7 +102,8 @@ function getExecutionIdentity(row: RecordingRow) {
   if (
     row.execution_surface !== 'workflow_endpoint' &&
     row.execution_surface !== 'web_app_action' &&
-    row.execution_surface !== 'editor_local'
+    row.execution_surface !== 'editor_local' &&
+    row.execution_surface !== 'subgraph_project'
   ) {
     return undefined;
   }

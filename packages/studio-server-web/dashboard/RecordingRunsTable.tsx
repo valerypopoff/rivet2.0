@@ -91,6 +91,7 @@ function RecordingRow({
       ? 'Completed without throwing, but the final output was control-flow-excluded.'
       : null);
   const endpointNameAtExecution = recording.endpointNameAtExecution?.trim() || 'Unknown';
+  const isSubgraphRun = recording.executionIdentity?.surface === 'subgraph_project';
 
   return (
     <div className={`run-recordings-run ${recording.status}`}>
@@ -108,6 +109,15 @@ function RecordingRow({
                 <span className="run-recordings-badge opening" role="status" aria-live="polite">
                   Opening…
                 </span>
+              ) : isSubgraphRun ? (
+                <span className="run-recordings-badge latest">
+                  Subgraph ·{' '}
+                  {recording.runKind === 'editor'
+                    ? 'Local editor'
+                    : recording.runKind === 'latest'
+                      ? 'Latest'
+                      : 'Published'}
+                </span>
               ) : recording.runKind === 'latest' ? (
                 <span className="run-recordings-badge latest">Latest</span>
               ) : recording.runKind === 'editor' ? (
@@ -124,8 +134,17 @@ function RecordingRow({
           </div>
         </div>
         <div className="run-recordings-run-endpoint">
-          Endpoint at execution: <span className="run-recordings-run-endpoint-value">{endpointNameAtExecution}</span>
+          {isSubgraphRun ? 'Called graph' : 'Endpoint at execution'}:{' '}
+          <span className="run-recordings-run-endpoint-value">
+            {isSubgraphRun ? endpointNameAtExecution.replace(/^Subgraph:\s*/, '') : endpointNameAtExecution}
+          </span>
         </div>
+        {recording.executionIdentity?.correlationId && (
+          <div className="run-recordings-run-endpoint">
+            Related run key:{' '}
+            <span className="run-recordings-run-endpoint-value">{recording.executionIdentity.correlationId}</span>
+          </div>
+        )}
       </button>
       <div className="run-recordings-run-actions">
         <button

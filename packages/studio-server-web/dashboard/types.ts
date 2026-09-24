@@ -119,6 +119,8 @@ export type WorkflowProjectOpenOptions = {
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
   title?: string;
+  preferredGraphId?: string;
+  expectedProjectId?: string;
 };
 
 export type RecordingOpenResult = { opened: true } | { opened: false; error: string };

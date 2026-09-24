@@ -9,7 +9,32 @@ import type { NodeRegistration } from './NodeRegistration.js';
 import type { Project, ProjectId } from './Project.js';
 import type { ReferencedGraphAliasNode } from './nodes/ReferencedGraphAliasNode.js';
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
+import { getSubgraphTargetBoundaryChange, reconcileSubgraphTargetBoundary } from './nodes/SubGraphNode.js';
+import { getGraphBoundary } from './GraphBoundaryCache.js';
 import { createGraphOutputSelection } from './GraphOutputSelection.js';
+import { getSubgraphProjectKey } from './SubgraphProjectTarget.js';
+
+function getCallerProject(
+  owner: Project,
+  caller: SubGraphNode | ReferencedGraphAliasNode,
+  projects: Record<ProjectId, Project>,
+): Project | undefined {
+  if (caller.type === 'referencedGraphAlias') return projects[caller.data.projectId];
+  if (!caller.data.targetProjectId) return owner;
+  return projects[
+    getSubgraphProjectKey({
+      projectId: caller.data.targetProjectId,
+      version: caller.data.targetVersion ?? 'latest',
+    })
+  ];
+}
+
+function getCallerBoundary(caller: SubGraphNode | ReferencedGraphAliasNode, target: Project) {
+  if (caller.type !== 'subGraph') return undefined;
+  const actual = getGraphBoundary(target, caller.data.graphId);
+  if (!actual || getSubgraphTargetBoundaryChange(caller.data.targetBoundary, actual)) return undefined;
+  return reconcileSubgraphTargetBoundary(caller.data.targetBoundary, actual);
+}
 
 /** An executing caller may forward outputs after its condition has passed. */
 export function canForwardGraphCallerOutputPartials(node: ChartNode): node is SubGraphNode | ReferencedGraphAliasNode {
@@ -150,7 +175,7 @@ export function getProjectStreamingOutputWatchConnections({
     for (const node of Object.values(context.nodes)) {
       if (node.disabled || isFrozen(context.project, parent, node) || !canStreamThroughGraphCaller(node)) continue;
       const caller = node as SubGraphNode | ReferencedGraphAliasNode;
-      const owner = caller.type === 'subGraph' ? context.project : projects[caller.data.projectId];
+      const owner = getCallerProject(context.project, caller, projects);
       const child = owner?.graphs[caller.data.graphId];
       if (!child) continue;
       let selected: ReadonlySet<NodeId> | undefined;
@@ -161,6 +186,7 @@ export function getProjectStreamingOutputWatchConnections({
         !(parent === graph && fullGraphCallers?.has(caller.id))
       ) {
         const childContext = contexts.get(child)!;
+        const callerBoundary = getCallerBoundary(caller, owner);
         const outputNames = new Set(
           Object.values(childContext.nodes)
             .filter((node) => node.type === 'graphOutput')
@@ -168,7 +194,7 @@ export function getProjectStreamingOutputWatchConnections({
         );
         const outputs = parent.connections
           .filter((edge) => edge.outputNodeId === caller.id)
-          .map((edge) => edge.outputId)
+          .map((edge) => callerBoundary?.outputs.find((output) => output.portId === edge.outputId)?.id ?? edge.outputId)
           .filter((id) => outputNames.has(id));
         try {
           selected = createGraphOutputSelection(
@@ -226,10 +252,14 @@ export function getProjectStreamingOutputWatchConnections({
         let foundSource = false;
         for (const parent of callers.get(candidate) ?? []) {
           if (parent.selected && !parent.selected.has(edge.inputNodeId)) continue;
+          const callerPortId =
+            getCallerBoundary(parent.node as SubGraphNode | ReferencedGraphAliasNode, context.project)?.inputs.find(
+              (input) => input.nodeId === source.id,
+            )?.portId ?? inputName;
           const inputs = contexts
             .get(parent.graph)!
             .incoming(parent.node.id)
-            .filter((input) => input.inputId === inputName);
+            .filter((input) => input.inputId === callerPortId);
           // Ambiguous authored inputs stay final-only even though ordinary
           // execution retains its established first-provider projection.
           if (inputs.length === 1 && trace(parent.graph, inputs[0]!)) foundSource = true;
@@ -246,13 +276,16 @@ export function getProjectStreamingOutputWatchConnections({
 
       if (!canForwardGraphCallerOutputPartials(source)) return false;
       const caller = source;
-      const childProject = caller.type === 'subGraph' ? context.project : projects[caller.data.projectId];
+      const childProject = getCallerProject(context.project, caller, projects);
       const child = childProject?.graphs[caller.data.graphId];
       const childContext = child && contexts.get(child);
-      if (!child || !childContext) return false;
+      if (!childProject || !child || !childContext) return false;
+      const targetOutputId =
+        getCallerBoundary(caller, childProject)?.outputs.find((output) => output.portId === edge.outputId)?.id ??
+        edge.outputId;
       const outputs = Object.values(childContext.nodes).filter(
         (node): node is GraphOutputNode =>
-          node.type === 'graphOutput' && !node.disabled && (node as GraphOutputNode).data.id === edge.outputId,
+          node.type === 'graphOutput' && !node.disabled && (node as GraphOutputNode).data.id === targetOutputId,
       );
       // Duplicate names have first-final-winner semantics, so cannot relay partials.
       if (outputs.length !== 1) return false;

@@ -481,6 +481,7 @@ async function installRunRecordingRoutes(
   page: Page,
   options: {
     includeResponseInspectorRun?: boolean;
+    subgraphRun?: boolean;
     latestFlowRunCount?: number;
     cursorDelayMs?: number;
     deletionGate?: Promise<void>;
@@ -531,6 +532,16 @@ async function installRunRecordingRoutes(
     }),
   );
   const { workflows, runsByWorkflow } = createRunRecordingsFixture(options.includeResponseInspectorRun);
+  if (options.subgraphRun) {
+    const run = runsByWorkflow.get('workflow-a')![0]!;
+    run.runKind = 'editor';
+    run.endpointNameAtExecution = 'Subgraph: Extract facts';
+    run.executionIdentity = {
+      surface: 'subgraph_project',
+      graphId: 'extract-facts',
+      correlationId: 'rvt-related-example-12345',
+    };
+  }
   const recordingFetches: string[] = [];
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
@@ -778,6 +789,16 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  test('labels a called-project recording as a Subgraph run', async ({ page }) => {
+    await installRunRecordingRoutes(page, { subgraphRun: true });
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    const run = modal.locator('.run-recordings-run').first();
+    await expect(run).toContainText('Subgraph · Local editor');
+    await expect(run.locator('.run-recordings-run-endpoint').first()).toContainText('Called graph: Extract facts');
+    await expect(run).toContainText('Related run key: rvt-related-example-12345');
+  });
+
   test('deletions are serialized within a view and an older deletion cannot clear a newer one', async ({ page }) => {
     const oldDeletion = responseGate();
     const newDeletion = responseGate();
@@ -1410,10 +1431,12 @@ test.describe('Run recordings modal', () => {
     });
     await editorFrame.locator('button.more-menu').click();
     await editorFrame.getByRole('button', { name: 'Export recording', exact: true }).click();
-    await expect.poll(async () => await recordingExportState()).toMatchObject({
-      fallbackDownloads: 0,
-      savedFiles: [{ content: savedBeforePlayback }, { content: savedBeforePlayback }],
-    });
+    await expect
+      .poll(async () => await recordingExportState())
+      .toMatchObject({
+        fallbackDownloads: 0,
+        savedFiles: [{ content: savedBeforePlayback }, { content: savedBeforePlayback }],
+      });
   });
 
   test('stops an active input search when the modal closes', async ({ page }) => {

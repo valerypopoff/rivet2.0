@@ -38,6 +38,7 @@ import {
 } from './reconciliation.js';
 import { createManagedWorkflowContext } from './context.js';
 import type { ManagedExecutionProjectResult, ManagedWebAppAccessPolicy } from './execution-types.js';
+import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
@@ -344,6 +345,11 @@ export class ManagedWorkflowBackend {
 
   createProjectReferenceLoader() {
     return this.#executionService.createProjectReferenceLoader();
+  }
+
+  async loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
+    await this.initialize();
+    return this.#executionService.loadSubgraphTarget(target);
   }
 
   async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {

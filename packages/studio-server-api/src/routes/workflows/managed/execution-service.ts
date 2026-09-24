@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { NodeDatasetProvider, deserializeDatasets, loadProjectAndAttachedDataFromString, loadProjectFromString, type Project } from '@valerypopoff/rivet2-node';
 import type { Pool } from 'pg';
+import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
@@ -133,6 +134,50 @@ export class ManagedWorkflowExecutionService {
         throw new Error(`Could not load project "${reference.title ?? reference.id} (${reference.id})": all hint paths failed.`);
       },
     };
+  }
+
+  async loadSubgraphTarget(
+    target: SubgraphProjectTarget,
+    remainingRetries = MANAGED_WORKFLOW_EXECUTION_INVALIDATION_RETRY_LIMIT,
+  ): Promise<ResolvedSubgraphProject> {
+    const resolveSnapshot = this.#invalidationController.captureResolveSnapshot();
+    const workflow = await this.#getWorkflowById(this.#pool, target.projectId);
+    if (!workflow) throw createHttpError(404, `Subgraph project ${target.projectId} was not found.`);
+    if (this.#invalidationController.shouldRetryAfterResolve(resolveSnapshot, workflow.workflow_id)) {
+      if (remainingRetries > 0) return this.loadSubgraphTarget(target, remainingRetries - 1);
+      throw createHttpError(503, 'Subgraph project changed while loading. Retry the run.');
+    }
+    const revisionId = target.version === 'published'
+      ? workflow.published_revision_id
+      : workflow.current_draft_revision_id;
+    if (!revisionId) {
+      throw createHttpError(409, `Subgraph project ${target.projectId} has no ${target.version} version.`);
+    }
+    const workflowSnapshot = this.#invalidationController.captureWorkflowSnapshot(workflow.workflow_id);
+    this.#invalidationController.beginWorkflowLoad(workflow.workflow_id);
+    try {
+      const materialization = await this.#getOrLoadRevisionMaterialization(revisionId, null);
+      if (this.#invalidationController.shouldRetryAfterMaterialize(resolveSnapshot, workflow.workflow_id, workflowSnapshot)) {
+        if (remainingRetries > 0) return this.loadSubgraphTarget(target, remainingRetries - 1);
+        throw createHttpError(503, 'Subgraph project changed while loading. Retry the run.');
+      }
+      const project = loadProjectFromString(materialization.contents);
+      if (project.metadata.id !== target.projectId) {
+        throw createHttpError(500, `Subgraph project ${target.projectId} has a mismatched saved identity.`);
+      }
+      return {
+        project,
+        datasetProvider: new NodeDatasetProvider(
+          materialization.datasetsContents ? deserializeDatasets(materialization.datasetsContents) : [],
+        ),
+        revisionKey: `managed:${revisionId}`,
+        projectContents: materialization.contents,
+        datasetsContents: materialization.datasetsContents ?? undefined,
+        sourceProjectPath: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+      };
+    } finally {
+      this.#invalidationController.endWorkflowLoad(workflow.workflow_id);
+    }
   }
 
   async #loadExecutionProjectByEndpoint(

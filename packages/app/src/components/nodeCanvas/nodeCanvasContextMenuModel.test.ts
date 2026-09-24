@@ -1082,6 +1082,19 @@ test('canRunNodeCanvasContextMenuFromHere hides partial replay inside an async s
   );
 });
 
+test('getNodeCanvasContextMenuContext identifies a hosted Subgraph target outside the current project', () => {
+  const subGraphNode = makeNode('subGraph', nodeId, 'Hosted Subgraph');
+  subGraphNode.data = { graphId: 'external-graph', targetProjectId: 'external-project' };
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-subGraph'),
+    nodesById: { [nodeId]: subGraphNode },
+    project,
+  });
+  assert.equal(context.type, 'node');
+  assert.equal(context.data.isExternalSubgraphTarget, true);
+});
+
 test('canRunNodeCanvasContextMenuFromHere permits Watch but hides its repeated branch and Stop boundary', () => {
   const source = makeNode('text', 'stream-source' as NodeId, 'Stream source');
   const watch = makeNode('watchStreamingOutput', 'watch' as NodeId, 'Watch Streaming Output');

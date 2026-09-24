@@ -22,6 +22,8 @@ import {
 import type { Tokenizer } from '../integrations/Tokenizer.js';
 import type { CodeRunner } from '../integrations/CodeRunner.js';
 import type { ProjectReferenceLoader } from './ProjectReferenceLoader.js';
+import type { ResolvedSubgraphProject, SubgraphProjectLoader, SubgraphProjectRun } from './SubgraphProjectTarget.js';
+import type { ExecutionRecorderOptions } from '../recording/ExecutionRecorder.js';
 import type { GraphBoundary } from './GraphBoundaryCache.js';
 import type { GraphInputStream } from './GraphInputStream.js';
 import type { GraphProgress } from './GraphProgress.js';
@@ -231,6 +233,15 @@ export type ProcessContext = {
   /** The loader for loading project references. */
   projectReferenceLoader?: ProjectReferenceLoader;
 
+  /** Host-only resolver for Studio Server Subgraph nodes targeting another saved project. */
+  subgraphProjectLoader?: SubgraphProjectLoader;
+
+  /** Optional host-owned recording sink. Failures must not alter graph results. */
+  onSubgraphProjectRun?: (run: SubgraphProjectRun) => void | Promise<void>;
+
+  /** Apply the host's recording privacy settings to called-project replays. */
+  subgraphRecordingOptions?: ExecutionRecorderOptions;
+
   /** The path to the current project. Required if project references are being used. */
   projectPath?: string;
 
@@ -310,12 +321,16 @@ export type GraphExecutionMetadata = {
   rootRunId: RootRunId;
   graphRunId: GraphRunId;
   graphId: GraphId;
+  /** Present for a hosted Subgraph call into another saved project. */
+  projectScope?: string;
   parentGraphRunId?: GraphRunId;
   executor?: SubgraphExecutorMetadata;
   evaluation?: EvaluationExecutionMetadata;
 };
 
 export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessContext & {
+  /** Dataset snapshot belonging to this node's selected external Subgraph target. */
+  subgraphTarget?: ResolvedSubgraphProject;
   /** Invocation-scoped live inputs for a named graph caller. Never serialized. */
   graphInputStreams?: Readonly<Record<string, GraphInputStream>>;
   /** The executor that is running the current processor. */

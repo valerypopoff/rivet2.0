@@ -711,6 +711,8 @@ Recording playback state is project-scoped in upstream Rivet. The hosted editor 
 
 Keep Studio Server recording cleanup on the stable shared `loadedRecordingState` export and perform the project ownership comparison in the hosted application. Do not import an internal convenience atom such as `clearLoadedRecordingForProjectState` merely because it exists in the same monorepo: use the public host seam so Rivet editor refactors and Studio Server changes remain independently reviewable in one commit.
 
+Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extractor searches both event types, so a `prompt` input is found with `$.prompt.requestId` while an `input` port uses the root path `$.requestId`. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep this covered through both a real child processor recording and the called-project HTTP listing filter.
+
 ## Source of truth
 
 - authored Studio Server source lives under `packages/studio-server-*`, `deploy/studio-server/`, `developer-docs/studio-server/`, and the namespaced GitHub workflows

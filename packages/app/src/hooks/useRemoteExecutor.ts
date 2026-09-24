@@ -802,6 +802,7 @@ export function useRemoteExecutor() {
         projectPath: loadedProject.path,
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
+        recordSubgraphProjectRuns: Boolean(remoteLocalRecordingProvider),
         returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
         ...(remoteLocalRecordingCorrelationId == null
           ? {}

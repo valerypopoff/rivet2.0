@@ -35,6 +35,7 @@ export * from './model/ProcessContext.js';
 export * from './model/AgentResponseTrace.js';
 export * from './model/DebuggerTransportSentinel.js';
 export * from './model/ProjectReferenceLoader.js';
+export * from './model/SubgraphProjectTarget.js';
 export * from './model/RivetUIContext.js';
 export * from './model/chat-v2/index.js';
 export * from './integrations/integrations.js';

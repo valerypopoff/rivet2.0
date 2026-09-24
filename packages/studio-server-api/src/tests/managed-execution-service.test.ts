@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
+import { loadProjectAndAttachedDataFromString, serializeProject, type ProjectId } from '@valerypopoff/rivet2-node';
 
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
-import { ManagedWorkflowExecutionCache, type ManagedWorkflowRunKind } from '../routes/workflows/managed/execution-cache.js';
+import {
+  ManagedWorkflowExecutionCache,
+  type ManagedWorkflowRunKind,
+} from '../routes/workflows/managed/execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from '../routes/workflows/managed/execution-invalidation.js';
 import { ManagedWorkflowExecutionService } from '../routes/workflows/managed/execution-service.js';
 import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
@@ -41,7 +45,9 @@ function createExecutionServiceFixture(options: {
   getWorkflowByRelativePath?: (relativePath: string) => Promise<ManagedExecutionWorkflowRecord | null>;
   getWorkflowById?: (workflowId: string) => Promise<ManagedExecutionWorkflowRecord | null>;
   getRevision?: (revisionId: string | null | undefined) => Promise<ManagedExecutionRevisionRecord | null>;
-  readRevisionContents?: (revision: ManagedExecutionRevisionRecord) => Promise<{ contents: string; datasetsContents: string | null }>;
+  readRevisionContents?: (
+    revision: ManagedExecutionRevisionRecord,
+  ) => Promise<{ contents: string; datasetsContents: string | null }>;
 }) {
   const cache = new ManagedWorkflowExecutionCache();
   const { controller, listener } = createControllerFixture();
@@ -90,7 +96,8 @@ function createExecutionServiceFixture(options: {
             ? workflow
             : null;
       },
-      getRevision: async (_client, revisionId) => options.getRevision ? options.getRevision(revisionId) : revisionId === revision.revision_id ? revision : null,
+      getRevision: async (_client, revisionId) =>
+        options.getRevision ? options.getRevision(revisionId) : revisionId === revision.revision_id ? revision : null,
       resolveExecutionPointerFromDatabase: async (_client, runKind, lookupName) => {
         resolveCount += 1;
         return options.resolveExecutionPointerFromDatabase
@@ -179,10 +186,7 @@ type ManagedWorkflowExecutionContextFixture = Pick<
       runKind: ManagedWorkflowRunKind,
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null>;
-    resolveWebAppAccessPolicyFromDatabase(
-      client: Pool,
-      lookupName: string,
-    ): Promise<ManagedWebAppAccessPolicy | null>;
+    resolveWebAppAccessPolicyFromDatabase(client: Pool, lookupName: string): Promise<ManagedWebAppAccessPolicy | null>;
   };
   revisions: {
     readRevisionContents(
@@ -300,9 +304,7 @@ test('service forwards the correct run kind for workflow and web app endpoint re
           relativePath: 'Managed Cache.rivet-project',
           revisionId: 'revision-a',
           webAppUiGraphId: runKind === 'web-app' || runKind === 'latest-web-app' ? 'ui-graph-a' : undefined,
-          webAppId: runKind === 'web-app' || runKind === 'latest-web-app'
-            ? 'published-app-a'
-            : undefined,
+          webAppId: runKind === 'web-app' || runKind === 'latest-web-app' ? 'published-app-a' : undefined,
         },
         revision: {
           revision_id: 'revision-a',
@@ -546,5 +548,55 @@ test('reference loading propagates real operational failures after a hint resolv
       title: 'Managed Cache',
     }),
     /blob read failed/,
+  );
+});
+
+test('Subgraph target resolution distinguishes managed saved and published revisions', async () => {
+  const [project] = loadProjectAndAttachedDataFromString(createBlankProjectFile('Saved target'));
+  project.metadata.id = 'managed-subgraph-target' as ProjectId;
+  const savedContents = serializeProject(project) as string;
+  project.metadata.title = 'Published target';
+  const publishedContents = serializeProject(project) as string;
+  const workflow: ManagedExecutionWorkflowRecord = {
+    workflow_id: project.metadata.id,
+    relative_path: 'Components/Target.rivet-project',
+    current_draft_revision_id: 'saved-revision',
+    published_revision_id: 'published-revision',
+  };
+  const fixture = createExecutionServiceFixture({
+    getWorkflowById: async (id) => (id === workflow.workflow_id ? workflow : null),
+    getRevision: async (id) =>
+      id
+        ? {
+            revision_id: id,
+            workflow_id: workflow.workflow_id,
+            project_blob_key: `blob-${id}`,
+            dataset_blob_key: null,
+            created_at: new Date(),
+          }
+        : null,
+    readRevisionContents: async (revision) => ({
+      contents: revision.revision_id === 'saved-revision' ? savedContents : publishedContents,
+      datasetsContents: null,
+    }),
+  });
+  await fixture.controller.initialize();
+  const latest = await fixture.service.loadSubgraphTarget({ projectId: project.metadata.id, version: 'latest' });
+  const published = await fixture.service.loadSubgraphTarget({ projectId: project.metadata.id, version: 'published' });
+  assert.equal(latest.project.metadata.title, 'Saved target');
+  assert.equal(published.project.metadata.title, 'Published target');
+  assert.equal(latest.sourceProjectPath, getManagedWorkflowProjectVirtualPath(workflow.relative_path));
+  assert.equal(fixture.getWorkflowByIdCount, 2);
+
+  workflow.current_draft_revision_id = 'replacement-revision';
+  const nextRun = await fixture.service.loadSubgraphTarget({ projectId: project.metadata.id, version: 'latest' });
+  assert.equal(latest.project.metadata.title, 'Saved target');
+  assert.equal(nextRun.project.metadata.title, 'Published target');
+  assert.equal(nextRun.revisionKey, 'managed:replacement-revision');
+
+  workflow.published_revision_id = null;
+  await assert.rejects(
+    fixture.service.loadSubgraphTarget({ projectId: project.metadata.id, version: 'published' }),
+    /no published version/,
   );
 });

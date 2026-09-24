@@ -2,7 +2,12 @@ import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { deserializeDatasets, loadProjectAndAttachedDataFromFile, loadProjectAndAttachedDataFromString } from '@valerypopoff/rivet2-node';
+import {
+  deserializeDatasets,
+  loadProjectAndAttachedDataFromFile,
+  loadProjectAndAttachedDataFromString,
+} from '@valerypopoff/rivet2-node';
+import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowFolderItem,
@@ -96,11 +101,13 @@ import {
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
 } from './recordings.js';
+import { shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
 import {
   createPublishedWorkflowProjectReferenceLoader,
   findPublishedWorkflowWebAppBySlug,
   normalizeWorkflowEndpointLookupName,
   readStoredWorkflowProjectSettings,
+  resolvePublishedWorkflowProjectPath,
 } from './publication.js';
 import { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 import type { AttachedData, CombinedDataset, Project, ProjectId } from '@valerypopoff/rivet2-node';
@@ -333,9 +340,7 @@ async function delegateWithWorkflowsRoot<T>(
   return delegate(managedFn, async () => fsFn(await ensureWorkflowsRoot()));
 }
 
-async function loadFilesystemWithMissingRootRetry<T>(
-  load: (root: string) => Promise<T>,
-): Promise<T> {
+async function loadFilesystemWithMissingRootRetry<T>(load: (root: string) => Promise<T>): Promise<T> {
   const root = getWorkflowsRoot();
 
   try {
@@ -470,9 +475,10 @@ async function resolveFilesystemWebAppAccessPolicy(
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const lookupName = normalizeWorkflowEndpointLookupName(slug);
-  const webApp = settings.publishedWebApps.find((candidate) =>
-    normalizeWorkflowEndpointLookupName(candidate.slug) === lookupName);
-  if (!webApp || !await pathExists(getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId))) {
+  const webApp = settings.publishedWebApps.find(
+    (candidate) => normalizeWorkflowEndpointLookupName(candidate.slug) === lookupName,
+  );
+  if (!webApp || !(await pathExists(getPublishedWorkflowSnapshotPath(root, webApp.publishedSnapshotId)))) {
     return null;
   }
 
@@ -663,7 +669,9 @@ export async function saveHostedProject(options: {
             const currentDatasetsContents = (await pathExists(datasetPath))
               ? await fs.readFile(datasetPath, 'utf8')
               : null;
-            if (getFilesystemProjectRevisionId(currentContents, currentDatasetsContents) !== options.expectedRevisionId) {
+            if (
+              getFilesystemProjectRevisionId(currentContents, currentDatasetsContents) !== options.expectedRevisionId
+            ) {
               throw createHttpError(409, 'Project has changed since it was opened. Reload it before saving again.', {
                 expose: true,
               });
@@ -673,7 +681,11 @@ export async function saveHostedProject(options: {
             try {
               const projectName = path.basename(savedProjectPath, PROJECT_EXTENSION);
               const normalized = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-              await writeWorkflowProjectStatsCacheFromContents(savedProjectPath, normalized.contents, options.datasetsContents);
+              await writeWorkflowProjectStatsCacheFromContents(
+                savedProjectPath,
+                normalized.contents,
+                options.datasetsContents,
+              );
             } finally {
               // The statistics cache is derived and may be rebuilt later. The
               // execution materialization is not: always discard it so a
@@ -748,11 +760,26 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   return delegateWithWorkflowsRoot(
     async (backend) =>
       backend.listWorkflowRecordingRunsPage(
-        workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal, inputAfter,
+        workflowId,
+        page,
+        pageSize,
+        statusFilter,
+        inputFilter,
+        inputCursor,
+        signal,
+        inputAfter,
       ),
     async (root) =>
       listWorkflowRecordingRunsPage(
-        root, workflowId, page, pageSize, statusFilter, inputFilter, inputCursor, signal, inputAfter,
+        root,
+        workflowId,
+        page,
+        pageSize,
+        statusFilter,
+        inputFilter,
+        inputCursor,
+        signal,
+        inputAfter,
       ),
   );
 }
@@ -1048,14 +1075,19 @@ async function publishWorkflowProjectItemWithBackend(
   );
 }
 
-async function updateWorkflowEndpointAccessWithBackend(relativePath: unknown, access: 'public' | 'internal', preconditions: WorkflowPublicationPreconditions) {
+async function updateWorkflowEndpointAccessWithBackend(
+  relativePath: unknown,
+  access: 'public' | 'internal',
+  preconditions: WorkflowPublicationPreconditions,
+) {
   return delegate(
     async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
-    async () => withFilesystemWorkflowStorageWrite(async () => {
-      const project = await updateWorkflowEndpointAccess(relativePath, access, preconditions);
-      markFilesystemExecutionStructureDirty([project.absolutePath]);
-      return project;
-    }),
+    async () =>
+      withFilesystemWorkflowStorageWrite(async () => {
+        const project = await updateWorkflowEndpointAccess(relativePath, access, preconditions);
+        markFilesystemExecutionStructureDirty([project.absolutePath]);
+        return project;
+      }),
   );
 }
 
@@ -1100,7 +1132,11 @@ async function updateWorkflowProjectWebAppAccessWithBackend(
   );
 }
 
-async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions) {
+async function unpublishWorkflowProjectWebAppWithBackend(
+  relativePath: unknown,
+  uiGraphId: unknown,
+  preconditions: WorkflowPublicationPreconditions,
+) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
     async () =>
@@ -1112,7 +1148,10 @@ async function unpublishWorkflowProjectWebAppWithBackend(relativePath: unknown, 
   );
 }
 
-async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown, preconditions: WorkflowPublicationPreconditions) {
+async function unpublishWorkflowProjectItemWithBackend(
+  relativePath: unknown,
+  preconditions: WorkflowPublicationPreconditions,
+) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
     async () =>
@@ -1127,16 +1166,28 @@ async function unpublishWorkflowProjectItemWithBackend(relativePath: unknown, pr
 type RestorePublicationCommand = Extract<WorkflowPublicationCommand, { kind: 'restore-version' }>;
 type ProjectPublicationCommand = Exclude<WorkflowPublicationCommand, RestorePublicationCommand>;
 
-export function executeWorkflowPublicationCommandWithBackend(command: RestorePublicationCommand): Promise<WorkflowPublishedVersionRestoreResponse>;
-export function executeWorkflowPublicationCommandWithBackend(command: ProjectPublicationCommand): Promise<WorkflowProjectItem>;
+export function executeWorkflowPublicationCommandWithBackend(
+  command: RestorePublicationCommand,
+): Promise<WorkflowPublishedVersionRestoreResponse>;
+export function executeWorkflowPublicationCommandWithBackend(
+  command: ProjectPublicationCommand,
+): Promise<WorkflowProjectItem>;
 export async function executeWorkflowPublicationCommandWithBackend(
   command: WorkflowPublicationCommand,
 ): Promise<WorkflowProjectItem | WorkflowPublishedVersionRestoreResponse> {
   switch (command.kind) {
     case 'publish-endpoint':
-      return publishWorkflowProjectItemWithBackend(command.relativePath, { endpointName: command.endpointName }, command.preconditions);
+      return publishWorkflowProjectItemWithBackend(
+        command.relativePath,
+        { endpointName: command.endpointName },
+        command.preconditions,
+      );
     case 'publish-web-apps':
-      return publishWorkflowProjectWebAppsWithBackend(command.relativePath, command.publications, command.preconditions);
+      return publishWorkflowProjectWebAppsWithBackend(
+        command.relativePath,
+        command.publications,
+        command.preconditions,
+      );
     case 'restore-version':
       return restoreWorkflowPublishedVersionWithBackend(command.relativePath, command.versionId, command.preconditions);
     case 'unpublish-endpoint':
@@ -1144,7 +1195,11 @@ export async function executeWorkflowPublicationCommandWithBackend(
     case 'set-endpoint-access':
       return updateWorkflowEndpointAccessWithBackend(command.relativePath, command.access, command.preconditions);
     case 'set-web-app-access':
-      return updateWorkflowProjectWebAppAccessWithBackend(command.relativePath, command.accessUpdates, command.preconditions);
+      return updateWorkflowProjectWebAppAccessWithBackend(
+        command.relativePath,
+        command.accessUpdates,
+        command.preconditions,
+      );
     case 'unpublish-web-app':
       return unpublishWorkflowProjectWebAppWithBackend(command.relativePath, command.uiGraphId, command.preconditions);
     default: {
@@ -1180,7 +1235,10 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown
   );
 }
 
-export async function resolvePublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ExecutionProjectResult | null> {
+export async function resolvePublishedExecutionProject(
+  endpointName: string,
+  requireFreshPointer = false,
+): Promise<ExecutionProjectResult | null> {
   if (isManagedWorkflowStorageEnabled()) {
     return (await getManagedBackend()).loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
@@ -1198,9 +1256,7 @@ export async function resolvePublishedWebAppExecutionProject(slug: string): Prom
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) =>
-      loadFilesystemPublishedWebAppExecutionProject(root, slug),
-    ),
+    loadFilesystemWithMissingRootRetry((root) => loadFilesystemPublishedWebAppExecutionProject(root, slug)),
   );
 }
 
@@ -1210,9 +1266,7 @@ export async function resolveLatestWebAppExecutionProject(slug: string): Promise
   }
 
   return withFilesystemWorkflowStorageRead(() =>
-    loadFilesystemWithMissingRootRetry((root) =>
-      loadFilesystemLatestWebAppExecutionProject(root, slug),
-    ),
+    loadFilesystemWithMissingRootRetry((root) => loadFilesystemLatestWebAppExecutionProject(root, slug)),
   );
 }
 
@@ -1235,11 +1289,15 @@ export async function resolveWebAppAccessPolicy(
 
   return withFilesystemWorkflowStorageRead(() =>
     loadFilesystemWithMissingRootRetry((root) =>
-      resolveFilesystemWebAppAccessPolicy(root, slug, expectedProjectVirtualPath)),
+      resolveFilesystemWebAppAccessPolicy(root, slug, expectedProjectVirtualPath),
+    ),
   );
 }
 
-export async function resolveLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ExecutionProjectResult | null> {
+export async function resolveLatestExecutionProject(
+  endpointName: string,
+  requireFreshPointer = false,
+): Promise<ExecutionProjectResult | null> {
   if (isManagedWorkflowStorageEnabled()) {
     return (await getManagedBackend()).loadLatestExecutionProject(endpointName, requireFreshPointer);
   }
@@ -1264,6 +1322,56 @@ export async function createExecutionProjectReferenceLoader(projectPath: string)
   );
 }
 
+export function createExecutionSubgraphProjectLoader() {
+  return {
+    async loadTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
+      return delegate(
+        async (backend) => backend.loadSubgraphTarget(target),
+        async () =>
+          withFilesystemWorkflowStorageRead(async () => {
+            const root = getWorkflowsRoot();
+            const matches = await findFilesystemProjectPathsByMetadataId(root, target.projectId);
+            if (matches.length > 1) {
+              throw createHttpError(409, `Subgraph project ${target.projectId} has multiple saved locations.`);
+            }
+            const selectedPath = matches[0];
+            if (!selectedPath) throw createHttpError(404, `Subgraph project ${target.projectId} was not found.`);
+            let artifactPath = selectedPath;
+            if (target.version === 'published') {
+              const settings = await readStoredWorkflowProjectSettings(
+                selectedPath,
+                path.basename(selectedPath, PROJECT_EXTENSION),
+              );
+              const publishedPath = await resolvePublishedWorkflowProjectPath(root, selectedPath, settings);
+              if (!publishedPath)
+                throw createHttpError(409, `Subgraph project ${target.projectId} has no published version.`);
+              artifactPath = publishedPath;
+            }
+            const projectContents = await fs.readFile(artifactPath, 'utf8');
+            const [project] = loadProjectAndAttachedDataFromString(projectContents);
+            if (project.metadata.id !== target.projectId) {
+              throw createHttpError(500, `Subgraph project ${target.projectId} has a mismatched saved identity.`);
+            }
+            const datasetPath = getWorkflowDatasetPath(artifactPath);
+            const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath, 'utf8') : null;
+            return {
+              project,
+              datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
+              revisionKey: `${target.version}:${createHash('sha256')
+                .update(projectContents)
+                .update('\0')
+                .update(datasetsContents ?? '')
+                .digest('hex')}`,
+              projectContents,
+              datasetsContents: datasetsContents ?? undefined,
+              sourceProjectPath: selectedPath,
+            };
+          }),
+      );
+    },
+  };
+}
+
 export async function persistWorkflowExecutionRecordingWithBackend(options: {
   sourceProject: Project;
   sourceProjectPath: string;
@@ -1279,11 +1387,14 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   onPersisted?: (recordingId: string) => Promise<void>;
 }): Promise<string | undefined> {
+  // Every recording surface, including editor uploads and called-project runs,
+  // must honor the same server-side dataset retention policy.
+  const permittedOptions = shouldSnapshotWorkflowRecordingDatasets() ? options : { ...options, executedDatasets: [] };
   if (isManagedWorkflowStorageEnabled()) {
-    return await (await getManagedBackend()).persistWorkflowExecutionRecording(options);
+    return await (await getManagedBackend()).persistWorkflowExecutionRecording(permittedOptions);
   }
 
-  return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...options });
+  return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...permittedOptions });
 }
 
 export function getWorkflowStorageMode() {

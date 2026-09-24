@@ -994,6 +994,10 @@ Operational defaults are intentionally conservative:
 - dataset snapshots are disabled by default
 - retention cleanup runs automatically
 
+The storage-backend recording entrypoint enforces `RIVET_RECORDINGS_DATASET_MODE` for every recording surface, including hosted editor uploads and cross-project Subgraph child runs. Callers may upload a dataset snapshot to reconstruct a run, but with the default `none` policy no replay dataset artifact is persisted. The API also avoids allocating a child recorder when recording is disabled and applies the configured partial-output and trace capture flags when recording is enabled.
+
+Project Settings receives Saved-latest cross-project Subgraph target IDs alongside the authoritative draft revision and publication version. Both filesystem and managed readers derive them from that same draft snapshot. A warning appears for endpoint and web-app publication because these dynamic dependencies can change behavior after the caller is published. This warning does not pin target revisions or change the publication precondition contract. Recording index and metadata readers must round-trip the `subgraph_project` execution surface and exclude it from endpoint/web-app run statistics; child and caller recording identities share the request/editor correlation key when both were captured.
+
 Retention applies to both storage backends. The per-endpoint cap groups by workflow id plus historical endpoint name, preserving independent allowances when a slug is later reused by another project. Filesystem cleanup deletes bundle directories and SQLite rows. Managed cleanup deletes matching Postgres rows transactionally and removes their recording/replay objects after commit; concurrent replicas delete blobs only for rows they actually claimed. Per-endpoint and age cleanup stays workflow/endpoint-scoped on ordinary managed writes, while startup reconciliation and the optional global byte cap inspect the full recording metadata set.
 
 ## Recording index and API shape

@@ -18,6 +18,7 @@ import { LLMChatV2CredentialNamesEditor } from './custom/LLMChatV2CredentialName
 import { ClassifierCredentialNamesEditor } from './custom/ClassifierCredentialNamesEditor';
 import { ClassifierScoreCriteriaEditor } from './custom/ClassifierScoreCriteriaEditor';
 import { ClassifierChoiceCriteriaEditor } from './custom/ClassifierChoiceCriteriaEditor';
+import { SubgraphTargetEditor } from './custom/SubgraphTargetEditor';
 
 export const CustomEditor: FC<
   SharedEditorProps & {
@@ -39,6 +40,7 @@ export const CustomEditor: FC<
     .with('ClassifierCredentialNames', () => <ClassifierCredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierScoreCriteria', () => <ClassifierScoreCriteriaEditor {...props} editor={editor} />)
     .with('ClassifierChoiceCriteria', () => <ClassifierChoiceCriteriaEditor {...props} editor={editor} />)
+    .with('SubgraphTarget', () => <SubgraphTargetEditor {...props} />)
     .with('LLMChatV2ModelCatalog', () => <LLMChatV2ModelCatalogEditor {...props} editor={editor} />)
     .with('GetGlobalVariableSelector', () => <GetGlobalVariableSelectorEditor {...props} editor={editor} />)
     .with('GetStoredValueSelector', () => <GetStoredValueSelectorEditor {...props} editor={editor} />)

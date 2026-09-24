@@ -18,7 +18,10 @@ import {
 } from './publication.js';
 import { normalizeWebAppAccessDrafts, normalizeWebAppPublicationDrafts } from './web-app-publication-drafts.js';
 import { saveFilesystemPublicationTransaction } from './filesystem-publication-transactions.js';
-import { assertFilesystemPublicationPreconditions, readFilesystemPublicationState } from './publication-preconditions.js';
+import {
+  assertFilesystemPublicationPreconditions,
+  readFilesystemPublicationState,
+} from './publication-preconditions.js';
 import {
   ensureWorkflowsRoot,
   getPublishedWorkflowSnapshotPath,
@@ -29,6 +32,7 @@ import {
 import type { StoredWorkflowPublishedWebApp } from './types.js';
 import { hasProjectMainGraph } from './main-graph.js';
 import { getWorkflowProject } from './workflow-query.js';
+import { listSavedLatestSubgraphProjectIds } from './subgraph-publication-dependencies.js';
 
 type UiGraphSummary = {
   uiGraphId: string;
@@ -40,9 +44,7 @@ type WebAppStatus = WorkflowProjectWebAppsResponse['webApps'][number]['status'];
 function getProjectUiGraphSummaries(project: Awaited<ReturnType<typeof loadProjectFromFile>>): UiGraphSummary[] {
   return Object.entries(project.uiGraphs ?? {}).map(([uiGraphId, uiGraph]) => ({
     uiGraphId,
-    name: typeof uiGraph?.name === 'string' && uiGraph.name.trim()
-      ? uiGraph.name.trim()
-      : uiGraphId,
+    name: typeof uiGraph?.name === 'string' && uiGraph.name.trim() ? uiGraph.name.trim() : uiGraphId,
   }));
 }
 
@@ -111,9 +113,11 @@ async function getPublishedWebAppStatus(options: {
 
 export async function listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const [project, settings] = await Promise.all([
     loadProjectFromFile(projectPath),
@@ -144,24 +148,27 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
     draftRevisionId: publicationState.draftRevisionId,
     publicationVersion: publicationState.publicationVersion,
     hasMainGraph: hasProjectMainGraph(project),
+    savedLatestSubgraphProjectIds: listSavedLatestSubgraphProjectIds(project),
     webApps: [
-      ...(await Promise.all(currentUiGraphs.map(async (uiGraph) => {
-        const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
-        return {
-          uiGraphId: uiGraph.uiGraphId,
-          name: uiGraph.name,
-          publishedSlug: published?.slug ?? null,
-          publishedAt: published?.publishedAt ?? null,
-          allowedEmails: published?.allowedEmails ?? [],
-          status: await getPublishedWebAppStatus({
-            root,
-            published,
-            getCurrentContentHash,
-            publishedContentHashBySnapshotId,
-          }),
-          isMissingFromProject: false,
-        };
-      }))),
+      ...(await Promise.all(
+        currentUiGraphs.map(async (uiGraph) => {
+          const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
+          return {
+            uiGraphId: uiGraph.uiGraphId,
+            name: uiGraph.name,
+            publishedSlug: published?.slug ?? null,
+            publishedAt: published?.publishedAt ?? null,
+            allowedEmails: published?.allowedEmails ?? [],
+            status: await getPublishedWebAppStatus({
+              root,
+              published,
+              getCurrentContentHash,
+              publishedContentHashBySnapshotId,
+            }),
+            isMissingFromProject: false,
+          };
+        }),
+      )),
       ...settings.publishedWebApps
         .filter((webApp) => !currentUiGraphIds.has(webApp.uiGraphId))
         .map((webApp) => ({
@@ -177,11 +184,17 @@ export async function listWorkflowProjectWebApps(relativePath: unknown): Promise
   };
 }
 
-export async function publishWorkflowProjectWebApps(relativePath: unknown, publications: unknown, preconditions: WorkflowDraftPublicationPreconditions) {
+export async function publishWorkflowProjectWebApps(
+  relativePath: unknown,
+  publications: unknown,
+  preconditions: WorkflowDraftPublicationPreconditions,
+) {
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const [project, existingSettings] = await Promise.all([
     loadProjectFromFile(projectPath),
@@ -238,23 +251,34 @@ export async function publishWorkflowProjectWebApps(relativePath: unknown, publi
     projectPath,
     changes: [
       ...snapshot.changes,
-      createStoredWorkflowProjectSettingsChange(projectPath, {
-        ...existingSettings,
-        publishedWebApps: nextPublishedWebApps,
-      }, existingSettings),
+      createStoredWorkflowProjectSettingsChange(
+        projectPath,
+        {
+          ...existingSettings,
+          publishedWebApps: nextPublishedWebApps,
+        },
+        existingSettings,
+      ),
     ],
     cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
-      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
+      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId),
+    ),
   });
 
   return getWorkflowProject(root, projectPath);
 }
 
-export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, accessUpdates: unknown, preconditions: WorkflowPublicationPreconditions) {
+export async function updateWorkflowProjectWebAppAccess(
+  relativePath: unknown,
+  accessUpdates: unknown,
+  preconditions: WorkflowPublicationPreconditions,
+) {
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'set-web-app-access');
@@ -270,34 +294,46 @@ export async function updateWorkflowProjectWebAppAccess(relativePath: unknown, a
   await saveFilesystemPublicationTransaction({
     root,
     projectPath,
-    changes: [createStoredWorkflowProjectSettingsChange(projectPath, {
-      ...existingSettings,
-      publishedWebApps: existingSettings.publishedWebApps.map((webApp) => {
-        if (!accessByUiGraphId.has(webApp.uiGraphId)) return webApp;
-        return {
-          ...webApp,
-          appId: getPersistedWebAppBindingId(webApp, webApp.uiGraphId),
-          // This endpoint updates only the explicitly selected web apps. Keep
-          // every other published app's access list intact instead of silently
-          // turning it into an empty allowlist.
-          allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
-        };
-      }),
-    }, existingSettings)],
+    changes: [
+      createStoredWorkflowProjectSettingsChange(
+        projectPath,
+        {
+          ...existingSettings,
+          publishedWebApps: existingSettings.publishedWebApps.map((webApp) => {
+            if (!accessByUiGraphId.has(webApp.uiGraphId)) return webApp;
+            return {
+              ...webApp,
+              appId: getPersistedWebAppBindingId(webApp, webApp.uiGraphId),
+              // This endpoint updates only the explicitly selected web apps. Keep
+              // every other published app's access list intact instead of silently
+              // turning it into an empty allowlist.
+              allowedEmails: accessByUiGraphId.get(webApp.uiGraphId) ?? webApp.allowedEmails,
+            };
+          }),
+        },
+        existingSettings,
+      ),
+    ],
   });
 
   return getWorkflowProject(root, projectPath);
 }
 
-export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions) {
+export async function unpublishWorkflowProjectWebApp(
+  relativePath: unknown,
+  uiGraphId: unknown,
+  preconditions: WorkflowPublicationPreconditions,
+) {
   if (typeof uiGraphId !== 'string' || !uiGraphId.trim()) {
     throw badRequest('Web app selection is required');
   }
 
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'unpublish-web-app');
@@ -307,7 +343,9 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
     throw createHttpError(404, 'Published web app not found');
   }
 
-  const nextPublishedWebApps = existingSettings.publishedWebApps.filter((webApp) => webApp.uiGraphId !== normalizedUiGraphId);
+  const nextPublishedWebApps = existingSettings.publishedWebApps.filter(
+    (webApp) => webApp.uiGraphId !== normalizedUiGraphId,
+  );
   const unusedSnapshotIds = getUnusedPublishedWebAppSnapshotIds({
     previousSnapshotIds: [removedWebApp.publishedSnapshotId],
     nextSnapshotIds: nextPublishedWebApps.map((webApp) => webApp.publishedSnapshotId),
@@ -316,12 +354,19 @@ export async function unpublishWorkflowProjectWebApp(relativePath: unknown, uiGr
   await saveFilesystemPublicationTransaction({
     root,
     projectPath,
-    changes: [createStoredWorkflowProjectSettingsChange(projectPath, {
-      ...existingSettings,
-      publishedWebApps: nextPublishedWebApps,
-    }, existingSettings)],
+    changes: [
+      createStoredWorkflowProjectSettingsChange(
+        projectPath,
+        {
+          ...existingSettings,
+          publishedWebApps: nextPublishedWebApps,
+        },
+        existingSettings,
+      ),
+    ],
     cleanupPaths: unusedSnapshotIds.flatMap((snapshotId) =>
-      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId)),
+      getPublishedWorkflowSnapshotArtifactPaths(root, snapshotId),
+    ),
   });
 
   return getWorkflowProject(root, projectPath);

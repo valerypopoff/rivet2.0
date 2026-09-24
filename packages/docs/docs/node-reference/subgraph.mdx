@@ -17,6 +17,10 @@ The inputs and outputs of the Subgraph Node are defined by [Graph Input Nodes](.
 
 You can choose the graph from the Subgraph node body directly on the canvas, or from the **Graph** setting in the node settings panel. Both controls edit the same Subgraph setting.
 
+In Rivet Studio Server, node settings offer **This project** and **Other projects**. The searchable graph dropdown shows this project's graphs under folder headings in graph-panel order. For other projects, server folders and projects expand in place; expanding a project shows its graph folders and graphs. The **Saved latest** (default) / **Published** choice appears below the graph field in settings. The target's Graph Input and Graph Output ports become this node's ports, and direct output streaming works across the project boundary. See [Subgraphs](../user-guide/subgraphs.md) for version and recording behavior. Cross-project targets require Studio Server to run.
+
+If a saved target changes or removes a port that this node was configured with, the graph control shows a warning. Re-select the target graph and review its connections; Rivet will not silently remap a wire to another port. A cycle through cross-project calls fails before execution.
+
 If a Subgraph node selects the same graph that contains it, Rivet shows a warning icon in the node header. This direct recursion is allowed, but it is easy to create accidentally and can run indefinitely unless the graph has its own stopping condition.
 
 ## Rearranging ports

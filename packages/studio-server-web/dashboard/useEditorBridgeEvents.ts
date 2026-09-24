@@ -20,6 +20,7 @@ type UseEditorBridgeEventsOptions = {
   editorReady: boolean;
   focusEditorFrame: () => void;
   onSaveShortcut: () => void;
+  onOpenSubgraphTarget: (projectId: string, graphId: string) => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
@@ -41,6 +42,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     editorReady,
     focusEditorFrame,
     onSaveShortcut,
+    onOpenSubgraphTarget,
     iframeRef,
     onActiveWorkflowProjectPathChange,
     onActiveProjectUnsavedChangesChange,
@@ -155,6 +157,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
         case 'editor-ready':
           onEditorReady(event.data.editorInstanceId);
           break;
+        case 'open-subgraph-target':
+          onOpenSubgraphTarget(event.data.projectId, event.data.graphId);
+          break;
         case 'workflow-project-conflicts':
           onProjectConflicts(event.data.snapshot);
           break;
@@ -208,6 +213,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onActiveProjectUnsavedChangesChange,
     onActiveWorkflowProjectPathChange,
     onEditorReady,
+    onOpenSubgraphTarget,
     onProjectConflicts,
     onReconciliationCaptured,
     onOpenProjectCountChange,

@@ -5,6 +5,7 @@ import type { NodeCreateProcessorOptions } from '@valerypopoff/rivet2-node';
 export type AppExecutorProcessorOptionsContext = Readonly<{
   graphId: GraphId;
   isWebAppAction: boolean;
+  recordSubgraphProjectRuns: boolean;
   llmProfileHealthExecutionCorrelationId?: string;
   project: Project;
   projectPath?: string;

@@ -30,6 +30,7 @@ import { GptTokenizerTokenizer } from '../integrations/GptTokenizerTokenizer.js'
 import type { Tokenizer } from '../integrations/Tokenizer.js';
 import { looseDataValuesToDataValues, type LooseDataValue } from './looseDataValue.js';
 import type { ProjectReferenceLoader } from '../model/ProjectReferenceLoader.js';
+import type { SubgraphProjectLoader } from '../model/SubgraphProjectTarget.js';
 import { resolveProcessSettings } from './processSettings.js';
 import type { RivetStoredValueStore } from '../model/StoredValueStore.js';
 import type { RivetKnowledgeStoreRegistry } from '../integrations/KnowledgeStore.js';
@@ -64,6 +65,9 @@ export type RunGraphOptions = {
   codeRunner?: ProcessContext['codeRunner'];
   projectPath?: string;
   projectReferenceLoader?: ProjectReferenceLoader;
+  subgraphProjectLoader?: SubgraphProjectLoader;
+  onSubgraphProjectRun?: ProcessContext['onSubgraphProjectRun'];
+  subgraphRecordingOptions?: ProcessContext['subgraphRecordingOptions'];
   editorExecutionCache?: ProcessContext['editorExecutionCache'];
   storedValueStore?: RivetStoredValueStore;
   knowledgeStores?: RivetKnowledgeStoreRegistry;
@@ -255,6 +259,9 @@ export function coreCreateProcessor(
           tokenizer: options.tokenizer ?? new GptTokenizerTokenizer(),
           projectPath: options.projectPath,
           projectReferenceLoader: options.projectReferenceLoader,
+          subgraphProjectLoader: options.subgraphProjectLoader,
+          onSubgraphProjectRun: options.onSubgraphProjectRun,
+          subgraphRecordingOptions: options.subgraphRecordingOptions,
           editorExecutionCache: options.editorExecutionCache,
           settings: resolveProcessSettings(options),
           getChatNodeEndpoint: options.getChatNodeEndpoint,

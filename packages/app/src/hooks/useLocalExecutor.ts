@@ -72,6 +72,8 @@ import {
   useLLMProfileHealthStore,
   useLocalExecutionRecordingPersistence,
   usePathPolicyProvider,
+  useSubgraphProjectLoader,
+  useSubgraphProjectRecordingPersistence,
 } from '../providers/ProvidersContext';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import { handleError } from '../utils/errorHandling.js';
@@ -164,6 +166,8 @@ export function useLocalExecutor() {
   const llmProfileHealthStore = useLLMProfileHealthStore();
   const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
   const pathPolicy = usePathPolicyProvider();
+  const subgraphProjectLoader = useSubgraphProjectLoader();
+  const persistSubgraphProjectRun = useSubgraphProjectRecordingPersistence();
   const projectNodeRegistry = useProjectNodeRegistry();
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphState);
@@ -669,6 +673,10 @@ export function useLocalExecutor() {
             tokenizer: new GptTokenizerTokenizer(),
             projectPath: loadedProject.path ?? undefined,
             projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
+            subgraphProjectLoader,
+            onSubgraphProjectRun: shouldRecordExecution && localRecordingProvider
+              ? persistSubgraphProjectRun
+              : undefined,
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
             llmProfileHealthStore,
             ...(localRecordingCorrelationId == null

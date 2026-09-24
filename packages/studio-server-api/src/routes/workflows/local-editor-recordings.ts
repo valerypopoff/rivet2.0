@@ -71,6 +71,36 @@ const localEditorRecordingSchema = z
     }
   });
 
+const subgraphEditorRecordingSchema = z
+  .object({
+    projectId: z.string().min(1).max(1_024),
+    projectContents: z.string().min(1),
+    datasetsContents: z.string().optional(),
+    recordingSerialized: z.string().min(1),
+    graphId: z.string().min(1).max(1_024),
+    revisionKey: z.string().max(1_024).optional(),
+    correlationId: z.string().min(16).max(96).optional(),
+    status: z.enum(['succeeded', 'failed']),
+    durationMs: z.number().finite().nonnegative(),
+    errorMessage: z.string().max(16_384).optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const totalBytes = [input.projectContents, input.datasetsContents, input.recordingSerialized].reduce(
+      (total, value) => total + (value == null ? 0 : Buffer.byteLength(value, 'utf8')),
+      0,
+    );
+    if (totalBytes > MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES,
+        inclusive: true,
+        origin: 'string',
+        message: `Subgraph replay uploads cannot exceed ${MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES} UTF-8 bytes.`,
+      });
+    }
+  });
+
 const recordingOutcomeSchema = z
   .object({
     correlationId: z.string().min(1).max(200),
@@ -267,5 +297,60 @@ localEditorRecordingsRouter.post(
       await reportOutcomeBestEffort(body.executionIdentity.correlationId, 'persistence-failed');
       throw error;
     }
+  }),
+);
+
+localEditorRecordingsRouter.post(
+  '/subgraph-run',
+  recordingJsonBody,
+  validateBody(subgraphEditorRecordingSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof subgraphEditorRecordingSchema>;
+    if (!isWorkflowRecordingEnabled()) {
+      res.json({ availability: 'disabled' });
+      return;
+    }
+
+    const { sourceProject, sourcePath } = await loadCurrentHostedProject(body.projectId, '');
+    const [executedProject, executedAttachedData] = parseProjectSnapshot(
+      body.projectContents,
+      'The Subgraph execution snapshot',
+    );
+    if (executedProject.metadata.id !== sourceProject.metadata.id) {
+      throw badRequest('The Subgraph replay does not belong to the selected hosted project.');
+    }
+    const executedGraph = Object.values(executedProject.graphs).find((graph) => graph.metadata?.id === body.graphId);
+    if (!executedGraph) throw badRequest('The Subgraph replay graph is not in the selected project snapshot.');
+    let executedDatasets: CombinedDataset[] = [];
+    if (body.datasetsContents) {
+      try {
+        executedDatasets = deserializeDatasets(body.datasetsContents);
+      } catch {
+        throw badRequest('The Subgraph execution dataset snapshot is invalid.');
+      }
+    }
+    const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+      sourceProject,
+      sourceProjectPath: sourcePath,
+      executedProject,
+      executedAttachedData,
+      executedDatasets,
+      endpointName: `Subgraph: ${executedGraph.metadata?.name ?? body.graphId}`,
+      recordingSerialized: body.recordingSerialized,
+      runKind: 'editor',
+      status: body.status,
+      durationMs: body.durationMs,
+      errorMessage: body.errorMessage,
+      executionIdentity: {
+        surface: 'subgraph_project',
+        graphId: body.graphId,
+        graphName: executedGraph.metadata?.name,
+        revisionKey: body.revisionKey,
+        correlationId: body.correlationId,
+      },
+    });
+    res
+      .status(recordingId ? 201 : 200)
+      .json(recordingId ? { availability: 'available', recordingId } : { availability: 'disabled' });
   }),
 );

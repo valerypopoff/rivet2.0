@@ -149,7 +149,7 @@ export const SegmentedEditor: FC<{
   ariaLabel?: string;
   name?: string;
   helperMessage?: string;
-  options: readonly { label: string; value: string | boolean }[];
+  options: readonly { label: string; value: string | boolean; disabled?: boolean }[];
   defaultValue?: string | boolean;
   allowOptionWrap?: boolean;
 }> = ({
@@ -241,7 +241,7 @@ export const SegmentedEditor: FC<{
             type="button"
             className={`segmented-choice-option${option.value === selectedValue ? ' is-active' : ''}`}
             aria-pressed={option.value === selectedValue}
-            disabled={disabled}
+            disabled={disabled || option.disabled}
             onClick={() => onChange(option.value)}
           >
             {option.label}

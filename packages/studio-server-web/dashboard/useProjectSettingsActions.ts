@@ -45,11 +45,13 @@ function createSlugFromWebAppName(name: string, fallback: string): string {
     return normalized;
   }
 
-  return fallback
-    .trim()
-    .replace(/[^A-Za-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase() || 'web-app';
+  return (
+    fallback
+      .trim()
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase() || 'web-app'
+  );
 }
 
 function createInitialWebAppSlugDrafts(webApps: WorkflowProjectWebAppSummary[]): Record<string, string> {
@@ -73,10 +75,7 @@ function createInitialWebAppSlugDrafts(webApps: WorkflowProjectWebAppSummary[]):
 }
 
 function createInitialWebAppAllowedEmailDrafts(webApps: WorkflowProjectWebAppSummary[]): Record<string, string> {
-  return Object.fromEntries(webApps.map((webApp) => [
-    webApp.uiGraphId,
-    (webApp.allowedEmails ?? []).join('\n'),
-  ]));
+  return Object.fromEntries(webApps.map((webApp) => [webApp.uiGraphId, (webApp.allowedEmails ?? []).join('\n')]));
 }
 
 function parseAllowedEmailDraft(value: string): string[] {
@@ -105,17 +104,17 @@ function carryEditedWebAppDrafts(
   previousServerValues: Record<string, string>,
   nextServerValues: Record<string, string>,
 ): Record<string, string> {
-  return Object.fromEntries(Object.entries(nextServerValues).map(([id, value]) => [
-    id,
-    Object.hasOwn(previousServerValues, id) && Object.hasOwn(drafts, id) && drafts[id] !== previousServerValues[id]
-      ? drafts[id]
-      : value,
-  ]));
+  return Object.fromEntries(
+    Object.entries(nextServerValues).map(([id, value]) => [
+      id,
+      Object.hasOwn(previousServerValues, id) && Object.hasOwn(drafts, id) && drafts[id] !== previousServerValues[id]
+        ? drafts[id]
+        : value,
+    ]),
+  );
 }
 
-function publicationSnapshotFromProject(
-  project: WorkflowProjectItem,
-): WorkflowPublicationPreconditions {
+function publicationSnapshotFromProject(project: WorkflowProjectItem): WorkflowPublicationPreconditions {
   return {
     // Missing server tokens must never re-arm the modal after a mutation.
     expectedProjectId: project.projectMetadataId ?? '',
@@ -125,14 +124,7 @@ function publicationSnapshotFromProject(
 }
 
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
-  const {
-    activeProject,
-    allProjects,
-    isOpen,
-    onClose,
-    onDeleteProject,
-    onRefresh,
-  } = options;
+  const { activeProject, allProjects, isOpen, onClose, onDeleteProject, onRefresh } = options;
   const [settingsDraft, setSettingsDraft] = useState<WorkflowProjectSettingsDraft>({
     endpointName: activeProject.settings.endpointName,
   });
@@ -150,6 +142,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const serverWebAppSlugs = useRef<Record<string, string>>({});
   const serverWebAppAllowedEmails = useRef<Record<string, string>>({});
   const [hasMainGraph, setHasMainGraph] = useState<boolean | null>(null);
+  const [savedLatestSubgraphProjectIds, setSavedLatestSubgraphProjectIds] = useState<string[]>([]);
   const [loadingWebApps, setLoadingWebApps] = useState(false);
   const [savingWebApps, setSavingWebApps] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -159,88 +152,103 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     const previous = previousServerEndpointName.current;
     const current = snapshotProject.settings.endpointName;
     previousServerEndpointName.current = current;
-    setSettingsDraft((draft) => draft.endpointName === previous ? { endpointName: current } : draft);
+    setSettingsDraft((draft) => (draft.endpointName === previous ? { endpointName: current } : draft));
   }, [snapshotProject?.settings.endpointName]);
 
-  const applyWebAppSnapshot = useCallback((
-    response: WorkflowProjectWebAppsResponse,
-    preserveDrafts: boolean,
-    expectedAfterMutation?: WorkflowPublicationPreconditions,
-    reviewedDraftRevisionId?: string,
-  ) => {
-    const consistentProject = response.project?.relativePath === activeProject.relativePath &&
-      response.project.projectMetadataId === response.projectId &&
-      response.project.revisionId === response.draftRevisionId &&
-      response.project.settings.publicationVersion === response.publicationVersion &&
-      isPublicationVersion(response.publicationVersion);
-    if (!consistentProject) {
-      setReviewedPublication(null);
-      setPublicationConflict(true);
-      toast.error('Publication state is inconsistent. Review the latest project before publishing.');
-      return;
-    }
-    setWebApps(response.webApps);
-    setHasMainGraph(response.hasMainGraph);
-    setSnapshotProject(response.project);
-    const matchesMutation = !expectedAfterMutation || (
-      response.projectId === expectedAfterMutation.expectedProjectId &&
-      response.draftRevisionId === expectedAfterMutation.expectedDraftRevisionId &&
-      response.publicationVersion === expectedAfterMutation.expectedPublicationVersion &&
-      response.draftRevisionId === reviewedDraftRevisionId
-    );
-    if (response.projectId && response.draftRevisionId && matchesMutation) {
-      setReviewedPublication({
-        expectedProjectId: response.projectId,
-        expectedDraftRevisionId: response.draftRevisionId,
-        expectedPublicationVersion: response.publicationVersion,
-      });
-      setPublicationConflict(false);
-    } else {
-      setReviewedPublication(null);
-      setPublicationConflict(Boolean(expectedAfterMutation));
-      if (!expectedAfterMutation) toast.error('Publication state is unavailable. Refresh the project before publishing.');
-    }
-    const slugs = createInitialWebAppSlugDrafts(response.webApps);
-    const emails = createInitialWebAppAllowedEmailDrafts(response.webApps);
-    const previousSlugs = serverWebAppSlugs.current;
-    const previousEmails = serverWebAppAllowedEmails.current;
-    serverWebAppSlugs.current = slugs;
-    serverWebAppAllowedEmails.current = emails;
-    setWebAppSlugDrafts((drafts) => preserveDrafts ? carryEditedWebAppDrafts(drafts, previousSlugs, slugs) : slugs);
-    setWebAppAllowedEmailDrafts((drafts) => preserveDrafts ? carryEditedWebAppDrafts(drafts, previousEmails, emails) : emails);
-  }, [activeProject.relativePath]);
+  const applyWebAppSnapshot = useCallback(
+    (
+      response: WorkflowProjectWebAppsResponse,
+      preserveDrafts: boolean,
+      expectedAfterMutation?: WorkflowPublicationPreconditions,
+      reviewedDraftRevisionId?: string,
+    ) => {
+      const consistentProject =
+        response.project?.relativePath === activeProject.relativePath &&
+        response.project.projectMetadataId === response.projectId &&
+        response.project.revisionId === response.draftRevisionId &&
+        response.project.settings.publicationVersion === response.publicationVersion &&
+        isPublicationVersion(response.publicationVersion);
+      if (!consistentProject) {
+        setReviewedPublication(null);
+        setPublicationConflict(true);
+        toast.error('Publication state is inconsistent. Review the latest project before publishing.');
+        return;
+      }
+      setWebApps(response.webApps);
+      setHasMainGraph(response.hasMainGraph);
+      setSavedLatestSubgraphProjectIds(response.savedLatestSubgraphProjectIds ?? []);
+      setSnapshotProject(response.project);
+      const matchesMutation =
+        !expectedAfterMutation ||
+        (response.projectId === expectedAfterMutation.expectedProjectId &&
+          response.draftRevisionId === expectedAfterMutation.expectedDraftRevisionId &&
+          response.publicationVersion === expectedAfterMutation.expectedPublicationVersion &&
+          response.draftRevisionId === reviewedDraftRevisionId);
+      if (response.projectId && response.draftRevisionId && matchesMutation) {
+        setReviewedPublication({
+          expectedProjectId: response.projectId,
+          expectedDraftRevisionId: response.draftRevisionId,
+          expectedPublicationVersion: response.publicationVersion,
+        });
+        setPublicationConflict(false);
+      } else {
+        setReviewedPublication(null);
+        setPublicationConflict(Boolean(expectedAfterMutation));
+        if (!expectedAfterMutation)
+          toast.error('Publication state is unavailable. Refresh the project before publishing.');
+      }
+      const slugs = createInitialWebAppSlugDrafts(response.webApps);
+      const emails = createInitialWebAppAllowedEmailDrafts(response.webApps);
+      const previousSlugs = serverWebAppSlugs.current;
+      const previousEmails = serverWebAppAllowedEmails.current;
+      serverWebAppSlugs.current = slugs;
+      serverWebAppAllowedEmails.current = emails;
+      setWebAppSlugDrafts((drafts) => (preserveDrafts ? carryEditedWebAppDrafts(drafts, previousSlugs, slugs) : slugs));
+      setWebAppAllowedEmailDrafts((drafts) =>
+        preserveDrafts ? carryEditedWebAppDrafts(drafts, previousEmails, emails) : emails,
+      );
+    },
+    [activeProject.relativePath],
+  );
 
-  const reloadWebApps = useCallback(async (
-    project: WorkflowProjectItem,
-    previous: WorkflowPublicationPreconditions,
-  ) => {
-    const expectedAfterMutation = publicationSnapshotFromProject(project);
-    if (project.relativePath !== activeProject.relativePath ||
+  const reloadWebApps = useCallback(
+    async (project: WorkflowProjectItem, previous: WorkflowPublicationPreconditions) => {
+      const expectedAfterMutation = publicationSnapshotFromProject(project);
+      if (
+        project.relativePath !== activeProject.relativePath ||
         expectedAfterMutation.expectedProjectId !== previous.expectedProjectId ||
         !expectedAfterMutation.expectedDraftRevisionId ||
-        !isNextPublicationVersion(previous.expectedPublicationVersion, expectedAfterMutation.expectedPublicationVersion)) {
-      setReviewedPublication(null);
-      setPublicationConflict(true);
-      toast.error('The change succeeded, but publication state could not be verified. Review the latest state before trying again.');
-      return;
-    }
-    setLoadingWebApps(true);
+        !isNextPublicationVersion(previous.expectedPublicationVersion, expectedAfterMutation.expectedPublicationVersion)
+      ) {
+        setReviewedPublication(null);
+        setPublicationConflict(true);
+        toast.error(
+          'The change succeeded, but publication state could not be verified. Review the latest state before trying again.',
+        );
+        return;
+      }
+      setLoadingWebApps(true);
 
-    try {
-      const response = await fetchWorkflowProjectWebApps(activeProject.relativePath);
-      applyWebAppSnapshot(response, true, expectedAfterMutation, previous.expectedDraftRevisionId);
-    } catch {
-      toast.error('The change succeeded, but publication state could not refresh. Review the latest state before trying again.');
-      setReviewedPublication(null);
-      setPublicationConflict(true);
-    } finally {
-      setLoadingWebApps(false);
-    }
-  }, [activeProject.relativePath, applyWebAppSnapshot]);
+      try {
+        const response = await fetchWorkflowProjectWebApps(activeProject.relativePath);
+        applyWebAppSnapshot(response, true, expectedAfterMutation, previous.expectedDraftRevisionId);
+      } catch {
+        toast.error(
+          'The change succeeded, but publication state could not refresh. Review the latest state before trying again.',
+        );
+        setReviewedPublication(null);
+        setPublicationConflict(true);
+      } finally {
+        setLoadingWebApps(false);
+      }
+    },
+    [activeProject.relativePath, applyWebAppSnapshot],
+  );
 
   useEffect(() => {
     setWebApps([]);
     setHasMainGraph(null);
+    setSavedLatestSubgraphProjectIds([]);
     setSnapshotProject(null);
     setWebAppSlugDrafts({});
     setWebAppAllowedEmailDrafts({});
@@ -289,12 +297,14 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       return null;
     }
 
-    return allProjects.find(
-      (project) =>
-        project.absolutePath !== activeProject.absolutePath &&
-        project.settings.status !== 'unpublished' &&
-        project.settings.endpointName.trim().toLowerCase() === endpointLookupName,
-    ) ?? null;
+    return (
+      allProjects.find(
+        (project) =>
+          project.absolutePath !== activeProject.absolutePath &&
+          project.settings.status !== 'unpublished' &&
+          project.settings.endpointName.trim().toLowerCase() === endpointLookupName,
+      ) ?? null
+    );
   }, [activeProject.absolutePath, allProjects, endpointLookupName]);
 
   const endpointValidationError = useMemo(() => {
@@ -370,23 +380,19 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }));
     };
 
-  const handleWebAppSlugDraftChange =
-    (uiGraphId: string) =>
-    (event: ChangeEvent<HTMLInputElement>) => {
-      setWebAppSlugDrafts((prev) => ({
-        ...prev,
-        [uiGraphId]: event.target.value,
-      }));
-    };
+  const handleWebAppSlugDraftChange = (uiGraphId: string) => (event: ChangeEvent<HTMLInputElement>) => {
+    setWebAppSlugDrafts((prev) => ({
+      ...prev,
+      [uiGraphId]: event.target.value,
+    }));
+  };
 
-  const handleWebAppAllowedEmailsDraftChange =
-    (uiGraphId: string) =>
-    (event: ChangeEvent<HTMLTextAreaElement>) => {
-      setWebAppAllowedEmailDrafts((prev) => ({
-        ...prev,
-        [uiGraphId]: event.target.value,
-      }));
-    };
+  const handleWebAppAllowedEmailsDraftChange = (uiGraphId: string) => (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setWebAppAllowedEmailDrafts((prev) => ({
+      ...prev,
+      [uiGraphId]: event.target.value,
+    }));
+  };
 
   const requireReviewedPublication = (): WorkflowPublicationPreconditions | null => {
     if (reviewedPublication) return reviewedPublication;
@@ -418,7 +424,8 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
   const refreshTreeAfterSuccess = async () => {
     try {
-      if (!await onRefresh()) toast.error('The change succeeded, but the project list could not refresh. Refresh to see the latest state.');
+      if (!(await onRefresh()))
+        toast.error('The change succeeded, but the project list could not refresh. Refresh to see the latest state.');
     } catch {
       toast.error('The change succeeded, but the project list could not refresh. Refresh to see the latest state.');
     }
@@ -434,7 +441,9 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     ) {
       setReviewedPublication(null);
       setPublicationConflict(true);
-      toast.error('The change succeeded, but publication state could not be verified. Review the latest state before trying again.');
+      toast.error(
+        'The change succeeded, but publication state could not be verified. Review the latest state before trying again.',
+      );
       return;
     }
     setSnapshotProject(project);
@@ -459,9 +468,13 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingSettings(true);
 
     try {
-      const project = await publishWorkflowProject(activeProject.relativePath, {
-        endpointName: settingsDraft.endpointName,
-      }, preconditions);
+      const project = await publishWorkflowProject(
+        activeProject.relativePath,
+        {
+          endpointName: settingsDraft.endpointName,
+        },
+        preconditions,
+      );
       acceptReturnedPublication(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
@@ -494,7 +507,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
 
   const handleEndpointAccessChange = async (access: 'public' | 'internal') => {
     const currentProject = snapshotProject ?? activeProject;
-    if (currentProject.settings.status === 'unpublished' || access === (currentProject.settings.endpointAccess ?? 'public')) return;
+    if (
+      currentProject.settings.status === 'unpublished' ||
+      access === (currentProject.settings.endpointAccess ?? 'public')
+    )
+      return;
     const preconditions = requireReviewedPublication();
     if (!preconditions) return;
     setSavingEndpointAccess(true);
@@ -530,9 +547,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   };
 
   const createWebAppPublicationDrafts = (uiGraphId?: string): WorkflowProjectWebAppPublicationDraft[] => {
-    const selectedWebApps = uiGraphId
-      ? webApps.filter((webApp) => webApp.uiGraphId === uiGraphId)
-      : webApps;
+    const selectedWebApps = uiGraphId ? webApps.filter((webApp) => webApp.uiGraphId === uiGraphId) : webApps;
 
     return selectedWebApps.reduce<WorkflowProjectWebAppPublicationDraft[]>((drafts, webApp) => {
       if (webApp.isMissingFromProject) {
@@ -540,11 +555,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }
 
       const slug = (webAppSlugDrafts[webApp.uiGraphId] ?? '').trim();
-      if (
-        webApp.publishedSlug != null &&
-        webApp.status !== 'unpublished_changes' &&
-        slug === webApp.publishedSlug
-      ) {
+      if (webApp.publishedSlug != null && webApp.status !== 'unpublished_changes' && slug === webApp.publishedSlug) {
         return drafts;
       }
 
@@ -612,7 +623,11 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setSavingWebApps(true);
 
     try {
-      const project = await updateWorkflowProjectWebAppAccess(activeProject.relativePath, [createWebAppAccessDraft(webApp)], preconditions);
+      const project = await updateWorkflowProjectWebAppAccess(
+        activeProject.relativePath,
+        [createWebAppAccessDraft(webApp)],
+        preconditions,
+      );
       await reloadWebApps(project, preconditions);
       await refreshTreeAfterSuccess();
     } catch (err: any) {
@@ -655,6 +670,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     webAppAccessValidationErrors,
     loadingWebApps,
     reviewedPublication,
+    savedLatestSubgraphProjectIds,
     publicationConflict,
     reviewLatestPublication,
     savingWebApps,

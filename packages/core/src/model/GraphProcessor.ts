@@ -140,6 +140,13 @@ import {
 } from './ConnectedToolContinuationHost.js';
 import { resolveProjectGlobalVariables } from './GlobalVariables.js';
 import { loadProjectReferenceTree } from './ProjectReferenceLoader.js';
+import {
+  getSubgraphProjectKey,
+  isSubgraphProjectKey,
+  type ResolvedSubgraphProject,
+  type SubgraphProjectTarget,
+} from './SubgraphProjectTarget.js';
+import type { SubGraphNode } from './nodes/SubGraphNode.js';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -675,6 +682,7 @@ export class GraphProcessor {
   #externalFunctions: Record<string, ExternalFunction> = {};
   slowMode = false;
   #parent: GraphProcessor | undefined;
+  #recordingProjectScope: string | undefined;
   #abortOwnerOverride: GraphProcessor | undefined;
   #sameGraphRunOwnerOverride: GraphProcessor | undefined;
   #suppressGraphPartialOutputs = false;
@@ -786,6 +794,7 @@ export class GraphProcessor {
   #ignoreNodes: Set<NodeId> = undefined!;
   #hasPreloadedData = false;
   #loadedProjects: Record<ProjectId, Project> = undefined!;
+  #subgraphTargetCache = new Map<ProjectId, ResolvedSubgraphProject>();
   #definitions: Record<NodeId, { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] }> = undefined!;
   #scc: ChartNode[][] = undefined!;
   #graphExecutionPlan: GraphExecutionPlan | undefined;
@@ -988,6 +997,19 @@ export class GraphProcessor {
       return false;
     }
 
+    // A target's Saved latest or Published pointer can change while the caller
+    // graph object remains identical. Its boundary definitions must be rebuilt.
+    if (
+      Object.values(project.graphs).some((graph) =>
+        graph.nodes.some((authored) => {
+          const node = resolveNodePrefabInstance(project, authored);
+          return node.type === 'subGraph' && (node as SubGraphNode).data.targetProjectId;
+        }),
+      )
+    ) {
+      return false;
+    }
+
     return true;
   }
 
@@ -1021,7 +1043,11 @@ export class GraphProcessor {
   }
 
   #seededExecutionPlanForNextRun(): GraphExecutionPlan | undefined {
-    if (!this.#useSeededExecutionPlanOnNextRun || this.warnOnInvalidGraph) {
+    if (
+      !this.#useSeededExecutionPlanOnNextRun ||
+      this.warnOnInvalidGraph ||
+      !this.#canUseRuntimeExecutionPlanCacheFor(this.#project, this.#isSubProcessor)
+    ) {
       return undefined;
     }
 
@@ -1049,6 +1075,7 @@ export class GraphProcessor {
       rootRunId: this.#rootRunId,
       graphRunId: this.#graphRunId,
       graphId: this.#graph.metadata!.id!,
+      ...(this.#recordingProjectScope ? { projectScope: this.#recordingProjectScope } : {}),
       parentGraphRunId: this.#parentGraphRunId,
       executor: this.#executor
         ? {
@@ -1060,6 +1087,10 @@ export class GraphProcessor {
         : undefined,
       ...(this.#context?.evaluation === undefined ? {} : { evaluation: this.#context.evaluation }),
     };
+  }
+
+  get recordingProjectScope(): string | undefined {
+    return this.#recordingProjectScope;
   }
 
   #withExecution<T extends object>(
@@ -1398,6 +1429,10 @@ export class GraphProcessor {
     this.#nodeAbortControllers = new Map();
     this.#loadedProjects =
       this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects ? { ...this.#runtimeCache.loadedProjects } : {};
+    if (!this.#isSubProcessor) {
+      // Latest and Published are selected afresh for each root invocation.
+      this.#subgraphTargetCache = new Map();
+    }
     // Referenced projects can be reloaded per run when loaded-project caching is disabled.
     if (!this.#cacheLoadedProjects && (this.#project.references?.length ?? 0) > 0) {
       if (this.#runtimeCache) {
@@ -1611,7 +1646,10 @@ export class GraphProcessor {
 
     // Resolve before touching the shared map. An invalid reference or definition
     // must fail startup without leaving a partial new set of authored globals.
-    const resolved = resolveProjectGlobalVariables(this.#project, this.#loadedProjects);
+    const legacyProjects = Object.fromEntries(
+      Object.entries(this.#loadedProjects).filter(([key]) => !isSubgraphProjectKey(key)),
+    ) as Record<ProjectId, Project>;
+    const resolved = resolveProjectGlobalVariables(this.#project, legacyProjects);
 
     for (const id of this.#projectGlobalVariableIdsAssignedByPreviousRootRun) {
       this.#globals.delete(id);
@@ -2117,6 +2155,7 @@ export class GraphProcessor {
     if ((this.#project.references?.length ?? 0) > 0) {
       if (this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects) {
         this.#loadedProjects = { ...this.#runtimeCache.loadedProjects };
+        await this.#loadSubgraphProjectTargets();
         return;
       }
 
@@ -2134,6 +2173,91 @@ export class GraphProcessor {
 
       if (this.#cacheLoadedProjects && this.#runtimeCache) {
         this.#runtimeCache.loadedProjects = { ...this.#loadedProjects };
+      }
+    }
+    await this.#loadSubgraphProjectTargets();
+  }
+
+  async #loadSubgraphProjectTargets(): Promise<void> {
+    const visited = new WeakMap<Project, Set<GraphId>>();
+    const active = new WeakMap<Project, Set<GraphId>>();
+    const visit = async (
+      owner: Project,
+      graphId: GraphId,
+      depth: number,
+      enteredFromOtherProject = false,
+    ): Promise<void> => {
+      if (depth > 64) throw new Error('Subgraph project dependency depth exceeds 64. Check for a project cycle.');
+      const graph = owner.graphs[graphId];
+      if (!graph) throw new Error(`Subgraph target graph ${graphId} is missing from project ${owner.metadata.id}.`);
+      if (active.get(owner)?.has(graphId)) {
+        if (enteredFromOtherProject)
+          throw new Error(
+            `Subgraph project dependency cycle reaches graph ${graphId} in project ${owner.metadata.id}.`,
+          );
+        return;
+      }
+      const visitedGraphs = visited.get(owner) ?? new Set<GraphId>();
+      if (visitedGraphs.has(graphId)) return;
+      visitedGraphs.add(graphId);
+      visited.set(owner, visitedGraphs);
+      const activeGraphs = active.get(owner) ?? new Set<GraphId>();
+      activeGraphs.add(graphId);
+      active.set(owner, activeGraphs);
+      try {
+        for (const authored of graph.nodes) {
+          const candidate = resolveNodePrefabInstance(owner, authored);
+          if (candidate.type !== 'subGraph' || candidate.disabled) continue;
+          const node = candidate as SubGraphNode;
+          if (node.data.targetScope === 'other-projects' && !node.data.targetProjectId) {
+            throw new Error('Select a project and graph for this Subgraph before running it.');
+          }
+          let childOwner = owner;
+          if (node.data.targetProjectId) {
+            const target: SubgraphProjectTarget = {
+              projectId: node.data.targetProjectId,
+              version: node.data.targetVersion ?? 'latest',
+            };
+            const key = getSubgraphProjectKey(target);
+            let resolved = this.#subgraphTargetCache.get(key);
+            if (!resolved) {
+              if (!this.#context.subgraphProjectLoader) {
+                throw new Error('Subgraph calls to another project require Rivet Studio Server.');
+              }
+              resolved = await this.#context.subgraphProjectLoader.loadTarget(target);
+              if (resolved.project.metadata.id !== target.projectId) {
+                throw new Error(`Subgraph target ${target.projectId} resolved to a different project.`);
+              }
+              this.#subgraphTargetCache.set(key, resolved);
+            }
+            childOwner = resolved.project;
+            if (Object.hasOwn(this.#loadedProjects, key) && this.#loadedProjects[key] !== childOwner) {
+              throw new Error('Subgraph target collides with an existing project reference.');
+            }
+            Object.defineProperty(this.#loadedProjects, key, {
+              configurable: true,
+              enumerable: true,
+              value: childOwner,
+              writable: true,
+            });
+          }
+          await visit(childOwner, node.data.graphId, depth + 1, Boolean(node.data.targetProjectId));
+        }
+      } finally {
+        activeGraphs.delete(graphId);
+      }
+    };
+    await visit(this.#project, this.#graph.metadata!.id!, 0);
+    // Streaming topology may visit any resolved target, including a version of
+    // a project with the same metadata ID as another selected target.
+    for (const [key, resolved] of this.#subgraphTargetCache) {
+      if (!Object.hasOwn(this.#loadedProjects, key)) {
+        Object.defineProperty(this.#loadedProjects, key, {
+          configurable: true,
+          enumerable: true,
+          value: resolved.project,
+          writable: true,
+        });
       }
     }
   }
@@ -2715,6 +2839,8 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
+    processor.#subgraphTargetCache = this.#subgraphTargetCache;
+    processor.#recordingProjectScope = this.#recordingProjectScope;
     processor.#executionCache = this.#executionCache;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
@@ -3383,7 +3509,7 @@ export class GraphProcessor {
       index,
     );
 
-    return buildNodeProcessContext({
+    const processContext = buildNodeProcessContext({
       activeOutputPortIds: this.#getActiveOutputPortIds(node),
       attachedData: this.#getAttachedDataTo(node),
       base: this.#nodeProcessContextBase,
@@ -3456,6 +3582,16 @@ export class GraphProcessor {
         });
       },
     });
+    if (node.type === 'subGraph' && (node as SubGraphNode).data.targetProjectId) {
+      const data = (node as SubGraphNode).data;
+      processContext.subgraphTarget = this.#subgraphTargetCache.get(
+        getSubgraphProjectKey({
+          projectId: data.targetProjectId!,
+          version: data.targetVersion ?? 'latest',
+        }),
+      );
+    }
+    return processContext;
   }
 
   #getToolCallContinuationContext(
@@ -3703,10 +3839,12 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
+    processor.#subgraphTargetCache = this.#subgraphTargetCache;
     processor.#executionCache = this.#executionCache;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#recordingProjectScope = this.#recordingProjectScope;
     processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = this.#abortOwnerOverride ?? this;
     processor.#sameGraphRunOwnerOverride = this.#sameGraphRunOwnerOverride ?? this;
@@ -4560,10 +4698,12 @@ export class GraphProcessor {
     });
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
+    processor.#subgraphTargetCache = this.#subgraphTargetCache;
     processor.#executionCache = this.#executionCache;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#recordingProjectScope = this.#recordingProjectScope;
     processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = root;
     processor.#suppressGraphPartialOutputs = true;
@@ -5148,10 +5288,18 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
+    processor.#subgraphTargetCache = this.#subgraphTargetCache;
     processor.#executionCache = this.#executionCache;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#recordingProjectScope =
+      node.type === 'subGraph' && (node as SubGraphNode).data.targetProjectId
+        ? getSubgraphProjectKey({
+            projectId: (node as SubGraphNode).data.targetProjectId!,
+            version: (node as SubGraphNode).data.targetVersion ?? 'latest',
+          })
+        : this.#recordingProjectScope;
     processor.#graphCallPath = Object.freeze([
       ...this.#graphCallPath,
       processor.#graph.metadata?.name || '(Unnamed Graph)',

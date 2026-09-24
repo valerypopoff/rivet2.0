@@ -153,6 +153,77 @@ test('renaming a project to its current name is a no-op', async () => {
   });
 });
 
+test('Subgraph project lookup selects saved latest or the exact published snapshot', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Called Project');
+  const [saved] = rivetNode.loadProjectAndAttachedDataFromString(await fs.readFile(created.absolutePath, 'utf8'));
+  const privateInput = rivetNode.graphInputNode.impl.create();
+  privateInput.data = { id: 'private-input', dataType: 'string', defaultValue: 'do-not-send-this-default' };
+  saved.graphs[saved.metadata.mainGraphId!]!.nodes.push(privateInput);
+  await fs.writeFile(created.absolutePath, rivetNode.serializeProject(saved) as string, 'utf8');
+  const projectId = saved.metadata.id;
+  const encodedId = encodeURIComponent(projectId);
+
+  await withEnvOverride('RIVET_KEY', 'subgraph-lookup-test-key', async () =>
+    withWorkflowApiServer(async (baseUrl) => {
+      const getTarget = (operation: 'preview' | 'execution', version: 'latest' | 'published') =>
+        fetch(`${baseUrl}/subgraph-projects/${encodedId}/${operation}?version=${version}`, {
+          headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() },
+        });
+      const previewResponse = await getTarget('preview', 'latest');
+      assert.equal(previewResponse.status, 200);
+      const preview = await readJson<{
+        project: { metadata: { id: string }; graphs: Record<string, { nodes: { type: string }[] }> };
+      }>(previewResponse);
+      assert.equal(preview.project.metadata.id, projectId);
+      assert.ok(
+        Object.values(preview.project.graphs).every((graph) =>
+          graph.nodes.every((node) => node.type === 'graphInput' || node.type === 'graphOutput'),
+        ),
+      );
+      assert.equal(JSON.stringify(preview).includes('do-not-send-this-default'), false);
+      assert.deepEqual(
+        Object.values(preview.project.graphs)
+          .flatMap((graph) => graph.nodes)
+          .find((node) => (node as { data?: { id?: string } }).data?.id === 'private-input'),
+        {
+          id: privateInput.id,
+          type: 'graphInput',
+          data: { id: 'private-input', dataType: 'string' },
+        },
+      );
+
+      const unavailable = await getTarget('execution', 'published');
+      assert.equal(unavailable.status, 409);
+
+      await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'called-project' });
+      const publishedResponse = await getTarget('execution', 'published');
+      assert.equal(publishedResponse.status, 200);
+      const published = await readJson<{ projectContents: string }>(publishedResponse);
+      assert.equal(
+        rivetNode.loadProjectAndAttachedDataFromString(published.projectContents)[0].metadata.title,
+        'Called Project',
+      );
+
+      saved.metadata.title = 'Changed Draft';
+      await fs.writeFile(created.absolutePath, rivetNode.serializeProject(saved) as string, 'utf8');
+      const latestResponse = await getTarget('execution', 'latest');
+      const latest = await readJson<{ projectContents: string }>(latestResponse);
+      assert.equal(
+        rivetNode.loadProjectAndAttachedDataFromString(latest.projectContents)[0].metadata.title,
+        'Changed Draft',
+      );
+      const stillPublished = await readJson<{ projectContents: string }>(await getTarget('execution', 'published'));
+      assert.equal(
+        rivetNode.loadProjectAndAttachedDataFromString(stillPublished.projectContents)[0].metadata.title,
+        'Called Project',
+      );
+
+      await fs.copyFile(created.absolutePath, path.join(workflowsRoot, 'duplicate-id.rivet-project'));
+      assert.equal((await getTarget('execution', 'latest')).status, 409);
+    }),
+  );
+});
+
 test('failed project move leaves publication and tree unchanged; committed retry invalidates once', async () => {
   await workflowMutations.createWorkflowFolderItem('Destination', '');
   const created = await workflowMutations.createWorkflowProjectItem('', 'MoveEvents');
@@ -160,15 +231,16 @@ test('failed project move leaves publication and tree unchanged; committed retry
 
   await withWorkflowApiServer(async (baseUrl) => {
     const initial = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
-    const move = () => fetch(`${baseUrl}/move`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        itemType: 'project',
-        sourceRelativePath: created.relativePath,
-        destinationFolderRelativePath: 'Destination',
-      }),
-    });
+    const move = () =>
+      fetch(`${baseUrl}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          itemType: 'project',
+          sourceRelativePath: created.relativePath,
+          destinationFolderRelativePath: 'Destination',
+        }),
+      });
 
     try {
       setFilesystemProjectMoveCheckpointForTests((checkpoint) => {
@@ -176,7 +248,10 @@ test('failed project move leaves publication and tree unchanged; committed retry
       });
       assert.equal((await move()).status, 500);
       assert.equal(await workflowFs.pathExists(created.absolutePath), true);
-      assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath, created.absolutePath);
+      assert.equal(
+        (await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath,
+        created.absolutePath,
+      );
       const failedTree = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
       assert.equal(failedTree.sync.revision, initial.sync.revision);
     } finally {
@@ -187,7 +262,10 @@ test('failed project move leaves publication and tree unchanged; committed retry
     assert.equal(response.status, 200);
     const moved = await readJson<{ project: { absolutePath: string; settings: { status: string } } }>(response);
     assert.equal(moved.project.settings.status, 'published');
-    assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath, moved.project.absolutePath);
+    assert.equal(
+      (await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'move-events-endpoint'))?.projectPath,
+      moved.project.absolutePath,
+    );
     const committedTree = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
     assert.equal(committedTree.sync.revision, initial.sync.revision + 1);
   });
@@ -215,7 +293,10 @@ test('a committed move with deferred cleanup survives the API rebuilding its des
       });
       assert.equal(response.status, 200);
       const moved = await readJson<{ project: { absolutePath: string } }>(response);
-      assert.equal(await workflowFs.pathExists(workflowFs.getProjectSidecarPaths(moved.project.absolutePath).stats), true);
+      assert.equal(
+        await workflowFs.pathExists(workflowFs.getProjectSidecarPaths(moved.project.absolutePath).stats),
+        true,
+      );
       assert.equal((await fs.readdir(path.join(workflowsRoot, FILESYSTEM_PROJECT_MOVE_TRANSACTIONS_DIR))).length, 1);
       setFilesystemProjectMoveCheckpointForTests(null);
 
@@ -224,8 +305,15 @@ test('a committed move with deferred cleanup survives the API rebuilding its des
       await withFilesystemWorkflowStorageWrite(async () => undefined);
       await initializeFilesystemProjectTransactions(workflowsRoot);
       assert.deepEqual(await fs.readdir(path.join(workflowsRoot, FILESYSTEM_PROJECT_MOVE_TRANSACTIONS_DIR)), []);
-      assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'deferred-move-endpoint'))?.projectPath, moved.project.absolutePath);
-      const tree = await readJson<{ sync: { revision: number }; folders: Array<{ projects: Array<{ absolutePath: string }> }> }>(await fetch(`${baseUrl}/tree`));
+      assert.equal(
+        (await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'deferred-move-endpoint'))
+          ?.projectPath,
+        moved.project.absolutePath,
+      );
+      const tree = await readJson<{
+        sync: { revision: number };
+        folders: Array<{ projects: Array<{ absolutePath: string }> }>;
+      }>(await fetch(`${baseUrl}/tree`));
       assert.equal(tree.sync.revision, initial.sync.revision + 1);
       assert.equal(tree.folders[0]?.projects[0]?.absolutePath, moved.project.absolutePath);
     } finally {
@@ -1010,11 +1098,20 @@ test('workflow duplicate route can duplicate the published snapshot for projects
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
           preconditions: {
-            expectedProjectId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).projectMetadataId,
+            expectedProjectId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).projectMetadataId,
             expectedPublicationVersion: '0',
-            expectedDraftRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId,
+            expectedDraftRevisionId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).revisionId,
           },
-          settings: { endpointName: 'http-duplicate-published-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId },
+          settings: {
+            endpointName: 'http-duplicate-published-endpoint',
+            expectedRevisionId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).revisionId,
+          },
         }),
       }),
     );
@@ -1218,11 +1315,20 @@ test('workflow download route streams published and unpublished-changes variants
         body: JSON.stringify({
           relativePath: createdProject.project.relativePath,
           preconditions: {
-            expectedProjectId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).projectMetadataId,
+            expectedProjectId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).projectMetadataId,
             expectedPublicationVersion: '0',
-            expectedDraftRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId,
+            expectedDraftRevisionId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).revisionId,
           },
-          settings: { endpointName: 'http-download-changed-endpoint', expectedRevisionId: (await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)).revisionId },
+          settings: {
+            endpointName: 'http-download-changed-endpoint',
+            expectedRevisionId: (
+              await workflowQuery.getWorkflowProject(workflowsRoot, createdProject.project.absolutePath)
+            ).revisionId,
+          },
         }),
       }),
     );

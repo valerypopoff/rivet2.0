@@ -9,6 +9,7 @@ import {
   type GraphId,
   type NodeId,
   type Project,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import type { ContextMenuContext } from '../ContextMenu.js';
 import type { ContextMenuData } from '../../hooks/useContextMenu.js';
@@ -161,6 +162,9 @@ export function getNodeCanvasContextMenuContext({
     data: {
       nodeType: effectiveTarget.nodeType,
       nodeId: target.nodeId,
+      ...(resolvedTargetNode?.type === 'subGraph' && (resolvedTargetNode as SubGraphNode).data.targetProjectId
+        ? { isExternalSubgraphTarget: true }
+        : {}),
       graphCommandsEnabled,
       isLinkedNode: targetIsPrefabInstance,
       canRunFromEditor: canStartEditorGraphRun,

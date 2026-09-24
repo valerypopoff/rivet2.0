@@ -831,7 +831,12 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
 
 function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingExecutionIdentity | undefined {
   const surface = row.executionSurface;
-  if (surface !== 'workflow_endpoint' && surface !== 'web_app_action' && surface !== 'editor_local') {
+  if (
+    surface !== 'workflow_endpoint' &&
+    surface !== 'web_app_action' &&
+    surface !== 'editor_local' &&
+    surface !== 'subgraph_project'
+  ) {
     return undefined;
   }
 

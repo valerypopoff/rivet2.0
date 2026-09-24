@@ -31,6 +31,7 @@ type OpenWorkflowProjectOptions = {
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
   preferredGraphId?: GraphId;
+  expectedProjectId?: ProjectId;
   skipReplaceConfirmation?: boolean;
   previewTab?: boolean;
   openingTabId?: string;
@@ -130,6 +131,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     const replaceCurrent = options?.replaceCurrent ?? false;
     const reloadFromDisk = options?.reloadFromDisk ?? false;
     const preferredGraphId = options?.preferredGraphId;
+    const expectedProjectId = options?.expectedProjectId;
     const skipReplaceConfirmation = options?.skipReplaceConfirmation ?? false;
     const openingTabId = options?.openingTabId;
     const tabUiOptions = getProjectTabUiOptions(options?.previewTab);
@@ -178,6 +180,9 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       (options?.openedProjectId != null && projectInfo.projectId === options.openedProjectId));
 
     if (alreadyOpenByPath) {
+      if (expectedProjectId && alreadyOpenByPath.projectId !== expectedProjectId) {
+        throw new Error('The selected Subgraph project changed identity. Refresh its target and try again.');
+      }
       let snapshot = reloadFromDisk
         ? null
         : getSnapshotForOpenedProject({
@@ -212,6 +217,9 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
 
       if (!snapshot) {
         throw new Error(`No in-memory snapshot is available for "${alreadyOpenByPath.title}".`);
+      }
+      if (preferredGraphId && !snapshot.project.graphs[preferredGraphId]) {
+        throw new Error('The selected Subgraph graph is no longer in the open project.');
       }
 
       const openedGraph = resolveProjectGraphId(snapshot.project, {
@@ -273,6 +281,12 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
 
     const { project: loadedProject, evaluation } = loadedProjectData;
     const project = withHostedProjectTitle(loadedProject, filePath);
+    if (expectedProjectId && project.metadata.id !== expectedProjectId) {
+      throw new Error('The selected Subgraph project changed identity. Refresh its target and try again.');
+    }
+    if (preferredGraphId && !project.graphs[preferredGraphId]) {
+      throw new Error('The selected Subgraph graph is no longer in the saved project.');
+    }
     const conflictingProject = activeOpenedProjects.find((projectInfo) => projectInfo.projectId === project.metadata.id);
 
     if (conflictingProject) {
