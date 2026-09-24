@@ -18,7 +18,7 @@ None. The node reads the current execution's project metadata.
 | ------------ | -------- | ----------------------------------------------------------------- |
 | Project Name | `string` | Name of the project that owns the graph currently being executed. |
 
-Ordinary subgraphs return the same project name as their caller. If a Referenced Graph Alias calls a graph from another project, a Project Name node inside that graph returns the referenced project's name.
+Same-project subgraphs return the caller project's name. Inside a cross-project Subgraph in Rivet Studio Server, Project Name returns the called project's name. A Referenced Graph Alias likewise returns its referenced project's name.
 
 Project names are human-readable and can be changed. Do not use this output as a permanent project identity key.
 

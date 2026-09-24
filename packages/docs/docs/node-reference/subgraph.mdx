@@ -11,15 +11,15 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-The Subgraph Node allows you to execute another graph within the current graph. This is useful for reusing logic across multiple graphs, or for breaking down complex graphs into smaller, more manageable pieces.
+The Subgraph Node runs another graph from the same project or, in Rivet Studio Server, from another project. Use it to reuse logic and break complex graphs into smaller pieces.
 
 The inputs and outputs of the Subgraph Node are defined by [Graph Input Nodes](./graph-input.mdx) and [Graph Output Nodes](./graph-output.mdx) within the subgraph. The Subgraph Node will automatically update its inputs and outputs to match those of the selected subgraph.
 
 You can choose the graph from the Subgraph node body directly on the canvas, or from the **Graph** setting in the node settings panel. Both controls edit the same Subgraph setting.
 
-In Rivet Studio Server, node settings offer **This project** and **Other projects**. The searchable graph dropdown shows this project's graphs under folder headings in graph-panel order. For other projects, server folders and projects expand in place; expanding a project shows its graph folders and graphs. The **Saved latest** (default) / **Published** choice appears below the graph field in settings. The target's Graph Input and Graph Output ports become this node's ports, and direct output streaming works across the project boundary. See [Subgraphs](../user-guide/subgraphs.md) for version and recording behavior. Cross-project targets require Studio Server to run.
+In Rivet Studio Server, **Graph source** offers **This project** and **Other projects**. The searchable graph dropdown shows this project's graphs under folder headings in graph-panel order. For other projects, expand server folders, projects, and graph folders in place. The selector shows **Project name > graph name** once an external graph is selected; the header's **Go to subgraph** button opens that project and graph. Choose **Saved latest** (default) or **Published** under **Version** in settings. The target's Graph Input and Graph Output ports become this node's ports, and direct output streaming works across the project boundary. See [Subgraphs](../user-guide/subgraphs.md) for version, connection, and recording behavior. Cross-project targets require Studio Server to run; desktop Rivet does not offer **Other projects**.
 
-If a saved target changes or removes a port that this node was configured with, the graph control shows a warning. Re-select the target graph and review its connections; Rivet will not silently remap a wire to another port. A cycle through cross-project calls fails before execution.
+Renaming a target Graph Input or Graph Output ID keeps an existing wire when its underlying node ID is unchanged. If a target port disappears, changes type, or conflicts with another port, Rivet warns instead of silently rewiring it. Re-select the graph and review its connections. Switching **Version** updates the graph selection automatically; review any connection warning below that control. A cycle through cross-project calls fails before execution.
 
 If a Subgraph node selects the same graph that contains it, Rivet shows a warning icon in the node header. This direct recursion is allowed, but it is easy to create accidentally and can run indefinitely unless the graph has its own stopping condition.
 
@@ -27,7 +27,7 @@ If a Subgraph node selects the same graph that contains it, Rivet shows a warnin
 
 You can manually reorder a Subgraph node's visible graph input and graph output ports by right-clicking the Subgraph node and choosing **Rearrange inputs/outputs**. While draggable port labels have rounded backgrounds, drag a port label or row up and down; the other labels shift while you drag, so you can drop the port between existing ports. Click outside the node to exit rearrange mode. Drag the circular port handle when you want to create or rewire a connection. The saved order is specific to that Subgraph node instance; it does not rename ports, change connections, or change the keys in the subgraph output object. The optional `Error` output is not part of the subgraph boundary and stays after the graph outputs.
 
-The Subgraph Node also has an optional error output. If enabled, any errors that occur while executing the subgraph will be caught and output from the error output port. If not enabled, errors will cause the entire graph to fail.
+The **Outputs** section in node settings contains **Use Error Output** and **Skip unused outputs**. If the error output is enabled, errors during the subgraph call are caught and sent to its Error port. Otherwise, an error fails the graph.
 
 ## Execution behavior
 
@@ -77,11 +77,13 @@ The Subgraph node output view can also show runtime metrics such as duration and
 
 ## Editor Settings
 
-| Setting             | Description                                                                                                                                                                                                                                                 | Default Value | Use Input Toggle | Input Data Type |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
-| Graph               | The graph to execute when this node is ran. Must be a graph in the same project. This can be changed from the node body on the canvas or from this settings panel. When output pruning is enabled, the canvas body shows it directly beneath this selector. | (required)    | No               | N/A             |
-| Use Error Output    | If enabled, then the Subgraph node will not fail, but instead any error will appear in the `Error` output port of the node. If disabled, the entire Subgraph node will error if the call errors.                                                            | False         | No               | N/A             |
-| Skip unused outputs | Run only branches needed by connected outputs; skipped work also skips its side effects and errors. Full execution is retained for direct Run to here, partial-output forwarding, and a connected Error output.                                             | False         | No               | N/A             |
+| Setting             | Description                                                                                                                                                                                                       | Default Value | Use Input Toggle | Input Data Type |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ---------------- | --------------- |
+| Graph source        | **This project** or **Other projects**. Available only in Studio Server; desktop Rivet uses this project.                                                                                                      | This project  | No               | N/A             |
+| Graph               | The graph to run. Select it from the node body or settings. For another project, browse server folders, expand a project, and choose one of its graphs. When output pruning is enabled, its status appears below this selector in the node body. | (required)    | No               | N/A             |
+| Version             | For **Other projects** only: run the target project's latest saved version or its active published version. See [Subgraphs](../user-guide/subgraphs.md) for how future runs follow changes.                       | Saved latest  | No               | N/A             |
+| Use Error Output    | Under **Outputs**: send a caught error to the Error port instead of failing the entire graph.                                                                                                                   | False         | No               | N/A             |
+| Skip unused outputs | Under **Outputs**: run only branches needed by connected outputs; skipped work also skips side effects and errors. Full execution remains for Run to here, partial-output forwarding, and a connected Error port. | False         | No               | N/A             |
 
 </TabItem>
 
@@ -105,7 +107,7 @@ Hi, From Subgraph`.
 1. Using the same graphs from Example 1, in the subgraph add a vector store node.
 2. Connect all the outputs from the text node to the vector store node.
 3. This will cause the Vector Store Node to Error
-4. In your main graph, add a Subgraph Node. In the editor settings enable `Use Error Output`.
+4. In your main graph, add a Subgraph Node. In the editor settings, expand **Outputs** and enable **Use Error Output**.
 5. Connect [Text Nodes](./text.mdx) to both outputs of the Subgraph Node.
 6. Run the graph. Note that the error is output on the `Error` port of the Subgraph Node, and the `Output` port is not ran.
 
@@ -120,7 +122,7 @@ If the subgraph errors, then the Subgraph Node will error. If you want to handle
 
 **Q: Can I use the Subgraph Node to execute a graph in a different project?**
 
-A: No, the Subgraph Node can only execute graphs within the same project.
+A: Yes, in Rivet Studio Server. Choose **Other projects** under **Graph source**, browse to the project and graph, then select **Saved latest** or **Published**. In desktop Rivet, Subgraphs can run graphs only from their own project. A saved cross-project Subgraph does not silently fall back to a local graph outside Studio Server.
 
 **Q: Can I use the Subgraph Node to execute a graph in a loop?**
 

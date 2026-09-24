@@ -43,6 +43,21 @@ const KnowledgeNodeTitleIcon: FC = () => (
   </svg>
 );
 
+const streamingNodeTypes = new Set([
+  'streamValue',
+  'catchStreamingChunks',
+  'watchStreamingOutput',
+  'stopWatchingStreamingOutput',
+]);
+
+const StreamingNodeTitleIcon: FC = () => (
+  <svg className="streaming-node-title-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M2.5 6c3-3 6 3 9 0s6-3 10 0" />
+    <path d="M2.5 12c3-3 6 3 9 0s6-3 10 0" />
+    <path d="M2.5 18c3-3 6 3 9 0s6-3 10 0" />
+  </svg>
+);
+
 export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = ({ node }) => {
   const globalIconDirection =
     node.type === 'getGlobal' || node.type === 'getStoredValue'
@@ -51,6 +66,7 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
         ? 'set'
         : undefined;
   const hasKnowledgeIcon = knowledgeNodeTypes.has(node.type);
+  const hasStreamingIcon = streamingNodeTypes.has(node.type);
   const hasDebugIcon = node.type === 'graphCallPath' || node.type === 'projectName';
   const hasToolCallContinuationIcon = node.type === 'delegateFunctionCall';
 
@@ -58,6 +74,7 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
     <span className="title-text-label">
       {globalIconDirection && <GlobalNodeTitleIcon direction={globalIconDirection} />}
       {hasKnowledgeIcon && <KnowledgeNodeTitleIcon />}
+      {hasStreamingIcon && <StreamingNodeTitleIcon />}
       {hasDebugIcon && <RemoteDebuggerBugIcon className="debug-node-title-icon" aria-hidden="true" focusable="false" />}
       {hasToolCallContinuationIcon && <ToolCallContinuationIndicator />}
       {node.title}

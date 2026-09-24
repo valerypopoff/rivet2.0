@@ -126,6 +126,12 @@ export * from './nodes/WatchStreamingOutputNode.js';
 import { stopWatchingStreamingOutputNode } from './nodes/StopWatchingStreamingOutputNode.js';
 export * from './nodes/StopWatchingStreamingOutputNode.js';
 
+import { streamValueNode } from './nodes/StreamValueNode.js';
+export * from './nodes/StreamValueNode.js';
+
+import { catchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
+export * from './nodes/CatchStreamingChunksNode.js';
+
 import { popNode } from './nodes/PopNode.js';
 export * from './nodes/PopNode.js';
 
@@ -380,6 +386,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(startBackgroundBranchNode)
     .register(watchStreamingOutputNode)
     .register(stopWatchingStreamingOutputNode)
+    .register(streamValueNode)
+    .register(catchStreamingChunksNode)
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)

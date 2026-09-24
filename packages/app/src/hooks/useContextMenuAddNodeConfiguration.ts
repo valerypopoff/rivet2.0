@@ -66,6 +66,10 @@ export const addContextMenuGroups = [
     label: 'Logic',
   },
   {
+    id: 'add-node-group:streaming',
+    label: 'Streaming',
+  },
+  {
     id: 'add-node-group:input-output',
     label: 'Input/Output',
   },
@@ -90,6 +94,20 @@ export const addContextMenuGroups = [
 };
 
 const ADD_NODE_MENU_HIDDEN_TYPES = new Set(['chat', 'loopController']);
+
+const streamingNodeOrder = new Map(
+  ['streamValue', 'catchStreamingChunks', 'watchStreamingOutput', 'stopWatchingStreamingOutput'].map((type, index) => [
+    `add-node:${type}`,
+    index,
+  ]),
+);
+
+export function orderAddNodeMenuItems(groupLabel: string, items: ContextMenuItem[]): ContextMenuItem[] {
+  return orderBy(items, [
+    (item) => groupLabel === 'Streaming' ? (streamingNodeOrder.get(item.id) ?? Number.MAX_SAFE_INTEGER) : 0,
+    (item) => item.label,
+  ]);
+}
 
 /** Legacy types remain registered for saved projects, but cannot be newly added from the palette. */
 export function isAddNodeMenuTypeVisible(type: string): boolean {
@@ -239,7 +257,7 @@ export function useContextMenuAddNodeConfiguration() {
                 };
               });
 
-      items = orderBy(items, (item) => item.label);
+      items = orderAddNodeMenuItems(group.label, items);
 
       return { ...group, items };
     });

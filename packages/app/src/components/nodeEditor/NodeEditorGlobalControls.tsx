@@ -125,6 +125,7 @@ export const NodeEditorGlobalControls: FC<{
   const isVariant = selectedVariant !== undefined;
   const hasSavedVariants = variantOptions.length > 1;
   const isDataBus = isDataBusNode(node);
+  const isCatchStreamingChunks = node.type === 'catchStreamingChunks';
   const hasInvalidDataBusExecutionState =
     isDataBus && Boolean(node.disabled || node.isConditional || node.isSplitRun || (node.variants?.length ?? 0) > 0);
   const showVariantEditor = !isDataBus && (hasSavedVariants || addVariantPopupOpen);
@@ -145,18 +146,20 @@ export const NodeEditorGlobalControls: FC<{
           >
             <span>Active</span>
           </HeaderToggleField>
-          <Tooltip
-            className="node-type-tooltip"
-            content="Exposes a conditional input port to the node, allowing to be executed only if the condition is met."
-          >
-            <HeaderToggleField
-              id={conditionalToggleId}
-              isChecked={node.isConditional ?? false}
-              onChange={(isConditional) => onUpdateNode({ ...node, isConditional })}
+          {!isCatchStreamingChunks && (
+            <Tooltip
+              className="node-type-tooltip"
+              content="Exposes a conditional input port to the node, allowing to be executed only if the condition is met."
             >
-              <span>Conditional node</span>
-            </HeaderToggleField>
-          </Tooltip>
+              <HeaderToggleField
+                id={conditionalToggleId}
+                isChecked={node.isConditional ?? false}
+                onChange={(isConditional) => onUpdateNode({ ...node, isConditional })}
+              >
+                <span>Conditional node</span>
+              </HeaderToggleField>
+            </Tooltip>
+          )}
         </div>
       )}
       <NodeMetadataEditor
@@ -190,7 +193,7 @@ export const NodeEditorGlobalControls: FC<{
       )}
       <div className="node-options-row">
         <section className="split-controls">
-          {!isDataBus && (
+          {!isDataBus && !isCatchStreamingChunks && (
             <>
               <SplitModeChoiceControl
                 value={splitMode}
@@ -206,7 +209,7 @@ export const NodeEditorGlobalControls: FC<{
             </>
           )}
 
-          {!isDataBus && showSplitRunFields && (
+          {!isDataBus && !isCatchStreamingChunks && showSplitRunFields && (
             <div className="split-max">
               <div className="split-max-field">
                 <label className="split-max-label">Max runs:</label>

@@ -63,7 +63,7 @@ import {
 } from './workflow-tree-events.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { isTrustedExecutorRequest } from '../../auth.js';
-import type { ProjectId } from '@valerypopoff/rivet2-node';
+import { assembleRegistry, getProjectStreamableGraphOutputNodeIdsByGraph, resolveBuiltInPlugin, type ProjectId } from '@valerypopoff/rivet2-node';
 
 export const workflowsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -347,11 +347,23 @@ workflowsRouter.get(
       ...target,
       projectId: target.projectId as ProjectId,
     });
+    // A built-in provider node can emit partials too. Use the target's own
+    // registered node definitions when deriving hints; unavailable external
+    // plugins remain conservative (no arrow) without exposing their contents.
+    const { registry: previewRegistry } = await assembleRegistry(
+      (project.plugins ?? []).filter((spec) => spec.type === 'built-in'),
+      async (spec) => resolveBuiltInPlugin(spec.id),
+    );
     // The picker needs boundary IDs, types, and editor hints only. Graph Input
     // defaults can contain large or sensitive values; never include them (or
     // executable node configuration, embedded assets, or datasets) in preview.
     res.json({
       revisionKey,
+      streamingOutputNodeIdsByGraph: getProjectStreamableGraphOutputNodeIdsByGraph({
+        project,
+        referencedProjects: {},
+        registry: previewRegistry,
+      }),
       project: {
         metadata: {
           id: project.metadata.id,

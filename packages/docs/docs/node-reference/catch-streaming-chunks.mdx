@@ -1,0 +1,22 @@
+---
+id: catch-streaming-chunks
+title: Catch streaming chunks node
+sidebar_label: Catch streaming chunks
+---
+
+# Catch streaming chunks node
+
+**Catch streaming chunks** collects the first configured number of snapshots from one streaming output, then returns **one ordinary value**. It does not run a repeated Watch branch.
+
+| Port | Data type | Description |
+| --- | --- | --- |
+| Streaming Output | `any` | Connect one streaming producer, including a named Subgraph output. |
+| Value | `any` | The first snapshot when the count is `1`; otherwise an array of collected snapshot values. |
+
+Set **Number of chunks** to a whole number from `1` to `1024` (default `1`). Catch releases its result as soon as that many snapshots have arrived, without waiting for the producer to finish. If the producer finishes sooner, Catch returns the values it received. If it emits no partial updates, its final value counts as one. An identical final value is not counted twice. If no usable value arrives, Catch's output is excluded.
+
+Each snapshot is the value currently offered by the producer. For an LLM Chat text stream, snapshots may be cumulative text, not separate token strings. Catch returns the first N snapshots, not N newly added text suffixes. The Value port ID stays the same when the count changes; with a count greater than one, its runtime value is an `any[]`.
+
+For a simple early Subgraph result, place [Stream value](./stream-value.mdx) before a named Graph Output in the child, and connect that Subgraph output to Catch with count `1` in the caller. Ordinary connections to the Subgraph still wait for its full final result. Catch does not cancel the producer or remaining child work; a later child failure still fails the run. Catch itself cannot use Conditional or Many runs.
+
+For processing every update rather than returning one value, use [Watch streaming](./watch-streaming-output.mdx) and optionally [Stop watching streaming](./stop-watching-streaming-output.mdx).

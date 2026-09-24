@@ -4,7 +4,7 @@ title: 05 - Subgraphs
 
 # Subgraphs
 
-Subgraphs let one graph call another graph in the same project. They are the main way to turn a busy canvas into smaller reusable pieces.
+Subgraphs let one graph call another graph. This tutorial uses two graphs in the same project; Rivet Studio Server can also call a graph in another project.
 
 In this tutorial, you will make a helper graph with explicit inputs and outputs, then call it from another graph with a [Subgraph Node](../node-reference/subgraph.mdx).
 
@@ -83,7 +83,7 @@ Use the error output when a subgraph call is optional or when you want the paren
 
 ## Notes
 
-- A Subgraph node calls a graph from the same project.
+- In Rivet Studio Server, **Graph source** in the node settings can be **This project** or **Other projects**. For another project, browse its folders and graphs, then choose **Saved latest** or **Published** under **Version**. Desktop Rivet supports only this-project calls. See the [Subgraphs guide](../user-guide/subgraphs.md) for the version and connection rules.
 - A graph can call another subgraph, so you can build layers of reusable workflow pieces.
 - Avoid accidental recursion unless you intentionally combine subgraphs with loop control.
-- Keep Graph Input and Graph Output IDs stable once other graphs depend on them.
+- When renaming a Graph Input or Graph Output ID, keep its underlying node: existing cross-project wires can then retain their port IDs. Removing a port or changing its type still requires reviewing callers.

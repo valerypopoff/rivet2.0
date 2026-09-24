@@ -10,6 +10,7 @@ import {
 import type { SubgraphProjectCatalogProvider } from '../../app/src/providers/ProvidersContext';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
+import { rememberSubgraphPreviewStreamingOutputs } from '../../app/src/utils/subgraphPreviewStreaming';
 
 function targetUrl(target: SubgraphProjectTarget, operation: 'preview' | 'execution'): string {
   return `${RIVET_API_BASE_URL}/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/${operation}?version=${target.version}`;
@@ -33,8 +34,13 @@ export const hostedSubgraphProjectCatalog: SubgraphProjectCatalogProvider = {
     return readJson(await fetch(`${RIVET_API_BASE_URL}/workflows/tree`, { cache: 'no-store' }));
   },
   async preview(target) {
-    const body = await readJson<{ project: Project }>(await fetch(targetUrl(target, 'preview'), { cache: 'no-store' }));
+    const body = await readJson<{ project: Project; streamingOutputNodeIdsByGraph?: Record<string, string[]> }>(
+      await fetch(targetUrl(target, 'preview'), { cache: 'no-store' }),
+    );
     if (body.project?.metadata?.id !== target.projectId) throw new Error('Subgraph preview project identity changed.');
+    if (body.streamingOutputNodeIdsByGraph) {
+      rememberSubgraphPreviewStreamingOutputs(body.project, body.streamingOutputNodeIdsByGraph);
+    }
     return body.project;
   },
 };

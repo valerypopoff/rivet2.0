@@ -299,6 +299,16 @@ const sidebars = {
         'node-reference/passthrough',
         'node-reference/race-inputs',
         'node-reference/start-async-branch',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Streaming',
+      collapsible: true,
+      collapsed: false,
+      items: [
+        'node-reference/stream-value',
+        'node-reference/catch-streaming-chunks',
         'node-reference/watch-streaming-output',
         'node-reference/stop-watching-streaming-output',
       ],

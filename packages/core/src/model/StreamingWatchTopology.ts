@@ -4,7 +4,7 @@ import type { ChartNode, NodeConnection, NodeId } from './NodeBase.js';
 import type { FrozenNodeOutputsByGraph } from './GraphProcessor.js';
 import type { GraphInputNode } from './nodes/GraphInputNode.js';
 import type { GraphOutputNode } from './nodes/GraphOutputNode.js';
-import type { NodeGraph } from './NodeGraph.js';
+import type { GraphId, NodeGraph } from './NodeGraph.js';
 import type { NodeRegistration } from './NodeRegistration.js';
 import type { Project, ProjectId } from './Project.js';
 import type { ReferencedGraphAliasNode } from './nodes/ReferencedGraphAliasNode.js';
@@ -13,6 +13,29 @@ import { getSubgraphTargetBoundaryChange, reconcileSubgraphTargetBoundary } from
 import { getGraphBoundary } from './GraphBoundaryCache.js';
 import { createGraphOutputSelection } from './GraphOutputSelection.js';
 import { getSubgraphProjectKey } from './SubgraphProjectTarget.js';
+import { nanoid } from 'nanoid/non-secure';
+
+/** Only ports that can publish live partials receive streaming wire markers. */
+function canEmitStreamingOutput(node: ChartNode, outputId: string): boolean {
+  const data = node.data as { useAsGraphPartialOutput?: boolean };
+  switch (node.type) {
+    case 'streamValue':
+      return outputId === 'value';
+    case 'llmChatV2':
+      return data.useAsGraphPartialOutput === true &&
+        ['response', 'in-messages', 'all-messages', 'function-calls', 'reasoning'].includes(outputId);
+    case 'chatAnthropic':
+      return ['response', 'all-messages', 'function-calls', 'citations'].includes(outputId);
+    case 'chatGoogle':
+      return ['response', 'function-calls'].includes(outputId);
+    case 'chatHuggingFace':
+      return outputId === 'output';
+    case 'loopUntil':
+      return outputId !== 'iteration' && outputId !== 'completed';
+    default:
+      return false;
+  }
+}
 
 function getCallerProject(
   owner: Project,
@@ -86,6 +109,8 @@ export function getProjectStreamingOutputWatchConnections({
   frozenNodeOutputs = {},
   isNodeFrozen,
   fullGraphCallers,
+  getPreviewGraphOutputStreamingCapability,
+  onlyStreamCapableSources = false,
 }: {
   project: Project;
   graph: NodeGraph;
@@ -94,6 +119,10 @@ export function getProjectStreamingOutputWatchConnections({
   frozenNodeOutputs?: FrozenNodeOutputsByGraph;
   isNodeFrozen?: (owner: Project, candidate: NodeGraph, node: ChartNode) => boolean;
   fullGraphCallers?: ReadonlySet<NodeId>;
+  /** Redacted hosted previews contain boundaries, not executable graph topology. */
+  getPreviewGraphOutputStreamingCapability?: (owner: Project, graph: NodeGraph, outputNodeId: NodeId) => boolean | undefined;
+  /** Presentation-only filter. Runtime routing must accept ordinary values too. */
+  onlyStreamCapableSources?: boolean;
 }): ReadonlySet<NodeConnection> {
   // Unsaved active graph edits must take precedence over the stored project graph.
   const currentProject: Project = {
@@ -215,7 +244,11 @@ export function getProjectStreamingOutputWatchConnections({
   const watchInputs: Array<{ graph: NodeGraph; edge: NodeConnection }> = [];
   for (const [candidate, context] of contexts) {
     for (const node of Object.values(context.nodes)) {
-      if (node.type !== 'watchStreamingOutput' || node.disabled || isFrozen(context.project, candidate, node)) continue;
+      if (
+        (node.type !== 'watchStreamingOutput' && node.type !== 'catchStreamingChunks') ||
+        node.disabled ||
+        isFrozen(context.project, candidate, node)
+      ) continue;
       const inputs = context.incoming(node.id).filter((edge) => edge.inputId === 'stream');
       // Multiple providers are rejected by the Watch scheduler, not multiple streams.
       if (inputs.length === 1) watchInputs.push({ graph: candidate, edge: inputs[0]! });
@@ -270,6 +303,7 @@ export function getProjectStreamingOutputWatchConnections({
       }
 
       if (source.type !== 'subGraph' && source.type !== 'referencedGraphAlias') {
+        if (onlyStreamCapableSources && !canEmitStreamingOutput(source, edge.outputId)) return false;
         context.marked.add(edge);
         return true;
       }
@@ -291,6 +325,14 @@ export function getProjectStreamingOutputWatchConnections({
       if (outputs.length !== 1) return false;
       const output = outputs[0]!;
       const outputIsFrozen = isFrozen(childProject, child, output);
+      const previewCapability = getPreviewGraphOutputStreamingCapability?.(childProject, child, output.id);
+      if (previewCapability !== undefined) {
+        if (previewCapability && !outputIsFrozen && !output.isConditional && !output.isSplitRun) {
+          context.marked.add(edge);
+          return true;
+        }
+        return false;
+      }
       const providers = childContext.incoming(output.id).filter((input) => input.inputId === 'value');
       // As in GraphProcessor's effective connection projection, the first
       // valid provider owns a single-input Graph Output in a malformed graph.
@@ -315,4 +357,62 @@ export function getProjectStreamingOutputWatchConnections({
   for (const { graph: candidate, edge } of watchInputs) trace(candidate, edge);
 
   return contexts.get(graph)?.marked ?? new Set();
+}
+
+/** Derive safe boundary capability hints for every graph in one topology pass. */
+export function getProjectStreamableGraphOutputNodeIdsByGraph({
+  project,
+  referencedProjects,
+  registry,
+}: {
+  project: Project;
+  referencedProjects: Record<ProjectId, Project>;
+  registry: NodeRegistration<any, any>;
+}): Record<string, NodeId[]> {
+  // Graph IDs come from project files; keep unusual keys such as __proto__
+  // as data rather than assigning through Object.prototype.
+  const result: Record<string, NodeId[]> = Object.create(null);
+  const nodes: ChartNode[] = [];
+  const probes: Array<{ graphId: string; outputNodeId: NodeId; connection: NodeConnection }> = [];
+  for (const [graphId] of Object.entries(project.graphs)) {
+    result[graphId] = [];
+    const boundary = getGraphBoundary(project, graphId as GraphId);
+    if (!boundary?.outputs.length) continue;
+    const callerId = nanoid() as NodeId;
+    nodes.push({ id: callerId, type: 'subGraph', title: 'Probe', data: { graphId }, visualData: { x: 0, y: 0 } });
+    for (const output of boundary.outputs) {
+      const watchId = nanoid() as NodeId;
+      nodes.push({ id: watchId, type: 'watchStreamingOutput', title: 'Probe watch', data: {}, visualData: { x: 0, y: 0 } });
+      probes.push({
+        graphId,
+        outputNodeId: output.nodeId,
+        connection: {
+          outputNodeId: callerId,
+          outputId: output.portId,
+          inputNodeId: watchId,
+          inputId: 'stream' as NodeConnection['inputId'],
+        },
+      });
+    }
+  }
+  if (probes.length === 0) return result;
+
+  const probeGraphId = nanoid() as GraphId;
+  const probeGraph: NodeGraph = {
+    metadata: { id: probeGraphId, name: 'Streaming preview probe' },
+    nodes,
+    connections: probes.map(({ connection }) => connection),
+  };
+  const probeProject = { ...project, graphs: { ...project.graphs, [probeGraphId]: probeGraph } };
+  const marked = getProjectStreamingOutputWatchConnections({
+    project: probeProject,
+    graph: probeGraph,
+    referencedProjects,
+    registry,
+    onlyStreamCapableSources: true,
+  });
+  for (const { graphId, outputNodeId, connection } of probes) {
+    if (marked.has(connection)) result[graphId]!.push(outputNodeId);
+  }
+  return result;
 }

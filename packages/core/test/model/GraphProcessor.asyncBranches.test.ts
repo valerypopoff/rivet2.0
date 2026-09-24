@@ -122,6 +122,26 @@ function makeStopWatchNode(id = 'stop-watch'): ChartNode {
   };
 }
 
+function makeStreamValueNode(id = 'stream-value'): ChartNode {
+  return {
+    data: {},
+    id: id as NodeId,
+    title: 'Stream value',
+    type: 'streamValue',
+    visualData: { x: 200, y: 0, width: 220 },
+  };
+}
+
+function makeCatchStreamingChunksNode(id = 'catch-streaming-chunks', count = 1): ChartNode {
+  return {
+    data: { count },
+    id: id as NodeId,
+    title: 'Catch streaming chunks',
+    type: 'catchStreamingChunks',
+    visualData: { x: 400, y: 0, width: 220 },
+  };
+}
+
 function makeDataBusNode(id: string): ChartNode {
   return {
     data: {},
@@ -243,6 +263,162 @@ beforeEach(() => {
 });
 
 void describe('GraphProcessor scheduler boundaries', () => {
+  void it('turns one ordinary value into one early chunk and releases Catch exactly once', async () => {
+    const source = makeTestNode('ordinary-source');
+    const emit = makeStreamValueNode();
+    const take = makeCatchStreamingChunksNode();
+    const consumer = makeTestNode('once-consumer');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('one-streaming-value', [source, emit, take, consumer, output], [
+      connect(source.id, emit.id, 'value'),
+      connect(emit.id, take.id, 'stream', 'value'),
+      connect(take.id, consumer.id, 'input', 'value'),
+      connect(consumer.id, output.id, 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'ready' } }));
+    const finished: string[] = [];
+    const processor = createProcessor(graph);
+    processor.on('nodeFinish', ({ node }) => finished.push(node.id));
+    const result = await withTimeout(processor.processGraph(testProcessContext()), 'one streaming value');
+    assert.equal(result.result?.value, 'ready');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    assert.equal(finished.filter((id) => id === take.id).length, 1);
+  });
+
+  void it('takes the first N partial snapshots before the producer finishes without counting its duplicate final', async () => {
+    const source = makeTestNode('two-chunk-source');
+    const take = makeCatchStreamingChunksNode('take-two', 2);
+    const consumer = makeTestNode('two-chunk-consumer');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('take-two-chunks', [source, take, consumer, output], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, consumer.id, 'input', 'value'),
+      connect(consumer.id, output.id, 'value'),
+    ]);
+    const releaseSource = deferred();
+    const consumed = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'A' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'AB' } });
+      await releaseSource.promise;
+      return { output: { type: 'string', value: 'AB' } };
+    });
+    AsyncTestNodeImpl.handlers.set(consumer.id, (inputs) => {
+      assert.deepEqual(inputs['input' as PortId], { type: 'any[]', value: ['A', 'AB'] });
+      consumed.resolve();
+      return { output: inputs['input' as PortId]! };
+    });
+    const run = createProcessor(graph).processGraph(testProcessContext());
+    try {
+      await withTimeout(consumed.promise, 'two chunks before source finishes');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    } finally {
+      releaseSource.resolve();
+    }
+    const result = await withTimeout(run, 'take-two graph');
+    assert.deepEqual(result.result?.value, ['A', 'AB']);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+  });
+
+  void it('returns available chunks when the stream ends before N, without duplicating an identical final', async () => {
+    const source = makeTestNode('short-source');
+    const take = makeCatchStreamingChunksNode('take-three', 3);
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('short-stream', [source, take, output], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, output.id, 'value', 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'A' } });
+      return { output: { type: 'string', value: 'A' } };
+    });
+    const result = await withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'short stream');
+    assert.deepEqual(result.result?.value, ['A']);
+  });
+
+  void it('does not release an incomplete Catch when its producer fails', async () => {
+    const source = makeTestNode('failing-catch-source');
+    const take = makeCatchStreamingChunksNode('take-before-failure', 2);
+    const consumer = makeTestNode('catch-failure-consumer');
+    const graph = makeGraph('failing-catch', [source, take, consumer], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, consumer.id, 'input', 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'one' } });
+      throw new Error('producer failed before a second chunk');
+    });
+    await assert.rejects(
+      withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'failed Catch producer'),
+      /failing-catch-source/,
+    );
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), undefined);
+  });
+
+  for (const crossProject of [false, true]) {
+    void it(`takes an emitted child value before a ${crossProject ? 'cross-project' : 'same-project'} Subgraph finishes`, async () => {
+      const source = makeTestNode(`early-child-source-${crossProject}`);
+      const emit = makeStreamValueNode(`early-child-emit-${crossProject}`);
+      const childOutput = makeGraphOutputNode('response');
+      const slow = makeTestNode(`slow-child-work-${crossProject}`);
+      const child = makeGraph(`early-child-${crossProject}`, [source, emit, childOutput, slow], [
+        connect(source.id, emit.id, 'value'),
+        connect(emit.id, childOutput.id, 'value', 'value'),
+      ]);
+      const subgraph = makeSubgraphNode(`early-caller-${crossProject}`, child.metadata!.id);
+      const targetProject = crossProject
+        ? { ...makeProject(child), metadata: { ...makeProject(child).metadata, id: 'early-called-project' as ProjectId } }
+        : undefined;
+      if (targetProject) {
+        subgraph.data = {
+          ...subgraph.data,
+          targetProjectId: targetProject.metadata.id,
+          targetVersion: 'latest',
+          targetBoundary: getGraphBoundary(targetProject, child.metadata!.id),
+        };
+      }
+      const take = makeCatchStreamingChunksNode(`early-take-${crossProject}`);
+      const consumer = makeTestNode(`early-consumer-${crossProject}`);
+      const output = makeGraphOutputNode('result');
+      const root = makeGraph(`early-root-${crossProject}`, [subgraph, take, consumer, output], [
+        connect(subgraph.id, take.id, 'stream', 'response'),
+        connect(take.id, consumer.id, 'input', 'value'),
+        connect(consumer.id, output.id, 'value'),
+      ]);
+      const slowStarted = deferred();
+      const releaseSlow = deferred();
+      const consumed = deferred();
+      AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'early' } }));
+      AsyncTestNodeImpl.handlers.set(slow.id, async () => {
+        slowStarted.resolve();
+        await releaseSlow.promise;
+        return { output: { type: 'string', value: 'late' } };
+      });
+      AsyncTestNodeImpl.handlers.set(consumer.id, (inputs) => {
+        assert.equal(inputs['input' as PortId]?.value, 'early');
+        consumed.resolve();
+        return { output: inputs['input' as PortId]! };
+      });
+      let runSettled = false;
+      const run = createProcessor(root, targetProject ? [] : [child]).processGraph({
+        ...testProcessContext(),
+        ...(targetProject
+          ? { subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) } }
+          : {}),
+      }).finally(() => { runSettled = true; });
+      try {
+        await withTimeout(Promise.all([slowStarted.promise, consumed.promise]), 'early child value');
+        assert.equal(runSettled, false);
+        assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+      } finally {
+        releaseSlow.resolve();
+      }
+      const result = await withTimeout(run, 'early child graph completion');
+      assert.equal(result.result?.value, 'early');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    });
+  }
+
   void it('runs a streaming watch branch before the producer finishes and rejoins after Stop', async () => {
     const source = makeTestNode('streaming-source');
     const watch = makeWatchNode();

@@ -6,6 +6,7 @@ import {
   isAddNodeMenuTypeAllowed,
   isAddNodeMenuGroupVisible,
   isAddNodeMenuTypeVisible,
+  orderAddNodeMenuItems,
 } from './useContextMenuAddNodeConfiguration.js';
 import { NODE_PREFAB_INSTANCE_TYPE } from '@valerypopoff/rivet2-core';
 
@@ -37,6 +38,7 @@ test('Add node menu keeps explicitly retired types and the Convenience category 
       'Objects',
       'Data',
       'Logic',
+      'Streaming',
       'Input/Output',
       'Advanced',
       'Debug',
@@ -53,4 +55,23 @@ test('Add node menu keeps explicitly retired types and the Convenience category 
   });
   assert.deepEqual(infoBox, { description: 'Creates text.', title: 'Text Node' });
   assert.equal('image' in infoBox, false);
+});
+
+test('Streaming menu follows the authored workflow order while other groups remain alphabetical', () => {
+  const items = [
+    { id: 'add-node:watchStreamingOutput', label: 'Watch streaming' },
+    { id: 'add-node:stopWatchingStreamingOutput', label: 'Stop watching streaming' },
+    { id: 'add-node:catchStreamingChunks', label: 'Catch streaming chunks' },
+    { id: 'add-node:streamValue', label: 'Stream value' },
+  ];
+  assert.deepEqual(
+    orderAddNodeMenuItems('Streaming', items).map((item) => item.id),
+    ['add-node:streamValue', 'add-node:catchStreamingChunks', 'add-node:watchStreamingOutput', 'add-node:stopWatchingStreamingOutput'],
+  );
+  assert.deepEqual(orderAddNodeMenuItems('Text', items).map((item) => item.label), [
+    'Catch streaming chunks',
+    'Stop watching streaming',
+    'Stream value',
+    'Watch streaming',
+  ]);
 });

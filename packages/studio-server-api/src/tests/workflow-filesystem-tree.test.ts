@@ -158,7 +158,27 @@ test('Subgraph project lookup selects saved latest or the exact published snapsh
   const [saved] = rivetNode.loadProjectAndAttachedDataFromString(await fs.readFile(created.absolutePath, 'utf8'));
   const privateInput = rivetNode.graphInputNode.impl.create();
   privateInput.data = { id: 'private-input', dataType: 'string', defaultValue: 'do-not-send-this-default' };
-  saved.graphs[saved.metadata.mainGraphId!]!.nodes.push(privateInput);
+  const graph = saved.graphs[saved.metadata.mainGraphId!]!;
+  const text = rivetNode.textNode.impl.create();
+  const stream = rivetNode.streamValueNode.impl.create();
+  const streamOutput = rivetNode.graphOutputNode.impl.create();
+  streamOutput.data = { id: 'streamed', dataType: 'string' };
+  const pluginRegistry = rivetNode.createBuiltInRegistry();
+  pluginRegistry.registerPlugin(rivetNode.resolveBuiltInPlugin('anthropic'));
+  const pluginStream = pluginRegistry.createDynamic('chatAnthropic');
+  const pluginOutput = rivetNode.graphOutputNode.impl.create();
+  pluginOutput.data = { id: 'plugin-streamed', dataType: 'string' };
+  const ordinaryOutput = rivetNode.graphOutputNode.impl.create();
+  ordinaryOutput.data = { id: 'ordinary', dataType: 'string' };
+  saved.plugins = [{ type: 'built-in', id: 'anthropic', name: 'Anthropic' }];
+  graph.nodes.push(privateInput, text, stream, streamOutput, pluginStream, pluginOutput, ordinaryOutput);
+  const port = (id: string) => id as (typeof graph.connections)[number]['outputId'];
+  graph.connections.push(
+    { outputNodeId: text.id, outputId: port('output'), inputNodeId: stream.id, inputId: port('value') },
+    { outputNodeId: stream.id, outputId: port('value'), inputNodeId: streamOutput.id, inputId: port('value') },
+    { outputNodeId: pluginStream.id, outputId: port('response'), inputNodeId: pluginOutput.id, inputId: port('value') },
+    { outputNodeId: text.id, outputId: port('output'), inputNodeId: ordinaryOutput.id, inputId: port('value') },
+  );
   await fs.writeFile(created.absolutePath, rivetNode.serializeProject(saved) as string, 'utf8');
   const projectId = saved.metadata.id;
   const encodedId = encodeURIComponent(projectId);
@@ -173,8 +193,13 @@ test('Subgraph project lookup selects saved latest or the exact published snapsh
       assert.equal(previewResponse.status, 200);
       const preview = await readJson<{
         project: { metadata: { id: string }; graphs: Record<string, { nodes: { type: string }[] }> };
+        streamingOutputNodeIdsByGraph: Record<string, string[]>;
       }>(previewResponse);
       assert.equal(preview.project.metadata.id, projectId);
+      assert.deepEqual(
+        new Set(preview.streamingOutputNodeIdsByGraph[graph.metadata!.id!]),
+        new Set([streamOutput.id, pluginOutput.id]),
+      );
       assert.ok(
         Object.values(preview.project.graphs).every((graph) =>
           graph.nodes.every((node) => node.type === 'graphInput' || node.type === 'graphOutput'),

@@ -396,6 +396,7 @@ export const nodeStyles = css`
 
   .global-node-title-icon,
   .knowledge-node-title-icon,
+  .streaming-node-title-icon,
   .debug-node-title-icon {
     display: inline-block;
     width: 1em;

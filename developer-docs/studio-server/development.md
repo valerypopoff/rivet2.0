@@ -404,12 +404,48 @@ Current behavior:
   fail-closed authority for manually edited, cached, remote, or otherwise
   incomplete project topology.
   `getEditorRunFromPlan(...)` is the shared local/remote partial-execution guard:
-  starting from **Watch Streaming Output** may reuse the upstream producer's saved
-  final output once, but a repeated branch node, **Stop Watching Streaming Output**,
+  starting from **Watch streaming** may reuse the upstream producer's saved
+  final output once, but a repeated branch node, **Stop watching streaming**,
   or a node after Stop must not be planned by preloading the Watch boundary. Keep
   the planner's error actionable: run from Watch for the final snapshot, or from
   the producer for a live stream. Core independently rejects direct/runtime cache
   injection into an active Watch source, boundary, or repeated branch.
+
+- The Streaming node group contains **Stream value**, **Catch streaming chunks**,
+  **Watch streaming**, and **Stop watching streaming** only, in that display
+  order. This is an explicit menu order, not an alphabetic rename of node types;
+  existing `watchStreamingOutput` and `stopWatchingStreamingOutput` graph data
+  must remain readable. Stream value is
+  an ordinary pass-through node that publishes one Core `onPartialOutputs` event;
+  Graph Output and Subgraph keep their existing final-result contracts. Catch
+  registers a once-only processor boundary for one source port: it snapshots
+  the first N updates, ignores an identical terminal duplicate, commits one
+  ordinary output when N arrives or the source ends, and never schedules a
+  repeated Watch branch. Its count is runtime-clamped to 1..1024; Conditional
+  and Many modes are rejected. If the producer fails before N chunks, Catch
+  does not release a partial array as a successful ordinary value. Keep
+  `StreamingWatchTopology` demand tracing in
+  sync for both Watch and Catch so named inputs and same-/cross-project Subgraph
+  outputs reach them before child completion. A child failure after an early
+  emission remains a failed run; previously started caller side effects cannot
+  be undone. Verify same-/cross-project early delivery, count=1 exactly-once
+  downstream execution, short streams, duplicate final values, and replay.
+  Their canvas headers share the wave icon in `NodeTitleLabel`; the two new
+  serialized types are `streamValue` and `catchStreamingChunks`.
+  Wire arrows are presentation-only and require a known partial-producing
+  source; a normal value connected to Watch or Catch remains a plain wire and
+  is delivered only at completion. The authenticated cross-project preview
+  includes only Graph Output node IDs proven streamable by the server's full
+  target topology. Derive those IDs with the target project's registered
+  built-in provider plugins as well as core nodes; otherwise a provider stream
+  can run correctly but its cross-project wire loses its arrow. Unavailable
+  external plugins remain unmarked rather than guessing. Probe all graph
+  boundaries in one topology pass, not one full-project traversal per graph;
+  retain graph IDs as data keys without prototype inheritance. The browser keeps
+  this hint outside the serializable
+  `Project` state, so previews still disclose no executable node configuration
+  or datasets. Core runtime topology remains permissive for ordinary final
+  values; never use the arrow filter to gate Watch/Catch execution.
 
 Managed-state safety:
 

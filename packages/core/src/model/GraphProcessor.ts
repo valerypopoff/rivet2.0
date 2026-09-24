@@ -147,6 +147,8 @@ import {
   type SubgraphProjectTarget,
 } from './SubgraphProjectTarget.js';
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
+import { MAX_CAUGHT_STREAMING_CHUNKS, type CatchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
+import { isEqual } from 'lodash-es';
 
 // eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
@@ -205,6 +207,13 @@ type StreamingOutputWatchPlan = {
   historySummaryEmitted: boolean;
   /** True once normal stream exhaustion has excluded the parent Stop boundary. */
   unmatchedStopResolved: boolean;
+};
+type StreamingOutputCatchPlan = {
+  node: CatchStreamingChunksNode;
+  sourceOutputId: PortId;
+  count: number;
+  chunks: DataValue[];
+  settled: boolean;
 };
 type StreamingOutputWatchInvocation = {
   plan: StreamingOutputWatchPlan;
@@ -583,6 +592,7 @@ const FAST_ACYCLIC_UNSUPPORTED_NODE_TYPES = new Set<string>([
   'startBackgroundBranch',
   'watchStreamingOutput',
   'stopWatchingStreamingOutput',
+  'catchStreamingChunks',
   'userInput',
   'waitForEvent',
 ]);
@@ -706,6 +716,8 @@ export class GraphProcessor {
   #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
   #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
   #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
+  #streamingCatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputCatchPlan[]>();
+  #streamingCatchTasks = new Set<Promise<void>>();
   #graphOutputPartialBindingsBySourceNodeId = new Map<NodeId, GraphOutputPartialBinding[]>();
   #graphOutputPartialListener: GraphOutputPartialListener | undefined;
   readonly #consumedStreamingWatchNodeId: NodeId | undefined;
@@ -1403,6 +1415,8 @@ export class GraphProcessor {
     this.#streamingWatchPlansBySourceNodeId = new Map();
     this.#streamingWatchPlansByWatchNodeId = new Map();
     this.#streamingOutputWatches = new Map();
+    this.#streamingCatchPlansBySourceNodeId = new Map();
+    this.#streamingCatchTasks = new Set();
     this.#graphOutputPartialBindingsBySourceNodeId = new Map();
     this.#loopControllersSeen = new Set();
     this.#subprocessors = new Set();
@@ -1529,6 +1543,7 @@ export class GraphProcessor {
           }
           this.#prepareAsyncBranchTopology();
           this.#prepareStreamingWatchTopology();
+          this.#prepareStreamingCatchTopology();
           this.#prepareGraphOutputPartialTopology();
           this.#prepareGraphInputStreamRoutes();
         } catch (error) {
@@ -1923,6 +1938,7 @@ export class GraphProcessor {
       await Promise.race(this.#streamCallerTasks);
       await this.#processingQueue.onIdle();
     }
+    await this.#drainStreamingCatchTasks();
     this.#markUnqueuedNodesIgnored();
   }
 
@@ -3200,6 +3216,7 @@ export class GraphProcessor {
     }
 
     this.#cancelStreamingOutputWatchesForSource(node.id);
+    this.#cancelStreamingCatchesForSource(node.id);
     this.#erroredNodes.set(node.id, error);
     await this.#emitter.emit(
       'nodeError',
@@ -3493,6 +3510,7 @@ export class GraphProcessor {
     const onGraphOutputPartial =
       canForwardGraphCallerOutputPartials(node) &&
       (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
+        this.#streamingCatchPlansBySourceNodeId.has(node.id) ||
         this.#inputStreamRoutes.has(node.id) ||
         this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
         ? (partialOutputs: Outputs) => {
@@ -4113,6 +4131,12 @@ export class GraphProcessor {
             `Watch Streaming Output "${watchNode.title}" cannot contain another Watch Streaming Output node.`,
           );
         }
+        if (node.type === 'catchStreamingChunks') {
+          throw new Error(
+            `Watch Streaming Output "${watchNode.title}" cannot contain Catch streaming chunks "${node.title}". ` +
+              'Put Catch streaming chunks outside the repeated Watch branch.',
+          );
+        }
         if (node.type === 'graphOutput') {
           throw new Error(
             `Watch Streaming Output "${watchNode.title}" must reach Stop Watching Streaming Output before Graph Output "${node.title}".`,
@@ -4225,8 +4249,55 @@ export class GraphProcessor {
     this.#assertStreamingOutputWatchPreloadsAreSafe();
   }
 
+  #prepareStreamingCatchTopology(): void {
+    const relevantNodeIds = this.#getExecutionRelevantNodeIds();
+    const connections = this.#getEffectiveConnections().filter((connection) =>
+      this.#isDefinitionValidConnection(connection),
+    );
+    for (const node of this.#executionGraphNodes) {
+      if (
+        node.type !== 'catchStreamingChunks' ||
+        node.disabled ||
+        (relevantNodeIds && !relevantNodeIds.has(node.id))
+      ) continue;
+      // A saved Catch result is an ordinary once-only value. Run-from may reuse
+      // it, but a live Catch still needs its own streaming coordinator.
+      if (this.#nodeResults.has(node.id)) continue;
+      if (node.isConditional || node.isSplitRun) {
+        throw new Error(`Catch streaming chunks "${node.title}" cannot use Conditional or Many runs.`);
+      }
+      const incoming = connections.filter((connection) => connection.inputNodeId === node.id);
+      if (incoming.length === 0) {
+        this.#ignoreNodes.add(node.id);
+        continue;
+      }
+      if (incoming.length !== 1 || incoming[0]!.inputId !== ('stream' as PortId)) {
+        throw new Error(`Catch streaming chunks "${node.title}" must have exactly one Streaming Output input connection.`);
+      }
+      const source = this.#nodesById[incoming[0]!.outputNodeId];
+      if (!source || source.disabled || source.isSplitRun) {
+        throw new Error(`Catch streaming chunks "${node.title}" needs one runnable, non-split streaming source.`);
+      }
+      const rawCount = (node as CatchStreamingChunksNode).data.count;
+      const count = Number.isFinite(rawCount)
+        ? Math.min(MAX_CAUGHT_STREAMING_CHUNKS, Math.max(1, Math.floor(rawCount)))
+        : 1;
+      const plan: StreamingOutputCatchPlan = {
+        node: node as CatchStreamingChunksNode,
+        sourceOutputId: incoming[0]!.outputId,
+        count,
+        chunks: [],
+        settled: false,
+      };
+      const plans = this.#streamingCatchPlansBySourceNodeId.get(source.id) ?? [];
+      plans.push(plan);
+      this.#streamingCatchPlansBySourceNodeId.set(source.id, plans);
+      this.#ignoreNodes.add(node.id);
+    }
+  }
+
   #isStreamingOutputWatchBoundary(node: ChartNode): boolean {
-    return node.type === 'watchStreamingOutput' || node.type === 'stopWatchingStreamingOutput';
+    return node.type === 'watchStreamingOutput' || node.type === 'stopWatchingStreamingOutput' || node.type === 'catchStreamingChunks';
   }
 
   #assertStreamingOutputWatchPreloadCanBeAdded(nodeId: NodeId): void {
@@ -4268,7 +4339,7 @@ export class GraphProcessor {
         continue;
       }
 
-      if (this.#isStreamingOutputWatchBoundary(node)) {
+      if (this.#isStreamingOutputWatchBoundary(node) && node.type !== 'catchStreamingChunks') {
         throw new Error(
           `Cannot preload ${node.title} because a streaming boundary must be scheduled. ` +
             "Run from Watch Streaming Output to reuse a producer's saved final value, or run from the producer to stream again.",
@@ -4302,6 +4373,14 @@ export class GraphProcessor {
   }
 
   #publishStreamingOutputWatchPartial(node: ChartNode, partialOutputs: Outputs, coalesced = 0): void {
+    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
+      if (plan.settled) continue;
+      const value = partialOutputs[plan.sourceOutputId];
+      if (!value || value.type === 'control-flow-excluded') continue;
+      const chunk = cloneExecutionOutputs({ ['value' as PortId]: value })['value' as PortId]!;
+      plan.chunks.push(chunk);
+      if (plan.chunks.length >= plan.count) this.#scheduleStreamingCatchCompletion(plan);
+    }
     for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
       const value = partialOutputs[plan.sourceOutputId];
       if (value == null || value.type === 'control-flow-excluded') {
@@ -4315,6 +4394,55 @@ export class GraphProcessor {
       plan.nextUpdateIndex += coalesced;
       const updateIndex = this.#nextStreamingWatchUpdateIndex(plan);
       watch.publish(this.#createStreamingOutputWatchSnapshot(plan, value, updateIndex, false));
+    }
+  }
+
+  #scheduleStreamingCatchCompletion(plan: StreamingOutputCatchPlan): void {
+    if (plan.settled) return;
+    plan.settled = true;
+    const task = this.#completeStreamingCatch(plan).catch((error: unknown) =>
+      this.#nodeErrored(plan.node, error, nanoid() as ProcessId),
+    );
+    this.#streamingCatchTasks.add(task);
+    void task.then(
+      () => this.#streamingCatchTasks.delete(task),
+      () => this.#streamingCatchTasks.delete(task),
+    );
+  }
+
+  async #completeStreamingCatch(plan: StreamingOutputCatchPlan): Promise<void> {
+    if (this.#abortController.signal.aborted) return;
+    const node = plan.node;
+    const processId = nanoid() as ProcessId;
+    const chunks = plan.chunks.slice(0, plan.count);
+    const output: DataValue =
+      plan.count === 1
+        ? chunks[0]!
+        : { type: 'any[]', value: chunks.map((chunk) => chunk.value) };
+    const outputs: Outputs = { ['value' as PortId]: output };
+    plan.chunks.length = 0;
+    await this.#emitter.emit(
+      'nodeStart',
+      this.#withExecution({ node, inputs: {}, processId, resultOrigin: 'executed' as const }),
+    );
+    if (this.#abortController.signal.aborted) return;
+    this.#nodeResults.set(node.id, outputs);
+    this.#visitedNodes.add(node.id);
+    this.#remainingNodes.delete(node.id);
+    await this.#emitter.emit(
+      'nodeFinish',
+      this.#withExecution({ node, outputs, processId, resultOrigin: 'executed' as const }),
+    );
+    this.#finishStreamingOutputWatches(node, outputs);
+    const outputNodes = getOutputNodesFrom(this.#executionState, node);
+    this.#propagateAttachedDataToOutputNodes(node, this.#getAttachedDataTo(node), outputNodes.connectionsToNodes);
+    this.#queueOutputNodes(node, outputNodes.nodes);
+  }
+
+  async #drainStreamingCatchTasks(): Promise<void> {
+    while (this.#streamingCatchTasks.size > 0) {
+      await Promise.all([...this.#streamingCatchTasks]);
+      await this.#processingQueue.onIdle();
     }
   }
 
@@ -4545,12 +4673,30 @@ export class GraphProcessor {
       if (failure?.error) {
         for (const route of this.#inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error: failure.error });
         this.#cancelStreamingOutputWatchesForSource(node.id);
+        this.#cancelStreamingCatchesForSource(node.id);
         return;
       }
       if (terminals.some((result) => result?.value?.type === 'control-flow-excluded')) {
         outputs = Object.fromEntries(
           Object.keys(outputs).map((port) => [port, { type: 'control-flow-excluded', value: undefined }]),
         );
+      }
+    }
+    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
+      if (plan.settled) continue;
+      const finalValue = outputs[plan.sourceOutputId];
+      if (
+        finalValue &&
+        finalValue.type !== 'control-flow-excluded' &&
+        !isEqual(plan.chunks.at(-1), finalValue)
+      ) {
+        plan.chunks.push(cloneExecutionOutputs({ ['value' as PortId]: finalValue })['value' as PortId]!);
+      }
+      if (plan.chunks.length > 0) {
+        this.#scheduleStreamingCatchCompletion(plan);
+      } else {
+        plan.settled = true;
+        this.#excludeNode(plan.node, nanoid() as ProcessId, {}, 'stream completed without a value');
       }
     }
     for (const { port, relay } of this.#inputStreamRoutes.get(node.id) ?? []) {
@@ -4869,6 +5015,14 @@ export class GraphProcessor {
     }
   }
 
+  #cancelStreamingCatchesForSource(nodeId: NodeId): void {
+    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(nodeId) ?? []) {
+      if (plan.settled) continue;
+      plan.settled = true;
+      plan.chunks.length = 0;
+    }
+  }
+
   #cancelStreamingOutputWatches(): void {
     for (const watch of this.#streamingOutputWatches.values()) {
       watch.stop();
@@ -4892,13 +5046,15 @@ export class GraphProcessor {
 
   async #drainSchedulerBoundaries(): Promise<void> {
     do {
+      await this.#drainStreamingCatchTasks();
       if (!this.#isSubProcessor) {
         await this.#profileRuntimeAsync('drainManagedAsyncBranches', () => this.#managedAsyncBranches!.drain());
       }
       await this.#profileRuntimeAsync('drainStreamingOutputWatches', () => this.#drainStreamingOutputWatches());
     } while (
       (!this.#isSubProcessor && this.#managedAsyncBranches!.hasPending) ||
-      this.#hasDrainableStreamingOutputWatches()
+      this.#hasDrainableStreamingOutputWatches() ||
+      this.#streamingCatchTasks.size > 0
     );
   }
 

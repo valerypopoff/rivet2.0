@@ -1,0 +1,20 @@
+---
+id: stream-value
+title: Stream value node
+sidebar_label: Stream value
+---
+
+# Stream value node
+
+**Stream value** turns one ordinary input value into one streaming update. It also passes the same value through its **Value** output normally. It does not create a new data type or make ordinary downstream connections repeat.
+
+| Port | Data type | Description |
+| --- | --- | --- |
+| Value (input) | `any` | The value to emit when ready. |
+| Value (output) | `any` | One streaming update, followed by the ordinary final value. |
+
+To send a value out of a Subgraph before the rest of the child graph finishes, connect **Value** directly to a named **Graph Output**. In the caller, connect that Subgraph output to [Catch streaming chunks](./catch-streaming-chunks.mdx) with **Number of chunks** set to `1`. Catch returns the early value to ordinary execution exactly once. This works for graphs in the same project and, in Studio Server, other projects.
+
+You can instead use [Watch streaming](./watch-streaming-output.mdx) for a repeated processing branch. Watch also receives a producer's final value, so a one-chunk producer may lead to both an early and a final Watch invocation. Use Catch when you want only one ordinary result.
+
+The emitted update is not a guarantee that the whole graph will succeed. Other child work can fail later, and downstream side effects already started from the early value cannot be rolled back. A frozen or preloaded result is final-only; it does not recreate the historical streaming update.

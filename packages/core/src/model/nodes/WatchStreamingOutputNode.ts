@@ -27,7 +27,7 @@ export class WatchStreamingOutputNodeImpl extends NodeImpl<WatchStreamingOutputN
         queueOverflowBehavior: streamingOutputWatchDefaults.queueOverflowBehavior,
       },
       id: nanoid() as NodeId,
-      title: 'Watch Streaming Output',
+      title: 'Watch streaming',
       type: 'watchStreamingOutput',
       visualData: { x: 0, y: 0, width: 230 },
     };
@@ -53,12 +53,12 @@ export class WatchStreamingOutputNodeImpl extends NodeImpl<WatchStreamingOutputN
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Watch Streaming Output',
-      group: ['Logic'],
-      infoBoxTitle: 'Watch Streaming Output Node',
+      contextMenuTitle: 'Watch streaming',
+      group: ['Streaming'],
+      infoBoxTitle: 'Watch streaming node',
       infoBoxBody: dedent`
-        Runs its downstream branch for streaming output snapshots. Without Stop Watching
-        Streaming Output, every snapshot runs the branch and the watch finishes with its
+        Runs its downstream branch for streaming output snapshots. Without Stop watching
+        streaming, every snapshot runs the branch and the watch finishes with its
         producer. Add one Stop node only when a chosen value must continue through the
         ordinary graph. Non-watched connections still wait for their upstream node's final result.
       `,
@@ -142,4 +142,4 @@ export class WatchStreamingOutputNodeImpl extends NodeImpl<WatchStreamingOutputN
   }
 }
 
-export const watchStreamingOutputNode = nodeDefinition(WatchStreamingOutputNodeImpl, 'Watch Streaming Output');
+export const watchStreamingOutputNode = nodeDefinition(WatchStreamingOutputNodeImpl, 'Watch streaming');

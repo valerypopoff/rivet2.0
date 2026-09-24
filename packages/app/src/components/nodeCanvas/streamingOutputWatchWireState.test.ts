@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createBuiltInRegistry,
+  getGraphBoundary,
+  getProjectStreamableGraphOutputNodeIdsByGraph,
+  getSubgraphProjectKey,
   type ChartNode,
   type GraphId,
   type NodeGraph,
@@ -42,7 +45,11 @@ const registry = createBuiltInRegistry();
 function streamFixture() {
   const make = (id: string, type: Parameters<typeof registry.createDynamic>[0], data = {}) => {
     const created = registry.createDynamic(type);
-    return { ...created, id: id as NodeId, data: { ...(created.data as object), ...data } };
+    return {
+      ...created,
+      id: id as NodeId,
+      data: { ...(created.data as object), ...(type === 'llmChatV2' ? { useAsGraphPartialOutput: true } : {}), ...data },
+    };
   };
   const edge = (source: string, output: string, target: string, input: string): NodeConnection => ({
     outputNodeId: source as NodeId,
@@ -74,7 +81,7 @@ function streamFixture() {
     plugins: [],
   };
   const marked = (graph: NodeGraph) =>
-    getProjectStreamingOutputWatchConnections({ project, graph, registry, referencedProjects: {} });
+    getProjectStreamingOutputWatchConnections({ project, graph, registry, referencedProjects: {}, onlyStreamCapableSources: true });
   return { project, root, middle, leaf, marked, make, edge };
 }
 
@@ -269,7 +276,94 @@ test('stops at ordinary processing nodes and leaves unrelated fanout ordinary', 
   leaf.connections.push(fanout);
   assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
   leaf.connections[0] = edge('plain', 'output1', 'out', 'value');
-  assert.deepEqual(marked(leaf), new Set([leaf.connections[0]]));
+  assert.equal(marked(leaf).size, 0);
+});
+
+test('ordinary values and non-streaming LLM outputs never receive stream arrows', () => {
+  const { root, project, make, edge } = streamFixture();
+  root.nodes = [make('plain', 'text'), make('watch', 'watchStreamingOutput')];
+  root.connections = [edge('plain', 'output', 'watch', 'stream')];
+  const marked = () => getProjectStreamingOutputWatchConnections({ project, graph: root, registry, referencedProjects: {}, onlyStreamCapableSources: true });
+  assert.equal(marked().size, 0);
+  assert.deepEqual(
+    getProjectStreamingOutputWatchConnections({ project, graph: root, registry, referencedProjects: {} }),
+    new Set(root.connections),
+    'ordinary final values still reach Watch at runtime',
+  );
+
+  root.nodes[0] = make('plain', 'llmChatV2', { useAsGraphPartialOutput: false });
+  root.connections[0] = edge('plain', 'response', 'watch', 'stream');
+  assert.equal(marked().size, 0);
+
+  root.nodes[0] = make('plain', 'streamValue');
+  root.connections[0] = edge('plain', 'value', 'watch', 'stream');
+  assert.deepEqual(marked(), new Set(root.connections));
+});
+
+test('cross-project preview derives all graph outputs in one pass', (t) => {
+  const { project: target, leaf, middle, root: targetRoot, make, edge } = streamFixture();
+  const targetId = 'stream-target' as ProjectId;
+  target.metadata.id = targetId;
+  const previewRegistry = createBuiltInRegistry();
+  const lookup = t.mock.method(previewRegistry, 'createDynamicImpl');
+  const streamableByGraph = getProjectStreamableGraphOutputNodeIdsByGraph({
+    project: target,
+    registry: previewRegistry,
+    referencedProjects: {},
+  });
+  assert.deepEqual(streamableByGraph[leaf.metadata!.id!], ['out' as NodeId]);
+  assert.deepEqual(streamableByGraph[middle.metadata!.id!], ['out' as NodeId]);
+  assert.deepEqual(streamableByGraph[targetRoot.metadata!.id!], []);
+  assert.equal(lookup.mock.calls.filter((call) => call.arguments[0].id === 'producer').length, 1);
+  const streamable = new Set(streamableByGraph[leaf.metadata!.id!]);
+  const preview: Project = {
+    ...target,
+    graphs: {
+      [leaf.metadata!.id!]: {
+        ...leaf,
+        nodes: leaf.nodes.filter((node) => node.type === 'graphOutput'),
+        connections: [],
+      },
+    },
+  };
+  const caller = make('caller', 'subGraph', {
+    graphId: leaf.metadata!.id,
+    targetProjectId: targetId,
+    targetVersion: 'latest',
+    targetBoundary: getGraphBoundary(target, leaf.metadata!.id),
+  });
+  const root: NodeGraph = {
+    metadata: { id: 'root' as GraphId, name: 'Root' },
+    nodes: [caller, make('watch', 'watchStreamingOutput')],
+    connections: [edge('caller', 'answer', 'watch', 'stream')],
+  };
+  const owner: Project = {
+    ...target,
+    metadata: { ...target.metadata, id: 'owner' as ProjectId },
+    graphs: { [root.metadata!.id!]: root },
+  };
+  const options = {
+    project: owner,
+    graph: root,
+    registry,
+    referencedProjects: { [getSubgraphProjectKey({ projectId: targetId, version: 'latest' })]: preview },
+    onlyStreamCapableSources: true,
+  };
+  assert.deepEqual(
+    getProjectStreamingOutputWatchConnections({
+      ...options,
+      getPreviewGraphOutputStreamingCapability: (project, _graph, nodeId) =>
+        project === preview ? streamable.has(nodeId) : undefined,
+    }),
+    new Set(root.connections),
+  );
+  assert.equal(
+    getProjectStreamingOutputWatchConnections({
+      ...options,
+      getPreviewGraphOutputStreamingCapability: (project) => project === preview ? false : undefined,
+    }).size,
+    0,
+  );
 });
 
 test('does not descend through final-only, ambiguous, missing, or stale named outputs', () => {

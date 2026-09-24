@@ -50,6 +50,15 @@ test('NodeTitleLabel gives every Knowledge node a database icon', () => {
   }
 });
 
+test('NodeTitleLabel gives every Streaming node a stream icon', () => {
+  for (const type of ['streamValue', 'catchStreamingChunks', 'watchStreamingOutput', 'stopWatchingStreamingOutput']) {
+    const html = renderNodeTitle(type, 'Streaming node');
+    assert.match(html, /^<span class="title-text-label"><svg[^>]*class="streaming-node-title-icon"/);
+    assert.match(html, /aria-hidden="true"/);
+    assert.match(html, /d="M2\.5 12c3-3 6 3 9 0s6-3 10 0"/);
+  }
+});
+
 test('NodeTitleLabel gives Debug nodes a bug icon before the title', () => {
   for (const [type, title] of [
     ['graphCallPath', 'Graph Call Path'],
@@ -83,5 +92,6 @@ test('NodeTitleLabel leaves other node titles plain', () => {
   assert.doesNotMatch(html, /global-node-title-icon/);
   assert.doesNotMatch(html, /knowledge-node-title-icon/);
   assert.doesNotMatch(html, /debug-node-title-icon/);
+  assert.doesNotMatch(html, /streaming-node-title-icon/);
   assert.match(html, /^<span class="title-text-label">Text<\/span>$/);
 });
