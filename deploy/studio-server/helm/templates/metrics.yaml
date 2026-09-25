@@ -37,7 +37,7 @@ spec:
       interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
 {{- end }}
-{{- if and .Values.metrics.serviceMonitor.enabled .Values.metrics.proxyExporter.enabled }}
+{{- if and (eq .Values.gateway.mode "embedded") .Values.metrics.serviceMonitor.enabled .Values.metrics.proxyExporter.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -169,26 +169,27 @@ spec:
             summary: One or more Rivet API replicas have not refreshed their managed App Settings revision within the expected window.
         {{- end }}
         {{- if .Values.metrics.prometheusRule.clusterStateAlerts.enabled }}
+        {{- $edgePodPattern := ternary "proxy|execution" "execution" (eq .Values.gateway.mode "embedded") }}
         - alert: RivetPublishedExecutionContainerRestarts
-          expr: sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*"}[10m])) >= {{ .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease }}
+          expr: sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-({{ $edgePodPattern }})-.*"}[10m])) >= {{ .Values.metrics.prometheusRule.clusterStateAlerts.restartIncrease }}
           for: {{ index .Values.metrics.prometheusRule "for" | quote }}
           labels:
             severity: warning
           annotations:
-            summary: A Rivet proxy or published-execution container restarted.
+            summary: A Rivet published-execution container{{ if eq .Values.gateway.mode "embedded" }} or proxy{{ end }} restarted.
         - alert: RivetPublishedExecutionContainerOOMKilled
-          expr: max by (namespace, pod) (kube_pod_container_status_last_terminated_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*",reason="OOMKilled"}) > 0
+          expr: max by (namespace, pod) (kube_pod_container_status_last_terminated_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-({{ $edgePodPattern }})-.*",reason="OOMKilled"}) > 0
           for: {{ index .Values.metrics.prometheusRule "for" | quote }}
           labels:
             severity: critical
           annotations:
-            summary: A Rivet proxy or published-execution container was OOM killed.
+            summary: A Rivet published-execution container{{ if eq .Values.gateway.mode "embedded" }} or proxy{{ end }} was OOM killed.
         - alert: RivetPublishedExecutionPodEvicted
-          expr: max by (namespace, pod) (kube_pod_status_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-(proxy|execution)-.*",reason="Evicted"}) > 0
+          expr: max by (namespace, pod) (kube_pod_status_reason{namespace="{{ .Release.Namespace }}",pod=~"{{ include "rivet.fullname" . }}-({{ $edgePodPattern }})-.*",reason="Evicted"}) > 0
           for: {{ index .Values.metrics.prometheusRule "for" | quote }}
           labels:
             severity: critical
           annotations:
-            summary: A Rivet proxy or published-execution pod was evicted.
+            summary: A Rivet published-execution pod{{ if eq .Values.gateway.mode "embedded" }} or proxy{{ end }} was evicted.
         {{- end }}
 {{- end }}

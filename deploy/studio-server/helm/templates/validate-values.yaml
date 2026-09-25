@@ -1,6 +1,21 @@
 {{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
 {{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
 
+{{- if not (has .Values.gateway.mode (list "external" "embedded")) -}}
+{{- fail "gateway.mode must be external or embedded" -}}
+{{- end -}}
+{{- if eq .Values.gateway.mode "external" -}}
+{{- if .Values.ingress.enabled -}}
+{{- fail "ingress.enabled requires gateway.mode=embedded; configure external ingress outside this chart" -}}
+{{- end -}}
+{{- if .Values.autoscaling.proxy.enabled -}}
+{{- fail "autoscaling.proxy.enabled requires gateway.mode=embedded" -}}
+{{- end -}}
+{{- if .Values.metrics.proxyExporter.enabled -}}
+{{- fail "metrics.proxyExporter.enabled requires gateway.mode=embedded" -}}
+{{- end -}}
+{{- end -}}
+
 {{- if ne .Values.workflowStorage.backend .Values.runtimeLibraries.backend -}}
 {{- fail "workflowStorage.backend and runtimeLibraries.backend must stay unified in phase 3" -}}
 {{- end -}}
@@ -183,7 +198,10 @@
 {{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
 {{- fail "resourceLimitAcknowledgements must be a map" -}}
 {{- end -}}
-{{- $resourceComponents := list "proxy" "web" "api" "executor" "execution" -}}
+{{- $resourceComponents := list "web" "api" "executor" "execution" -}}
+{{- if eq .Values.gateway.mode "embedded" -}}
+{{- $resourceComponents = append $resourceComponents "proxy" -}}
+{{- end -}}
 {{- if .Values.hostedEvaluations.enabled -}}
 {{- $resourceComponents = append $resourceComponents "evaluation" -}}
 {{- end -}}
@@ -606,6 +624,7 @@
 {{- fail "availability.disruptionBudget.maxUnavailable must be greater than zero" -}}
 {{- end -}}
 {{- range $component := list "proxy" "web" "execution" -}}
+{{- if or (ne $component "proxy") (eq $.Values.gateway.mode "embedded") -}}
 {{- $replicas := int (index $.Values.replicaCount $component) -}}
 {{- $autoscaling := index $.Values.autoscaling $component -}}
 {{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled -}}
@@ -614,7 +633,8 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if empty (index .Values.env "RIVET_PROXY_RESOLVER") -}}
+{{- end -}}
+{{- if and (eq .Values.gateway.mode "embedded") (empty (index .Values.env "RIVET_PROXY_RESOLVER")) -}}
 {{- fail "env.RIVET_PROXY_RESOLVER is required so nginx can resolve in-cluster service names dynamically" -}}
 {{- end -}}
 
@@ -666,11 +686,11 @@
 {{- fail "managed storage requires objectStorage.accessKeySecretName and objectStorage.secretKeySecretName unless Vault provides RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID and RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" -}}
 {{- end -}}
 
-{{- if or (empty .Values.images.proxy.repository) (empty .Values.images.web.repository) (empty .Values.images.api.repository) (empty .Values.images.executor.repository) -}}
+{{- if or (and (eq .Values.gateway.mode "embedded") (empty .Values.images.proxy.repository)) (empty .Values.images.web.repository) (empty .Values.images.api.repository) (empty .Values.images.executor.repository) -}}
 {{- fail "all image repositories must be set before install" -}}
 {{- end -}}
 
-{{- if or (contains "example.invalid/" .Values.images.proxy.repository) (contains "example.invalid/" .Values.images.web.repository) (contains "example.invalid/" .Values.images.api.repository) (contains "example.invalid/" .Values.images.executor.repository) -}}
+{{- if or (and (eq .Values.gateway.mode "embedded") (contains "example.invalid/" .Values.images.proxy.repository)) (contains "example.invalid/" .Values.images.web.repository) (contains "example.invalid/" .Values.images.api.repository) (contains "example.invalid/" .Values.images.executor.repository) -}}
 {{- fail "replace the example.invalid image repositories with real image repositories before install" -}}
 {{- end -}}
 
@@ -705,9 +725,11 @@
 {{- fail "release.production.database.managedWorkflowSchemaVersion must equal workflowSchema.compatibility.maximumVersion" -}}
 {{- end -}}
 {{- range $component := list "proxy" "web" "api" "executor" -}}
+{{- if or (ne $component "proxy") (eq $.Values.gateway.mode "embedded") -}}
 {{- $image := index $.Values.images $component -}}
 {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" $image.digest)) -}}
 {{- fail (printf "images.%s.digest must be a sha256 OCI manifest digest for a production release; mutable tags are not accepted" $component) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

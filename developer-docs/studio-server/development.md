@@ -100,7 +100,7 @@ compatibility aliases.
 | `yarn studio-server:ui:observe`                                                                                                                                                                                                 | Runs the headed slow-motion Playwright flow against the current hosted app                                                                                                                                               | Watch the browser click through a real scenario                                                                     |
 | `yarn studio-server:ui:observe:debug`                                                                                                                                                                                           | Runs the same flow with Playwright Inspector enabled                                                                                                                                                                     | Step through or pause browser actions                                                                               |
 | `yarn studio-server:ui:observe:report`                                                                                                                                                                                          | Opens the last Playwright HTML report                                                                                                                                                                                    | Review traces, screenshots, and videos after a run                                                                  |
-| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs the narrow headless hosted-editor regression set against a fresh Vite host                                                                                                                                         | Reproduce the CI output-paging and sidebar interaction gate locally after installing Chromium                    |
+| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs the narrow headless hosted-editor regression set against a fresh Vite host                                                                                                                                          | Reproduce the CI output-paging and sidebar interaction gate locally after installing Chromium                       |
 
 `yarn studio-server:clean` is intentionally Docker-volume-safe but Docker-host-wide. It first prints the selected Docker context/endpoint, a concise Docker disk summary, and counted stopped-container, custom-network, and image inventories (showing at most 20 rows from each inventory). Docker evaluates the latter two inventories for unused resources only at prune time. Run `yarn studio-server:clean -- --dry-run` to stop there. An interactive terminal must then type `PRUNE`; automation must pass `--confirm-host-prune`. The command rejects remote or unknown endpoints before Docker preflight unless the caller also supplies both `--allow-remote-docker-host` and `--confirm-host-prune`. When it resolves the currently selected context, it pins that context on every later Docker invocation so a concurrent `docker context use` cannot retarget the cleanup. This prevents an inherited Docker context or `DOCKER_HOST` from silently cleaning another machine.
 
@@ -582,6 +582,50 @@ Important constraints:
 - Docker dev remains the best path for testing the full hosted browser flow exactly as deployed
 
 ## Docker launcher behavior
+
+### Single-VM HTTPS without host nginx
+
+Production Compose can run the existing Rivet nginx proxy and the VM's public
+TLS/private-HTTP edge in **one container**. Set these deployment values in the
+launcher dotenv (use your actual hostnames and existing certificate files):
+
+```dotenv
+RIVET_PROXY_PUBLIC_HOST=rivet.example.com
+RIVET_PROXY_INTERNAL_HOST=rivet-1.internal.example.com
+RIVET_PROXY_TLS_CERT_HOST_PATH=/opt/tls/rivet.crt
+RIVET_PROXY_TLS_KEY_HOST_PATH=/opt/tls/rivet.key
+RIVET_PORT=80
+RIVET_HTTPS_PORT=443
+```
+
+The production launcher validates both hostnames and certificate paths, then
+adds `docker-compose.vm-tls.yml`. Public HTTP redirects to HTTPS; public HTTPS
+offers HTTP/2, and both public HTTPS and private-host HTTP pass through the
+unchanged Rivet route/auth proxy on a
+loopback-only listener. Unknown hostnames return 404. The certificate and key
+are mounted read-only and must be readable by container UID 10001. Recreate the
+proxy container after certificate rotation. A non-default `RIVET_HTTPS_PORT`
+is included in the HTTP redirect. Before switching traffic, render
+`yarn studio-server:prod:config`, verify ports 80/443 are free, and check the
+public HTTPS, private HTTP, WebSocket, SSE, OAuth, and published routes. Keep
+the old host nginx available for a controlled rollback until the new path is
+verified. Do not bind the private hostname to a publicly reachable interface
+without a firewall/network ACL: a Host header is not access control.
+
+The proxy image has a read-only root filesystem in production Compose. Nginx
+configuration, PID, and request-body scratch space use a bounded `/tmp`
+`tmpfs`; this avoids persistent proxy disk writes, **not** filesystem writes
+altogether. Large concurrent uploads can exhaust that memory budget and fail
+closed. The local-Docker and standalone API/storage files are intentionally
+unchanged. Without the four VM TLS values above, production Compose retains
+its original single HTTP listener for an external TLS terminator.
+
+Run `node deploy/studio-server/scripts/verify-vm-nginx-tls.mjs` to exercise the
+actual image with a disposable certificate, mock services, public/private
+hosts, forwarded-header spoofing, endpoint planes, and executor WebSocket. The
+GitHub deployment-contract job runs this fixture on Linux. It needs Docker and
+OpenSSL; on a host without OpenSSL, supply disposable certificate/key paths as
+`RIVET_VM_TLS_FIXTURE_CERT` and `RIVET_VM_TLS_FIXTURE_KEY`.
 
 The Docker launchers now render layered Compose files:
 

@@ -129,8 +129,8 @@ test('managed release gate proves cross-instance OAuth web-app revocation with i
   assert.match(runner, /Removed OAuth user could still start an action/);
   assert.match(runner, /Retained OAuth user action did not complete/);
   assert.match(runner, /await gate\.verifyManagedWebAppAccessRevocation\(baseUrl, persistedState\)/);
-  assert.match(overlay, /RIVET_ENABLE_DEVELOPMENT_AUTH: "true"/);
-  assert.match(overlay, /RIVET_DEVELOPMENT_AUTH_CLIENTS: "127\.0\.0\.1\/32,::1\/128"/);
+  assert.match(overlay, /RIVET_ENABLE_DEVELOPMENT_AUTH: ['"]true['"]/);
+  assert.match(overlay, /RIVET_DEVELOPMENT_AUTH_CLIENTS: ['"]127\.0\.0\.1\/32,::1\/128['"]/);
   assert.match(overlay, /This is never a production deployment setting/);
 });
 
@@ -365,6 +365,7 @@ test('provider staging gate is explicitly confirmed, HTTPS-only, and scoped to a
   const config = {
     namespace: 'rivet-staging-release',
     release: 'rivet-staging',
+    gatewayMode: 'external',
     baseUrl: 'https://rivet-staging.example.test',
     requestHeaders: { authorization: 'Bearer test-only' },
     workflowProbe: {
@@ -411,10 +412,47 @@ test('provider staging gate is explicitly confirmed, HTTPS-only, and scoped to a
       env: createProviderEnvironment(configFile, valuesFile),
     });
     assert.equal(providerConfig.namespace, 'rivet-staging-release');
+    assert.equal(providerConfig.gatewayMode, 'external');
+    assert.deepEqual(Object.keys(providerConfig.images).sort(), ['api', 'executor', 'web']);
     assert.equal(providerConfig.baseUrl, 'https://rivet-staging.example.test');
     assert.equal(providerConfig.interruptionManifests[0]?.restoreAction, 'delete');
     assert.equal(providerConfig.keyRotation?.nextSecretName, 'rivet-settings-new');
     assert.equal(providerConfig.registry.secretName, 'rivet-managed-provider-gate-registry');
+
+    for (const baseUrl of ['https://[::1]', 'https://127.1', 'https://staging.localhost.']) {
+      await fs.writeFile(configFile, JSON.stringify({ ...config, baseUrl }));
+      assert.throws(
+        () => buildManagedProviderGateConfig({ rootDir, env: createProviderEnvironment(configFile, valuesFile) }),
+        /must be a non-local HTTPS URL/,
+      );
+    }
+
+    await fs.writeFile(configFile, JSON.stringify({ ...config, gatewayMode: 'embedded' }));
+    assert.ok(
+      buildManagedProviderGateConfig({ rootDir, env: createProviderEnvironment(configFile, valuesFile) }).images.proxy,
+    );
+    await fs.writeFile(configFile, JSON.stringify({ ...config, gatewayMode: undefined }));
+    assert.throws(
+      () => buildManagedProviderGateConfig({ rootDir, env: createProviderEnvironment(configFile, valuesFile) }),
+      /gatewayMode must be external or embedded/,
+    );
+    await fs.writeFile(configFile, JSON.stringify({ ...config, requestHeaders: { 'X-Rivet-Proxy-Auth': 'spoofed' } }));
+    assert.throws(
+      () => buildManagedProviderGateConfig({ rootDir, env: createProviderEnvironment(configFile, valuesFile) }),
+      /reserved for the trusted gateway/,
+    );
+    for (const unsafeConfig of [
+      { ...config, workflowProbe: { ...config.workflowProbe, path: '/\\attacker.example/collect' } },
+      { ...config, webAppProbe: { ...config.webAppProbe, path: '/\\attacker.example/collect' } },
+      { ...config, legacyImport: { probe: { ...config.legacyImport.probe, path: '/\\attacker.example/collect' } } },
+    ]) {
+      await fs.writeFile(configFile, JSON.stringify(unsafeConfig));
+      assert.throws(
+        () => buildManagedProviderGateConfig({ rootDir, env: createProviderEnvironment(configFile, valuesFile) }),
+        /must be an absolute path on the configured staging host/,
+      );
+    }
+    await fs.writeFile(configFile, JSON.stringify(config));
 
     assert.throws(
       () =>
@@ -472,7 +510,7 @@ test('provider staging gate preserves secret inputs outside uploaded artifacts',
   assert.match(runner, /os\.tmpdir\(\)/);
   assert.match(
     runner,
-    /path\.dirname\(fileURLToPath\(import\.meta\.url\)\),\s+["']\.\.["'],\s+["']\.\.["'],\s+["']\.\.["'],/,
+    /path\.dirname\(fileURLToPath\(import\.meta\.url\)\),\s*["']\.\.["'],\s*["']\.\.["'],\s*["']\.\.["']\s*\)/,
   );
   assert.match(runner, /rivet-managed-provider-gate-/);
   assert.match(runner, /NetworkPolicy resources in/);
@@ -484,6 +522,8 @@ test('provider staging gate preserves secret inputs outside uploaded artifacts',
   assert.match(runner, /["']--atomic["']/);
   assert.match(runner, /reuseValues: true,\s+setValues: this\.getFinalAppSettingsKeyValues\(\)/);
   assert.match(runner, /app\.kubernetes\.io\/instance=\$\{this\.config\.release\}/);
+  assert.match(runner, /gateway\.mode=\$\{this\.config\.gatewayMode\}/);
+  assert.match(runner, /\/internal\/workflows\/\$\{endpointName\}/);
   assert.match(runner, /readiness recovery[\s\S]*?await this\.assertPublicSurface\(\);/);
   assert.match(runner, /refusing to overwrite registry secret/);
   assert.match(runner, /could not determine whether registry secret/);

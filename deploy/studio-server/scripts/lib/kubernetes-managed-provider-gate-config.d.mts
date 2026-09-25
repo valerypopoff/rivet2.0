@@ -5,7 +5,7 @@ export type ManagedProviderGateImage = {
 
 export type ManagedProviderGateProbe = {
   path: string;
-  method: "GET" | "POST";
+  method: 'GET' | 'POST';
   body: unknown;
   expectedStatus: number;
   contains: string | undefined;
@@ -16,14 +16,14 @@ export type ManagedProviderGateConfig = {
   allowedContext: string;
   namespace: string;
   release: string;
+  gatewayMode: 'external' | 'embedded';
   baseUrl: string;
   configFile: string;
   configDirectory: string;
   valuesFile: string;
-  images: Record<
-    "proxy" | "web" | "api" | "executor",
-    ManagedProviderGateImage
-  >;
+  images: Record<'web' | 'api' | 'executor', ManagedProviderGateImage> & {
+    proxy?: ManagedProviderGateImage;
+  };
   registry: {
     server: string;
     username: string;
@@ -43,7 +43,7 @@ export type ManagedProviderGateConfig = {
     name: string;
     applyFile: string;
     restoreFile: string;
-    restoreAction: "apply" | "delete";
+    restoreAction: 'apply' | 'delete';
   }>;
   artifactsDir: string;
   deploymentTimeoutSeconds: number;

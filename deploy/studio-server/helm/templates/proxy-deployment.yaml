@@ -1,3 +1,4 @@
+{{- if eq .Values.gateway.mode "embedded" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -126,3 +127,4 @@ spec:
           emptyDir:
             sizeLimit: {{ .Values.tmpVolume.sizeLimit }}
         {{- end }}
+{{- end }}

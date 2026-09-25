@@ -2,6 +2,17 @@
 
 This document describes the current external route families, the nginx gate, and the trust boundary between `proxy`, the control-plane API, the execution-plane API, and `executor`.
 
+On a single VM, the optional Compose TLS listener terminates public HTTPS and
+forwards public HTTPS or private-host HTTP over loopback to this same nginx
+gate. It overwrites forwarded host, protocol, client IP, and Rivet trust
+headers before the inner gate signs API requests. The private hostname still
+requires a network/firewall restriction; the hostname alone is not a trust
+boundary. The Kubernetes production chart defaults to no in-chart proxy or
+Ingress (`gateway.mode: external`); DevOps owns the replacement route and auth
+boundary. The disposable local/release-gate overlays explicitly use the old
+`gateway.mode: embedded` proxy. See [Kubernetes external gateway contract](./kubernetes.md#external-gateway-contract)
+before exposing the cluster Services publicly.
+
 The current runtime split keeps:
 
 - `control plane`
@@ -413,7 +424,7 @@ All three workflow execution handlers are `POST`-only:
 Public route exposure rules:
 
 - Workflow endpoint access is `public` by default, including all pre-existing publications. Project Settings → Endpoint shows the access control whenever a published version exists, even with unpublished draft changes. Switching to `internal` updates publication metadata immediately, without republishing the draft: both browser-facing `/workflows/:publishedEndpointName` and `/workflows-latest/:draftEndpointName` return 404. The published snapshot remains executable on `/internal/workflows/:publishedEndpointName`; the latest draft remains executable on `/internal/workflows-latest/:draftEndpointName` inside the private server network. Both deployment-specific internal URLs remain visible in the settings help when draft changes exist. Docker Compose defaults both to the `http://api` service alias; Helm supplies separate execution and control-plane Service URLs through the authenticated `/api/config` response. Switching back restores both public routes. Web-app routes are separate and unaffected.
-- The internal routes have no bearer check because network isolation is their security boundary. The public proxy explicitly returns 404 for `/internal` and `/internal/*`; never expose the API or execution Services through a separate public ingress or load balancer. In Kubernetes, ClusterIP means cluster-internal, not restricted to a particular Pod or namespace; apply NetworkPolicy when other cluster workloads must not call these routes. The per-workflow access setting is enforced by both filesystem and managed execution lookups, not by a browser-only switch.
+- The internal routes have no bearer check because network isolation is their security boundary. The embedded proxy returns 404 for `/internal` and `/internal/*`; an external Kubernetes gateway must do the same. In Kubernetes, ClusterIP means cluster-internal, not restricted to a particular Pod or namespace; apply NetworkPolicy when other cluster workloads must not call these routes. The per-workflow access setting is enforced by both filesystem and managed execution lookups, not by a browser-only switch.
 - Managed public workflow requests re-read the endpoint pointer from PostgreSQL before admission and do not join an older in-flight pointer lookup, so an execution replica cannot keep serving a newly internal-only endpoint while its cross-replica cache notification is in flight. Private routes continue using the cached pointer; immutable revision payloads remain cached on both paths. Requests already admitted before the access update may finish.
 
 - `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` resolves only the actively published endpoint identity

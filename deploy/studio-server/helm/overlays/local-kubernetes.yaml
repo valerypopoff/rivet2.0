@@ -1,3 +1,7 @@
+# The local test cluster deliberately exercises the legacy gateway.
+gateway:
+  mode: embedded
+
 images:
   proxy:
     repository: rivet-local/proxy
@@ -38,7 +42,6 @@ vault:
 auth:
   keySecretName: rivet-auth
 
-
 workflowStorage:
   backend: managed
 
@@ -55,8 +58,8 @@ postgres:
   sslMode: require
 
 objectStorage:
-  endpoint: ""
-  bucket: ""
+  endpoint: ''
+  bucket: ''
   region: us-east-1
   prefix: workflows/
   accessKeySecretName: rivet-object-storage
@@ -71,8 +74,8 @@ env:
   RIVET_WEB_APPS_BASE_PATH: /apps
   RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
   RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
-  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: "true"
-  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_ENABLE_LATEST_REMOTE_DEBUGGER: 'true'
+  RIVET_CORS_ALLOWED_ORIGINS: ''
   RIVET_SERVER_UI_AUTH_MODE: none
-  RIVET_REQUIRE_UI_GATE_KEY: "false"
-  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  RIVET_REQUIRE_UI_GATE_KEY: 'false'
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'false'

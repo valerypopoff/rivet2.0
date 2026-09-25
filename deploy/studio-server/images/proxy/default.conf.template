@@ -38,7 +38,7 @@ server {
 }
 
 server {
-    listen 8080;
+    listen ${RIVET_PROXY_INTERNAL_LISTEN};
     server_name _;
 
     client_max_body_size 100m;

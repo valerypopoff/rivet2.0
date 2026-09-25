@@ -493,8 +493,16 @@ export function createCapacityEvidence({
   };
 }
 
-export function createPublishedCapacityLoadJobConfig({ serviceNamePrefix, namespace, jobName, capacity }) {
-  const proxyBaseUrl = `http://${serviceNamePrefix}-proxy.${namespace}.svc.cluster.local`;
+export function createPublishedCapacityLoadJobConfig({
+  serviceNamePrefix,
+  namespace,
+  jobName,
+  capacity,
+  gatewayMode,
+  baseUrl,
+}) {
+  const proxyBaseUrl =
+    gatewayMode === 'external' ? baseUrl : `http://${serviceNamePrefix}-proxy.${namespace}.svc.cluster.local`;
   const controlBaseUrl = `http://${serviceNamePrefix}-api.${namespace}.svc.cluster.local`;
   return {
     version: 1,
@@ -613,7 +621,9 @@ export class PublishedCapacityGate {
       );
       const { projectId, draftRevisionId, publicationVersion, project } = publicationSnapshot ?? {};
       if (
-        !projectId || !draftRevisionId || !publicationVersion ||
+        !projectId ||
+        !draftRevisionId ||
+        !publicationVersion ||
         project?.projectMetadataId !== projectId ||
         project.revisionId !== draftRevisionId ||
         project.settings?.publicationVersion !== publicationVersion
@@ -642,6 +652,8 @@ export class PublishedCapacityGate {
       namespace: this.config.namespace,
       jobName: this.jobName,
       capacity: this.config.capacity,
+      gatewayMode: this.config.gatewayMode,
+      baseUrl: this.config.baseUrl,
     });
     this.tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-capacity-gate-'));
     const configPath = path.join(this.tempDir, 'config.json');

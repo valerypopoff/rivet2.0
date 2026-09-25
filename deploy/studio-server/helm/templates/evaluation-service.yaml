@@ -1,7 +1,6 @@
 {{- if .Values.hostedEvaluations.enabled }}
-# Internal-only Service: it exists solely for health/metrics discovery. The
-# proxy has no upstream for this selector, so batch workers cannot receive
-# product-facing workflow traffic.
+# Internal-only Service for health/metrics discovery. Neither the external
+# gateway nor the embedded proxy routes product-facing workflow traffic here.
 apiVersion: v1
 kind: Service
 metadata:

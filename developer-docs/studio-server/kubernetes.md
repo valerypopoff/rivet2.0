@@ -3,12 +3,52 @@
 Open managed-mode risks and recommended remediation work are tracked in
 [`kubernetes-managed-mode.md`](./audits/kubernetes-managed-mode.md).
 
-This repo supports one Kubernetes topology today:
+The production chart defaults to `gateway.mode: external`: it deploys HTTP
+ClusterIP Services, but no Rivet proxy Deployment/Service/HPA/PDB or Ingress.
+The cluster owner supplies the hostname, TLS, ingress/gateway, authentication
+gate, and path routing. `gateway.mode: embedded` retains the older in-chart
+proxy for existing installations and disposable local/release-gate tests. Do
+not switch an existing release to `external` until its replacement gateway is
+ready: Helm will remove the embedded proxy and Ingress during the upgrade.
 
-- `proxy`: scalable
+This repo supports one Kubernetes application topology today:
+
 - `web`: fixed at `1` in the current endpoint-heavy recommended shape
 - `backend`: singleton
 - `execution`: scalable
+
+### External gateway contract
+
+The cluster-owned gateway must route `/` to the `web` Service;
+`/readyz` to the singleton `api` Service;
+`/api/*`, `/workflows-latest/*`, `/apps-latest/*`, `/ws/latest-debugger`,
+and `/__rivet_auth*` (rewritten to `/ui-auth*`) to the singleton `api` Service; `/workflows/*`
+and `/apps/*` (including action WebSockets) to the `execution` Service;
+and `/ws/executor*` to the `executor` Service. The existing
+`/ws/executor/internal` path needs the same rewrite to the executor's
+`/internal` path as the embedded proxy. Preserve the request path for other
+routes, forward the public Host/protocol, support WebSocket upgrades and
+long-lived SSE streams, and configure body-size/timeouts for graph runs and
+web-app actions. Routes under `/internal` and `/metrics` must never be exposed
+through the public gateway.
+The route prefixes above are defaults: App Settings can change the workflow
+and web-app bases. Unlike the embedded proxy, an external gateway does not
+automatically poll those settings. Keep route bases fixed in production or
+coordinate every change with DevOps before applying it.
+
+Crucially, the embedded proxy is also a security boundary, not just a router.
+The replacement must implement its UI session gate and strip client-supplied
+`X-Rivet-Proxy-Auth`, `X-Rivet-Client-IP`, `X-Rivet-Token-Free-Host`, and
+correlation/forwarded identity headers before setting trusted values. API
+browser routes expect `X-Rivet-Proxy-Auth` derived from `RIVET_KEY` as
+`sha256(RIVET_KEY + ":proxy-auth")`; this credential must be injected only by
+the trusted gateway, never exposed to browsers or logs. Set the trusted client
+address from the verified ingress chain. Direct access to the API, execution,
+and executor Services must be restricted by cluster network policy so a pod
+cannot forge the gateway identity. The chart cannot validate a separately
+managed gateway: verify these behaviors end-to-end in staging before exposing
+the host. Until then, the external-mode services are not a complete public
+deployment.
 
 ## Migration verification before release
 
@@ -51,7 +91,7 @@ The `execution` Deployment owns:
 - `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`
 - `/internal/workflows/:endpointName`
 
-An internal-only workflow remains on the private `/internal/workflows/:publishedEndpointName` and `/internal/workflows-latest/:draftEndpointName` routes; both corresponding public routes return 404. The latest-draft route lives on the control-plane `api` Service, while the published route lives on the execution Service. Helm injects each Service's in-cluster DNS URL into the control-plane API workload, so Project Settings shows the correct internal address for each route even with custom Service ports and cluster DNS domains. API startup preserves those chart-owned URLs across Vault dotenv loading. The public proxy explicitly returns 404 for `/internal` and `/internal/*`; ingress targets only that proxy. Do not expose the API or execution ClusterIP Services through another ingress or load balancer. ClusterIP alone does not restrict other Pods in the cluster, so use a namespace/network-policy boundary if untrusted workloads share the cluster. Managed migration 12 defaults existing published workflows to public, so upgrading does not withdraw their external endpoints.
+An internal-only workflow remains on the private `/internal/workflows/:publishedEndpointName` and `/internal/workflows-latest/:draftEndpointName` routes; both corresponding public routes return 404. The latest-draft route lives on the control-plane `api` Service, while the published route lives on the execution Service. Helm injects each Service's in-cluster DNS URL into the control-plane API workload, so Project Settings shows the correct internal address for each route even with custom Service ports and cluster DNS domains. API startup preserves those chart-owned URLs across Vault dotenv loading. The cluster-owned public gateway must return 404 for `/internal` and `/internal/*`; the embedded proxy does this in compatibility mode. ClusterIP alone does not restrict other Pods in the cluster, so use a namespace/network-policy boundary if untrusted workloads share the cluster. Managed migration 12 defaults existing published workflows to public, so upgrading does not withdraw their external endpoints.
 
 Wait for the Helm upgrade to complete before switching an endpoint to internal-only. During a rolling execution Deployment update, an old image may still serve public traffic and does not know about the new access setting. Once all execution Pods run the new image, every public request reads the current access policy from PostgreSQL before admission; already-admitted requests may still finish. Do not rely on the switch as a rollout-time security barrier.
 
@@ -86,27 +126,27 @@ Workflow storage initializes before the API listens. Its filesystem capability p
 Scaling in this chart is per Deployment or StatefulSet, not in fixed pod pairs.
 
 - a new `execution` pod is only another execution-plane API pod
-- a new `proxy` pod is only another nginx proxy pod
+- in embedded compatibility mode, a new `proxy` pod is only another nginx proxy pod
 - a new `web` pod is only another dashboard shell pod
 - the `backend` StatefulSet stays at one pod because the current control-plane and latest-debugger behavior is still process-local
 
-That means rising endpoint demand should usually add `execution` pods first. `proxy` should stay redundant and may also scale, but it does not need to grow one-for-one with `execution`.
+That means rising endpoint demand should usually add `execution` pods first. In external mode, gateway capacity is owned and scaled by DevOps, outside this chart.
 
 Recommended operator mental model:
 
 - scale `execution` for workflow endpoint throughput
-- keep `proxy` redundant so ingress and websocket termination do not become a single bottleneck
+- keep the external gateway redundant so ingress and websocket termination do not become a single bottleneck
 - keep `web=1` when the dashboard is only used by one operator and temporary UI hiccups are acceptable
 - keep `backend=1` until the process-local control-plane constraints are removed architecturally
 
 Typical endpoint-heavy production shape:
 
-- `proxy`: `2` to `5`
+- external gateway: sized independently by DevOps
 - `execution`: `2` to `10`
 - `web`: `1`
 - `backend`: `1`
 
-Do not treat that as a forced ratio. `execution=8` with `proxy=2` can be correct. The tiers scale independently.
+Do not treat that as a forced ratio. The application and cluster-owned gateway scale independently.
 
 ## Hosted Evaluations
 
@@ -308,6 +348,7 @@ The values file remains an environment-owned Helm overlay. It should reference e
 {
   "namespace": "rivet-staging-rivet",
   "release": "rivet-staging",
+  "gatewayMode": "external",
   "baseUrl": "https://rivet-staging.example.test",
   "requestHeaders": { "authorization": "Bearer <staging-key-or-session>" },
   "workflowProbe": {
@@ -343,13 +384,13 @@ The values file remains an environment-owned Helm overlay. It should reference e
 }
 ```
 
-`namespace` must begin with `rivet-staging-`; the runner requires both configured context values to exactly equal the active context and requires `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`. It accepts only same-origin HTTPS probes. Each workflow and web-app probe must include a response marker, so a generic 200 page cannot pass as execution evidence.
+`namespace` must begin with `rivet-staging-`; the runner requires both configured context values to exactly equal the active context and requires `RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`. Set `gatewayMode` explicitly to `external` or `embedded` to match the intended deployment. It rejects loopback staging hosts and accepts only same-origin HTTPS probes, checking the parsed URL origin as well as the path spelling before sending credentials. It does not follow redirects, so a probe cannot silently run against another host. Each workflow and web-app probe must include a response marker, so a generic 200 page cannot pass as execution evidence. Probe headers cannot impersonate trusted gateway identity headers.
 
 For each configured dependency outage, put the config-relative Kubernetes manifests in the optional interruption archive under the same relative paths. The workflow rejects archive path traversal and symbolic or hard links before extracting into the runner temporary directory; the runner also rejects missing or symlinked referenced manifests. Each manifest may contain only a `NetworkPolicy` explicitly in that staging namespace. `restoreAction: "delete"` deletes the named test policy after the readiness-failure assertion; `"apply"` applies a separate restoring policy. The runner attempts the restore even if the apply command fails after changing an earlier resource, so a later rejection does not normally leave the configured staging outage in place. This is intentionally narrow: the runner will not execute arbitrary shell commands or apply cluster-scoped resources. Configure the policies to sever only the selected staging dependency, then the gate verifies `/readyz` becomes unready, restores the policy, waits for recovery, and re-runs both workflow and web-app probes.
 
 When `keyRotation` is supplied, the gate writes an unchanged Run recordings settings snapshot to ensure an encrypted row exists, performs the documented old/new, new/old, and new-only Helm rollouts, and reads the same settings after every phase. When `legacyImport` is supplied, the staging release must already exist and retain its legacy PVC during the test. The gate checks the supplied legacy-data probe, rolls back to the preceding Helm revision, checks it again, then reinstalls the candidate and checks both current and legacy probes. This is a staging-only destructive acceptance test, not a recovery recipe for production.
 
-Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the candidate images to digests, verifies the rendered release uses them, checks the public ingress host and TLS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. The ingress check is restricted to objects owned by the selected Helm release, so an unrelated staging ingress cannot satisfy it. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
+Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernetes_provider_gate`. The protected job allows up to 180 minutes because candidate deployment, optional three-phase key rotation, legacy rollback, and outage recovery are each bounded independently; the default Helm operation bound is 15 minutes. The job resolves the deployed candidate images to digests, verifies the rendered release uses them, probes the public HTTPS endpoint, and uploads only workload/manifest/log artifacts under `artifacts/kubernetes-managed-provider-gate`. In `external` mode it forces proxy/Ingress resources off even when reusing old Helm values, checks that no proxy resource remains, and requires the public `/internal/workflows/*` route to return 404. It cannot certify the external gateway's implementation of header stripping, UI authentication, or network isolation: DevOps must verify those separately. In `embedded` mode it checks the release-owned Ingress host. Candidate Helm upgrades are atomic: a failed rollout rolls the release back instead of leaving a partial failed candidate deployed. When upgrading an existing staging release, the gate reuses its existing Helm values so omitted values are not reset; a new staging release uses only the supplied values. The gate treats any Helm history error other than an explicitly absent release as a failure, rather than risking an install-style upgrade with no inherited values. The gate labels and owns only its configured registry pull secret (by default, `rivet-managed-provider-gate-registry`) and refuses to overwrite a same-named secret without its ownership label. A first green run is required operational evidence; repository tests can validate this harness but cannot substitute for access to the real provider services.
 
 ### Published execution capacity calibration and certificate
 
@@ -360,7 +401,7 @@ Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernet
 
 Selecting both inputs fails before any capacity work begins and the provider deployment is not started. An observe run is isolated from the destructive hosted-Evaluation certificate; use a later, explicitly reviewed run for the joint saturation scenario.
 
-The runner requires both the provider-gate acknowledgement (`RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`) and its separate exact acknowledgement (`RIVET_K8S_CAPACITY_GATE_CONFIRM=certify-staging`). Both configured context variables must exactly match the active context, the namespace must begin `rivet-staging-`, and the live Helm manifest must contain all four requested `repository@sha256:digest` images. It does not upgrade an arbitrary release: the provider gate owns candidate deployment. The capacity runner only adds short-lived owned resources and removes them before returning:
+The runner requires both the provider-gate acknowledgement (`RIVET_K8S_PROVIDER_GATE_CONFIRM=deploy-staging`) and its separate exact acknowledgement (`RIVET_K8S_CAPACITY_GATE_CONFIRM=certify-staging`). Both configured context variables must exactly match the active context, the namespace must begin `rivet-staging-`, and the live Helm manifest must contain every selected deployed `repository@sha256:digest` image (web, API, and executor, plus proxy only in embedded mode). It does not upgrade an arbitrary release: the provider gate owns candidate deployment. In external mode, its load Job calls the configured public HTTPS gateway from inside the cluster; staging must permit that DNS and egress path. In embedded mode, it calls the in-cluster proxy Service. The capacity runner only adds short-lived owned resources and removes them before returning:
 
 - two uniquely identified temporary projects based on the deterministic Code-plus-Delay fixture, published as one short and one long endpoint;
 - one uniquely named ConfigMap containing a non-secret worker configuration;
@@ -590,20 +631,20 @@ If none of those exist, the launcher/verification flow fails with an explicit in
 
 ## DevOps handoff map
 
-This repo is already shaped like a Kubernetes application, but it is not the single-container sample chart shape. Treat it as a custom four-workload app:
+This repo is already shaped like a Kubernetes application, but it is not the single-container sample chart shape. Treat the production deployment as a custom web/control/execution app with a co-located executor; the fourth, proxy image is retained for embedded compatibility mode:
 
 | DevOps expectation                            | This repo                                                                                                                                                                                                                                                                                          |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Root `deploy/studio-server/images/` directory | Present. It contains four runtime images: `deploy/studio-server/images/proxy/Dockerfile`, `deploy/studio-server/images/web/Dockerfile`, `deploy/studio-server/images/api/Dockerfile`, and `deploy/studio-server/images/executor/Dockerfile`.                                                       |
 | Application user `uid/gid=10001`              | Present. Runtime images and chart security contexts run workloads as `10001:10001`.                                                                                                                                                                                                                |
 | Environment overlays                          | Present under [deploy/studio-server/helm/overlays](../../deploy/studio-server/helm/overlays). If your GitLab template requires `deploy/overlays`, point that wrapper at these values or copy environment overrides from here; do not replace the custom chart with a generic single-service chart. |
-| Helm chart                                    | Present under [deploy/studio-server/helm](../../deploy/studio-server/helm). It renders `proxy`, `web`, singleton `backend`, scalable `execution`, services, ingress, HPAs, Vault annotations, and validation guards.                                                                               |
+| Helm chart                                    | Present under [deploy/studio-server/helm](../../deploy/studio-server/helm). External mode renders `web`, singleton `backend`, scalable `execution`, ClusterIP Services, HPAs, Vault annotations, and validation guards. Embedded mode also renders proxy and Ingress resources.                    |
 | CI image build                                | Current publishing is GitHub Actions at [.github/workflows/studio-server-images.yml](../../.github/workflows/studio-server-images.yml). If deploying from GitLab CI, create equivalent jobs for all four Dockerfiles or reuse the published GHCR images.                                           |
 | Vault AppRole                                 | The chart uses Vault Injector annotations through `vault.role`, `vault.authPath`, `vault.secretPath`, and `vault.dotenvTemplate`. The containers source `/vault/dotenv` during startup.                                                                                                            |
 
-Do not deploy this app with a generic one-Deployment chart unless that chart can faithfully express the four workload roles and their routing:
+Do not deploy this app with a generic one-Deployment chart unless that chart can faithfully express the workload roles and the [external gateway contract](#external-gateway-contract):
 
-- public browser traffic enters `proxy`
+- public browser traffic enters the cluster-owned gateway (or the embedded proxy in compatibility mode)
 - dashboard/editor assets come from `web`
 - `/api/*`, latest workflow execution, and `/ws/latest-debugger` go to singleton `backend`
 - published workflow endpoint traffic goes to scalable `execution`
@@ -638,7 +679,7 @@ Have these ready before the first `helm upgrade --install`:
 - `metrics-server` or equivalent resource metrics if the CPU HPAs are enabled
 - GHCR image-pull access, either anonymous for public images or `imagePullSecrets` for private packages
 
-The pods need outbound network access to Postgres, object storage, Vault, and GHCR during image pulls. The proxy also needs in-cluster DNS resolution through `env.RIVET_PROXY_RESOLVER`; the default value is `kube-dns.kube-system.svc.cluster.local`.
+The pods need outbound network access to Postgres, object storage, Vault, and GHCR during image pulls. Only embedded-gateway mode needs in-cluster proxy DNS resolution through `env.RIVET_PROXY_RESOLVER`.
 
 ## Production handoff
 
@@ -648,7 +689,7 @@ Before DevOps installs it, they must replace or confirm:
 
 - `images.*.repository` and `images.*.tag`
 - `clusterDomain` if the cluster does not use `cluster.local`
-- ingress hostnames and DNS annotations
+- the external gateway host, TLS, UI gate, route mapping, and trusted-header handling described above (owned outside this chart)
 - Vault role, secret path, and dotenv template if Vault is used
 - managed Postgres secret wiring
 - `postgres.maxConnections`, `postgres.reservedConnections`, and `postgres.poolMaxPerApiPod` against the provider's actual database limit and the execution HPA maximum
@@ -656,7 +697,7 @@ Before DevOps installs it, they must replace or confirm:
 - `objectStorage.prefix` for workflow objects (`runtime-libraries/` remains a separate, fixed namespace)
 - `auth.keySecretName` or equivalent Vault-provided `RIVET_KEY`
 - `writableVolumeLimits.*` from measured workspace, workflow, app-data, and runtime-library high-water marks
-- for every workload, complete memory and node-ephemeral-storage request/limit pairs, or the documented temporary rationale under `resourceLimitAcknowledgements`; remove an acknowledgement as soon as its measured limit is supplied
+- for every deployed workload, complete memory and node-ephemeral-storage request/limit pairs, or the documented temporary rationale under `resourceLimitAcknowledgements`; remove an acknowledgement as soon as its measured limit is supplied
 
 The chart defaults deliberately use `example.invalid/...` image repositories and the templates fail validation until those placeholders are replaced. This keeps production installs from silently using stale or accidental images.
 
@@ -701,9 +742,6 @@ imagePullSecrets:
   # - name: ghcr-pull-secret
 
 images:
-  proxy:
-    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/proxy
-    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
   web:
     repository: ghcr.io/valerypopoff/rivet2.0-studio-server/web
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
@@ -714,17 +752,10 @@ images:
     repository: ghcr.io/valerypopoff/rivet2.0-studio-server/executor
     tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
 
+gateway:
+  mode: external
 ingress:
-  enabled: true
-  className: <ingress-class>
-  host: <rivet-hostname>
-  externalDNSHostname: <rivet-hostname>
-  tlsSecretName: <tls-secret-name>
-  annotations:
-    # Use the equivalent long-timeout/websocket annotations for the target ingress controller.
-    nginx.ingress.kubernetes.io/proxy-body-size: 100m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: '86400'
-    nginx.ingress.kubernetes.io/proxy-send-timeout: '86400'
+  enabled: false # The cluster owner installs the gateway/Ingress separately.
 
 vault:
   enabled: true
@@ -811,11 +842,11 @@ Helm validates every chart-owned integer that becomes a runtime limit or a Kuber
 
 Every chart-managed disposable writable volume is nevertheless bounded: `writableVolumeLimits` caps workspace, workflow materialization, app-data caches, and runtime-library cache storage; the existing `tmpVolume.sizeLimit` caps `/var/tmp`. These prevent a single pod from consuming unbounded node ephemeral storage, but their starting values are not capacity evidence.
 
-For a production release, Helm requires each of `proxy`, `web`, `api`, `executor`, and `execution` to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations with tested values after the published-route capacity gate.
+For a production release, Helm requires each deployed component (`web`, `api`, `executor`, and `execution`, plus `proxy` only in embedded mode) to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations with tested values after the published-route capacity gate.
 
-The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally, keeps them as `ClusterIP`, and routes ingress to the `proxy` service.
+The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally and keeps them as `ClusterIP`. In external mode it creates no Ingress; DevOps routes to the component Services outside the chart. Only embedded mode routes a chart Ingress to the `proxy` Service.
 
-`nginx.ingress.kubernetes.io/proxy-body-size` is the ingress-side ceiling. If App Settings -> `Web apps` -> `Button data` is set above `100 MiB`, raise this annotation to the same or a larger value too; the running app can reload its own proxy configuration but cannot rewrite an ingress controller's annotations.
+The cluster-owned ingress must set its own body-size ceiling. If App Settings -> `Web apps` -> `Button data` is set above `100 MiB`, raise that ceiling to the same or a larger value too. In embedded mode, set the appropriate ingress-controller annotation as well; the running app cannot rewrite external ingress settings.
 
 If you are adapting a standard single-app overlay, do not expect these sample keys to do anything until the chart explicitly supports them:
 
@@ -827,7 +858,7 @@ If you are adapting a standard single-app overlay, do not expect these sample ke
 - `pdb`
 - single-service `hpa`
 
-Use this chart's existing `autoscaling.proxy`, `autoscaling.execution`, `resources.*`, `ingress`, `vault`, and component `service.*` values instead. Add new chart support intentionally if the cluster standard requires one of the unsupported knobs.
+Use this chart's existing `autoscaling.execution`, `resources.*`, `vault`, and component `service.*` values instead. `autoscaling.proxy` and chart-owned `ingress` apply only in embedded compatibility mode. Add new chart support intentionally if the cluster standard requires one of the unsupported knobs.
 
 ### Prometheus metrics and alerts
 
@@ -1001,9 +1032,9 @@ Runtime-library local files are caches/workspaces, not the source of truth in ma
 
 `tmpVolume` is an `emptyDir` mounted at `/var/tmp` with a default `2Gi` size limit. Increase `tmpVolume.sizeLimit` if workflows write larger temporary files; do not use the unsupported generic `writableDirs` overlay key.
 
-### Ingress and public routes
+### Gateway and public routes
 
-Ingress should route all public traffic to the chart's `proxy` service. The proxy then routes internally:
+In external mode, the cluster-owned gateway implements the [external gateway contract](#external-gateway-contract) and routes to these chart Services. In embedded compatibility mode, the chart-owned Ingress enters the in-chart proxy, which applies the same routing:
 
 | Public path                                | Internal target                                           |
 | ------------------------------------------ | --------------------------------------------------------- |
@@ -1018,9 +1049,7 @@ Ingress should route all public traffic to the chart's `proxy` service. The prox
 | `/ws/latest-debugger`                      | singleton `backend` API websocket                         |
 | `/ws/executor/internal` and `/ws/executor` | executor container in the singleton `backend` StatefulSet |
 
-Keep ingress body-size limits high enough for project import/export and keep websocket timeouts long. The tracked nginx overlay examples use `100m` body size and `86400` second read/send timeouts. For non-nginx ingress controllers, translate those annotations to the controller-specific equivalents.
-
-Do not route `/workflows` directly to `execution` from the external ingress. External traffic should still enter through `proxy`, because the proxy injects the trusted `X-Rivet-Proxy-Auth` header and handles the optional UI/public workflow auth policies consistently.
+Keep gateway body-size limits high enough for project import/export and keep websocket timeouts long. The tracked nginx overlay examples use `100m` body size and `86400` second read/send timeouts. In external mode, the gateway must replace the embedded proxy's authentication and trusted-header boundary before routing `/workflows` to `execution`; merely forwarding HTTP to the Service is unsafe.
 
 ### Published execution admission
 
@@ -1148,13 +1177,13 @@ Termination is coordinated across Kubernetes and the API:
 
 Tune shutdown and pod termination values together. Longer drain windows improve completion probability but slow rollouts and node maintenance.
 
-Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Proxy and execution default to `maxUnavailable: 0` and `maxSurge: 1`. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; by default this protects proxy and execution. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
+Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Execution defaults to `maxUnavailable: 0` and `maxSurge: 1`; the embedded proxy uses the same strategy when present. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; production external mode protects execution, while embedded mode can also protect proxy. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
 
 The backend remains a validated singleton. Managed web-app action run history/replay/cancellation is replica-safe, and execution replicas scale normally. The remaining control-plane blockers are process-local latest-debugger ownership and the co-located editor executor: their related Services could choose different backend pods if backend replicas were increased. Do not disable the singleton validation until those sessions have distributed ownership or stable fenced routing and are tested with owner loss.
 
 ### Vault dotenv contract
 
-Runtime images source `/vault/dotenv` at startup and also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`. API and executor workloads receive the configured full dotenv; the proxy's chart-owned template writes only `RIVET_KEY` to that path.
+Runtime images source `/vault/dotenv` at startup and also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`. API and executor workloads receive the configured full dotenv; in embedded mode only, the proxy's chart-owned template writes only `RIVET_KEY` to that path.
 
 The chart's typed dotenv contract emits `agent-pre-populate-only: "true"` and `agent-init-first: "true"`. The latter ensures the schema-migration Job and serving containers can source `/vault/dotenv` before using credentials. The API and executor compatibility init containers do not read secrets. Vault also receives explicit CPU, memory, and node-ephemeral requests and limits from `vault.agentResources` (`50m`/`64Mi`/`64Mi` requested and `250m`/`128Mi`/`256Mi` limited by default). These small bounds are intentionally separate from the long-running graph workloads, because the injected agent only renders the dotenv file. The Injector owns the shared in-memory secret volume and its standard annotations do not expose a chart-owned `sizeLimit`; do not use this dotenv contract for large rendered payloads.
 
@@ -1173,9 +1202,9 @@ BILLING_OPENAI_KEY=<provider-api-key>
 
 You may provide `RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING` instead of `RIVET_DEPLOYMENT_DATABASE_PASSWORD`, but keep the non-secret `postgres.host`, `postgres.database`, and `postgres.username` values in the Helm values because chart validation uses them to catch incomplete managed-storage configuration. The migration Job uses these bootstrap values to seed the encrypted deployment-storage row only when it is absent. API and execution replicas then read PostgreSQL; the editor executor receives its startup snapshot over authenticated pod-local loopback, not through a settings file.
 
-Vault dotenv injection is the preferred place for production LLM/provider credentials. The full injected file is sourced only by backend API, execution API, and editor executor workloads, so custom credential names do not require a fixed chart template list. The proxy receives a generated one-variable dotenv containing only `RIVET_KEY`; it does not receive provider credentials. Non-secret development values may use `env`, which is likewise projected into execution workloads while the proxy receives only its route/resolver settings. Do not commit provider keys in Helm values. Browser access remains separately restricted by `RIVET_ENV_ALLOWLIST`; server-side availability never makes a secret browser-readable.
+Vault dotenv injection is the preferred place for production LLM/provider credentials. The full injected file is sourced only by backend API, execution API, and editor executor workloads, so custom credential names do not require a fixed chart template list. In embedded mode, the proxy receives a generated one-variable dotenv containing only `RIVET_KEY`; it does not receive provider credentials. Non-secret development values may use `env`, which is likewise projected into execution workloads while the embedded proxy receives only its route/resolver settings. Do not commit provider keys in Helm values. Browser access remains separately restricted by `RIVET_ENV_ALLOWLIST`; server-side availability never makes a secret browser-readable.
 
-`RIVET_KEY` must be available to both the proxy and API workloads. It is used for trusted proxy-to-API identity and for optional public route/UI access checks.
+`RIVET_KEY` must be available to the API workloads and the separately managed trusted gateway in external mode, or to the chart proxy in embedded mode. It is used for trusted gateway-to-API identity and optional public route/UI access checks; never expose it to browsers or logs.
 
 If Vault is disabled, create Kubernetes secrets that match the chart values. For example:
 
@@ -1328,11 +1357,10 @@ With release name `rivet`, the default Kubernetes object names are prefixed as `
 
 ### First deploy checks
 
-After install or upgrade, check the rollout from the cluster side before opening the browser:
+After install or upgrade, check the rollout from the cluster side before opening the browser (adjust the example object prefix if `fullnameOverride` differs):
 
 ```bash
-kubectl -n your-namespace get pods,svc,ingress
-kubectl -n your-namespace rollout status deployment/rivet-proxy
+kubectl -n your-namespace get pods,svc
 kubectl -n your-namespace rollout status deployment/rivet-web
 kubectl -n your-namespace rollout status deployment/rivet-execution
 kubectl -n your-namespace rollout status statefulset/rivet-backend
@@ -1345,14 +1373,14 @@ kubectl -n your-namespace get jobs -l app.kubernetes.io/component=workflow-schem
 kubectl -n your-namespace logs job/<release>-rivet-workflow-schema-migration
 ```
 
-Then port-forward the proxy service and verify the proxy-facing routes:
+In external mode, verify the DevOps-owned HTTPS gateway, including the expected authentication challenge and a public 404 for `/internal/workflows/<published-endpoint>`. The gateway may be outside this release or namespace; do not expect a chart Ingress or proxy Service. In embedded mode only, port-forward the proxy Service:
 
 ```bash
 kubectl -n your-namespace port-forward svc/rivet-proxy 8080:80
 curl -i http://127.0.0.1:8080/
 ```
 
-If server UI auth is disabled with `env.RIVET_SERVER_UI_AUTH_MODE: "none"` or the verified client IP matches `Settings` -> `General` -> `Trusted clients`, `/api/config` should be reachable through the proxy directly:
+If server UI auth is disabled with `env.RIVET_SERVER_UI_AUTH_MODE: "none"` or the verified client IP matches `Settings` -> `General` -> `Trusted clients`, `/api/config` should be reachable through the selected gateway directly (the examples below use the embedded proxy's local port-forward; substitute the public HTTPS origin in external mode):
 
 ```bash
 curl -i http://127.0.0.1:8080/api/config
@@ -1407,11 +1435,11 @@ The production contract today is:
 
 - `workflowStorage.backend=managed`
 - `runtimeLibraries.backend=managed`
-- `replicaCount.proxy=2`
+- `gateway.mode=external`; there is no chart proxy replica in production
 - `replicaCount.web=1`
 - `replicaCount.backend=1`
 - `replicaCount.execution=2`
-- `autoscaling.proxy.enabled=true`
+- `autoscaling.proxy.enabled=false`
 - `autoscaling.web.enabled=false`
 - `autoscaling.backend.enabled=false`
 - `autoscaling.execution.enabled=true`
@@ -1423,13 +1451,13 @@ The production contract today is:
 - `env.RIVET_LATEST_APPS_BASE_PATH=/apps-latest`
 - `/ws/latest-debugger` is enabled by default for latest workflow and latest web-app action debugging; set `env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=false` only for deployments that intentionally forbid this hosted debugger websocket
 - `appSettings.backend=postgres` is required; no shared app-data PVC or RWX storage class is required for App Settings
-- storage/database, routes, trusted clients, endpoint/web-app auth, OAuth, runtime limits, recording policy, environment overlays, websocket overrides, and executor proxy settings are persisted as encrypted PostgreSQL App Settings. Storage changes require pod rollout; dynamic non-startup settings propagate by revision notification/polling. The proxy consumes only the authenticated non-secret projection and has no app-data mount
+- storage/database, routes, trusted clients, endpoint/web-app auth, OAuth, runtime limits, recording policy, environment overlays, websocket overrides, and executor proxy settings are persisted as encrypted PostgreSQL App Settings. Storage changes require pod rollout; dynamic non-startup settings propagate by revision notification/polling. The external gateway does not consume this projection; coordinate route changes with DevOps. The embedded proxy consumes only the authenticated non-secret projection and has no app-data mount
 - `clusterDomain=cluster.local` unless the cluster DNS suffix is different
-- `env.RIVET_PROXY_RESOLVER` must be set for in-cluster nginx DNS resolution
+- `env.RIVET_PROXY_RESOLVER` is needed only in embedded mode for in-cluster nginx DNS resolution
 - control-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=none` with the job worker enabled there
 - execution-plane runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=endpoint` with `RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED=false`
 - executor runtime-library reporting should stay at `RIVET_RUNTIME_LIBRARIES_REPLICA_TIER=editor`
-- `proxy` and `execution` scale independently; they are not a tied pair
+- the cluster-owned gateway and `execution` scale independently; in embedded mode the proxy has its own HPA
 - baseline resource requests are defined for every workload; tune them from production-like load tests before treating the HPA thresholds as final
 
 Chart-maintainer note:
@@ -1437,7 +1465,7 @@ Chart-maintainer note:
 - backend/execution chart reuse is intentionally shallow
 - shared env and pod fragments live in `_env.tpl` and `_pod.tpl`
 - backend and execution pods use independent `emptyDir` app-data volumes for other local caches; the managed storage and executor-proxy settings are not projected into them
-- `proxy` and `web` remain mostly explicit so rendered pod shape stays operator-readable
+- `web` remains mostly explicit so rendered pod shape stays operator-readable; the embedded proxy templates are isolated behind `gateway.mode`
 
 ## Repo-local verification
 
@@ -1459,7 +1487,7 @@ For a live-cluster local check, also run:
 yarn studio-server:dev:kubernetes-test
 ```
 
-Then validate:
+Then validate the local embedded-mode rehearsal:
 
 - the proxy URL opens successfully
 - `/api/config` returns the expected published/latest base paths
@@ -1469,13 +1497,13 @@ Then validate:
 ## Operator checklist
 
 - scale `execution` for endpoint demand
-- keep `proxy` redundant and autoscaled because all endpoint traffic still crosses it
+- have DevOps keep the external gateway redundant; embedded installations must keep their proxy redundant
 - keep `web` fixed at `1` unless real dashboard traffic becomes significant
 - keep the control plane conservative and do not scale `backend`
-- do not couple `proxy` and `execution` replica counts mechanically; let each tier scale for its own pressure
+- do not couple gateway and `execution` replica counts mechanically; let each tier scale for its own pressure
 - keep `postgres.maxConnections` equal to the real provider limit and re-check the rendered connection formula whenever execution `maxReplicas` or the per-pod pool changes
 - load-test and tune the chart's baseline CPU and memory requests before treating HPA behavior as production-ready
-- keep the same `RIVET_KEY` available to both `proxy` and the API workloads
+- supply the same `RIVET_KEY` to the API workloads and only to the trusted gateway component that derives and injects the proxy-auth token; never expose it to browsers or logs
 - route `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, `${RIVET_LATEST_APPS_BASE_PATH}`, and `/ws/latest-debugger` to the singleton control plane
 - route `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}` and `${RIVET_PUBLISHED_APPS_BASE_PATH}` to the execution plane
 - keep runtime-library job ownership on the singleton control plane and keep execution replicas in sync-only mode

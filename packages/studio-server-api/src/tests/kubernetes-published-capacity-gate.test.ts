@@ -50,6 +50,7 @@ function providerConfig() {
   return {
     namespace: 'rivet-staging-capacity',
     release: 'rivet-staging',
+    gatewayMode: 'external',
     baseUrl: 'https://rivet-staging.example.test',
     requestHeaders: { authorization: 'Bearer capacity-secret' },
     workflowProbe: {
@@ -166,19 +167,23 @@ test('capacity fixtures receive unique isolated identities and the requested exe
   assert.doesNotMatch(fixture, /59701e85-9052-43e1-a71d-af698ef7c1fe/);
 });
 
-test('published capacity load Job config uses only the published proxy route and contains no control credentials', () => {
-  const jobConfig = createPublishedCapacityLoadJobConfig({
+test('published capacity load Job uses the selected gateway without control credentials', () => {
+  const options = {
     serviceNamePrefix: 'rivet-staging',
     namespace: 'rivet-staging-capacity',
     jobName: 'rivet-capacity-test',
+    baseUrl: 'https://rivet-staging.example.test',
     capacity: {
       requestTimeoutMs: 10_000,
       controlCanaryEveryRequests: 5,
       controlCanaryTimeoutMs: 1_000,
       stages: [{ name: 'steady', scenario: 'fast', expect: 'success', concurrency: 2, requests: 3 }],
     },
-  });
-  assert.equal(jobConfig.proxyBaseUrl, 'http://rivet-staging-proxy.rivet-staging-capacity.svc.cluster.local');
+  };
+  const jobConfig = createPublishedCapacityLoadJobConfig({ ...options, gatewayMode: 'external' });
+  assert.equal(jobConfig.proxyBaseUrl, 'https://rivet-staging.example.test');
+  const embeddedJobConfig = createPublishedCapacityLoadJobConfig({ ...options, gatewayMode: 'embedded' });
+  assert.equal(embeddedJobConfig.proxyBaseUrl, 'http://rivet-staging-proxy.rivet-staging-capacity.svc.cluster.local');
   assert.equal(jobConfig.controlBaseUrl, 'http://rivet-staging-api.rivet-staging-capacity.svc.cluster.local');
   assert.deepEqual(jobConfig.scenarios, [
     { name: 'fast', endpoint: 'rivet-capacity-test-fast', body: { input: 'capacity-fast' } },

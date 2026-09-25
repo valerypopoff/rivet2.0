@@ -1,17 +1,14 @@
+gateway:
+  mode: external
+
+# Ingress, hostname, TLS, and routing are supplied by the cluster owner.
 ingress:
-  enabled: true
-  className: nginx
-  host: rivet.example.com
-  externalDNSHostname: rivet.example.com
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: 100m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: '86400'
-    nginx.ingress.kubernetes.io/proxy-send-timeout: '86400'
+  enabled: false
 
 release:
   production:
     # The canonical deployment command fills the immutable source SHA, CI
-    # evidence, canonical manifest digest, schema version, and all four image
+    # evidence, canonical manifest digest, schema version, and image
     # digests from a promoted release manifest. Do not put mutable image tags
     # in this file.
     enabled: true
@@ -61,7 +58,6 @@ auth:
   keySecretName: rivet-shared-key
 
 replicaCount:
-  proxy: 2
   web: 1
   backend: 1
   execution: 2
@@ -87,28 +83,20 @@ writableVolumeLimits:
 # long-running graphs. These acknowledgements make that temporary decision
 # deliberate; replace each with measured limits after the capacity load gate.
 resourceLimitAcknowledgements:
-  proxy:
-    memory: "Proxy memory limit deferred until ingress load evidence is retained."
-    ephemeralStorage: "Proxy node-ephemeral limit deferred until ingress and log-volume evidence is retained."
   web:
-    memory: "Web memory limit deferred until the low-volume control-plane profile is measured."
-    ephemeralStorage: "Web node-ephemeral limit deferred until the low-volume control-plane profile is measured."
+    memory: 'Web memory limit deferred until the low-volume control-plane profile is measured.'
+    ephemeralStorage: 'Web node-ephemeral limit deferred until the low-volume control-plane profile is measured.'
   api:
-    memory: "Control API memory limit deferred until editor and maintenance high-water marks are measured."
-    ephemeralStorage: "Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured."
+    memory: 'Control API memory limit deferred until editor and maintenance high-water marks are measured.'
+    ephemeralStorage: 'Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured.'
   executor:
-    memory: "Editor executor memory limit deferred until remote-debugger graph high-water marks are measured."
-    ephemeralStorage: "Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured."
+    memory: 'Editor executor memory limit deferred until remote-debugger graph high-water marks are measured.'
+    ephemeralStorage: 'Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured.'
   execution:
-    memory: "Execution API memory limit deferred until the published-route load gate establishes a safe ceiling."
-    ephemeralStorage: "Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling."
+    memory: 'Execution API memory limit deferred until the published-route load gate establishes a safe ceiling.'
+    ephemeralStorage: 'Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling.'
 
 autoscaling:
-  proxy:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 5
-    targetCPUUtilizationPercentage: 75
   web:
     enabled: false
   backend:

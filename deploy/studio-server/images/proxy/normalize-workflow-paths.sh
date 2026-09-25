@@ -580,6 +580,38 @@ write_client_address_include "$RIVET_CLIENT_ADDRESS_INCLUDE_FILE" || exit 1
 export RIVET_PUBLIC_ROUTES_INCLUDE_FILE="${RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-/tmp/nginx/rivet-public-routes.inc}"
 export RIVET_PROXY_TIMEOUT_INCLUDE_FILE="${RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-/tmp/nginx/rivet-proxy-timeout.inc}"
 export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
+RIVET_PROXY_INTERNAL_LISTEN="${RIVET_PROXY_INTERNAL_LISTEN:-8080}"
+case "$RIVET_PROXY_INTERNAL_LISTEN" in
+  8080|127.0.0.1:18081) export RIVET_PROXY_INTERNAL_LISTEN ;;
+  *) >&2 printf 'Error: invalid proxy listen port.\n'; exit 1 ;;
+esac
+if [ "${RIVET_PROXY_VM_TLS:-0}" = 1 ]; then
+  RIVET_PROXY_HTTPS_PORT="${RIVET_PROXY_HTTPS_PORT:-443}"
+  case "$RIVET_PROXY_HTTPS_PORT" in
+    ''|0*|??????*|*[!0-9]*) >&2 printf 'Error: invalid VM HTTPS port.\n'; exit 1 ;;
+  esac
+  if [ "$RIVET_PROXY_HTTPS_PORT" -lt 1 ] || [ "$RIVET_PROXY_HTTPS_PORT" -gt 65535 ]; then
+    >&2 printf 'Error: invalid VM HTTPS port.\n'
+    exit 1
+  fi
+  RIVET_PROXY_HTTPS_REDIRECT_SUFFIX=""
+  if [ "$RIVET_PROXY_HTTPS_PORT" != 443 ]; then
+    RIVET_PROXY_HTTPS_REDIRECT_SUFFIX=:$RIVET_PROXY_HTTPS_PORT
+  fi
+  export RIVET_PROXY_HTTPS_REDIRECT_SUFFIX
+  for host in "${RIVET_PROXY_PUBLIC_HOST:-}" "${RIVET_PROXY_INTERNAL_HOST:-}"; do
+    case "$host" in
+      ''|.*|*..*|*.|*[!a-zA-Z0-9.-]*) >&2 printf 'Error: invalid VM hostname.\n'; exit 1 ;;
+    esac
+  done
+  if [ "$RIVET_PROXY_PUBLIC_HOST" = "$RIVET_PROXY_INTERNAL_HOST" ] ||
+    [ "$RIVET_PROXY_INTERNAL_LISTEN" != '127.0.0.1:18081' ] ||
+    [ ! -r /run/rivet/tls/cert.pem ] || [ ! -r /run/rivet/tls/key.pem ] ||
+    [ ! -f /etc/nginx/templates/vm-tls.conf.template ]; then
+    >&2 printf 'Error: incomplete VM TLS proxy configuration.\n'
+    exit 1
+  fi
+fi
 
 fetch_initial_proxy_settings
 read_runtime_limit_settings

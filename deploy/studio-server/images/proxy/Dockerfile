@@ -11,6 +11,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/lib/load-env.sh /opt/rivet/
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/entrypoint.sh /opt/rivet/proxy/entrypoint.sh
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chown=10001:10001 deploy/studio-server/images/proxy/vm-edge-proxy.conf /etc/nginx/vm-edge-proxy.conf
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/normalize-workflow-paths.sh /opt/rivet/proxy/normalize-workflow-paths.sh
 COPY --chown=10001:10001 deploy/studio-server/images/proxy/client-address.sh /opt/rivet/proxy/client-address.sh
 
@@ -28,8 +29,9 @@ ENV RIVET_EXECUTOR_UPSTREAM_HOST=executor
 ENV RIVET_EXECUTOR_UPSTREAM_PORT=21889
 ENV RIVET_PROXY_RESOLVER=127.0.0.11
 ENV RIVET_PROXY_READ_TIMEOUT=180s
+ENV RIVET_PROXY_INTERNAL_LISTEN=8080
 
-EXPOSE 8080
+EXPOSE 8080 8443
 USER 10001:10001
 
 ENTRYPOINT ["/opt/rivet/proxy/entrypoint.sh"]

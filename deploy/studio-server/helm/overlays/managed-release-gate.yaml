@@ -3,6 +3,10 @@
 # image digests. Do not use this overlay as a production deployment template.
 fullnameOverride: rivet-managed-release
 
+# Disposable release-gate ingress fixture; production uses the external mode.
+gateway:
+  mode: embedded
+
 replicaCount:
   proxy: 2
   web: 1
@@ -61,13 +65,13 @@ env:
   RIVET_WEB_APPS_BASE_PATH: /apps
   RIVET_LATEST_WEB_APPS_BASE_PATH: /apps-latest
   RIVET_PROXY_RESOLVER: kube-dns.kube-system.svc.cluster.local
-  RIVET_CORS_ALLOWED_ORIGINS: ""
+  RIVET_CORS_ALLOWED_ORIGINS: ''
   RIVET_SERVER_UI_AUTH_MODE: none
-  RIVET_REQUIRE_UI_GATE_KEY: "false"
-  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  RIVET_REQUIRE_UI_GATE_KEY: 'false'
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'false'
   # The disposable release gate uses loopback-only dummy OAuth to prove that
   # a managed publication update revokes an already-open WebSocket on an
   # execution replica. This is never a production deployment setting.
-  RIVET_ENABLE_DEVELOPMENT_AUTH: "true"
-  RIVET_DEVELOPMENT_AUTH_CLIENTS: "127.0.0.1/32,::1/128"
-  RIVET_RECORDINGS_ENABLED: "true"
+  RIVET_ENABLE_DEVELOPMENT_AUTH: 'true'
+  RIVET_DEVELOPMENT_AUTH_CLIENTS: '127.0.0.1/32,::1/128'
+  RIVET_RECORDINGS_ENABLED: 'true'

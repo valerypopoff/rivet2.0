@@ -152,6 +152,32 @@ async function assertHelmTemplateFails(
   );
 }
 
+test('external gateway mode deploys no in-chart proxy or Ingress', async () => {
+  assert.match(readRepoFile('deploy/studio-server/helm/values.yaml'), /gateway:\s*\n\s*mode:\s*external/);
+  const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'gateway.mode=external',
+    'ingress.enabled=false',
+    'autoscaling.proxy.enabled=false',
+  ]);
+
+  for (const component of ['web', 'api', 'execution', 'executor']) {
+    assert.match(renderedChart, new RegExp(`name: rivet-rivet-${component}\\b`));
+  }
+  assert.doesNotMatch(renderedChart, /name: rivet-rivet-proxy\b/);
+  assert.doesNotMatch(renderedChart, /^kind: Ingress$/m);
+  assert.doesNotMatch(renderedChart, /app\.kubernetes\.io\/component: proxy/);
+
+  await assertHelmTemplateFails(
+    ['gateway.mode=external', 'ingress.enabled=true'],
+    /ingress\.enabled requires gateway\.mode=embedded/,
+  );
+  await assertHelmTemplateFails(['gateway.mode=invalid'], /gateway\.mode must be external or embedded/);
+  await assertHelmTemplateFails(
+    ['gateway.mode=external', 'metrics.enabled=true', 'metrics.proxyExporter.enabled=true'],
+    /metrics\.proxyExporter\.enabled requires gateway\.mode=embedded/,
+  );
+});
+
 test('rendered chart keeps control-plane and execution-plane API env contracts distinct', async () => {
   const renderedChart = await renderLocalKubernetesChart();
 
@@ -258,7 +284,10 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.doesNotMatch(renderedChart, /bootstrap-deployment-storage-settings\.mjs/);
   assert.match(renderedChart, /- name: api-runtime-config-compatibility/);
   assert.match(renderedChart, /- name: executor-runtime-config-compatibility/);
-  assert.match(renderedChart, /name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/internal\/executor-runtime-config"/);
+  assert.match(
+    renderedChart,
+    /name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/internal\/executor-runtime-config"/,
+  );
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_PREFIX\s*\n\s*value: "workflows\/"/);
@@ -708,8 +737,11 @@ test('chart exposes aggregate proxy metrics only through opt-in internal resourc
     proxyTemplate,
     /server \{\s*listen 127\.0\.0\.1:18080;[\s\S]*?location = \/stub_status \{\s*stub_status;/,
   );
-  assert.match(proxyTemplate, /server \{\s*listen 8080;[\s\S]*?include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/);
-  assert.doesNotMatch(proxyTemplate, /listen 8080;[\s\S]*?location = \/metrics/);
+  assert.match(
+    proxyTemplate,
+    /server \{\s*listen \$\{RIVET_PROXY_INTERNAL_LISTEN\};[\s\S]*?include \$\{RIVET_PUBLIC_ROUTES_INCLUDE_FILE\};/,
+  );
+  assert.doesNotMatch(proxyTemplate, /listen \$\{RIVET_PROXY_INTERNAL_LISTEN\};[\s\S]*?location = \/metrics/);
 
   assert.match(
     proxyMetricsChart,
@@ -1022,17 +1054,18 @@ test('chart renders profile-aware probes, graceful lifecycle, and replicated-tie
     /must be less than the effective minimum replica count for proxy/,
   );
 });
-test('production overlay keeps the supported ingress, Vault, and scale boundaries for the real cluster topology', () => {
+test('production overlay leaves ingress to the cluster owner and keeps managed storage and scale boundaries', () => {
   const prodOverlay = readRepoFile('deploy/studio-server/helm/overlays/prod.yaml');
 
-  assert.match(prodOverlay, /ingress:\s*\n\s*enabled:\s*true/);
+  assert.match(prodOverlay, /gateway:\s*\n\s*mode:\s*external/);
+  assert.match(prodOverlay, /ingress:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /vault:\s*\n\s*enabled:\s*true/);
   assert.match(prodOverlay, /backend:\s*1/);
   assert.match(prodOverlay, /web:\s*1/);
   assert.match(prodOverlay, /execution:\s*[2-9]\d*/);
   assert.match(prodOverlay, /workflowStorage:\s*\n\s*backend:\s*managed/);
   assert.doesNotMatch(prodOverlay, /rivet-prod-app-data|storage:\s*\n\s*appData:/);
-  assert.match(prodOverlay, /autoscaling:[\s\S]*proxy:\s*\n\s*enabled:\s*true/);
+  assert.doesNotMatch(prodOverlay, /autoscaling:[\s\S]*proxy:\s*\n\s*enabled:\s*true/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*web:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*backend:\s*\n\s*enabled:\s*false/);
   assert.match(prodOverlay, /autoscaling:[\s\S]*execution:\s*\n\s*enabled:\s*true/);
@@ -1042,7 +1075,7 @@ test('production overlay keeps the supported ingress, Vault, and scale boundarie
   assert.match(prodOverlay, /writableVolumeLimits:\s*\n\s*workspace:\s*2Gi[\s\S]*?runtimeLibraries:\s*8Gi/);
   assert.match(
     prodOverlay,
-    /resourceLimitAcknowledgements:[\s\S]*?execution:[\s\S]*?memory:\s*"[^"]{24,}"[\s\S]*?ephemeralStorage:\s*"[^"]{24,}"/,
+    /resourceLimitAcknowledgements:[\s\S]*?execution:[\s\S]*?memory:\s*['"][^'"]{24,}['"][\s\S]*?ephemeralStorage:\s*['"][^'"]{24,}['"]/,
   );
   assert.match(prodOverlay, /release:\s*\n\s*production:[\s\S]*?enabled:\s*true/);
 });
@@ -1058,8 +1091,6 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--values',
     'deploy/studio-server/helm/overlays/prod.yaml',
     '--set',
-    'images.proxy.repository=ghcr.io/example/proxy',
-    '--set',
     'images.web.repository=ghcr.io/example/web',
     '--set',
     'images.api.repository=ghcr.io/example/api',
@@ -1067,8 +1098,6 @@ test('production rendering requires a fully identified digest-pinned release', a
     'images.executor.repository=ghcr.io/example/executor',
   ];
   const identifiedReleaseArgs = [
-    '--set',
-    `images.proxy.digest=sha256:${'a'.repeat(64)}`,
     '--set',
     `images.web.digest=sha256:${'b'.repeat(64)}`,
     '--set',
@@ -1111,6 +1140,9 @@ test('production rendering requires a fully identified digest-pinned release', a
   assert.match(rendered, new RegExp(`release-manifest-digest: "sha256:${'f'.repeat(64)}"`));
   assert.match(rendered, new RegExp(`chart-content-digest: "sha256:${'f'.repeat(64)}"`));
   assert.match(rendered, new RegExp(`image: ghcr.io/example/api@sha256:${'c'.repeat(64)}`));
+  assert.doesNotMatch(rendered, /name: rivet-prod-rivet-proxy\b|app\.kubernetes\.io\/component: proxy/);
+  assert.doesNotMatch(rendered, /^kind: Ingress$/m);
+  assert.doesNotMatch(rendered, /example\.invalid\/rivet\/proxy/);
 
   assert.throws(
     () => renderProduction(['--set-string', 'resourceLimitAcknowledgements.execution.memory=']),
@@ -1139,9 +1171,9 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.match(localOverlay, /execution:\s*2/);
   assert.match(localOverlay, /workflowStorage:\s*\n\s*backend:\s*managed/);
   assert.doesNotMatch(localOverlay, /rivet-local-app-data|storage:\s*\n\s*appData:/);
-  assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*"true"/);
+  assert.match(localOverlay, /RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:\s*['"]true['"]/);
   assert.doesNotMatch(localOverlay, /RIVET_REQUIRE_WORKFLOW_KEY/);
-  assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*"false"/);
+  assert.match(localOverlay, /RIVET_REQUIRE_UI_GATE_KEY:\s*['"]false['"]/);
   assert.doesNotMatch(localOverlay, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
