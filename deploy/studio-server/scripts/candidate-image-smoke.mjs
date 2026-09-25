@@ -239,7 +239,9 @@ async function main() {
     const publicationSnapshot = await publicationSnapshotResponse.json();
     const { projectId, draftRevisionId, publicationVersion, project } = publicationSnapshot;
     if (
-      !projectId || !draftRevisionId || !publicationVersion ||
+      !projectId ||
+      !draftRevisionId ||
+      !publicationVersion ||
       project?.projectMetadataId !== projectId ||
       project.revisionId !== draftRevisionId ||
       project.settings?.publicationVersion !== publicationVersion

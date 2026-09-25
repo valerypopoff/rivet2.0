@@ -47,7 +47,7 @@
       "expires": "2026-10-10"
     },
     {
-      "advisoryIds": [1138808, 1138809],
+      "advisoryIds": [1239765, 1239766],
       "packages": ["image-size"],
       "dependents": ["@docusaurus/mdx-loader@npm:3.10.1"],
       "scope": "Documentation build toolchain parsing repository-controlled MDX image assets only; it is not shipped in Rivet runtime bundles.",

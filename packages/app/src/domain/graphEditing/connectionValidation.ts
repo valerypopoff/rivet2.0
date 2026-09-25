@@ -427,7 +427,7 @@ export function getAsyncBranchTopologyViolation({
         kind: 'invalidWatchInput',
         triggerNodeId: watchNode.id,
         nodeId: watchNode.id,
-        message: `Watch Streaming Output "${watchNode.title}" must have exactly one Streaming Output input connection.`,
+        message: `Watch streaming "${watchNode.title}" must have exactly one Streaming Output input connection.`,
       };
     }
 
@@ -437,7 +437,7 @@ export function getAsyncBranchTopologyViolation({
         kind: 'missingSource',
         triggerNodeId: watchNode.id,
         nodeId: watchInputs[0]!.outputNodeId,
-        message: `Watch Streaming Output "${watchNode.title}" has no runnable streaming source.`,
+        message: `Watch streaming "${watchNode.title}" has no runnable streaming source.`,
       };
     }
     if (sourceNode.isSplitRun) {
@@ -446,7 +446,7 @@ export function getAsyncBranchTopologyViolation({
         triggerNodeId: watchNode.id,
         nodeId: sourceNode.id,
         message:
-          `Watch Streaming Output "${watchNode.title}" cannot watch split-run node "${sourceNode.title}". ` +
+          `Watch streaming "${watchNode.title}" cannot watch split-run node "${sourceNode.title}". ` +
           'Assemble a single streaming value before the watch boundary.',
       };
     }
@@ -461,7 +461,7 @@ export function getAsyncBranchTopologyViolation({
           kind: 'cycle',
           triggerNodeId: watchNode.id,
           nodeId,
-          message: `Watch Streaming Output "${watchNode.title}" cannot reconnect to itself.`,
+          message: `Watch streaming "${watchNode.title}" cannot reconnect to itself.`,
         };
       }
       if (branchNodeIds.has(nodeId)) {
@@ -476,7 +476,7 @@ export function getAsyncBranchTopologyViolation({
           kind: 'disabledNode',
           triggerNodeId: watchNode.id,
           nodeId,
-          message: `Watch Streaming Output "${watchNode.title}" cannot include disabled node "${node.title}".`,
+          message: `Watch streaming "${watchNode.title}" cannot include disabled node "${node.title}".`,
         };
       }
       if (node.type === 'watchStreamingOutput') {
@@ -484,7 +484,7 @@ export function getAsyncBranchTopologyViolation({
           kind: 'nestedWatch',
           triggerNodeId: watchNode.id,
           nodeId,
-          message: `Watch Streaming Output "${watchNode.title}" cannot contain another Watch Streaming Output node.`,
+          message: `Watch streaming "${watchNode.title}" cannot contain another Watch streaming node.`,
         };
       }
       if (node.type === 'startBackgroundBranch') {
@@ -493,7 +493,7 @@ export function getAsyncBranchTopologyViolation({
           triggerNodeId: watchNode.id,
           nodeId,
           message:
-            `Watch Streaming Output "${watchNode.title}" cannot contain Start Async Branch. ` +
+            `Watch streaming "${watchNode.title}" cannot contain Start Async Branch. ` +
             'Keep watched work in the bounded watch branch.',
         };
       }
@@ -507,9 +507,9 @@ export function getAsyncBranchTopologyViolation({
             nestedGraphId: nestedAsyncBranch.graphId,
             nestedNodeId: nestedAsyncBranch.node.id,
             message:
-              `Start Async Branch "${nestedAsyncBranch.node.title}" cannot run inside Watch Streaming Output "${watchNode.title}" ` +
+              `Start Async Branch "${nestedAsyncBranch.node.title}" cannot run inside Watch streaming "${watchNode.title}" ` +
               `through Subgraph "${node.title}". A Watch invocation must keep all work within the Watch scheduler. ` +
-              'Move Start Async Branch after Stop Watching Streaming Output, or run the work directly inside the watched branch.',
+              'Move Start Async Branch after Stop watching streaming, or run the work directly inside the watched branch.',
           };
         }
         const nestedWatch = findReachableStreamingWatchInSubGraph(node, topologyProject);
@@ -521,7 +521,7 @@ export function getAsyncBranchTopologyViolation({
             nestedGraphId: nestedWatch.graphId,
             nestedNodeId: nestedWatch.node.id,
             message:
-              `Watch Streaming Output "${nestedWatch.node.title}" cannot run inside Watch Streaming Output "${watchNode.title}" ` +
+              `Watch streaming "${nestedWatch.node.title}" cannot run inside Watch streaming "${watchNode.title}" ` +
               `through Subgraph "${node.title}". A Watch branch cannot contain another Watch.`,
           };
         }
@@ -532,7 +532,7 @@ export function getAsyncBranchTopologyViolation({
           triggerNodeId: watchNode.id,
           nodeId,
           message:
-            `Watch Streaming Output "${watchNode.title}" must reach Stop Watching Streaming Output before ` +
+            `Watch streaming "${watchNode.title}" must reach Stop watching streaming before ` +
             `Graph Output "${node.title}".`,
         };
       }
@@ -544,7 +544,7 @@ export function getAsyncBranchTopologyViolation({
             kind: 'multipleStops',
             triggerNodeId: watchNode.id,
             nodeId,
-            message: `Watch Streaming Output "${watchNode.title}" must have one Stop Watching Streaming Output boundary.`,
+            message: `Watch streaming "${watchNode.title}" must have one Stop watching streaming boundary.`,
           };
         }
         stopNodeId = nodeId;
@@ -569,7 +569,7 @@ export function getAsyncBranchTopologyViolation({
         nodeId,
         externalNodeId: externalInput.outputNodeId,
         message:
-          `Watch Streaming Output "${watchNode.title}" cannot run "${node.title}" because it also depends on ` +
+          `Watch streaming "${watchNode.title}" cannot run "${node.title}" because it also depends on ` +
           `"${externalNode?.title ?? externalInput.outputNodeId}" outside the watch branch. ` +
           'Assemble every required value inside the watch boundary.',
       };
@@ -586,7 +586,7 @@ export function getAsyncBranchTopologyViolation({
           triggerNodeId: watchNode.id,
           nodeId: stopNodeId,
           message:
-            `Stop Watching Streaming Output "${stopNode.title}" cannot reconnect to its own Watch Streaming Output branch. ` +
+            `Stop watching streaming "${stopNode.title}" cannot reconnect to its own Watch streaming branch. ` +
             'Connect it only to ordinary downstream execution.',
         };
       }

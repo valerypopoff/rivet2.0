@@ -121,9 +121,13 @@ active graph's definition-valid connections.
 
 ## Streaming Watch Connections
 
+Connection-topology diagnostics use the visible **Watch streaming** and
+**Stop watching streaming** node names. Renaming either node in the UI should
+update these diagnostics and their graph-editing tests together.
+
 [`streamingOutputWatchWireState.ts`](../packages/app/src/components/nodeCanvas/streamingOutputWatchWireState.ts)
 derives a second, intentionally simpler visual treatment for the ordinary
-definition-valid connection into an enabled **Watch Streaming Output** node's
+definition-valid connection into an enabled **Watch streaming** node's
 `Streaming Output` (`stream`) input. The base wire remains a single ordinary
 one-way wire, but short copies of the existing continuation arrowhead repeat
 from the source toward Watch along its rendered Bézier route. They communicate
