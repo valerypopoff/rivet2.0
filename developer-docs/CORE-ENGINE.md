@@ -1217,7 +1217,18 @@ it ignores that slice in ordinary scheduling. Inputs into the slice may come
 only from Watch, Graph Output and nested Watch/Start Async Branch boundaries are
 rejected, including when either boundary is hidden behind one or more Subgraphs,
 and direct split-run producers are rejected because a partial item
-would otherwise have ambiguous ownership. The temporary child processor receives
+would otherwise have ambiguous ownership.
+
+Watch wiring in the canvas has one narrow draft-state exception: if a Stop
+already has multiple branches attached, restoring a Watch wire may leave
+another branch temporarily outside the boundary. The editor permits that
+wire only when the other Stop predecessor has input ports but none are
+wired yet. Further wires can then close the boundary. Core execution and
+full-project validation still reject any unfinished or genuinely external
+input; zero-input producers and already wired external branches do not qualify
+for the editor exception.
+
+The temporary child processor receives
 Watch's `value` (**Chunk**), `updateIndex` (**Chunk Index**), and `isFinal`
 outputs as a suppressed preload,
 shares the root's globals, stored values, cache, references, and lifecycle wiring,

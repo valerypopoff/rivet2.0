@@ -620,3 +620,51 @@ export function getAsyncBranchTopologyViolation({
 
   return undefined;
 }
+
+/**
+ * A Stop with two prewired inputs becomes temporarily open when the first
+ * Watch-to-branch wire is restored. Allow that one editor step only when the
+ * other Stop predecessor has input ports but none are wired yet. Execution
+ * and full-project validation continue to use the strict check above.
+ */
+export function getWireDragAsyncBranchTopologyViolation({
+  connections,
+  proposedConnection,
+  graphId,
+  project,
+  nodesById,
+  hasInputPorts,
+}: {
+  connections: readonly NodeConnection[];
+  proposedConnection: NodeConnection;
+  graphId?: GraphId;
+  project?: Project;
+  nodesById: Record<NodeId, ChartNode>;
+  hasInputPorts: (nodeId: NodeId) => boolean;
+}): AsyncBranchTopologyViolation | undefined {
+  const violation = getAsyncBranchTopologyViolation({ connections, graphId, project, nodesById });
+  if (
+    violation?.kind !== 'externalInput' ||
+    nodesById[violation.triggerNodeId]?.type !== 'watchStreamingOutput' ||
+    nodesById[violation.nodeId]?.type !== 'stopWatchingStreamingOutput' ||
+    !violation.externalNodeId ||
+    proposedConnection.outputNodeId !== violation.triggerNodeId ||
+    !hasInputPorts(violation.externalNodeId) ||
+    connections.some((connection) => connection.inputNodeId === violation.externalNodeId)
+  ) {
+    return violation;
+  }
+
+  const pending = [proposedConnection.inputNodeId];
+  const visited = new Set<NodeId>();
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (nodeId === violation.nodeId) return undefined;
+    if (visited.has(nodeId)) continue;
+    visited.add(nodeId);
+    for (const connection of connections) {
+      if (connection.outputNodeId === nodeId) pending.push(connection.inputNodeId);
+    }
+  }
+  return violation;
+}

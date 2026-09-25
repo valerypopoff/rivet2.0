@@ -20,7 +20,10 @@ import {
   shouldKeepWireConnectionModeAfterAction,
 } from '../domain/graphEditing/wireDragActions.js';
 import { createConnectionChange, createRewireConnectionChange } from '../domain/graphEditing/connectionActions.js';
-import { getAsyncBranchTopologyViolation } from '../domain/graphEditing/connectionValidation.js';
+import {
+  getAsyncBranchTopologyViolation,
+  getWireDragAsyncBranchTopologyViolation,
+} from '../domain/graphEditing/connectionValidation.js';
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 
@@ -210,19 +213,30 @@ export const useDraggingWire = ({
         dropTarget: validatedDropTarget,
       });
 
-      const nextConnections =
-        action.type === 'makeConnection'
-          ? createConnectionChange([...connections], action.params).connections
-          : action.type === 'rewireConnection'
-            ? createRewireConnectionChange([...connections], action.originalConnection, action.params).connections
-            : undefined;
+      const connectionChange =
+        action.type === 'makeConnection' ? createConnectionChange([...connections], action.params) : undefined;
+      const nextConnections = connectionChange
+        ? connectionChange.connections
+        : action.type === 'rewireConnection'
+          ? createRewireConnectionChange([...connections], action.originalConnection, action.params).connections
+          : undefined;
       const asyncBranchViolation = nextConnections
-        ? getAsyncBranchTopologyViolation({
-            connections: nextConnections,
-            graphId,
-            nodesById,
-            project,
-          })
+        ? connectionChange
+          ? getWireDragAsyncBranchTopologyViolation({
+              connections: nextConnections,
+              proposedConnection: connectionChange.newConnection,
+              graphId,
+              nodesById,
+              project,
+              hasInputPorts: (nodeId) =>
+                (store.get(canvasIoDefinitionsForNodeState(nodeId))?.inputDefinitions.length ?? 0) > 0,
+            })
+          : getAsyncBranchTopologyViolation({
+              connections: nextConnections,
+              graphId,
+              nodesById,
+              project,
+            })
         : undefined;
 
       if (asyncBranchViolation) {
