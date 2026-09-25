@@ -1,12 +1,12 @@
 ---
 id: watch-streaming-output
-title: Watch Streaming Output Node
-sidebar_label: Watch Streaming Output
+title: Watch streaming node
+sidebar_label: Watch streaming
 ---
 
-# Watch Streaming Output Node
+# Watch streaming node
 
-**Watch Streaming Output** lets a branch begin work from snapshots emitted by a
+**Watch streaming** lets a branch begin work from snapshots emitted by a
 node that is still running. It is useful when an LLM Chat response is streaming
 and some downstream work can begin as soon as a useful partial value appears.
 
@@ -17,7 +17,10 @@ making every wire in a graph stream-aware.
 When the complete route can carry partial snapshots, its wires are marked with
 repeated forward arrowheads. Rivet does not show those arrows for a route that
 ends at a frozen or final-only boundary, has an ambiguous Subgraph input, or
-enters a recursive caller chain with no eligible producer. The route remains
+enters a recursive caller chain with no eligible producer. A normal value wired
+to Watch still arrives once at completion, but its wire has no arrows. A
+cross-project Subgraph output gets arrows when the selected project's preview
+confirms that its graph can emit live snapshots on that output. The route remains
 one-way and does not change any other output wire's final-only behavior.
 
 ## Inputs and outputs
@@ -68,13 +71,20 @@ The final producer output is also offered to the watch. This means a
 non-streaming producer, or an LLM call that produces no usable partial value,
 can still take the same path once it finishes.
 
+If you only need the first N snapshots as one ordinary value, use
+[Catch streaming chunks](./catch-streaming-chunks.mdx). In particular, Catch with
+count `1` avoids a repeated branch when an
+[Stream value](./stream-value.mdx) node publishes one early
+value. Watch deliberately still offers both partial updates and the final value;
+do not assume a one-chunk producer makes a no-Stop Watch branch run only once.
+
 ## Watching a Subgraph output
 
 Streaming can cross a graph boundary without a special wrapper node or setting.
 Inside the child graph, connect the streaming producer directly to a named
 **Graph Output**. The matching output port on its **Subgraph** node or
 **Referenced Graph Alias** then emits the same partial snapshots, so it can
-connect to **Watch Streaming Output** in the parent graph.
+connect to **Watch streaming** in the parent graph.
 
 For example, enable **Stream response** on LLM Chat, connect its **Response**
 to a Graph Output named `response`, then connect the Subgraph node's
@@ -132,14 +142,14 @@ pages. A non-streaming source still produces only one final iteration.
 
 ## Reusing saved results
 
-When you use **Run from Watch Streaming Output**, Rivet can reuse the connected
+When you use **Run from Watch streaming**, Rivet can reuse the connected
 producer's saved output. It sends that value through the watch exactly once as
 the final snapshot. It does not invent partial chunks that were not saved.
 
 Rivet does not reuse a saved Watch, Stop, or node inside the repeated watch
 branch. Those values would bypass the ordering, cancellation, and first-Stop
 rules that make a watch reliable. If you need to repeat the branch from the
-saved final value, run from **Watch Streaming Output**. If you need fresh
+saved final value, run from **Watch streaming**. If you need fresh
 chunks, run from the producer instead.
 
 For LLM Chat, **Chunk** is the current cumulative Response text. Use **All
@@ -151,7 +161,7 @@ retaining repeated whole-response prefixes.
 
 ### Process every snapshot
 
-**Stop Watching Streaming Output is optional.** Without it, every partial
+**Stop watching streaming is optional.** Without it, every partial
 snapshot and the final producer value run the whole downstream branch. Use this
 form when each chunk should be sent or handled independently, such as updating
 a live status, storing progress, or calling another service. The branch ends
@@ -163,7 +173,7 @@ join its repeatedly produced values back into ordinary one-time scheduling.
 
 ### Select one value and rejoin the graph
 
-Add **one reachable Stop Watching Streaming Output** node when one branch
+Add **one reachable Stop watching streaming** node when one branch
 result must continue through ordinary graph execution. A snapshot does not
 have to reach Stop: for example, a conditional branch can end normally while
 partial JSON is still incomplete. Stop accepts a single value, stops new watch
@@ -207,10 +217,10 @@ is valid JSON.
 
 ## Example: begin enrichment as soon as an ID is present
 
-1. Connect LLM Chat's **Response** output to **Watch Streaming Output**.
+1. Connect LLM Chat's **Response** output to **Watch streaming**.
 2. In the watch branch, parse only when the response contains a complete ID,
    then use that ID for lookup or enrichment nodes.
-3. Send the prepared result to **Stop Watching Streaming Output**.
+3. Send the prepared result to **Stop watching streaming**.
 4. After Stop, join that result with LLM Chat's normal final Response output
    and continue through the graph.
 
@@ -223,7 +233,7 @@ alternative value.
 
 ## See also
 
-- [Stop Watching Streaming Output](./stop-watching-streaming-output.mdx)
+- [Stop watching streaming](./stop-watching-streaming-output.mdx)
 - [LLM Chat](./llm-chat.mdx)
 - [Join](./join.mdx)
 - [Start Async Branch](./start-async-branch.mdx)

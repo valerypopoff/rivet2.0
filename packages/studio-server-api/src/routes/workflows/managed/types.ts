@@ -25,6 +25,8 @@ export type WorkflowRow = {
   published_revision_id: string | null;
   published_version_id: string | null;
   endpoint_name: string;
+  endpoint_access?: 'public' | 'internal';
+  publication_version?: string;
   published_endpoint_name: string;
   last_published_at: TimestampValue | null;
 };
@@ -107,7 +109,7 @@ export type RecordingRow = {
   status: 'succeeded' | 'failed' | 'suspicious';
   duration_ms: number;
   endpoint_name_at_execution: string;
-  execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | null;
+  execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | null;
   graph_id_at_execution: string | null;
   graph_name_at_execution: string | null;
   revision_key_at_execution: string | null;

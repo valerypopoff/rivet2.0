@@ -5,10 +5,12 @@ import { useGoToSubgraphNode } from '../../hooks/useGoToSubgraphNode.js';
 import { projectState } from '../../state/savedGraphs.js';
 import { Tooltip } from '../Tooltip.js';
 import { SubgraphGraphIcon } from './SubgraphGraphIcon.js';
+import { useSubgraphProjectCatalog } from '../../providers/ProvidersContext.js';
 
 export const SubGraphHeaderLink: FC<{ node: ChartNode }> = ({ node }) => {
   const goToSubgraphNode = useGoToSubgraphNode();
   const project = useAtomValue(projectState);
+  const catalog = useSubgraphProjectCatalog();
 
   if (node.type !== 'subGraph') {
     return null;
@@ -17,7 +19,7 @@ export const SubGraphHeaderLink: FC<{ node: ChartNode }> = ({ node }) => {
   const subGraphNode = node as SubGraphNode;
   const graphId = subGraphNode.data.graphId;
 
-  if (!graphId || !project.graphs[graphId]) {
+  if (!graphId || (subGraphNode.data.targetProjectId ? !catalog : !project.graphs[graphId])) {
     return (
       <span className="subgraph-link-tooltip subgraph-link-placeholder" aria-hidden="true">
         <span className="subgraph-link-button">

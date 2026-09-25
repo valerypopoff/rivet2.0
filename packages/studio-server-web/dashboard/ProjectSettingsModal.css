@@ -202,6 +202,34 @@
   gap: 6px;
 }
 
+.project-settings-publication-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning-color, #b99148);
+  border-radius: 6px;
+  color: var(--grey-lightest);
+}
+
+.project-settings-endpoint-access {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding-bottom: 14px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.project-settings-access-label {
+  color: var(--grey-lightest);
+  font-size: var(--workflow-library-font-size-s);
+  font-weight: 700;
+}
+
 .project-settings-input-row {
   display: flex;
   align-items: center;

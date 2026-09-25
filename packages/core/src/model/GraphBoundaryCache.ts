@@ -11,6 +11,8 @@ export type GraphBoundaryInput = {
   dataType: DataType;
   editor?: DynamicEditorEditor;
   id: string;
+  /** Stable Graph Input node identity; older saved boundaries may omit it. */
+  nodeId?: NodeId;
   portId: PortId;
 };
 
@@ -131,7 +133,7 @@ export function buildGraphBoundaryInputData(
       continue;
     }
 
-    const defaultValue = defaults?.[input.id];
+    const defaultValue = defaults?.[input.portId] ?? defaults?.[input.id];
     if (defaultValue != null) {
       inputData[input.portId] = defaultValue;
     }
@@ -164,6 +166,7 @@ function deriveGraphBoundary(graph: NodeGraph): GraphBoundary {
         dataType: inputNode.data.dataType,
         editor: inputNode.data.editor,
         id: inputNode.data.id,
+        nodeId: inputNode.id,
         portId: inputNode.data.id as PortId,
       });
     } else if (node.type === 'graphOutput' && !outputsById.has(getBoundaryNodeId(node))) {

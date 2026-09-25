@@ -320,7 +320,6 @@ Copy-Item deploy/studio-server/.env.kubernetes-local.example .env.local
 kubectl --context rivet-local apply -f deploy/studio-server/kubernetes-test/local-dependencies.yaml
 kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-postgres --timeout=180s
 kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-minio --timeout=180s
-kubectl --context rivet-local -n rivet-local wait --for=condition=complete job/rivet-local-create-bucket --timeout=180s
 $env:RIVET_ENV_FILE = '.env.local'
 yarn studio-server:dev:kubernetes-test
 ```
@@ -404,12 +403,48 @@ Current behavior:
   fail-closed authority for manually edited, cached, remote, or otherwise
   incomplete project topology.
   `getEditorRunFromPlan(...)` is the shared local/remote partial-execution guard:
-  starting from **Watch Streaming Output** may reuse the upstream producer's saved
-  final output once, but a repeated branch node, **Stop Watching Streaming Output**,
+  starting from **Watch streaming** may reuse the upstream producer's saved
+  final output once, but a repeated branch node, **Stop watching streaming**,
   or a node after Stop must not be planned by preloading the Watch boundary. Keep
   the planner's error actionable: run from Watch for the final snapshot, or from
   the producer for a live stream. Core independently rejects direct/runtime cache
   injection into an active Watch source, boundary, or repeated branch.
+
+- The Streaming node group contains **Stream value**, **Catch streaming chunks**,
+  **Watch streaming**, and **Stop watching streaming** only, in that display
+  order. This is an explicit menu order, not an alphabetic rename of node types;
+  existing `watchStreamingOutput` and `stopWatchingStreamingOutput` graph data
+  must remain readable. Stream value is
+  an ordinary pass-through node that publishes one Core `onPartialOutputs` event;
+  Graph Output and Subgraph keep their existing final-result contracts. Catch
+  registers a once-only processor boundary for one source port: it snapshots
+  the first N updates, ignores an identical terminal duplicate, commits one
+  ordinary output when N arrives or the source ends, and never schedules a
+  repeated Watch branch. Its count is runtime-clamped to 1..1024; Conditional
+  and Many modes are rejected. If the producer fails before N chunks, Catch
+  does not release a partial array as a successful ordinary value. Keep
+  `StreamingWatchTopology` demand tracing in
+  sync for both Watch and Catch so named inputs and same-/cross-project Subgraph
+  outputs reach them before child completion. A child failure after an early
+  emission remains a failed run; previously started caller side effects cannot
+  be undone. Verify same-/cross-project early delivery, count=1 exactly-once
+  downstream execution, short streams, duplicate final values, and replay.
+  Their canvas headers share the wave icon in `NodeTitleLabel`; the two new
+  serialized types are `streamValue` and `catchStreamingChunks`.
+  Wire arrows are presentation-only and require a known partial-producing
+  source; a normal value connected to Watch or Catch remains a plain wire and
+  is delivered only at completion. The authenticated cross-project preview
+  includes only Graph Output node IDs proven streamable by the server's full
+  target topology. Derive those IDs with the target project's registered
+  built-in provider plugins as well as core nodes; otherwise a provider stream
+  can run correctly but its cross-project wire loses its arrow. Unavailable
+  external plugins remain unmarked rather than guessing. Probe all graph
+  boundaries in one topology pass, not one full-project traversal per graph;
+  retain graph IDs as data keys without prototype inheritance. The browser keeps
+  this hint outside the serializable
+  `Project` state, so previews still disclose no executable node configuration
+  or datasets. Core runtime topology remains permissive for ordinary final
+  values; never use the arrow filter to gate Watch/Catch execution.
 
 Managed-state safety:
 
@@ -558,7 +593,7 @@ The Docker launchers now render layered Compose files:
 - `yarn studio-server:dev` / `yarn studio-server:dev:docker:*` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.dev.yml`; set `RIVET_METRICS_ENABLED=true` only when a private host or Docker-network scraper needs the direct API container's pull-only `/metrics` endpoint. The public proxy intentionally does not route that endpoint.
 - Published web-app Chat state and Stored Values use browser IndexedDB. The API-only `RIVET_WEB_APP_BROWSER_STORAGE_*` settings bound the optional on-demand WebSocket storage RPC; Compose and Helm supply safe defaults. See [web-app-browser-storage.md](web-app-browser-storage.md) before changing limits or proxy timeouts, because these ceilings must be sized with execution-replica memory and admission capacity.
 - `yarn studio-server:prod`, `yarn studio-server:prod:prebuilt`, `yarn studio-server:prod:restart`, and `yarn studio-server:prod:custom` use `deploy/studio-server/compose/docker-compose.managed-services.yml` plus `deploy/studio-server/compose/docker-compose.yml`
-- the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally. Its MinIO server and client use tag-pinned `quay.io/minio/*` images, rather than mutable Docker Hub `latest` tags, so local object-storage rehearsals use the same repeatable dependency releases as the Kubernetes fixture.
+- the shared file only contributes the optional managed Postgres/MinIO services; enable them explicitly with `COMPOSE_PROFILES=workflow-managed` when rehearsing object-storage mode locally. The disposable MinIO server uses the same release-and-digest-pinned Docker Hub image as the managed API test and Kubernetes fixtures. The managed blob store creates its bucket on startup; a separate MinIO client container is not needed. Every service in the managed Compose layer retains the dev-stack fingerprint label used by the launchers. The fixture runs as root only to write its initially root-owned local volume; this is not a production storage recommendation.
 
 Current behavior:
 
@@ -710,6 +745,8 @@ The target selector is a portaled modal control. Its menu must use the shared mo
 Recording playback state is project-scoped in upstream Rivet. The hosted editor bridge must attach a loaded recorder to the exact replay project id returned by the workspace open operation; writing the older `{ recorder, path }` shape loads the project but intentionally leaves `Play Recording` hidden. Switching to another project must not globally clear that owner-scoped state, and closing a replay tab prunes its cached recorder payload. Replay datasets are optional. A `404` from the replay-dataset artifact endpoint means that run has no captured dataset snapshot, and `HostedIOProvider` must continue opening the replay project with an empty dataset rather than treating that response as a project-load failure.
 
 Keep Studio Server recording cleanup on the stable shared `loadedRecordingState` export and perform the project ownership comparison in the hosted application. Do not import an internal convenience atom such as `clearLoadedRecordingForProjectState` merely because it exists in the same monorepo: use the public host seam so Rivet editor refactors and Studio Server changes remain independently reviewable in one commit.
+
+Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extractor searches both event types, so a `prompt` input is found with `$.prompt.requestId` while an `input` port uses the root path `$.requestId`. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep this covered through both a real child processor recording and the called-project HTTP listing filter.
 
 ## Source of truth
 

@@ -18,7 +18,9 @@ export const requireOperatorAuth: RequestHandler = (req, res, next) => {
     // The executor's existing service-only overlay and profile-health routes
     // do not represent browser operator sessions. Never grant all /api access.
     if (isTrustedExecutorRequest(req) && (
-      (req.method === 'GET' && req.path === '/workflows/execution-environment') ||
+      (req.method === 'GET' && (req.path === '/workflows/execution-environment' ||
+        /^\/workflows\/subgraph-projects\/[^/]+\/execution$/.test(req.path))) ||
+      (req.method === 'POST' && req.path === '/workflows/local-editor-recordings/subgraph-run') ||
       req.path === '/workflows/llm-profile-health' || req.path.startsWith('/workflows/llm-profile-health/')
     )) return next();
     if (!isServerUiAuthRequestAllowed(req)) {

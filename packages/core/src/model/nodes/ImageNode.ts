@@ -21,8 +21,12 @@ import { expectType } from '../../utils/expectType.js';
 export type ImageNode = ChartNode<'image', ImageNodeData>;
 
 type ImageNodeData = {
+  /** Missing on older projects; treat it as binary for compatibility. */
+  sourceType?: 'binary' | 'base64';
   data?: DataRef;
   useDataInput: boolean;
+  base64?: string;
+  useBase64Input?: boolean;
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif';
   useMediaTypeInput: boolean;
 };
@@ -35,7 +39,10 @@ export class ImageNodeImpl extends NodeImpl<ImageNode> {
       title: 'Image',
       visualData: { x: 0, y: 0, width: 250 },
       data: {
+        sourceType: 'binary',
         useDataInput: false,
+        base64: '',
+        useBase64Input: false,
         mediaType: 'image/png',
         useMediaTypeInput: false,
       },
@@ -45,7 +52,14 @@ export class ImageNodeImpl extends NodeImpl<ImageNode> {
   getInputDefinitions(): NodeInputDefinition[] {
     const inputDefinitions: NodeInputDefinition[] = [];
 
-    if (this.chartNode.data.useDataInput) {
+    if (this.chartNode.data.sourceType === 'base64' && this.chartNode.data.useBase64Input) {
+      inputDefinitions.push({
+        id: 'base64' as PortId,
+        title: 'Base64',
+        dataType: 'string',
+        coerced: false,
+      });
+    } else if (this.chartNode.data.sourceType !== 'base64' && this.chartNode.data.useDataInput) {
       inputDefinitions.push({
         id: 'data' as PortId,
         title: 'Data',
@@ -78,6 +92,16 @@ export class ImageNodeImpl extends NodeImpl<ImageNode> {
   getEditors(): EditorDefinition<ImageNode>[] {
     return [
       {
+        type: 'segmented',
+        label: 'Image source',
+        dataKey: 'sourceType',
+        defaultValue: 'binary',
+        options: [
+          { value: 'binary', label: 'Binary data' },
+          { value: 'base64', label: 'Base64' },
+        ],
+      },
+      {
         type: 'dropdown',
         label: 'Media Type',
         dataKey: 'mediaType',
@@ -94,6 +118,17 @@ export class ImageNodeImpl extends NodeImpl<ImageNode> {
         dataKey: 'data',
         useInputToggleDataKey: 'useDataInput',
         mediaTypeDataKey: 'mediaType',
+        hideIf: (data) => data.sourceType === 'base64',
+      },
+      {
+        type: 'code',
+        label: 'Base64',
+        dataKey: 'base64',
+        defaultValue: '',
+        language: 'plaintext',
+        useInputToggleDataKey: 'useBase64Input',
+        hideIf: (data) => data.sourceType !== 'base64',
+        helperMessage: 'Raw base64-encoded image bytes. The Media Type setting describes the decoded image.',
       },
     ];
   }
@@ -103,14 +138,22 @@ export class ImageNodeImpl extends NodeImpl<ImageNode> {
       contextMenuTitle: 'Image',
       group: 'Data',
       infoBoxTitle: 'Image Node',
-      infoBoxBody: 'Defines a static image for use with other nodes. Can convert a binary type into an image type.',
+      infoBoxBody: 'Defines an image from a file, binary input, or base64 text. Media Type describes the resulting image.',
     };
   }
 
   async process(inputData: Inputs, context: InternalProcessContext): Promise<Outputs> {
     let data: Uint8Array;
 
-    if (this.chartNode.data.useDataInput) {
+    if (this.chartNode.data.sourceType === 'base64') {
+      const encodedData = this.chartNode.data.useBase64Input
+        ? expectType(inputData['base64' as PortId], 'string')
+        : this.data.base64;
+      if (!encodedData?.trim()) {
+        throw new Error('No base64 image data');
+      }
+      data = base64ToUint8Array(encodedData.trim());
+    } else if (this.chartNode.data.useDataInput) {
       data = expectType(inputData['data' as PortId], 'binary');
     } else {
       const dataRef = this.data.data?.refId;

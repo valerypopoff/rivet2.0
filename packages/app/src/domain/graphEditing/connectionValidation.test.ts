@@ -42,7 +42,7 @@ function makeStartAsyncBranchNode(nodeId: string, title = 'Start Async Branch'):
   return node;
 }
 
-function makeWatchStreamingOutputNode(nodeId: string, title = 'Watch Streaming Output'): ChartNode {
+function makeWatchStreamingOutputNode(nodeId: string, title = 'Watch streaming'): ChartNode {
   const node = registry.createDynamic('watchStreamingOutput');
   node.id = nodeId as NodeId;
   node.title = title;
@@ -309,7 +309,7 @@ test('getAsyncBranchTopologyViolation rejects a Stop boundary that reconnects to
     triggerNodeId: watch.id,
     nodeId: stop.id,
     message:
-      'Stop Watching Streaming Output "Stop Watching Streaming Output" cannot reconnect to its own Watch Streaming Output branch. ' +
+      'Stop watching streaming "Stop watching streaming" cannot reconnect to its own Watch streaming branch. ' +
       'Connect it only to ordinary downstream execution.',
   });
 });
@@ -482,7 +482,7 @@ test('getAsyncBranchTopologyViolation rejects async branches nested through Watc
 
   assert.equal(violation?.kind, 'asyncBranch');
   assert.equal(violation?.nodeId, outerSubgraph.id);
-  assert.match(violation?.message ?? '', /Nested Start Async Branch.*Watch Streaming Output.*through Subgraph/s);
+  assert.match(violation?.message ?? '', /Nested Start Async Branch.*Watch streaming.*through Subgraph/s);
 
   const nestedGraphViolation = getAsyncBranchTopologyViolation({
     connections: innerGraph.connections,
@@ -559,7 +559,7 @@ test('getAsyncBranchTopologyViolation rejects Watches nested through Watch Subgr
       nestedNodeId: nestedWatch.id,
     },
   );
-  assert.match(violation?.message ?? '', /Nested Watch.*cannot run inside Watch Streaming Output.*through Subgraph/s);
+  assert.match(violation?.message ?? '', /Nested Watch.*cannot run inside Watch streaming.*through Subgraph/s);
 });
 
 test('getAsyncBranchTopologyViolation permits ordinary and disabled Watch Subgraphs', () => {

@@ -1,4 +1,5 @@
 export type WorkflowProjectStatus = 'unpublished' | 'published' | 'unpublished_changes';
+export type WorkflowEndpointAccess = 'public' | 'internal';
 export type WorkflowProjectDownloadVersion = 'live' | 'published';
 
 export const WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH = 240;
@@ -101,8 +102,23 @@ export type WorkflowProjectSettings = {
   status: WorkflowProjectStatus;
   publicationStatus?: WorkflowProjectStatus;
   endpointName: string;
+  publishedEndpointName?: string;
+  endpointAccess?: WorkflowEndpointAccess;
   lastPublishedAt: string | null;
   publishedWebApps: WorkflowPublishedWebAppSummary[];
+  /** Opaque, project-scoped version of active publication settings. */
+  publicationVersion?: string;
+};
+
+export type WorkflowPublicationPreconditions = {
+  expectedProjectId: string;
+  expectedPublicationVersion: string;
+  /** Required only for commands that publish or replace executable draft content. */
+  expectedDraftRevisionId?: string;
+};
+
+export type WorkflowDraftPublicationPreconditions = WorkflowPublicationPreconditions & {
+  expectedDraftRevisionId: string;
 };
 
 export type WorkflowProjectSettingsDraft = {
@@ -133,7 +149,14 @@ export type WorkflowProjectWebAppSummary = {
 };
 
 export type WorkflowProjectWebAppsResponse = {
+  /** Endpoint settings and publication tokens from the same read as webApps. */
+  project: WorkflowProjectItem;
+  projectId: string;
+  draftRevisionId: string;
+  publicationVersion: string;
   hasMainGraph: boolean;
+  /** Project IDs whose saved-latest graphs can change a published caller without republishing it. */
+  savedLatestSubgraphProjectIds?: string[];
   webApps: WorkflowProjectWebAppSummary[];
 };
 

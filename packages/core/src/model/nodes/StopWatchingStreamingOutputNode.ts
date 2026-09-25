@@ -13,7 +13,7 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
     return {
       data: {},
       id: nanoid() as NodeId,
-      title: 'Stop Watching Streaming Output',
+      title: 'Stop watching streaming',
       type: 'stopWatchingStreamingOutput',
       visualData: { x: 0, y: 0, width: 230 },
     };
@@ -29,11 +29,11 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Stop Watching Streaming Output',
-      group: ['Logic'],
-      infoBoxTitle: 'Stop Watching Streaming Output Node',
+      contextMenuTitle: 'Stop watching streaming',
+      group: ['Streaming'],
+      infoBoxTitle: 'Stop watching streaming node',
       infoBoxBody: dedent`
-        Accepts a value from a Watch Streaming Output branch, stops future streaming
+        Accepts a value from a Watch streaming branch, stops future streaming
         snapshots, and lets its completed output continue through the ordinary graph.
         In parallel mode, the first completed branch to reach this node wins.
         If the stream ends without a value reaching this node, it is shown as Not ran
@@ -49,10 +49,10 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const value = inputs['value' as PortId];
     if (!value) {
-      throw new Error('Stop Watching Streaming Output requires a value.');
+      throw new Error('Stop watching streaming requires a value.');
     }
     if (!context.acceptStreamingWatchStop) {
-      throw new Error('Stop Watching Streaming Output must be downstream of Watch Streaming Output.');
+      throw new Error('Stop watching streaming must be downstream of Watch streaming.');
     }
     context.acceptStreamingWatchStop();
     return { ['value' as PortId]: value };
@@ -61,5 +61,5 @@ export class StopWatchingStreamingOutputNodeImpl extends NodeImpl<StopWatchingSt
 
 export const stopWatchingStreamingOutputNode = nodeDefinition(
   StopWatchingStreamingOutputNodeImpl,
-  'Stop Watching Streaming Output',
+  'Stop watching streaming',
 );

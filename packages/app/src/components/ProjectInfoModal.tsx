@@ -18,6 +18,7 @@ import { ProjectKnowledgeStoresConfiguration } from './ProjectKnowledgeStoresCon
 import { ProjectLLMProfileHealthConfiguration } from './ProjectLLMProfileHealthConfiguration';
 import { ProjectGlobalVariablesConfiguration } from './ProjectGlobalVariablesConfiguration';
 import { useIOProvider, useLLMProfileHealthAdmin } from '../providers/ProvidersContext';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext';
 import { fields } from './settings/settingsPageStyles';
 import { modalBody, SETTINGS_MODAL_HEIGHT, SettingsNavButton } from './SettingsModal';
 import {
@@ -138,6 +139,7 @@ export const ProjectInfoPanel: FC<{ page: ProjectSettingsPage }> = ({ page }) =>
   const savedGraphs = useAtomValue(savedGraphsState);
   const ioProvider = useIOProvider();
   const llmProfileHealthAdmin = useLLMProfileHealthAdmin();
+  const hostUiConfig = useRivetAppHostUiConfig();
   const [compareLoading, setCompareLoading] = useState(false);
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
@@ -255,9 +257,11 @@ export const ProjectInfoPanel: FC<{ page: ProjectSettingsPage }> = ({ page }) =>
             </div>
           )}
 
-          <div className="project-info-item">
-            <ProjectReferencesConfiguration />
-          </div>
+          {hostUiConfig.projectSettings?.showProjectReferences !== false && (
+            <div className="project-info-item">
+              <ProjectReferencesConfiguration />
+            </div>
+          )}
 
           <div className="project-info-item">
             <div className="project-info-label">Project compare</div>
@@ -307,7 +311,7 @@ export const ProjectInfoModal: FC<{
   return (
     <ModalTransition>
       {isOpen && (
-        <Modal onClose={onClose} width="40%" height={SETTINGS_MODAL_HEIGHT} testId="project-settings-modal">
+        <Modal onClose={onClose} width="max(700px, 40%)" height={SETTINGS_MODAL_HEIGHT} testId="project-settings-modal">
           <Global styles={projectSettingsModalScrollContainerOverrides} />
           <AppModalHeader title="Project settings" onClose={onClose} />
           <ModalBody>

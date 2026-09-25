@@ -1,32 +1,48 @@
 import { expect, test } from '@playwright/test';
-import { GetGlobalNodeImpl, SetGlobalNodeImpl } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { GetGlobalNodeImpl, SetGlobalNodeImpl, type NodeConnection, type PortId } from '@valerypopoff/rivet2-core';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
-test('Get Global uses one searchable Variable ID field for suggestions and manual IDs', async ({ page }) => {
+test('global output labels track IDs while Get Global remains searchable', async ({ page }) => {
   const writer = SetGlobalNodeImpl.create();
   writer.data.id = 'knownGlobalId';
   writer.visualData = { ...writer.visualData, x: 120, y: 150, width: 320 };
   const reader = GetGlobalNodeImpl.create();
   reader.data.id = 'originalId';
   reader.visualData = { ...reader.visualData, x: 530, y: 150, width: 320 };
+  const existingConnection: NodeConnection = {
+    outputNodeId: reader.id,
+    outputId: 'value' as PortId,
+    inputNodeId: writer.id,
+    inputId: 'value' as PortId,
+  };
 
   await seedHostedEditorProject(page, {
-    graph: { nodes: [writer, reader] },
+    graph: { nodes: [writer, reader], connections: [existingConnection] },
     graphId: 'get-global-variable-id-graph',
     loaded: true,
     projectId: 'get-global-variable-id-project',
     projectPath: '/workflows/Get Global Variable ID.rivet-project',
     title: 'Get Global Variable ID',
   });
+  await mockHostedEditorBootstrap(page);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
 
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const writerNode = editor.locator(`.node[data-nodeid="${writer.id}"]`);
+  await expect(writerNode.locator('.output-port[data-portid="saved-value"] + .port-label')).toHaveText('knownGlobalId');
+  await expect(writerNode.locator('.output-port[data-portid="previous-value"] + .port-label')).toHaveText(
+    'Prev value of: knownGlobalId',
+  );
   const readerNode = editor.locator(`.node[data-nodeid="${reader.id}"]`);
   await expect(readerNode).toBeVisible({ timeout: 60_000 });
+  const valuePort = readerNode.locator('.output-port[data-portid="value"]');
+  const valueOutput = readerNode.locator('.output-port[data-portid="value"] + .port-label');
+  await expect(valueOutput).toHaveText('originalId');
+  await expect(valuePort.locator('..')).toHaveClass(/connected/);
   await readerNode.hover();
   await readerNode.locator('.edit-button').click({ timeout: 10_000 });
 
@@ -46,6 +62,8 @@ test('Get Global uses one searchable Variable ID field for suggestions and manua
   await expect(editor.getByRole('option', { name: 'knownGlobalId' })).toHaveAttribute('aria-selected', 'true');
   await variableId.press('Enter');
   await expect(variableId).toHaveValue('knownGlobalId');
+  await expect(valueOutput).toHaveText('knownGlobalId');
+  await expect(valuePort.locator('..')).toHaveClass(/connected/);
   await variableId.fill('known');
   await editor.getByRole('option', { name: 'knownGlobalId' }).click({ timeout: 10_000 });
   await expect(variableId).toHaveValue('knownGlobalId');
@@ -65,7 +83,9 @@ test('Get Global uses one searchable Variable ID field for suggestions and manua
 
   await variableId.fill('manuallyTypedId');
   await variableId.press('Tab');
-  await editor.locator('.node-canvas').click({ position: { x: 500, y: 500 } });
+  await expect(valueOutput).toHaveText('manuallyTypedId');
+  await expect(valuePort.locator('..')).toHaveClass(/connected/);
+  await editor.locator('.node-canvas').click({ position: { x: 450, y: 600 } });
   await readerNode.hover();
   await readerNode.locator('.edit-button').click({ timeout: 10_000 });
   await expect(variableId).toHaveValue('manuallyTypedId');
@@ -81,5 +101,16 @@ test('Get Global uses one searchable Variable ID field for suggestions and manua
 
   await editor.getByRole('button', { name: 'Use an input port for Variable ID' }).click();
   await expect(readerNode.locator('.port-label', { hasText: /^Variable ID$/ })).toHaveCount(2);
+  await expect(valueOutput).toHaveText('Value');
+  await expect(valuePort.locator('..')).toHaveClass(/connected/);
   await expect(variableId).toHaveValue('manuallyTypedIXd');
+
+  await writerNode.hover();
+  await writerNode.locator('.edit-button').click({ timeout: 10_000 });
+  await editor.getByRole('button', { name: 'Use an input port for ID' }).click();
+  await expect(writerNode).toContainText('(ID from input)');
+  await expect(writerNode.locator('.output-port[data-portid="saved-value"] + .port-label')).toHaveText('Value');
+  await expect(writerNode.locator('.output-port[data-portid="previous-value"] + .port-label')).toHaveText(
+    'Previous Value',
+  );
 });

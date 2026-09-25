@@ -28,6 +28,8 @@ export type DashboardToEditorCommand =
       title?: string;
       preview?: boolean;
       reloadFromDisk?: boolean;
+      preferredGraphId?: string;
+      expectedProjectId?: string;
       requestId?: string;
     }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean; requestId?: string }
@@ -84,6 +86,7 @@ export type WorkflowProjectBindingReconciliationResult = {
 
 export type EditorToDashboardEvent =
   | { type: 'editor-ready'; editorInstanceId: string }
+  | { type: 'open-subgraph-target'; projectId: string; graphId: string }
   | { type: 'workflow-project-reconciliation-captured'; context: HostedProjectReconciliationContext; requestId: string }
   | { type: 'workflow-project-conflicts'; snapshot: HostedProjectConflictSnapshot }
   | { type: 'project-opened'; path: string; requestId?: string }
@@ -188,6 +191,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         (value.title == null || typeof value.title === 'string') &&
         (value.preview == null || typeof value.preview === 'boolean') &&
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean') &&
+        (value.preferredGraphId == null || typeof value.preferredGraphId === 'string') &&
+        (value.expectedProjectId == null || typeof value.expectedProjectId === 'string') &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'open-recording':
@@ -268,6 +273,8 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
   switch (value.type) {
     case 'editor-ready':
       return typeof value.editorInstanceId === 'string';
+    case 'open-subgraph-target':
+      return typeof value.projectId === 'string' && typeof value.graphId === 'string';
     case 'workflow-project-reconciliation-captured':
       return typeof value.requestId === 'string' && isHostedProjectReconciliationContext(value.context);
     case 'workflow-project-conflicts':

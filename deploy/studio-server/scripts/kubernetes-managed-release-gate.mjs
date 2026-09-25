@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
@@ -277,7 +278,8 @@ spec:
           effect: NoSchedule
       containers:
         - name: minio
-          image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+          image: alpine/minio:RELEASE.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4
+          securityContext: { runAsUser: 0 } # Disposable hostPath is root-owned.
           args: ["server", "/data", "--console-address", ":9001"]
           ports: [{ containerPort: 9000 }]
           env:
@@ -302,33 +304,6 @@ metadata:
 spec:
   selector: { app: release-gate-minio }
   ports: [{ port: 9000, targetPort: 9000 }]
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: release-gate-create-bucket
-  namespace: ${namespace}
-  labels: { app.kubernetes.io/part-of: rivet-managed-release-gate }
-spec:
-  backoffLimit: 30
-  template:
-    metadata:
-      labels: { app.kubernetes.io/part-of: rivet-managed-release-gate }
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: create-bucket
-          image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
-          command: ["sh", "-ec"]
-          args:
-            - >-
-              until mc alias set release-gate http://release-gate-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD";
-              do sleep 2; done; mc mb --ignore-existing release-gate/rivet-release-gate
-          env:
-            - name: MINIO_ROOT_USER
-              valueFrom: { secretKeyRef: { name: rivet-release-gate-object-storage, key: accessKeyId } }
-            - name: MINIO_ROOT_PASSWORD
-              valueFrom: { secretKeyRef: { name: rivet-release-gate-object-storage, key: secretAccessKey } }
 `;
 }
 
@@ -436,6 +411,27 @@ async function requestJson(baseUrl, route, options = {}) {
       `${options.method ?? 'GET'} ${route} returned ${response.status}: ${typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body)}`,
     );
   return body;
+}
+
+async function readPublicationPreconditions(baseUrl, relativePath) {
+  const snapshot = await requestJson(
+    baseUrl,
+    `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+  );
+  const { projectId, draftRevisionId, publicationVersion, project } = snapshot ?? {};
+  if (
+    !projectId || !draftRevisionId || !publicationVersion ||
+    project?.projectMetadataId !== projectId ||
+    project.revisionId !== draftRevisionId ||
+    project.settings?.publicationVersion !== publicationVersion
+  ) {
+    throw new Error('Managed release gate did not receive a coherent publication snapshot');
+  }
+  return {
+    expectedProjectId: projectId,
+    expectedDraftRevisionId: draftRevisionId,
+    expectedPublicationVersion: publicationVersion,
+  };
 }
 
 async function waitFor(description, operation, timeoutMs, intervalMs = 500) {
@@ -794,14 +790,6 @@ class ManagedReleaseGate {
       this.config.namespace,
       '--timeout=180s',
     ]);
-    await this.waitForDependency('MinIO bucket initialization', 'job-name=release-gate-create-bucket', [
-      'wait',
-      '--for=condition=complete',
-      'job/release-gate-create-bucket',
-      '-n',
-      this.config.namespace,
-      '--timeout=240s',
-    ]);
   }
   async installChart() {
     const valuesPath = path.join(this.config.artifactsDir, 'release-gate.values.json');
@@ -945,17 +933,41 @@ class ManagedReleaseGate {
     });
     const relativePath = upload.project?.relativePath;
     if (typeof relativePath !== 'string') throw new Error('Project upload did not return relativePath');
+    const initialPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
     await requestJson(baseUrl, '/api/workflows/projects/publish', {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
         settings: { endpointName: 'managed-release-workflow' },
+        preconditions: initialPreconditions,
       }),
     });
+    const historyRoute = `/api/workflows/projects/published-versions?relativePath=${encodeURIComponent(relativePath)}`;
+    const historyBeforeConflict = await requestJson(baseUrl, historyRoute);
+    const currentPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
+    const stalePublish = await fetch(`${baseUrl}/api/workflows/projects/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        relativePath,
+        settings: { endpointName: 'managed-release-workflow' },
+        preconditions: { ...currentPreconditions, expectedDraftRevisionId: randomUUID() },
+      }),
+    });
+    assert.equal(stalePublish.status, 409, 'Deployed API must reject a stale publication revision');
+    assert.match((await stalePublish.json()).error, /Publishing failed because the project changed/);
+    assert.deepEqual(
+      await requestJson(baseUrl, historyRoute),
+      historyBeforeConflict,
+      'Rejected publication must leave the current version and publication history unchanged',
+    );
+
     await requestJson(baseUrl, '/api/workflows/projects/web-apps/publish', {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
+        preconditions: await readPublicationPreconditions(baseUrl, relativePath),
         publications: [{ uiGraphId: 'release-gate-web-app', slug: 'release-gate-web-app' }],
       }),
     });
@@ -1072,6 +1084,36 @@ class ManagedReleaseGate {
     return { environmentVariableId, publishedRevision, relativePath, replayRecordingId };
   }
 
+  async verifyManagedPublicationConflict(baseUrl, relativePath) {
+    const preconditions = await readPublicationPreconditions(baseUrl, relativePath);
+    const sendUpdate = async (email) => {
+      const response = await fetch(`${baseUrl}/api/workflows/projects/web-apps/access`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          relativePath,
+          preconditions,
+          accessUpdates: [{ uiGraphId: 'release-gate-web-app', allowedEmails: [email] }],
+        }),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const results = await Promise.all([
+      sendUpdate('race-a@release-gate.example.test'),
+      sendUpdate('race-b@release-gate.example.test'),
+    ]);
+    const statuses = results.map(({ status }) => status).sort((a, b) => a - b);
+    if (statuses[0] !== 200 || statuses[1] !== 409 ||
+        results.find(({ status }) => status === 409)?.body?.code !== 'publication_state_changed') {
+      throw new Error(`Managed concurrent publication updates did not produce one success and one state conflict: ${JSON.stringify(results)}`);
+    }
+    const next = await readPublicationPreconditions(baseUrl, relativePath);
+    if (next.expectedPublicationVersion !== (BigInt(preconditions.expectedPublicationVersion) + 1n).toString()) {
+      throw new Error('Managed concurrent publication updates did not advance the publication version exactly once');
+    }
+  }
+
   /**
    * Exercises a publication update on the control-plane API against sockets
    * served by the separately replicated execution API. Those processes share
@@ -1114,6 +1156,7 @@ class ManagedReleaseGate {
         method: 'PATCH',
         body: JSON.stringify({
           relativePath: state.relativePath,
+          preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
           accessUpdates: [{
             uiGraphId: 'release-gate-web-app',
             allowedEmails: [removedEmail, retainedEmail],
@@ -1169,6 +1212,7 @@ class ManagedReleaseGate {
         method: 'PATCH',
         body: JSON.stringify({
           relativePath: state.relativePath,
+          preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
           accessUpdates: [{
             uiGraphId: 'release-gate-web-app',
             allowedEmails: [retainedEmail],
@@ -1703,6 +1747,7 @@ async function main() {
     const baseUrl = await gate.openProxy();
     await requestJson(baseUrl, '/api/config');
     const persistedState = await gate.exercisePersistence(baseUrl);
+    await gate.verifyManagedPublicationConflict(baseUrl, persistedState.relativePath);
     await gate.verifyManagedWebAppAccessRevocation(baseUrl, persistedState);
     await gate.verifyAfterReplacement(baseUrl, persistedState);
     if (config.mode === 'release') {

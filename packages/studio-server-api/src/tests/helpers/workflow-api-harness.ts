@@ -20,7 +20,9 @@ type WorkflowExecutionServerHarnessOptions = WorkflowApiServerHarnessOptions & {
   latestWebAppsRouter?: Router;
   publishedWebAppsRouter?: Router;
   publishedWorkflowsRouter: Router;
+  internalPublishedWorkflowsRouter?: Router;
   latestWorkflowsRouter: Router;
+  internalLatestWorkflowsRouter?: Router;
 };
 
 type HostedProjectApiServerHarnessOptions = WorkflowApiServerHarnessOptions & {
@@ -30,9 +32,11 @@ type HostedProjectApiServerHarnessOptions = WorkflowApiServerHarnessOptions & {
 type WorkflowExecutionServerUrls = {
   apiBaseUrl: string;
   publishedBaseUrl: string;
+  internalPublishedBaseUrl: string;
   webAppsBaseUrl: string;
   latestWebAppsBaseUrl: string;
   latestBaseUrl: string;
+  internalLatestBaseUrl: string;
 };
 
 type FilesystemExecutionCacheProbe = {
@@ -159,6 +163,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
     app.use(createRequestCorrelationMiddleware());
     app.use('/api/workflows', options.workflowsRouter);
     app.use('/workflows', options.publishedWorkflowsRouter);
+    if (options.internalPublishedWorkflowsRouter) app.use('/internal/workflows', options.internalPublishedWorkflowsRouter);
     if (options.publishedWebAppsRouter) {
       app.use('/apps', options.publishedWebAppsRouter);
     }
@@ -166,6 +171,7 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
       app.use('/apps-latest', options.latestWebAppsRouter);
     }
     app.use('/workflows-latest', options.latestWorkflowsRouter);
+    if (options.internalLatestWorkflowsRouter) app.use('/internal/workflows-latest', options.internalLatestWorkflowsRouter);
     attachJsonFallbackHandlers(app);
 
     const server = http.createServer(app);
@@ -176,9 +182,11 @@ export function createWorkflowExecutionServerHarness(options: WorkflowExecutionS
       await run({
         apiBaseUrl: `${listener.baseUrl}/api/workflows`,
         publishedBaseUrl: `${listener.baseUrl}/workflows`,
+        internalPublishedBaseUrl: `${listener.baseUrl}/internal/workflows`,
         webAppsBaseUrl: `${listener.baseUrl}/apps`,
         latestWebAppsBaseUrl: `${listener.baseUrl}/apps-latest`,
         latestBaseUrl: `${listener.baseUrl}/workflows-latest`,
+        internalLatestBaseUrl: `${listener.baseUrl}/internal/workflows-latest`,
       });
     } finally {
       await webAppActionWebSockets?.dispose({ interrupt: true });

@@ -54,7 +54,17 @@ if (process.env.RIVET_ASYNC_TEST_FAILURE === 'foreground') {
 const contents = rivet.serializeProject(project);
 if (typeof contents !== 'string') throw new Error('Expected serialized project');
 await storage.saveHostedProject({ projectPath: created.absolutePath, contents, datasetsContents: null });
-await storage.publishWorkflowProjectItemWithBackend(created.relativePath, { endpointName: 'async-acceptance' });
+const reviewed = await storage.listWorkflowProjectWebAppsWithBackend(created.relativePath);
+await storage.executeWorkflowPublicationCommandWithBackend({
+  kind: 'publish-endpoint',
+  relativePath: created.relativePath,
+  endpointName: 'async-acceptance',
+  preconditions: {
+    expectedProjectId: reviewed.projectId,
+    expectedPublicationVersion: reviewed.publicationVersion,
+    expectedDraftRevisionId: reviewed.draftRevisionId,
+  },
+});
 if (process.env.RIVET_ASYNC_TEST_FAILURE === 'serialization') {
   const { default: express } = await import('express');
   const json = express.response.json;

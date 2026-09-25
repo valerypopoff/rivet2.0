@@ -1,7 +1,10 @@
 import type {
   WorkflowFolderItem,
+  WorkflowEndpointAccess,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
+  WorkflowDraftPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectWebAppAccessDraft,
   WorkflowProjectWebAppPublicationDraft,
@@ -35,6 +38,7 @@ import {
 } from './reconciliation.js';
 import { createManagedWorkflowContext } from './context.js';
 import type { ManagedExecutionProjectResult, ManagedWebAppAccessPolicy } from './execution-types.js';
+import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
@@ -269,12 +273,17 @@ export class ManagedWorkflowBackend {
   async restoreWorkflowPublishedVersion(
     relativePath: unknown,
     versionId: unknown,
+    preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse> {
-    return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId);
+    return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions);
   }
 
-  async publishWorkflowProjectItem(relativePath: unknown, settings: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.publishWorkflowProjectItem(relativePath, settings);
+  async publishWorkflowProjectItem(relativePath: unknown, settings: unknown, preconditions: WorkflowDraftPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.publishWorkflowProjectItem(relativePath, settings, preconditions);
+  }
+
+  async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.updateWorkflowEndpointAccess(relativePath, access, preconditions);
   }
 
   async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
@@ -284,37 +293,39 @@ export class ManagedWorkflowBackend {
   async publishWorkflowProjectWebApps(
     relativePath: unknown,
     publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+    preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
-    return this.#publication.publishWorkflowProjectWebApps(relativePath, publications);
+    return this.#publication.publishWorkflowProjectWebApps(relativePath, publications, preconditions);
   }
 
   async updateWorkflowProjectWebAppAccess(
     relativePath: unknown,
     accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+    preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
-    return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates);
+    return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
   }
 
-  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId);
+  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
   }
 
-  async unpublishWorkflowProjectItem(relativePath: unknown): Promise<WorkflowProjectItem> {
-    return this.#publication.unpublishWorkflowProjectItem(relativePath);
+  async unpublishWorkflowProjectItem(relativePath: unknown, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+    return this.#publication.unpublishWorkflowProjectItem(relativePath, preconditions);
   }
 
   async deleteWorkflowProjectItem(relativePath: unknown): Promise<string | null> {
     return this.#catalog.deleteWorkflowProjectItem(relativePath);
   }
 
-  async loadPublishedExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
+  async loadPublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
-    return this.#executionService.loadPublishedExecutionProject(endpointName);
+    return this.#executionService.loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
 
-  async loadLatestExecutionProject(endpointName: string): Promise<ManagedExecutionProjectResult | null> {
+  async loadLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
-    return this.#executionService.loadLatestExecutionProject(endpointName);
+    return this.#executionService.loadLatestExecutionProject(endpointName, requireFreshPointer);
   }
 
   async loadPublishedWebAppExecutionProject(slug: string): Promise<ManagedExecutionProjectResult | null> {
@@ -334,6 +345,11 @@ export class ManagedWorkflowBackend {
 
   createProjectReferenceLoader() {
     return this.#executionService.createProjectReferenceLoader();
+  }
+
+  async loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
+    await this.initialize();
+    return this.#executionService.loadSubgraphTarget(target);
   }
 
   async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {

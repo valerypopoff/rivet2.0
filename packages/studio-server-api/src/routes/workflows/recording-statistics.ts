@@ -51,9 +51,7 @@ export function buildWorkflowRunStatisticsCatalog(
       projectName: isLatestRow ? row.sourceProjectName : existing.projectName,
       latestRunAt: isLatestRow ? row.createdAt : existing.latestRunAt,
       totalRuns: (existing?.totalRuns ?? 0) + 1,
-      uiGraphName: isLatestRow
-        ? row.executionIdentity?.uiGraphName ?? existing?.uiGraphName
-        : existing?.uiGraphName,
+      uiGraphName: isLatestRow ? row.executionIdentity?.uiGraphName ?? existing?.uiGraphName : existing?.uiGraphName,
       componentType: isLatestRow
         ? row.executionIdentity?.componentType ?? existing?.componentType
         : existing?.componentType,
@@ -72,8 +70,9 @@ export function buildWorkflowRunStatisticsCatalog(
       if (latestDifference) return latestDifference;
       const projectDifference = left.projectName.localeCompare(right.projectName);
       if (projectDifference) return projectDifference;
-      return getWorkflowRunStatisticsTargetKey(left.target)
-        .localeCompare(getWorkflowRunStatisticsTargetKey(right.target));
+      return getWorkflowRunStatisticsTargetKey(left.target).localeCompare(
+        getWorkflowRunStatisticsTargetKey(right.target),
+      );
     }),
   };
 }
@@ -111,7 +110,7 @@ function getTargetForRow(row: WorkflowRecordingStatisticsRow): WorkflowRunStatis
   const identity = row.executionIdentity;
   // Local editor evidence exists solely to make a suspension diagnosable. It
   // must never create a production endpoint or web-app analytics target.
-  if (identity?.surface === 'editor_local') return null;
+  if (identity?.surface === 'editor_local' || identity?.surface === 'subgraph_project') return null;
   if (identity?.surface === 'workflow_endpoint') {
     return { surface: 'endpoint', workflowId: row.workflowId };
   }
@@ -130,8 +129,10 @@ function getTargetForRow(row: WorkflowRecordingStatisticsRow): WorkflowRunStatis
 }
 
 function isLegacyWebAppRow(row: WorkflowRecordingStatisticsRow): boolean {
-  return (!row.executionIdentity && row.endpointNameAtExecution.startsWith('/')) ||
-    (row.executionIdentity?.surface === 'web_app_action' && !hasStableWebAppActionIdentity(row.executionIdentity));
+  return (
+    (!row.executionIdentity && row.endpointNameAtExecution.startsWith('/')) ||
+    (row.executionIdentity?.surface === 'web_app_action' && !hasStableWebAppActionIdentity(row.executionIdentity))
+  );
 }
 
 function hasStableWebAppActionIdentity(
@@ -158,15 +159,19 @@ function matchesTarget(row: WorkflowRecordingStatisticsRow, target: WorkflowRunS
   if ('legacyEndpointName' in target) {
     return isLegacyWebAppRow(row) && row.endpointNameAtExecution === target.legacyEndpointName;
   }
-  return identity?.surface === 'web_app_action' &&
+  return (
+    identity?.surface === 'web_app_action' &&
     identity.uiGraphId === target.uiGraphId &&
-    identity.componentId === target.componentId;
+    identity.componentId === target.componentId
+  );
 }
 
 function shouldIncludeStatus(status: WorkflowRecordingStatus, query: WorkflowRunStatisticsQuery): boolean {
-  return status === 'succeeded' ||
+  return (
+    status === 'succeeded' ||
     (status === 'failed' && query.includeFailed) ||
-    (status === 'suspicious' && query.includeWarnings);
+    (status === 'suspicious' && query.includeWarnings)
+  );
 }
 
 function countStatuses(rows: readonly WorkflowRecordingStatisticsRow[]): WorkflowRunStatisticsStatusCounts {

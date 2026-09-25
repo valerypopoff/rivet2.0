@@ -9,7 +9,7 @@ const baseURL = `http://127.0.0.1:${Number.isFinite(port) ? port : 5174}`;
 
 export default defineConfig({
   testDir: './playwright-observe',
-  testMatch: ['fullscreen-output-search-paging.spec.ts', 'sidebar-name-wrapping.spec.ts'],
+  testMatch: ['fullscreen-output-search-paging.spec.ts', 'sidebar-name-wrapping.spec.ts', 'streaming-nodes.spec.ts'],
   timeout: 180_000,
   expect: {
     timeout: 20_000,

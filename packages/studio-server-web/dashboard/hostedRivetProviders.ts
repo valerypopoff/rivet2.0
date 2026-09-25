@@ -19,6 +19,7 @@ import {
 import { createHttpEvaluationStore } from '../../studio-server-shared/evaluationRunHttpStore';
 import { createHostedEvaluationCoordinator } from './hostedEvaluationCoordinator';
 import { createHostedLocalExecutionRecordingPersistence } from './hostedLocalExecutionRecordingPersistence';
+import { hostedSubgraphProjectCatalog, hostedSubgraphProjectLoader, persistHostedSubgraphProjectRun } from './hostedSubgraphProjects';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -47,6 +48,9 @@ export const hostedRivetProviders = {
   pathPolicy: getDefaultPathPolicyProvider(),
   llmProfileHealthStore: hostedLLMProfileHealthStore,
   localExecutionRecordingPersistence: createHostedLocalExecutionRecordingPersistence(),
+  subgraphProjectCatalog: hostedSubgraphProjectCatalog,
+  subgraphProjectLoader: hostedSubgraphProjectLoader,
+  subgraphProjectRecordingPersistence: persistHostedSubgraphProjectRun,
   evaluationStore: hostedEvaluationStore,
   hostedEvaluationCoordinator: createHostedEvaluationCoordinator(),
 } satisfies ProviderOverrides;

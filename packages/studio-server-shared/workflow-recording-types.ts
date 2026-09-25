@@ -15,7 +15,7 @@ export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
  * after a recording is created.
  */
 export type WorkflowRecordingExecutionIdentity = {
-  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local';
+  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project';
   graphId?: string;
   graphName?: string;
   revisionKey?: string;

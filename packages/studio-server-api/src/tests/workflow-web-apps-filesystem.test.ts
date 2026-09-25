@@ -39,6 +39,23 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+async function publicationPreconditions(baseUrl: string, relativePath: string) {
+  const snapshot = await readJson<{
+    project: { projectMetadataId: string; revisionId: string; settings: { publicationVersion: string; endpointName: string } };
+    projectId: string; draftRevisionId: string; publicationVersion: string;
+  }>(
+    await fetch(`${baseUrl}/projects/web-apps?${new URLSearchParams({ relativePath })}`),
+  );
+  assert.equal(snapshot.project.projectMetadataId, snapshot.projectId);
+  assert.equal(snapshot.project.revisionId, snapshot.draftRevisionId);
+  assert.equal(snapshot.project.settings.publicationVersion, snapshot.publicationVersion);
+  return {
+    expectedProjectId: snapshot.projectId,
+    expectedDraftRevisionId: snapshot.draftRevisionId,
+    expectedPublicationVersion: snapshot.publicationVersion,
+  };
+}
+
 async function withEnvOverrides(
   values: Record<string, string | undefined>,
   run: () => Promise<void>,
@@ -333,6 +350,7 @@ test('workflow web app publication routes publish multiple project web apps inde
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         publications: [
           { uiGraphId: 'ui-one', slug: 'first-app' },
           { uiGraphId: 'ui-two', slug: 'second-app' },
@@ -356,6 +374,7 @@ test('workflow web app publication routes publish multiple project web apps inde
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         uiGraphId: 'ui-one',
       }),
     }));
@@ -396,6 +415,7 @@ test('workflow web app publication stores and updates OAuth allowed emails witho
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         publications: [
           {
             uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
@@ -420,6 +440,7 @@ test('workflow web app publication stores and updates OAuth allowed emails witho
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         accessUpdates: [
           {
             uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
@@ -440,6 +461,70 @@ test('workflow web app publication stores and updates OAuth allowed emails witho
   });
 });
 
+test('web-app publishing requires a reviewed draft and publication version', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'VersionCheckedWebApp');
+  await writeWebAppProject(created.absolutePath, 'VersionCheckedWebApp', 'Version Checked Web App');
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const initial = await publicationPreconditions(baseUrl, created.relativePath);
+    const publish = (preconditions?: typeof initial) => fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        publications: [{ uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'version-checked-app' }],
+        preconditions,
+      }),
+    });
+
+    assert.equal((await publish()).status, 400);
+    await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'version-checked-endpoint' });
+    const treeBeforeConflict = await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`));
+    const staleState = await publish(initial);
+    assert.equal(staleState.status, 409);
+    assert.equal((await staleState.json() as { code: string }).code, 'publication_state_changed');
+    assert.equal((await readJson<{ sync: { revision: number } }>(await fetch(`${baseUrl}/tree`))).sync.revision, treeBeforeConflict.sync.revision);
+
+    const current = await publicationPreconditions(baseUrl, created.relativePath);
+    assert.equal((await publish(current)).status, 200);
+    const beforeDraftChange = await publicationPreconditions(baseUrl, created.relativePath);
+    await fs.appendFile(created.absolutePath, '\n');
+    const staleDraft = await publish(beforeDraftChange);
+    assert.equal(staleDraft.status, 409);
+    assert.equal((await staleDraft.json() as { code: string }).code, 'publication_draft_changed');
+  });
+});
+
+test('dataset-only edits invalidate web-app publish without affecting another project', async () => {
+  const first = await workflowMutations.createWorkflowProjectItem('', 'DatasetPublishConflict');
+  const second = await workflowMutations.createWorkflowProjectItem('', 'IndependentWebAppPublish');
+  await writeWebAppProject(first.absolutePath, 'DatasetPublishConflict', 'Dataset App');
+  await writeWebAppProject(second.absolutePath, 'IndependentWebAppPublish', 'Independent App');
+
+  await withWorkflowApiServer(async (baseUrl) => {
+    const firstPreconditions = await publicationPreconditions(baseUrl, first.relativePath);
+    const secondPreconditions = await publicationPreconditions(baseUrl, second.relativePath);
+    await fs.writeFile(workflowFs.getWorkflowDatasetPath(first.absolutePath), '{"updated":true}', 'utf8');
+
+    const publish = (relativePath: string, preconditions: typeof firstPreconditions) => fetch(`${baseUrl}/projects/web-apps/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath,
+        preconditions,
+        publications: [{ uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'independent-app' }],
+      }),
+    });
+    const staleFirst = await publish(first.relativePath, firstPreconditions);
+    assert.equal(staleFirst.status, 409);
+    assert.equal((await staleFirst.json() as { code: string }).code, 'publication_draft_changed');
+    const independent = await publish(second.relativePath, secondPreconditions);
+    assert.equal(independent.status, 200);
+    const firstSnapshot = await publicationPreconditions(baseUrl, first.relativePath);
+    assert.equal(firstSnapshot.expectedPublicationVersion, firstPreconditions.expectedPublicationVersion);
+  });
+});
+
 test('workflow web app access updates preserve the access policy of unselected apps', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'WebAppSelectedAccessUpdates');
   await writeMultiWebAppProject(created.absolutePath, 'WebAppSelectedAccessUpdates', [
@@ -453,6 +538,7 @@ test('workflow web app access updates preserve the access policy of unselected a
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         publications: [
           { uiGraphId: 'ui-one', slug: 'first-access-app', allowedEmails: ['first@example.com'] },
           { uiGraphId: 'ui-two', slug: 'second-access-app', allowedEmails: ['second@example.com'] },
@@ -465,6 +551,7 @@ test('workflow web app access updates preserve the access policy of unselected a
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         accessUpdates: [{ uiGraphId: 'ui-one', allowedEmails: ['updated@example.com'] }],
       }),
     }));
@@ -505,6 +592,7 @@ test('workflow web app publication routes allow batch slug swaps for selected ap
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           relativePath: created.relativePath,
+          preconditions: await publicationPreconditions(baseUrl, created.relativePath),
           publications,
         }),
       }));
@@ -597,6 +685,7 @@ test('workflow web app publication status tracks saved draft changes and republi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         publications: [
           { uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'web-app-publication-status' },
         ],
@@ -664,6 +753,7 @@ test('workflow web app publication routes keep stale published apps visible for 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
       }),
     }));
@@ -1135,6 +1225,7 @@ test('workflow web app publication rejects the reserved OAuth auth slug', async 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         relativePath: created.relativePath,
+        preconditions: await publicationPreconditions(baseUrl, created.relativePath),
         publications: [
           { uiGraphId: WEB_APP_TEST_UI_GRAPH_ID, slug: 'auth' },
         ],

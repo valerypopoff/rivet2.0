@@ -8,6 +8,7 @@ import type { ManagedWorkflowDbClient } from '../routes/workflows/managed/db.js'
 import * as managedMappers from '../routes/workflows/managed/mappers.js';
 import { createManagedWorkflowPublicationService } from '../routes/workflows/managed/publication.js';
 import { resolveManagedHostedProjectSaveTarget } from '../routes/workflows/managed/save-target.js';
+import { publicationCommandPublishesDraft } from '../routes/workflows/publication-command.js';
 import type {
   PublishedVersionRow,
   RevisionRow,
@@ -31,6 +32,16 @@ type EndpointSyncCall = {
 
 const now = '2026-05-21T10:00:00.000Z';
 
+test('publication command policy classifies every active mutation and rejects unknown kinds', () => {
+  for (const kind of ['publish-endpoint', 'publish-web-apps', 'restore-version'] as const) {
+    assert.equal(publicationCommandPublishesDraft(kind), true);
+  }
+  for (const kind of ['unpublish-endpoint', 'set-endpoint-access', 'set-web-app-access', 'unpublish-web-app'] as const) {
+    assert.equal(publicationCommandPublishesDraft(kind), false);
+  }
+  assert.throws(() => publicationCommandPublishesDraft('unknown' as never), /Unsupported publication command/);
+});
+
 function createWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
     workflow_id: 'workflow-a',
@@ -43,6 +54,7 @@ function createWorkflow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
     published_revision_id: null,
     published_version_id: null,
     endpoint_name: 'draft-endpoint',
+    publication_version: '0',
     published_endpoint_name: '',
     last_published_at: null,
     ...overrides,
@@ -136,6 +148,10 @@ function createPublicationHarness(options: {
   const client = {
     async query(sql: string, params: unknown[] = []) {
       clientQueries.push({ sql, params });
+      if (normalizeSql(sql).startsWith('UPDATE workflows SET publication_version = publication_version + 1')) {
+        workflow.publication_version = (BigInt(workflow.publication_version ?? '0') + 1n).toString();
+        return { rows: [{ publication_version: workflow.publication_version }] };
+      }
       if (normalizeSql(sql).startsWith('INSERT INTO workflow_published_versions')) {
         latestInsertedPublishedVersionId = String(params[0]);
       }
@@ -275,13 +291,53 @@ function createPublicationHarness(options: {
 
   return {
     service: createManagedWorkflowPublicationService({ context }),
+    reviewedPreconditions: {
+      expectedProjectId: workflow.workflow_id,
+      expectedPublicationVersion: workflow.publication_version ?? '0',
+      expectedDraftRevisionId: workflow.current_draft_revision_id,
+    },
     clientQueries,
     queryOneCalls,
     endpointSyncCalls,
     invalidationRequests,
     invalidationCommits,
+    workflowLookups,
   };
 }
+
+test('managed endpoint access updates publication policy without creating a revision', async () => {
+  const unpublished = createPublicationHarness();
+  await assert.rejects(
+    unpublished.service.updateWorkflowEndpointAccess('Main.rivet-project', 'internal', unpublished.reviewedPreconditions),
+    /Publish the workflow before changing endpoint access/,
+  );
+
+  const harness = createPublicationHarness({
+    workflow: createWorkflow({ published_revision_id: 'draft-revision' }),
+    workflowAfterMutation: createWorkflow({ published_revision_id: 'draft-revision', endpoint_access: 'internal' }),
+  });
+  const { expectedDraftRevisionId: _draftRevisionId, ...publicationPreconditions } = harness.reviewedPreconditions;
+  const updated = await harness.service.updateWorkflowEndpointAccess('Main.rivet-project', 'internal', publicationPreconditions);
+  assert.equal(updated.settings.endpointAccess, 'internal');
+  assert.ok(harness.clientQueries.some(({ sql, params }) =>
+    normalizeSql(sql).startsWith('UPDATE workflows SET endpoint_access') && params[1] === 'internal'));
+  assert.deepEqual(harness.invalidationCommits, ['workflow-a']);
+  assert.ok(harness.clientQueries.every(({ sql }) => !normalizeSql(sql).includes('INSERT INTO workflow_published_versions')));
+});
+
+test('managed publication methods reject omitted reviewed state before mutation', async () => {
+  const harness = createPublicationHarness();
+  await assert.rejects(
+    harness.service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'unchecked-endpoint' }, undefined as never),
+    { status: 400 },
+  );
+  await assert.rejects(
+    harness.service.unpublishWorkflowProjectItem('Main.rivet-project', undefined as never),
+    { status: 400 },
+  );
+  assert.deepEqual(harness.clientQueries, []);
+  assert.deepEqual(harness.invalidationRequests, []);
+});
 
 test('managed web app publication list exposes revision-based statuses', async () => {
   const draftContents = createManagedWebAppProjectContents([
@@ -325,6 +381,9 @@ test('managed web app publication list exposes revision-based statuses', async (
   const response = await service.listWorkflowProjectWebApps('Main.rivet-project');
 
   assert.equal(response.hasMainGraph, true);
+  assert.equal(response.project.projectMetadataId, response.projectId);
+  assert.equal(response.project.revisionId, response.draftRevisionId);
+  assert.equal(response.project.settings.publicationVersion, response.publicationVersion);
   assert.deepEqual(
     response.webApps.map((webApp) => [
       webApp.uiGraphId,
@@ -347,14 +406,14 @@ test('managed endpoint publish rejects a revision whose selected Main Graph no l
     /^[ \t]*mainGraphId:.*\r?\n/m,
     '    mainGraphId: "missing-main-graph"\n',
   );
-  const { service, clientQueries, endpointSyncCalls, invalidationRequests } = createPublicationHarness({
+  const { service, clientQueries, endpointSyncCalls, invalidationRequests, reviewedPreconditions } = createPublicationHarness({
     revisionContents: {
       'draft-revision': contentsWithoutMainGraph,
     },
   });
 
   await assert.rejects(
-    service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'missing-main-graph' }),
+    service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'missing-main-graph' }, reviewedPreconditions),
     /Choose a Main Graph before publishing this endpoint/,
   );
 
@@ -384,7 +443,7 @@ test('managed publication backfills legacy current versions before new publishes
     published_endpoint_name: 'new-endpoint',
     last_published_at: now,
   });
-  const { service, clientQueries, queryOneCalls, endpointSyncCalls, invalidationRequests, invalidationCommits } =
+  const { service, clientQueries, queryOneCalls, endpointSyncCalls, invalidationRequests, invalidationCommits, reviewedPreconditions } =
     createPublicationHarness({
       workflow,
       workflowAfterMutation,
@@ -396,7 +455,7 @@ test('managed publication backfills legacy current versions before new publishes
 
   const project = await service.publishWorkflowProjectItem('Main.rivet-project', {
     endpointName: 'new-endpoint',
-  });
+  }, reviewedPreconditions);
 
   const publishedVersionInserts = [...clientQueries, ...queryOneCalls].filter((query) =>
     normalizeSql(query.sql).startsWith('INSERT INTO workflow_published_versions'));
@@ -421,13 +480,50 @@ test('managed publication backfills legacy current versions before new publishes
   assert.equal(project.settings.status, 'published');
 });
 
+test('managed publishing rejects a stale revision under the row lock without mutations', async () => {
+  const { service, clientQueries, endpointSyncCalls, invalidationRequests, workflowLookups } = createPublicationHarness();
+  await assert.rejects(service.publishWorkflowProjectItem('Main.rivet-project', {
+    endpointName: 'new-endpoint',
+  }, { expectedProjectId: 'workflow-a', expectedPublicationVersion: '0', expectedDraftRevisionId: 'older-revision' }), {
+    status: 409,
+    message: 'Publishing failed because the project changed. Review the latest saved version before trying again.',
+  });
+  assert.deepEqual(clientQueries, []);
+  assert.deepEqual(endpointSyncCalls, []);
+  assert.deepEqual(invalidationRequests, []);
+  assert.equal(workflowLookups[0]?.forUpdate, true);
+});
+
+test('managed web-app publishing rejects stale draft, publication, and project identity under the row lock', async () => {
+  const harness = createPublicationHarness({
+    workflow: createWorkflow({ publication_version: '3' }),
+    revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current Web App']]) },
+  });
+  const publish = (preconditions: { expectedProjectId: string; expectedDraftRevisionId: string; expectedPublicationVersion: string }) =>
+    harness.service.publishWorkflowProjectWebApps('Main.rivet-project', [{ uiGraphId: 'ui-current', slug: 'current-app' }], preconditions);
+  const expected = { expectedProjectId: 'workflow-a', expectedDraftRevisionId: 'draft-revision', expectedPublicationVersion: '3' };
+
+  await assert.rejects(publish({ ...expected, expectedDraftRevisionId: 'old-revision' }), { status: 409, code: 'publication_draft_changed' });
+  await assert.rejects(publish({ ...expected, expectedPublicationVersion: '2' }), { status: 409, code: 'publication_state_changed' });
+  await assert.rejects(publish({ ...expected, expectedProjectId: 'other-project' }), { status: 409, code: 'publication_project_changed' });
+  assert.deepEqual(harness.clientQueries, []);
+  assert.deepEqual(harness.invalidationRequests, []);
+  assert.ok(harness.workflowLookups.every(({ forUpdate }) => forUpdate));
+
+  const published = await publish(expected);
+  assert.equal(published.settings.publicationVersion, '4');
+  assert.deepEqual(harness.invalidationRequests, ['workflow-a']);
+  await assert.rejects(publish(expected), { status: 409, code: 'publication_state_changed' });
+  assert.deepEqual(harness.invalidationRequests, ['workflow-a']);
+});
+
 test('managed published version restore republishes a stored revision as a new current history entry', async () => {
   const selectedVersion = createPublishedVersion({
     version_id: 'old-version',
     revision_id: 'old-revision',
     endpoint_name: 'restore-endpoint',
   });
-  const { service, clientQueries, endpointSyncCalls, invalidationRequests, invalidationCommits } = createPublicationHarness({
+  const { service, clientQueries, endpointSyncCalls, invalidationRequests, invalidationCommits, reviewedPreconditions } = createPublicationHarness({
     workflow: createWorkflow({
       current_draft_revision_id: 'current-revision',
       published_revision_id: 'current-revision',
@@ -450,7 +546,7 @@ test('managed published version restore republishes a stored revision as a new c
     publishedVersions: [selectedVersion],
   });
 
-  const result = await service.restoreWorkflowPublishedVersion('Main.rivet-project', 'old-version');
+  const result = await service.restoreWorkflowPublishedVersion('Main.rivet-project', 'old-version', reviewedPreconditions);
 
   assert.notEqual(result.version.id, 'old-version');
   assert.equal(result.version.projectId, 'workflow-a');
@@ -478,7 +574,7 @@ test('managed published version restore republishes a stored revision as a new c
 
 test('managed published version restore supports legacy current versions without history rows', async () => {
   const legacyPublishedAt = '2026-05-20T10:45:00.000Z';
-  const { service, clientQueries, queryOneCalls, endpointSyncCalls, invalidationRequests, invalidationCommits } =
+  const { service, clientQueries, queryOneCalls, endpointSyncCalls, invalidationRequests, invalidationCommits, reviewedPreconditions } =
     createPublicationHarness({
       workflow: createWorkflow({
         current_draft_revision_id: 'draft-revision',
@@ -501,7 +597,7 @@ test('managed published version restore supports legacy current versions without
       ],
     });
 
-  const result = await service.restoreWorkflowPublishedVersion('Main.rivet-project', 'legacy-published-revision');
+  const result = await service.restoreWorkflowPublishedVersion('Main.rivet-project', 'legacy-published-revision', reviewedPreconditions);
 
   assert.notEqual(result.version.id, 'legacy-published-revision');
   assert.equal(result.version.endpointName, 'legacy-endpoint');

@@ -1,4 +1,5 @@
 import type { WorkflowProjectStatus as SharedWorkflowProjectStatus } from '../../../../studio-server-shared/workflow-types.js';
+import type { WorkflowEndpointAccess } from '../../../../studio-server-shared/workflow-types.js';
 
 export type {
   WorkflowFolderItem,
@@ -15,7 +16,9 @@ export type {
 } from '../../../../studio-server-shared/workflow-types.js';
 
 export type StoredWorkflowProjectSettings = {
+  publicationVersion?: string;
   endpointName: string;
+  endpointAccess: WorkflowEndpointAccess;
   publishedEndpointName: string;
   publishedSnapshotId: string | null;
   publishedStateHash: string | null;

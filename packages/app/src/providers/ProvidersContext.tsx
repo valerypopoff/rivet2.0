@@ -4,9 +4,13 @@ import {
   type DatasetProvider,
   type AudioProvider,
   type ProjectId,
+  type GraphId,
   type CombinedDataset,
   type RivetLLMProfileHealthSnapshot,
   type RivetLLMProfileHealthStore,
+  type SubgraphProjectLoader,
+  type SubgraphProjectRun,
+  type Project,
 } from '@valerypopoff/rivet2-core';
 import {
   type EvaluationDataset,
@@ -53,6 +57,26 @@ export type EnvironmentProvider = {
 export type PathPolicyProvider = {
   allowDataFileNeighbor(projectFilePath: string): Promise<void>;
   readRelativeProjectFile?(currentProjectPath: string, projectFilePath: string): Promise<string>;
+};
+
+export type SubgraphProjectTreeItem = {
+  id: string;
+  name: string;
+  projectMetadataId?: string;
+  relativePath: string;
+};
+
+export type SubgraphProjectTreeFolder = {
+  id: string;
+  name: string;
+  folders: SubgraphProjectTreeFolder[];
+  projects: SubgraphProjectTreeItem[];
+};
+
+export type SubgraphProjectCatalogProvider = {
+  listTree(): Promise<{ folders: SubgraphProjectTreeFolder[]; projects: SubgraphProjectTreeItem[] }>;
+  preview(target: { projectId: ProjectId; version: 'latest' | 'published' }): Promise<Project>;
+  openGraph(target: { projectId: ProjectId; graphId: GraphId }): void;
 };
 
 export type HostedEvaluationJobState = 'queued' | 'claimed' | 'accepted' | 'settled' | 'interrupted' | 'canceled';
@@ -147,6 +171,9 @@ export type Providers = {
   dataRefs: DataRefStore;
   environment: EnvironmentProvider;
   pathPolicy: PathPolicyProvider;
+  subgraphProjectCatalog?: SubgraphProjectCatalogProvider;
+  subgraphProjectLoader?: SubgraphProjectLoader;
+  subgraphProjectRecordingPersistence?: (run: SubgraphProjectRun) => Promise<void>;
   staticData: StaticDataStore;
   llmProfileHealthAdmin?: LLMProfileHealthAdminProvider;
   llmProfileHealthStore?: RivetLLMProfileHealthStore;
@@ -195,6 +222,18 @@ export function useEnvironmentProvider(): EnvironmentProvider {
 
 export function usePathPolicyProvider(): PathPolicyProvider {
   return useProviders().pathPolicy;
+}
+
+export function useSubgraphProjectCatalog(): SubgraphProjectCatalogProvider | undefined {
+  return useProviders().subgraphProjectCatalog;
+}
+
+export function useSubgraphProjectLoader(): SubgraphProjectLoader | undefined {
+  return useProviders().subgraphProjectLoader;
+}
+
+export function useSubgraphProjectRecordingPersistence(): Providers['subgraphProjectRecordingPersistence'] {
+  return useProviders().subgraphProjectRecordingPersistence;
 }
 
 export function useStaticDataStore(): StaticDataStore {

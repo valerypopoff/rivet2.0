@@ -396,14 +396,12 @@ async function main(): Promise<void> {
     : { body: args.body, source: 'explicit --body option' };
 
   const [
-    workflowMutations,
     workflowStorageBackend,
     workflowRoutes,
     workflowRecordings,
     filesystemExecutionCache,
     managedCodeRunner,
   ] = await Promise.all([
-    import('../routes/workflows/workflow-mutations.js'),
     import('../routes/workflows/storage-backend.js'),
     import('../routes/workflows/index.js'),
     import('../routes/workflows/recordings.js'),
@@ -421,8 +419,16 @@ async function main(): Promise<void> {
   await workflowStorageBackend.initializeWorkflowStorage();
   const projectPath = path.join(workflowsRoot, 'GraphFixture.rivet-project');
   await fs.writeFile(projectPath, fixtureContents, 'utf8');
-  await workflowMutations.publishWorkflowProjectItem('GraphFixture.rivet-project', {
+  const reviewed = await workflowStorageBackend.listWorkflowProjectWebAppsWithBackend('GraphFixture.rivet-project');
+  await workflowStorageBackend.executeWorkflowPublicationCommandWithBackend({
+    kind: 'publish-endpoint',
+    relativePath: 'GraphFixture.rivet-project',
     endpointName: args.endpoint,
+    preconditions: {
+      expectedProjectId: reviewed.projectId,
+      expectedPublicationVersion: reviewed.publicationVersion,
+      expectedDraftRevisionId: reviewed.draftRevisionId,
+    },
   });
 
   const app = express();

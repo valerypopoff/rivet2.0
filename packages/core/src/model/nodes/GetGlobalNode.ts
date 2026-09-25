@@ -76,11 +76,11 @@ export class GetGlobalNodeImpl extends NodeImpl<GetGlobalNode> {
   }
 
   getOutputDefinitions(): NodeOutputDefinition[] {
-    const { onDemand, dataType } = this.chartNode.data;
+    const { id, useIdInput, onDemand, dataType } = this.chartNode.data;
     return [
       {
         id: 'value' as PortId,
-        title: 'Value',
+        title: !useIdInput && typeof id === 'string' && id.trim() ? id : 'Value',
         dataType: onDemand ? (`fn<${dataType}>` as const) : dataType,
       },
       {

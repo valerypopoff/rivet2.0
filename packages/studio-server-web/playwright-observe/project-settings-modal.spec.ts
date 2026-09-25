@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type {
   HostedRouteConfig,
   WorkflowProjectItem,
@@ -11,7 +11,16 @@ import type {
 
 type ProjectSettingsRouteTrackers = {
   projectLoadRequests: Array<{ path: string }>;
-  endpointPublishRequests: Array<{ relativePath?: string; settings?: { endpointName?: string } }>;
+  endpointPublishRequests: Array<{
+    relativePath?: string;
+    settings?: { endpointName?: string; expectedRevisionId?: string };
+    preconditions?: {
+      expectedProjectId?: string;
+      expectedDraftRevisionId?: string;
+      expectedPublicationVersion?: string;
+    };
+  }>;
+  endpointAccessRequests: Array<{ relativePath: string; access: 'public' | 'internal' }>;
   webAppPublishRequests: Array<{
     relativePath: string;
     publications: Array<{ uiGraphId: string; slug: string; allowedEmails?: string[] }>;
@@ -26,6 +35,7 @@ type ProjectSettingsRouteTrackers = {
 type ProjectSettingsFixtureProject = WorkflowProjectItem & {
   hasMainGraph?: boolean;
   webApps?: WorkflowProjectWebAppSummary[];
+  savedLatestSubgraphProjectIds?: string[];
 };
 
 const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
@@ -38,7 +48,11 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   webAppsAuthMode: 'ui-gate',
 };
 
-function isRouteRequest(routeRequest: { method: () => string; url: () => string }, method: string, pathname: string): boolean {
+function isRouteRequest(
+  routeRequest: { method: () => string; url: () => string },
+  method: string,
+  pathname: string,
+): boolean {
   const url = new URL(routeRequest.url());
 
   return routeRequest.method() === method && url.pathname === pathname;
@@ -48,6 +62,7 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
   return {
     projectLoadRequests: [],
     endpointPublishRequests: [],
+    endpointAccessRequests: [],
     webAppPublishRequests: [],
     webAppUnpublishRequests: [],
     publishedVersionCommentRequests: [],
@@ -60,6 +75,8 @@ function createProjectSettingsRouteTrackers(): ProjectSettingsRouteTrackers {
 function createProjectSettingsFixture(name: string): ProjectSettingsFixtureProject {
   return {
     id: `project-settings-fixture-${name}`,
+    projectMetadataId: `project-settings-fixture-${name}`,
+    revisionId: 'revision-1',
     name,
     fileName: `${name}.rivet-project`,
     relativePath: `${name}.rivet-project`,
@@ -72,6 +89,7 @@ function createProjectSettingsFixture(name: string): ProjectSettingsFixtureProje
     },
     settings: {
       status: 'unpublished',
+      publicationVersion: '0',
       endpointName: '',
       lastPublishedAt: null,
       publishedWebApps: [],
@@ -110,7 +128,9 @@ async function installProjectSettingsRoutes(
   trackers: ProjectSettingsRouteTrackers,
   options: { routeConfig?: Partial<HostedRouteConfig> } = {},
 ): Promise<void> {
+  await mockHostedEditorBootstrap(page);
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
+  for (const candidate of projects) candidate.settings.publicationVersion ??= '0';
   const project = projects[0]!;
   const routeConfig = {
     ...DEFAULT_HOSTED_ROUTE_CONFIG,
@@ -133,6 +153,31 @@ async function installProjectSettingsRoutes(
       endpointName: index === 0 ? endpointName : `${endpointName}-${index + 1}`,
       isCurrent: index === 0 && project.settings.status !== 'unpublished',
     }));
+  };
+  const advancePublicationVersion = (target: ProjectSettingsFixtureProject) => {
+    target.settings.publicationVersion = (BigInt(target.settings.publicationVersion ?? '0') + 1n).toString();
+  };
+  const preconditionsMatch = (
+    target: ProjectSettingsFixtureProject,
+    preconditions:
+      | { expectedProjectId?: string; expectedDraftRevisionId?: string; expectedPublicationVersion?: string }
+      | undefined,
+    publishesDraft: boolean,
+  ) =>
+    preconditions?.expectedProjectId === target.projectMetadataId &&
+    preconditions.expectedPublicationVersion === target.settings.publicationVersion &&
+    (!publishesDraft || preconditions.expectedDraftRevisionId === target.revisionId);
+  const rejectStale = async (route: {
+    fulfill: (options: { status: number; contentType: string; body: string }) => Promise<void>;
+  }) => {
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: 'Publishing failed because the project changed. Review the latest saved version before trying again.',
+        code: 'publication_draft_changed',
+      }),
+    });
   };
 
   await page.route('**/api/config', async (route) => {
@@ -176,16 +221,29 @@ async function installProjectSettingsRoutes(
 
     const requestBody = route.request().postDataJSON() as {
       relativePath?: string;
-      settings?: { endpointName?: string };
+      settings?: { endpointName?: string; expectedRevisionId?: string };
+      preconditions?: {
+        expectedProjectId?: string;
+        expectedDraftRevisionId?: string;
+        expectedPublicationVersion?: string;
+      };
     };
     trackers.endpointPublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (!preconditionsMatch(targetProject, requestBody.preconditions, true)) {
+      await rejectStale(route);
+      return;
+    }
     targetProject.settings = {
       status: 'published',
       endpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
+      publishedEndpointName: requestBody.settings?.endpointName ?? targetProject.settings.endpointName,
+      endpointAccess: targetProject.settings.endpointAccess ?? 'public',
       lastPublishedAt: '2026-04-08T10:30:00.000Z',
       publishedWebApps: targetProject.settings.publishedWebApps,
+      publicationVersion: targetProject.settings.publicationVersion,
     };
+    advancePublicationVersion(targetProject);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -203,17 +261,52 @@ async function installProjectSettingsRoutes(
       relativePath?: string;
     };
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (
+      !preconditionsMatch(
+        targetProject,
+        (route.request().postDataJSON() as { preconditions?: any }).preconditions,
+        false,
+      )
+    ) {
+      await rejectStale(route);
+      return;
+    }
     targetProject.settings = {
       status: 'unpublished',
       endpointName: targetProject.settings.endpointName,
+      publishedEndpointName: '',
+      endpointAccess: targetProject.settings.endpointAccess ?? 'public',
       lastPublishedAt: targetProject.settings.lastPublishedAt,
       publishedWebApps: targetProject.settings.publishedWebApps,
+      publicationVersion: targetProject.settings.publicationVersion,
     };
+    advancePublicationVersion(targetProject);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ project: targetProject }),
     });
+  });
+
+  await page.route('**/api/workflows/projects/endpoint-access', async (route) => {
+    if (!isRouteRequest(route.request(), 'POST', '/api/workflows/projects/endpoint-access')) {
+      await route.fallback();
+      return;
+    }
+    const requestBody = route.request().postDataJSON() as {
+      relativePath: string;
+      access: 'public' | 'internal';
+      preconditions?: any;
+    };
+    trackers.endpointAccessRequests.push(requestBody);
+    const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (!preconditionsMatch(targetProject, requestBody.preconditions, false)) {
+      await rejectStale(route);
+      return;
+    }
+    targetProject.settings.endpointAccess = requestBody.access;
+    advancePublicationVersion(targetProject);
+    await route.fulfill({ json: { project: targetProject } });
   });
 
   await page.route('**/api/workflows/projects/web-apps**', async (route) => {
@@ -228,7 +321,12 @@ async function installProjectSettingsRoutes(
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
+        project: targetProject,
+        projectId: targetProject.projectMetadataId,
+        draftRevisionId: targetProject.revisionId,
+        publicationVersion: targetProject.settings.publicationVersion,
         hasMainGraph: targetProject.hasMainGraph ?? true,
+        savedLatestSubgraphProjectIds: targetProject.savedLatestSubgraphProjectIds ?? [],
         webApps: targetProject.webApps ?? [],
       }),
     });
@@ -243,9 +341,18 @@ async function installProjectSettingsRoutes(
     const requestBody = route.request().postDataJSON() as {
       relativePath: string;
       publications: Array<{ uiGraphId: string; slug: string }>;
+      preconditions?: {
+        expectedProjectId?: string;
+        expectedDraftRevisionId?: string;
+        expectedPublicationVersion?: string;
+      };
     };
     trackers.webAppPublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (!preconditionsMatch(targetProject, requestBody.preconditions, true)) {
+      await rejectStale(route);
+      return;
+    }
     const publishedAt = '2026-04-08T10:35:00.000Z';
     targetProject.webApps = (targetProject.webApps ?? []).map((webApp) => {
       const publication = requestBody.publications.find((candidate) => candidate.uiGraphId === webApp.uiGraphId);
@@ -272,6 +379,7 @@ async function installProjectSettingsRoutes(
           publishedAt: webApp.publishedAt ?? publishedAt,
         })),
     };
+    advancePublicationVersion(targetProject);
 
     await route.fulfill({
       status: 200,
@@ -289,18 +397,28 @@ async function installProjectSettingsRoutes(
     const requestBody = route.request().postDataJSON() as {
       relativePath: string;
       uiGraphId: string;
+      preconditions?: { expectedProjectId?: string; expectedPublicationVersion?: string };
     };
     trackers.webAppUnpublishRequests.push(requestBody);
     const targetProject = projects.find((candidate) => candidate.relativePath === requestBody.relativePath) ?? project;
+    if (!preconditionsMatch(targetProject, requestBody.preconditions, false)) {
+      await rejectStale(route);
+      return;
+    }
     targetProject.webApps = (targetProject.webApps ?? [])
-      .map((webApp) => webApp.uiGraphId === requestBody.uiGraphId
-        ? { ...webApp, publishedSlug: null, publishedAt: null, status: 'unpublished' }
-        : webApp)
+      .map((webApp) =>
+        webApp.uiGraphId === requestBody.uiGraphId
+          ? { ...webApp, publishedSlug: null, publishedAt: null, status: 'unpublished' }
+          : webApp,
+      )
       .filter((webApp) => !(webApp.isMissingFromProject && webApp.publishedSlug == null));
     targetProject.settings = {
       ...targetProject.settings,
-      publishedWebApps: targetProject.settings.publishedWebApps.filter((webApp) => webApp.uiGraphId !== requestBody.uiGraphId),
+      publishedWebApps: targetProject.settings.publishedWebApps.filter(
+        (webApp) => webApp.uiGraphId !== requestBody.uiGraphId,
+      ),
     };
+    advancePublicationVersion(targetProject);
 
     await route.fulfill({
       status: 200,
@@ -441,8 +559,17 @@ async function installProjectSettingsRoutes(
     const requestBody = route.request().postDataJSON() as {
       relativePath: string;
       versionId: string;
+      preconditions?: {
+        expectedProjectId?: string;
+        expectedDraftRevisionId?: string;
+        expectedPublicationVersion?: string;
+      };
     };
     trackers.publishedVersionRestoreRequests.push(requestBody);
+    if (!preconditionsMatch(project, requestBody.preconditions, true)) {
+      await rejectStale(route);
+      return;
+    }
     const sourceVersion = publishedVersions.find((candidate) => candidate.id === requestBody.versionId);
     const sourceSummary = getPublishedVersions().find((candidate) => candidate.id === requestBody.versionId);
     if (!sourceVersion) {
@@ -472,7 +599,9 @@ async function installProjectSettingsRoutes(
       endpointName: restoredVersion.endpointName,
       lastPublishedAt: restoredVersion.publishedAt,
       publishedWebApps: project.settings.publishedWebApps,
+      publicationVersion: project.settings.publicationVersion,
     };
+    advancePublicationVersion(project);
 
     await route.fulfill({
       status: 200,
@@ -493,7 +622,7 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
   const projectRow = page.locator('.project-row', { hasText: project.name });
   await expect(projectRow).toBeVisible({ timeout: 30_000 });
   await projectRow.click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.active-project-more-button').click();
 
   const modal = page.getByTestId('workflow-project-settings-modal');
   await expect(modal).toBeVisible();
@@ -503,6 +632,402 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
+  test('warns about dynamic Saved latest dependencies before endpoint and web-app publication', async ({ page }) => {
+    const project = createProjectSettingsFixture('dynamic-subgraph-dependency');
+    project.savedLatestSubgraphProjectIds = ['called-project'];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    const { modal } = await openProjectSettingsModal(page, project);
+    await expect(modal.getByRole('note')).toContainText('future saves can change this endpoint');
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(modal.getByRole('note')).toContainText('future saves can change a published web app');
+  });
+  test('a nonsequential success version cannot re-arm publication', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-invalid-publication-response');
+    project.settings = {
+      ...project.settings,
+      status: 'published',
+      endpointName: 'versioned-endpoint',
+      publishedEndpointName: 'versioned-endpoint',
+      endpointAccess: 'public',
+    };
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    await page.route(
+      '**/api/workflows/projects/endpoint-access',
+      async (route) => {
+        project.settings.endpointAccess = 'internal';
+        project.settings.publicationVersion = '2';
+        await route.fulfill({ json: { project } });
+      },
+      { times: 1 },
+    );
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
+    await expect(
+      page.getByText('The change succeeded, but publication state could not be verified.', { exact: false }),
+    ).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Review latest' })).toBeVisible();
+  });
+
+  test('unrelated tree refresh does not silently advance the publication revision', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-pinned-publication');
+    project.settings = {
+      ...project.settings,
+      status: 'published',
+      endpointName: 'pinned-endpoint',
+      publishedEndpointName: 'pinned-endpoint',
+      endpointAccess: 'public',
+    };
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    const endpointInput = modal.locator('#workflow-project-endpoint-name');
+    await endpointInput.fill('my-edited-endpoint');
+    project.revisionId = 'revision-2';
+    project.settings.status = 'unpublished_changes';
+    project.settings.endpointName = 'colleague-endpoint';
+    // A competing saved draft must reject the access command without adopting
+    // the refreshed tree as a new publication baseline.
+    await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Internal network only', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(endpointInput).toHaveValue('my-edited-endpoint');
+    const update = modal.getByRole('button', { name: 'Update', exact: true });
+    await expect(update).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Review latest' })).toBeVisible();
+    expect(trackers.endpointPublishRequests).toHaveLength(0);
+    await modal.getByRole('button', { name: 'Review latest' }).click();
+    await expect(update).toBeEnabled();
+    await update.click();
+    await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+    expect(trackers.endpointPublishRequests[0]?.preconditions?.expectedDraftRevisionId).toBe('revision-2');
+    expect(trackers.endpointPublishRequests[0]?.settings?.expectedRevisionId).toBeUndefined();
+    expect(trackers.endpointPublishRequests[0]?.settings?.endpointName).toBe('my-edited-endpoint');
+    expect(project.settings.endpointAccess).toBe('internal');
+    // Once the edit is saved, the clean field should follow later server updates.
+    project.settings.endpointName = 'later-server-endpoint';
+    await modal.getByRole('button', { name: 'External', exact: true }).click();
+    await expect(endpointInput).toHaveValue('later-server-endpoint');
+  });
+
+  for (const conflict of [false, true]) {
+    test(`reports refresh failure separately after ${conflict ? 'conflicting' : 'successful'} publishing`, async ({
+      page,
+    }) => {
+      const project = createProjectSettingsFixture(`codex-publish-refresh-${conflict}`);
+      project.settings.endpointName = 'refresh-endpoint';
+      const trackers = createProjectSettingsRouteTrackers();
+      await installProjectSettingsRoutes(page, project, trackers);
+      const { modal } = await openProjectSettingsModal(page, project);
+      let failRefresh = false;
+      await page.route('**/api/workflows/tree', async (route) => {
+        if (!failRefresh) return route.fallback();
+        await route.fulfill({ status: 503, json: { error: 'Temporary tree failure' } });
+      });
+      await page.route(
+        '**/api/workflows/projects/publish',
+        async (route) => {
+          failRefresh = true;
+          if (conflict) project.revisionId = 'revision-2';
+          await route.fallback();
+        },
+        { times: 1 },
+      );
+      await modal.getByRole('button', { name: 'Publish', exact: true }).click();
+      await expect(
+        page.getByText(
+          conflict
+            ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
+            : 'The change succeeded, but the project list could not refresh. Refresh to see the latest state.',
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(modal).toBeVisible();
+      await expect(page.locator('.workflow-library-panel')).toContainText(project.name);
+      expect(trackers.endpointPublishRequests).toHaveLength(1);
+      expect(project.settings.status).toBe(conflict ? 'unpublished' : 'published');
+      if (!conflict) {
+        await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toHaveCount(0);
+      }
+    });
+  }
+
+  test('stale publishing requires explicit review before retry', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-publish-conflict');
+    project.settings.endpointName = 'conflict-endpoint';
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    // Commit the competing save after the browser has sent its reviewed revision.
+    await page.route(
+      '**/api/workflows/projects/publish',
+      async (route) => {
+        project.revisionId = 'revision-2';
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    const publish = modal.getByRole('button', { name: 'Publish', exact: true });
+    await publish.click();
+    await expect(page.getByText('Publishing failed because the project changed.', { exact: false })).toBeVisible();
+    await expect(publish).toBeDisabled();
+    expect(trackers.endpointPublishRequests).toHaveLength(1);
+    expect(trackers.endpointPublishRequests[0]?.preconditions?.expectedDraftRevisionId).toBe('revision-1');
+    expect(project.settings.status).toBe('unpublished');
+    await modal.getByRole('button', { name: 'Review latest' }).click();
+    await expect(publish).toBeEnabled();
+    await publish.click();
+    await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+    expect(trackers.endpointPublishRequests).toHaveLength(2);
+    expect(trackers.endpointPublishRequests[1]?.preconditions?.expectedDraftRevisionId).toBe('revision-2');
+  });
+
+  test('a newer publication found after web-app publish requires review', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-web-app-post-publish-race');
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-race',
+        name: 'Race App',
+        publishedSlug: null,
+        publishedAt: null,
+        status: 'unpublished',
+        isMissingFromProject: false,
+      },
+    ];
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    let reads = 0;
+    await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+      if (isRouteRequest(route.request(), 'GET', '/api/workflows/projects/web-apps') && ++reads === 2) {
+        project.settings.publicationVersion = (BigInt(project.settings.publicationVersion ?? '0') + 1n).toString();
+      }
+      await route.fallback();
+    });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const row = modal.locator('.project-settings-web-app-row', { hasText: 'Race App' });
+    await row.locator('input').fill('my-race-app');
+    await row.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(
+      modal.getByText('The project or its publication changed during your attempt.', { exact: false }),
+    ).toBeVisible();
+    await expect(row.locator('input')).toHaveValue('my-race-app');
+    await expect(row.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    expect(trackers.webAppPublishRequests).toHaveLength(1);
+  });
+
+  test('an incoherent publication read leaves edited web-app fields intact', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-incoherent-publication-read');
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-incoherent',
+        name: 'Incoherent App',
+        publishedSlug: null,
+        publishedAt: null,
+        status: 'unpublished',
+        isMissingFromProject: false,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let reads = 0;
+    await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+      if (!isRouteRequest(route.request(), 'GET', '/api/workflows/projects/web-apps') || ++reads !== 2) {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        json: {
+          project: { ...project, settings: { ...project.settings, publicationVersion: 'malformed' } },
+          projectId: project.projectMetadataId,
+          draftRevisionId: project.revisionId,
+          publicationVersion: project.settings.publicationVersion,
+          hasMainGraph: true,
+          webApps: [],
+        },
+      });
+    });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const row = modal.locator('.project-settings-web-app-row', { hasText: 'Incoherent App' });
+    await row.locator('input').fill('my-incoherent-app');
+    await row.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(page.getByText('Publication state is inconsistent.', { exact: false })).toBeVisible();
+    await expect(row.locator('input')).toHaveValue('my-incoherent-app');
+    await expect(row.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
+  });
+
+  test('reviewing a conflict updates clean web-app fields without discarding edited fields', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-web-app-review-drafts');
+    project.settings = {
+      ...project.settings,
+      status: 'published',
+      endpointName: 'review-endpoint',
+      publishedEndpointName: 'review-endpoint',
+      endpointAccess: 'public',
+    };
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-edited',
+        name: 'Edited App',
+        publishedSlug: 'edited-app',
+        publishedAt: '2026-04-08T10:35:00.000Z',
+        allowedEmails: ['edited@example.com'],
+        status: 'published',
+        isMissingFromProject: false,
+      },
+      {
+        uiGraphId: 'ui-graph-clean',
+        name: 'Clean App',
+        publishedSlug: 'clean-app',
+        publishedAt: '2026-04-08T10:35:00.000Z',
+        allowedEmails: ['clean@example.com'],
+        status: 'published',
+        isMissingFromProject: false,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers(), {
+      routeConfig: { webAppsAuthMode: 'oauth' },
+    });
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const edited = modal.locator('.project-settings-web-app-row', { hasText: 'Edited App' });
+    const clean = modal.locator('.project-settings-web-app-row', { hasText: 'Clean App' });
+    await edited.locator('input').fill('my-edited-app');
+    await edited.locator('textarea').fill('mine@example.com');
+
+    project.webApps![1] = {
+      ...project.webApps![1]!,
+      publishedSlug: 'colleague-app',
+      allowedEmails: ['colleague@example.com'],
+    };
+    project.settings.publicationVersion = '1';
+    await modal.getByRole('tab', { name: 'Endpoint' }).click();
+    await modal.getByRole('button', { name: 'Internal network only', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Review latest' })).toBeVisible();
+    await modal.getByRole('button', { name: 'Review latest' }).click();
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    await expect(edited.locator('input')).toHaveValue('my-edited-app');
+    await expect(edited.locator('textarea')).toHaveValue('mine@example.com');
+    await expect(clean.locator('input')).toHaveValue('colleague-app');
+    await expect(clean.locator('textarea')).toHaveValue('colleague@example.com');
+  });
+
+  test('a failed post-publish web-app refresh preserves local drafts', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-web-app-post-publish-refresh');
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-refresh',
+        name: 'Refresh App',
+        publishedSlug: null,
+        publishedAt: null,
+        status: 'unpublished',
+        isMissingFromProject: false,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let reads = 0;
+    await page.route('**/api/workflows/projects/web-apps**', async (route) => {
+      if (isRouteRequest(route.request(), 'GET', '/api/workflows/projects/web-apps') && ++reads === 2) {
+        await route.fulfill({ status: 503, json: { error: 'Temporary read failure' } });
+        return;
+      }
+      await route.fallback();
+    });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const row = modal.locator('.project-settings-web-app-row', { hasText: 'Refresh App' });
+    await row.locator('input').fill('my-refresh-app');
+    await row.getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(
+      page.getByText('The change succeeded, but publication state could not refresh.', { exact: false }),
+    ).toBeVisible();
+    await expect(row.locator('input')).toHaveValue('my-refresh-app');
+    await expect(modal.getByRole('button', { name: 'Review latest' })).toBeVisible();
+  });
+
+  test('web-app unpublish does not approve a newer draft saved during the command', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-web-app-unpublish-draft-race');
+    project.webApps = [
+      {
+        uiGraphId: 'ui-graph-unpublish-race',
+        name: 'Unpublish Race App',
+        publishedSlug: 'unpublish-race-app',
+        publishedAt: '2026-04-08T10:35:00.000Z',
+        status: 'published',
+        isMissingFromProject: false,
+      },
+    ];
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    await page.route(
+      '**/api/workflows/projects/web-apps/unpublish',
+      async (route) => {
+        project.revisionId = 'revision-2';
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    page.on('dialog', (dialog) => void dialog.accept());
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
+    const row = modal.locator('.project-settings-web-app-row', { hasText: 'Unpublish Race App' });
+    await row.getByRole('button', { name: 'Unpublish' }).click();
+    await expect(
+      modal.getByText('The project or its publication changed during your attempt.', { exact: false }),
+    ).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Publish', exact: true })).toBeDisabled();
+    await modal.getByRole('button', { name: 'Review latest' }).click();
+    await expect(row.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+  });
+
+  test('changes endpoint access immediately even with unpublished graph changes', async ({ page }) => {
+    const project = createProjectSettingsFixture('codex-endpoint-access');
+    project.settings = {
+      status: 'unpublished_changes',
+      endpointName: 'draft-endpoint',
+      publishedEndpointName: 'existing-endpoint',
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: [],
+    };
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers, {
+      routeConfig: {
+        internalPublishedWorkflowsBaseUrl: 'http://rivet-execution.internal:80/internal/workflows',
+        internalLatestWorkflowsBaseUrl: 'http://rivet-api.internal:80/internal/workflows-latest',
+      },
+    });
+
+    const { modal } = await openProjectSettingsModal(page, project);
+    const access = modal.getByRole('group', { name: 'Endpoint access' });
+    await expect(modal.getByText('Changes take effect immediately', { exact: true })).toBeVisible();
+    await expect(modal.getByText('Endpoint access', { exact: true })).toHaveAttribute(
+      'title',
+      'Controls where the endpoint can be reached. Bearer-key requirements are configured separately in Rivet Server settings.',
+    );
+    await expect(access.getByRole('button', { name: 'External', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await access.getByRole('button', { name: 'Internal network only' }).click();
+    await expect(access.getByRole('button', { name: 'Internal network only' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal).toContainText('http://rivet-execution.internal:80/internal/workflows/existing-endpoint');
+    await expect(modal).toContainText('The unpublished changes are accessible on');
+    await expect(modal).toContainText('http://rivet-api.internal:80/internal/workflows-latest/draft-endpoint');
+    await expect(modal.locator('.project-settings-endpoint-access')).toHaveCSS('border-bottom-style', 'solid');
+    await expect(modal).toContainText('Unpublished changes');
+    expect(trackers.endpointAccessRequests).toMatchObject([{ relativePath: project.relativePath, access: 'internal' }]);
+    expect(trackers.endpointPublishRequests).toEqual([]);
+
+    await access.getByRole('button', { name: 'External', exact: true }).click();
+    await expect(access.getByRole('button', { name: 'External', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal).toContainText('/workflows/existing-endpoint');
+    await expect(modal).toContainText('/workflows-latest/draft-endpoint');
+    expect(trackers.endpointAccessRequests).toHaveLength(2);
+  });
+
   test('distinguishes active LLM profile suspensions from recovery states', async ({ page }) => {
     const project = createProjectSettingsFixture('codex-project-settings-llm-health');
     const now = Date.now();
@@ -521,13 +1046,15 @@ test.describe('Project settings modal', () => {
         failureCount: 3,
         openUntil: now + 60_000,
         updatedAt: now,
-        contributingRuns: [{
-          occurredAt: now - 1_000,
-          contributionCount: 1,
-          triggeredSuspension: true,
-          availability: 'available',
-          recordingId: 'suspension-recording',
-        }],
+        contributingRuns: [
+          {
+            occurredAt: now - 1_000,
+            contributionCount: 1,
+            triggeredSuspension: true,
+            availability: 'available',
+            recordingId: 'suspension-recording',
+          },
+        ],
       },
       {
         identity: {
@@ -590,14 +1117,19 @@ test.describe('Project settings modal', () => {
     await expect(modal.locator('.project-settings-modal-header-row').getByRole('tablist')).toHaveCount(1);
     await expect(modal.locator('.project-settings-modal-content').getByRole('tablist')).toHaveCount(0);
     await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveCSS('height', '28px');
-    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute('aria-selected', 'true');
+    await expect(projectSettingsSections.getByRole('tab', { name: 'Endpoint' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     const sectionSwitcherBox = await projectSettingsSections.boundingBox();
     const modalBox = await modal.boundingBox();
     expect(sectionSwitcherBox).not.toBeNull();
     expect(modalBox).not.toBeNull();
-    expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width / 2);
+    expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width * 0.6);
     const activeProjectSection = page.locator('.active-project-section');
-    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
+    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
+      /active-project-name-row/,
+    );
     await expect(activeProjectSection.locator('.active-project-name')).toHaveText(unique);
     const activeProjectStatusLines = activeProjectSection.locator('.active-project-status-line');
     await expect(activeProjectStatusLines).toHaveCount(2);
@@ -624,9 +1156,9 @@ test.describe('Project settings modal', () => {
     const endpointInput = modal.locator('#workflow-project-endpoint-name');
     await expect(endpointInput).toBeVisible();
     await expect(modal.locator('.active-project-status-row')).toContainText('Workflow is not published as endpoint.');
-    const unpublishedStatusNoteFontSize = await modal.locator('.project-settings-status-note').evaluate(
-      (element) => getComputedStyle(element).fontSize,
-    );
+    const unpublishedStatusNoteFontSize = await modal
+      .locator('.project-settings-status-note')
+      .evaluate((element) => getComputedStyle(element).fontSize);
     const unpublishedStatusNoteCenterOffset = await modal.locator('.active-project-status-row').evaluate((row) => {
       const badge = row.querySelector('.project-status-badge');
       const note = row.querySelector('.project-settings-status-note');
@@ -636,7 +1168,7 @@ test.describe('Project settings modal', () => {
 
       const badgeRect = badge.getBoundingClientRect();
       const noteRect = note.getBoundingClientRect();
-      return Math.abs((badgeRect.top + badgeRect.height / 2) - (noteRect.top + noteRect.height / 2));
+      return Math.abs(badgeRect.top + badgeRect.height / 2 - (noteRect.top + noteRect.height / 2));
     });
     await expect(modal.getByText('Endpoint path')).toHaveCount(0);
 
@@ -651,9 +1183,9 @@ test.describe('Project settings modal', () => {
     await modal.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
     await expect(modal.locator('.project-settings-last-published-at')).toBeVisible();
-    const lastPublishedAtFontSize = await modal.locator('.project-settings-last-published-at').evaluate(
-      (element) => getComputedStyle(element).fontSize,
-    );
+    const lastPublishedAtFontSize = await modal
+      .locator('.project-settings-last-published-at')
+      .evaluate((element) => getComputedStyle(element).fontSize);
     expect(lastPublishedAtFontSize).toBe(unpublishedStatusNoteFontSize);
     const lastPublishedAtCenterOffset = await modal.locator('.active-project-status-row').evaluate((row) => {
       const badge = row.querySelector('.project-status-badge');
@@ -664,13 +1196,15 @@ test.describe('Project settings modal', () => {
 
       const badgeRect = badge.getBoundingClientRect();
       const timestampRect = timestamp.getBoundingClientRect();
-      return Math.abs((badgeRect.top + badgeRect.height / 2) - (timestampRect.top + timestampRect.height / 2));
+      return Math.abs(badgeRect.top + badgeRect.height / 2 - (timestampRect.top + timestampRect.height / 2));
     });
     expect(Math.abs(lastPublishedAtCenterOffset - unpublishedStatusNoteCenterOffset)).toBeLessThanOrEqual(1);
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await endpointInput.fill(`${endpointName}-renamed`);
     await expect(modal.locator('.project-settings-status-help')).toContainText(`/workflows/${endpointName}`);
-    await expect(modal.locator('.project-settings-status-help')).not.toContainText(`/workflows/${endpointName}-renamed`);
+    await expect(modal.locator('.project-settings-status-help')).not.toContainText(
+      `/workflows/${endpointName}-renamed`,
+    );
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
     await endpointInput.fill(endpointName);
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
@@ -801,7 +1335,9 @@ test.describe('Project settings modal', () => {
 
     const { modal } = await openProjectSettingsModal(page, project);
     const activeProjectSection = page.locator('.active-project-section');
-    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(/active-project-name-row/);
+    await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
+      /active-project-name-row/,
+    );
     await expect(activeProjectSection.locator('.active-project-status-line')).toHaveCount(2);
     await expect(activeProjectSection.locator('.active-project-status-line').nth(1)).toContainText('Web apps:');
     await expect(activeProjectSection.locator('.active-project-various-statuses')).toHaveText('various statuses');
@@ -827,8 +1363,12 @@ test.describe('Project settings modal', () => {
     const gammaRow = webAppSection.locator('.project-settings-web-app-row', { hasText: 'Gamma Reporter' });
     const staleRow = webAppSection.locator('.project-settings-web-app-row', { hasText: 'Legacy Tool' });
     await expect(alphaRow.locator('.project-settings-web-app-state.unpublished')).toHaveText('Not published');
-    await expect(gammaRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText('Unpublished changes');
-    await expect(staleRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText('Unpublished changes');
+    await expect(gammaRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText(
+      'Unpublished changes',
+    );
+    await expect(staleRow.locator('.project-settings-web-app-state.unpublished_changes')).toHaveText(
+      'Unpublished changes',
+    );
     await expect(gammaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
     await expect(gammaRow).toContainText('/custom-apps/gamma-reporter');
     await expect(gammaRow).toContainText('/custom-apps-latest/gamma-reporter');
@@ -836,11 +1376,9 @@ test.describe('Project settings modal', () => {
     await expect(staleRow).not.toContainText('/custom-apps-latest/legacy-tool');
     await gammaRow.getByRole('button', { name: 'Update', exact: true }).click();
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(1);
-    expect(routeTrackers.webAppPublishRequests[0]).toEqual({
+    expect(routeTrackers.webAppPublishRequests[0]).toMatchObject({
       relativePath: project.relativePath,
-      publications: [
-        { uiGraphId: 'ui-graph-gamma', slug: 'gamma-reporter', allowedEmails: [] },
-      ],
+      publications: [{ uiGraphId: 'ui-graph-gamma', slug: 'gamma-reporter', allowedEmails: [] }],
     });
     await expect(gammaRow.locator('.project-settings-web-app-state.published')).toHaveText('Published');
     await expect(gammaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
@@ -852,11 +1390,9 @@ test.describe('Project settings modal', () => {
     await betaRow.locator('input').fill('beta-console');
     await alphaRow.getByRole('button', { name: 'Publish', exact: true }).click();
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(2);
-    expect(routeTrackers.webAppPublishRequests[1]).toEqual({
+    expect(routeTrackers.webAppPublishRequests[1]).toMatchObject({
       relativePath: project.relativePath,
-      publications: [
-        { uiGraphId: 'ui-graph-alpha', slug: 'alpha-helper', allowedEmails: [] },
-      ],
+      publications: [{ uiGraphId: 'ui-graph-alpha', slug: 'alpha-helper', allowedEmails: [] }],
     });
     await betaRow.getByRole('button', { name: 'Publish', exact: true }).click();
 
@@ -872,18 +1408,18 @@ test.describe('Project settings modal', () => {
     const publishedAppLink = alphaRow.getByRole('link', { name: 'Open /custom-apps/alpha-helper in a new tab' });
     await expect(publishedAppLink).toHaveAttribute('href', `${currentOrigin}/custom-apps/alpha-helper`);
     await expect(publishedAppLink).toHaveAttribute('target', '_blank');
-    await expect(alphaRow.getByRole('link', { name: 'Open /custom-apps-latest/alpha-helper in a new tab' })).toHaveCount(0);
+    await expect(
+      alphaRow.getByRole('link', { name: 'Open /custom-apps-latest/alpha-helper in a new tab' }),
+    ).toHaveCount(0);
     await expect(alphaRow.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
     await alphaRow.locator('input').fill('alpha-helper-renamed');
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
     await expect(alphaRow).toContainText('/custom-apps/alpha-helper');
     await expect(alphaRow).not.toContainText('/custom-apps/alpha-helper-renamed');
     await expect.poll(() => routeTrackers.webAppPublishRequests.length).toBe(3);
-    expect(routeTrackers.webAppPublishRequests[2]).toEqual({
+    expect(routeTrackers.webAppPublishRequests[2]).toMatchObject({
       relativePath: project.relativePath,
-      publications: [
-        { uiGraphId: 'ui-graph-beta', slug: 'beta-console', allowedEmails: [] },
-      ],
+      publications: [{ uiGraphId: 'ui-graph-beta', slug: 'beta-console', allowedEmails: [] }],
     });
     await expect(staleRow.getByRole('button', { name: 'Publish', exact: true })).toHaveCount(0);
     await expect(staleRow.getByRole('button', { name: 'Update', exact: true })).toHaveCount(0);
@@ -891,10 +1427,12 @@ test.describe('Project settings modal', () => {
     page.once('dialog', (dialog) => dialog.accept());
     await alphaRow.getByRole('button', { name: 'Unpublish' }).click();
     await expect.poll(() => routeTrackers.webAppUnpublishRequests.length).toBe(1);
-    expect(routeTrackers.webAppUnpublishRequests).toEqual([{
-      relativePath: project.relativePath,
-      uiGraphId: 'ui-graph-alpha',
-    }]);
+    expect(routeTrackers.webAppUnpublishRequests).toMatchObject([
+      {
+        relativePath: project.relativePath,
+        uiGraphId: 'ui-graph-alpha',
+      },
+    ]);
     await expect(alphaRow.locator('.project-settings-web-app-state')).toHaveText('Not published');
     await expect(betaRow.locator('.project-settings-web-app-state')).toHaveText('Published');
     await expect(deleteButton).toBeDisabled();
@@ -902,7 +1440,7 @@ test.describe('Project settings modal', () => {
     page.once('dialog', (dialog) => dialog.accept());
     await staleRow.getByRole('button', { name: 'Unpublish' }).click();
     await expect.poll(() => routeTrackers.webAppUnpublishRequests.length).toBe(2);
-    expect(routeTrackers.webAppUnpublishRequests[1]).toEqual({
+    expect(routeTrackers.webAppUnpublishRequests[1]).toMatchObject({
       relativePath: project.relativePath,
       uiGraphId: 'ui-graph-stale',
     });
@@ -964,17 +1502,21 @@ test.describe('Project settings modal', () => {
       exact: true,
     });
     await expect(addFirstCommentButton).toBeVisible();
-    await expect(historyModal.getByRole('textbox', {
-      name: 'Comment for published version published-version-1',
-      exact: true,
-    })).toHaveCount(0);
+    await expect(
+      historyModal.getByRole('textbox', {
+        name: 'Comment for published version published-version-1',
+        exact: true,
+      }),
+    ).toHaveCount(0);
     await historyModal.getByRole('button', { name: 'Star published version' }).first().click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
-    expect(routeTrackers.publishedVersionStarRequests).toEqual([{
-      relativePath: project.relativePath,
-      versionId: 'published-version-1',
-      isStarred: true,
-    }]);
+    expect(routeTrackers.publishedVersionStarRequests).toEqual([
+      {
+        relativePath: project.relativePath,
+        versionId: 'published-version-1',
+        isStarred: true,
+      },
+    ]);
     await addFirstCommentButton.click();
     const firstCommentInput = historyModal.getByRole('textbox', {
       name: 'Comment for published version published-version-1',
@@ -984,11 +1526,13 @@ test.describe('Project settings modal', () => {
     await firstCommentInput.fill('Launch baseline');
     await firstCommentInput.press('Enter');
     await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
-    expect(routeTrackers.publishedVersionCommentRequests).toEqual([{
-      relativePath: project.relativePath,
-      versionId: 'published-version-1',
-      comment: 'Launch baseline',
-    }]);
+    expect(routeTrackers.publishedVersionCommentRequests).toEqual([
+      {
+        relativePath: project.relativePath,
+        versionId: 'published-version-1',
+        comment: 'Launch baseline',
+      },
+    ]);
     await expect(firstCommentInput).toHaveCount(0);
     const savedComment = historyModal.getByRole('button', {
       name: 'Edit comment for published version published-version-1',
@@ -1006,10 +1550,12 @@ test.describe('Project settings modal', () => {
     await expect(historyModal).toHaveCount(0);
     await modal.getByRole('button', { name: 'Published version history' }).click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
-    await expect(historyModal.getByRole('button', {
-      name: 'Edit comment for published version published-version-1',
-      exact: true,
-    })).toHaveText('Launch baseline');
+    await expect(
+      historyModal.getByRole('button', {
+        name: 'Edit comment for published version published-version-1',
+        exact: true,
+      }),
+    ).toHaveText('Launch baseline');
     await expect(historyModal.getByText('Page 1 of 2')).toBeVisible();
     await expect(historyModal.getByRole('button', { name: 'Previous' })).toBeDisabled();
     await historyModal.getByRole('button', { name: 'Next' }).click();
@@ -1035,7 +1581,7 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.projectLoadRequests[0]).toEqual({
       path: project.absolutePath,
     });
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('.active-project-more-button').click();
     await expect(modal).toBeVisible();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
 
@@ -1047,7 +1593,7 @@ test.describe('Project settings modal', () => {
     });
     await historyModal.getByRole('button', { name: 'Restore' }).first().click();
     await expect.poll(() => routeTrackers.publishedVersionRestoreRequests.length).toBe(1);
-    expect(routeTrackers.publishedVersionRestoreRequests[0]).toEqual({
+    expect(routeTrackers.publishedVersionRestoreRequests[0]).toMatchObject({
       relativePath: project.relativePath,
       versionId: 'published-version-1',
     });

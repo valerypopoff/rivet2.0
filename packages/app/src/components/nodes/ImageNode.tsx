@@ -1,33 +1,35 @@
 import { type FC } from 'react';
-import { type NodeComponentDescriptor } from '../../hooks/useNodeTypes';
 import { type ImageNode } from '@valerypopoff/rivet2-core';
-import { css } from '@emotion/react';
-import { useAtomValue } from 'jotai';
-import { projectDataState } from '../../state/savedGraphs';
+import { type NodeComponentDescriptor } from '../../hooks/useNodeTypes';
+import { LLMNodeBody } from './LLMNodeBody.js';
 
-const styles = css`
-  img {
-    max-width: 100%;
+function getImageSourceValue(node: ImageNode): string {
+  if (node.data.sourceType === 'base64') {
+    if (node.data.useBase64Input) return 'From input';
+    return node.data.base64?.trim() ? 'Entered' : 'Empty';
   }
-`;
 
-type ImageNodeBodyProps = {
-  node: ImageNode;
-};
+  if (node.data.useDataInput) return 'From input';
+  return node.data.data ? 'File selected' : 'No image selected';
+}
 
-export const ImageNodeBody: FC<ImageNodeBodyProps> = ({ node }) => {
-  const projectData = useAtomValue(projectDataState);
-
-  const dataRef = node.data.data;
-  const b64Data = dataRef ? projectData?.[dataRef.refId] : undefined;
-  const mediaType = node.data.mediaType ?? 'image/png';
-
-  const dataUri = `data:${mediaType};base64,${b64Data}`;
+export const ImageNodeBody: FC<{ node: ImageNode }> = ({ node }) => {
+  const isBase64 = node.data.sourceType === 'base64';
+  const mediaType = node.data.useMediaTypeInput
+    ? 'From input'
+    : (node.data.mediaType ?? 'image/png').replace('image/', '').toUpperCase();
 
   return (
-    <div css={styles}>
-      <img src={dataUri} alt="" />
-    </div>
+    <LLMNodeBody
+      sections={[{
+        id: 'settings',
+        fields: [
+          { label: 'Image source', value: isBase64 ? 'Base64' : 'Binary data' },
+          { label: isBase64 ? 'Base64' : 'Image', value: getImageSourceValue(node) },
+          { label: 'Media Type', value: mediaType },
+        ],
+      }]}
+    />
   );
 };
 

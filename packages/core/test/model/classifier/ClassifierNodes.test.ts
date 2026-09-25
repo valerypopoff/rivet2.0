@@ -315,6 +315,7 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     inputs.filter((input) => input.id.startsWith('question')).map((input) => input.id),
     ['question1', 'question2', 'question3', 'question4'],
   );
+  assert.equal(inputs.find((input) => input.id === 'state')?.required, false);
   assert.ok(inputs.filter((input) => input.id === 'state' || input.id.startsWith('question')).every((input) => input.splitRunBehavior === 'preserve-array'));
   const providerEditor = instance.getEditors().find((editor) => editor.type === 'dropdown' && editor.dataKey === 'provider');
   assert.deepEqual(providerEditor && 'options' in providerEditor ? providerEditor.options : undefined, [{ value: 'jev', label: 'Jev' }]);
@@ -329,6 +330,34 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     ].join(''),
   });
   assert.doesNotMatch(body.text, /Batch: one request/);
+});
+
+test('Classifier Evaluate sends an empty string when optional State is omitted', async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(
+      JSON.stringify({
+        model: 'jev-latest',
+        answers: { q: { type: 'noul', noul: 0.5 } },
+        usage: { input_tokens: 1, output_tokens: 0 },
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  const outputs = await evaluateNode({ outputRequestBody: true }).process(
+    {
+      ['question1' as PortId]: {
+        type: 'object',
+        value: { questionId: 'q', type: 'noul', instructions: 'Question?' },
+      },
+    },
+    context(),
+  );
+
+  assert.equal(requestBodies[0]?.state, '');
+  assert.equal((outputs.requestBody!.value as Record<string, unknown>).state, '');
 });
 
 test('Classifier Evaluate exposes provider HTTP body outputs only when enabled in Outputs', () => {

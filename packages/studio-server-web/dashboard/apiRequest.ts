@@ -1,10 +1,12 @@
 type ResponseError = Error & {
   status?: number;
+  code?: string;
 };
 
-export function createResponseError(status: number, message: string): ResponseError {
+export function createResponseError(status: number, message: string, code?: string): ResponseError {
   const error = new Error(message) as ResponseError;
   error.status = status;
+  if (code) error.code = code;
   return error;
 }
 
@@ -31,7 +33,7 @@ export async function parseJsonResponse<T>(
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: response.statusText }));
-    throw createResponseError(response.status, data.error || response.statusText);
+    throw createResponseError(response.status, data.error || response.statusText, data.code);
   }
 
   return response.json() as Promise<T>;
@@ -42,7 +44,7 @@ export async function parseTextResponse(response: Response): Promise<string> {
     const contentType = response.headers.get('content-type') ?? '';
     if (contentType.includes('application/json')) {
       const data = await response.json().catch(() => ({ error: response.statusText }));
-      throw createResponseError(response.status, data.error || response.statusText);
+      throw createResponseError(response.status, data.error || response.statusText, data.code);
     }
 
     throw createResponseError(response.status, response.statusText);

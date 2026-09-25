@@ -11,17 +11,23 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-The Image Node is used to define a static image for use with other nodes. It can convert a binary type into an image type. The node requires a media type (PNG, JPEG, or GIF) and a data input.
+The Image Node creates an `image` value from binary data or raw base64-encoded image bytes. **Image source** defaults to **Binary data**, preserving the behavior of existing projects. Select **Base64** to paste encoded bytes into a code field or supply them through an input port. **Media Type** describes the decoded image (PNG, JPEG, or GIF) in either mode.
 
-The data input can be provided in two ways:
+In Binary data mode, provide the image bytes in either of two ways:
 
-- Directly in the node's editor settings, using the image browser.
-- Dynamically, by connecting another node to the Image Node's `Data` input port.
+- Directly in the node's editor settings, using **Pick Image**. The settings show that an image is selected without displaying a thumbnail.
+- Dynamically, by clicking **Use an input port for Image** and connecting a `binary` value to the `Data` port.
+
+In Base64 mode, paste the raw base64 string in the **Base64** code field, or click **Use an input port for Base64** and connect a `string` value to the `Base64` port. The source-mode switch shows only the port for the selected mode; switching back to Binary data makes the existing `Data` port available again.
 
 The media type can also be provided in two ways:
 
 - Directly in the node's editor settings, using the dropdown menu.
 - Dynamically, by connecting another node to the Image Node's `Media Type` input port.
+
+The node body summarizes the selected source and media type. After the node runs, its output shows a fitted image preview; open the fullscreen output to inspect the image without the inline preview size limit.
+
+To encode the resulting image bytes as a raw base64 string, connect the **Image** output to a [To Base64 node](./to-base64.mdx). The same node can encode binary data directly without an Image node.
 
 <Tabs
   defaultValue="inputs"
@@ -36,10 +42,11 @@ The media type can also be provided in two ways:
 
 ## Inputs
 
-| Title      | Data Type | Description                                      | Default Value                                               | Notes                                                                                                                                             |
-| ---------- | --------- | ------------------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Data       | `string`  | The data to be converted into an image.          | (required if if the input toggle for Data is enabled)       | The input will be coerced into a string if it is not a string.                                                                                    |
-| Media Type | `string`  | The media type of the image (PNG, JPEG, or GIF). | (required if if the input toggle for Media Type is enabled) | The input will be coerced into a string if it is not a string. The value must be one of the following: `image/png`, `image/jpeg`, or `image/gif`. |
+| Title      | Data Type | Description                                      | Availability |
+| ---------- | --------- | ------------------------------------------------ | ------------ |
+| Data       | `binary`  | Image bytes to convert into an image value.      | Binary data mode, when its input port is enabled. |
+| Base64     | `string`  | Raw base64-encoded image bytes.                  | Base64 mode, when its input port is enabled. |
+| Media Type | `string`  | The media type of the image (PNG, JPEG, or GIF). | Either mode, when its input port is enabled. |
 
 </TabItem>
 
@@ -57,10 +64,12 @@ The media type can also be provided in two ways:
 
 ## Editor Settings
 
-| Setting    | Description                                      | Default Value | Use Input Toggle | Input Data Type |
-| ---------- | ------------------------------------------------ | ------------- | ---------------- | --------------- |
-| Media Type | The media type of the image (PNG, JPEG, or GIF). | `image/png`   | Yes              | `string`        |
-| Image      | The data to be converted into an image.          | (empty)       | Yes              | `string`        |
+| Setting      | Description                                      | Default Value | Use Input Toggle | Input Data Type |
+| ------------ | ------------------------------------------------ | ------------- | ---------------- | --------------- |
+| Image source | Binary data or Base64.                           | Binary data   | No               | —               |
+| Media Type   | The media type of the image (PNG, JPEG, or GIF). | `image/png`   | Yes              | `string`        |
+| Image        | Image picker, shown only in Binary data mode.   | (empty)       | Yes              | `binary`        |
+| Base64       | Raw base64 code field, shown only in Base64 mode.| (empty)       | Yes              | `string`        |
 
 </TabItem>
 
@@ -70,14 +79,14 @@ The media type can also be provided in two ways:
 
 1. Create an Image Node.
 2. In the node's editor settings, click on the `Pick Image` button. This will open the image browser.
-3. Select an image from the image browser. The selected image will be displayed in the `Image` field.
+3. Select an image from the image browser. The `Image` field will show a selected-file status, not an image preview.
 4. Run the graph. The `Image` output of the Image Node should contain the selected image.
 
 ![Image Node Example 1](./assets/image-node-example-01.png)
 
 ## Error Handling
 
-The Image Node will error if the `Data` input or the `Media Type` input is not provided. It will also error if the `Data` input cannot be converted into an image.
+The Image Node errors if its selected source is missing or has the wrong input type. Base64 mode also errors on invalid base64. When the Media Type input port is enabled, it must receive a string. The node does not inspect the bytes to infer the media type; choose the matching type yourself.
 
 ## FAQ
 

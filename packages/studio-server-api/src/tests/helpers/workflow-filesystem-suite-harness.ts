@@ -5,6 +5,7 @@ import {
   createWorkflowExecutionServerHarness,
 } from './workflow-api-harness.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './workflow-fixtures.js';
+import { createReviewedBackendPublicationFixtures, createReviewedFilesystemMutationFixtures } from './reviewed-publication.js';
 
 export async function createFilesystemWorkflowSuiteHarness() {
   const roots = await createWorkflowTestRoots('rivet-workflows-');
@@ -16,7 +17,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
 
   applyRootEnv();
 
-  const workflowMutations = await import('../../routes/workflows/workflow-mutations.js');
+  const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../../routes/workflows/workflow-mutations.js'));
   const workflowQuery = await import('../../routes/workflows/workflow-query.js');
   const workflowFs = await import('../../routes/workflows/fs-helpers.js');
   const workflowDownload = await import('../../routes/workflows/workflow-download.js');
@@ -25,7 +26,7 @@ export async function createFilesystemWorkflowSuiteHarness() {
   const workflowExecution = await import('../../routes/workflows/execution.js');
   const workflowRoutes = await import('../../routes/workflows/index.js');
   const projectRoutes = await import('../../routes/projects.js');
-  const workflowStorageBackend = await import('../../routes/workflows/storage-backend.js');
+  const workflowStorageBackend = createReviewedBackendPublicationFixtures(await import('../../routes/workflows/storage-backend.js'));
   const filesystemExecutionCache = await import('../../routes/workflows/filesystem-execution-cache.js');
   const workflowEndpointAuthSettings = await import('../../workflow-endpoint-auth-settings.js');
   const webAppActionWebSockets = await import('../../web-app-action-websocket.js');
@@ -48,7 +49,9 @@ export async function createFilesystemWorkflowSuiteHarness() {
     latestWebAppsRouter: workflowRoutes.latestWebAppsRouter,
     publishedWebAppsRouter: workflowRoutes.publishedWebAppsRouter,
     publishedWorkflowsRouter: workflowRoutes.publishedWorkflowsRouter,
+    internalPublishedWorkflowsRouter: workflowRoutes.internalPublishedWorkflowsRouter,
     latestWorkflowsRouter: workflowRoutes.latestWorkflowsRouter,
+    internalLatestWorkflowsRouter: workflowRoutes.internalLatestWorkflowsRouter,
   });
 
   async function resetWorkflowsRoot() {

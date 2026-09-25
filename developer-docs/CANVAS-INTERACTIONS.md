@@ -27,7 +27,7 @@ detached output section.
 
 ## Node Body Previews
 
-Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It shows no more than 15 source lines, clips each source line at 240 characters, and caps the resulting preview at 3,000 characters with an ellipsis when content is omitted. This is presentation-only: the node data and editor retain the complete value. Tool's core `getToolNodeBodyPreview(...)` limits its combined name/description preview to 14 source lines: the header separator uses the remaining Text-height line. Its app-level `ToolNodeBody` presents `Name: <toolname>` using the LLM field-label color, followed by the standard LLM-style separator and the same `ColorizedNodeBody` renderer, monospace metrics, zero preformatted margin, and wrapping rules as Text. Do not route Tool through Markdown or independently reapply preview limits: that reintroduces the formatting and height mismatch.
+Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It shows no more than 15 source lines, clips each source line at 240 characters, and caps the resulting preview at 3,000 characters with an ellipsis when content is omitted. This is presentation-only: the node data and editor retain the complete value. Prompt keeps its compact role header but sends its bounded prompt text through the same `ColorizedNodeBody` renderer, Markdown/interpolation language, and wrapping rules as Text. Tool's core `getToolNodeBodyPreview(...)` limits its combined name/description preview to 14 source lines: the header separator uses the remaining Text-height line. Its app-level `ToolNodeBody` presents `Name: <toolname>` using the LLM field-label color, followed by the standard LLM-style separator and the same `ColorizedNodeBody` renderer, monospace metrics, zero preformatted margin, and wrapping rules as Text. Do not route these previews through rendered Markdown or independently reapply preview limits: that reintroduces formatting and height mismatches.
 
 ## Connection Mode
 
@@ -121,9 +121,13 @@ active graph's definition-valid connections.
 
 ## Streaming Watch Connections
 
+Connection-topology diagnostics use the visible **Watch streaming** and
+**Stop watching streaming** node names. Renaming either node in the UI should
+update these diagnostics and their graph-editing tests together.
+
 [`streamingOutputWatchWireState.ts`](../packages/app/src/components/nodeCanvas/streamingOutputWatchWireState.ts)
 derives a second, intentionally simpler visual treatment for the ordinary
-definition-valid connection into an enabled **Watch Streaming Output** node's
+definition-valid connection into an enabled **Watch streaming** node's
 `Streaming Output` (`stream`) input. The base wire remains a single ordinary
 one-way wire, but short copies of the existing continuation arrowhead repeat
 from the source toward Watch along its rendered Bézier route. They communicate

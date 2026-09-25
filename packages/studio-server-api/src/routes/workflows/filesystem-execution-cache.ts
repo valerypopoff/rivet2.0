@@ -32,6 +32,7 @@ export type FilesystemExecutionProjectResult = {
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
   revisionKey: string;
+  endpointAccess: 'public' | 'internal';
   debug: {
     cacheStatus: 'hit' | 'miss' | 'bypass';
     resolveMs: number;
@@ -64,6 +65,7 @@ function createCachedExecutionPointer(
 ): FilesystemExecutionPointer {
   return {
     sourceProjectPath: candidate.projectPath,
+    endpointAccess: candidate.endpointAccess,
     executionProjectPath,
     settingsPath: candidate.settingsPath,
     routingValidationState: {
@@ -348,6 +350,7 @@ export class FilesystemExecutionCache {
       datasetProvider,
       projectVirtualPath: pointer.sourceProjectPath,
       revisionKey: createFilesystemExecutionRevisionKey(pointer, materialization),
+      endpointAccess: pointer.endpointAccess,
       debug: {
         cacheStatus,
         resolveMs,

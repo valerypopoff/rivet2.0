@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 async function seedFileMenuProject(page: Page, suffix: string) {
@@ -41,8 +41,9 @@ test.describe('Hosted editor File menu', () => {
     await expect(fileMenu.getByRole('separator')).toHaveCount(1);
   });
 
-  test('opens the Rivet settings modal at 45% of the editor viewport width', async ({ page }) => {
+  test('keeps the Rivet settings modal at least 700px wide', async ({ page }) => {
     await seedFileMenuProject(page, 'settings-modal-width');
+    await mockHostedEditorBootstrap(page);
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
@@ -54,11 +55,8 @@ test.describe('Hosted editor File menu', () => {
     await expect(modal).toBeVisible();
     await expect(modal.getByRole('heading', { name: 'Rivet settings', exact: true })).toBeVisible();
     const modalWidth = await modal.evaluate((element) => element.getBoundingClientRect().width);
-    const editorWidth = await editorFrame
-      .locator('body')
-      .evaluate((element) => element.ownerDocument!.defaultView!.innerWidth);
-    expect(modalWidth / editorWidth).toBeGreaterThan(0.44);
-    expect(modalWidth / editorWidth).toBeLessThan(0.46);
+    expect(modalWidth).toBeGreaterThanOrEqual(699);
+    expect(modalWidth).toBeLessThanOrEqual(701);
     await expect(modal.getByRole('navigation', { name: 'Settings' })).toBeVisible();
   });
 

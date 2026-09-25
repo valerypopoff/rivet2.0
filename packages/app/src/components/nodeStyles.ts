@@ -396,6 +396,7 @@ export const nodeStyles = css`
 
   .global-node-title-icon,
   .knowledge-node-title-icon,
+  .streaming-node-title-icon,
   .debug-node-title-icon {
     display: inline-block;
     width: 1em;
@@ -1041,6 +1042,15 @@ export const nodeStyles = css`
   .node-output {
     position: relative;
     z-index: 0;
+  }
+
+  .node[data-contextmenutype='node-image'] .node-output img {
+    display: block;
+    height: auto;
+    max-height: 200px;
+    max-width: 100%;
+    object-fit: contain;
+    width: auto;
   }
 
   .node.isComment .node-output {

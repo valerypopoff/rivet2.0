@@ -24,6 +24,8 @@ const WORKFLOW_COLUMN_NAMES = [
   'published_revision_id',
   'published_version_id',
   'endpoint_name',
+  'endpoint_access',
+  'publication_version',
   'published_endpoint_name',
   'last_published_at',
 ] as const;
@@ -117,6 +119,9 @@ export function mapWorkflowRowToProjectItem(
         getWorkflowWebAppPublicationStatuses(row, options.webAppRows),
       ),
       endpointName: row.endpoint_name,
+      publishedEndpointName: row.published_endpoint_name,
+      endpointAccess: row.endpoint_access ?? 'public',
+      publicationVersion: row.publication_version ?? '0',
       lastPublishedAt: toIsoString(row.last_published_at),
       publishedWebApps: (options.webAppRows ?? []).map((webApp) => ({
         uiGraphId: webApp.ui_graph_id,

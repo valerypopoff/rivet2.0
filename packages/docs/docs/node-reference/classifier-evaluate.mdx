@@ -21,7 +21,7 @@ Changing Provider is an authored graph setting, not an input port. Providers add
 
 ## Inputs
 
-- **State**: required string, JSON object, or JSON array.
+- **State**: optional string, JSON object, or JSON array. When it is unconnected, Classifier Evaluate sends an empty string to the provider.
 - **Questions 1…N**: one definition or an array/nested array of definitions. A trailing empty port is always available. Arrays are preserved during split runs and recursively flattened in authored order.
 - **Model**: shown when **Model from input** is enabled.
 - **API Key**: shown when **API key source** is **Input port**. It is never saved in the project.

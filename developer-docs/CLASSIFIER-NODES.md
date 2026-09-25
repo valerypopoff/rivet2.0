@@ -71,7 +71,7 @@ The migration must remain idempotent. Apply it at every serialized project ingre
 
 Questions, state, request maps, and response maps accept exact authored IDs including `__proto__` and `constructor`. Use null-prototype maps, own-property checks, and `Object.defineProperty`; never assign provider-controlled keys through ordinary object assignment.
 
-Classifier inputs use `splitRunBehavior: 'preserve-array'`. Flatten only Question values, preserve authored port/array order, and issue exactly one provider request. Validate question and state data before dispatch. Provider errors must not contain an API key, authorization header, full state, or raw response body.
+Classifier inputs use `splitRunBehavior: 'preserve-array'`. **State** is optional: an unconnected port resolves to `""` before validation and provider serialization, while an explicitly supplied value must still be a valid string, JSON object, or JSON array. Flatten only Question values, preserve authored port/array order, and issue exactly one provider request. Provider errors must not contain an API key, authorization header, full state, or raw response body.
 
 ## Required verification
 

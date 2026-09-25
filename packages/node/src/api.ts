@@ -570,6 +570,9 @@ function createNodeProcessContext(
     codeRunner: runtimeOptions.codeRunner ?? overrides.codeRunner ?? new NodeCodeRunner(executionEnvironment),
     projectPath: runtimeOptions.projectPath,
     projectReferenceLoader: runtimeOptions.projectReferenceLoader ?? new NodeProjectReferenceLoader(),
+    subgraphProjectLoader: runtimeOptions.subgraphProjectLoader,
+    onSubgraphProjectRun: runtimeOptions.onSubgraphProjectRun,
+    subgraphRecordingOptions: runtimeOptions.subgraphRecordingOptions,
     editorExecutionCache: runtimeOptions.editorExecutionCache,
     settings: resolveProcessSettings(
       { ...runtimeOptions, pluginEnv },

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
 
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
 
@@ -33,7 +34,7 @@ process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
 
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
-const workflowMutations = await import('../routes/workflows/workflow-mutations.js');
+const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../routes/workflows/workflow-mutations.js'));
 const workflowRecordings = await import('../routes/workflows/recordings.js');
 const workflowRecordingDb = await import('../routes/workflows/recordings-db.js');
 const { writeRunRecordingsSettings } = await import('../routes/workflows/recordings-config.js');

@@ -33,6 +33,8 @@ const UNFREEZABLE_NODE_TYPES = new Set<ChartNode['type']>([
   'startBackgroundBranch',
   'watchStreamingOutput',
   'stopWatchingStreamingOutput',
+  'catchStreamingChunks',
+  'streamValue',
   // Data Bus channels are compiled into effective connections before a run;
   // there is no node invocation whose outputs could be replayed.
   'dataBus',

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FC } from 'react';
-import { ToastContainer } from 'react-toastify';
+import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel';
 import type {
@@ -12,7 +12,7 @@ import { useEditorCommandQueue } from './useEditorCommandQueue';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
-import { fetchHostedConfig } from './workflowApi';
+import { fetchHostedConfig, fetchWorkflowTree } from './workflowApi';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 import type {
   ProjectCompareSideLabels,
@@ -21,7 +21,7 @@ import type {
   HostedProjectReconciliationContext,
   HostedProjectConflictSnapshot,
 } from '../../studio-server-shared/editor-bridge';
-import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
+import type { WorkflowFolderItem, WorkflowProjectEditorBinding, WorkflowProjectItem } from '../../studio-server-shared/workflow-types';
 import { acceptConflictSnapshot, useHostedProjectConflictNotices } from './useHostedProjectConflictNotices';
 import {
   RIVET_EXECUTOR_WS_URL,
@@ -42,6 +42,8 @@ const DEFAULT_HOSTED_ROUTE_CONFIG: HostedRouteConfig = {
   remoteDebuggerDefaultWs: RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
   publishedWorkflowsBasePath: RIVET_PUBLISHED_WORKFLOWS_BASE_PATH,
   latestWorkflowsBasePath: RIVET_LATEST_WORKFLOWS_BASE_PATH,
+  internalPublishedWorkflowsBaseUrl: 'http://api/internal/workflows',
+  internalLatestWorkflowsBaseUrl: 'http://api/internal/workflows-latest',
   publishedAppsBasePath: RIVET_WEB_APPS_BASE_PATH,
   latestAppsBasePath: RIVET_LATEST_WEB_APPS_BASE_PATH,
   webAppsAuthMode: 'ui-gate',
@@ -54,10 +56,26 @@ function resolveHostedRouteConfig(config: Partial<HostedRouteConfig>): HostedRou
     publishedWorkflowsBasePath:
       config.publishedWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedWorkflowsBasePath,
     latestWorkflowsBasePath: config.latestWorkflowsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestWorkflowsBasePath,
+    internalPublishedWorkflowsBaseUrl:
+      config.internalPublishedWorkflowsBaseUrl || DEFAULT_HOSTED_ROUTE_CONFIG.internalPublishedWorkflowsBaseUrl,
+    internalLatestWorkflowsBaseUrl:
+      config.internalLatestWorkflowsBaseUrl || DEFAULT_HOSTED_ROUTE_CONFIG.internalLatestWorkflowsBaseUrl,
     publishedAppsBasePath: config.publishedAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.publishedAppsBasePath,
     latestAppsBasePath: config.latestAppsBasePath || DEFAULT_HOSTED_ROUTE_CONFIG.latestAppsBasePath,
     webAppsAuthMode: config.webAppsAuthMode || DEFAULT_HOSTED_ROUTE_CONFIG.webAppsAuthMode,
   };
+}
+
+function findSubgraphProjects(
+  folders: WorkflowFolderItem[],
+  projects: WorkflowProjectItem[],
+  projectId: string,
+): WorkflowProjectItem[] {
+  const matches = projects.filter((project) => project.projectMetadataId === projectId);
+  for (const folder of folders) {
+    matches.push(...findSubgraphProjects(folder.folders, folder.projects, projectId));
+  }
+  return matches;
 }
 
 export const DashboardPage: FC = () => {
@@ -165,6 +183,8 @@ export const DashboardPage: FC = () => {
         title: options?.title,
         preview: options?.preview === true ? true : undefined,
         reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
+        preferredGraphId: options?.preferredGraphId,
+        expectedProjectId: options?.expectedProjectId,
         requestId,
       });
     },
@@ -176,6 +196,29 @@ export const DashboardPage: FC = () => {
       rememberPendingWorkflowProjectOpen(path);
     },
     [rememberPendingWorkflowProjectOpen],
+  );
+
+  const handleOpenSubgraphTarget = useCallback(
+    async (projectId: string, graphId: string) => {
+      try {
+        const tree = await fetchWorkflowTree();
+        const matches = findSubgraphProjects(tree.folders, tree.projects, projectId);
+        if (matches.length !== 1) {
+          throw new Error(matches.length === 0
+            ? 'The selected Subgraph project is no longer available.'
+            : 'More than one project has the selected Subgraph project ID. Resolve the duplicate before opening it.');
+        }
+        const project = matches[0]!;
+        handleOpenProject(project.absolutePath, {
+          title: project.name,
+          preferredGraphId: graphId,
+          expectedProjectId: projectId,
+        });
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not open the selected Subgraph project.');
+      }
+    },
+    [handleOpenProject],
   );
 
   const handleWorkflowProjectOpenIntentCanceled = useCallback(
@@ -507,6 +550,7 @@ export const DashboardPage: FC = () => {
     editorReady,
     focusEditorFrame,
     onSaveShortcut: requestShortcutProjectSave,
+    onOpenSubgraphTarget: handleOpenSubgraphTarget,
     iframeRef,
     onActiveWorkflowProjectPathChange: (path) => {
       if (shouldIgnoreTransientActiveProjectPath(path)) {

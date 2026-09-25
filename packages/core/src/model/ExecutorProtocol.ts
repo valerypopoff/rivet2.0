@@ -205,6 +205,8 @@ export type OutgoingMessageMap = {
     projectPath?: string | null;
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
+    /** Hosted editor setting; only the authenticated Node executor uses it. */
+    recordSubgraphProjectRuns?: boolean;
     evaluation?: EvaluationExecutionMetadata;
     /**
      * An opaque, host-owned ID that lets a trusted executor join an unhealthy

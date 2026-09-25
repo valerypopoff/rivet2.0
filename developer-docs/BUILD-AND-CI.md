@@ -910,6 +910,13 @@ validates policy rather than a frozen advisory count, so a newly published high
 finding or a new unreviewed dependent fails CI even when lower-severity counts
 change.
 
+The `image-size` documentation-only exception tracks the current advisory IDs
+for the unpatched ICNS and JXL/HEIF parser-loop findings. If the registry
+reissues these findings under new IDs, review the advisory contents and direct
+dependent before replacing the old IDs; unused exceptions are intentionally
+fatal so stale waivers cannot accumulate. This exception does not cover image
+parsing in a running Rivet service.
+
 An exception for a parser used only by a build tool must state that the input is
 repository-controlled and identify the owning toolchain. An exception for a
 runtime dependency must instead identify the exact safe API boundary (for

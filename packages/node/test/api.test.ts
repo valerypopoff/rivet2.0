@@ -7,6 +7,7 @@ import {
   createGraphRunner,
   createProcessor,
   ExecutionRecorder,
+  getGraphBoundary,
   getKnowledgeStoreProvider,
   globalRivetNodeRegistry,
   nodeDefinition,
@@ -27,6 +28,8 @@ import {
   type Outputs,
   type PortId,
   type Project,
+  type ProjectId,
+  type SubGraphNode,
   type RivetKnowledgeStore,
 } from '../src/index.js';
 import {
@@ -1179,5 +1182,62 @@ describe('api', () => {
     assert.ok(eventTypes.includes('done'));
     // `finish` seals the recorder, but is deliberately not replayable.
     assert.equal(eventTypes.at(-1), 'done');
+  });
+
+  it('passes hosted cross-project Subgraph facilities through the Node processor context', async () => {
+    const fixture = makeSubgraphChainProject(1);
+    const childGraphId = 'runtime-speed-subgraph' as GraphId;
+    const child = fixture.project.graphs[childGraphId]!;
+    const target: Project = {
+      ...fixture.project,
+      graphs: { [childGraphId]: child },
+      metadata: {
+        ...fixture.project.metadata,
+        id: 'hosted-subgraph-target' as ProjectId,
+        mainGraphId: childGraphId,
+      },
+    };
+    const caller = structuredClone(fixture.project);
+    delete caller.graphs[childGraphId];
+    const call = caller.graphs[fixture.graphId]!.nodes.find((node) => node.type === 'subGraph') as SubGraphNode;
+    call.data.targetProjectId = target.metadata.id;
+    call.data.targetVersion = 'latest';
+    call.data.targetBoundary = getGraphBoundary(target, childGraphId)!;
+
+    const loads: string[] = [];
+    const recordedGraphIds: GraphId[] = [];
+    const processor = createProcessor(caller, {
+      graph: fixture.graphId,
+      inputs: { input: 'hello' },
+      subgraphProjectLoader: {
+        async loadTarget(requested) {
+          loads.push(`${requested.projectId}:${requested.version}`);
+          return { project: target };
+        },
+      },
+      onSubgraphProjectRun: (run) => {
+        recordedGraphIds.push(run.graphId);
+      },
+    });
+    try {
+      const outputs = await processor.run();
+      assert.equal(outputs.result?.value, 'hellox');
+      assert.deepEqual(loads, ['hosted-subgraph-target:latest']);
+      assert.deepEqual(recordedGraphIds, [childGraphId]);
+    } finally {
+      processor.dispose();
+    }
+  });
+
+  it('does not run a same-project graph for an unfinished Other projects target', async () => {
+    const fixture = makeSubgraphChainProject(1);
+    const call = fixture.project.graphs[fixture.graphId]!.nodes.find((node) => node.type === 'subGraph') as SubGraphNode;
+    call.data.targetScope = 'other-projects';
+    const processor = createProcessor(fixture.project, { graph: fixture.graphId, inputs: { input: 'hello' } });
+    try {
+      await assert.rejects(processor.run(), /Select a project and graph for this Subgraph/);
+    } finally {
+      processor.dispose();
+    }
   });
 });

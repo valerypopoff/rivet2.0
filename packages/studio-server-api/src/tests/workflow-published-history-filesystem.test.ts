@@ -130,6 +130,46 @@ test('each filesystem publish creates a downloadable published version history e
   );
 });
 
+test('restoring a published version preserves dataset sidecar bytes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryBytes');
+  const datasetPath = workflowFs.getWorkflowDatasetPath(created.absolutePath);
+  const originalBytes = Buffer.from([0, 255, 254, 13, 10]);
+  await fs.writeFile(datasetPath, originalBytes);
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'published-history-bytes',
+  });
+  const history = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
+  const versionId = history.versions[0]?.id;
+  assert.ok(versionId);
+
+  await fs.writeFile(datasetPath, 'changed dataset');
+  await workflowStorageBackend.restoreWorkflowPublishedVersionWithBackend(created.relativePath, versionId);
+
+  assert.deepEqual(await fs.readFile(datasetPath), originalBytes);
+  const restoredHistory = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
+  assert.deepEqual(
+    await fs.readFile(workflowFs.getPublishedWorkflowSnapshotDatasetPath(workflowsRoot, restoredHistory.versions[0]!.id)),
+    originalBytes,
+  );
+});
+
+test('a direct request for corrupt noncurrent history reports corruption instead of not found', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'CorruptOldHistory');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'corrupt-old-history' });
+  const first = (await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath)).versions[0]!;
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'corrupt-old-history' });
+  const metadataPath = workflowFs.getPublishedWorkflowSnapshotMetadataPath(workflowsRoot, first.id);
+  await fs.writeFile(metadataPath, '{broken', 'utf8');
+
+  const visible = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
+  assert.equal(visible.versions.length, 1);
+  await assert.rejects(
+    workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(created.relativePath, first.id, true),
+    /Corrupt published-version metadata/,
+  );
+  assert.equal(await fs.readFile(metadataPath, 'utf8'), '{broken');
+});
+
 test('filesystem published version history exposes legacy current snapshots without metadata', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryLegacy');
   const publishedContents = await fs.readFile(created.absolutePath, 'utf8');
@@ -203,7 +243,7 @@ test('filesystem published version history exposes legacy current snapshots with
   assert.equal(historyAfterSecondPublish.versions[1]?.comment, 'legacy keeper');
 });
 
-test('filesystem published version history rejects mismatched metadata ids', async (t) => {
+test('filesystem published version history preserves corrupt metadata and rejects foreign snapshots', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryMetadataMismatch');
   const published = await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
     endpointName: 'published-history-metadata-mismatch-endpoint',
@@ -216,30 +256,60 @@ test('filesystem published version history rejects mismatched metadata ids', asy
     storedSettings.publishedSnapshotId,
   );
   const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+  await fs.writeFile(metadataPath, '{broken', 'utf8');
+  await assert.rejects(
+    workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath),
+    /Corrupt published-version metadata/,
+  );
+  await fs.writeFile(metadataPath, `${JSON.stringify({ ...metadata, isStarred: 'true' })}\n`, 'utf8');
+  await assert.rejects(
+    workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath),
+    /Corrupt published-version metadata/,
+  );
   await fs.writeFile(
     metadataPath,
     `${JSON.stringify({ ...metadata, id: 'different-version-id' }, null, 2)}\n`,
     'utf8',
   );
 
-  const history = await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath);
-  assert.equal(history.versions.length, 1);
-  assert.equal(history.versions[0]?.id, storedSettings.publishedSnapshotId);
-  assert.equal(history.versions[0]?.isCurrent, true);
-  assert.equal(history.versions[0]?.comment, '');
-
-  const starredVersion = await workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
-    created.relativePath,
-    storedSettings.publishedSnapshotId,
-    true,
+  await assert.rejects(
+    workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath),
+    /Corrupt published-version metadata/,
   );
-  assert.equal(starredVersion.id, storedSettings.publishedSnapshotId);
-  assert.equal(starredVersion.isStarred, true);
+  await assert.rejects(
+    workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
+      created.relativePath, storedSettings.publishedSnapshotId, true,
+    ),
+    /Corrupt published-version metadata/,
+  );
+  await assert.rejects(
+    workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+      endpointName: 'published-history-metadata-mismatch-endpoint',
+    }),
+    /Corrupt published-version metadata/,
+  );
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, 'utf8')).id, 'different-version-id');
 
-  const repairedMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
-  assert.equal(repairedMetadata.id, storedSettings.publishedSnapshotId);
-  assert.equal(repairedMetadata.isStarred, true);
-  assert.equal(repairedMetadata.comment, '');
+  await fs.writeFile(metadataPath, `${JSON.stringify({ ...metadata, projectId: 'another-project' }, null, 2)}\n`, 'utf8');
+  await assert.rejects(
+    workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath),
+    /belongs to a different project/,
+  );
+  await assert.rejects(
+    workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
+      created.relativePath, storedSettings.publishedSnapshotId, true,
+    ),
+    /belongs to a different project/,
+  );
+  await assert.rejects(
+    workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+      endpointName: 'published-history-metadata-mismatch-endpoint',
+    }),
+    /belongs to a different project/,
+  );
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, 'utf8')).projectId, 'another-project');
+
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
 
   const originalContents = await fs.readFile(created.absolutePath, 'utf8');
   const otherProject = await workflowMutations.createWorkflowProjectItem('', 'PublishedHistoryOtherProject');
@@ -247,6 +317,32 @@ test('filesystem published version history rejects mismatched metadata ids', asy
     otherProject.absolutePath,
     workflowFs.getPublishedWorkflowSnapshotPath(workflowsRoot, storedSettings.publishedSnapshotId),
   );
+  for (const operation of [
+    () => workflowStorageBackend.readWorkflowPublishedVersionDownloadWithBackend(
+      created.relativePath, storedSettings.publishedSnapshotId,
+    ),
+    () => workflowStorageBackend.readWorkflowPublishedVersionPreviewWithBackend(
+      created.relativePath, storedSettings.publishedSnapshotId,
+    ),
+    () => workflowStorageBackend.setWorkflowPublishedVersionStarWithBackend(
+      created.relativePath, storedSettings.publishedSnapshotId, true,
+    ),
+    () => workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+      endpointName: 'published-history-metadata-mismatch-endpoint',
+    }),
+  ]) {
+    await assert.rejects(operation, /Published version snapshot belongs to a different project/);
+  }
+
+  await fs.rm(metadataPath);
+  await assert.rejects(
+    workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+      endpointName: 'published-history-metadata-mismatch-endpoint',
+    }),
+    /Published version snapshot belongs to a different project/,
+  );
+  await assert.rejects(fs.stat(metadataPath), { code: 'ENOENT' });
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
 
   const cacheInvalidations = observeFilesystemExecutionInvalidations(
     t,
@@ -259,7 +355,7 @@ test('filesystem published version history rejects mismatched metadata ids', asy
     ),
     /Published version snapshot belongs to a different project/,
   );
-  assert.equal(cacheInvalidations.markedIndexDirty, true);
-  assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls.at(-1), [created.absolutePath]);
+  assert.equal(cacheInvalidations.markedIndexDirty, false);
+  assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls, []);
   assert.equal(await fs.readFile(created.absolutePath, 'utf8'), originalContents);
 });

@@ -61,6 +61,7 @@ import {
   type ToolContinuationWireState,
 } from './nodeCanvas/toolContinuationWireState.js';
 import { getProjectStreamingOutputWatchConnections } from './nodeCanvas/streamingOutputWatchWireState.js';
+import { getSubgraphPreviewGraphOutputStreamingCapability } from '../utils/subgraphPreviewStreaming.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import {
   connectionMatchesDataBusChannelKeys,
@@ -481,6 +482,8 @@ export const WireLayer: FC<WireLayerProps> = ({
         referencedProjects,
         registry,
         frozenNodeOutputs,
+        getPreviewGraphOutputStreamingCapability: getSubgraphPreviewGraphOutputStreamingCapability,
+        onlyStreamCapableSources: true,
       }),
     [project, graph, referencedProjects, registry, frozenNodeOutputs],
   );
@@ -1062,7 +1065,7 @@ const StaticWireContents = memo(
                   markerIds: wireArrowMarkerIds,
                 }),
                 title:
-                  'Streaming watch: this connection leads to Watch Streaming Output, including through named graph inputs and outputs.',
+                  'Streaming output: this connection can carry live updates to Watch or Catch, including through named graph inputs and outputs.',
               }
             : undefined;
           const bendPoint = connection.bendPoint;

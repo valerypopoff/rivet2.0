@@ -1,4 +1,4 @@
-import { getError } from '@valerypopoff/rivet2-core';
+import { getError, type GraphId, type ProjectId } from '@valerypopoff/rivet2-core';
 
 import { postMessageToDashboard, type DashboardToEditorCommand } from '../../studio-server-shared/editor-bridge';
 import { primeOpenedProjectSession } from '../io/openedProjectSessionCache';
@@ -102,6 +102,8 @@ export async function handleOpenProjectCommand(
       reloadFromDisk: Boolean(command.reloadFromDisk),
       skipReplaceConfirmation: shouldReplaceActivePreview,
       previewTab: shouldUsePreviewSlot,
+      preferredGraphId: command.preferredGraphId as GraphId | undefined,
+      expectedProjectId: command.expectedProjectId as ProjectId | undefined,
     });
     if (!openResult.opened) {
       if (openingTabId) {

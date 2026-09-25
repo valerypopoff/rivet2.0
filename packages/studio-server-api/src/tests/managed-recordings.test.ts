@@ -129,6 +129,11 @@ test('managed recording statistics preserve web-app action identity and run-kind
     component_label_at_execution: 'Generate report',
     correlation_id: 'rvt-managed-recording-12345',
   };
+  const childRow: RecordingRow = {
+    ...createRecordingRow('child', 'Subgraph: Extract', '2026-08-04T12:00:01.000Z'),
+    execution_surface: 'subgraph_project',
+    graph_id_at_execution: 'extract',
+  };
   const context = {
     pool: {},
     initialize: async () => {},
@@ -144,7 +149,7 @@ test('managed recording statistics preserve web-app action identity and run-kind
     },
     db: {
       queryOne: async () => null,
-      queryRows: async () => [webAppRow],
+      queryRows: async () => [webAppRow, childRow],
     },
     blobStore: { getText: async () => '' },
     mappers: {
@@ -179,8 +184,9 @@ test('managed recording statistics preserve web-app action identity and run-kind
   );
   assert.equal(catalog.targets[0]?.componentLabel, 'Generate report');
   const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all');
-  assert.equal(page.runs.length, 1);
+  assert.equal(page.runs.length, 2);
   assert.equal(page.runs[0]?.executionIdentity?.correlationId, 'rvt-managed-recording-12345');
+  assert.equal(page.runs[1]?.executionIdentity?.surface, 'subgraph_project');
 });
 
 test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {

@@ -6,6 +6,11 @@ import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
 import { createWorkflowCapacityCapability } from '../workflow-capacity-capability.js';
+import {
+  FilesystemProjectMoveInterruption,
+  moveProjectWithSidecars,
+  setFilesystemProjectMoveCheckpointForTests,
+} from '../routes/workflows/filesystem-project-move-transactions.js';
 
 const {
   workflowsRoot,
@@ -151,6 +156,81 @@ test('workflow request headers context is normalized to a safe string object', (
   assert.equal(Object.prototype.hasOwnProperty.call(headers, 'constructor'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(headers, 'prototype'), false);
   assert.ok(Object.values(headers).every((value) => typeof value === 'string'));
+});
+
+test('internal endpoint access blocks both public routes while retaining private published and draft routes', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Network Access');
+  const published = await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+    endpointName: 'network-access',
+  });
+
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
+    const post = (baseUrl: string) => fetch(`${baseUrl}/network-access`, { method: 'POST' });
+    assert.equal((await post(publishedBaseUrl)).status, 200);
+
+    const accessResponse = await fetch(`${apiBaseUrl}/projects/endpoint-access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        relativePath: created.relativePath,
+        access: 'internal',
+        preconditions: {
+          expectedProjectId: published.projectMetadataId,
+          expectedPublicationVersion: published.settings.publicationVersion,
+        },
+      }),
+    });
+    assert.equal(accessResponse.status, 200);
+    assert.equal((await post(publishedBaseUrl)).status, 404);
+    assert.equal((await post(latestBaseUrl)).status, 404);
+    assert.equal((await post(internalPublishedBaseUrl)).status, 200);
+    assert.equal((await post(internalLatestBaseUrl)).status, 200);
+
+    await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+      endpointName: 'network-access',
+    });
+    assert.equal((await post(publishedBaseUrl)).status, 404);
+
+    await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'public');
+    assert.equal((await post(publishedBaseUrl)).status, 200);
+    assert.equal((await post(latestBaseUrl)).status, 200);
+  });
+});
+
+test('a published endpoint keeps its identity and private access after recovery of a crashed project move', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'Recovered Endpoint Move');
+  await workflowStorageBackend.publishWorkflowProjectItemWithBackend(created.relativePath, {
+    endpointName: 'recovered-move-endpoint',
+  });
+  await workflowStorageBackend.updateWorkflowEndpointAccessWithBackend(created.relativePath, 'internal');
+  const settingsBefore = await workflowPublication.readStoredWorkflowProjectSettings(created.absolutePath, 'Recovered Endpoint Move');
+  const destination = path.join(workflowsRoot, 'Moved');
+  await fs.mkdir(destination);
+  const target = path.join(destination, path.basename(created.absolutePath));
+
+  const assertPrivateEndpoint = async () => withWorkflowExecutionServer(async ({ publishedBaseUrl, internalPublishedBaseUrl, latestBaseUrl, internalLatestBaseUrl }) => {
+    const post = (baseUrl: string) => fetch(`${baseUrl}/recovered-move-endpoint`, { method: 'POST' });
+    assert.equal((await post(publishedBaseUrl)).status, 404);
+    assert.equal((await post(latestBaseUrl)).status, 404);
+    assert.equal((await post(internalPublishedBaseUrl)).status, 200);
+    assert.equal((await post(internalLatestBaseUrl)).status, 200);
+  });
+
+  await assertPrivateEndpoint();
+  try {
+    setFilesystemProjectMoveCheckpointForTests((checkpoint) => {
+      if (checkpoint === 'committed') throw new FilesystemProjectMoveInterruption(checkpoint);
+    });
+    await assert.rejects(moveProjectWithSidecars(workflowsRoot, created.absolutePath, target), FilesystemProjectMoveInterruption);
+  } finally {
+    setFilesystemProjectMoveCheckpointForTests(null);
+  }
+
+  // The second execution-server startup runs journal recovery before it serves requests.
+  await assertPrivateEndpoint();
+  assert.deepEqual(await workflowPublication.readStoredWorkflowProjectSettings(target, 'Recovered Endpoint Move'), settingsBefore);
+  await assert.rejects(fs.stat(created.absolutePath), { code: 'ENOENT' });
+  assert.equal((await workflowPublication.findPublishedWorkflowByEndpoint(workflowsRoot, 'recovered-move-endpoint'))?.projectPath, target);
 });
 
 test('filesystem execution emits per-stage debug headers only when explicitly enabled', async () => {

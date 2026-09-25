@@ -243,6 +243,7 @@ const rivetDebugger = startDebuggerServer({
     projectPath,
     useEditorCache,
     captureNodeTimings,
+    recordSubgraphProjectRuns,
     evaluation,
     llmProfileHealthExecutionCorrelationId: requestedLLMProfileHealthExecutionCorrelationId,
     returnWhenGraphOutputsReady,
@@ -325,6 +326,7 @@ const rivetDebugger = startDebuggerServer({
         (await getAppExecutorHostOptions().createProcessorOptions?.({
           graphId,
           isWebAppAction: initialWebAppStorage !== undefined,
+          recordSubgraphProjectRuns: recordSubgraphProjectRuns === true,
           ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
           project,
           projectPath,

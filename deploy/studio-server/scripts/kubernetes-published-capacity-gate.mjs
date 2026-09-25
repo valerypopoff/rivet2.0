@@ -606,10 +606,32 @@ export class PublishedCapacityGate {
       });
       const relativePath = safeRelativePath(upload?.project?.relativePath);
       this.fixturePaths.push(relativePath);
+      const publicationSnapshot = await requestJson(
+        this.config.baseUrl,
+        `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+        { headers: this.config.requestHeaders },
+      );
+      const { projectId, draftRevisionId, publicationVersion, project } = publicationSnapshot ?? {};
+      if (
+        !projectId || !draftRevisionId || !publicationVersion ||
+        project?.projectMetadataId !== projectId ||
+        project.revisionId !== draftRevisionId ||
+        project.settings?.publicationVersion !== publicationVersion
+      ) {
+        throw new Error('Capacity gate did not receive a coherent publication snapshot.');
+      }
       await requestJson(this.config.baseUrl, '/api/workflows/projects/publish', {
         method: 'POST',
         headers: this.config.requestHeaders,
-        body: { relativePath, settings: { endpointName } },
+        body: {
+          relativePath,
+          settings: { endpointName },
+          preconditions: {
+            expectedProjectId: projectId,
+            expectedDraftRevisionId: draftRevisionId,
+            expectedPublicationVersion: publicationVersion,
+          },
+        },
       });
     }
   }

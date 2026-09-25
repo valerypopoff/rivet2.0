@@ -68,7 +68,7 @@ data:
     child:
       metadata:
         id: child
-        name: Child Graph
+        name: Folder B/Child Graph
       nodes:
         '[gate]:graphInput "Gate"':
           data:
@@ -100,8 +100,37 @@ data:
     selector-search-target:
       metadata:
         id: selector-search-target
-        name: Selector search target
+        name: Folder A/Selector search target
       nodes: []
+    selector-alpha:
+      metadata:
+        id: selector-alpha
+        name: Folder A/Alpha graph
+      nodes: []
+  plugins: []
+  references: []
+`;
+}
+
+function createExternalFixture(): string {
+  return `version: 4
+data:
+  metadata:
+    id: external-project
+    title: Reusable logic
+    description: ""
+    mainGraphId: external-graph
+  graphs:
+    external-graph:
+      metadata:
+        id: external-graph
+        name: Graph group/Saved graph
+      nodes:
+        '[external-output]:graphOutput "Result"':
+          data:
+            id: result
+            dataType: string
+          visualData: 400/220/240/null//
   plugins: []
   references: []
 `;
@@ -113,6 +142,12 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
 }, testInfo) => {
   test.slow();
   let contents = createFixture();
+  let externalGraphAvailable = true;
+  let externalOutputId = 'result';
+  let publishedOutputId = 'outputStream2';
+  let publishedOutputType = 'string';
+  let externalPreviewUnavailable = false;
+  let externalPreviewRequests = 0;
   let saveCount = 0;
   let loadCount = 0;
   const unexpectedMutations: string[] = [];
@@ -124,6 +159,16 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     absolutePath: projectPath,
     updatedAt: '2026-09-05T00:00:00.000Z',
     settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+  };
+  const externalProject: WorkflowProjectItem = {
+    id: 'external-project-row',
+    projectMetadataId: 'external-project',
+    name: 'Reusable logic',
+    fileName: 'Reusable logic.rivet-project',
+    relativePath: 'Components/Reusable/Reusable logic.rivet-project',
+    absolutePath: '/workflows/Components/Reusable/Reusable logic.rivet-project',
+    updatedAt: '2026-09-05T00:00:00.000Z',
+    settings: { status: 'published', endpointName: 'reusable-logic', lastPublishedAt: null, publishedWebApps: [] },
   };
   const installFixture = async (fixturePage: Page) => {
     await fixturePage.addInitScript(() => {
@@ -159,13 +204,84 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
         const tree: WorkflowTreeResponse = {
           root: '/workflows',
           sync: { epoch: 'pruning-fixture', revision: 0 },
-          folders: [],
+          folders: [
+            {
+              id: 'components',
+              name: 'Components',
+              relativePath: 'Components',
+              absolutePath: '/workflows/Components',
+              updatedAt: '2026-09-05T00:00:00.000Z',
+              projects: [],
+              folders: [
+                {
+                  id: 'reusable',
+                  name: 'Reusable',
+                  relativePath: 'Components/Reusable',
+                  absolutePath: '/workflows/Components/Reusable',
+                  updatedAt: '2026-09-05T00:00:00.000Z',
+                  projects: [externalProject],
+                  folders: [],
+                },
+              ],
+            },
+            {
+              id: 'zeta',
+              name: 'Zeta',
+              relativePath: 'Zeta',
+              absolutePath: '/workflows/Zeta',
+              updatedAt: '2026-09-05T00:00:00.000Z',
+              projects: [],
+              folders: [],
+            },
+          ],
           projects: [project],
         };
         await route.fulfill({ json: tree });
+      } else if (path === '/api/workflows/subgraph-projects/external-project/preview' && request.method() === 'GET') {
+        externalPreviewRequests++;
+        if (externalPreviewUnavailable) {
+          await route.fulfill({ status: 503, json: { error: 'Preview temporarily unavailable' } });
+          return;
+        }
+        const version = new URL(request.url()).searchParams.get('version');
+        await route.fulfill({
+          json: {
+            project: {
+              metadata: { id: 'external-project', title: 'Reusable logic', mainGraphId: 'external-graph' },
+              graphs: externalGraphAvailable
+                ? {
+                    'external-graph': {
+                      metadata: {
+                        id: 'external-graph',
+                        name: version === 'published' ? 'Graph group/Published graph' : 'Graph group/Saved graph',
+                      },
+                      nodes: [
+                        {
+                          id: 'external-output',
+                          type: 'graphOutput',
+                          data: {
+                            id: version === 'published' ? publishedOutputId : externalOutputId,
+                            dataType: version === 'published' ? publishedOutputType : 'string',
+                          },
+                        },
+                      ],
+                      connections: [],
+                    },
+                  }
+                : {},
+            },
+          },
+        });
       } else if (path === '/api/projects/load' && request.method() === 'POST') {
         loadCount++;
-        await route.fulfill({ json: { contents, datasetsContents: null, revisionId: null } });
+        const requestedPath = request.postDataJSON().path;
+        await route.fulfill({
+          json: {
+            contents: requestedPath === externalProject.absolutePath ? createExternalFixture() : contents,
+            datasetsContents: null,
+            revisionId: null,
+          },
+        });
       } else if (path === '/api/projects/save' && request.method() === 'POST') {
         const saved = request.postDataJSON();
         expect(saved.path).toBe(projectPath);
@@ -208,9 +324,117 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toHaveCount(0);
   });
 
-  await test.step('Search and select from the full-width canvas graph selector', async () => {
-    const selector = unset.getByRole('combobox', { name: 'Subgraph graph' });
-    const selectorContainer = unset.locator('.subgraph-node-body-select');
+  await test.step('Browse folder sections and select a graph through the searchable dropdown', async () => {
+    await editNode(unset);
+    const scope = frame.getByRole('group', { name: 'Subgraph graph source' });
+    await expect(frame.locator('.panel-container').getByText('Graph source', { exact: true })).toBeVisible();
+    await scope.getByRole('button', { name: 'Other projects' }).click();
+    const selector = frame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
+    await selector.click();
+    const panel = frame.locator('.panel-container');
+    await panel.getByText('Components', { exact: true }).click();
+    const reusableY = (await panel.getByText('Reusable', { exact: true }).boundingBox())?.y;
+    const zetaY = (await panel.getByText('Zeta', { exact: true }).boundingBox())?.y;
+    expect(reusableY).toBeDefined();
+    expect(zetaY).toBeDefined();
+    expect(reusableY!).toBeLessThan(zetaY!);
+    await panel.getByText('Reusable', { exact: true }).click();
+    await panel.getByText('Reusable logic', { exact: true }).click();
+    const graphFolder = panel.getByText('Graph group', { exact: true });
+    await expect(graphFolder.locator('..').locator('svg')).toBeVisible();
+    const graphFolderY = (await graphFolder.boundingBox())?.y;
+    const savedGraphY = (await panel.getByText('Saved graph', { exact: true }).boundingBox())?.y;
+    expect(graphFolderY).toBeDefined();
+    expect(savedGraphY).toBeDefined();
+    expect(graphFolderY!).toBeLessThan(savedGraphY!);
+    await panel.getByText('Saved graph', { exact: true }).click();
+    await expect(panel.locator('.subgraph-node-body-select')).toContainText('Reusable logic > Saved graph');
+    await expect(unset.locator('.subgraph-node-body-select')).toContainText('Reusable logic > Saved graph');
+    await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toBeVisible();
+    await expect(panel.getByText('A later save to the selected project changes this Subgraph’s next run.')).toHaveCount(
+      0,
+    );
+
+    const version = frame.getByRole('group', { name: 'Subgraph project version' });
+    await expect(version.getByRole('button', { name: 'Published' })).toBeEnabled();
+    await version.getByRole('button', { name: 'Published' }).click();
+    await expect(unset.locator('.subgraph-node-body-select')).toContainText('Published graph');
+    await expect(panel.locator('.subgraph-node-body-select')).toContainText('Reusable logic > Published graph');
+    await expect(unset.locator('.output-port[data-portid="result"]')).toHaveCount(1);
+    await expect(unset.locator('.output-port[data-portid="outputStream2"]')).toHaveCount(0);
+    await expect(panel.getByText(/The selected project's graph changed its output/)).toHaveCount(0);
+    await version.getByRole('button', { name: 'Saved latest' }).click();
+    await expect(version.getByRole('button', { name: 'Saved latest' })).toHaveAttribute('aria-pressed', 'true');
+    publishedOutputType = 'number';
+    await version.getByRole('button', { name: 'Published' }).click();
+    const automaticWarning = panel.getByText(
+      'The selected project\'s graph changed its output "result". The graph selection was updated automatically; review its connections.',
+      { exact: true },
+    );
+    await expect(automaticWarning).toBeVisible();
+    const versionBounds = await version.boundingBox();
+    const warningBounds = await automaticWarning.boundingBox();
+    expect(versionBounds).not.toBeNull();
+    expect(warningBounds).not.toBeNull();
+    expect(warningBounds!.y).toBeGreaterThan(versionBounds!.y + versionBounds!.height);
+    const warningColors = await automaticWarning.evaluate((element) => {
+      const reference = document.createElement('span');
+      reference.style.color = 'var(--warning)';
+      element.append(reference);
+      const colors = { actual: getComputedStyle(element).color, expected: getComputedStyle(reference).color };
+      reference.remove();
+      return colors;
+    });
+    expect(warningColors.actual).toBe(warningColors.expected);
+    externalPreviewUnavailable = true;
+    await version.getByRole('button', { name: 'Saved latest' }).click();
+    await expect(
+      panel.getByText('Could not load the selected project version. The current version was kept.'),
+    ).toBeVisible();
+    await expect(version.getByRole('button', { name: 'Published' })).toHaveAttribute('aria-pressed', 'true');
+    const previewRequestsBeforeRefresh = externalPreviewRequests;
+    await selector.click();
+    await expect(frame.locator('.panel-container').getByText('Preview temporarily unavailable')).toBeVisible();
+    expect(externalPreviewRequests).toBe(previewRequestsBeforeRefresh + 1);
+    await selector.press('Escape');
+    await expect(unset.locator('.subgraph-node-body-select')).toContainText('Published graph');
+    await expect(
+      frame.locator('.panel-container').getByText('Could not refresh the target preview. Try again.'),
+    ).toBeVisible();
+    externalPreviewUnavailable = false;
+    publishedOutputId = 'renamed-result';
+    await selector.click();
+    await expect(panel.getByText(/The selected project's graph changed its output/)).toHaveCount(0);
+    await selector.press('Escape');
+    publishedOutputType = 'boolean';
+    await selector.click();
+    await expect(
+      frame
+        .locator('.panel-container')
+        .getByText(
+          'The selected project\'s graph changed its output "outputStream2". Re-select the graph and review its connections.',
+        ),
+    ).toBeVisible();
+    await selector.press('Escape');
+    publishedOutputType = 'number';
+    publishedOutputId = 'outputStream2';
+    externalGraphAvailable = false;
+    await selector.click();
+    await expect(
+      frame.locator('.panel-container').getByText('Selected graph is unavailable. Choose another graph.'),
+    ).toBeVisible();
+    await selector.press('Escape');
+    externalGraphAvailable = true;
+    await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toBeVisible();
+  });
+
+  await test.step('Choose current-project graphs from the compact Subgraph target control', async () => {
+    await frame
+      .getByRole('group', { name: 'Subgraph graph source' })
+      .getByRole('button', { name: 'This project' })
+      .click();
+    const selector = frame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
+    const selectorContainer = unset.locator('.subgraph-node-body-select-wrap');
 
     await expect
       .poll(async () => {
@@ -223,16 +447,28 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
       .toBeLessThan(1);
 
     await selector.click();
+    const panel = frame.locator('.panel-container');
+    const rows = [
+      panel.getByText('Folder A', { exact: true }),
+      panel.getByText('Alpha graph', { exact: true }),
+      panel.getByText('Selector search target', { exact: true }),
+      panel.getByText('Folder B', { exact: true }),
+      panel.getByText('Child Graph', { exact: true }),
+      panel.getByText('Main Graph', { exact: true }),
+    ];
+    const positions = await Promise.all(rows.map(async (row) => (await row.boundingBox())?.y));
+    await expect(rows[0]!.locator('..').locator('svg')).toBeVisible();
+    await expect(rows[3]!.locator('..').locator('svg')).toBeVisible();
+    expect(positions.every((position) => position != null)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left! - right!));
     await selector.fill('Selector search');
-    await selectorContainer.getByText('Selector search target', { exact: true }).click();
-    await expect(selector).toHaveAttribute('aria-expanded', 'false');
+    await frame.locator('.panel-container').getByText('Selector search target', { exact: true }).click();
     await expect(selectorContainer).toContainText('Selector search target');
     await expect(unset.getByRole('button', { name: 'Go to subgraph', exact: true })).toBeVisible();
 
     await selector.click();
     await selector.fill('Child Graph');
-    await selectorContainer.getByText('Child Graph', { exact: true }).click();
-    await expect(selector).toHaveAttribute('aria-expanded', 'false');
+    await frame.locator('.panel-container').getByText('Child Graph', { exact: true }).click();
     await expect(selectorContainer).toContainText('Child Graph');
   });
 
@@ -240,6 +476,11 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await expect(pruningBodySetting(optimized)).toHaveCount(0);
     await expect(pruningBodySetting(full)).toHaveCount(0);
     await editNode(optimized);
+    const outputs = frame.locator('.panel-container .collapsible-panel-toggle').filter({ hasText: 'Outputs' });
+    await expect(outputs).toHaveAttribute('aria-expanded', 'false');
+    await outputs.click();
+    await expect(outputs).toHaveAttribute('aria-expanded', 'true');
+    await expect(frame.getByText('Use Error Output', { exact: true })).toBeVisible();
     await expect(toggle).not.toBeChecked();
     await expect(frame.getByText(helpText, { exact: true })).toBeVisible();
     await frame.getByText('Skip unused outputs', { exact: true }).click();
@@ -275,8 +516,27 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     expect(nodeData('subgraph-unset').data.graphId).toBe('child');
   });
 
+  await test.step('Follow an external Subgraph to its project and selected graph', async () => {
+    await unset.locator('.edit-button').evaluate((button: HTMLElement) => button.click());
+    await frame.getByRole('group', { name: 'Subgraph graph source' }).getByRole('button', { name: 'Other projects' }).click();
+    const selector = frame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
+    await selector.click();
+    const panel = frame.locator('.panel-container');
+    await panel.getByText('Components', { exact: true }).click();
+    await panel.getByText('Reusable', { exact: true }).click();
+    await panel.getByText('Reusable logic', { exact: true }).click();
+    await panel.getByText('Saved graph', { exact: true }).click();
+    await expect(unset.locator('.subgraph-node-body-select')).toContainText('Reusable logic > Saved graph');
+    await unset.getByRole('button', { name: 'Go to subgraph', exact: true }).evaluate((button: HTMLElement) => button.click());
+    await expect(frame.locator('.node[data-nodeid="external-output"]')).toBeVisible();
+    await expect(frame.locator('.projects .project.active', { hasText: 'Reusable logic' })).toBeVisible();
+  });
+
   // A fresh browser context proves file persistence rather than restoring the
   // original editor's IndexedDB snapshot after a page reload.
+  // Close the first editor before starting another Vite-backed iframe: on
+  // Windows, two live editors can exhaust Chromium's local socket pool.
+  await page.close();
   const reloaded = await browser.newPage({
     baseURL: testInfo.project.use.baseURL,
     viewport: testInfo.project.use.viewport,
@@ -288,10 +548,11 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await expect.poll(() => loadCount).toBeGreaterThan(loadCountBeforeReload);
     const optimizedReloaded = reloadedFrame.locator('.node[data-nodeid="subgraph-a"]');
     const fullReloaded = reloadedFrame.locator('.node[data-nodeid="subgraph-b"]');
-    await expect(reloadedFrame.locator('.node[data-nodeid="subgraph-unset"] .subgraph-node-body-select')).toContainText(
-      'Child Graph',
-    );
+    await expect(
+      reloadedFrame.locator('.node[data-nodeid="subgraph-unset"] .subgraph-node-body-select-wrap'),
+    ).toContainText('Child Graph');
     await editNode(optimizedReloaded);
+    await reloadedFrame.locator('.panel-container .collapsible-panel-toggle').filter({ hasText: 'Outputs' }).click();
     await expect(reloadedFrame.locator('input#skipUnusedOutputs')).toBeChecked();
     await editNode(fullReloaded);
     await expect(reloadedFrame.locator('input#skipUnusedOutputs')).not.toBeChecked();
@@ -337,8 +598,46 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
       await expect(wanted).toHaveClass(/success/);
       await expect(reloadedFrame.getByText('Execution: 1/2', { exact: true })).toBeVisible();
     });
+
+    await test.step('Re-selecting the same external graph in the node body saves a refreshed boundary', async () => {
+      await reloadedFrame.getByRole('button', { name: 'Go to previous graph', exact: true }).click();
+      const caller = reloadedFrame.locator('.node[data-nodeid="subgraph-unset"]');
+      await caller.locator('.edit-button').evaluate((button: HTMLElement) => button.click());
+      await reloadedFrame.getByRole('group', { name: 'Subgraph graph source' })
+        .getByRole('button', { name: 'Other projects' }).click();
+      const panelSelector = reloadedFrame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
+      await panelSelector.click();
+      const panel = reloadedFrame.locator('.panel-container');
+      await panel.getByText('Components', { exact: true }).click();
+      await panel.getByText('Reusable', { exact: true }).click();
+      await panel.getByText('Reusable logic', { exact: true }).click();
+      await panel.getByText('Saved graph', { exact: true }).click();
+
+      externalOutputId = 'renamed-result';
+      await reloaded.setViewportSize({ width: 1800, height: 1600 });
+      await reloadedFrame.locator('.node-canvas').click({ position: { x: 300, y: 60 } });
+      const bodySelector = caller.locator('.subgraph-node-body-select');
+      const previewsBeforeReselect = externalPreviewRequests;
+      await bodySelector.locator('input').click();
+      await expect.poll(() => externalPreviewRequests).toBeGreaterThan(previewsBeforeReselect);
+      await reloadedFrame.getByText('Components', { exact: true }).click();
+      await reloadedFrame.getByText('Reusable', { exact: true }).click();
+      const savedOption = reloadedFrame.getByText('Saved graph', { exact: true });
+      if (!(await savedOption.isVisible())) {
+        await reloadedFrame.getByText('Reusable logic', { exact: true }).click();
+      }
+      await savedOption.click();
+      await reloaded.keyboard.press(`${shortcutModifier}+S`);
+      await expect.poll(() => saveCount).toBe(2);
+      const savedNodes = parse(contents).data.graphs.main.nodes;
+      const savedCaller = Object.entries(savedNodes).find(([key]) => key.startsWith('[subgraph-unset]:'))?.[1] as {
+        data: { targetBoundary?: { outputs: Array<{ id: string; portId: string }> } };
+      };
+      expect(savedCaller.data.targetBoundary?.outputs[0]).toMatchObject({ id: 'renamed-result', portId: 'result' });
+    });
   } finally {
     await reloaded.close();
   }
+
   expect(unexpectedMutations).toEqual([]);
 });

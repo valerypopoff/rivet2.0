@@ -1,7 +1,8 @@
 import { css } from '@emotion/react';
-import type { PromptNode, PromptNodeData } from '@valerypopoff/rivet2-core';
+import { buildNodeBodyPreview, type PromptNode, type PromptNodeData } from '@valerypopoff/rivet2-core';
 import type { FC } from 'react';
 import type { NodeComponentDescriptor } from '../../hooks/useNodeTypes.js';
+import { ColorizedNodeBody } from '../ColorizedNodeBody.js';
 
 const styles = css`
   display: flex;
@@ -16,26 +17,15 @@ const styles = css`
     line-height: 1.4;
   }
 
-  .prompt-node-text {
-    max-width: 100%;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .prompt-node-line {
-    font-family: inherit;
+  .prompt-node-text .node-body-colorized-wrap {
     line-height: 1.4;
+    margin: 0;
     max-width: 100%;
-    min-height: 1.4em;
     min-width: 0;
-    overflow: hidden;
     overflow-wrap: normal;
     white-space: pre-wrap;
+    width: 100%;
     word-break: normal;
-  }
-
-  .prompt-node-variable {
-    color: var(--primary-text);
   }
 `;
 
@@ -47,24 +37,9 @@ const typeDisplay: Record<PromptNodeData['type'], string> = {
   function: 'Function',
 };
 
-const interpolationTokenPattern = /(\{\{[^{}\n]+\}\})/g;
-const interpolationTokenOnlyPattern = /^\{\{[^{}\n]+\}\}$/;
-
-function renderPromptLine(line: string) {
-  return line.split(interpolationTokenPattern).map((part, index) =>
-    interpolationTokenOnlyPattern.test(part) ? (
-      <span key={index} className="prompt-node-variable">
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  );
-}
-
 const PromptNodeBody: FC<{ node: PromptNode }> = ({ node }) => {
   const role = `${typeDisplay[node.data.type]}${node.data.name ? ` (${node.data.name})` : ''}`;
-  const promptLines = node.data.promptText.split('\n').slice(0, 15);
+  const promptText = buildNodeBodyPreview(node.data.promptText);
 
   return (
     <div css={styles}>
@@ -73,11 +48,12 @@ const PromptNodeBody: FC<{ node: PromptNode }> = ({ node }) => {
         {node.data.isCacheBreakpoint ? ' (Cache Breakpoint)' : ''}
       </div>
       <div className="prompt-node-text">
-        {promptLines.map((line, index) => (
-          <div key={index} className="prompt-node-line">
-            {line ? renderPromptLine(line) : '\u00A0'}
-          </div>
-        ))}
+        <ColorizedNodeBody
+          language="prompt-interpolation-markdown"
+          text={promptText}
+          theme="prompt-interpolation"
+          type="colorized"
+        />
       </div>
     </div>
   );

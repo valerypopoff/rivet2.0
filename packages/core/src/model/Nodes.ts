@@ -5,6 +5,7 @@ export * from './nodes/UserInputNode.js';
 
 import { textNode } from './nodes/TextNode.js';
 export * from './nodes/TextNode.js';
+export { buildNodeBodyPreview } from './nodes/nodeBodyPreview.js';
 
 import { chatNode } from './nodes/ChatNode.js';
 export * from './nodes/ChatNode.js';
@@ -125,6 +126,12 @@ export * from './nodes/WatchStreamingOutputNode.js';
 import { stopWatchingStreamingOutputNode } from './nodes/StopWatchingStreamingOutputNode.js';
 export * from './nodes/StopWatchingStreamingOutputNode.js';
 
+import { streamValueNode } from './nodes/StreamValueNode.js';
+export * from './nodes/StreamValueNode.js';
+
+import { catchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
+export * from './nodes/CatchStreamingChunksNode.js';
+
 import { popNode } from './nodes/PopNode.js';
 export * from './nodes/PopNode.js';
 
@@ -187,6 +194,9 @@ export * from './nodes/RaceInputsNode.js';
 
 import { toJsonNode } from './nodes/ToJsonNode.js';
 export * from './nodes/ToJsonNode.js';
+
+import { toBase64Node } from './nodes/ToBase64Node.js';
+export * from './nodes/ToBase64Node.js';
 
 import { joinNode } from './nodes/JoinNode.js';
 export * from './nodes/JoinNode.js';
@@ -376,6 +386,8 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(startBackgroundBranchNode)
     .register(watchStreamingOutputNode)
     .register(stopWatchingStreamingOutputNode)
+    .register(streamValueNode)
+    .register(catchStreamingChunksNode)
     .register(popNode)
     .register(setGlobalNode)
     .register(getGlobalNode)
@@ -396,6 +408,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(abortGraphNode)
     .register(raceInputsNode)
     .register(toJsonNode)
+    .register(toBase64Node)
     .register(joinNode)
     .register(filterNode)
     .register(jsFilterNode)

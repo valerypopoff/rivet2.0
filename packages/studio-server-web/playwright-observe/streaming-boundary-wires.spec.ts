@@ -40,7 +40,7 @@ for (const direction of ['outputs', 'inputs']) {
             metadata: { id: 'leaf', name: 'Leaf' },
             nodes: {
               '[llm]:llmChatV2 "LLM Chat"': {
-                data: {},
+                data: { useAsGraphPartialOutput: true },
                 visualData: '100/150/280/null//',
                 outgoingConnections: ['response->"Boundary" out/value'],
               },
@@ -61,7 +61,7 @@ for (const direction of ['outputs', 'inputs']) {
           metadata: { id: 'root', name: 'Root' },
           nodes: {
             '[llm]:llmChatV2 "LLM Chat"': {
-              data: {},
+              data: { useAsGraphPartialOutput: true },
               visualData: '100/150/280/null//',
               outgoingConnections: ['response->"Middle caller" caller/outer'],
             },

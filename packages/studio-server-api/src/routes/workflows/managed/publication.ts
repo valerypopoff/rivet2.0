@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { loadProjectFromString } from '@valerypopoff/rivet2-node';
+import { listSavedLatestSubgraphProjectIds } from '../subgraph-publication-dependencies.js';
 
 import type {
+  WorkflowDraftPublicationPreconditions,
+  WorkflowEndpointAccess,
+  WorkflowPublicationPreconditions,
   WorkflowProjectItem,
   WorkflowProjectSettingsDraft,
-  WorkflowProjectWebAppAccessDraft,
-  WorkflowProjectWebAppPublicationDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionRestoreResponse,
@@ -16,7 +18,9 @@ import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../st
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import { hasProjectMainGraph, requireProjectMainGraphForEndpoint } from '../main-graph.js';
-import { normalizeEmailList } from '../publication.js';
+import { assertPublicationPreconditions } from '../publication-preconditions.js';
+import type { WorkflowPublicationCommandKind } from '../publication-command.js';
+import { normalizeWebAppAccessDrafts, normalizeWebAppPublicationDrafts } from '../web-app-publication-drafts.js';
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { ManagedWorkflowDbClient } from './db.js';
@@ -49,7 +53,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     readRevisionProjectContents: options.context.revisions.readRevisionProjectContents,
     syncWorkflowEndpointRows: options.context.endpointSync.syncWorkflowEndpointRows,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
-    queueWorkflowInvalidation: options.context.executionInvalidationController.queueWorkflowInvalidation.bind(options.context.executionInvalidationController),
+    queueWorkflowInvalidation: options.context.executionInvalidationController.queueWorkflowInvalidation.bind(
+      options.context.executionInvalidationController,
+    ),
   };
 
   const isCurrentPublishedVersion = (workflow: WorkflowRow, versionId: string): boolean =>
@@ -70,7 +76,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     }
 
     if (value.length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH) {
-      throw badRequest(`Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`);
+      throw badRequest(
+        `Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`,
+      );
     }
 
     return value.trim();
@@ -90,132 +98,56 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     comment: normalizePublishedVersionCommentForStorage(row.comment),
   });
 
-  const getUiGraphsFromProject = (project: ReturnType<typeof loadProjectFromString>): Array<{ uiGraphId: string; name: string }> => {
+  const getUiGraphsFromProject = (
+    project: ReturnType<typeof loadProjectFromString>,
+  ): Array<{ uiGraphId: string; name: string }> => {
     return Object.entries(project.uiGraphs ?? {}).map(([uiGraphId, uiGraph]) => ({
       uiGraphId,
-      name: typeof uiGraph?.name === 'string' && uiGraph.name.trim()
-        ? uiGraph.name.trim()
-        : uiGraphId,
+      name: typeof uiGraph?.name === 'string' && uiGraph.name.trim() ? uiGraph.name.trim() : uiGraphId,
     }));
   };
 
   const getUiGraphsFromProjectContents = (contents: string): Array<{ uiGraphId: string; name: string }> =>
     getUiGraphsFromProject(loadProjectFromString(contents));
 
-  const normalizeWebAppPublicationDrafts = (value: unknown): WorkflowProjectWebAppPublicationDraft[] => {
-    if (!Array.isArray(value)) {
-      throw badRequest('Web app publications must be an array');
-    }
-
-    const normalized = value.map((item) => {
-      const raw = (item ?? {}) as Record<string, unknown>;
-      const allowedEmails = Object.prototype.hasOwnProperty.call(raw, 'allowedEmails')
-        ? normalizeEmailList(raw.allowedEmails)
-        : undefined;
-      if (allowedEmails) {
-        validateAllowedEmailList(allowedEmails);
-      }
-      return {
-        uiGraphId: typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '',
-        slug: normalizeStoredEndpointName(typeof raw.slug === 'string' ? raw.slug : ''),
-        allowedEmails,
-      };
-    });
-
-    if (normalized.length === 0) {
-      throw badRequest('At least one web app must be selected');
-    }
-
-    const seenUiGraphIds = new Set<string>();
-    const seenSlugLookupNames = new Set<string>();
-    for (const publication of normalized) {
-      if (!publication.uiGraphId) {
-        throw badRequest('Web app selection is required');
-      }
-
-      if (!publication.slug) {
-        throw badRequest('Web app URL slug is required');
-      }
-      assertUsableWebAppSlug(publication.slug);
-
-      const slugLookupName = normalizeWorkflowEndpointLookupName(publication.slug);
-      if (seenUiGraphIds.has(publication.uiGraphId)) {
-        throw badRequest('Each web app can only be published once per request');
-      }
-
-      if (seenSlugLookupNames.has(slugLookupName)) {
-        throw badRequest('Each web app URL slug must be unique');
-      }
-
-      seenUiGraphIds.add(publication.uiGraphId);
-      seenSlugLookupNames.add(slugLookupName);
-    }
-
-    return normalized;
-  };
-
-  const validateAllowedEmailList = (allowedEmails: readonly string[]): void => {
-    for (const email of allowedEmails) {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        throw badRequest(`Invalid allowed email: ${email}`);
-      }
-    }
-  };
-
-  const assertUsableWebAppSlug = (slug: string): void => {
-    if (slug.toLowerCase() === 'auth') {
-      throw badRequest('Web app URL slug "auth" is reserved');
-    }
-  };
-
-  const normalizeWebAppAccessDrafts = (value: unknown): WorkflowProjectWebAppAccessDraft[] => {
-    if (!Array.isArray(value)) {
-      throw badRequest('Web app access updates must be an array');
-    }
-
-    const normalized = value.map((item) => {
-      const raw = (item ?? {}) as Record<string, unknown>;
-      const allowedEmails = normalizeEmailList(raw.allowedEmails);
-      validateAllowedEmailList(allowedEmails);
-      return {
-        uiGraphId: typeof raw.uiGraphId === 'string' ? raw.uiGraphId.trim() : '',
-        allowedEmails,
-      };
-    });
-
-    if (normalized.length === 0) {
-      throw badRequest('At least one web app access update is required');
-    }
-
-    const seenUiGraphIds = new Set<string>();
-    for (const access of normalized) {
-      if (!access.uiGraphId) {
-        throw badRequest('Web app selection is required');
-      }
-
-      if (seenUiGraphIds.has(access.uiGraphId)) {
-        throw badRequest('Each web app access policy can only be updated once per request');
-      }
-
-      seenUiGraphIds.add(access.uiGraphId);
-    }
-
-    return normalized;
-  };
-
   const listWebAppPublicationRows = async (
     client: ManagedWorkflowDbClient,
     workflowId: string,
-  ): Promise<WebAppPublicationRow[]> => deps.queryRows<WebAppPublicationRow>(
-    client,
-    `
+  ): Promise<WebAppPublicationRow[]> =>
+    deps.queryRows<WebAppPublicationRow>(
+      client,
+      `
       SELECT app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, allowed_emails, published_at
       FROM workflow_web_apps
       WHERE workflow_id = $1
       ORDER BY published_at DESC, app_id DESC
     `,
-    [workflowId],
-  );
+      [workflowId],
+    );
+
+  const assertManagedPublicationPreconditions = (
+    workflow: WorkflowRow,
+    preconditions: WorkflowPublicationPreconditions,
+    kind: WorkflowPublicationCommandKind,
+  ): void =>
+    assertPublicationPreconditions(
+      preconditions,
+      {
+        projectId: workflow.workflow_id,
+        draftRevisionId: workflow.current_draft_revision_id,
+        publicationVersion: workflow.publication_version ?? '0',
+      },
+      kind,
+    );
+
+  const bumpPublicationVersion = async (client: ManagedWorkflowDbClient, workflow: WorkflowRow): Promise<void> => {
+    const result = await client.query<{ publication_version: string }>(
+      'UPDATE workflows SET publication_version = publication_version + 1 WHERE workflow_id = $1 RETURNING publication_version',
+      [workflow.workflow_id],
+    );
+    if (!result.rows[0]) throw createHttpError(500, 'Publication version could not be updated');
+    workflow.publication_version = result.rows[0].publication_version;
+  };
 
   const backfillLegacyPublishedVersion = async (
     client: ManagedWorkflowDbClient,
@@ -300,9 +232,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
 
       return {
         projectName: workflow.name,
-        publishedAt: toIsoString(workflow.last_published_at) ??
-          toIsoString(revision.created_at) ??
-          new Date().toISOString(),
+        publishedAt:
+          toIsoString(workflow.last_published_at) ?? toIsoString(revision.created_at) ?? new Date().toISOString(),
         revision,
       };
     }
@@ -331,7 +262,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         [workflow.workflow_id],
       );
       const versions: WorkflowPublishedVersionSummary[] = rows.map((row) =>
-        mapPublishedVersionRowToSummary(workflow, row));
+        mapPublishedVersionRowToSummary(workflow, row),
+      );
 
       if (
         !workflow.published_version_id &&
@@ -355,7 +287,10 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       };
     },
 
-    async readWorkflowPublishedVersionDownload(relativePath: unknown, versionId: unknown): Promise<{ contents: string; fileName: string }> {
+    async readWorkflowPublishedVersionDownload(
+      relativePath: unknown,
+      versionId: unknown,
+    ): Promise<{ contents: string; fileName: string }> {
       const { projectName, publishedAt, revision } = await resolvePublishedVersionRevision(relativePath, versionId);
       return {
         contents: await deps.readRevisionProjectContents(revision),
@@ -524,6 +459,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     async restoreWorkflowPublishedVersion(
       relativePath: unknown,
       versionId: unknown,
+      preconditions: WorkflowDraftPublicationPreconditions,
     ): Promise<WorkflowPublishedVersionRestoreResponse> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedVersionId = typeof versionId === 'string' ? versionId.trim() : '';
@@ -536,6 +472,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         if (!workflow) {
           throw createHttpError(404, 'Project not found');
         }
+
+        assertManagedPublicationPreconditions(workflow, preconditions, 'restore-version');
 
         const versionRow = await deps.queryOne<PublishedVersionRow>(
           client,
@@ -602,13 +540,16 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
                 endpoint_name = $4,
                 published_endpoint_name = $4,
                 last_published_at = NOW(),
+                publication_version = publication_version + 1,
                 updated_at = NOW()
             WHERE workflow_id = $1
           `,
           [workflow.workflow_id, revisionId, restoredVersionId, endpointName],
         );
 
-        const restoredWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        const restoredWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, {
+          forUpdate: true,
+        });
         if (!restoredWorkflow) {
           throw createHttpError(500, 'Restored workflow could not be loaded');
         }
@@ -625,33 +566,43 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
 
-      await deps.initialize();
-      const workflow = await deps.getWorkflowByRelativePath(deps.pool, normalizedRelativePath);
-      if (!workflow) {
-        throw createHttpError(404, 'Project not found');
-      }
+      // Capture the row and its published apps under one lock, then release the
+      // lock before fetching immutable revision contents from blob storage.
+      const { workflow, revision, publishedRows } = await deps.withTransaction(async (client) => {
+        const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!workflow) {
+          throw createHttpError(404, 'Project not found');
+        }
 
-      const revision = await deps.getRevision(deps.pool, workflow.current_draft_revision_id);
-      if (!revision) {
-        throw createHttpError(500, 'Current workflow revision could not be loaded');
-      }
+        const revision = await deps.getRevision(client, workflow.current_draft_revision_id);
+        if (!revision) {
+          throw createHttpError(500, 'Current workflow revision could not be loaded');
+        }
 
-      const [contents, publishedRows] = await Promise.all([
-        deps.readRevisionContents(revision),
-        listWebAppPublicationRows(deps.pool, workflow.workflow_id),
-      ]);
+        const publishedRows = await listWebAppPublicationRows(client, workflow.workflow_id);
+        return { workflow, revision, publishedRows };
+      });
+
+      const contents = await deps.readRevisionContents(revision);
       const currentProject = loadProjectFromString(contents.contents);
       const currentUiGraphs = getUiGraphsFromProject(currentProject);
       const currentUiGraphIds = new Set(currentUiGraphs.map((uiGraph) => uiGraph.uiGraphId));
       const publishedByUiGraphId = new Map(publishedRows.map((row) => [row.ui_graph_id, row]));
 
       return {
+        project: deps.mapWorkflowRowToProjectItem(workflow, { webAppRows: publishedRows }),
+        projectId: workflow.workflow_id,
+        draftRevisionId: workflow.current_draft_revision_id,
+        publicationVersion: workflow.publication_version ?? '0',
         hasMainGraph: hasProjectMainGraph(currentProject),
+        savedLatestSubgraphProjectIds: listSavedLatestSubgraphProjectIds(currentProject),
         webApps: [
           ...currentUiGraphs.map((uiGraph) => {
             const published = publishedByUiGraphId.get(uiGraph.uiGraphId);
             const status: WorkflowProjectWebAppsResponse['webApps'][number]['status'] = published
-              ? (published.revision_id === workflow.current_draft_revision_id ? 'published' : 'unpublished_changes')
+              ? published.revision_id === workflow.current_draft_revision_id
+                ? 'published'
+                : 'unpublished_changes'
               : 'unpublished';
             return {
               uiGraphId: uiGraph.uiGraphId,
@@ -681,6 +632,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     async publishWorkflowProjectWebApps(
       relativePath: unknown,
       publications: unknown,
+      preconditions: WorkflowDraftPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedPublications = normalizeWebAppPublicationDrafts(publications);
@@ -691,13 +643,17 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Project not found');
         }
 
+        assertManagedPublicationPreconditions(workflow, preconditions, 'publish-web-apps');
+
         const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
         if (!currentDraftRevision) {
           throw createHttpError(500, 'Current workflow revision could not be loaded');
         }
 
         const currentDraftContents = await deps.readRevisionContents(currentDraftRevision);
-        const uiGraphsById = new Map(getUiGraphsFromProjectContents(currentDraftContents.contents).map((uiGraph) => [uiGraph.uiGraphId, uiGraph]));
+        const uiGraphsById = new Map(
+          getUiGraphsFromProjectContents(currentDraftContents.contents).map((uiGraph) => [uiGraph.uiGraphId, uiGraph]),
+        );
 
         for (const publication of normalizedPublications) {
           if (!uiGraphsById.has(publication.uiGraphId)) {
@@ -708,10 +664,10 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         const uiGraphIds = normalizedPublications.map((publication) => publication.uiGraphId);
         const previousRows = await listWebAppPublicationRows(client, workflow.workflow_id);
         const previousByUiGraphId = new Map(previousRows.map((row) => [row.ui_graph_id, row]));
-        await client.query(
-          'DELETE FROM workflow_web_apps WHERE workflow_id = $1 AND ui_graph_id = ANY($2::text[])',
-          [workflow.workflow_id, uiGraphIds],
-        );
+        await client.query('DELETE FROM workflow_web_apps WHERE workflow_id = $1 AND ui_graph_id = ANY($2::text[])', [
+          workflow.workflow_id,
+          uiGraphIds,
+        ]);
 
         for (const publication of normalizedPublications) {
           try {
@@ -733,7 +689,12 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
               ],
             );
           } catch (error) {
-            if (typeof error === 'object' && error != null && 'code' in error && String((error as { code?: unknown }).code ?? '') === '23505') {
+            if (
+              typeof error === 'object' &&
+              error != null &&
+              'code' in error &&
+              String((error as { code?: unknown }).code ?? '') === '23505'
+            ) {
               throw conflict('Web app URL slug is already used by another workflow');
             }
 
@@ -741,6 +702,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           }
         }
 
+        await bumpPublicationVersion(client, workflow);
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         return deps.mapWorkflowRowToProjectItem(workflow, {
           webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
@@ -751,6 +713,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     async updateWorkflowProjectWebAppAccess(
       relativePath: unknown,
       accessUpdates: unknown,
+      preconditions: WorkflowPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedAccessUpdates = normalizeWebAppAccessDrafts(accessUpdates);
@@ -760,6 +723,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         if (!workflow) {
           throw createHttpError(404, 'Project not found');
         }
+
+        assertManagedPublicationPreconditions(workflow, preconditions, 'set-web-app-access');
 
         for (const access of normalizedAccessUpdates) {
           const updateResult = await client.query(
@@ -775,6 +740,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           }
         }
 
+        await bumpPublicationVersion(client, workflow);
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         return deps.mapWorkflowRowToProjectItem(workflow, {
           webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
@@ -782,7 +748,11 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       });
     },
 
-    async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown): Promise<WorkflowProjectItem> {
+    async unpublishWorkflowProjectWebApp(
+      relativePath: unknown,
+      uiGraphId: unknown,
+      preconditions: WorkflowPublicationPreconditions,
+    ): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedUiGraphId = typeof uiGraphId === 'string' ? uiGraphId.trim() : '';
       if (!normalizedUiGraphId) {
@@ -795,6 +765,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Project not found');
         }
 
+        assertManagedPublicationPreconditions(workflow, preconditions, 'unpublish-web-app');
+
         const deleteResult = await client.query(
           'DELETE FROM workflow_web_apps WHERE workflow_id = $1 AND ui_graph_id = $2 RETURNING app_id',
           [workflow.workflow_id, normalizedUiGraphId],
@@ -803,6 +775,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Published web app not found');
         }
 
+        await bumpPublicationVersion(client, workflow);
         await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
         return deps.mapWorkflowRowToProjectItem(workflow, {
           webAppRows: await listWebAppPublicationRows(client, workflow.workflow_id),
@@ -810,7 +783,34 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       });
     },
 
-    async publishWorkflowProjectItem(relativePath: unknown, settings: unknown): Promise<WorkflowProjectItem> {
+    async updateWorkflowEndpointAccess(
+      relativePath: unknown,
+      access: WorkflowEndpointAccess,
+      preconditions: WorkflowPublicationPreconditions,
+    ): Promise<WorkflowProjectItem> {
+      const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
+      return deps.withTransaction(async (client, hooks) => {
+        const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!workflow) throw createHttpError(404, 'Project not found');
+        assertManagedPublicationPreconditions(workflow, preconditions, 'set-endpoint-access');
+        if (!workflow.published_revision_id) throw conflict('Publish the workflow before changing endpoint access');
+
+        await client.query(
+          'UPDATE workflows SET endpoint_access = $2, publication_version = publication_version + 1 WHERE workflow_id = $1',
+          [workflow.workflow_id, access],
+        );
+        const updated = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        if (!updated) throw createHttpError(500, 'Updated workflow could not be loaded');
+        await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+        return deps.mapWorkflowRowToProjectItem(updated);
+      });
+    },
+
+    async publishWorkflowProjectItem(
+      relativePath: unknown,
+      settings: unknown,
+      preconditions: WorkflowDraftPublicationPreconditions,
+    ): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedSettings = (() => {
         const raw = (settings ?? {}) as WorkflowProjectSettingsDraft;
@@ -829,6 +829,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           throw createHttpError(404, 'Project not found');
         }
 
+        assertManagedPublicationPreconditions(workflow, preconditions, 'publish-endpoint');
         const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
         if (!currentDraftRevision) {
           throw createHttpError(500, 'Current workflow revision could not be loaded');
@@ -850,12 +851,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             INSERT INTO workflow_published_versions (version_id, workflow_id, revision_id, endpoint_name, published_at)
             VALUES ($1, $2, $3, $4, NOW())
           `,
-          [
-            publishedVersionId,
-            workflow.workflow_id,
-            currentDraftRevision.revision_id,
-            normalizedSettings.endpointName,
-          ],
+          [publishedVersionId, workflow.workflow_id, currentDraftRevision.revision_id, normalizedSettings.endpointName],
         );
 
         await client.query(
@@ -866,13 +862,16 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
                 published_revision_id = current_draft_revision_id,
                 published_version_id = $3,
                 last_published_at = NOW(),
+                publication_version = publication_version + 1,
                 updated_at = NOW()
             WHERE workflow_id = $1
           `,
           [workflow.workflow_id, normalizedSettings.endpointName, publishedVersionId],
         );
 
-        const publishedWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        const publishedWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, {
+          forUpdate: true,
+        });
         if (!publishedWorkflow) {
           throw createHttpError(500, 'Published workflow could not be loaded');
         }
@@ -883,7 +882,10 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       });
     },
 
-    async unpublishWorkflowProjectItem(relativePath: unknown): Promise<WorkflowProjectItem> {
+    async unpublishWorkflowProjectItem(
+      relativePath: unknown,
+      preconditions: WorkflowPublicationPreconditions,
+    ): Promise<WorkflowProjectItem> {
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
 
       return deps.withTransaction(async (client, hooks) => {
@@ -891,6 +893,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         if (!workflow) {
           throw createHttpError(404, 'Project not found');
         }
+
+        assertManagedPublicationPreconditions(workflow, preconditions, 'unpublish-endpoint');
 
         await backfillLegacyPublishedVersion(client, workflow);
 
@@ -900,6 +904,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
             SET published_revision_id = NULL,
                 published_version_id = NULL,
                 published_endpoint_name = '',
+                publication_version = publication_version + 1,
                 updated_at = NOW()
             WHERE workflow_id = $1
           `,
@@ -911,7 +916,9 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
           publishedEndpointName: '',
         });
 
-        const unpublishedWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
+        const unpublishedWorkflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, {
+          forUpdate: true,
+        });
         if (!unpublishedWorkflow) {
           throw createHttpError(500, 'Unpublished workflow could not be loaded');
         }

@@ -1,0 +1,19 @@
+---
+id: to-base64
+title: To Base64 Node
+sidebar_label: To Base64
+---
+
+The To Base64 node encodes its required **Data** input as a raw base64 `string`, without a `data:` URL prefix or media type.
+
+| Input | Type | Description |
+| --- | --- | --- |
+| Data | `any` (required) | Value to encode. Arrays stay together, including in Split Run. |
+
+| Output | Type | Description |
+| --- | --- | --- |
+| Base64 | `string` | The base64-encoded bytes. |
+
+`binary`, `image`, `audio`, `document`, `ArrayBuffer`, byte views, and `Blob` values encode their raw bytes; media metadata is omitted. Strings encode as UTF-8 (`hello` becomes `aGVsbG8=`). Numbers, booleans, plain objects, and arrays encode as compact UTF-8 JSON.
+
+Missing data, malformed bytes, non-finite numbers, functions, control-flow markers, opaque objects such as maps or nested byte containers, and values JSON cannot serialize cause an error. Ordinary JSON omission rules still apply to optional `undefined` fields. Convert unsupported values first. For a data URL, prepend a matching media prefix such as `data:image/png;base64,` separately.

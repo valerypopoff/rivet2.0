@@ -61,7 +61,7 @@ export const NewProjectModal: FC = () => {
   };
 
   return (
-    <Modal onClose={() => setNewProjectModalOpen(false)} width="75%">
+    <Modal onClose={() => setNewProjectModalOpen(false)} width="max(700px, 75%)">
       <AppModalHeader title="New Rivet Project" />
       <ModalBody>
         <div css={modalBody}>

@@ -9,8 +9,6 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { nanoid } from 'nanoid/non-secure';
 import { type FC } from 'react';
-import { useAtomValue } from 'jotai';
-import { projectDataState } from '../../state/savedGraphs';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { getHelperMessage } from './editorUtils';
 import mime from 'mime';
@@ -25,8 +23,6 @@ export const DefaultImageBrowserEditor: FC<
   const ioProvider = useIOProvider();
   const data = node.data as Record<string, unknown>;
   const helperMessage = getHelperMessage(editor, node.data);
-
-  const dataState = useAtomValue(projectDataState);
 
   const handleFileSelected = wrapAsync(
     async (binaryData: Uint8Array) => {
@@ -58,10 +54,6 @@ export const DefaultImageBrowserEditor: FC<
   );
 
   const dataRef = data[editor.dataKey] as DataRef | undefined;
-  const b64Data = dataRef ? dataState?.[dataRef.refId] : undefined;
-  const mediaType = b64Data ? (data[editor.mediaTypeDataKey] as string | undefined) : undefined;
-
-  const dataUri = b64Data ? `data:${mediaType ?? 'image/png'};base64,${b64Data}` : undefined;
 
   return (
     <Field name={editor.dataKey} label={editor.label}>
@@ -72,9 +64,7 @@ export const DefaultImageBrowserEditor: FC<
             Pick Image
           </Button>
 
-          <div className="current">
-            <img src={dataUri} alt="" />
-          </div>
+          {dataRef && <div className="current">Image selected</div>}
         </div>
       )}
     </Field>

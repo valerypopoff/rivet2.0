@@ -28,8 +28,16 @@ function composeServiceBlock(compose: string, service: string): string {
   assert.notEqual(markerIndex, -1, `Expected ${service} service to exist.`);
   const start = markerIndex + 1;
   const afterMarker = start + marker.length - 1;
-  const nextService = /\r?\n  [a-z][a-z0-9-]*:/i.exec(compose.slice(afterMarker));
+  const nextService = /\r?\n  [a-z][a-z0-9_-]*:/i.exec(compose.slice(afterMarker));
   return compose.slice(start, nextService ? afterMarker + nextService.index : compose.length);
+}
+
+function composeServiceNames(compose: string): string[] {
+  const services = compose.split(/^services:\r?$/m)[1]?.split(/^\S.*:\r?$/m)[0];
+  assert.ok(services, 'Expected a Compose services section.');
+  const names = [...services.matchAll(/^  ([a-z][a-z0-9_-]*):\r?$/gim)].map((match) => match[1]!);
+  assert.ok(names.length > 0, 'Expected at least one Compose service.');
+  return names;
 }
 
 test('proxy templates route public workflow traffic to the right API plane', () => {
@@ -71,7 +79,11 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   assert.match(latestDebuggerLocation, /proxy_set_header Upgrade \$http_upgrade;/);
   assert.match(latestDebuggerLocation, /proxy_set_header Connection \$connection_upgrade;/);
 
-  assert.ok(!imageProxyTemplate.includes('location /internal/workflows'));
+  for (const proxyTemplate of readProxyTemplates()) {
+    assert.doesNotMatch(proxyTemplate, /location\s+[^\{]*\/internal\/workflows(?:-latest)?\b/);
+    assert.match(proxyPublicLocation(proxyTemplate, /location = \/internal\s*\{/), /return 404;/);
+    assert.match(proxyPublicLocation(proxyTemplate, /location \^~ \/internal\/\s*\{/), /return 404;/);
+  }
   assert.match(proxyBootstrap, /resolve_proxy_resolver\(\)/);
   assert.match(proxyBootstrap, /fetch_proxy_settings\(\)/);
   assert.match(proxyBootstrap, /X-Rivet-Proxy-Auth: \$\{RIVET_PROXY_AUTH_TOKEN\}/);
@@ -439,9 +451,17 @@ test('images and local launchers build directly from the monorepo workspace', ()
     assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
   }
   assert.match(devCompose, /com\.valerypopoff\.rivet2\.dev-stack-input-fingerprint/);
-  assert.equal(devCompose.match(/labels: \*dev-stack-labels/g)?.length, 5);
+  for (const service of composeServiceNames(devCompose)) {
+    assert.match(composeServiceBlock(devCompose, service), /labels: \*dev-stack-labels/);
+  }
   assert.match(managedServicesCompose, /com\.valerypopoff\.rivet2\.dev-stack-input-fingerprint/);
-  assert.equal(managedServicesCompose.match(/labels: \*dev-stack-labels/g)?.length, 3);
+  const managedServiceNames = composeServiceNames(managedServicesCompose);
+  for (const service of ['workflow-postgres', 'workflow-minio']) {
+    assert.ok(managedServiceNames.includes(service), `Expected ${service} service to exist.`);
+  }
+  for (const service of managedServiceNames) {
+    assert.match(composeServiceBlock(managedServicesCompose, service), /labels: \*dev-stack-labels/);
+  }
   assert.match(devCompose, /\r?\n  api:\r?\n    labels: \*dev-stack-labels\r?\n(?:    #.*\r?\n)*    entrypoint: \[\]/);
   assert.match(devCompose, /node_modules\/\.studio-server-yarn-install-ok/);
   assert.match(

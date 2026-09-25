@@ -22,7 +22,7 @@ export function getPublishedItems(
   return projects
     .flatMap((project): PublishedItem[] => {
       const items: PublishedItem[] = [];
-      const endpointName = project.settings.endpointName.trim();
+      const endpointName = (project.settings.publishedEndpointName || project.settings.endpointName).trim();
 
       if (endpointName && project.settings.status !== 'unpublished') {
         items.push({
@@ -30,7 +30,12 @@ export function getPublishedItems(
           kind: 'endpoint',
           label: endpointName,
           project,
-          route: buildPublishedRoute(routeConfig.publishedWorkflowsBasePath, endpointName),
+          route: buildPublishedRoute(
+            project.settings.endpointAccess === 'internal'
+              ? routeConfig.internalPublishedWorkflowsBaseUrl || 'http://api/internal/workflows'
+              : routeConfig.publishedWorkflowsBasePath,
+            endpointName,
+          ),
           status: project.settings.status,
         });
       }

@@ -3,6 +3,7 @@ import type {
   WorkflowProjectDeleteResponse,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
@@ -54,6 +55,7 @@ export type {
   WorkflowProjectDeleteResponse,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowPublicationPreconditions,
   WorkflowProjectPathMove,
   WorkflowProjectSettings,
   WorkflowProjectSettingsDraft,
@@ -105,6 +107,8 @@ export type HostedRouteConfig = {
   remoteDebuggerDefaultWs: string;
   publishedWorkflowsBasePath: string;
   latestWorkflowsBasePath: string;
+  internalPublishedWorkflowsBaseUrl?: string;
+  internalLatestWorkflowsBaseUrl?: string;
   publishedAppsBasePath: string;
   latestAppsBasePath: string;
   webAppsAuthMode: 'ui-gate' | 'oauth' | 'none';
@@ -115,6 +119,8 @@ export type WorkflowProjectOpenOptions = {
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
   title?: string;
+  preferredGraphId?: string;
+  expectedProjectId?: string;
 };
 
 export type RecordingOpenResult = { opened: true } | { opened: false; error: string };

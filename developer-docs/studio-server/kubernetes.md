@@ -42,6 +42,7 @@ That split is intentional. The singleton `backend` owns:
 - `/ui-auth`
 - `${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}`
 - `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}`
+- `/internal/workflows-latest/:endpointName`
 - `/ws/latest-debugger`
 
 The `execution` Deployment owns:
@@ -50,7 +51,29 @@ The `execution` Deployment owns:
 - `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`
 - `/internal/workflows/:endpointName`
 
+An internal-only workflow remains on the private `/internal/workflows/:publishedEndpointName` and `/internal/workflows-latest/:draftEndpointName` routes; both corresponding public routes return 404. The latest-draft route lives on the control-plane `api` Service, while the published route lives on the execution Service. Helm injects each Service's in-cluster DNS URL into the control-plane API workload, so Project Settings shows the correct internal address for each route even with custom Service ports and cluster DNS domains. API startup preserves those chart-owned URLs across Vault dotenv loading. The public proxy explicitly returns 404 for `/internal` and `/internal/*`; ingress targets only that proxy. Do not expose the API or execution ClusterIP Services through another ingress or load balancer. ClusterIP alone does not restrict other Pods in the cluster, so use a namespace/network-policy boundary if untrusted workloads share the cluster. Managed migration 12 defaults existing published workflows to public, so upgrading does not withdraw their external endpoints.
+
+Wait for the Helm upgrade to complete before switching an endpoint to internal-only. During a rolling execution Deployment update, an old image may still serve public traffic and does not know about the new access setting. Once all execution Pods run the new image, every public request reads the current access policy from PostgreSQL before admission; already-admitted requests may still finish. Do not rely on the switch as a rollout-time security barrier.
+
 Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
+
+Publication commands use the project identity and publication version from the
+single Project Settings read; commands that publish or restore executable draft
+content also use its draft revision. The old duplicate endpoint
+`settings.expectedRevisionId` is accepted only as a matching HTTP compatibility
+field; the backend uses the draft precondition alone. Managed schema
+migration 13 adds the project-scoped `publication_version` counter and must run
+before the new API starts accepting publication writes. All comparisons happen
+under the PostgreSQL workflow row lock, before changing publication state. A
+competing save or publication that wins the lock causes 409 without changing the
+live version. No sticky session or Pod-local publication cache is involved.
+Old browser tabs or API clients that omit preconditions receive 400 and must
+reload/update; do not weaken validation during rollout. The candidate,
+managed-release, and capacity smoke callers supply reviewed preconditions
+without the duplicate endpoint revision field. The managed release gate changes
+the draft precondition itself to test a genuine stale-command 409, then checks
+unchanged history and concurrent publication updates against PostgreSQL through the deployed
+proxy/API before exercising workflow execution.
 
 The chart enforces `backend=1` and disables backend autoscaling. The backend is a StatefulSet, so Kubernetes does not offer the Deployment-only `Recreate` strategy named in some deployment guidance. Its `OrderedReady` plus single-ordinal `RollingUpdate` is the equivalent single-writer replacement here: ordinal `0` is terminated before its replacement is created, accepting a short control-plane interruption and preventing an old and new backend from serving together. Execution replicas remain independently scalable.
 
@@ -217,7 +240,7 @@ Managed runtime-library startup now serializes its shared Postgres schema initia
 
 `yarn studio-server:verify:kubernetes` is the fast deterministic gate. It renders and validates the chart plus Kubernetes contracts, but it does not start a cluster.
 
-The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a four-node Kind cluster (one control plane plus three workers), starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The disposable MinIO server and client are explicitly pinned to the supported `quay.io/minio/*` release tags; the local Minikube dependency manifest uses those same tags. The smoke suite verifies:
+The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a four-node Kind cluster (one control plane plus three workers), starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The disposable MinIO server is pinned to a Docker Hub release and OCI digest, matching the local Minikube dependency manifest and managed API integration test. The managed blob store creates its bucket on startup, rechecking after a creation conflict so concurrent first-boot processes can share the bucket; these fixtures do not pull a separate client image. The disposable hostPath/PVC is initially root-owned, so only the fixture MinIO container overrides the image's unprivileged default user. The smoke suite verifies:
 
 - singleton backend plus two proxy and two execution replicas;
 - Helm schema migration, managed PostgreSQL App Settings with execution-runtime propagation through a replacement pod, and managed object storage;
@@ -516,7 +539,7 @@ Set `workflowSchema.migrationJob.enabled=false` only when an external delivery p
 
 ### Managed maintenance
 
-Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. A normal release verifies exactly the current schema version, presently `11`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
+Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. Migration 12 adds the checked, public-by-default workflow endpoint access column. Migration 13 adds a nonnegative publication-version counter, defaulting existing projects to `0`; it does not republish existing artifacts. Endpoint and web-app publication commands compare the reviewed version under the workflow row lock and increment it in the same transaction as the change. A normal release verifies exactly the current schema version, presently `13`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
 
 Only the singleton `control` API pod receives `RIVET_MANAGED_MAINTENANCE_ENABLED=true`. The scalable `execution` Deployment receives `false`, so published endpoint traffic cannot create one global retention scan per replica or allocate the reconciliation-only runtime-library S3 client. Helm owns this boundary and the `managedMaintenance.intervalMs` (default `300000`), `leaseMs` (default `60000`), and `batchSize` (default `100`) values; `env` overrides for those variables are rejected. The worker uses a PostgreSQL fencing token, so a stale control pod cannot commit the recording-retention mutation after a successor owns the lease. Each pass selects candidates in PostgreSQL and removes at most `batchSize` recording rows while holding the fence, so a large backlog converges without loading its history into the API process or using one unbounded transaction. Recording/replay object keys are queued in the same transaction as removed metadata, then deleted only after a fresh database-reference recheck. Temporary blob-store failures retry with exponential backoff; still-referenced keys become `blocked` rather than being removed. A later deletion intent reopens a blocked key, because its final reference may have been removed after the earlier safety check.
 

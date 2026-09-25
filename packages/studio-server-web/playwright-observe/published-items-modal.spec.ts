@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { serializeProject, type GraphId, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 test('published catalog lists endpoint and app references and opens their project', async ({ page }) => {
@@ -39,6 +39,7 @@ test('published catalog lists endpoint and app references and opens their projec
     },
   }));
 
+  await mockHostedEditorBootstrap(page);
   await seedHostedEditorProject(page, {
     graphId: sourceGraphId,
     loaded: true,
@@ -80,6 +81,8 @@ test('published catalog lists endpoint and app references and opens their projec
               status: 'unpublished_changes',
               publicationStatus: 'unpublished_changes',
               endpointName: 'story-endpoint',
+              publishedEndpointName: 'story-live',
+              endpointAccess: 'internal',
               lastPublishedAt: '2026-09-16T00:00:00.000Z',
               publishedWebApps: [
                 {
@@ -130,7 +133,7 @@ test('published catalog lists endpoint and app references and opens their projec
   const endpointsTab = modal.getByRole('tab', { name: 'Endpoints (13)' });
   const webAppsTab = modal.getByRole('tab', { name: 'Web apps (1)' });
   const changedStatus = modal.locator('.published-item-status-unpublished_changes');
-  const endpointRoute = modal.getByRole('button', { name: 'Copy /workflows/story-endpoint' });
+  const endpointRoute = modal.getByRole('button', { name: 'Copy http://api/internal/workflows/story-live' });
   const appRoute = modal.getByRole('button', { name: 'Copy /apps/story-console' });
   await expect(endpointsTab).toHaveAttribute('aria-selected', 'true');
   await expect(webAppsTab).toHaveAttribute('aria-selected', 'false');
@@ -172,7 +175,7 @@ test('published catalog lists endpoint and app references and opens their projec
     scrollableContentBox!.x + scrollableContentBox!.width - 12,
   );
 
-  const endpointName = modal.getByText('story-endpoint', { exact: true });
+  const endpointName = modal.getByText('story-live', { exact: true });
   const endpointProject = modal.getByRole('button', { name: 'Project: Published Target' });
   await expect(endpointProject.locator('.published-item-project-label')).toHaveCSS('color', 'rgb(187, 187, 187)');
   await expect(endpointProject.locator('.published-item-project-name')).toHaveCSS('color', 'rgb(255, 255, 255)');
@@ -187,6 +190,9 @@ test('published catalog lists endpoint and app references and opens their projec
   expect(endpointProjectBox!.x).toBeCloseTo(endpointNameBox!.x, 0);
   expect(changedStatusBox!.x).toBeCloseTo(endpointNameBox!.x, 0);
   expect(changedStatusBox!.y).toBeGreaterThan(endpointProjectBox!.y);
+  await endpointRoute.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe('http://api/internal/workflows/story-live');
 
   const tabBeforeScroll = await endpointsTab.boundingBox();
   const scrollMetrics = await modalScrollableContent.evaluate((element) => ({

@@ -38,8 +38,8 @@ void describe('GraphBoundaryCache', () => {
 
     assert.ok(boundary);
     assert.deepEqual(boundary.inputs, [
-      { dataType: 'string', editor: 'string', id: 'a', portId: 'a' },
-      { dataType: 'number', editor: 'number', id: 'b', portId: 'b' },
+      { dataType: 'string', editor: 'string', id: 'a', nodeId: 'input-a', portId: 'a' },
+      { dataType: 'number', editor: 'number', id: 'b', nodeId: 'input-b-first', portId: 'b' },
     ]);
     assert.deepEqual(boundary.outputs, [
       { dataType: 'string', id: 'a', nodeId: 'output-a', portId: 'a' },

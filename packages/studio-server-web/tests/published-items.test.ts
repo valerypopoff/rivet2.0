@@ -8,6 +8,7 @@ const routeConfig: HostedRouteConfig = {
   remoteDebuggerDefaultWs: '',
   publishedWorkflowsBasePath: '/workflows/',
   latestWorkflowsBasePath: '/workflows-latest',
+  internalPublishedWorkflowsBaseUrl: 'http://execution.test:8181/internal/workflows',
   publishedAppsBasePath: '/apps/',
   latestAppsBasePath: '/apps-latest',
   webAppsAuthMode: 'none',
@@ -124,4 +125,28 @@ test('treats a published web app from an older tree response as published', () =
   });
 
   assert.equal(getPublishedItems([legacyTreeProject], routeConfig)[0]?.status, 'published');
+});
+
+test('lists the live endpoint name and private route without changing web app routes', () => {
+  const changed = project('private', 'Private', {
+    status: 'unpublished_changes',
+    endpointName: 'renamed-draft',
+    publishedEndpointName: 'still-live',
+    endpointAccess: 'internal',
+    lastPublishedAt: '2026-09-15T00:00:00.000Z',
+    publishedWebApps: [{
+      uiGraphId: 'app',
+      uiGraphName: 'Public app',
+      slug: 'public-app',
+      publishedAt: '2026-09-15T00:00:00.000Z',
+      allowedEmails: [],
+      status: 'published',
+    }],
+  });
+
+  const items = getPublishedItems([changed], routeConfig);
+  assert.deepEqual(items.map(({ kind, label, route }) => ({ kind, label, route })), [
+    { kind: 'endpoint', label: 'still-live', route: 'http://execution.test:8181/internal/workflows/still-live' },
+    { kind: 'web-app', label: 'Public app', route: '/apps/public-app' },
+  ]);
 });

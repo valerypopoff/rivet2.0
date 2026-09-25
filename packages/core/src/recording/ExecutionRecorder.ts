@@ -427,6 +427,10 @@ export class ExecutionRecorder {
           return;
         }
 
+        if (getEventProjectScope(data) !== undefined) {
+          return;
+        }
+
         this.#events.push(toRecordedEvent(message, data as never) as RecordedEvents);
 
         if (isSocketRecordingTerminalEvent(message)) {
@@ -448,8 +452,12 @@ export class ExecutionRecorder {
     });
   }
 
-  record(processor: GraphProcessor) {
+  record(processor: GraphProcessor): (terminal?:
+    | { type: 'done'; results: ProcessEvents['done']['results'] }
+    | { type: 'error'; error: ProcessEvents['error']['error'] }
+  ) => void {
     this.recordingId = nanoid() as RecordingId;
+    const recordingProjectScope = processor.recordingProjectScope;
     let settled = false;
     const finish = () => {
       if (settled) return;
@@ -473,9 +481,23 @@ export class ExecutionRecorder {
         return;
       }
 
+      const eventScope = getEventProjectScope(data);
+      if (eventScope !== undefined && eventScope !== recordingProjectScope) {
+        return;
+      }
+
       this.#events.push(toRecordedEvent(event, data as never) as RecordedEvents);
     });
     const unsubscribeFinish = processor.on('finish', finish);
+    // Child processors have graph terminals but no root-level done/finish.
+    // Their owner calls this after processGraph settles to make a standalone,
+    // replayable recording without changing the live event stream.
+    return (terminal) => {
+      if (settled) return;
+      if (terminal?.type === 'done') this.#events.push(toRecordedEvent('done', { results: terminal.results }));
+      if (terminal?.type === 'error') this.#events.push(toRecordedEvent('error', { error: terminal.error }));
+      finish();
+    };
   }
 
   getRecording(): Recording {
@@ -530,4 +552,10 @@ export class ExecutionRecorder {
 
 function isSocketRecordingTerminalEvent(event: keyof ProcessEvents): boolean {
   return event === 'done' || event === 'error';
+}
+
+function getEventProjectScope(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || !('execution' in data)) return undefined;
+  const execution = (data as { execution?: GraphExecutionMetadata }).execution;
+  return execution?.projectScope;
 }

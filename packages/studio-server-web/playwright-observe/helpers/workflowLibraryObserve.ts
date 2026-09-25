@@ -104,10 +104,20 @@ export async function deleteWorkflowProject(page: Page, relativePath: string): P
 }
 
 export async function unpublishWorkflowProject(page: Page, relativePath: string): Promise<void> {
+  const state = await apiJson<{ projectId: string; publicationVersion: string }>(
+    page,
+    `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+  );
   await apiJson<{ project: WorkflowProjectItem }>(page, '/api/workflows/projects/unpublish', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ relativePath }),
+    body: JSON.stringify({
+      relativePath,
+      preconditions: {
+        expectedProjectId: state.projectId,
+        expectedPublicationVersion: state.publicationVersion,
+      },
+    }),
   });
 }
 

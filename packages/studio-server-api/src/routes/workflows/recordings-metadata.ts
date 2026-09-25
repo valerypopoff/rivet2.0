@@ -8,14 +8,8 @@ import type {
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 import type { WorkflowRecordingRunRow } from './recordings-db.js';
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
-import {
-  getWorkflowRecordingMetadataPath,
-  pathExists,
-} from './fs-helpers.js';
-import {
-  getRecordingArtifactPath,
-  readArtifactBytes,
-} from './recordings-artifacts.js';
+import { getWorkflowRecordingMetadataPath, pathExists } from './fs-helpers.js';
+import { getRecordingArtifactPath, readArtifactBytes } from './recordings-artifacts.js';
 
 export type StoredWorkflowRecordingMetadataV2 = {
   version: 2;
@@ -113,12 +107,13 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
   if (
     raw.surface !== 'workflow_endpoint' &&
     raw.surface !== 'web_app_action' &&
-    raw.surface !== 'editor_local'
+    raw.surface !== 'editor_local' &&
+    raw.surface !== 'subgraph_project'
   ) {
     return undefined;
   }
   const componentType = raw.componentType;
-  const optionalString = (field: string) => isNonEmptyString(raw[field]) ? raw[field].trim() : undefined;
+  const optionalString = (field: string) => (isNonEmptyString(raw[field]) ? raw[field].trim() : undefined);
 
   return {
     surface: raw.surface,
@@ -249,21 +244,27 @@ export async function normalizeStoredWorkflowRecording(
 
     const gzipRecordingPath = getRecordingArtifactPath(bundlePath, 'recording', 'gzip');
     const identityRecordingPath = getRecordingArtifactPath(bundlePath, 'recording', 'identity');
-    const encoding: WorkflowRecordingBlobEncoding = await pathExists(gzipRecordingPath) ? 'gzip' : 'identity';
-    const recordingPath = await pathExists(getRecordingArtifactPath(bundlePath, 'recording', encoding))
+    const encoding: WorkflowRecordingBlobEncoding = (await pathExists(gzipRecordingPath)) ? 'gzip' : 'identity';
+    const recordingPath = (await pathExists(getRecordingArtifactPath(bundlePath, 'recording', encoding)))
       ? getRecordingArtifactPath(bundlePath, 'recording', encoding)
-      : await pathExists(identityRecordingPath)
+      : (await pathExists(identityRecordingPath))
         ? identityRecordingPath
         : gzipRecordingPath;
-    const projectPath = await pathExists(getRecordingArtifactPath(bundlePath, 'replay-project', encoding))
+    const projectPath = (await pathExists(getRecordingArtifactPath(bundlePath, 'replay-project', encoding)))
       ? getRecordingArtifactPath(bundlePath, 'replay-project', encoding)
       : getRecordingArtifactPath(bundlePath, 'replay-project', 'identity');
-    const datasetPath = await pathExists(getRecordingArtifactPath(bundlePath, 'replay-dataset', encoding))
+    const datasetPath = (await pathExists(getRecordingArtifactPath(bundlePath, 'replay-dataset', encoding)))
       ? getRecordingArtifactPath(bundlePath, 'replay-dataset', encoding)
       : getRecordingArtifactPath(bundlePath, 'replay-dataset', 'identity');
 
-    const recordingBytes = await readArtifactBytes(recordingPath, encoding).catch(() => ({ compressedBytes: 0, uncompressedBytes: 0 }));
-    const projectBytes = await readArtifactBytes(projectPath, encoding).catch(() => ({ compressedBytes: 0, uncompressedBytes: 0 }));
+    const recordingBytes = await readArtifactBytes(recordingPath, encoding).catch(() => ({
+      compressedBytes: 0,
+      uncompressedBytes: 0,
+    }));
+    const projectBytes = await readArtifactBytes(projectPath, encoding).catch(() => ({
+      compressedBytes: 0,
+      uncompressedBytes: 0,
+    }));
     const datasetExists = await pathExists(datasetPath);
     const datasetBytes = datasetExists
       ? await readArtifactBytes(datasetPath, encoding).catch(() => ({ compressedBytes: 0, uncompressedBytes: 0 }))
@@ -301,7 +302,9 @@ export async function normalizeStoredWorkflowRecording(
   return null;
 }
 
-export async function readStoredWorkflowRecordingMetadata(bundlePath: string): Promise<NormalizedStoredWorkflowRecording | null> {
+export async function readStoredWorkflowRecordingMetadata(
+  bundlePath: string,
+): Promise<NormalizedStoredWorkflowRecording | null> {
   try {
     const metadataPath = getWorkflowRecordingMetadataPath(bundlePath);
     const contents = await fs.readFile(metadataPath, 'utf8');

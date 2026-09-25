@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
-test('project settings uses the shared settings-style navigation rail', async ({ page }) => {
+test('hosted project settings keeps the shared navigation and hides project references', async ({ page }) => {
   const projectId = 'project-settings-sections-project';
   const graphId = 'project-settings-sections-graph';
 
@@ -21,6 +21,23 @@ test('project settings uses the shared settings-style navigation rail', async ({
     projectPath: '/workflows/Project Settings Sections.rivet-project',
     title: 'Project Settings Sections',
   });
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) => route.fulfill({
+    json: {
+      root: '/workflows',
+      sync: { epoch: 'project-settings-sections', revision: 0 },
+      folders: [],
+      projects: [{
+        id: projectId,
+        name: 'Project Settings Sections',
+        fileName: 'Project Settings Sections.rivet-project',
+        relativePath: 'Project Settings Sections.rivet-project',
+        absolutePath: '/workflows/Project Settings Sections.rivet-project',
+        updatedAt: '2026-09-15T00:00:00.000Z',
+        settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+      }],
+    },
+  }));
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
@@ -32,11 +49,8 @@ test('project settings uses the shared settings-style navigation rail', async ({
 
   const modal = editor.getByTestId('project-settings-modal');
   const modalWidth = await modal.evaluate((element) => element.getBoundingClientRect().width);
-  const editorWidth = await editor
-    .locator('body')
-    .evaluate((element) => element.ownerDocument!.defaultView!.innerWidth);
-  expect(modalWidth / editorWidth).toBeGreaterThan(0.35);
-  expect(modalWidth / editorWidth).toBeLessThan(0.45);
+  expect(modalWidth).toBeGreaterThanOrEqual(699);
+  expect(modalWidth).toBeLessThanOrEqual(701);
   const navigation = modal.getByRole('navigation', { name: 'Project settings' });
   await expect(navigation.getByRole('button')).toHaveText([
     'General',
@@ -70,7 +84,8 @@ test('project settings uses the shared settings-style navigation rail', async ({
   await expect(modal.getByRole('button', { name: 'Add Context Value' })).toBeVisible();
 
   await navigation.getByRole('button', { name: 'Other' }).click();
-  await expect(modal.locator('.project-info-section')).toContainText('Project References');
+  await expect(modal.getByText('Project References')).toHaveCount(0);
+  await expect(modal.getByRole('button', { name: 'Add Project Reference' })).toHaveCount(0);
   await expect(modal.locator('.project-info-section')).toContainText('Project compare');
   await expect(modal.locator('.project-info-section')).toContainText('Revisions');
   await expect(modal.locator('.project-info-foldable')).toHaveCount(0);

@@ -17,7 +17,7 @@ import {
 } from '../state/projectComparison.js';
 import { AppModalHeader } from './AppModalHeader.js';
 
-const PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH = 'max(30vw, min(968px, calc(100vw - 48px)))';
+const PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH = 'max(700px, 30vw, min(968px, calc(100vw - 48px)))';
 const LazyProjectComparisonDiffEditor = lazy(() => import('./ProjectComparisonDiffEditor.js'));
 
 const styles = css`

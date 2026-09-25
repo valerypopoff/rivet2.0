@@ -40,6 +40,7 @@ export type FilesystemExecutionRoutingValidationState = {
 
 export type FilesystemExecutionPointer = {
   sourceProjectPath: string;
+  endpointAccess: 'public' | 'internal';
   executionProjectPath: string;
   settingsPath: string;
   routingValidationState: FilesystemExecutionRoutingValidationState;
@@ -57,6 +58,7 @@ export type FilesystemExecutionMaterialization = {
 
 export type FilesystemExecutionCandidate = {
   projectPath: string;
+  endpointAccess: 'public' | 'internal';
   settingsPath: string;
   settingsSignature: PathSignature;
   latestLookupName: string | null;
@@ -116,12 +118,14 @@ function createRoutingValidationState(settingsSignature: PathSignature, liveInpu
 function createExecutionPointer(
   projectPath: string,
   executionProjectPath: string,
+  endpointAccess: 'public' | 'internal',
   settingsPath: string,
   settingsSignature: PathSignature,
   liveInputSignatures?: FilesystemPathValidationState,
 ): FilesystemExecutionPointer {
   return {
     sourceProjectPath: projectPath,
+    endpointAccess,
     executionProjectPath,
     settingsPath,
     routingValidationState: createRoutingValidationState(settingsSignature, liveInputSignatures),
@@ -270,6 +274,7 @@ export async function scanFilesystemExecutionCandidates(root: string): Promise<F
 
     return {
       projectPath,
+      endpointAccess: settings.endpointAccess,
       settingsPath,
       settingsSignature,
       latestLookupName,
@@ -311,6 +316,7 @@ export async function resolveFilesystemPublishedExecutionPointer(
     return createExecutionPointer(
       candidate.projectPath,
       candidate.publishedExecutionProjectPath,
+      candidate.endpointAccess,
       candidate.settingsPath,
       candidate.settingsSignature,
       liveInputSignatures,
@@ -335,6 +341,7 @@ export async function resolveFilesystemLatestExecutionPointer(
     return createExecutionPointer(
       candidate.projectPath,
       candidate.projectPath,
+      candidate.endpointAccess,
       candidate.settingsPath,
       candidate.settingsSignature,
     );

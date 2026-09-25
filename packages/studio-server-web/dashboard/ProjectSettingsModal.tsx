@@ -8,11 +8,7 @@ import {
   getWorkflowProjectStatusLabel,
   isWorkflowProjectFullyUnpublished,
 } from './projectSettingsForm';
-import type {
-  HostedRouteConfig,
-  WorkflowProjectItem,
-  WorkflowProjectStatus,
-} from './types';
+import type { HostedRouteConfig, WorkflowProjectItem, WorkflowProjectStatus, WorkflowTreeResponse } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
@@ -20,40 +16,48 @@ import { useProjectSettingsActions } from './useProjectSettingsActions';
 const renderWorkflowEndpointHelp = (
   routeConfig: HostedRouteConfig,
   status: WorkflowProjectStatus,
-  endpointName: string,
+  publishedEndpointName: string,
+  draftEndpointName: string,
+  endpointAccess: 'public' | 'internal',
 ): ReactNode => {
+  const publishedRoute =
+    endpointAccess === 'internal'
+      ? `${routeConfig.internalPublishedWorkflowsBaseUrl ?? 'http://api/internal/workflows'}/${publishedEndpointName}`
+      : `${routeConfig.publishedWorkflowsBasePath}/${publishedEndpointName}`;
+  const latestRoute =
+    endpointAccess === 'internal'
+      ? `${routeConfig.internalLatestWorkflowsBaseUrl ?? 'http://api/internal/workflows-latest'}/${draftEndpointName}`
+      : `${routeConfig.latestWorkflowsBasePath}/${draftEndpointName}`;
   switch (status) {
     case 'unpublished':
       return null;
     case 'published':
       return (
         <>
-          The workflow is accessible via the endpoint on 
+          {endpointAccess === 'internal'
+            ? 'The published workflow is available only inside the server network at'
+            : 'The workflow is accessible via the endpoint on'}
           <br />
-          <code className="project-settings-endpoint-code">
-            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
-          </code>
+          <code className="project-settings-endpoint-code">{publishedRoute}</code>
         </>
       );
 
     case 'unpublished_changes':
       return (
         <>
-          Workflow has changes that are not live. 
+          Workflow has changes that are not live.
           <br />
           <br />
-          The published workflow version is still accessible on 
+          {endpointAccess === 'internal'
+            ? 'The published workflow version is available only inside the server network at'
+            : 'The published workflow version is still accessible on'}
           <br />
-          <code className="project-settings-endpoint-code">
-            {`${routeConfig.publishedWorkflowsBasePath}/${endpointName}`}
-          </code>
+          <code className="project-settings-endpoint-code">{publishedRoute}</code>
           <br />
           <br />
-          The unpublished changes are accessible on 
+          The unpublished changes are accessible on
           <br />
-          <code className="project-settings-endpoint-code">
-            {`${routeConfig.latestWorkflowsBasePath}/${endpointName}`}
-          </code>
+          <code className="project-settings-endpoint-code">{latestRoute}</code>
         </>
       );
     default:
@@ -112,7 +116,7 @@ type ProjectSettingsModalProps = {
   allProjects: WorkflowProjectItem[];
   isOpen: boolean;
   onClose: () => void;
-  onRefresh: () => void | Promise<void>;
+  onRefresh: () => Promise<WorkflowTreeResponse | null>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onOpenPublishedHistory: (project: WorkflowProjectItem) => void;
   onOpenRecording: (recordingId: string) => void;
@@ -138,13 +142,19 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   }, [activeProject.relativePath, isOpen]);
   const {
     settingsDraft,
+    snapshotProject,
     savingSettings,
+    savingEndpointAccess,
     webApps,
     webAppSlugDrafts,
     webAppAllowedEmailDrafts,
     webAppSlugValidationErrors,
     webAppAccessValidationErrors,
     loadingWebApps,
+    reviewedPublication,
+    savedLatestSubgraphProjectIds,
+    publicationConflict,
+    reviewLatestPublication,
     savingWebApps,
     deletingProject,
     handleSettingsDraftChange,
@@ -152,6 +162,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     handleWebAppAllowedEmailsDraftChange,
     handlePublishProject,
     handleUnpublishProject,
+    handleEndpointAccessChange,
     handlePublishWebApps,
     handleUnpublishWebApp,
     handleSaveWebAppAccess,
@@ -166,37 +177,44 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     onRefresh,
   });
 
-  const displayedProjectStatus: WorkflowProjectStatus = activeProject.settings.status;
+  const displayProject = snapshotProject ?? activeProject;
+  const displayedProjectStatus: WorkflowProjectStatus = displayProject.settings.status;
   const baseFileName = useMemo(() => activeProject.fileName.replace(/\.[^.]+$/, ''), [activeProject.fileName]);
-  const publishedEndpointName = activeProject.settings.endpointName || 'endpoint-name';
+  const publishedEndpointName =
+    displayProject.settings.publishedEndpointName || displayProject.settings.endpointName || 'endpoint-name';
   const isUnpublishedProject = displayedProjectStatus === 'unpublished';
+  const endpointAccess = displayProject.settings.endpointAccess ?? 'public';
   const hasWorkflowChangesToPublish = displayedProjectStatus === 'unpublished_changes';
-  const hasWorkflowEndpointDraftChange = settingsDraft.endpointName.trim() !== activeProject.settings.endpointName.trim();
+  const hasWorkflowEndpointDraftChange =
+    settingsDraft.endpointName.trim() !== displayProject.settings.endpointName.trim();
   const hasWebApps = webApps.length > 0;
   const hasPublishedWebApps = webApps.some((webApp) => webApp.publishedSlug != null);
-  const canDeleteProject = isWorkflowProjectFullyUnpublished(activeProject) && !loadingWebApps && !hasPublishedWebApps;
+  const canDeleteProject =
+    isWorkflowProjectFullyUnpublished(activeProject) &&
+    isWorkflowProjectFullyUnpublished(displayProject) &&
+    !loadingWebApps &&
+    !hasPublishedWebApps;
   const lastPublishedAtLabel = useMemo(
-    () => formatLastPublishedAtLabel(displayedProjectStatus, activeProject.settings.lastPublishedAt),
-    [activeProject.settings.lastPublishedAt, displayedProjectStatus],
+    () => formatLastPublishedAtLabel(displayedProjectStatus, displayProject.settings.lastPublishedAt),
+    [displayProject.settings.lastPublishedAt, displayedProjectStatus],
   );
-  const canCloseModal = !savingSettings && !savingWebApps && !deletingProject;
+  const canCloseModal = !savingSettings && !savingEndpointAccess && !savingWebApps && !deletingProject;
   const disablePublishAction =
     savingSettings ||
+    savingEndpointAccess ||
     loadingWebApps ||
+    !reviewedPublication ||
     deletingProject ||
     endpointValidationError != null ||
     (!isUnpublishedProject && !hasWorkflowChangesToPublish && !hasWorkflowEndpointDraftChange);
-  const disableUnpublishAction = savingSettings || deletingProject;
+  const disableUnpublishAction = savingSettings || savingEndpointAccess || deletingProject || !reviewedPublication;
   const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !canDeleteProject;
-  const disableWebAppActions = savingSettings || savingWebApps || deletingProject || loadingWebApps;
+  const disableWebAppActions =
+    savingSettings || savingWebApps || deletingProject || loadingWebApps || !reviewedPublication;
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
   const showWebAppOauthSettings = routeConfig.webAppsAuthMode === 'oauth';
   const renderTabs = () => (
-    <SegmentedControl
-      className="project-settings-section-switcher"
-      label="Project settings sections"
-      role="tablist"
-    >
+    <SegmentedControl className="project-settings-section-switcher" label="Project settings sections" role="tablist">
       <SegmentedControlButton
         selected={activeTab === 'workflow'}
         role="tab"
@@ -227,7 +245,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     <Button
       appearance="subtle"
       className="project-settings-secondary-button button-size-l published-version-history-button"
-      onClick={() => onOpenPublishedHistory(activeProject)}
+      onClick={() => onOpenPublishedHistory(displayProject)}
       isDisabled={savingSettings || deletingProject}
     >
       Published version history
@@ -250,10 +268,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       </div>
 
       <div className="project-settings-field">
+        {savedLatestSubgraphProjectIds.length > 0 && reviewedPublication && (
+          <div className="project-settings-help" role="note">
+            This project calls {savedLatestSubgraphProjectIds.length} other project
+            {savedLatestSubgraphProjectIds.length === 1 ? '' : 's'} using Saved latest. Their future saves can change
+            this endpoint without updating its published version.
+          </div>
+        )}
         <div className="project-settings-input-row project-settings-prefixed-input-row">
-          <span className="project-settings-url-prefix">
-            {`${routeConfig.publishedWorkflowsBasePath}/`}
-          </span>
+          <span className="project-settings-url-prefix">{`${routeConfig.publishedWorkflowsBasePath}/`}</span>
           <TextField
             id="workflow-project-endpoint-name"
             className="project-settings-input text-field-size-l"
@@ -286,12 +309,44 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         </div>
         {endpointValidationError ? <div className="project-settings-error">{endpointValidationError}</div> : null}
         {!isUnpublishedProject ? (
+          <div className="project-settings-endpoint-access">
+            <span
+              className="project-settings-access-label"
+              title="Controls where the endpoint can be reached. Bearer-key requirements are configured separately in Rivet Server settings."
+            >
+              Endpoint access
+            </span>
+            <SegmentedControl label="Endpoint access">
+              <SegmentedControlButton
+                selected={endpointAccess === 'public'}
+                disabled={savingEndpointAccess || savingSettings || deletingProject || !reviewedPublication}
+                onClick={() => void handleEndpointAccessChange('public')}
+              >
+                External
+              </SegmentedControlButton>
+              <SegmentedControlButton
+                selected={endpointAccess === 'internal'}
+                disabled={savingEndpointAccess || savingSettings || deletingProject || !reviewedPublication}
+                onClick={() => void handleEndpointAccessChange('internal')}
+              >
+                Internal network only
+              </SegmentedControlButton>
+            </SegmentedControl>
+            <span className="project-settings-help">Changes take effect immediately</span>
+          </div>
+        ) : null}
+        {!isUnpublishedProject ? (
           <div className="project-settings-help project-settings-status-help">
-            {renderWorkflowEndpointHelp(routeConfig, displayedProjectStatus, publishedEndpointName)}
+            {renderWorkflowEndpointHelp(
+              routeConfig,
+              displayedProjectStatus,
+              publishedEndpointName,
+              displayProject.settings.endpointName,
+              endpointAccess,
+            )}
           </div>
         ) : null}
       </div>
-
     </div>
   );
 
@@ -311,13 +366,16 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
 
   const renderWebAppsSettings = () => (
     <div className="project-settings-tab-panel project-settings-web-app-section" role="tabpanel">
-      {loadingWebApps ? (
-        <div className="project-settings-help">Loading project web apps...</div>
-      ) : null}
+      {savedLatestSubgraphProjectIds.length > 0 && reviewedPublication && (
+        <div className="project-settings-help" role="note">
+          This project calls {savedLatestSubgraphProjectIds.length} other project
+          {savedLatestSubgraphProjectIds.length === 1 ? '' : 's'} using Saved latest. Their future saves can change a
+          published web app without updating it.
+        </div>
+      )}
+      {loadingWebApps ? <div className="project-settings-help">Loading project web apps...</div> : null}
 
-      {!loadingWebApps && !hasWebApps ? (
-        <div className="project-settings-help">No web apps in the project.</div>
-      ) : null}
+      {!loadingWebApps && !hasWebApps ? <div className="project-settings-help">No web apps in the project.</div> : null}
 
       {!loadingWebApps && hasWebApps && !hasPublishedWebApps ? (
         <div className="project-settings-help">No web apps are published.</div>
@@ -334,8 +392,8 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
             const isPublished = webApp.publishedSlug != null;
             const hasWebAppSlugDraftChange = isPublished && slugDraft.trim() !== webApp.publishedSlug;
             const parsedAllowedEmails = normalizeAllowedEmailDraft(allowedEmailDraft);
-            const hasWebAppAccessDraftChange = isPublished &&
-              parsedAllowedEmails.join('\n') !== allowedEmails.join('\n');
+            const hasWebAppAccessDraftChange =
+              isPublished && parsedAllowedEmails.join('\n') !== allowedEmails.join('\n');
             const hasWebAppChangesToPublish = webApp.status === 'unpublished_changes' && !webApp.isMissingFromProject;
             const showLatestWebAppLink = hasWebAppChangesToPublish;
             const displaySlug = isPublished ? webApp.publishedSlug! : slugDraft.trim() || 'slug';
@@ -351,9 +409,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                 </div>
                 <div className="project-settings-field">
                   <div className="project-settings-input-row project-settings-prefixed-input-row">
-                    <span className="project-settings-url-prefix">
-                      {`${routeConfig.publishedAppsBasePath}/`}
-                    </span>
+                    <span className="project-settings-url-prefix">{`${routeConfig.publishedAppsBasePath}/`}</span>
                     <TextField
                       id={`workflow-project-web-app-slug-${webApp.uiGraphId}`}
                       className="project-settings-input text-field-size-l"
@@ -417,17 +473,19 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                           appearance="primary"
                           className="project-settings-primary-button button-size-l"
                           onClick={() => void handleSaveWebAppAccess(webApp)}
-                          isDisabled={disableWebAppActions || accessValidationError != null || !hasWebAppAccessDraftChange}
+                          isDisabled={
+                            disableWebAppActions || accessValidationError != null || !hasWebAppAccessDraftChange
+                          }
                           isLoading={savingWebApps}
                         >
                           Save access
                         </LoadingButton>
                       ) : null}
                     </div>
-                    {accessValidationError ? <div className="project-settings-error">{accessValidationError}</div> : null}
-                    <div className="project-settings-help">
-                      Leave empty to deny all signed-in OAuth users.
-                    </div>
+                    {accessValidationError ? (
+                      <div className="project-settings-error">{accessValidationError}</div>
+                    ) : null}
+                    <div className="project-settings-help">Leave empty to deny all signed-in OAuth users.</div>
                   </div>
                 ) : null}
                 {isPublished ? (
@@ -493,6 +551,18 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
               </div>
 
               <div className="project-settings-modal-content">
+                {!loadingWebApps && !reviewedPublication ? (
+                  <div className="project-settings-publication-conflict" role="alert">
+                    <span>
+                      {publicationConflict
+                        ? 'The project or its publication changed during your attempt. Review the latest state before trying again; your edits remain here.'
+                        : 'Publication state could not be loaded. Review the latest state before changing publication.'}
+                    </span>
+                    <Button appearance="subtle" onClick={() => void reviewLatestPublication()}>
+                      Review latest
+                    </Button>
+                  </div>
+                ) : null}
                 {activeTab === 'workflow' ? renderWorkflowSettings() : null}
                 {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
                 {activeTab === 'llm-health' ? (

@@ -12,6 +12,8 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 Open **Run recordings**, choose a workflow, and use **Filter by input** to search its captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
+When a Subgraph runs a graph in another Studio Server project, its run also appears under the called project. Search the called project's run using the values actually passed to that graph: for a Graph Input named `prompt`, use a path such as `$.prompt.requestId`; for a Graph Input named `input`, its value is the search root, so use `$.requestId`. Hosted editor child runs require **Record local graph executions** to be enabled; server endpoint runs follow the server's recording setting.
+
 Search shows an initial match promptly, then collects larger batches automatically. The ordinary runs-per-page setting does not limit the total search results. Repeated searches can reuse recently extracted inputs, but large histories may exceed the server's memory cache and still require reading recording files again.
 
 **Search complete** means the scan finished. **Search stopped** means the results may be incomplete, including when an unreadable or malformed recording caused an error. Check the displayed error before treating an empty result as proof that no matching run exists.

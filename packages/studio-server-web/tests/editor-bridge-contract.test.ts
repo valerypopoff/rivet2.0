@@ -242,6 +242,30 @@ test('open project bridge command accepts optional title and preview flags', () 
   );
 });
 
+test('Subgraph navigation carries stable project and graph IDs through validated bridge messages', () => {
+  assert.equal(isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 'project-1', graphId: 'graph-1' }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 1, graphId: 'graph-1' }), false);
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-project',
+      path: '/workflows/target.rivet-project',
+      replaceCurrent: false,
+      expectedProjectId: 'project-1',
+      preferredGraphId: 'graph-1',
+    }),
+    true,
+  );
+  assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-project',
+      path: '/workflows/target.rivet-project',
+      replaceCurrent: false,
+      expectedProjectId: 1,
+    }),
+    false,
+  );
+});
+
 test('save-project bridge command accepts only the optional shortcut source', () => {
   assert.equal(isDashboardToEditorCommand({ type: 'save-project' }), true);
   assert.equal(isDashboardToEditorCommand({ type: 'save-project', source: 'shortcut' }), true);

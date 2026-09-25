@@ -15,6 +15,7 @@ export type ManagedExecutionProjectResult = {
   datasetProvider: NodeDatasetProvider;
   projectVirtualPath: string;
   revisionKey: string;
+  endpointAccess?: 'public' | 'internal';
   webAppUiGraphId?: string;
   webAppAllowedEmails?: string[];
   webAppBindingId?: string;

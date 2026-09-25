@@ -507,10 +507,6 @@ export const defaultEditorContainerStyles = css`
     align-items: start;
   }
 
-  .node-editor-color-picker {
-    width: min(180px, 100%);
-  }
-
   &.match-case-node-editor > .inline-editor-row {
     grid-template-columns: max-content max-content;
     justify-content: start;

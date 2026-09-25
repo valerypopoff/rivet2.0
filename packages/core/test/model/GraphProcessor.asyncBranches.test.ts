@@ -4,8 +4,10 @@ import Emittery from 'emittery';
 import {
   GraphProcessor,
   NodeImpl,
+  SubGraphNodeImpl,
   createBuiltInRegistry,
   createFrozenNodeOutputResolver,
+  getGraphBoundary,
   nodeDefinition,
   type ChartNode,
   type GraphId,
@@ -22,6 +24,8 @@ import {
   type ProcessEvents,
   type Project,
   type ProjectId,
+  type SubGraphNode,
+  getSubgraphProjectKey,
 } from '../../src/index.js';
 import { ManagedAsyncBranches } from '../../src/model/ManagedAsyncBranches.js';
 import { GraphInputStreamRelay } from '../../src/model/GraphInputStream.js';
@@ -118,6 +122,26 @@ function makeStopWatchNode(id = 'stop-watch'): ChartNode {
   };
 }
 
+function makeStreamValueNode(id = 'stream-value'): ChartNode {
+  return {
+    data: {},
+    id: id as NodeId,
+    title: 'Stream value',
+    type: 'streamValue',
+    visualData: { x: 200, y: 0, width: 220 },
+  };
+}
+
+function makeCatchStreamingChunksNode(id = 'catch-streaming-chunks', count = 1): ChartNode {
+  return {
+    data: { count },
+    id: id as NodeId,
+    title: 'Catch streaming chunks',
+    type: 'catchStreamingChunks',
+    visualData: { x: 400, y: 0, width: 220 },
+  };
+}
+
 function makeDataBusNode(id: string): ChartNode {
   return {
     data: {},
@@ -148,7 +172,7 @@ function makeGraphInputNode(id: string, inputId = 'input'): ChartNode {
   };
 }
 
-function makeSubgraphNode(id: string, graphId: GraphId): ChartNode {
+function makeSubgraphNode(id: string, graphId: GraphId): SubGraphNode {
   return {
     data: {
       graphId,
@@ -239,6 +263,162 @@ beforeEach(() => {
 });
 
 void describe('GraphProcessor scheduler boundaries', () => {
+  void it('turns one ordinary value into one early chunk and releases Catch exactly once', async () => {
+    const source = makeTestNode('ordinary-source');
+    const emit = makeStreamValueNode();
+    const take = makeCatchStreamingChunksNode();
+    const consumer = makeTestNode('once-consumer');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('one-streaming-value', [source, emit, take, consumer, output], [
+      connect(source.id, emit.id, 'value'),
+      connect(emit.id, take.id, 'stream', 'value'),
+      connect(take.id, consumer.id, 'input', 'value'),
+      connect(consumer.id, output.id, 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'ready' } }));
+    const finished: string[] = [];
+    const processor = createProcessor(graph);
+    processor.on('nodeFinish', ({ node }) => finished.push(node.id));
+    const result = await withTimeout(processor.processGraph(testProcessContext()), 'one streaming value');
+    assert.equal(result.result?.value, 'ready');
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    assert.equal(finished.filter((id) => id === take.id).length, 1);
+  });
+
+  void it('takes the first N partial snapshots before the producer finishes without counting its duplicate final', async () => {
+    const source = makeTestNode('two-chunk-source');
+    const take = makeCatchStreamingChunksNode('take-two', 2);
+    const consumer = makeTestNode('two-chunk-consumer');
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('take-two-chunks', [source, take, consumer, output], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, consumer.id, 'input', 'value'),
+      connect(consumer.id, output.id, 'value'),
+    ]);
+    const releaseSource = deferred();
+    const consumed = deferred();
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'A' } });
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'AB' } });
+      await releaseSource.promise;
+      return { output: { type: 'string', value: 'AB' } };
+    });
+    AsyncTestNodeImpl.handlers.set(consumer.id, (inputs) => {
+      assert.deepEqual(inputs['input' as PortId], { type: 'any[]', value: ['A', 'AB'] });
+      consumed.resolve();
+      return { output: inputs['input' as PortId]! };
+    });
+    const run = createProcessor(graph).processGraph(testProcessContext());
+    try {
+      await withTimeout(consumed.promise, 'two chunks before source finishes');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    } finally {
+      releaseSource.resolve();
+    }
+    const result = await withTimeout(run, 'take-two graph');
+    assert.deepEqual(result.result?.value, ['A', 'AB']);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+  });
+
+  void it('returns available chunks when the stream ends before N, without duplicating an identical final', async () => {
+    const source = makeTestNode('short-source');
+    const take = makeCatchStreamingChunksNode('take-three', 3);
+    const output = makeGraphOutputNode();
+    const graph = makeGraph('short-stream', [source, take, output], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, output.id, 'value', 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'A' } });
+      return { output: { type: 'string', value: 'A' } };
+    });
+    const result = await withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'short stream');
+    assert.deepEqual(result.result?.value, ['A']);
+  });
+
+  void it('does not release an incomplete Catch when its producer fails', async () => {
+    const source = makeTestNode('failing-catch-source');
+    const take = makeCatchStreamingChunksNode('take-before-failure', 2);
+    const consumer = makeTestNode('catch-failure-consumer');
+    const graph = makeGraph('failing-catch', [source, take, consumer], [
+      connect(source.id, take.id, 'stream'),
+      connect(take.id, consumer.id, 'input', 'value'),
+    ]);
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'one' } });
+      throw new Error('producer failed before a second chunk');
+    });
+    await assert.rejects(
+      withTimeout(createProcessor(graph).processGraph(testProcessContext()), 'failed Catch producer'),
+      /failing-catch-source/,
+    );
+    assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), undefined);
+  });
+
+  for (const crossProject of [false, true]) {
+    void it(`takes an emitted child value before a ${crossProject ? 'cross-project' : 'same-project'} Subgraph finishes`, async () => {
+      const source = makeTestNode(`early-child-source-${crossProject}`);
+      const emit = makeStreamValueNode(`early-child-emit-${crossProject}`);
+      const childOutput = makeGraphOutputNode('response');
+      const slow = makeTestNode(`slow-child-work-${crossProject}`);
+      const child = makeGraph(`early-child-${crossProject}`, [source, emit, childOutput, slow], [
+        connect(source.id, emit.id, 'value'),
+        connect(emit.id, childOutput.id, 'value', 'value'),
+      ]);
+      const subgraph = makeSubgraphNode(`early-caller-${crossProject}`, child.metadata!.id);
+      const targetProject = crossProject
+        ? { ...makeProject(child), metadata: { ...makeProject(child).metadata, id: 'early-called-project' as ProjectId } }
+        : undefined;
+      if (targetProject) {
+        subgraph.data = {
+          ...subgraph.data,
+          targetProjectId: targetProject.metadata.id,
+          targetVersion: 'latest',
+          targetBoundary: getGraphBoundary(targetProject, child.metadata!.id),
+        };
+      }
+      const take = makeCatchStreamingChunksNode(`early-take-${crossProject}`);
+      const consumer = makeTestNode(`early-consumer-${crossProject}`);
+      const output = makeGraphOutputNode('result');
+      const root = makeGraph(`early-root-${crossProject}`, [subgraph, take, consumer, output], [
+        connect(subgraph.id, take.id, 'stream', 'response'),
+        connect(take.id, consumer.id, 'input', 'value'),
+        connect(consumer.id, output.id, 'value'),
+      ]);
+      const slowStarted = deferred();
+      const releaseSlow = deferred();
+      const consumed = deferred();
+      AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'early' } }));
+      AsyncTestNodeImpl.handlers.set(slow.id, async () => {
+        slowStarted.resolve();
+        await releaseSlow.promise;
+        return { output: { type: 'string', value: 'late' } };
+      });
+      AsyncTestNodeImpl.handlers.set(consumer.id, (inputs) => {
+        assert.equal(inputs['input' as PortId]?.value, 'early');
+        consumed.resolve();
+        return { output: inputs['input' as PortId]! };
+      });
+      let runSettled = false;
+      const run = createProcessor(root, targetProject ? [] : [child]).processGraph({
+        ...testProcessContext(),
+        ...(targetProject
+          ? { subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) } }
+          : {}),
+      }).finally(() => { runSettled = true; });
+      try {
+        await withTimeout(Promise.all([slowStarted.promise, consumed.promise]), 'early child value');
+        assert.equal(runSettled, false);
+        assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+      } finally {
+        releaseSlow.resolve();
+      }
+      const result = await withTimeout(run, 'early child graph completion');
+      assert.equal(result.result?.value, 'early');
+      assert.equal(AsyncTestNodeImpl.runCounts.get(consumer.id), 1);
+    });
+  }
+
   void it('runs a streaming watch branch before the producer finishes and rejoins after Stop', async () => {
     const source = makeTestNode('streaming-source');
     const watch = makeWatchNode();
@@ -358,6 +538,356 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(outputs.result?.value, 'joined child result');
     assert.equal(AsyncTestNodeImpl.runCounts.get(branch.id), 1);
     assert.deepEqual(subgraphPartialEvents, []);
+  });
+
+  void it('streams a saved-project Subgraph and records it under the called project', async () => {
+    const source = makeTestNode('external-stream-source');
+    const childInput = makeGraphInputNode('external-input', 'prompt');
+    const childOutput = makeGraphOutputNode('response');
+    const child = makeGraph(
+      'external-stream-graph',
+      [childInput, source, childOutput],
+      [connect(source.id, 'response-graph-output', 'value')],
+    );
+    const targetProject: Project = {
+      ...makeProject(child),
+      metadata: { ...makeProject(child).metadata, id: 'called-project' as ProjectId },
+    };
+    const subgraph = makeSubgraphNode('external-caller', child.metadata!.id);
+    const savedBoundary = getGraphBoundary(targetProject, child.metadata!.id)!;
+    Object.assign(childOutput.data, { id: 'renamedResponse' });
+    subgraph.data = {
+      ...subgraph.data,
+      targetProjectId: targetProject.metadata.id,
+      targetVersion: 'latest',
+      targetBoundary: savedBoundary,
+      skipUnusedOutputs: true,
+    };
+    const watch = makeWatchNode('external-watch');
+    const branch = makeTestNode('external-watch-branch');
+    const callerInput = makeTestNode('external-caller-input');
+    const result = makeGraphOutputNode('result');
+    const root = makeGraph(
+      'external-root',
+      [callerInput, subgraph, watch, branch, result],
+      [
+        connect(callerInput.id, subgraph.id, 'prompt'),
+        connect(subgraph.id, watch.id, 'stream', 'response'),
+        connect(watch.id, branch.id, 'input', 'value'),
+        connect(subgraph.id, result.id, 'value', 'response'),
+      ],
+    );
+    const releaseSource = deferred();
+    const sawPartial = deferred();
+    AsyncTestNodeImpl.handlers.set(callerInput.id, () => ({ output: { type: 'object', value: { requestId: 'called-123' } } }));
+    AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
+      context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
+      await releaseSource.promise;
+      return { output: { type: 'string', value: 'final' } };
+    });
+    AsyncTestNodeImpl.handlers.set(branch.id, (inputs) => {
+      if (inputs['input' as PortId]?.value === 'partial') {
+        sawPartial.resolve();
+        releaseSource.resolve();
+      }
+      return {};
+    });
+    const processor = createProcessor(root);
+    const parentRecorder = new ExecutionRecorder();
+    parentRecorder.record(processor);
+    let childRecorder: ExecutionRecorder | undefined;
+    let childCorrelationId: string | undefined;
+    const persistenceStarted = deferred();
+    const releasePersistence = deferred();
+    let runSettled = false;
+    const run = processor.processGraph({
+      ...testProcessContext(),
+      llmProfileHealthExecutionCorrelationId: 'rvt-cross-project-test-12345',
+      subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) },
+      subgraphRecordingOptions: { includePartialOutputs: true },
+      onSubgraphProjectRun: async (captured) => {
+        childRecorder = captured.recorder;
+        childCorrelationId = captured.correlationId;
+        persistenceStarted.resolve();
+        await releasePersistence.promise;
+      },
+    }).finally(() => { runSettled = true; });
+    await withTimeout(sawPartial.promise, 'cross-project streaming output');
+    await withTimeout(persistenceStarted.promise, 'called-project recording upload');
+    assert.equal(runSettled, false, 'the caller cannot finish before its child recording upload');
+    releasePersistence.resolve();
+    const outputs = await withTimeout(run, 'cross-project Subgraph result');
+    assert.equal(outputs.result?.value, 'final');
+    assert.ok(childRecorder);
+    assert.equal(childCorrelationId, 'rvt-cross-project-test-12345');
+    assert.deepEqual(
+      childRecorder.events.find((event) => event.type === 'graphStart')?.data.inputs['prompt' as PortId]?.value,
+      { requestId: 'called-123' },
+    );
+    assert.equal(
+      parentRecorder.events.some((event) => event.type === 'nodeStart' && event.data.nodeId === source.id),
+      false,
+    );
+    assert.equal(
+      childRecorder.events.some((event) => event.type === 'nodeStart' && event.data.nodeId === source.id),
+      true,
+    );
+    assert.equal(
+      childRecorder.events.some((event) => event.type === 'partialOutput'),
+      true,
+    );
+    const replayed = await withTimeout(createProcessor(root).replayRecording(parentRecorder), 'caller replay');
+    assert.equal(replayed.result?.value, 'final');
+    const childReplay = new GraphProcessor(
+      targetProject,
+      child.metadata!.id,
+      createBuiltInRegistry().register(asyncTestNode),
+    );
+    const replayedChild = await withTimeout(childReplay.replayRecording(childRecorder), 'called-project replay');
+    assert.equal(replayedChild.renamedResponse?.value, 'final');
+  });
+
+  void it('keeps nested cross-project Subgraphs on one resolved target snapshot per root run', async () => {
+    const source = makeTestNode('nested-project-source');
+    const leafGraph = makeGraph(
+      'nested-project-leaf',
+      [source, makeGraphOutputNode('result')],
+      [connect(source.id, 'result-graph-output', 'value')],
+    );
+    const leafProject = makeProject(leafGraph);
+    leafProject.metadata.id = 'nested-leaf-project' as ProjectId;
+    const leafCaller = makeSubgraphNode('nested-leaf-caller', leafGraph.metadata!.id);
+    leafCaller.data.targetProjectId = leafProject.metadata.id;
+    const middleGraph = makeGraph(
+      'nested-project-middle',
+      [leafCaller, makeGraphOutputNode('result')],
+      [connect(leafCaller.id, 'result-graph-output', 'value', 'result')],
+    );
+    const middleProject = makeProject(middleGraph);
+    middleProject.metadata.id = 'nested-middle-project' as ProjectId;
+    const middleCaller = makeSubgraphNode('nested-middle-caller', middleGraph.metadata!.id);
+    middleCaller.data.targetProjectId = middleProject.metadata.id;
+    const root = makeGraph(
+      'nested-project-root',
+      [middleCaller, makeGraphOutputNode('result')],
+      [connect(middleCaller.id, 'result-graph-output', 'value', 'result')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'nested result' } }));
+    const resolvedIds: ProjectId[] = [];
+    const runs: ProjectId[] = [];
+    const correlations: Array<string | undefined> = [];
+    const processor = createProcessor(root);
+    const outputs = await withTimeout(
+      processor.processGraph({
+        ...testProcessContext(),
+        llmProfileHealthExecutionCorrelationId: 'rvt-nested-subgraph-test-12345',
+        subgraphProjectLoader: {
+          loadTarget: async (target) => {
+            resolvedIds.push(target.projectId);
+            return { project: target.projectId === middleProject.metadata.id ? middleProject : leafProject };
+          },
+        },
+        onSubgraphProjectRun: (run) => {
+          runs.push(run.target.projectId);
+          correlations.push(run.correlationId);
+        },
+      }),
+      'nested cross-project Subgraph',
+    );
+    assert.equal(outputs.result?.value, 'nested result');
+    assert.deepEqual(resolvedIds, [middleProject.metadata.id, leafProject.metadata.id]);
+    assert.deepEqual(runs, [leafProject.metadata.id, middleProject.metadata.id]);
+    assert.deepEqual(correlations, ['rvt-nested-subgraph-test-12345', 'rvt-nested-subgraph-test-12345']);
+  });
+
+  void it('keeps Saved latest and Published snapshots of one project distinct', async () => {
+    const latestSource = makeTestNode('latest-version-source');
+    const publishedSource = makeTestNode('published-version-source');
+    const latestGraph = makeGraph(
+      'versioned-child',
+      [latestSource, makeGraphOutputNode('value')],
+      [connect(latestSource.id, 'value-graph-output', 'value')],
+    );
+    const publishedGraph = makeGraph(
+      'versioned-child',
+      [publishedSource, makeGraphOutputNode('value')],
+      [connect(publishedSource.id, 'value-graph-output', 'value')],
+    );
+    const latestProject = makeProject(latestGraph);
+    const publishedProject = makeProject(publishedGraph);
+    latestProject.metadata.id = 'versioned-target' as ProjectId;
+    publishedProject.metadata.id = latestProject.metadata.id;
+    const latestCaller = makeSubgraphNode('latest-caller', latestGraph.metadata!.id);
+    latestCaller.data.targetProjectId = latestProject.metadata.id;
+    latestCaller.data.targetVersion = 'latest';
+    const publishedCaller = makeSubgraphNode('published-caller', publishedGraph.metadata!.id);
+    publishedCaller.data.targetProjectId = latestProject.metadata.id;
+    publishedCaller.data.targetVersion = 'published';
+    const root = makeGraph(
+      'versioned-root',
+      [latestCaller, publishedCaller, makeGraphOutputNode('latest'), makeGraphOutputNode('published')],
+      [
+        connect(latestCaller.id, 'latest-graph-output', 'value', 'value'),
+        connect(publishedCaller.id, 'published-graph-output', 'value', 'value'),
+      ],
+    );
+    AsyncTestNodeImpl.handlers.set(latestSource.id, () => ({ output: { type: 'string', value: 'saved' } }));
+    AsyncTestNodeImpl.handlers.set(publishedSource.id, () => ({ output: { type: 'string', value: 'published' } }));
+    const resolvedVersions: string[] = [];
+    const outputs = await createProcessor(root).processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: {
+        loadTarget: async (target) => {
+          resolvedVersions.push(target.version);
+          return { project: target.version === 'latest' ? latestProject : publishedProject };
+        },
+      },
+    });
+    assert.equal(outputs.latest?.value, 'saved');
+    assert.equal(outputs.published?.value, 'published');
+    assert.deepEqual(resolvedVersions, ['latest', 'published']);
+  });
+
+  void it('rejects a cross-project dependency cycle before executing either project', async () => {
+    const graphA = makeGraph('cycle-a', [], []);
+    const graphB = makeGraph('cycle-b', [], []);
+    const projectA = makeProject(graphA);
+    const projectB = makeProject(graphB);
+    projectA.metadata.id = 'cycle-project-a' as ProjectId;
+    projectB.metadata.id = 'cycle-project-b' as ProjectId;
+    const callB = makeSubgraphNode('call-b', graphB.metadata!.id);
+    callB.data.targetProjectId = projectB.metadata.id;
+    graphA.nodes.push(callB);
+    const callA = makeSubgraphNode('call-a', graphA.metadata!.id);
+    callA.data.targetProjectId = projectA.metadata.id;
+    graphB.nodes.push(callA);
+    const rootCall = makeSubgraphNode('cycle-root-call', graphA.metadata!.id);
+    rootCall.data.targetProjectId = projectA.metadata.id;
+    const processor = createProcessor(makeGraph('cycle-root', [rootCall], []));
+    await assert.rejects(
+      processor.processGraph({
+        ...testProcessContext(),
+        subgraphProjectLoader: {
+          loadTarget: async ({ projectId }) => ({ project: projectId === projectA.metadata.id ? projectA : projectB }),
+        },
+      }),
+      /Subgraph project dependency cycle/,
+    );
+  });
+
+  void it('rejects a changed cross-project output type instead of dropping an existing wire', async () => {
+    const output = makeGraphOutputNode('response');
+    const child = makeGraph('changed-boundary-child', [output], []);
+    const project = makeProject(child);
+    project.metadata.id = 'changed-boundary-project' as ProjectId;
+    const caller = makeSubgraphNode('changed-boundary-caller', child.metadata!.id);
+    caller.data.targetProjectId = project.metadata.id;
+    const boundary = getGraphBoundary(project, child.metadata!.id)!;
+    caller.data.targetBoundary = {
+      ...boundary,
+      outputs: boundary.outputs.map((port) => ({ ...port, dataType: 'string', portId: 'old-output' as PortId })),
+    };
+    const definitions = new SubGraphNodeImpl(caller).getOutputDefinitions(
+      [],
+      {},
+      makeProject(makeGraph('unused-owner', [], [])),
+      { [getSubgraphProjectKey({ projectId: project.metadata.id, version: 'latest' })]: project },
+    );
+    assert.equal(definitions[0]?.id, 'old-output', 'a refreshed preview must not hide the authored wire');
+    const rootOutput = makeGraphOutputNode('result');
+    const processor = createProcessor(
+      makeGraph(
+        'changed-boundary-root',
+        [caller, rootOutput],
+        [connect(caller.id, rootOutput.id, 'value', 'old-output')],
+      ),
+    );
+    let nodeError = '';
+    processor.on('nodeError', ({ error }) => {
+      nodeError = String(error);
+    });
+    await assert.rejects(
+      processor.processGraph({
+        ...testProcessContext(),
+        subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+      }),
+      /changed-boundary-caller/,
+    );
+    assert.match(nodeError, /graph changed its output/);
+  });
+
+  void it('preserves saved cross-project input and output wires after both IDs are renamed', async () => {
+    const input = makeGraphInputNode('stable-input-node', 'prompt');
+    const output = makeGraphOutputNode('answer');
+    const child = makeGraph('renamed-boundary-child', [input, output], [connect(input.id, output.id, 'value', 'data')]);
+    const project = makeProject(child);
+    project.metadata.id = 'renamed-boundary-project' as ProjectId;
+    const savedBoundary = getGraphBoundary(project, child.metadata!.id)!;
+    Object.assign(input.data, { id: 'renamedPrompt' });
+    Object.assign(output.data, { id: 'renamedAnswer' });
+    const currentBoundary = getGraphBoundary(project, child.metadata!.id)!;
+    assert.notEqual(currentBoundary.inputs[0]?.portId, savedBoundary.inputs[0]?.portId);
+    assert.notEqual(currentBoundary.outputs[0]?.portId, savedBoundary.outputs[0]?.portId);
+
+    const caller = makeSubgraphNode('renamed-boundary-caller', child.metadata!.id);
+    caller.data.targetProjectId = project.metadata.id;
+    caller.data.targetBoundary = savedBoundary;
+    const source = makeTestNode('renamed-boundary-source');
+    const rootOutput = makeGraphOutputNode('result');
+    const root = makeGraph(
+      'renamed-boundary-root',
+      [source, caller, rootOutput],
+      [connect(source.id, caller.id, 'prompt'), connect(caller.id, rootOutput.id, 'value', 'answer')],
+    );
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'connected value' } }));
+    const definitions = new SubGraphNodeImpl(caller).getOutputDefinitions([], {}, makeProject(root), {
+      [getSubgraphProjectKey({ projectId: project.metadata.id, version: 'latest' })]: project,
+    });
+    assert.equal(definitions[0]?.id, 'answer');
+    assert.equal(definitions[0]?.title, 'renamedAnswer');
+    const results = await createProcessor(root).processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+    });
+    assert.equal(results.result?.value, 'connected value');
+
+    caller.data.inputData = { prompt: { type: 'string', value: 'authored default' } };
+    const defaultRoot = makeGraph(
+      'renamed-default-root',
+      [caller, rootOutput],
+      [connect(caller.id, rootOutput.id, 'value', 'answer')],
+    );
+    const defaultResults = await createProcessor(defaultRoot).processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+    });
+    assert.equal(defaultResults.result?.value, 'authored default');
+  });
+
+  void it('does not guess an already-renamed legacy input or collide with a reused port ID', async () => {
+    const input = makeGraphInputNode('stable-input-node', 'prompt');
+    const child = makeGraph('ambiguous-boundary-child', [input], []);
+    const project = makeProject(child);
+    project.metadata.id = 'ambiguous-boundary-project' as ProjectId;
+    const savedBoundary = getGraphBoundary(project, child.metadata!.id)!;
+    const caller = makeSubgraphNode('ambiguous-boundary-caller', child.metadata!.id);
+    caller.data.targetProjectId = project.metadata.id;
+    caller.data.targetBoundary = {
+      ...savedBoundary,
+      inputs: savedBoundary.inputs.map(({ nodeId: _nodeId, ...port }) => port),
+    };
+    Object.assign(input.data, { id: 'renamedPrompt' });
+    const root = makeGraph('ambiguous-boundary-root', [caller], []);
+    const run = () =>
+      createProcessor(root).processGraph({
+        ...testProcessContext(),
+        subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+      });
+    await assert.rejects(run(), /ambiguous-boundary-caller/);
+
+    caller.data.targetBoundary = savedBoundary;
+    child.nodes.push(makeGraphInputNode('new-input-node', 'prompt'));
+    await assert.rejects(run(), /ambiguous-boundary-caller/);
   });
 
   void it('streams a direct named Referenced Graph Alias output to Watch before the child graph finishes', async () => {
@@ -2296,6 +2826,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     'data-bus',
     'library',
     'alias',
+    'cross-project-renamed',
     'default-value',
   ] as const) {
     void it(`streams into a once-called Subgraph Watch before the outer producer finishes: ${route}`, async () => {
@@ -2359,6 +2890,15 @@ void describe('GraphProcessor scheduler boundaries', () => {
       });
       const project = makeProject(root, extraGraphs);
       let referencedProject: Project | undefined;
+      let subgraphProject: Project | undefined;
+      if (route === 'cross-project-renamed') {
+        subgraphProject = makeProject(child);
+        subgraphProject.metadata.id = 'renamed-stream-project' as ProjectId;
+        caller.data.targetProjectId = subgraphProject.metadata.id;
+        caller.data.targetBoundary = getGraphBoundary(subgraphProject, child.metadata!.id)!;
+        Object.assign(input.data, { id: 'renamed-stream' });
+        delete project.graphs[child.metadata!.id!];
+      }
       if (route === 'alias') {
         referencedProject = makeProject(child);
         referencedProject.metadata.id = 'stream-external' as ProjectId;
@@ -2401,6 +2941,9 @@ void describe('GraphProcessor scheduler boundaries', () => {
               projectReferenceLoader: { loadProject: async () => referencedProject! },
             }
           : {}),
+        ...(subgraphProject
+          ? { subgraphProjectLoader: { loadTarget: async () => ({ project: subgraphProject! }) } }
+          : {}),
       });
       try {
         await withTimeout(ready.promise, 'outer stream starts');
@@ -2429,8 +2972,8 @@ void describe('GraphProcessor scheduler boundaries', () => {
       const recorded = recorder.events.filter(
         (event) => event.type === 'nodeFinish' && event.data.nodeId === branch.id,
       );
-      assert.equal(recorded.length, 4);
-      if (route !== 'alias') {
+      assert.equal(recorded.length, route === 'cross-project-renamed' ? 0 : 4);
+      if (route !== 'alias' && route !== 'cross-project-renamed') {
         const replayEmitter = new Emittery<ProcessEvents>();
         const replayed: unknown[] = [];
         replayEmitter.on('nodeFinish', (event) => {
