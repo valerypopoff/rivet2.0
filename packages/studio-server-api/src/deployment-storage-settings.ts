@@ -8,21 +8,23 @@ import type {
   DeploymentStorageSettings,
   DeploymentStorageSettingsDraft,
 } from '../../studio-server-shared/app-settings-types.js';
-import {
-  normalizeBoundedText,
-  normalizeStrictEnumSetting,
-  toSettingsRecord,
-} from './app-settings/schema.js';
+import { normalizeBoundedText, normalizeStrictEnumSetting, toSettingsRecord } from './app-settings/schema.js';
 import { getAppSettingsBackendKind, VersionedSettingsRepository } from './app-settings/settings-repository.js';
 import { writeJsonSettingsFile } from './settings-file-writer.js';
 import { getAppDataRoot } from './security.js';
+import {
+  buildLegacyStorageUrl,
+  parseLegacyStorageUrl,
+  validateObjectStorageLocation,
+  type ObjectStorageLocation,
+} from './object-storage-location.js';
 import { badRequest } from './utils/httpError.js';
 
 export const DEPLOYMENT_STORAGE_SETTINGS_RELATIVE_PATH = path.join('settings', 'deployment-storage.json');
 
 export type DeploymentStorageRuntimeSettings = Omit<
   DeploymentStorageSettings,
-  'databaseConnectionStringConfigured' | 'storageAccessKeyConfigured'
+  'databaseConnectionStringConfigured' | 'storageAccessKeyConfigured' | 'deploymentManaged'
 > & {
   databaseConnectionString: string;
   storageAccessKey: string;
@@ -43,30 +45,15 @@ function normalizeSecret(value: unknown, previous: string, fieldLabel: string): 
 }
 
 function normalizeStorageMode(value: unknown, fallback: DeploymentStorageMode): DeploymentStorageMode {
-  return normalizeStrictEnumSetting(
-    value,
-    ['filesystem', 'managed'] as const,
-    fallback,
-  );
+  return normalizeStrictEnumSetting(value, ['filesystem', 'managed'] as const, fallback);
 }
 
 function normalizeDatabaseMode(value: unknown, fallback: DeploymentDatabaseMode): DeploymentDatabaseMode {
-  return normalizeStrictEnumSetting(
-    value,
-    ['local-docker', 'managed'] as const,
-    fallback,
-  );
+  return normalizeStrictEnumSetting(value, ['local-docker', 'managed'] as const, fallback);
 }
 
-function normalizeDatabaseSslMode(
-  value: unknown,
-  fallback: DeploymentDatabaseSslMode,
-): DeploymentDatabaseSslMode {
-  return normalizeStrictEnumSetting(
-    value,
-    ['disable', 'require', 'verify-full'] as const,
-    fallback,
-  );
+function normalizeDatabaseSslMode(value: unknown, fallback: DeploymentDatabaseSslMode): DeploymentDatabaseSslMode {
+  return normalizeStrictEnumSetting(value, ['disable', 'require', 'verify-full'] as const, fallback);
 }
 
 function defaultDatabaseSslMode(databaseMode: DeploymentDatabaseMode): DeploymentDatabaseSslMode {
@@ -97,6 +84,11 @@ function getDefaultSettings(source: AppSettingsSource = 'default'): DeploymentSt
     databaseSslMode: 'disable',
     databaseConnectionString: '',
     storageUrl: '',
+    objectStorageBucket: '',
+    objectStorageEndpoint: '',
+    objectStorageRegion: 'us-east-1',
+    objectStoragePrefix: 'workflows/',
+    objectStorageForcePathStyle: false,
     storageAccessKeyId: '',
     storageAccessKey: '',
     updatedAt: null,
@@ -171,19 +163,61 @@ function normalizeSettings(
   const raw = toSettingsRecord(value) as DeploymentStorageSettingsDraft & { updatedAt?: unknown };
   const storageMode = normalizeStorageMode(raw.storageMode, fallback.storageMode);
   const databaseMode = normalizeDatabaseMode(raw.databaseMode, fallback.databaseMode);
-  const previousManagedDatabaseConnectionString = fallback.databaseMode === 'managed'
-    ? fallback.databaseConnectionString
-    : '';
-  const localDockerDatabaseConnectionString = databaseMode === 'local-docker'
-    ? LOCAL_DOCKER_DATABASE_CONNECTION_STRING
-    : previousManagedDatabaseConnectionString;
+  const previousManagedDatabaseConnectionString =
+    fallback.databaseMode === 'managed' ? fallback.databaseConnectionString : '';
+  const localDockerDatabaseConnectionString =
+    databaseMode === 'local-docker' ? LOCAL_DOCKER_DATABASE_CONNECTION_STRING : previousManagedDatabaseConnectionString;
   const previousManagedStorageAccessKey = fallback.storageAccessKey;
+  const suppliedLocation = [
+    raw.objectStorageBucket,
+    raw.objectStorageEndpoint,
+    raw.objectStorageRegion,
+    raw.objectStoragePrefix,
+    raw.objectStorageForcePathStyle,
+  ].some((field) => field !== undefined);
+  if (
+    suppliedLocation &&
+    [
+      raw.objectStorageBucket,
+      raw.objectStorageEndpoint,
+      raw.objectStorageRegion,
+      raw.objectStoragePrefix,
+      raw.objectStorageForcePathStyle,
+    ].some((field) => field === undefined)
+  ) {
+    throw badRequest('Object storage bucket, endpoint, region, prefix, and path-style must be supplied together');
+  }
+  const storageUrl = normalizeSingleLine(raw.storageUrl, 'Object storage URL', MAX_URL_LENGTH) || fallback.storageUrl;
+  let location: ObjectStorageLocation;
+  if (suppliedLocation && (storageMode === 'managed' || raw.objectStorageBucket)) {
+    if (typeof raw.objectStorageForcePathStyle !== 'boolean') {
+      throw badRequest('Object storage path-style must be true or false');
+    }
+    location = validateObjectStorageLocation({
+      objectStorageBucket: normalizeSingleLine(raw.objectStorageBucket, 'Object storage bucket'),
+      objectStorageEndpoint: normalizeSingleLine(raw.objectStorageEndpoint, 'Object storage endpoint', MAX_URL_LENGTH),
+      objectStorageRegion: normalizeSingleLine(raw.objectStorageRegion, 'Object storage region'),
+      objectStoragePrefix: normalizeSingleLine(raw.objectStoragePrefix, 'Object storage prefix'),
+      objectStorageForcePathStyle: raw.objectStorageForcePathStyle,
+    });
+  } else if (storageUrl && (raw.storageUrl !== undefined || !fallback.objectStorageBucket)) {
+    location = validateObjectStorageLocation(parseLegacyStorageUrl(storageUrl));
+  } else {
+    location = {
+      objectStorageBucket: fallback.objectStorageBucket,
+      objectStorageEndpoint: fallback.objectStorageEndpoint,
+      objectStorageRegion: fallback.objectStorageRegion,
+      objectStoragePrefix: fallback.objectStoragePrefix,
+      objectStorageForcePathStyle: fallback.objectStorageForcePathStyle,
+    };
+  }
 
   const settings: DeploymentStorageRuntimeSettings = {
     storageMode,
-    artifactsHostPath: normalizeSingleLine(raw.artifactsHostPath, 'Filesystem artifacts host path', MAX_PATH_LENGTH)
-      || fallback.artifactsHostPath
-      || '../',
+    artifactsHostPath:
+      normalizeSingleLine(raw.artifactsHostPath, 'Filesystem artifacts host path', MAX_PATH_LENGTH) ||
+      fallback.artifactsHostPath ||
+      '../',
     databaseMode,
     databaseSslMode: getNextDatabaseSslMode(raw.databaseSslMode, databaseMode, fallback),
     databaseConnectionString: normalizeSecret(
@@ -191,9 +225,15 @@ function normalizeSettings(
       localDockerDatabaseConnectionString,
       'Managed PostgreSQL connection string',
     ),
-    storageUrl: normalizeSingleLine(raw.storageUrl, 'Object storage URL', MAX_URL_LENGTH) || fallback.storageUrl,
-    storageAccessKeyId: normalizeSingleLine(raw.storageAccessKeyId, 'Object storage access key ID') || fallback.storageAccessKeyId,
-    storageAccessKey: normalizeSecret(raw.storageAccessKey, previousManagedStorageAccessKey, 'Object storage secret access key'),
+    storageUrl: suppliedLocation && location.objectStorageBucket ? buildLegacyStorageUrl(location) : storageUrl,
+    ...location,
+    storageAccessKeyId:
+      normalizeSingleLine(raw.storageAccessKeyId, 'Object storage access key ID') || fallback.storageAccessKeyId,
+    storageAccessKey: normalizeSecret(
+      raw.storageAccessKey,
+      previousManagedStorageAccessKey,
+      'Object storage secret access key',
+    ),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
     source,
   };
@@ -210,6 +250,12 @@ function toPublicSettings(settings: DeploymentStorageRuntimeSettings): Deploymen
     databaseSslMode: settings.databaseSslMode,
     databaseConnectionStringConfigured: Boolean(settings.databaseConnectionString),
     storageUrl: settings.storageUrl,
+    objectStorageBucket: settings.objectStorageBucket,
+    objectStorageEndpoint: settings.objectStorageEndpoint,
+    objectStorageRegion: settings.objectStorageRegion,
+    objectStoragePrefix: settings.objectStoragePrefix,
+    objectStorageForcePathStyle: settings.objectStorageForcePathStyle,
+    deploymentManaged: process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated',
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKeyConfigured: Boolean(settings.storageAccessKey),
     updatedAt: settings.updatedAt,
@@ -237,6 +283,11 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
     databaseSslMode: settings.databaseSslMode,
     databaseConnectionString: settings.databaseConnectionString,
     storageUrl: settings.storageUrl,
+    objectStorageBucket: settings.objectStorageBucket,
+    objectStorageEndpoint: settings.objectStorageEndpoint,
+    objectStorageRegion: settings.objectStorageRegion,
+    objectStoragePrefix: settings.objectStoragePrefix,
+    objectStorageForcePathStyle: settings.objectStorageForcePathStyle,
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKey: settings.storageAccessKey,
     updatedAt: settings.updatedAt,
@@ -248,14 +299,28 @@ export async function projectDeploymentStorageSettings(): Promise<void> {
     return;
   }
   const settings = deploymentStorageSettingsRepository.readSync().value;
-  await writeJsonSettingsFile(getDeploymentStorageSettingsPath(), {
-    version: 1,
-    ...deploymentStorageSettingsRepository.descriptor.serialize(settings),
-  }, 0o600);
+  await writeJsonSettingsFile(
+    getDeploymentStorageSettingsPath(),
+    {
+      version: 1,
+      ...deploymentStorageSettingsRepository.descriptor.serialize(settings),
+    },
+    0o600,
+  );
 }
 
 export function readDeploymentStorageRuntimeSettingsSync(): DeploymentStorageRuntimeSettings {
   return deploymentStorageSettingsRepository.readSync().value;
+}
+
+export function assertKubernetesStorageModes(
+  settings: Pick<DeploymentStorageRuntimeSettings, 'storageMode' | 'databaseMode'>,
+): void {
+  if (settings.storageMode !== 'managed' || settings.databaseMode !== 'managed') {
+    throw new Error(
+      'Kubernetes requires managed workflow storage and managed PostgreSQL, but the authoritative settings row selects another mode. Refusing to start a pod with ephemeral local storage.',
+    );
+  }
 }
 
 export async function readDeploymentStorageSettings(): Promise<DeploymentStorageSettings> {
@@ -266,11 +331,27 @@ export async function writeDeploymentStorageSettings(
   draft: unknown,
   expectedRevision?: string,
 ): Promise<DeploymentStorageSettings> {
-  const saved = await deploymentStorageSettingsRepository.update((previous) => ({
-    ...normalizeSettings(draft, previous, 'app-settings'),
-    updatedAt: new Date().toISOString(),
-    source: 'app-settings',
-  }), expectedRevision);
+  if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
+    throw badRequest(
+      'Kubernetes deployment storage is managed by the deployment. Change it through a coordinated operator migration and rollout, not App Settings.',
+    );
+  }
+  const saved = await deploymentStorageSettingsRepository.update((previous) => {
+    const next = normalizeSettings(draft, previous, 'app-settings');
+    if (
+      previous.objectStorageBucket &&
+      (previous.objectStorageBucket !== next.objectStorageBucket ||
+        previous.objectStorageEndpoint !== next.objectStorageEndpoint ||
+        previous.objectStorageRegion !== next.objectStorageRegion ||
+        previous.objectStoragePrefix !== next.objectStoragePrefix ||
+        previous.objectStorageForcePathStyle !== next.objectStorageForcePathStyle)
+    ) {
+      throw badRequest(
+        'Changing the object-storage location or addressing of active managed storage requires a coordinated operator migration and restart; no objects were moved.',
+      );
+    }
+    return { ...next, updatedAt: new Date().toISOString(), source: 'app-settings' };
+  }, expectedRevision);
   return toPublicSettings(saved.value);
 }
 

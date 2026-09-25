@@ -46,7 +46,7 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
           env:
 {{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
           volumeMounts:

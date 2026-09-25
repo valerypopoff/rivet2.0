@@ -40,7 +40,7 @@ function parsePositiveInt(value, fallback) {
   return parsed;
 }
 
-function parseManagedStorageUrl(rawUrl) {
+function parseManagedStorageUrl(rawUrl, explicitBucket) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -53,33 +53,30 @@ function parseManagedStorageUrl(rawUrl) {
     .map((segment) => segment.trim())
     .filter(Boolean);
   const hostParts = url.hostname.split('.').filter(Boolean);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('Storage URL must use HTTP(S) without credentials, query, or fragment');
+  }
 
   if (pathSegments.length > 0) {
+    if (pathSegments.length !== 1 || (explicitBucket && pathSegments[0] !== explicitBucket)) {
+      throw new Error('Storage URL path must identify only the configured bucket');
+    }
     return {
       bucket: pathSegments[0],
       endpoint: url.origin,
-      region: hostParts[0] === 's3' && hostParts[1] ? hostParts[1] : null,
       forcePathStyle: true,
     };
   }
 
   if (hostParts.length >= 2) {
-    const bucket = hostParts[0];
-    let region = null;
-    let endpointHost = hostParts.slice(1).join('.');
-
-    if (url.hostname.endsWith('.digitaloceanspaces.com') && hostParts.length >= 3) {
-      region = hostParts[1] ?? null;
-      endpointHost = hostParts.slice(1).join('.');
-    } else if (hostParts[1] === 's3') {
-      region = hostParts[2] ?? null;
-      endpointHost = hostParts.slice(1).join('.');
+    const bucket = explicitBucket ?? hostParts[0];
+    if (!url.hostname.startsWith(`${bucket}.`)) {
+      throw new Error(`Storage URL host does not start with the configured bucket "${bucket}"`);
     }
 
     return {
       bucket,
-      endpoint: `${url.protocol}//${endpointHost}`,
-      region,
+      endpoint: `${url.protocol}//${url.host.slice(bucket.length + 1)}`,
       forcePathStyle: false,
     };
   }
@@ -145,7 +142,8 @@ function yamlBoolean(value) {
 export function buildKubernetesLauncherConfig(env) {
   const launcherName = 'dev-kubernetes';
   const storageUrl = readEnv(env, 'RIVET_K8S_STORAGE_URL');
-  const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl) : null;
+  const explicitBucket = readEnv(env, 'RIVET_K8S_STORAGE_BUCKET');
+  const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl, explicitBucket) : null;
   const imageTag = readEnv(env, 'RIVET_K8S_IMAGE_TAG') ?? 'dev';
   const context = readEnv(env, 'RIVET_K8S_CONTEXT') ?? 'docker-desktop';
   const localClusterProvider = inferLocalClusterProvider(context, readEnv(env, 'RIVET_K8S_CLUSTER_PROVIDER'));
@@ -183,11 +181,8 @@ export function buildKubernetesLauncherConfig(env) {
     databaseConnectionString: requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
     databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? 'require',
     objectStorage: {
-      bucket:
-        readEnv(env, 'RIVET_K8S_STORAGE_BUCKET') ??
-        parsedStorageUrl?.bucket ??
-        requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
-      region: readEnv(env, 'RIVET_K8S_STORAGE_REGION') ?? parsedStorageUrl?.region ?? 'us-east-1',
+      bucket: explicitBucket ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
+      region: requireEnv(env, 'RIVET_K8S_STORAGE_REGION', launcherName),
       endpoint: readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
       accessKeyId: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName),
       secretAccessKey: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY', launcherName),

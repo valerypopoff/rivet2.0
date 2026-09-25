@@ -7,7 +7,13 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 export async function startAsyncWorkflowProcess(
-  options: { graceSeconds?: number; storage?: Record<string, unknown>; failure?: 'foreground' | 'serialization' } = {},
+  options: {
+    endpointName?: string;
+    projectName?: string;
+    graceSeconds?: number;
+    storage?: Record<string, unknown>;
+    failure?: 'foreground' | 'serialization';
+  } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-async-acceptance-'));
   const reservation = net.createServer();
@@ -32,6 +38,8 @@ export async function startAsyncWorkflowProcess(
     RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE: 'enforce',
     RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS: '4',
     ...(options.storage ? { RIVET_ASYNC_TEST_STORAGE: JSON.stringify(options.storage) } : {}),
+    ...(options.endpointName ? { RIVET_ASYNC_TEST_ENDPOINT_NAME: options.endpointName } : {}),
+    ...(options.projectName ? { RIVET_ASYNC_TEST_PROJECT_NAME: options.projectName } : {}),
     ...(options.failure ? { RIVET_ASYNC_TEST_FAILURE: options.failure } : {}),
   });
   const child = fork(new URL('./workflow-async-server.mts', import.meta.url), [], {

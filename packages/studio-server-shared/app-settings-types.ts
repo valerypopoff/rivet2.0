@@ -191,6 +191,12 @@ export interface DeploymentStorageSettings {
   databaseSslMode: DeploymentDatabaseSslMode;
   databaseConnectionStringConfigured: boolean;
   storageUrl: string;
+  objectStorageBucket: string;
+  objectStorageEndpoint: string;
+  objectStorageRegion: string;
+  objectStoragePrefix: string;
+  objectStorageForcePathStyle: boolean;
+  deploymentManaged: boolean;
   storageAccessKeyId: string;
   storageAccessKeyConfigured: boolean;
   updatedAt: string | null;
@@ -204,6 +210,11 @@ export interface DeploymentStorageSettingsDraft {
   databaseSslMode?: unknown;
   databaseConnectionString?: unknown;
   storageUrl?: unknown;
+  objectStorageBucket?: unknown;
+  objectStorageEndpoint?: unknown;
+  objectStorageRegion?: unknown;
+  objectStoragePrefix?: unknown;
+  objectStorageForcePathStyle?: unknown;
   storageAccessKeyId?: unknown;
   storageAccessKey?: unknown;
 }

@@ -29,7 +29,7 @@ function loadKubernetesLauncherModule(): Promise<KubernetesLauncherModule> {
 
 test('kubernetes launcher config uses managed canonical envs and local rehearsal defaults', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
-  const config = buildKubernetesLauncherConfig({
+  const env = {
     RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
     RIVET_K8S_DATABASE_SSL_MODE: 'verify-full',
     RIVET_K8S_STORAGE_BUCKET: 'rivet-prod',
@@ -43,7 +43,8 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
     RIVET_K8S_PROXY_REPLICAS: '3',
     RIVET_K8S_WEB_REPLICAS: '2',
     RIVET_K8S_EXECUTION_REPLICAS: '4',
-  });
+  };
+  const config = buildKubernetesLauncherConfig(env);
 
   assert.equal(config.namespace, 'rivet-dev');
   assert.equal(config.release, 'rivet-dev');
@@ -68,11 +69,12 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.routeConfig.developmentAuthClients, '');
 });
 
-test('kubernetes launcher config can derive object storage settings from RIVET_K8S_STORAGE_URL', async () => {
+test('kubernetes launcher can derive legacy bucket and endpoint but requires an explicit signing region', async () => {
   const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
   const config = buildKubernetesLauncherConfig({
     RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
     RIVET_K8S_STORAGE_URL: 'https://my-bucket.s3.us-east-1.amazonaws.com',
+    RIVET_K8S_STORAGE_REGION: 'eu-central-9',
     RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'spaces-key',
     RIVET_K8S_STORAGE_ACCESS_KEY: 'spaces-secret',
     RIVET_KEY: 'shared-key',
@@ -80,9 +82,30 @@ test('kubernetes launcher config can derive object storage settings from RIVET_K
 
   assert.equal(config.objectStorage.bucket, 'my-bucket');
   assert.equal(config.objectStorage.endpoint, 'https://s3.us-east-1.amazonaws.com');
-  assert.equal(config.objectStorage.region, 'us-east-1');
+  assert.equal(config.objectStorage.region, 'eu-central-9');
   assert.equal(config.objectStorage.forcePathStyle, false);
   assert.equal(config.replicas.web, 1);
+});
+
+test('kubernetes launcher preserves dotted virtual-host buckets and custom endpoint ports', async () => {
+  const { buildKubernetesLauncherConfig } = await loadKubernetesLauncherModule();
+  const env = {
+    RIVET_K8S_DATABASE_CONNECTION_STRING: 'postgresql://user:pass@db.example.test/rivet',
+    RIVET_K8S_STORAGE_URL: 'https://my.bucket.objects.example.test:9443',
+    RIVET_K8S_STORAGE_BUCKET: 'my.bucket',
+    RIVET_K8S_STORAGE_REGION: 'provider-region-7',
+    RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'access',
+    RIVET_K8S_STORAGE_ACCESS_KEY: 'secret',
+    RIVET_KEY: 'shared-key',
+  };
+  const config = buildKubernetesLauncherConfig(env);
+  assert.equal(config.objectStorage.bucket, 'my.bucket');
+  assert.equal(config.objectStorage.endpoint, 'https://objects.example.test:9443');
+  assert.equal(config.objectStorage.region, 'provider-region-7');
+  assert.throws(
+    () => buildKubernetesLauncherConfig({ ...env, RIVET_K8S_STORAGE_REGION: '' }),
+    /RIVET_K8S_STORAGE_REGION/,
+  );
 });
 
 test('kubernetes launcher renderer emits chart values and secrets compatible with the local rehearsal workflow', async () => {

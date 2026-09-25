@@ -9,6 +9,22 @@
 {{- fail "The phase 4 chart shape requires workflowStorage.backend=managed and runtimeLibraries.backend=managed" -}}
 {{- end -}}
 
+{{- if or (empty .Values.objectStorage.bucket) (empty .Values.objectStorage.region) -}}
+{{- fail "objectStorage.bucket and objectStorage.region must be nonempty" -}}
+{{- end -}}
+{{- if and (not (empty .Values.objectStorage.endpoint)) (not (regexMatch "^https?://[^/@?#]+/?$" .Values.objectStorage.endpoint)) -}}
+{{- fail "objectStorage.endpoint must be an HTTP(S) origin without credentials, path, query, or fragment" -}}
+{{- end -}}
+{{- $workflowPrefix := .Values.objectStorage.prefix -}}
+{{- if or (empty $workflowPrefix) (hasPrefix "/" $workflowPrefix) (not (hasSuffix "/" $workflowPrefix)) (contains "\\" $workflowPrefix) (contains "//" $workflowPrefix) (regexMatch "(^|/)[.][.]?(/|$)" $workflowPrefix) (hasPrefix "runtime-libraries/" $workflowPrefix) (hasPrefix $workflowPrefix "runtime-libraries/") -}}
+{{- fail "objectStorage.prefix must be a safe relative path ending in / and must not overlap runtime-libraries/" -}}
+{{- end -}}
+{{- range $key := list "RIVET_DEPLOYMENT_STORAGE_BUCKET" "RIVET_DEPLOYMENT_STORAGE_REGION" "RIVET_DEPLOYMENT_STORAGE_ENDPOINT" "RIVET_DEPLOYMENT_STORAGE_PREFIX" "RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE" "RIVET_DEPLOYMENT_STORAGE_URL" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure objectStorage instead" $key) -}}
+{{- end -}}
+{{- end -}}
+
 {{- if hasKey .Values.vault "roleIdSecretName" -}}
 {{- fail "vault.roleIdSecretName is retired; use vault.role with the Vault Injector dotenv contract" -}}
 {{- end -}}

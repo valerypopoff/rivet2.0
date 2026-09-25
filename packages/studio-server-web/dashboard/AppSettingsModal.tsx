@@ -157,7 +157,7 @@ function OpenAppSettingsModal({
             name: 'storage',
             revert: storage.revert,
             save: storage.save,
-            savedMessage: 'Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.',
+            savedMessage: 'Saved. Restart Docker services to apply storage changes.',
           }]
         : activeTab === 'workflow-endpoints'
           ? [

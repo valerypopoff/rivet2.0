@@ -262,6 +262,7 @@ Current behavior:
   - `RIVET_KEY`
   - `RIVET_K8S_DATABASE_CONNECTION_STRING`
   - `RIVET_K8S_STORAGE_URL` or the explicit `RIVET_K8S_STORAGE_*` tuple
+  - `RIVET_K8S_STORAGE_REGION` is always required; the signing region is never inferred from a storage URL. With a dotted virtual-host bucket, also set `RIVET_K8S_STORAGE_BUCKET` explicitly.
   - `RIVET_K8S_STORAGE_ACCESS_KEY_ID`
   - `RIVET_K8S_STORAGE_ACCESS_KEY`
 - it starts a local `kubectl port-forward` for the proxy service so the app is available on `http://127.0.0.1:${RIVET_K8S_PROXY_PORT:-RIVET_PORT:-8080}`

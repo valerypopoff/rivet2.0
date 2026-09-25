@@ -17,6 +17,8 @@
 {{- end -}}
 {{- include "rivet.env.vaultDotenv" $root }}
 {{ include "rivet.env.databasePool" $root }}
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: "replicated"
 - name: RIVET_APP_DATA_ROOT
   value: {{ $appDataRoot | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_MODE
@@ -52,6 +54,8 @@
   value: {{ $root.Values.objectStorage.bucket | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_REGION
   value: {{ $root.Values.objectStorage.region | quote }}
+- name: RIVET_DEPLOYMENT_STORAGE_PREFIX
+  value: {{ $root.Values.objectStorage.prefix | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_ENDPOINT
   value: {{ $root.Values.objectStorage.endpoint | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE

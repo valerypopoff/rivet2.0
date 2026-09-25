@@ -163,8 +163,14 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     renderedChart,
     /name: RIVET_API_PROFILE\s*\n\s*value: "execution"[\s\S]*?- name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?- name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
   );
-  assert.match(renderedChart, /name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-execution\.[^\"]+:80\/internal\/workflows"/);
-  assert.match(renderedChart, /name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-api\.[^\"]+:80\/internal\/workflows-latest"/);
+  assert.match(
+    renderedChart,
+    /name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-execution\.[^\"]+:80\/internal\/workflows"/,
+  );
+  assert.match(
+    renderedChart,
+    /name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL\s*\n\s*value: "http:\/\/[^\"]+-api\.[^\"]+:80\/internal\/workflows-latest"/,
+  );
   assert.equal((renderedChart.match(/name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL/g) ?? []).length, 1);
   assert.equal((renderedChart.match(/name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL/g) ?? []).length, 1);
   const customInternalRoutes = await renderLocalKubernetesChartWithOverrides([
@@ -173,11 +179,23 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     'service.execution.port=8181',
     'service.api.port=8282',
   ]);
-  assert.match(customInternalRoutes, /value: "http:\/\/custom-rivet-execution\.default\.svc\.corp\.local:8181\/internal\/workflows"/);
-  assert.match(customInternalRoutes, /value: "http:\/\/custom-rivet-api\.default\.svc\.corp\.local:8282\/internal\/workflows-latest"/);
+  assert.match(
+    customInternalRoutes,
+    /value: "http:\/\/custom-rivet-execution\.default\.svc\.corp\.local:8181\/internal\/workflows"/,
+  );
+  assert.match(
+    customInternalRoutes,
+    /value: "http:\/\/custom-rivet-api\.default\.svc\.corp\.local:8282\/internal\/workflows-latest"/,
+  );
   const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
-  assert.match(apiEntrypoint, /deployment_internal_published_workflows_base_url="\$\{RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL "\$deployment_internal_published_workflows_base_url"/);
-  assert.match(apiEntrypoint, /deployment_internal_latest_workflows_base_url="\$\{RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL "\$deployment_internal_latest_workflows_base_url"/);
+  assert.match(
+    apiEntrypoint,
+    /deployment_internal_published_workflows_base_url="\$\{RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL "\$deployment_internal_published_workflows_base_url"/,
+  );
+  assert.match(
+    apiEntrypoint,
+    /deployment_internal_latest_workflows_base_url="\$\{RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-\}"[\s\S]*load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv[\s\S]*apply_deployment_owned_value RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL "\$deployment_internal_latest_workflows_base_url"/,
+  );
   await assertHelmTemplateFails(
     ['env.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL=http://wrong-service/internal/workflows'],
     /env\.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL is chart-owned/,
@@ -239,6 +257,8 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /initContainers:\s*\n\s*- name: deployment-storage-settings/);
   assert.match(renderedChart, /node \/opt\/rivet\/lib\/bootstrap-deployment-storage-settings\.mjs/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
+  assert.match(renderedChart, /name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"/);
+  assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_PREFIX\s*\n\s*value: "workflows\/"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX\s*\n\s*value: "10"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID/);
@@ -311,6 +331,122 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /name: RIVET_STORAGE_MODE\b|name: RIVET_DATABASE_MODE\b|name: RIVET_DATABASE_CONNECTION_STRING\b|name: RIVET_STORAGE_ACCESS_KEY_ID\b/,
   );
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
+});
+
+test('Kubernetes restores chart-owned storage values after Vault dotenv loading', () => {
+  const loadEnv = readRepoFile('deploy/studio-server/images/lib/load-env.sh');
+  assert.match(loadEnv, /load_optional_dotenv_preserving_deployment_storage\(\)/);
+  for (const name of [
+    'RIVET_DEPLOYMENT_TOPOLOGY',
+    'RIVET_DEPLOYMENT_STORAGE_MODE',
+    'RIVET_DEPLOYMENT_DATABASE_MODE',
+    'RIVET_DEPLOYMENT_DATABASE_SSL_MODE',
+    'RIVET_DEPLOYMENT_DATABASE_POOL_MAX',
+    'RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING',
+    'RIVET_DEPLOYMENT_DATABASE_HOST',
+    'RIVET_DEPLOYMENT_DATABASE_PORT',
+    'RIVET_DEPLOYMENT_DATABASE_NAME',
+    'RIVET_DEPLOYMENT_DATABASE_USERNAME',
+    'RIVET_DEPLOYMENT_STORAGE_BUCKET',
+    'RIVET_DEPLOYMENT_STORAGE_REGION',
+    'RIVET_DEPLOYMENT_STORAGE_ENDPOINT',
+    'RIVET_DEPLOYMENT_STORAGE_PREFIX',
+    'RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE',
+    'RIVET_APP_SETTINGS_BACKEND',
+    'RIVET_APP_DATA_ROOT',
+  ]) {
+    assert.match(loadEnv, new RegExp(`export ${name}=`));
+  }
+  for (const file of [
+    'deploy/studio-server/images/api/entrypoint.sh',
+    'deploy/studio-server/helm/templates/_pod.tpl',
+    'deploy/studio-server/helm/templates/backend-statefulset.yaml',
+    'deploy/studio-server/helm/templates/execution-deployment.yaml',
+    'deploy/studio-server/helm/templates/evaluation-deployment.yaml',
+    'deploy/studio-server/helm/templates/workflow-schema-migration-job.yaml',
+  ]) {
+    assert.match(readRepoFile(file), /load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv/, file);
+  }
+});
+
+test('Vault may supply S3 credentials but cannot override Kubernetes object location', (context) => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
+  if (process.platform === 'win32' && !fs.existsSync(shell)) {
+    context.skip('A POSIX shell is unavailable on this Windows host');
+    return;
+  }
+  const output = execFileSync(
+    shell,
+    [
+      '-c',
+      '. deploy/studio-server/images/lib/load-env.sh\n' +
+        'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; RIVET_DEPLOYMENT_STORAGE_MODE=filesystem; RIVET_DEPLOYMENT_STORAGE_BUCKET=wrong; RIVET_DEPLOYMENT_STORAGE_PREFIX=wrong/; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
+        'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
+        'printf "%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$RIVET_DEPLOYMENT_STORAGE_MODE" "$RIVET_DEPLOYMENT_STORAGE_BUCKET" "$RIVET_DEPLOYMENT_STORAGE_PREFIX" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY"',
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
+        RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
+        RIVET_DEPLOYMENT_STORAGE_BUCKET: 'chart-bucket',
+        RIVET_DEPLOYMENT_STORAGE_PREFIX: 'tenant/workflows/',
+      },
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(output, 'replicated|managed|chart-bucket|tenant/workflows/|from-vault');
+});
+
+test('Vault may supply a database password but cannot redirect Kubernetes PostgreSQL', (context) => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
+  if (process.platform === 'win32' && !fs.existsSync(shell)) {
+    context.skip('A POSIX shell is unavailable on this Windows host');
+    return;
+  }
+  const output = execFileSync(
+    shell,
+    [
+      '-c',
+      '. deploy/studio-server/images/lib/load-env.sh\n' +
+        'load_optional_dotenv() { RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING=postgres://wrong; RIVET_DEPLOYMENT_DATABASE_HOST=wrong; RIVET_DEPLOYMENT_DATABASE_PORT=9999; RIVET_DEPLOYMENT_DATABASE_NAME=wrong; RIVET_DEPLOYMENT_DATABASE_USERNAME=wrong; RIVET_DEPLOYMENT_DATABASE_POOL_MAX=999; RIVET_DEPLOYMENT_DATABASE_PASSWORD=from-vault; }\n' +
+        'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
+        'printf "%s|%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING" "$RIVET_DEPLOYMENT_DATABASE_HOST" "$RIVET_DEPLOYMENT_DATABASE_PORT" "$RIVET_DEPLOYMENT_DATABASE_NAME" "$RIVET_DEPLOYMENT_DATABASE_USERNAME" "$RIVET_DEPLOYMENT_DATABASE_POOL_MAX" "$RIVET_DEPLOYMENT_DATABASE_PASSWORD"',
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
+        RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING: '',
+        RIVET_DEPLOYMENT_DATABASE_HOST: 'chart-postgres',
+        RIVET_DEPLOYMENT_DATABASE_PORT: '5432',
+        RIVET_DEPLOYMENT_DATABASE_NAME: 'rivet',
+        RIVET_DEPLOYMENT_DATABASE_USERNAME: 'rivet-user',
+        RIVET_DEPLOYMENT_DATABASE_POOL_MAX: '10',
+      },
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(output, '|chart-postgres|5432|rivet|rivet-user|10|from-vault');
+});
+
+test('chart passes the workflow prefix to bootstrap and rejects unsafe object namespaces', async () => {
+  const rendered = await renderLocalKubernetesChartWithOverrides(['objectStorage.prefix=tenant/workflows/']);
+  assert.match(rendered, /name: RIVET_DEPLOYMENT_STORAGE_PREFIX\s*\n\s*value: "tenant\/workflows\/"/);
+  await assertHelmTemplateFails(
+    ['objectStorage.prefix=../workflows/'],
+    /objectStorage\.prefix must be a safe relative path/,
+  );
+  await assertHelmTemplateFails(
+    ['objectStorage.prefix=runtime-libraries/workflows/'],
+    /objectStorage\.prefix must be a safe relative path/,
+  );
+  await assertHelmTemplateFails(
+    ['objectStorage.endpoint=https://objects.example.test/path'],
+    /objectStorage\.endpoint must be an HTTP\(S\) origin/,
+  );
 });
 
 test('chart isolates hosted Evaluation workers with chart-owned quotas and a dedicated internal Service', async () => {
@@ -393,7 +529,7 @@ test('chart owns the published execution admission policy only on execution API 
   );
   assert.match(
     apiEntrypoint,
-    /deployment_published_execution_admission_mode="\$\{RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "\$deployment_published_execution_admission_mode"/,
+    /deployment_published_execution_admission_mode="\$\{RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_ADMISSION_MODE:-\}"[\s\S]*load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv[\s\S]*RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE "\$deployment_published_execution_admission_mode"/,
   );
 
   await assertHelmTemplateFails(
@@ -531,7 +667,7 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
   );
   assert.match(
     apiEntrypoint,
-    /deployment_metrics_enabled="\$\{RIVET_DEPLOYMENT_METRICS_ENABLED:-\}"[\s\S]*?load_optional_dotenv \/vault\/dotenv[\s\S]*?RIVET_METRICS_ENABLED "\$deployment_metrics_enabled"/,
+    /deployment_metrics_enabled="\$\{RIVET_DEPLOYMENT_METRICS_ENABLED:-\}"[\s\S]*?load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv[\s\S]*?RIVET_METRICS_ENABLED "\$deployment_metrics_enabled"/,
   );
   await assertHelmTemplateFails(
     ['metrics.prometheusRule.failureModeAlerts.enabled=true'],
@@ -682,7 +818,7 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js/,
+    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/project-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,
@@ -717,7 +853,7 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.doesNotMatch(kubernetesVerifier, /managedWorkflowSchemaVersion=3/);
   assert.match(
     readRepoFile('deploy/studio-server/images/api/entrypoint.sh'),
-    /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
+    /deployment_managed_workflow_schema_mode="\$\{RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE:-\}"[\s\S]*load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv[\s\S]*RIVET_MANAGED_WORKFLOW_SCHEMA_MODE="\$deployment_managed_workflow_schema_mode"/,
   );
 });
 
