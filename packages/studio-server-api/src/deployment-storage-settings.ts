@@ -96,6 +96,70 @@ function getDefaultSettings(source: AppSettingsSource = 'default'): DeploymentSt
   };
 }
 
+function deploymentEnv(name: string): string {
+  return process.env[name]?.trim() ?? '';
+}
+
+export function readDeploymentStorageBootstrapSettings(): DeploymentStorageRuntimeSettings {
+  const explicitDatabaseUrl = deploymentEnv('RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING');
+  const host = deploymentEnv('RIVET_DEPLOYMENT_DATABASE_HOST');
+  const database = deploymentEnv('RIVET_DEPLOYMENT_DATABASE_NAME');
+  const username = deploymentEnv('RIVET_DEPLOYMENT_DATABASE_USERNAME');
+  const password = process.env.RIVET_DEPLOYMENT_DATABASE_PASSWORD ?? '';
+  if (!explicitDatabaseUrl && (!host || !database || !username || !password)) {
+    throw new Error('Managed deployment storage requires a PostgreSQL connection string or complete host, database, username and password settings.');
+  }
+  const databaseConnectionString = explicitDatabaseUrl ||
+    `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${deploymentEnv('RIVET_DEPLOYMENT_DATABASE_PORT') || '5432'}/${encodeURIComponent(database)}`;
+  const bucket = deploymentEnv('RIVET_DEPLOYMENT_STORAGE_BUCKET');
+  const legacyUrl = deploymentEnv('RIVET_DEPLOYMENT_STORAGE_URL');
+  if (bucket && legacyUrl) {
+    throw new Error('RIVET_DEPLOYMENT_STORAGE_URL conflicts with the chart-owned bucket and S3 location fields.');
+  }
+  const pathStyle = deploymentEnv('RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE').toLowerCase();
+  if (pathStyle && !['true', 'false'].includes(pathStyle)) {
+    throw new Error('RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE must be true or false.');
+  }
+  const location = bucket ? validateObjectStorageLocation({
+    objectStorageBucket: bucket,
+    objectStorageEndpoint: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_ENDPOINT').replace(/\/+$/, ''),
+    objectStorageRegion: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_REGION'),
+    objectStoragePrefix: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_PREFIX') || 'workflows/',
+    objectStorageForcePathStyle: pathStyle === 'true',
+  }) : undefined;
+  if (!location && !legacyUrl) {
+    throw new Error('Managed deployment storage requires an object storage bucket or URL.');
+  }
+  const settings = normalizeSettings({
+    storageMode: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_MODE') || 'managed',
+    databaseMode: deploymentEnv('RIVET_DEPLOYMENT_DATABASE_MODE') || 'managed',
+    databaseSslMode: deploymentEnv('RIVET_DEPLOYMENT_DATABASE_SSL_MODE') || 'require',
+    databaseConnectionString,
+    storageUrl: location ? buildLegacyStorageUrl(location) : legacyUrl,
+    ...location,
+    storageAccessKeyId: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID'),
+    storageAccessKey: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY'),
+  });
+  assertKubernetesStorageModes(settings);
+  return settings;
+}
+
+export function getDeploymentStorageBootstrapDrift(active: DeploymentStorageRuntimeSettings): string[] {
+  const bootstrap = readDeploymentStorageBootstrapSettings();
+  const checks = [
+    ['databaseConnectionString', 'PostgreSQL connection or credentials'],
+    ['databaseSslMode', 'PostgreSQL SSL mode'],
+    ['objectStorageBucket', 'object storage bucket'],
+    ['objectStorageEndpoint', 'object storage endpoint'],
+    ['objectStorageRegion', 'object storage region'],
+    ['objectStoragePrefix', 'object storage prefix'],
+    ['objectStorageForcePathStyle', 'object storage path style'],
+    ['storageAccessKeyId', 'object storage credentials'],
+    ['storageAccessKey', 'object storage credentials'],
+  ] as const;
+  return [...new Set(checks.filter(([field]) => bootstrap[field] !== active[field]).map(([, label]) => label))];
+}
+
 function validateUrl(value: string, fieldLabel: string): void {
   if (!value) {
     return;
@@ -275,6 +339,13 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
   currentVersion: 1,
   getPath: getDeploymentStorageSettingsPath,
   getDefault: getDefaultSettings,
+  getManagedBootstrap: () => {
+    if (process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated') return undefined;
+    if (process.env.RIVET_DEPLOYMENT_STORAGE_SEED_MISSING !== '1') {
+      throw new Error('The authoritative deployment-storage settings row is missing. Run the Kubernetes migration Job before serving.');
+    }
+    return readDeploymentStorageBootstrapSettings();
+  },
   parseStored: (stored) => normalizeSettings(stored, getDefaultSettings(), 'app-settings'),
   serialize: (settings) => ({
     storageMode: settings.storageMode,
@@ -295,7 +366,7 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
 });
 
 export async function projectDeploymentStorageSettings(): Promise<void> {
-  if (getAppSettingsBackendKind() !== 'postgres') {
+  if (getAppSettingsBackendKind() !== 'postgres' || process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
     return;
   }
   const settings = deploymentStorageSettingsRepository.readSync().value;

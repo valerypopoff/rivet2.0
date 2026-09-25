@@ -306,6 +306,60 @@ test('deployment bootstrap persists Helm S3 fields without relying on URL infere
   }
 });
 
+test('managed Kubernetes storage bootstrap is validated in memory without a settings file', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-in-memory-bootstrap-'));
+  try {
+    await withScopedEnv([
+      'RIVET_APP_DATA_ROOT', 'RIVET_DEPLOYMENT_STORAGE_MODE', 'RIVET_DEPLOYMENT_DATABASE_MODE',
+      'RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING', 'RIVET_DEPLOYMENT_DATABASE_SSL_MODE',
+      'RIVET_DEPLOYMENT_STORAGE_BUCKET', 'RIVET_DEPLOYMENT_STORAGE_ENDPOINT',
+      'RIVET_DEPLOYMENT_STORAGE_REGION', 'RIVET_DEPLOYMENT_STORAGE_PREFIX',
+      'RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE', 'RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID',
+      'RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY', 'RIVET_DEPLOYMENT_STORAGE_URL',
+    ] as const, {
+      RIVET_APP_DATA_ROOT: root,
+      RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
+      RIVET_DEPLOYMENT_DATABASE_MODE: 'managed',
+      RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING: 'postgresql://user:pass@db.example.test/rivet',
+      RIVET_DEPLOYMENT_DATABASE_SSL_MODE: 'require',
+      RIVET_DEPLOYMENT_STORAGE_BUCKET: 'custom-bucket',
+      RIVET_DEPLOYMENT_STORAGE_ENDPOINT: 'https://objects.example.test:9443',
+      RIVET_DEPLOYMENT_STORAGE_REGION: 'custom-region-7',
+      RIVET_DEPLOYMENT_STORAGE_PREFIX: 'tenant/workflows/',
+      RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE: 'true',
+      RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID: 'access',
+      RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY: 'secret',
+    }, () => {
+      const settings = deploymentStorageSettings.readDeploymentStorageBootstrapSettings();
+      assert.equal(settings.objectStoragePrefix, 'tenant/workflows/');
+      assert.equal(settings.objectStorageRegion, 'custom-region-7');
+      assert.equal(settings.databaseConnectionString, 'postgresql://user:pass@db.example.test/rivet');
+      assert.deepEqual(deploymentStorageSettings.getDeploymentStorageBootstrapDrift(settings), []);
+      const drift = deploymentStorageSettings.getDeploymentStorageBootstrapDrift({
+        ...settings,
+        databaseConnectionString: 'postgresql://user:old-secret@db.example.test/rivet',
+        objectStoragePrefix: 'previous/workflows/',
+        storageAccessKey: 'old-object-secret',
+      });
+      assert.deepEqual(drift, [
+        'PostgreSQL connection or credentials',
+        'object storage prefix',
+        'object storage credentials',
+      ]);
+      assert.doesNotMatch(drift.join(','), /old-secret|old-object-secret|pass/);
+      assert.equal(fs.existsSync(path.join(root, 'settings', 'deployment-storage.json')), false);
+      process.env.RIVET_DEPLOYMENT_STORAGE_URL = 'https://wrong.example.test';
+      assert.throws(() => deploymentStorageSettings.readDeploymentStorageBootstrapSettings(), /conflicts with the chart-owned bucket/);
+      delete process.env.RIVET_DEPLOYMENT_STORAGE_URL;
+      process.env.RIVET_DEPLOYMENT_STORAGE_REGION = '';
+      assert.throws(() => deploymentStorageSettings.readDeploymentStorageBootstrapSettings(), /Object storage region/);
+      assert.equal(fs.existsSync(path.join(root, 'settings')), false);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('deployment bootstrap requires a signing region for a new explicit bucket', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-storage-bootstrap-region-'));
   try {
@@ -457,7 +511,7 @@ test('replicated deployment refuses storage writes even when invoked directly', 
   });
 });
 
-test('Kubernetes projection refuses an authoritative local-storage row', () => {
+test('Kubernetes storage validation refuses an authoritative local-storage row', () => {
   assert.throws(
     () =>
       deploymentStorageSettings.assertKubernetesStorageModes({ storageMode: 'filesystem', databaseMode: 'managed' }),

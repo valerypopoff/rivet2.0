@@ -53,6 +53,10 @@
 {{- fail "runtimeLibraries.objectStoragePrefix must remain runtime-libraries/ in phase 3 because the current managed runtime-library backend uses a fixed object-storage prefix" -}}
 {{- end -}}
 
+{{- if and .Values.compatibility.legacyStartupSettingsFiles .Values.workflowSchema.migrationJob.enabled -}}
+{{- fail "compatibility.legacyStartupSettingsFiles is reserved for verified predecessor rollback with the migration Job disabled" -}}
+{{- end -}}
+
 {{- if hasKey .Values.env "RIVET_MANAGED_WORKFLOW_SCHEMA_MODE" -}}
 {{- fail "env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE is chart-owned; use workflowSchema.migrationJob.enabled and keep API workloads verify-only" -}}
 {{- end -}}

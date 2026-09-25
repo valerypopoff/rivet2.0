@@ -254,8 +254,11 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     renderedChart,
     /name: RIVET_EXECUTION_ENVIRONMENT_API_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/api\/workflows\/execution-environment"/,
   );
-  assert.match(renderedChart, /initContainers:\s*\n\s*- name: deployment-storage-settings/);
-  assert.match(renderedChart, /node \/opt\/rivet\/lib\/bootstrap-deployment-storage-settings\.mjs/);
+  assert.doesNotMatch(renderedChart, /- name: deployment-storage-settings|- name: managed-app-settings-projection/);
+  assert.doesNotMatch(renderedChart, /bootstrap-deployment-storage-settings\.mjs/);
+  assert.match(renderedChart, /- name: api-runtime-config-compatibility/);
+  assert.match(renderedChart, /- name: executor-runtime-config-compatibility/);
+  assert.match(renderedChart, /name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/internal\/executor-runtime-config"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_MODE\s*\n\s*value: "managed"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_TOPOLOGY\s*\n\s*value: "replicated"/);
   assert.match(renderedChart, /name: RIVET_DEPLOYMENT_STORAGE_PREFIX\s*\n\s*value: "workflows\/"/);
@@ -285,36 +288,6 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /emptyDir: \{\}/,
     'the managed local render must not leave writable emptyDirs unbounded',
   );
-  const initContainersWithResources =
-    renderedChart.match(
-      /- name: (?:deployment-storage-settings|managed-app-settings-projection)[\s\S]*?resources:\s*\n\s*requests:/g,
-    ) ?? [];
-  assert.equal(
-    initContainersWithResources.length,
-    4,
-    'every managed-storage init container should inherit the owning workload resource policy',
-  );
-  assert.equal(
-    (renderedChart.match(/- name: managed-app-settings-projection/g) ?? []).length,
-    2,
-    'control and execution pods should project managed settings before containers start',
-  );
-  const projectionEnvironmentBlocks = [
-    ...renderedChart.matchAll(
-      /- name: managed-app-settings-projection[\s\S]*?\n\s+env:\s*\n([\s\S]*?)\n\s+volumeMounts:/g,
-    ),
-  ].map((match) => match[1]);
-  assert.equal(projectionEnvironmentBlocks.length, 2);
-  for (const environmentBlock of projectionEnvironmentBlocks) {
-    const environmentNames = [...environmentBlock.matchAll(/^\s+- name: (RIVET_[A-Z0-9_]+)\s*$/gm)].map(
-      (match) => match[1],
-    );
-    assert.equal(
-      new Set(environmentNames).size,
-      environmentNames.length,
-      'managed settings projection must not declare duplicate Rivet environment variables',
-    );
-  }
   assert.match(renderedChart, /project-managed-app-settings\.js/);
   assert.match(renderedChart, /name: RIVET_APP_SETTINGS_BACKEND\s*\n\s*value: "postgres"/);
   assert.match(
@@ -331,6 +304,21 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /name: RIVET_STORAGE_MODE\b|name: RIVET_DATABASE_MODE\b|name: RIVET_DATABASE_CONNECTION_STRING\b|name: RIVET_STORAGE_ACCESS_KEY_ID\b/,
   );
   assert.doesNotMatch(renderedChart, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
+});
+
+test('verified predecessor rollback can restore the older images startup settings readers', async () => {
+  const rendered = await renderLocalKubernetesChartWithOverrides([
+    'compatibility.legacyStartupSettingsFiles=true',
+    'workflowSchema.migrationJob.enabled=false',
+  ]);
+  assert.match(rendered, /- name: deployment-storage-settings/);
+  assert.match(rendered, /- name: managed-app-settings-projection/);
+  assert.doesNotMatch(rendered, /- name: api-runtime-config-compatibility/);
+  assert.doesNotMatch(rendered, /- name: executor-runtime-config-compatibility/);
+  await assert.rejects(
+    renderLocalKubernetesChartWithOverrides(['compatibility.legacyStartupSettingsFiles=true']),
+    /reserved for verified predecessor rollback/,
+  );
 });
 
 test('Kubernetes restores chart-owned storage values after Vault dotenv loading', () => {
@@ -359,10 +347,7 @@ test('Kubernetes restores chart-owned storage values after Vault dotenv loading'
   }
   for (const file of [
     'deploy/studio-server/images/api/entrypoint.sh',
-    'deploy/studio-server/helm/templates/_pod.tpl',
-    'deploy/studio-server/helm/templates/backend-statefulset.yaml',
-    'deploy/studio-server/helm/templates/execution-deployment.yaml',
-    'deploy/studio-server/helm/templates/evaluation-deployment.yaml',
+    'deploy/studio-server/images/executor/entrypoint.sh',
     'deploy/studio-server/helm/templates/workflow-schema-migration-job.yaml',
   ]) {
     assert.match(readRepoFile(file), /load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv/, file);
@@ -818,7 +803,7 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /bootstrap-deployment-storage-settings\.mjs; RIVET_APP_SETTINGS_BACKEND=file RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/project-managed-app-settings\.js/,
+    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; RIVET_DEPLOYMENT_STORAGE_SEED_MISSING=1 node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/project-managed-app-settings\.js/,
   );
   assert.match(
     renderedChartWithRollbackWindow,

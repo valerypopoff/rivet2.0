@@ -119,6 +119,7 @@ const relevantEnvKeys = [
   'RIVET_REQUIRE_WORKFLOW_KEY',
   'RIVET_UI_TOKEN_FREE_HOSTS',
   'RIVET_KEY',
+  'RIVET_DEPLOYMENT_TOPOLOGY',
   'OPENAI_API_KEY',
   'UI_MANAGED_ENVIRONMENT_VARIABLE_TEST',
 ] as const;
@@ -745,6 +746,26 @@ test('Node executor proxy settings API stays behind trusted proxy auth', async (
       assert.equal(response.status, 403);
     } finally {
       console.error = originalConsoleError;
+      await server.close();
+    }
+  });
+});
+
+test('managed executor runtime configuration is loopback and service-token restricted', async () => {
+  await withAppSettingsEnv(async () => {
+    process.env.RIVET_DEPLOYMENT_TOPOLOGY = 'replicated';
+    const server = await startServer();
+    try {
+      const url = `${server.baseUrl}/internal/executor-runtime-config`;
+      assert.equal((await fetch(url)).status, 403);
+      assert.equal((await fetch(url, { headers: trustedProxyHeaders() })).status, 403);
+      const response = await fetch(url, { headers: trustedExecutorHeaders() });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const body = await response.json() as { protocolVersion: number; proxy: { httpProxy: string } };
+      assert.equal(body.protocolVersion, 1);
+      assert.equal(body.proxy.httpProxy, '');
+    } finally {
       await server.close();
     }
   });

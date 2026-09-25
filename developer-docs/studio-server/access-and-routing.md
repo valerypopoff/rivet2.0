@@ -531,14 +531,14 @@ The current runtime split does not make `RIVET_APP_DATA_ROOT` authoritative for 
 
 - workflow truth remains Postgres plus object storage
 - `Code` node package resolution comes from the managed runtime-library cache under `RIVET_RUNTIME_LIBRARIES_ROOT`
-- execution-plane `app-data` is disposable compatibility state in Kubernetes, not workflow blob storage or settings authority; each execution pod uses its own `emptyDir`, reads encrypted settings from PostgreSQL, and receives only narrow pod-local projections where an external process still expects a file
+- execution-plane `app-data` is disposable cache/state in Kubernetes, not workflow blob storage or settings authority; each execution pod uses its own `emptyDir` and reads encrypted settings from PostgreSQL without deployment-storage or Node-proxy startup files
 
 Important limitation:
 
 - API-hosted published/latest execution does not currently register package plugins from local app-data
 - package-plugin install/load remains a control-plane and editor/executor concern
 - the execution-plane `app-data` contract is therefore intentionally minimal today; plugin-backed published endpoint execution is not something the current split newly enables
-- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` use the active settings repository. Single-host deployments persist private JSON files under app data. Kubernetes stores the same typed domains as encrypted, revisioned PostgreSQL rows; execution replicas read them directly and the co-located editor executor receives a pod-local Node-proxy projection. Optional hosted executor/default-debugger websocket URL overrides remain blank by default, which keeps the normal request-host-derived websocket URLs.
+- App Settings -> `Storage`, `Run recordings`, `Web apps`, `Workflow endpoints`, and `Node executor proxy` use the active settings repository. Single-host deployments persist private JSON files under app data. Kubernetes stores the same typed domains as encrypted, revisioned PostgreSQL rows; execution replicas read them directly and the co-located editor executor receives an authenticated loopback startup snapshot plus proxy-setting refreshes. Optional hosted executor/default-debugger websocket URL overrides remain blank by default, which keeps the normal request-host-derived websocket URLs.
 
 ## Latest Debugger Model
 

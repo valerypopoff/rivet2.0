@@ -1,5 +1,6 @@
 import { badRequest } from '../../utils/httpError.js';
 import { readDeploymentStorageRuntimeSettingsSync } from '../../deployment-storage-settings.js';
+import type { DeploymentStorageRuntimeSettings } from '../../deployment-storage-settings.js';
 
 export type WorkflowStorageBackendMode = 'filesystem' | 'managed';
 export type ManagedWorkflowDatabaseMode = 'local-docker' | 'managed';
@@ -38,7 +39,12 @@ export function isManagedWorkflowStorageEnabled(): boolean {
 }
 
 export function getManagedWorkflowStorageConfig(): ManagedWorkflowStorageConfig {
-  const deploymentSettings = readDeploymentStorageRuntimeSettingsSync();
+  return getManagedWorkflowStorageConfigFromSettings(readDeploymentStorageRuntimeSettingsSync());
+}
+
+export function getManagedWorkflowStorageConfigFromSettings(
+  deploymentSettings: DeploymentStorageRuntimeSettings,
+): ManagedWorkflowStorageConfig {
 
   if (deploymentSettings.storageMode !== 'managed') {
     throw badRequest(

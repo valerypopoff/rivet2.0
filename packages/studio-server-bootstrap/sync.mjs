@@ -265,8 +265,8 @@ function createReplicaStatusReporter(pool, config) {
   };
 }
 
-export function createManagedRuntimeLibrariesSyncController() {
-  const config = getManagedRuntimeLibrariesConfig();
+export function createManagedRuntimeLibrariesSyncController(runtimeSettings) {
+  const config = getManagedRuntimeLibrariesConfig(runtimeSettings);
   if (!config.objectStorageBucket || !config.objectStorageAccessKeyId || !config.objectStorageSecretAccessKey) {
     throw new Error('Managed runtime-library sync requires object-storage bucket and credentials');
   }

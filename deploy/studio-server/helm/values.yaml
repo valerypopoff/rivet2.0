@@ -352,6 +352,10 @@ appSettings:
     # Optional one-time source from deployments that used the old shared app-data PVC.
     existingClaimName: ''
 
+compatibility:
+  # Set only by the verified forward-rollback command for predecessor images.
+  legacyStartupSettingsFiles: false
+
 tmpVolume:
   enabled: true
   name: var-tmp

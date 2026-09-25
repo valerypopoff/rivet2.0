@@ -258,6 +258,10 @@
   value: /data/runtime-libraries
 - name: RIVET_RUNTIME_PROCESS_ROLE
   value: executor
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: replicated
+- name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL
+  value: {{ printf "http://127.0.0.1:%v/internal/executor-runtime-config" .apiPort | quote }}
 - name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER
   value: editor
 - name: RIVET_LLM_PROFILE_HEALTH_API_URL

@@ -27,6 +27,7 @@ export type SettingsRepositoryDescriptor<T> = {
   currentVersion: number;
   getPath(): string;
   getDefault(): T;
+  getManagedBootstrap?(): T | undefined;
   parseStored(stored: Record<string, unknown>): T;
   serialize(value: T): Record<string, unknown>;
   migrations?: Readonly<Record<number, SettingsMigration>>;
@@ -344,7 +345,7 @@ export class VersionedSettingsRepository<T> {
           }
           initialValue = recovered;
         } else {
-          initialValue = this.descriptor.getDefault();
+          initialValue = this.descriptor.getManagedBootstrap?.() ?? this.descriptor.getDefault();
         }
       }
     }

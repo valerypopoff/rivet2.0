@@ -15,6 +15,11 @@ let pollerStarted = false;
 let pollerHandle = null;
 let controller = null;
 let retryHandle = null;
+let managedRuntimeSettings = null;
+
+function managedRuntimeEnabled() {
+  return isManagedRuntimeLibrariesEnabled(managedRuntimeSettings);
+}
 
 function clearSetupRetry() {
   if (retryHandle) {
@@ -24,7 +29,7 @@ function clearSetupRetry() {
 }
 
 function scheduleSetupRetry() {
-  if (retryHandle || !isManagedRuntimeLibrariesEnabled()) {
+  if (retryHandle || !managedRuntimeEnabled()) {
     return;
   }
 
@@ -38,7 +43,7 @@ function scheduleSetupRetry() {
 }
 
 async function prepareManagedRuntimeLibraries(force = true) {
-  if (!isManagedRuntimeLibrariesEnabled()) {
+  if (!managedRuntimeEnabled()) {
     return;
   }
 
@@ -73,13 +78,13 @@ async function setupManagedRuntimeLibrariesSync() {
     return setupPromise;
   }
 
-  if (!isManagedRuntimeLibrariesEnabled()) {
+  if (!managedRuntimeEnabled()) {
     globalThis.__RIVET_PREPARE_RUNTIME_LIBRARIES__ = async () => {};
     return;
   }
 
   setupPromise = (async () => {
-    controller = createManagedRuntimeLibrariesSyncController();
+    controller = createManagedRuntimeLibrariesSyncController(managedRuntimeSettings);
     await controller.initialize();
     clearSetupRetry();
 
@@ -121,3 +126,11 @@ async function disposeManagedRuntimeLibrariesSync() {
 }
 
 export { setupManagedRuntimeLibrariesSync, disposeManagedRuntimeLibrariesSync };
+
+export async function startManagedRuntimeLibrariesFromSettings(settings) {
+  if (!settings || settings.storageMode !== 'managed') {
+    throw new Error('Managed runtime-library startup requires managed deployment storage settings.');
+  }
+  managedRuntimeSettings = settings;
+  await setupManagedRuntimeLibrariesSync();
+}

@@ -144,6 +144,25 @@ export function applyNodeExecutorProxySettingsToEnv(settings) {
   applyProxySettingEnvPair('ALL_PROXY', 'all_proxy', '');
 }
 
+export async function applyManagedNodeExecutorProxySettings(settings) {
+  if (!settings || ['httpProxy', 'httpsProxy', 'noProxy'].some((key) => typeof settings[key] !== 'string')) {
+    throw new Error('Managed Node executor proxy settings are invalid.');
+  }
+  const previous = Object.fromEntries(dispatcherSignatureEnvKeys.map((key) => [key, process.env[key]]));
+  try {
+    applyNodeExecutorProxySettingsToEnv(settings);
+    await configureProxyDispatcherFromEnv();
+  } catch (error) {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    lastDispatcherSignature = '';
+    await configureProxyDispatcherFromEnv({ force: true });
+    throw error;
+  }
+}
+
 async function configureProxyDispatcherFromEnv(options = {}) {
   const signature = createDispatcherSignature();
   if (!options.force && signature === lastDispatcherSignature) {

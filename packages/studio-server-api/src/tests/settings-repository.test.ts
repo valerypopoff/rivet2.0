@@ -449,6 +449,39 @@ test('managed trusted-client replicas preserve legacy data, fail closed on corru
   }
 });
 
+test('managed settings seed a missing row in memory and never replace an existing row', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-managed-memory-seed-'));
+  const filePath = path.join(root, 'settings', 'deployment-storage.json');
+  const key = `managed-memory-seed-${path.basename(root)}`;
+  const backend = new InMemoryAppSettingsBackend();
+  const createRepository = (count: number) => new VersionedSettingsRepository<TestSettings>({
+    key,
+    currentVersion: 1,
+    getPath: () => filePath,
+    getDefault: () => ({ count: 0, nested: { label: 'default' } }),
+    getManagedBootstrap: () => ({ count, nested: { label: 'bootstrap' } }),
+    parseStored: (stored) => ({ count: Number(stored.count), nested: { label: String(stored.label) } }),
+    serialize: (value) => ({ count: value.count, label: value.nested.label }),
+  });
+  const first = createRepository(7);
+  let second: VersionedSettingsRepository<TestSettings> | undefined;
+  try {
+    await configureAppSettingsBackendForTests(backend);
+    assert.equal((await first.initialize()).value.count, 7);
+    assert.equal(fs.existsSync(filePath), false);
+    first.dispose();
+    second = createRepository(99);
+    assert.equal((await second.initialize()).value.count, 7);
+    assert.equal(backend.records.get(key)?.revision, 1n);
+    assert.equal(fs.existsSync(path.dirname(filePath)), false);
+  } finally {
+    first.dispose();
+    second?.dispose();
+    await configureAppSettingsBackendForTests(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('filesystem metadata failures invalidate cached settings and recover without a file change', async (t) => {
   await withTestRepository(async ({ filePath, repository }) => {
     await repository.update(() => ({ count: 1, nested: { label: 'allowed' } }));

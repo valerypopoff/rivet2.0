@@ -466,6 +466,7 @@ test('forward rollback retains the migrated schema and restores only a compatibl
 
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
+  assert.equal(values.compatibility.legacyStartupSettingsFiles, true);
   assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 13 });
   assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 13);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));

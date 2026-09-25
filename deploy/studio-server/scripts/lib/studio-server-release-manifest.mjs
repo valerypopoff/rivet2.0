@@ -409,7 +409,7 @@ export function promoteStudioServerReleaseManifest(
   );
 }
 
-function releaseValuesFor({ manifest, chart, images, compatibility, migrationJobEnabled }) {
+function releaseValuesFor({ manifest, chart, images, compatibility, migrationJobEnabled, legacyStartupSettingsFiles }) {
   return {
     images: Object.fromEntries(
       Object.entries(images).map(([component, image]) => [
@@ -424,6 +424,7 @@ function releaseValuesFor({ manifest, chart, images, compatibility, migrationJob
       compatibility,
       migrationJob: { enabled: migrationJobEnabled },
     },
+    compatibility: { legacyStartupSettingsFiles },
     release: {
       production: {
         enabled: true,
@@ -458,6 +459,7 @@ export function createProductionHelmValues(manifest) {
       maximumVersion: schema.version,
     },
     migrationJobEnabled: true,
+    legacyStartupSettingsFiles: false,
   });
 }
 
@@ -504,5 +506,6 @@ export function createForwardRollbackHelmValues({ failedRelease, rollbackRelease
       maximumVersion: activeSchema.version,
     },
     migrationJobEnabled: false,
+    legacyStartupSettingsFiles: true,
   });
 }

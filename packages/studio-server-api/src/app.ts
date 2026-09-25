@@ -39,7 +39,9 @@ import {
 import { getWorkflowStorageBackendMode } from './routes/workflows/storage-config.js';
 import { requireAuth, requireOperatorAuth } from './middleware/auth.js';
 import { createProxySettingsSnapshot } from './proxy-settings-snapshot.js';
-import { isTrustedProxyRequest } from './auth.js';
+import { isTrustedExecutorRequest, isTrustedProxyRequest } from './auth.js';
+import { readDeploymentStorageRuntimeSettingsSync } from './deployment-storage-settings.js';
+import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
 import {
   getApiRuntimeProfile,
   isControlPlaneApiProfile,
@@ -286,6 +288,40 @@ function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRoute
 }
 
 function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void {
+  app.get('/internal/executor-runtime-config', (req, res) => {
+    const address = req.socket.remoteAddress;
+    if (
+      process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' ||
+      !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '') ||
+      !isTrustedProxyRequest(req) || !isTrustedExecutorRequest(req)
+    ) {
+      res.sendStatus(403);
+      return;
+    }
+    res.set('Cache-Control', 'no-store');
+    const storage = readDeploymentStorageRuntimeSettingsSync();
+    const proxy = nodeExecutorProxySettingsRepository.readSync().value;
+    res.json({
+      protocolVersion: 1,
+      storage: {
+        storageMode: storage.storageMode,
+        databaseMode: storage.databaseMode,
+        databaseSslMode: storage.databaseSslMode,
+        databaseConnectionString: storage.databaseConnectionString,
+        objectStorageBucket: storage.objectStorageBucket,
+        objectStorageEndpoint: storage.objectStorageEndpoint,
+        objectStorageRegion: storage.objectStorageRegion,
+        objectStorageForcePathStyle: storage.objectStorageForcePathStyle,
+        storageAccessKeyId: storage.storageAccessKeyId,
+        storageAccessKey: storage.storageAccessKey,
+      },
+      proxy: {
+        httpProxy: proxy.httpProxy,
+        httpsProxy: proxy.httpsProxy,
+        noProxy: proxy.noProxy,
+      },
+    });
+  });
   app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(createProxySettingsSnapshot());
