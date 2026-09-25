@@ -131,13 +131,6 @@ export const defaultEditorContainerStyles = css`
     height: 18px;
   }
 
-  .data-type-selector {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    column-gap: var(--node-editor-side-control-gap);
-  }
-
   .editor-wrapper-wrapper {
     min-height: 0;
     flex: 0 0 auto;

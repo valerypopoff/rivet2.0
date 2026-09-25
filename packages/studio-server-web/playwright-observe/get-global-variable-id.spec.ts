@@ -114,3 +114,58 @@ test('global output labels track IDs while Get Global remains searchable', async
     'Previous Value',
   );
 });
+
+test('Get Global copies a known variable type once and keeps a later manual choice', async ({ page }) => {
+  const reader = GetGlobalNodeImpl.create();
+  reader.data.id = 'unknown';
+  reader.visualData = { ...reader.visualData, x: 400, y: 180, width: 320 };
+  const writer = SetGlobalNodeImpl.create();
+  writer.data.id = 'typedGlobal';
+  writer.data.dataType = 'string';
+  writer.visualData = { ...writer.visualData, x: 60, y: 180, width: 320 };
+
+  await seedHostedEditorProject(page, {
+    graph: { nodes: [writer, reader] },
+    graphId: 'get-global-type-graph',
+    loaded: true,
+    metadata: { globalVariables: { typedGlobal: { type: 'number', value: 3 } } },
+    projectId: 'get-global-type-project',
+    projectPath: '/workflows/Get Global Type.rivet-project',
+    title: 'Get Global Type',
+  });
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const readerNode = editor.locator(`.node[data-nodeid="${reader.id}"]`);
+  await readerNode.hover();
+  await readerNode.locator('.edit-button').click();
+  const variableId = editor.getByRole('combobox', { name: 'Variable ID' });
+  const dataType = editor.locator('.data-type-selector');
+
+  await variableId.fill('typedGlobal');
+  await expect(dataType.getByText('Number', { exact: true })).toBeVisible();
+  await expect(dataType.getByRole('status')).toContainText('Data type set to Number from variable "typedGlobal"');
+  await expect(dataType.getByRole('status')).toContainText('Other declarations use String');
+  await page.waitForTimeout(5_500);
+  await expect(dataType.getByRole('status')).toBeVisible();
+
+  await editor.locator('.node-canvas').click({ position: { x: 700, y: 650 } });
+  await readerNode.hover();
+  await readerNode.locator('.edit-button').click();
+  await expect(dataType.getByRole('status')).toBeVisible();
+
+  await dataType.getByRole('combobox').click();
+  await editor.getByText('String', { exact: true }).click({ timeout: 10_000 });
+  await expect(dataType.getByText('String', { exact: true })).toBeVisible();
+  await expect(dataType.getByRole('status')).toHaveCount(0);
+
+  await editor.locator('.node-canvas').click({ position: { x: 700, y: 650 } });
+  await readerNode.hover();
+  await readerNode.locator('.edit-button').click();
+  await expect(variableId).toHaveValue('typedGlobal');
+  await expect(dataType.getByText('String', { exact: true })).toBeVisible();
+  await expect(dataType.getByRole('status')).toHaveCount(0);
+});

@@ -6,7 +6,7 @@ import { useAtomValue } from 'jotai';
 import { type FC, useId, useMemo, useState } from 'react';
 import { graphState, projectState, referencedProjectsState } from '../editorWorkflowState.js';
 import type { SharedEditorProps } from '../SharedEditorProps';
-import { getGlobalVariableOptions } from './globalVariableOptions.js';
+import { getGlobalVariableOptions, getGlobalVariableTypeSuggestion } from './globalVariableOptions.js';
 
 type Props = SharedEditorProps & {
   editor: CustomEditorDefinition<ChartNode>;
@@ -63,7 +63,21 @@ export const GetGlobalVariableSelectorEditor: FC<Props> = ({ node, onChange, isR
     [graph, project, referencedProjects],
   );
   const suggestions = options.filter((option) => option.value.toLowerCase().includes(variableId.toLowerCase()));
-  const setVariableId = (id: string) => onChange({ ...node, data: { ...data, id } });
+  const setVariableId = (id: string) => {
+    const suggestion = data.useIdInput || !options.some((option) => option.value === id)
+      ? undefined
+      : getGlobalVariableTypeSuggestion(id, project, graph, referencedProjects);
+    const nextData: Record<string, unknown> = { ...data, id };
+    delete nextData.typeSuggestion;
+    if (suggestion) {
+      nextData.dataType = suggestion.type;
+      nextData.typeSuggestion = { id, ...suggestion };
+    }
+    onChange({
+      ...node,
+      data: nextData,
+    });
+  };
   const showSuggestions = !isUnavailable && isOpen && suggestions.length > 0;
   const closeSuggestions = () => {
     setIsOpen(false);

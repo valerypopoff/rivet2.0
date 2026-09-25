@@ -324,9 +324,18 @@ const ProjectGlobalVariableEditorModalContents: FC<ProjectGlobalVariableEditorMo
 
   return (
     <Modal onClose={onClose} width="medium" testId="project-global-variable-editor-modal">
-      <AppModalHeader title={editing.id === undefined ? 'Add Global Variable' : 'Edit Global Variable'} />
+      {/* A drag can end outside the title text, so its synthesized click can
+          target the header rather than the title itself. */}
+      <div onClick={(event) => event.stopPropagation()}>
+        <AppModalHeader title={editing.id === undefined ? 'Add Global Variable' : 'Edit Global Variable'} />
+      </div>
       <ModalBody>
-        <div css={styles}>
+        <div
+          css={styles}
+          // The nested modal's click handler refocuses its first input after a
+          // text drag, clearing the browser selection. Keep inner clicks local.
+          onClick={(event) => event.stopPropagation()}
+        >
           <p className="project-global-variables-modal-copy">
             This global variable is saved with the project and assigned automatically at the start of each project
             run. Values use JSON. Binary values and special values use Rivet portable markers so they remain valid in
@@ -353,6 +362,7 @@ const ProjectGlobalVariableEditorModalContents: FC<ProjectGlobalVariableEditorMo
             onChange={(nextType) => changeDataType(nextType as ScalarOrArrayDataType | undefined)}
             isDisabled={false}
             isReadonly={false}
+            menuPortal={false}
           />
           <Field name="project-global-variable-value" label="Value (JSON)">
             {({ fieldProps }) => (

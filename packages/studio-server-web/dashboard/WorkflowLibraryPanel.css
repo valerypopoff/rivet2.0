@@ -398,14 +398,16 @@
   font-size: var(--workflow-library-font-size-m);
   font-weight: 600;
   color: var(--grey-lightest);
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
   max-width: 100%;
   margin-top: 0;
 }
 
 .workflow-library-panel .active-project-name-row {
   display: flex;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   gap: 8px;

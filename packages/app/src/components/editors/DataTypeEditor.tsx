@@ -8,6 +8,7 @@ import {
   type DataTypeSelectorEditorDefinition,
   type ChartNode,
   type DataType,
+  type GetGlobalNodeData,
   type ScalarDataType,
   getScalarTypeOf,
   isArrayDataType,
@@ -27,23 +28,40 @@ export const DefaultDataTypeSelector: FC<
   const data = node.data as Record<string, unknown>;
   const dataType = data[editor.dataKey] as DataType | undefined;
   const helperMessage = getHelperMessage(editor, node.data);
+  const suggested = data.typeSuggestion as GetGlobalNodeData['typeSuggestion'];
+  const notice =
+    node.type === 'getGlobal' &&
+    !data.useIdInput &&
+    suggested &&
+    data.id === suggested.id &&
+    dataType === suggested.type
+      ? suggested
+      : undefined;
+  const conflictText = notice?.conflictingTypes.map((type) => dataTypeDisplayNames[type]).join(', ');
 
   return (
     <DataTypeSelector
       value={dataType}
       allowedDataTypes={editor.allowedDataTypes}
       onChange={(newValue) => {
+        const nextData: Record<string, unknown> = { ...data, [editor.dataKey]: newValue };
+        if (node.type === 'getGlobal') delete nextData.typeSuggestion;
         onChange({
           ...node,
-          data: {
-            ...data,
-            [editor.dataKey]: newValue,
-          },
+          data: nextData,
         });
       }}
       isReadonly={isReadonly}
       isDisabled={isDisabled}
       helperMessage={helperMessage}
+      afterControlMessage={
+        notice
+          ? {
+              text: `Data type set to ${dataTypeDisplayNames[notice.type]} from variable "${notice.id}" (${notice.source}).${conflictText ? ` Other declarations use ${conflictText}.` : ''}`,
+              warning: Boolean(conflictText),
+            }
+          : undefined
+      }
     />
   );
 };
@@ -55,7 +73,9 @@ export const DataTypeSelector: FC<{
   isDisabled: boolean;
   isReadonly: boolean;
   helperMessage?: string;
-}> = ({ value, allowedDataTypes, onChange, isReadonly, isDisabled, helperMessage }) => {
+  afterControlMessage?: { text: string; warning: boolean };
+  menuPortal?: boolean;
+}> = ({ value, allowedDataTypes, onChange, isReadonly, isDisabled, helperMessage, afterControlMessage, menuPortal = true }) => {
   const [menuPortalTarget, setMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const scalarType = value ? getScalarTypeOf(value) : undefined;
   const isArray = value ? isArrayDataType(value) : undefined;
@@ -69,26 +89,38 @@ export const DataTypeSelector: FC<{
   const selectedOption = dataTypeOptions.find((option) => option.value === scalarType);
 
   return (
-    <div className="data-type-selector">
+    <div
+      className="data-type-selector"
+      css={css`
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        column-gap: var(--node-editor-side-control-gap, 16px);
+      `}
+    >
       <Field name="data-type" label="Data Type" isDisabled={isReadonly || isDisabled}>
         {({ fieldProps }) => (
           <>
             {helperMessage && <HelperMessage>{helperMessage}</HelperMessage>}
             <Select
               {...fieldProps}
+              isDisabled={isReadonly || isDisabled}
               menuPlacement="auto"
-              menuPortalTarget={menuPortalTarget ?? undefined}
+              menuPortalTarget={menuPortal ? (menuPortalTarget ?? undefined) : undefined}
               menuPosition="fixed"
               menuShouldScrollIntoView={false}
               options={dataTypeOptions}
               value={selectedOption}
-              onChange={(selected) =>
-                onChange?.(selected ? (isArray ? (`${selected.value}[]` as DataType) : selected.value) : undefined)
-              }
+              onChange={(selected) => {
+                if (isReadonly || isDisabled) return;
+                onChange(selected ? (isArray ? (`${selected.value}[]` as DataType) : selected.value) : undefined);
+              }}
             />
-            <Portal zIndex={1000}>
-              <div ref={setMenuPortalTarget} />
-            </Portal>
+            {menuPortal && (
+              <Portal zIndex={1000}>
+                <div ref={setMenuPortalTarget} />
+              </Portal>
+            )}
           </>
         )}
       </Field>
@@ -101,11 +133,27 @@ export const DataTypeSelector: FC<{
             css={css`
               margin-top: 16px;
             `}
-            onChange={(e) => onChange?.(e.target.checked ? (`${scalarType}[]` as DataType) : scalarType)}
-            isDisabled={isDisabled}
+            onChange={(e) => {
+              if (isReadonly || isDisabled || !scalarType) return;
+              onChange(e.target.checked ? (`${scalarType}[]` as DataType) : scalarType);
+            }}
+            isDisabled={isReadonly || isDisabled || !scalarType}
           />
         )}
       </Field>
+      {afterControlMessage && (
+        <div
+          role="status"
+          css={css`
+            grid-column: 1 / -1;
+            margin-top: 4px;
+            color: ${afterControlMessage.warning ? 'var(--warning)' : 'var(--foreground-muted)'};
+            font-size: var(--ui-font-size-sm);
+          `}
+        >
+          {afterControlMessage.text}
+        </div>
+      )}
     </div>
   );
 };
