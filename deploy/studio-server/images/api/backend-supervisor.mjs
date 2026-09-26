@@ -64,6 +64,8 @@ export async function startBackendSupervisor({
   apiCommand = API_ENTRYPOINT,
   executorCommand = EXECUTOR_ENTRYPOINT,
   executorCwd = '/app',
+  apiEnvOverrides = {},
+  executorEnvOverrides = {},
   signalSource = process,
   apiStartupTimeoutMs = Number(env.RIVET_BACKEND_API_STARTUP_TIMEOUT_MS ?? 300_000),
   shutdownTimeoutMs = Number(env.RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS ?? 130_000),
@@ -189,7 +191,7 @@ export async function startBackendSupervisor({
     return child;
   }
 
-  api = launch(apiCommand, config.api, () => {
+  api = launch(apiCommand, { ...config.api, ...apiEnvOverrides }, () => {
     apiDone = true;
   });
   void (async () => {
@@ -206,7 +208,7 @@ export async function startBackendSupervisor({
     executorDone = false;
     executor = launch(
       executorCommand,
-      config.executor,
+      { ...config.executor, ...executorEnvOverrides },
       () => {
         executorDone = true;
         executorReady = false;
@@ -215,6 +217,7 @@ export async function startBackendSupervisor({
     );
     executor.on('message', (message) => {
       if (message?.type === 'rivet-executor-ready') executorReady = true;
+      if (message?.type === 'rivet-executor-unready') executorReady = false;
     });
   })().catch((error) => {
     console.error('[backend-supervisor] Startup failed:', error);

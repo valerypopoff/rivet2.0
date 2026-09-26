@@ -1,6 +1,7 @@
 services:
   proxy:
     image: ${RIVET_PROXY_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/proxy:${RIVET_IMAGE_TAG:-latest}}
+    read_only: true
     build:
       context: ../../..
       dockerfile: deploy/studio-server/images/proxy/Dockerfile
@@ -38,10 +39,13 @@ services:
         read_only: true
         volume:
           nocopy: true
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=512m,uid=10001,gid=10001
     restart: unless-stopped
 
   web:
     image: ${RIVET_WEB_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/web:${RIVET_IMAGE_TAG:-latest}}
+    read_only: true
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.web
@@ -72,8 +76,12 @@ services:
       - all_proxy=${all_proxy:-${ALL_PROXY:-}}
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
-      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
+      - npm_config_cache=/tmp/npm-cache
+      - YARN_CACHE_FOLDER=/tmp/yarn-cache
+      - TMPDIR=/tmp
+    tmpfs:
+      - /tmp:rw,nosuid,size=128m,uid=10001,gid=10001
+      - /var/tmp:rw,nosuid,size=128m,uid=10001,gid=10001
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
       interval: 10s
@@ -84,6 +92,7 @@ services:
 
   filesystem-artifacts-init:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
+    read_only: true
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -103,6 +112,9 @@ services:
         target: /data/rivet-app
         volume:
           nocopy: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=128m
+      - /var/tmp:rw,nosuid,size=128m
     restart: "no"
   api:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
@@ -129,7 +141,9 @@ services:
       - all_proxy=${all_proxy:-${ALL_PROXY:-}}
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
+      - TMPDIR=/tmp
+      - npm_config_cache=/tmp/npm-cache
+      - XDG_CACHE_HOME=/tmp/cache
       - PORT=80
       - RIVET_DEPLOYMENT_TOPOLOGY=single-host
       - RIVET_BACKEND_API_PORT=80
@@ -185,6 +199,11 @@ services:
         volume:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+    # Disposable, bounded RAM-backed scratch. Durable project and library data
+    # remain on their existing host/named volumes.
+    tmpfs:
+      - /tmp:rw,nosuid,exec,size=${RIVET_API_TMPFS_SIZE:-512m},uid=10001,gid=10001
+      - /var/tmp:rw,nosuid,exec,size=${RIVET_API_VAR_TMPFS_SIZE:-512m},uid=10001,gid=10001
     depends_on:
       filesystem-artifacts-init:
         condition: service_completed_successfully

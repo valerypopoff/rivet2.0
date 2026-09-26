@@ -56,8 +56,7 @@ ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
 RUN apk add --no-cache git && \
-    corepack enable && \
-    corepack prepare pnpm@10.18.3 --activate && \
+    npm install -g pnpm@10.18.3 && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /workspace /workflows /data/rivet-app/plugins /data/rivet-app/logs /data/runtime-libraries /home/rivet/.local/share/com.valerypopoff.rivet2/plugins /opt/rivet/lib /app && \
@@ -77,6 +76,9 @@ COPY --chown=10001:10001 deploy/studio-server/images/api/backend-supervisor.mjs 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh /opt/rivet/executor-entrypoint.sh
 
 ENV HOME=/home/rivet
+ENV TMPDIR=/tmp
+ENV npm_config_cache=/tmp/npm-cache
+ENV XDG_CACHE_HOME=/tmp/cache
 ENV PORT=8080
 ENV RIVET_WORKSPACE_ROOT=/workspace
 ENV RIVET_WORKFLOWS_ROOT=/workflows

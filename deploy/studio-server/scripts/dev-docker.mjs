@@ -12,10 +12,7 @@ import {
   run,
   runCapture,
 } from './lib/docker-launcher.mjs';
-import {
-  assertNoRetiredEnv,
-  dropAmbientNodeOptionsForDocker,
-} from './lib/docker-launcher-env.mjs';
+import { assertNoRetiredEnv, dropAmbientNodeOptionsForDocker } from './lib/docker-launcher-env.mjs';
 const rootDir = process.cwd();
 const composeProject = 'rivet-studio-server-dev';
 const composeConfigFiles = [
@@ -23,7 +20,7 @@ const composeConfigFiles = [
   'deploy/studio-server/compose/docker-compose.dev.yml',
 ];
 let composeBase = `docker compose -p ${composeProject} -f ${composeConfigFiles[0]} -f ${composeConfigFiles[1]}`;
-const diagnosticServices = 'api web executor proxy';
+const diagnosticServices = 'api web proxy';
 let envFileLabel = '.env';
 
 const devDependencyMarkerChecks = {
@@ -42,10 +39,14 @@ const devDependencyMarkerChecks = {
 const workspaceSourceProbe = "find /workspace/packages/core/src -type f -name '*.ts' -exec cat {} + >/dev/null";
 
 async function runningServiceDependenciesNeedRefresh(service, env) {
-  const result = await runCapture(`${composeBase} exec -T ${service} sh -lc "${devDependencyMarkerChecks[service]}"`, env, {
-    allowFailure: true,
-    cwd: rootDir,
-  });
+  const result = await runCapture(
+    `${composeBase} exec -T ${service} sh -lc "${devDependencyMarkerChecks[service]}"`,
+    env,
+    {
+      allowFailure: true,
+      cwd: rootDir,
+    },
+  );
 
   return result.exitCode !== 0;
 }
@@ -59,20 +60,15 @@ async function runningServiceHasBrokenWorkspaceBindMount(service, env) {
 }
 
 async function runningWorkspaceBindMountNeedsRecovery(env) {
-  for (const service of ['api', 'executor']) {
-    if (!await isComposeServiceRunning(service, { composeBase, cwd: rootDir, env })) {
-      continue;
-    }
-    if (await runningServiceHasBrokenWorkspaceBindMount(service, env)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    (await isComposeServiceRunning('api', { composeBase, cwd: rootDir, env })) &&
+    (await runningServiceHasBrokenWorkspaceBindMount('api', env))
+  );
 }
 
 async function assertWorkspaceBindMountReadable(env) {
   const result = await runCapture(
-    `${composeBase} run --rm --no-deps --entrypoint sh executor -lc \"${workspaceSourceProbe}\"`,
+    `${composeBase} run --rm --no-deps --entrypoint sh api -lc \"${workspaceSourceProbe}\"`,
     env,
     { allowFailure: true, cwd: rootDir },
   );
@@ -86,7 +82,7 @@ async function assertWorkspaceBindMountReadable(env) {
 }
 
 async function devStackHasBindMountInputOutputError(env) {
-  const result = await runCapture(`${composeBase} logs --tail=200 api web executor`, env, {
+  const result = await runCapture(`${composeBase} logs --tail=200 api web`, env, {
     allowFailure: true,
     cwd: rootDir,
   });
@@ -99,7 +95,7 @@ async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSecond
       await run(command, env, { cwd: rootDir });
     }
   } catch (error) {
-    if (await devStackHasBindMountInputOutputError(env) === false) {
+    if ((await devStackHasBindMountInputOutputError(env)) === false) {
       throw error;
     }
 
@@ -108,11 +104,9 @@ async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSecond
     );
     await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
     try {
-      await run(
-        `${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-        env,
-        { cwd: rootDir },
-      );
+      await run(`${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`, env, {
+        cwd: rootDir,
+      });
     } catch (retryError) {
       await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
       throw new Error(
@@ -161,7 +155,7 @@ async function main() {
   const staleDependencyServices = [];
 
   const commandsByAction = {
-    build: [`${composeBase} build api executor`],
+    build: [`${composeBase} build api`],
     up: [`${composeBase} up --build --remove-orphans`],
     down: [`${composeBase} down --remove-orphans`],
     config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],

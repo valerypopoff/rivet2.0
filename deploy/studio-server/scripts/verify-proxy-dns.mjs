@@ -140,7 +140,7 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
       RIVET_EXECUTION_UPSTREAM_PORT: '80',
       RIVET_WEB_UPSTREAM_HOST: 'web',
       RIVET_WEB_UPSTREAM_PORT: String(webPort),
-      RIVET_EXECUTOR_UPSTREAM_HOST: 'executor',
+      RIVET_EXECUTOR_UPSTREAM_HOST: 'api',
       RIVET_EXECUTOR_UPSTREAM_PORT: '21889',
     };
     const rendered = (await readFile(path.join(root, template), 'utf8')).replace(/\$\{(RIVET_[A-Z_]+)\}/g, (_, key) => {
@@ -169,7 +169,8 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
         '-e',
         `IDENTITY=${role}-${generation}`,
         '-e',
-        `PORT=${role === 'api' ? 80 : role === 'web' ? webPort : 21889}`,
+        `PORT=${role === 'api' ? 80 : webPort}`,
+        ...(role === 'api' ? ['-e', 'SECONDARY_PORT=21889'] : []),
         'node:20-alpine',
         'node',
         '/fixture/mock.mjs',
@@ -178,7 +179,6 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     };
     let api = startMock('api', 1, 200);
     let web = startMock('web', 1, 201);
-    const executor = startMock('executor', 1, 202);
     const proxy = `${network}-proxy`;
     containers.add(proxy);
     docker(
@@ -292,7 +292,7 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     const logs = spawnSync('docker', ['logs', proxy], { encoding: 'utf8', timeout: 10000 });
     assert.equal(logs.status, 0);
     assert.doesNotMatch(logs.stdout + logs.stderr, /reconfiguring/);
-    for (const name of [proxy, api, web, executor]) remove(name);
+    for (const name of [proxy, api, web]) remove(name);
     console.log(`${variant}: routing, auth, streams, upgrades and DNS recovery passed`);
   }
 } finally {

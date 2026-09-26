@@ -25,6 +25,8 @@ securityContext:
 {{- if .Values.tmpVolume.enabled }}
 - name: {{ .Values.tmpVolume.name }}
   mountPath: {{ .Values.tmpVolume.path }}
+- name: node-tmp
+  mountPath: /tmp
 {{- end }}
 {{- end -}}
 
@@ -33,6 +35,9 @@ securityContext:
 - name: {{ .Values.tmpVolume.name }}
   emptyDir:
     sizeLimit: {{ .Values.tmpVolume.sizeLimit }}
+- name: node-tmp
+  emptyDir:
+    sizeLimit: {{ .Values.tmpVolume.nodeTmpSizeLimit }}
 {{- end }}
 {{- end -}}
 

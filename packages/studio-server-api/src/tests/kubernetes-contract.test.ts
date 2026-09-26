@@ -307,7 +307,8 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     ['workflows', '2Gi', 2],
     ['app-data', '1Gi', 2],
     ['runtime-libraries', '8Gi', 2],
-    ['var-tmp', '2Gi', 4],
+    ['var-tmp', '2Gi', 5],
+    ['node-tmp', '1Gi', 5],
   ] as const;
   for (const [volumeName, sizeLimit, expectedOccurrences] of boundedWritableVolumes) {
     assert.equal(
@@ -325,6 +326,19 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /emptyDir: \{\}/,
     'the managed local render must not leave writable emptyDirs unbounded',
   );
+  assert.equal((renderedChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 5);
+  assert.equal((renderedChart.match(/mountPath: \/var\/tmp\s*$/gm) ?? []).length, 5);
+  const webWorkload = renderedChart.split('# Source: rivet/templates/web-deployment.yaml')[1]?.split('\n---\n')[0];
+  assert.ok(webWorkload);
+  assert.match(webWorkload, /readOnlyRootFilesystem: true/);
+  assert.match(webWorkload, /name: node-tmp\s*\n\s*mountPath: \/tmp/);
+  const unsandboxedLocalChart = await renderLocalKubernetesChartWithOverrides(['tmpVolume.enabled=false']);
+  const unsandboxedWeb = unsandboxedLocalChart.split('# Source: rivet/templates/web-deployment.yaml')[1]?.split('\n---\n')[0];
+  assert.ok(unsandboxedWeb);
+  assert.match(unsandboxedWeb, /readOnlyRootFilesystem: false/);
+  const evaluationChart = await renderLocalKubernetesChartWithOverrides(['hostedEvaluations.enabled=true']);
+  assert.equal((evaluationChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 6);
+  assert.equal((evaluationChart.match(/- name: node-tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit: 1Gi/g) ?? []).length, 6);
   assert.match(renderedChart, /project-managed-app-settings\.js/);
   assert.match(renderedChart, /name: RIVET_APP_SETTINGS_BACKEND\s*\n\s*value: "postgres"/);
   assert.match(
@@ -445,6 +459,31 @@ test('Vault may supply S3 credentials but cannot override Kubernetes object loca
     },
   );
   assert.equal(output, 'replicated|managed|chart-bucket|tenant/workflows/|from-vault');
+});
+
+test('dotenv cannot redirect replicated or single-host scratch paths but standalone remains configurable', (context) => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
+  if (process.platform === 'win32' && !fs.existsSync(shell)) {
+    context.skip('A POSIX shell is unavailable on this Windows host');
+    return;
+  }
+  const script =
+    '. deploy/studio-server/images/lib/load-env.sh\n' +
+    'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; TMPDIR=/home/rivet/unsafe; npm_config_cache=/home/rivet/.npm; NPM_CONFIG_CACHE=/home/rivet/uppercase; XDG_CACHE_HOME=/home/rivet/.cache; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
+    'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
+    'printf "%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$TMPDIR" "$npm_config_cache" "$XDG_CACHE_HOME" "${NPM_CONFIG_CACHE-unset}" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY"';
+  const run = (topology: string) =>
+    execFileSync(shell, ['-c', script], {
+      cwd: repoRoot,
+      env: { ...process.env, RIVET_DEPLOYMENT_TOPOLOGY: topology },
+      encoding: 'utf8',
+    });
+  assert.equal(run('replicated'), 'replicated|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
+  assert.equal(run('single-host'), 'single-host|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
+  assert.equal(
+    run('standalone'),
+    'standalone|/home/rivet/unsafe|/home/rivet/.npm|/home/rivet/.cache|/home/rivet/uppercase|from-vault',
+  );
 });
 
 test('Vault may supply a database password but cannot redirect Kubernetes PostgreSQL', (context) => {
@@ -591,6 +630,22 @@ test('chart owns the published execution admission policy only on execution API 
   await assertHelmTemplateFails(
     ['writableVolumeLimits.workspace=0Gi'],
     /writableVolumeLimits\.workspace must be a positive binary Kubernetes quantity such as 2Gi/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.nodeTmpSizeLimit=0Gi'],
+    /tmpVolume\.nodeTmpSizeLimit must be a positive binary Kubernetes quantity such as 1Gi/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.path=/tmp'],
+    /tmpVolume\.path must be \/var\/tmp/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.name=node-tmp'],
+    /tmpVolume\.name must differ from the reserved node-tmp volume name/,
+  );
+  await assertHelmTemplateFails(
+    ['release.production.enabled=true', 'tmpVolume.enabled=false'],
+    /production requires tmpVolume\.enabled=true/,
   );
   await assertHelmTemplateFails(
     ['resources.execution.requests.memory=not-a-quantity'],

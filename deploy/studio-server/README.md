@@ -158,6 +158,18 @@ listener, on port 8080 by default. Kubernetes uses a separate, external
 gateway for hostname, TLS, auth, and route handling; it does not use this VM
 TLS overlay.
 
+Production Compose bounds disposable scratch: proxy `/tmp` is a 512 MiB tmpfs;
+web `/tmp` and `/var/tmp` are 128 MiB each; the combined backend gets separate
+512 MiB mounts at `/tmp` and `/var/tmp`; the one-shot artifact initializer has
+128 MiB scratch mounts and a read-only root. They use RAM only as files are
+written, and restart clears them. Workflows, recordings, settings, and runtime
+libraries stay on their existing persistent mounts. If package installation or a
+workflow needs more temporary space, set `RIVET_API_TMPFS_SIZE` and/or
+`RIVET_API_VAR_TMPFS_SIZE` in `.env` after checking the VM memory budget, then
+recreate the backend. A full scratch mount causes a visible write failure for
+these standard temp paths. The graph-capable backend root is still writable,
+so this is not a blanket disk-write prohibition for arbitrary workflow code.
+
 Useful variants:
 
 | Command                           | Behavior                                                                                                           |
@@ -199,9 +211,11 @@ The Docker development stack is the default production-shaped loop:
 yarn studio-server:dev
 ```
 
-When Compose recreates the API, editor web service, or internal executor, it
-also restarts Nginx so Docker service-name resolution cannot leave the browser
-connected to a retired container IP.
+Development runs API and executor source watchers in one backend container,
+matching the production Compose container layout while retaining hot reload.
+When Compose recreates that backend or the editor web service, it also restarts
+Nginx so Docker service-name resolution cannot leave the browser connected to
+a retired container IP.
 
 Useful commands:
 

@@ -2,10 +2,7 @@
 # same nginx process so the inner proxy can trust only the loopback hop.
 services:
   proxy:
-    read_only: true
     cap_drop: [ALL]
-    tmpfs:
-      - /tmp:rw,nosuid,noexec,size=512m,uid=10001,gid=10001
     ports:
       - '${RIVET_HTTPS_PORT:-443}:8443'
     environment:

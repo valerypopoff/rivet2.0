@@ -192,6 +192,18 @@
 {{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.sizeLimit))) -}}
 {{- fail "tmpVolume.sizeLimit must be a positive binary Kubernetes quantity such as 2Gi when tmpVolume.enabled=true" -}}
 {{- end -}}
+{{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.nodeTmpSizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.nodeTmpSizeLimit))) -}}
+{{- fail "tmpVolume.nodeTmpSizeLimit must be a positive binary Kubernetes quantity such as 1Gi when tmpVolume.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (eq .Values.tmpVolume.name "node-tmp") -}}
+{{- fail "tmpVolume.name must differ from the reserved node-tmp volume name" -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (ne .Values.tmpVolume.path "/var/tmp") -}}
+{{- fail "tmpVolume.path must be /var/tmp, which the migration Job uses for scratch" -}}
+{{- end -}}
+{{- if and .Values.release.production.enabled (not .Values.tmpVolume.enabled) -}}
+{{- fail "production requires tmpVolume.enabled=true so /tmp and /var/tmp are bounded" -}}
+{{- end -}}
 
 {{- $resourceLimitAcknowledgements := .Values.resourceLimitAcknowledgements -}}
 {{- $productionReleaseEnabled := .Values.release.production.enabled -}}

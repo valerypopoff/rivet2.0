@@ -21,7 +21,12 @@ load_optional_dotenv() {
 
 load_optional_dotenv_preserving_deployment_storage() {
   if [ "${RIVET_DEPLOYMENT_TOPOLOGY:-}" != "replicated" ]; then
+    deployment_topology="${RIVET_DEPLOYMENT_TOPOLOGY:-}"
     load_optional_dotenv "$@"
+    if [ "$deployment_topology" = "single-host" ]; then
+      export RIVET_DEPLOYMENT_TOPOLOGY=single-host
+      set_bounded_scratch_env
+    fi
     return
   fi
 
@@ -64,6 +69,18 @@ load_optional_dotenv_preserving_deployment_storage() {
   export RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE="$deployment_storage_force_path_style"
   export RIVET_APP_SETTINGS_BACKEND="$deployment_app_settings_backend"
   export RIVET_APP_DATA_ROOT="$deployment_app_data_root"
+
+  set_bounded_scratch_env
+}
+
+set_bounded_scratch_env() {
+  # Compose and Helm own these scratch mounts. Dotenv values must not redirect
+  # temporary files to the writable image layer or a durable app-data volume.
+  # npm prefers the uppercase cache variable over npm_config_cache.
+  export TMPDIR=/tmp
+  export npm_config_cache=/tmp/npm-cache
+  export XDG_CACHE_HOME=/tmp/cache
+  unset NPM_CONFIG_CACHE
 }
 
 append_proxy_bootstrap_node_options() {

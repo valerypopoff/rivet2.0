@@ -50,6 +50,19 @@ async function waitForReady(port) {
   throw new Error('Combined backend did not become ready.');
 }
 
+async function waitForHealthStatus(port, status) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${port}/readyz`)).status === status) return;
+    } catch {
+      /* The supervisor may not yet have opened the listener. */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Combined backend readiness did not become ${status}.`);
+}
+
 test('combined backend keeps the child environments and loopback configuration separate', async () => {
   const env = environment(await ports());
   const children = childEnvironments(env);
@@ -173,6 +186,50 @@ test('combined backend does not launch the executor before the API is ready', as
     assert.equal(await supervisor.completed, 1);
     await assert.rejects(access(executorMarker), { code: 'ENOENT' });
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('combined backend withdraws readiness while the development executor watcher replaces its child', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rivet-backend-supervisor-'));
+  const apiScript = join(dir, 'api.mjs');
+  const executorScript = join(dir, 'executor.mjs');
+  const { apiPort, executorPort, healthPort } = await ports();
+  await writeFile(
+    apiScript,
+    `import { createServer } from 'node:http';
+     const server = createServer((_request, response) => response.writeHead(200).end());
+     server.listen(Number(process.env.PORT), '127.0.0.1');
+     process.on('SIGTERM', () => server.close(() => process.exit(0)));`,
+  );
+  await writeFile(
+    executorScript,
+    `import { createServer } from 'node:net';
+     const server = createServer((socket) => socket.end());
+     server.listen(Number(process.env.PORT), '127.0.0.1', () => {
+       process.send?.({ type: 'rivet-executor-ready' });
+       setTimeout(() => {
+         process.send?.({ type: 'rivet-executor-unready' });
+         setTimeout(() => process.send?.({ type: 'rivet-executor-ready' }), 500);
+       }, 500);
+     });
+     process.on('SIGTERM', () => server.close(() => process.exit(0)));`,
+  );
+  let supervisor;
+  try {
+    supervisor = await startBackendSupervisor({
+      env: environment({ apiPort, executorPort, healthPort }),
+      apiCommand: [process.execPath, apiScript],
+      executorCommand: [process.execPath, executorScript],
+      executorCwd: dir,
+      apiStartupTimeoutMs: 5_000,
+      shutdownTimeoutMs: 2_000,
+    });
+    await waitForReady(healthPort);
+    await waitForHealthStatus(healthPort, 503);
+    await waitForReady(healthPort);
+  } finally {
+    if (supervisor) assert.equal(await supervisor.stop(), 0);
     await rm(dir, { recursive: true, force: true });
   }
 });

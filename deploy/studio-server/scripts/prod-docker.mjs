@@ -148,7 +148,7 @@ async function main() {
     mergedEnv.RIVET_RUNTIME_ENV_FILE = envPath;
     composeBase = composeCommand(
       composeProject,
-      `--env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml -f deploy/studio-server/compose/docker-compose.runtime-env.prod.yml`,
+      `--env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml -f deploy/studio-server/compose/docker-compose.runtime-env.yml`,
     );
   }
   if (vmTls.enabled) {

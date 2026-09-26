@@ -67,6 +67,7 @@ async function refreshInputSignatures() {
 }
 
 async function replaceExecutor() {
+  process.send?.({ type: 'rivet-executor-unready' });
   if (activeExecutor) {
     const previousExecutor = activeExecutor;
     activeExecutor = undefined;
@@ -80,11 +81,19 @@ async function replaceExecutor() {
       ...process.env,
       NODE_OPTIONS: process.env.RIVET_EXECUTOR_CHILD_NODE_OPTIONS ?? process.env.NODE_OPTIONS,
     },
-    stdio: 'inherit',
+    stdio: process.send ? ['inherit', 'inherit', 'inherit', 'ipc'] : 'inherit',
   });
   activeExecutor = child;
+  child.on('message', (message) => {
+    if (activeExecutor === child && message?.type === 'rivet-executor-ready') {
+      process.send?.(message);
+    }
+  });
   child.once('exit', () => {
-    if (activeExecutor === child) activeExecutor = undefined;
+    if (activeExecutor === child) {
+      activeExecutor = undefined;
+      process.send?.({ type: 'rivet-executor-unready' });
+    }
   });
 }
 

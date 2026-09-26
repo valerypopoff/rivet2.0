@@ -369,6 +369,9 @@ tmpVolume:
   name: var-tmp
   path: /var/tmp
   sizeLimit: 2Gi
+  # Node, npm, and other libraries normally use /tmp rather than /var/tmp.
+  # Keep the two directories independent so files cannot alias across paths.
+  nodeTmpSizeLimit: 1Gi
 
 # Every disposable writable volume receives a bounded starting capacity. Tune
 # these from the published-route load gate before raising them for production.
