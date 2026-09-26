@@ -7,7 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
-import { S3Client, CreateBucketCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  CreateBucketCommand,
+  DeleteBucketCommand,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import { startAsyncWorkflowProcess } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
@@ -75,6 +80,8 @@ try {
     forcePathStyle: true,
     credentials: { accessKeyId: 'asyncfixture', secretAccessKey: 'asyncfixturesecret' },
   });
+  // The mock runtime-config server below precedes the real API; provision its
+  // bucket explicitly because it does not enforce the real API's readiness.
   await s3.send(new CreateBucketCommand({ Bucket: 'async-recordings' }));
   const storageSettings = {
     version: 1,
@@ -239,6 +246,9 @@ try {
     await fs.rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     assert.equal(executorAppDataFiles.length, 0, 'managed executor must not create settings files');
   }
+  // Exercise the real API's first-install path with an absent bucket after
+  // the isolated executor bootstrap check has finished.
+  await s3.send(new DeleteBucketCommand({ Bucket: 'async-recordings' }));
   api = await startAsyncWorkflowProcess({ storage: storageSettings });
   for (const [index, route] of ['/workflows', '/internal/workflows', '/workflows-latest'].entries()) {
     const value = `${tail.baseUrl}/${index}`;

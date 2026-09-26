@@ -28,7 +28,10 @@ import {
 } from './app-settings/settings-repository.js';
 import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController, type RuntimeHealthCheck } from './runtime-health.js';
 import { configureStudioMetrics } from './metrics.js';
-import { getDeploymentStorageBootstrapDrift, readDeploymentStorageRuntimeSettingsSync } from './deployment-storage-settings.js';
+import {
+  getDeploymentStorageBootstrapDrift,
+  readDeploymentStorageRuntimeSettingsSync,
+} from './deployment-storage-settings.js';
 import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
@@ -258,10 +261,14 @@ async function startServer(): Promise<void> {
     }
     await initializeAppSettingsRepositories();
     assertStartupActive();
+    assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
+    let startManagedRuntimeLibraries: (() => Promise<void>) | undefined;
     if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
       const storageSettings = readDeploymentStorageRuntimeSettingsSync();
-      const mismatchedFields = process.env.RIVET_DEPLOYMENT_STORAGE_BUCKET || process.env.RIVET_DEPLOYMENT_STORAGE_URL
-        ? getDeploymentStorageBootstrapDrift(storageSettings) : [];
+      const mismatchedFields =
+        process.env.RIVET_DEPLOYMENT_STORAGE_BUCKET || process.env.RIVET_DEPLOYMENT_STORAGE_URL
+          ? getDeploymentStorageBootstrapDrift(storageSettings)
+          : [];
       if (mismatchedFields.length > 0) {
         console.warn(
           `[deployment-storage] Helm bootstrap differs from the authoritative PostgreSQL settings row (${mismatchedFields.join(', ')}). The row remains authoritative; reconcile configuration before rollout.`,
@@ -271,16 +278,20 @@ async function startServer(): Promise<void> {
         __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
         __rivetStartManagedRuntimeLibraries?: (settings: unknown) => Promise<void>;
       };
-      if (!bootstrap.__rivetApplyNodeExecutorProxySettings || !bootstrap.__rivetStartManagedRuntimeLibraries) {
+      const start = bootstrap.__rivetStartManagedRuntimeLibraries;
+      if (!bootstrap.__rivetApplyNodeExecutorProxySettings || !start) {
         throw new Error('Managed runtime configuration bootstrap is not installed.');
       }
       await bootstrap.__rivetApplyNodeExecutorProxySettings(nodeExecutorProxySettingsRepository.readSync().value);
-      await bootstrap.__rivetStartManagedRuntimeLibraries(storageSettings);
+      startManagedRuntimeLibraries = () => start(storageSettings);
     }
-    assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
-    await reconcileRuntimeLibraries();
-    assertStartupActive();
+    // On first install the workflow store creates the shared S3 bucket. The
+    // bootstrap runtime-library sync only checks for that bucket, so it must
+    // not start first on a fresh managed deployment.
     await initializeWorkflowStorage();
+    assertStartupActive();
+    await startManagedRuntimeLibraries?.();
+    await reconcileRuntimeLibraries();
     assertStartupActive();
     if (apiRuntimeProfile !== 'evaluation') {
       webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
