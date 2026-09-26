@@ -605,9 +605,16 @@ unchanged Rivet route/auth proxy on a
 loopback-only listener. Unknown hostnames return 404. The certificate and key
 are mounted read-only and must be readable by container UID 10001. A typical
 root-only `0600` private key will fail at nginx startup even though the launcher
-can see the file; grant UID 10001 read access to a dedicated key copy or via a
-restricted ACL, not by making the production private key world-readable.
-Recreate the proxy container after certificate rotation. A non-default `RIVET_HTTPS_PORT`
+can see the file. Grant container UID 10001 read access to a dedicated key copy,
+or use a restricted ACL after confirming it works inside the bind mount. A
+`root:10001` key with mode `0640` is another option when host group 10001 is
+not used by unrelated processes. Verify key readability from a temporary proxy
+container before stopping host nginx; never make the key world-readable.
+The proxy's nginx hash bucket supports the longest DNS hostname accepted by the
+launcher; the VM TLS fixture exercises that limit so long private hostnames
+cannot prevent the proxy from starting.
+Recheck the key's UID/group access after certificate rotation, then recreate
+the proxy container. A non-default `RIVET_HTTPS_PORT`
 is included in the HTTP redirect. Before switching traffic, render
 `yarn studio-server:prod:config`, verify ports 80/443 are free, and check the
 public HTTPS, private HTTP, WebSocket, SSE, OAuth, and published routes. Keep

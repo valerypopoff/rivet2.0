@@ -15,6 +15,9 @@ const image = `rivet-vm-nginx-contract:${randomUUID().slice(0, 8)}`;
 const token = createHash('sha256').update('vm-nginx-fixture:proxy-auth').digest('hex');
 const redirectPort = process.env.RIVET_VM_TLS_FIXTURE_HTTPS_PORT ?? '443';
 const mockPorts = { web: 3300, api: 3301, execution: 3302, executor: 3303 };
+const publicHost = 'public.test';
+// Exercise the longest DNS name accepted by the VM launcher, not just short fixture hosts.
+const internalHost = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(61)}`;
 
 function docker(...args) {
   return execFileSync('docker', args, {
@@ -210,9 +213,9 @@ async function main() {
       '-e',
       `RIVET_PROXY_HTTPS_PORT=${redirectPort}`,
       '-e',
-      'RIVET_PROXY_PUBLIC_HOST=public.test',
+      `RIVET_PROXY_PUBLIC_HOST=${publicHost}`,
       '-e',
-      'RIVET_PROXY_INTERNAL_HOST=internal.test',
+      `RIVET_PROXY_INTERNAL_HOST=${internalHost}`,
       '-e',
       'RIVET_PROXY_INTERNAL_LISTEN=127.0.0.1:18081',
       '-e',
@@ -236,7 +239,7 @@ async function main() {
     let lastReadinessResult = 'no response';
     for (let attempt = 0; attempt < 60; attempt++) {
       try {
-        const response = await request(httpPort, 'internal.test', '/api/echo', false, {}, 1000);
+        const response = await request(httpPort, internalHost, '/api/echo', false, {}, 1000);
         if (response.status === 200) break;
         lastReadinessResult = `HTTP ${response.status}`;
       } catch (error) {
@@ -258,16 +261,16 @@ async function main() {
       }
       await delay(200);
     }
-    const redirect = await request(httpPort, 'public.test', '/sample?x=1');
+    const redirect = await request(httpPort, publicHost, '/sample?x=1');
     assert.equal(redirect.status, 301);
     assert.equal(
       redirect.headers.location,
-      `https://public.test${redirectPort === '443' ? '' : `:${redirectPort}`}/sample?x=1`,
+      `https://${publicHost}${redirectPort === '443' ? '' : `:${redirectPort}`}/sample?x=1`,
     );
     assert.equal((await request(httpPort, 'unknown.test', '/')).status, 404);
-    assert.equal((await request(httpsPort, 'internal.test', '/', true)).status, 404);
-    assert.equal(await negotiatedProtocol(httpsPort, 'public.test'), 'h2');
-    const api = await request(httpsPort, 'public.test', '/api/echo', true, {
+    assert.equal((await request(httpsPort, internalHost, '/', true)).status, 404);
+    assert.equal(await negotiatedProtocol(httpsPort, publicHost), 'h2');
+    const api = await request(httpsPort, publicHost, '/api/echo', true, {
       'X-Rivet-Proxy-Auth': 'spoofed',
       'X-Rivet-Executor-Auth': 'spoofed',
       'X-Rivet-Client-IP': '1.2.3.4',
@@ -288,17 +291,17 @@ async function main() {
     assert.equal(echoed.headers.forwarded, undefined);
     assert.notEqual(echoed.headers['x-rivet-client-ip'], '1.2.3.4');
     assert.equal(echoed.headers['x-forwarded-proto'], 'https');
-    assert.equal(echoed.headers['x-forwarded-host'], 'public.test');
+    assert.equal(echoed.headers['x-forwarded-host'], publicHost);
     assert.equal(
-      JSON.parse((await request(httpsPort, 'public.test', '/workflows/demo', true)).body).plane,
+      JSON.parse((await request(httpsPort, publicHost, '/workflows/demo', true)).body).plane,
       'execution',
     );
     assert.equal(
-      JSON.parse((await request(httpsPort, 'public.test', '/workflows-latest/demo', true)).body).plane,
+      JSON.parse((await request(httpsPort, publicHost, '/workflows-latest/demo', true)).body).plane,
       'api',
     );
-    assert.equal((await request(httpsPort, 'public.test', '/internal/workflows/demo', true)).status, 404);
-    assert.equal(await upgrade(httpsPort, 'public.test', '/ws/executor/internal'), 'executor');
+    assert.equal((await request(httpsPort, publicHost, '/internal/workflows/demo', true)).status, 404);
+    assert.equal(await upgrade(httpsPort, publicHost, '/ws/executor/internal'), 'executor');
     console.log('PASS: VM nginx TLS, host routing, trusted headers, published/latest planes, and executor websocket.');
   } finally {
     for (const args of [
