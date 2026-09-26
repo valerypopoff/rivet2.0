@@ -328,9 +328,10 @@ function extractWebAppRevisionKey(html) {
 }
 
 function readCookiePair(response, name) {
-  const setCookies = typeof response.headers.getSetCookie === 'function'
-    ? response.headers.getSetCookie()
-    : response.headers.get('set-cookie')?.split(/,\s*/u) ?? [];
+  const setCookies =
+    typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : response.headers.get('set-cookie')?.split(/,\s*/u) ?? [];
   return setCookies.find((cookie) => cookie.startsWith(`${name}=`))?.split(';', 1)[0] ?? null;
 }
 
@@ -420,7 +421,9 @@ async function readPublicationPreconditions(baseUrl, relativePath) {
   );
   const { projectId, draftRevisionId, publicationVersion, project } = snapshot ?? {};
   if (
-    !projectId || !draftRevisionId || !publicationVersion ||
+    !projectId ||
+    !draftRevisionId ||
+    !publicationVersion ||
     project?.projectMetadataId !== projectId ||
     project.revisionId !== draftRevisionId ||
     project.settings?.publicationVersion !== publicationVersion
@@ -743,6 +746,13 @@ class ManagedReleaseGate {
       { capture: true, allowFailure: true },
     );
     await this.artifact(`${stage}/helm-manifest.yaml`, `${manifest.stdout}\n${manifest.stderr}`);
+    for (const [name, args] of [
+      ['helm-status.log', ['status', this.config.release, '--namespace', this.config.namespace]],
+      ['helm-hooks.yaml', ['get', 'hooks', this.config.release, '--namespace', this.config.namespace]],
+    ]) {
+      const result = await run(this.helmBin, args, { capture: true, allowFailure: true });
+      await this.artifact(`${stage}/${name}`, `${result.stdout}\n${result.stderr}`);
+    }
   }
 
   async createRegistrySecret() {
@@ -795,22 +805,48 @@ class ManagedReleaseGate {
     const valuesPath = path.join(this.config.artifactsDir, 'release-gate.values.json');
     await fs.mkdir(this.config.artifactsDir, { recursive: true });
     await fs.writeFile(valuesPath, `${JSON.stringify(renderManagedReleaseGateValues(this.config), null, 2)}\n`, 'utf8');
-    await run(this.helmBin, [
-      'upgrade',
-      '--install',
-      this.config.release,
-      'deploy/studio-server/helm',
-      '--namespace',
-      this.config.namespace,
-      '--values',
-      path.join(rootDir, 'deploy', 'studio-server', 'helm', 'overlays', 'managed-release-gate.yaml'),
-      '--values',
-      valuesPath,
-      '--wait',
-      '--wait-for-jobs',
-      '--timeout',
-      `${this.config.deploymentTimeoutSeconds}s`,
-    ]);
+    try {
+      await run(this.helmBin, [
+        'upgrade',
+        '--install',
+        this.config.release,
+        'deploy/studio-server/helm',
+        '--namespace',
+        this.config.namespace,
+        '--values',
+        path.join(rootDir, 'deploy', 'studio-server', 'helm', 'overlays', 'managed-release-gate.yaml'),
+        '--values',
+        valuesPath,
+        '--wait',
+        '--wait-for-jobs',
+        '--timeout',
+        `${this.config.deploymentTimeoutSeconds}s`,
+      ]);
+    } catch (error) {
+      try {
+        const status = await this.kubectl(
+          [
+            'get',
+            'pods,jobs,deployments,statefulsets',
+            '-n',
+            this.config.namespace,
+            '-o',
+            'wide',
+            '--request-timeout=10s',
+          ],
+          { capture: true, allowFailure: true },
+        );
+        console.error(
+          `[${runnerName}] Helm install did not become ready. Workload status:\n${(status.stdout || status.stderr).trim().slice(0, 8000)}`,
+        );
+        console.error(
+          `[${runnerName}] Full pod events, descriptions, logs, and Helm hook status are in ${this.config.artifactsDir}/failure/.`,
+        );
+      } catch (diagnosticError) {
+        console.error(`[${runnerName}] Could not inspect workload status after Helm failure:`, diagnosticError);
+      }
+      throw error;
+    }
     const manifest = await run(
       this.helmBin,
       ['get', 'manifest', this.config.release, '--namespace', this.config.namespace],
@@ -1104,9 +1140,14 @@ class ManagedReleaseGate {
       sendUpdate('race-b@release-gate.example.test'),
     ]);
     const statuses = results.map(({ status }) => status).sort((a, b) => a - b);
-    if (statuses[0] !== 200 || statuses[1] !== 409 ||
-        results.find(({ status }) => status === 409)?.body?.code !== 'publication_state_changed') {
-      throw new Error(`Managed concurrent publication updates did not produce one success and one state conflict: ${JSON.stringify(results)}`);
+    if (
+      statuses[0] !== 200 ||
+      statuses[1] !== 409 ||
+      results.find(({ status }) => status === 409)?.body?.code !== 'publication_state_changed'
+    ) {
+      throw new Error(
+        `Managed concurrent publication updates did not produce one success and one state conflict: ${JSON.stringify(results)}`,
+      );
     }
     const next = await readPublicationPreconditions(baseUrl, relativePath);
     if (next.expectedPublicationVersion !== (BigInt(preconditions.expectedPublicationVersion) + 1n).toString()) {
@@ -1157,10 +1198,12 @@ class ManagedReleaseGate {
         body: JSON.stringify({
           relativePath: state.relativePath,
           preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
-          accessUpdates: [{
-            uiGraphId: 'release-gate-web-app',
-            allowedEmails: [removedEmail, retainedEmail],
-          }],
+          accessUpdates: [
+            {
+              uiGraphId: 'release-gate-web-app',
+              allowedEmails: [removedEmail, retainedEmail],
+            },
+          ],
         }),
       });
 
@@ -1213,10 +1256,12 @@ class ManagedReleaseGate {
         body: JSON.stringify({
           relativePath: state.relativePath,
           preconditions: await readPublicationPreconditions(baseUrl, state.relativePath),
-          accessUpdates: [{
-            uiGraphId: 'release-gate-web-app',
-            allowedEmails: [retainedEmail],
-          }],
+          accessUpdates: [
+            {
+              uiGraphId: 'release-gate-web-app',
+              allowedEmails: [retainedEmail],
+            },
+          ],
         }),
       });
       const close = await waitForPromise('removed managed OAuth WebSocket close', removedClosed, 30_000);
@@ -1250,7 +1295,11 @@ class ManagedReleaseGate {
 
       retainedAction.start();
       await waitForPromise('retained managed OAuth WebSocket acceptance', retainedAction.accepted, 30_000);
-      const retainedTerminal = await waitForPromise('retained managed OAuth WebSocket action', retainedAction.terminal, 45_000);
+      const retainedTerminal = await waitForPromise(
+        'retained managed OAuth WebSocket action',
+        retainedAction.terminal,
+        45_000,
+      );
       if (retainedTerminal.type !== 'action.completed') {
         throw new Error(`Retained OAuth user action did not complete: ${JSON.stringify(retainedTerminal)}`);
       }
