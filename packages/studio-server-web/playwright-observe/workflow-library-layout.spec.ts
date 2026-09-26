@@ -90,6 +90,12 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     databaseSslMode: 'disable',
     databaseConnectionStringConfigured: false,
     storageUrl: '',
+    objectStorageBucket: '',
+    objectStorageEndpoint: '',
+    objectStorageRegion: 'us-east-1',
+    objectStoragePrefix: 'workflows/',
+    objectStorageForcePathStyle: false,
+    deploymentManaged: false,
     storageAccessKeyId: '',
     storageAccessKeyConfigured: false,
     updatedAt: null as string | null,
@@ -503,6 +509,13 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
           databaseConnectionStringConfigured:
             Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
           storageUrl: String(body.storageUrl ?? deploymentStorageSettings.storageUrl),
+          objectStorageBucket: String(body.objectStorageBucket ?? deploymentStorageSettings.objectStorageBucket),
+          objectStorageEndpoint: String(body.objectStorageEndpoint ?? deploymentStorageSettings.objectStorageEndpoint),
+          objectStorageRegion: String(body.objectStorageRegion ?? deploymentStorageSettings.objectStorageRegion),
+          objectStoragePrefix: String(body.objectStoragePrefix ?? deploymentStorageSettings.objectStoragePrefix),
+          objectStorageForcePathStyle: Boolean(
+            body.objectStorageForcePathStyle ?? deploymentStorageSettings.objectStorageForcePathStyle,
+          ),
           storageAccessKeyId: String(body.storageAccessKeyId ?? deploymentStorageSettings.storageAccessKeyId),
           storageAccessKeyConfigured:
             Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
@@ -617,7 +630,7 @@ test.describe('Workflow library layout', () => {
     await page.route('**/?editor', (route) =>
       route.fulfill({
         contentType: 'text/html',
-        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
       }),
     );
     await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -669,7 +682,7 @@ test.describe('Workflow library layout', () => {
     await page.route('**/?editor', (route) =>
       route.fulfill({
         contentType: 'text/html',
-        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
       }),
     );
     await page.goto('/');
@@ -688,7 +701,7 @@ test.describe('Workflow library layout', () => {
     await page.route('**/?editor', (route) =>
       route.fulfill({
         contentType: 'text/html',
-        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready"}, location.origin), 100)</script>',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
       }),
     );
 
@@ -869,9 +882,11 @@ test.describe('Workflow library layout', () => {
     await expect(
       appSettingsModal.getByText('It must already be running before object storage mode can apply.'),
     ).toBeVisible();
-    await expect(appSettingsModal.getByLabel('Object storage URL')).toHaveValue('');
+    await expect(appSettingsModal.getByLabel('Object storage bucket')).toHaveValue('');
     await expect(appSettingsModal.getByLabel('Object storage access key ID')).toHaveValue('');
-    await appSettingsModal.getByLabel('Object storage URL').fill('http://workflow-minio:9000/rivet-workflows');
+    await appSettingsModal.getByLabel('Object storage bucket').fill('rivet-workflows');
+    await appSettingsModal.getByLabel('Object storage endpoint').fill('http://workflow-minio:9000');
+    await appSettingsModal.getByRole('button', { name: 'Path style' }).click();
     await appSettingsModal.getByLabel('Object storage access key ID').fill('minioadmin');
     await appSettingsModal.getByLabel('Object storage secret access key').fill('minioadmin');
     await expect(appSettingsActions).toHaveCount(1);
@@ -880,7 +895,7 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
     await appSettingsActions.getByRole('button', { name: 'Save' }).click();
     await expect(appSettingsActions.locator('.project-settings-success')).toHaveText(
-      'Saved. Restart Docker services or roll out Kubernetes pods to apply storage changes.',
+      'Saved. Restart Docker services to apply storage changes.',
     );
     await expect(
       appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success'),
@@ -1170,6 +1185,48 @@ test.describe('Workflow library layout', () => {
     await expect(page.getByRole('button', { name: 'Collapse folders pane' })).toBeVisible();
     await expect(title).toBeVisible();
     await expect(title).toHaveText('Rivet Studio Server');
+  });
+
+  test('shows Kubernetes deployment storage as read-only', async ({ page }) => {
+    await installAppSettingsRoute(page);
+    await page.route('**/api/app-settings/deployment-storage', (route) =>
+      route.fulfill({
+        json: {
+          storageMode: 'managed',
+          artifactsHostPath: '../',
+          databaseMode: 'managed',
+          databaseSslMode: 'require',
+          databaseConnectionStringConfigured: true,
+          storageUrl: 'https://rivet.s3.us-east-1.amazonaws.com',
+          objectStorageBucket: 'rivet',
+          objectStorageEndpoint: '',
+          objectStorageRegion: 'us-east-1',
+          objectStoragePrefix: 'workflows/',
+          objectStorageForcePathStyle: false,
+          deploymentManaged: true,
+          storageAccessKeyId: 'access',
+          storageAccessKeyConfigured: true,
+          updatedAt: null,
+          source: 'app-settings',
+        },
+      }),
+    );
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const modal = page.getByTestId('app-settings-modal');
+    await modal.getByRole('tab', { name: 'Storage' }).click();
+    await expect(modal.getByText('Kubernetes deployment storage is managed by the operator.')).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Local folders' })).toBeDisabled();
+    await expect(modal.getByLabel('Object storage bucket')).toBeDisabled();
+    await expect(modal.getByLabel('PostgreSQL connection string')).toBeDisabled();
   });
 
   test('resizes with a wider drag target and folds while dragging below half the minimum width', async ({ page }) => {

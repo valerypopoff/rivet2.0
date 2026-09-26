@@ -41,6 +41,7 @@ function providerConfig() {
   return {
     namespace: 'rivet-staging-evaluations',
     release: 'rivet-staging',
+    gatewayMode: 'external',
     baseUrl: 'https://rivet-staging.example.test',
     requestHeaders: { authorization: 'Bearer test-only' },
     workflowProbe: {

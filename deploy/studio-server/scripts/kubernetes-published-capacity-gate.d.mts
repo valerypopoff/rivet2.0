@@ -47,6 +47,8 @@ export function createPublishedCapacityLoadJobConfig(input: {
   serviceNamePrefix: string;
   namespace: string;
   jobName: string;
+  gatewayMode: 'external' | 'embedded';
+  baseUrl: string;
   capacity: {
     requestTimeoutMs: number;
     controlCanaryEveryRequests: number;

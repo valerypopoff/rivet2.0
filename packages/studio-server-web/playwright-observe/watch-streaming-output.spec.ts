@@ -533,6 +533,62 @@ test('Watch Streaming Output exposes its chunk outputs', async ({ page }) => {
   await expect(editor.getByLabel('Maximum parallel runs')).toBeVisible();
 });
 
+test('restores both All Chunks wires into a prewired Stop merge', async ({ page }) => {
+  await seedHostedEditorProject(page, {
+    graphId: 'watch-reconnect',
+    projectId: 'watch-reconnect-project',
+    projectPath: '/workflows/Watch reconnect.rivet-project',
+    title: 'Watch reconnect',
+    loaded: true,
+    graph: {
+      nodes: [
+        { id: 'source', type: 'text', title: 'Source', data: { text: 'ready' }, visualData: { x: 30, y: 270 } },
+        { id: 'watch', type: 'watchStreamingOutput', title: 'Watch', data: {}, visualData: { x: 280, y: 270 } },
+        {
+          id: 'condition',
+          type: 'expression',
+          title: 'Condition',
+          data: { expression: '{{a}}.join("").includes("BOOM")' },
+          visualData: { x: 550, y: 90 },
+        },
+        {
+          id: 'value',
+          type: 'expression',
+          title: 'Value',
+          data: { expression: '{{a}}.join("")' },
+          visualData: { x: 550, y: 420 },
+        },
+        {
+          id: 'stop',
+          type: 'stopWatchingStreamingOutput',
+          title: 'Stop',
+          isConditional: true,
+          data: {},
+          visualData: { x: 850, y: 270 },
+        },
+      ],
+      connections: [
+        { outputNodeId: 'source', outputId: 'output', inputNodeId: 'watch', inputId: 'stream' },
+        { outputNodeId: 'condition', outputId: 'output', inputNodeId: 'stop', inputId: '$if' },
+        { outputNodeId: 'value', outputId: 'output', inputNodeId: 'stop', inputId: 'value' },
+      ],
+    },
+  });
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  const editor = await getEditorRoot(page);
+  const allChunks = editor.locator('.node[data-nodeid="watch"] .output-port[data-portid="allStreamedOutput"]');
+  const conditionInput = editor.locator('.node[data-nodeid="condition"] .input-port[data-portid="a"]');
+  const valueInput = editor.locator('.node[data-nodeid="value"] .input-port[data-portid="a"]');
+
+  await expect(allChunks).toBeVisible({ timeout: 60_000 });
+  await allChunks.dragTo(conditionInput);
+  await expect(conditionInput.locator('..')).toHaveClass(/connected/);
+  await allChunks.dragTo(valueInput);
+  await expect(valueInput.locator('..')).toHaveClass(/connected/);
+  await expect(editor.getByText('Cannot create connection:', { exact: false })).toHaveCount(0);
+});
+
 test('Watch Streaming Output accepts a named Subgraph streaming output', async ({ page }) => {
   const graphId = 'watch-subgraph-streaming-output-graph';
   const childGraphId = 'streaming-child-graph';

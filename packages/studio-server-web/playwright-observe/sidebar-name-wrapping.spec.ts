@@ -121,7 +121,7 @@ async function installWrappingFixture(page: Page, tree: WorkflowTreeResponse, pr
   });
 }
 
-test('wraps long project, graph, and folder names in the server and editor sidebars', async ({ page }) => {
+test('wraps long sidebar names but clips the active project title to one line', async ({ page }) => {
   const projectName = `project-${'unbroken-name-'.repeat(14)}`;
   const serverFolderName = `server-folder-${'unbroken-name-'.repeat(12)}`;
   const graphFolderName = `editor-folder-${'unbroken-name-'.repeat(12)}`;
@@ -187,11 +187,26 @@ test('wraps long project, graph, and folder names in the server and editor sideb
   await serverProjectRow.dblclick();
 
   const activeProjectName = page.locator('.workflow-library-panel .active-project-name');
-  await expectWrappedLabel(activeProjectName);
+  await expect(activeProjectName).toHaveText(projectName);
+  const activeNameMetrics = await activeProjectName.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      clientWidth: element.clientWidth,
+      height: element.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(styles.lineHeight),
+      overflow: styles.overflow,
+      scrollWidth: element.scrollWidth,
+      textOverflow: styles.textOverflow,
+      whiteSpace: styles.whiteSpace,
+    };
+  });
+  expect(activeNameMetrics.whiteSpace).toBe('nowrap');
+  expect(activeNameMetrics.overflow).toBe('hidden');
+  expect(activeNameMetrics.textOverflow).toBe('clip');
+  expect(activeNameMetrics.scrollWidth).toBeGreaterThan(activeNameMetrics.clientWidth);
+  expect(activeNameMetrics.height).toBeLessThan(activeNameMetrics.lineHeight * 1.5);
   const activeProjectCard = page.locator('.workflow-library-panel .active-project-section');
-  const activeProjectCardBox = await activeProjectCard.boundingBox();
-  expect(activeProjectCardBox).not.toBeNull();
-  expect(activeProjectCardBox?.height).toBeGreaterThan(166);
+  await expect(activeProjectCard).toHaveCSS('height', '166px');
 
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   await expect(editor.locator('#graph-tree-sidebar')).toBeVisible({ timeout: 90_000 });

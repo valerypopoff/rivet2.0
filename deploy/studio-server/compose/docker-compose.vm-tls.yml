@@ -1,0 +1,31 @@
+# Optional single-VM entrypoint. Keep the application proxy and TLS edge in the
+# same nginx process so the inner proxy can trust only the loopback hop.
+services:
+  proxy:
+    read_only: true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=512m,uid=10001,gid=10001
+    ports:
+      - '${RIVET_HTTPS_PORT:-443}:8443'
+    environment:
+      - RIVET_PROXY_VM_TLS=1
+      - RIVET_PROXY_INTERNAL_LISTEN=127.0.0.1:18081
+      - RIVET_PROXY_HTTPS_PORT=${RIVET_HTTPS_PORT:-443}
+      - RIVET_PROXY_PUBLIC_HOST=${RIVET_PROXY_PUBLIC_HOST:?Set the public VM hostname}
+      - RIVET_PROXY_INTERNAL_HOST=${RIVET_PROXY_INTERNAL_HOST:?Set the private VM hostname}
+      - RIVET_TRUST_INCOMING_FORWARDED_HEADERS=true
+      - RIVET_TRUSTED_FORWARDING_PROXIES=127.0.0.1/32
+    volumes:
+      - ./../images/proxy/vm-tls.conf.template:/etc/nginx/templates/vm-tls.conf.template:ro
+      - ${RIVET_PROXY_TLS_CERT_HOST_PATH:?Set the certificate path}:/run/rivet/tls/cert.pem:ro
+      - ${RIVET_PROXY_TLS_KEY_HOST_PATH:?Set the private-key path}:/run/rivet/tls/key.pem:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'nginx -t && curl --noproxy "*" -kfsS --max-time 3 http://api:80/readyz -o /dev/null && curl --noproxy "*" -kfsS --max-time 3 http://web:3000/ -o /dev/null && curl --noproxy "*" -kfsS --max-time 3 --resolve "$$RIVET_PROXY_PUBLIC_HOST:8443:127.0.0.1" "https://$$RIVET_PROXY_PUBLIC_HOST:8443/" -o /dev/null',
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 5

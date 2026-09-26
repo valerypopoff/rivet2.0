@@ -46,7 +46,7 @@ securityContext:
     - /bin/sh
     - -ec
   args:
-    - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings.js
+    - . /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings.js
   env:
 {{ include "rivet.env.deploymentStorageBootstrap" $root | nindent 4 }}
 {{ include "rivet.env.appSettings" (dict "root" $root "includeDatabase" false) | nindent 4 }}

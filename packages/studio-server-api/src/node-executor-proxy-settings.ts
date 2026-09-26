@@ -81,7 +81,7 @@ export async function readNodeExecutorProxySettings(): Promise<NodeExecutorProxy
 }
 
 export async function projectNodeExecutorProxySettings(): Promise<void> {
-  if (getAppSettingsBackendKind() !== 'postgres') {
+  if (getAppSettingsBackendKind() !== 'postgres' || process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
     return;
   }
   const settings = nodeExecutorProxySettingsRepository.readSync().value;
@@ -111,6 +111,15 @@ export async function writeNodeExecutorProxySettings(
 }
 
 nodeExecutorProxySettingsRepository.subscribe(() => {
+  if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
+    const apply = (globalThis as typeof globalThis & {
+      __rivetApplyNodeExecutorProxySettings?: (settings: NodeExecutorProxySettings) => Promise<void>;
+    }).__rivetApplyNodeExecutorProxySettings;
+    if (apply) void apply(nodeExecutorProxySettingsRepository.readSync().value).catch((error) => {
+      console.error('[node-executor-proxy] Failed to refresh in-memory proxy settings:', error);
+    });
+    return;
+  }
   void projectNodeExecutorProxySettings().catch((error) => {
     console.error('[node-executor-proxy] Failed to refresh the pod-local settings projection:', error);
   });

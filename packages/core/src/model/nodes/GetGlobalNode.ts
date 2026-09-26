@@ -28,6 +28,14 @@ export type GetGlobalNodeData = {
 
   dataType: ScalarOrArrayDataType;
 
+  /** Editor-only explanation of a type copied from a known variable declaration. */
+  typeSuggestion?: {
+    id: string;
+    type: ScalarOrArrayDataType;
+    source: string;
+    conflictingTypes: ScalarOrArrayDataType[];
+  };
+
   /**
    * Returns a fn<value> instead of a value, so that the variable is read when nodes need it, rather than when this node executes.
    * The only time you wouldn't want this is to read a global at the start of a subgraph.

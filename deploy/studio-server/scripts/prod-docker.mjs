@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import {
@@ -19,6 +20,48 @@ export const DEFAULT_PRODUCTION_COMPOSE_PROJECT = 'compose';
 export const LEGACY_PRODUCTION_COMPOSE_PROJECTS = ['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT];
 const composeProjectNamePattern = /^[a-z0-9][a-z0-9_-]*$/;
 const diagnosticServices = 'api web executor proxy';
+const dnsLabelPattern = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+export function resolveVmTlsConfiguration(environment) {
+  const keys = [
+    'RIVET_PROXY_PUBLIC_HOST',
+    'RIVET_PROXY_INTERNAL_HOST',
+    'RIVET_PROXY_TLS_CERT_HOST_PATH',
+    'RIVET_PROXY_TLS_KEY_HOST_PATH',
+  ];
+  if (!keys.some((key) => environment[key]?.trim())) return { enabled: false };
+  if (keys.some((key) => !environment[key]?.trim())) {
+    throw new Error('VM TLS requires both hostnames and both certificate host paths.');
+  }
+  if (keys.some((key) => environment[key] !== environment[key].trim())) {
+    throw new Error('VM TLS hostnames and certificate paths must not have surrounding whitespace.');
+  }
+  const hosts = keys.slice(0, 2).map((key) => environment[key].trim().toLowerCase());
+  if (
+    hosts[0] === hosts[1] ||
+    hosts.some(
+      (host) => host.length > 253 || host.split('.').some((label) => label.length > 63 || !dnsLabelPattern.test(label)),
+    )
+  ) {
+    throw new Error('VM TLS requires distinct valid public and internal DNS hostnames.');
+  }
+  for (const key of keys.slice(2)) {
+    const file = environment[key].trim();
+    let isFile = false;
+    if (path.isAbsolute(file) || path.posix.isAbsolute(file)) {
+      try {
+        isFile = statSync(file).isFile();
+      } catch {
+        // Report missing or inaccessible certificate files without exposing
+        // their contents or an incidental filesystem stack trace.
+      }
+    }
+    if (!isFile) {
+      throw new Error(`${key} must name an existing absolute file.`);
+    }
+  }
+  return { enabled: true };
+}
 
 export function appDataVolumeName(composeProject) {
   return `${composeProject}_rivet_data`;
@@ -73,6 +116,17 @@ async function main() {
   const action = process.argv[2] == null ? 'prebuilt' : process.argv[2];
   const { mergedEnv, envPath, hasEnvFile, fileEnv } = loadDevEnv(rootDir);
   dropAmbientNodeOptionsForDocker(mergedEnv, fileEnv);
+  const vmTls = resolveVmTlsConfiguration(mergedEnv);
+  if (vmTls.enabled) {
+    mergedEnv.RIVET_PORT ||= '80';
+    mergedEnv.RIVET_HTTPS_PORT ||= '443';
+    for (const key of ['RIVET_PORT', 'RIVET_HTTPS_PORT']) {
+      const value = mergedEnv[key];
+      if (!/^[1-9][0-9]{0,4}$/.test(value) || Number(value) > 65535) {
+        throw new Error(`${key} must be a valid TCP port in VM TLS mode.`);
+      }
+    }
+  }
 
   const envFileLabel = path.basename(envPath);
   const { composeProject, source } = await resolveProductionComposeProject({
@@ -97,6 +151,9 @@ async function main() {
       `--env-file "${relativeEnvPath}" -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml -f deploy/studio-server/compose/docker-compose.runtime-env.yml`,
     );
   }
+  if (vmTls.enabled) {
+    composeBase = `${composeBase} -f deploy/studio-server/compose/docker-compose.vm-tls.yml`;
+  }
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });
 
@@ -113,6 +170,8 @@ async function main() {
     label: 'prod-docker',
   });
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
+  const httpsPort = vmTls.enabled ? assertValidPort(mergedEnv.RIVET_HTTPS_PORT, 443) : undefined;
+  if (httpsPort === proxyPort) throw new Error('VM HTTP and HTTPS host ports must differ.');
   const commandsByAction = {
     config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
     services: [`${composeBase} config --services`],
@@ -148,6 +207,9 @@ async function main() {
           envFileLabel,
           label: 'prod-docker',
         });
+        if (vmTls.enabled) {
+          await ensurePortAvailable(httpsPort, { envFileLabel, label: 'prod-docker' });
+        }
       }
     }
 

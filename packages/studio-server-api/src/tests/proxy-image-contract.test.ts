@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
-import { extractBracedBlock, readRepoFile, readRepoJson } from './helpers/repo-contract-helpers.js';
+import { extractBracedBlock, readRepoFile, readRepoJson, repoRoot } from './helpers/repo-contract-helpers.js';
 
 const proxyTemplatePaths = [
   'deploy/studio-server/images/proxy/default.conf.template',
@@ -18,7 +22,10 @@ function proxyLocation(template: string, locationPattern: RegExp): string {
 }
 
 function proxyPublicLocation(template: string, locationPattern: RegExp): string {
-  const publicServer = extractBracedBlock(template, /server\s*\{\s*listen (?:80|8080);/);
+  const publicServer = extractBracedBlock(
+    template,
+    /server\s*\{(?=\s*listen (?:80|8080|\$\{RIVET_PROXY_INTERNAL_LISTEN\});)/,
+  );
   return extractBracedBlock(publicServer, locationPattern);
 }
 
@@ -39,6 +46,97 @@ function composeServiceNames(compose: string): string[] {
   assert.ok(names.length > 0, 'Expected at least one Compose service.');
   return names;
 }
+
+test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-only hop', () => {
+  const image = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
+  const overlay = readRepoFile('deploy/studio-server/compose/docker-compose.vm-tls.yml');
+  const edge = readRepoFile('deploy/studio-server/images/proxy/vm-tls.conf.template');
+  const hop = readRepoFile('deploy/studio-server/images/proxy/vm-edge-proxy.conf');
+  const normalizer = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
+  assert.match(image, /ENV RIVET_PROXY_INTERNAL_LISTEN=8080/);
+  assert.match(overlay, /read_only: true[\s\S]*cap_drop: \[ALL\][\s\S]*tmpfs:/);
+  assert.match(overlay, /RIVET_PROXY_INTERNAL_LISTEN=127\.0\.0\.1:18081/);
+  assert.match(overlay, /RIVET_PROXY_HTTPS_PORT=\$\{RIVET_HTTPS_PORT:-443\}/);
+  assert.match(overlay, /RIVET_TRUSTED_FORWARDING_PROXIES=127\.0\.0\.1\/32/);
+  assert.match(overlay, /\/run\/rivet\/tls\/cert\.pem:ro/);
+  assert.match(overlay, /\/run\/rivet\/tls\/key\.pem:ro/);
+  assert.match(
+    edge,
+    /listen 8080;\s*server_name \$\{RIVET_PROXY_PUBLIC_HOST\};\s*return 301 https:\/\/\$host\$\{RIVET_PROXY_HTTPS_REDIRECT_SUFFIX\}\$request_uri;/,
+  );
+  assert.match(edge, /listen 8080;\s*server_name \$\{RIVET_PROXY_INTERNAL_HOST\};/);
+  assert.match(edge, /listen 8443 ssl;\s*http2 on;\s*server_name \$\{RIVET_PROXY_PUBLIC_HOST\};/);
+  assert.match(hop, /proxy_pass http:\/\/127\.0\.0\.1:18081;/);
+  assert.match(hop, /proxy_set_header X-Forwarded-For \$remote_addr;/);
+  assert.match(hop, /proxy_set_header X-Rivet-Proxy-Auth "";/);
+  assert.match(hop, /proxy_set_header X-Rivet-Executor-Auth "";/);
+  assert.match(hop, /proxy_set_header X-Rivet-Ui-Return-To "";/);
+  assert.match(normalizer, /incomplete VM TLS proxy configuration/);
+});
+
+test('VM TLS fixture rejects a partial certificate pair before touching a supplied file', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
+  const cert = path.join(directory, 'existing.pem');
+  try {
+    writeFileSync(cert, 'keep this file');
+    const before = statSync(cert);
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '', RIVET_VM_TLS_FIXTURE_CERT: cert, RIVET_VM_TLS_FIXTURE_KEY: '' },
+        timeout: 5_000,
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together/);
+    const after = statSync(cert);
+    assert.equal(after.size, before.size);
+    assert.equal(after.mtimeMs, before.mtimeMs);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('VM TLS fixture does not change the supplied certificate pair', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
+  const cert = path.join(directory, 'existing-cert.pem');
+  const key = path.join(directory, 'existing-key.pem');
+  try {
+    writeFileSync(cert, 'keep this certificate');
+    writeFileSync(key, 'keep this key');
+    if (process.platform !== 'win32') {
+      chmodSync(cert, 0o600);
+      chmodSync(key, 0o600);
+    }
+    const certBefore = statSync(cert);
+    const keyBefore = statSync(key);
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '', RIVET_VM_TLS_FIXTURE_CERT: cert, RIVET_VM_TLS_FIXTURE_KEY: key },
+        timeout: 5_000,
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /docker/);
+    const certAfter = statSync(cert);
+    const keyAfter = statSync(key);
+    assert.equal(certAfter.size, certBefore.size);
+    assert.equal(keyAfter.size, keyBefore.size);
+    assert.equal(certAfter.mtimeMs, certBefore.mtimeMs);
+    assert.equal(keyAfter.mtimeMs, keyBefore.mtimeMs);
+    assert.equal(certAfter.mode, certBefore.mode);
+    assert.equal(keyAfter.mode, keyBefore.mode);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('proxy templates route public workflow traffic to the right API plane', () => {
   const imageProxyTemplate = readRepoFile('deploy/studio-server/images/proxy/default.conf.template');
@@ -275,7 +373,9 @@ test('dev Compose recreates Nginx when its upstream container is recreated', () 
   for (const service of ['web', 'api', 'executor']) {
     assert.match(
       proxy,
-      new RegExp(`\\n      ${service}:\\s*\\r?\\n        condition: [^\\r\\n]+\\r?\\n(?:        #[^\\r\\n]*\\r?\\n)*        restart: true`),
+      new RegExp(
+        `\\n      ${service}:\\s*\\r?\\n        condition: [^\\r\\n]+\\r?\\n(?:        #[^\\r\\n]*\\r?\\n)*        restart: true`,
+      ),
     );
   }
 });
@@ -493,7 +593,10 @@ test('images and local launchers build directly from the monorepo workspace', ()
   assert.match(devDockerLauncher, /Restarting the dev stack because dependency markers changed/);
   assert.match(dockerLauncher, /docker ps -aq --no-trunc/);
   assert.match(devDockerLauncher, /dev: \[`\$\{composeBase\} up -d --remove-orphans --wait/);
-  assert.match(devDockerLauncher, /down --remove-orphans --timeout 20`,\s*`\$\{composeBase\} up -d --build --remove-orphans --wait/);
+  assert.match(
+    devDockerLauncher,
+    /down --remove-orphans --timeout 20`,\s*`\$\{composeBase\} up -d --build --remove-orphans --wait/,
+  );
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(
     prodDockerLauncher,
@@ -514,8 +617,8 @@ test('images and local launchers build directly from the monorepo workspace', ()
 });
 
 test('CI and production launchers publish and run the Studio Server image set from one commit', () => {
-  const imageBuildWorkflow = readRepoFile('.github/workflows/studio-server-images.yml');
-  const verificationWorkflow = readRepoFile('.github/workflows/studio-server-verify.yml');
+  const imageBuildWorkflow = readRepoFile('.github/workflows/studio-server-images.yml').replace(/\r\n/g, '\n');
+  const verificationWorkflow = readRepoFile('.github/workflows/studio-server-verify.yml').replace(/\r\n/g, '\n');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
   const packageJson = readRepoJson<{
@@ -620,8 +723,8 @@ test('Compose explicitly initializes every writable storage mount before runtime
     const initializer = composeServiceBlock(compose, 'filesystem-artifacts-init');
 
     assert.match(initializer, expectedImage, `${topology} initializer image`);
-    assert.match(initializer, /user: "0:0"/);
-    assert.match(initializer, /entrypoint: \["\/bin\/sh", "-ec"\]/);
+    assert.match(initializer, /user: ['"]0:0['"]/);
+    assert.match(initializer, /entrypoint: \[['"]\/bin\/sh['"], ['"]-ec['"]\]/);
     assert.match(initializer, /command:\s*\n\s*- \|/);
     assert.match(
       initializer,
@@ -636,7 +739,7 @@ test('Compose explicitly initializes every writable storage mount before runtime
       initializer,
       /- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,
     );
-    assert.match(initializer, /restart: "no"/);
+    assert.match(initializer, /restart: ['"]no['"]/);
     assert.doesNotMatch(initializer, /rivet_workspace|\/workspace/);
 
     for (const service of ['api', 'executor']) {

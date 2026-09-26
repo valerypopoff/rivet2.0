@@ -1,4 +1,4 @@
-{{- if .Values.autoscaling.proxy.enabled }}
+{{- if and (eq .Values.gateway.mode "embedded") .Values.autoscaling.proxy.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

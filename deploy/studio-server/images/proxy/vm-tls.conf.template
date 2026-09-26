@@ -1,0 +1,44 @@
+# Only the public DNS name is redirected to HTTPS. The private DNS name stays
+# on HTTP; the VM firewall must restrict who can reach that listener.
+server {
+    listen 8080 default_server;
+    server_name _;
+    return 404;
+}
+
+server {
+    listen 8080;
+    server_name ${RIVET_PROXY_PUBLIC_HOST};
+    return 301 https://$host${RIVET_PROXY_HTTPS_REDIRECT_SUFFIX}$request_uri;
+}
+
+server {
+    listen 8080;
+    server_name ${RIVET_PROXY_INTERNAL_HOST};
+    client_max_body_size 100m;
+    location / {
+        include /etc/nginx/vm-edge-proxy.conf;
+    }
+}
+
+server {
+    listen 8443 ssl default_server;
+    server_name _;
+    ssl_certificate /run/rivet/tls/cert.pem;
+    ssl_certificate_key /run/rivet/tls/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    return 404;
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${RIVET_PROXY_PUBLIC_HOST};
+    ssl_certificate /run/rivet/tls/cert.pem;
+    ssl_certificate_key /run/rivet/tls/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 100m;
+    location / {
+        include /etc/nginx/vm-edge-proxy.conf;
+    }
+}

@@ -89,7 +89,12 @@ export type DeploymentStorageSettingsForm = {
   databaseSslMode: DeploymentDatabaseSslMode;
   databaseConnectionString: string;
   databaseConnectionStringConfigured: boolean;
-  storageUrl: string;
+  objectStorageBucket: string;
+  objectStorageEndpoint: string;
+  objectStorageRegion: string;
+  objectStoragePrefix: string;
+  objectStorageForcePathStyle: boolean;
+  deploymentManaged: boolean;
   storageAccessKeyId: string;
   storageAccessKey: string;
   storageAccessKeyConfigured: boolean;
@@ -170,7 +175,12 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
     databaseSslMode: settings.databaseSslMode,
     databaseConnectionString: '',
     databaseConnectionStringConfigured: settings.databaseConnectionStringConfigured,
-    storageUrl: settings.storageUrl,
+    objectStorageBucket: settings.objectStorageBucket ?? '',
+    objectStorageEndpoint: settings.objectStorageEndpoint ?? '',
+    objectStorageRegion: settings.objectStorageRegion ?? 'us-east-1',
+    objectStoragePrefix: settings.objectStoragePrefix ?? 'workflows/',
+    objectStorageForcePathStyle: settings.objectStorageForcePathStyle ?? false,
+    deploymentManaged: settings.deploymentManaged ?? false,
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKey: '',
     storageAccessKeyConfigured: settings.storageAccessKeyConfigured,

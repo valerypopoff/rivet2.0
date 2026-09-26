@@ -166,7 +166,8 @@ function readDeploymentStorageSettingsFile() {
   }
 }
 
-function getStorageMode() {
+function getStorageMode(runtimeSettings) {
+  if (runtimeSettings) return runtimeSettings.storageMode;
   const deploymentSettings = readDeploymentStorageSettingsFile();
   if (deploymentSettings?.source === 'app-settings') {
     assertNoRetiredEnv(RETIRED_RUNTIME_ENV_REPLACEMENTS);
@@ -270,11 +271,16 @@ function isExecutorRuntimeEntryArg(arg) {
   return arg.includes('executor-bundle') || arg.includes('app-executor');
 }
 
-export function isManagedRuntimeLibrariesEnabled() {
-  return getStorageMode() === 'managed';
+export function isExecutorRuntimeEntryProcess() {
+  return getNormalizedArgv().some(isExecutorRuntimeEntryArg);
+}
+
+export function isManagedRuntimeLibrariesEnabled(runtimeSettings) {
+  return getStorageMode(runtimeSettings) === 'managed';
 }
 
 export function shouldBootstrapManagedRuntimeLibrariesInCurrentProcess() {
+  if (readEnv('RIVET_DEPLOYMENT_TOPOLOGY') === 'replicated') return false;
   if (!isManagedRuntimeLibrariesEnabled()) {
     return false;
   }
@@ -283,7 +289,7 @@ export function shouldBootstrapManagedRuntimeLibrariesInCurrentProcess() {
   const runtimeProcessRole = inferRuntimeProcessRole();
 
   if (runtimeProcessRole === 'executor') {
-    return argv.some(isExecutorRuntimeEntryArg);
+    return isExecutorRuntimeEntryProcess();
   }
 
   if (argv.includes('watch')) {
@@ -293,22 +299,33 @@ export function shouldBootstrapManagedRuntimeLibrariesInCurrentProcess() {
   return argv.some(isApiRuntimeEntryArg);
 }
 
-export function getManagedRuntimeLibrariesConfig() {
-  const storageConfig = getManagedStorageConfig();
+export function getManagedRuntimeLibrariesConfig(runtimeSettings) {
+  const storageConfig = runtimeSettings ? {
+    databaseMode: runtimeSettings.databaseMode,
+    databaseUrl: stripDatabaseSslQueryOptions(runtimeSettings.databaseConnectionString),
+    databaseSslMode: runtimeSettings.databaseSslMode,
+    storageUrl: runtimeSettings.storageUrl,
+    objectStorageAccessKeyId: runtimeSettings.storageAccessKeyId,
+    objectStorageSecretAccessKey: runtimeSettings.storageAccessKey,
+  } : getManagedStorageConfig();
   const databaseUrl = storageConfig.databaseUrl;
   if (!databaseUrl) {
     throw new Error('Managed runtime-library sync requires a PostgreSQL connection string in Settings -> Storage');
   }
 
-  const parsedStorageUrl = storageConfig.storageUrl ? parseManagedStorageUrl(storageConfig.storageUrl) : null;
-  if (!parsedStorageUrl) {
+  const parsedStorageUrl = runtimeSettings?.objectStorageBucket ? null :
+    storageConfig.storageUrl ? parseManagedStorageUrl(storageConfig.storageUrl) : null;
+  if (!runtimeSettings?.objectStorageBucket && !parsedStorageUrl) {
     throw new Error('Managed runtime-library sync requires an object storage URL in deployment storage app settings');
   }
 
-  const objectStorageBucket = parsedStorageUrl?.bucket;
-  const objectStorageRegion = parsedStorageUrl?.region || 'us-east-1';
-  const objectStorageEndpoint = parsedStorageUrl?.endpoint || undefined;
-  const objectStorageForcePathStyle = parsedStorageUrl?.forcePathStyle ?? false;
+  const objectStorageBucket = runtimeSettings?.objectStorageBucket || parsedStorageUrl?.bucket;
+  const objectStorageRegion = runtimeSettings?.objectStorageBucket
+    ? runtimeSettings.objectStorageRegion : parsedStorageUrl?.region || 'us-east-1';
+  const objectStorageEndpoint = runtimeSettings?.objectStorageBucket
+    ? runtimeSettings.objectStorageEndpoint || undefined : parsedStorageUrl?.endpoint || undefined;
+  const objectStorageForcePathStyle = runtimeSettings?.objectStorageBucket
+    ? runtimeSettings.objectStorageForcePathStyle : parsedStorageUrl?.forcePathStyle ?? false;
   const replicaStatusRetentionMs = normalizePositiveInt(
     readEnv(RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_ENV_NAME),
     getDefaultReplicaStatusRetentionMs(storageConfig.databaseMode),

@@ -28,6 +28,8 @@ import {
 } from './app-settings/settings-repository.js';
 import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController, type RuntimeHealthCheck } from './runtime-health.js';
 import { configureStudioMetrics } from './metrics.js';
+import { getDeploymentStorageBootstrapDrift, readDeploymentStorageRuntimeSettingsSync } from './deployment-storage-settings.js';
+import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
@@ -256,6 +258,25 @@ async function startServer(): Promise<void> {
     }
     await initializeAppSettingsRepositories();
     assertStartupActive();
+    if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
+      const storageSettings = readDeploymentStorageRuntimeSettingsSync();
+      const mismatchedFields = process.env.RIVET_DEPLOYMENT_STORAGE_BUCKET || process.env.RIVET_DEPLOYMENT_STORAGE_URL
+        ? getDeploymentStorageBootstrapDrift(storageSettings) : [];
+      if (mismatchedFields.length > 0) {
+        console.warn(
+          `[deployment-storage] Helm bootstrap differs from the authoritative PostgreSQL settings row (${mismatchedFields.join(', ')}). The row remains authoritative; reconcile configuration before rollout.`,
+        );
+      }
+      const bootstrap = globalThis as typeof globalThis & {
+        __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
+        __rivetStartManagedRuntimeLibraries?: (settings: unknown) => Promise<void>;
+      };
+      if (!bootstrap.__rivetApplyNodeExecutorProxySettings || !bootstrap.__rivetStartManagedRuntimeLibraries) {
+        throw new Error('Managed runtime configuration bootstrap is not installed.');
+      }
+      await bootstrap.__rivetApplyNodeExecutorProxySettings(nodeExecutorProxySettingsRepository.readSync().value);
+      await bootstrap.__rivetStartManagedRuntimeLibraries(storageSettings);
+    }
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
     await reconcileRuntimeLibraries();
     assertStartupActive();

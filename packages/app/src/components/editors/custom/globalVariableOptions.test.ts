@@ -1,16 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ChartNode, GraphId, NodeGraph, NodeId, Project } from '@valerypopoff/rivet2-core';
+import type { ChartNode, GraphId, NodeGraph, NodeId, Project, ScalarOrArrayDataType } from '@valerypopoff/rivet2-core';
 import {
   getGlobalVariableOptions,
+  getGlobalVariableTypeSuggestion,
   getMissingKnownGlobalVariableWarning,
   getKnownGlobalVariableIds,
 } from './globalVariableOptions.js';
 
-function setGlobalNode(id: string, useIdInput = false, disabled = false): ChartNode {
+function setGlobalNode(
+  id: string,
+  useIdInput = false,
+  disabled = false,
+  dataType: ScalarOrArrayDataType = 'string',
+  nodeId = `set-global-${id}`,
+): ChartNode {
   return {
     type: 'setGlobal',
-    id: `set-global-${id}` as NodeId,
+    id: nodeId as NodeId,
     title: 'Set Global',
     visualData: {
       x: 0,
@@ -20,7 +27,7 @@ function setGlobalNode(id: string, useIdInput = false, disabled = false): ChartN
     data: {
       id,
       useIdInput,
-      dataType: 'string',
+      dataType,
     },
     disabled,
   };
@@ -111,6 +118,17 @@ test('getGlobalVariableOptions deduplicates repeated fixed IDs', () => {
   );
 });
 
+test('getGlobalVariableOptions excludes IDs with only disabled Set Global writers', () => {
+  assert.deepEqual(
+    getGlobalVariableOptions(
+      project({
+        main: graph('main', [setGlobalNode('disabled-only', false, true), setGlobalNode('enabled')]),
+      }),
+    ),
+    [{ label: 'enabled', value: 'enabled' }],
+  );
+});
+
 test('getGlobalVariableOptions includes project and referenced project global variables', () => {
   assert.deepEqual(
     getGlobalVariableOptions(
@@ -150,6 +168,54 @@ test('getGlobalVariableOptions prefers the live graph over the saved project gra
       { label: 'live-id', value: 'live-id' },
       { label: 'other-id', value: 'other-id' },
     ],
+  );
+});
+
+test('Get Global type suggestion prefers the configured project variable and reports conflicting setters', () => {
+  assert.deepEqual(
+    getGlobalVariableTypeSuggestion(
+      'shared',
+      project({ main: graph('main', [setGlobalNode('shared', false, false, 'string')]) }, {
+        shared: { type: 'number', value: 2 },
+      }),
+    ),
+    { type: 'number', source: 'project settings', conflictingTypes: ['string'] },
+  );
+});
+
+test('Get Global type suggestion uses the live graph, then stable node IDs, without stale or disabled setters', () => {
+  const saved = project({
+    main: graph('main', [setGlobalNode('shared', false, false, 'string')]),
+    other: graph('other', [setGlobalNode('shared', false, false, 'boolean')]),
+  });
+  const live = graph('main', [
+    setGlobalNode('shared', false, false, 'number', 'z-writer'),
+    setGlobalNode('shared', false, false, 'object', 'a-writer'),
+    setGlobalNode('shared', false, true, 'date', 'disabled-writer'),
+    setGlobalNode('shared', true, false, 'image', 'dynamic-writer'),
+  ]);
+
+  assert.deepEqual(getGlobalVariableTypeSuggestion('shared', saved, live), {
+    type: 'object',
+    source: 'Set Global "Set Global"',
+    conflictingTypes: ['boolean', 'number'],
+  });
+  assert.equal(getGlobalVariableTypeSuggestion('missing', saved, live), undefined);
+});
+
+test('Get Global type suggestion can use a referenced project definition', () => {
+  assert.deepEqual(
+    getGlobalVariableTypeSuggestion('from-reference', project({}), undefined, {
+      referenced: {
+        metadata: {
+          id: 'referenced' as never,
+          title: 'Reference',
+          description: '',
+          globalVariables: { 'from-reference': { type: 'string[]', value: ['a'] } },
+        },
+      },
+    }),
+    { type: 'string[]', source: 'referenced project "Reference"', conflictingTypes: [] },
   );
 });
 

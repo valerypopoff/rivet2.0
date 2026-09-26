@@ -5,6 +5,7 @@ import type { ChartNode, PortId } from '@valerypopoff/rivet2-node';
 
 if (!process.send || !process.env.RIVET_ASYNC_TEST_ROOT) throw new Error('Requires the isolated async test harness');
 const root = process.env.RIVET_ASYNC_TEST_ROOT;
+const endpointName = process.env.RIVET_ASYNC_TEST_ENDPOINT_NAME || 'async-acceptance';
 await fs.mkdir(path.join(root, 'app', 'settings'), { recursive: true });
 await fs.mkdir(path.join(root, 'workflows'), { recursive: true });
 if (process.env.RIVET_ASYNC_TEST_STORAGE) {
@@ -18,7 +19,10 @@ const rivet = await import('@valerypopoff/rivet2-node');
 await storage.initializeWorkflowStorage();
 const { writeWorkflowEndpointAuthSettings } = await import('../../workflow-endpoint-auth-settings.js');
 await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
-const created = await storage.createWorkflowProjectItemWithBackend('', 'Async acceptance');
+const created = await storage.createWorkflowProjectItemWithBackend(
+  '',
+  process.env.RIVET_ASYNC_TEST_PROJECT_NAME || 'Async acceptance',
+);
 const project = rivet.loadProjectFromString((await storage.loadHostedProject(created.absolutePath)).contents);
 const graph = project.graphs[project.metadata.mainGraphId!]!;
 const input = rivet.graphInputNode.impl.create();
@@ -58,7 +62,7 @@ const reviewed = await storage.listWorkflowProjectWebAppsWithBackend(created.rel
 await storage.executeWorkflowPublicationCommandWithBackend({
   kind: 'publish-endpoint',
   relativePath: created.relativePath,
-  endpointName: 'async-acceptance',
+  endpointName,
   preconditions: {
     expectedProjectId: reviewed.projectId,
     expectedPublicationVersion: reviewed.publicationVersion,

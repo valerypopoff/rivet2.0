@@ -127,6 +127,7 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
   for (const [variant, template, proxyPort, webPort] of templates) {
     const values = {
       RIVET_PROXY_RESOLVER: '127.0.0.11',
+      RIVET_PROXY_INTERNAL_LISTEN: String(proxyPort),
       RIVET_TRUST_INCOMING_FORWARDED_HEADERS: '0',
       RIVET_PROXY_AUTH_TOKEN: 'fixture-secret',
       RIVET_TRUSTED_HOSTS_INCLUDE_FILE: '/fixture/empty.inc',

@@ -32,15 +32,13 @@ spec:
       {{- include "rivet.pod.placement" (dict "root" . "component" "backend") | nindent 6 }}
       {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
       initContainers:
+        {{- if .Values.compatibility.legacyStartupSettingsFiles }}
         - name: deployment-storage-settings
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
           {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
-          command:
-            - /bin/sh
-            - -ec
-          args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+          command: ["/bin/sh", "-ec"]
+          args: [". /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs"]
           env:
 {{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
           volumeMounts:
@@ -50,6 +48,24 @@ spec:
           resources:
 {{ toYaml .Values.resources.api | nindent 12 }}
 {{ include "rivet.pod.appSettingsProjectionInitContainer" (dict "root" . "resources" .Values.resources.api) | nindent 8 }}
+        {{- else }}
+        - name: api-runtime-config-compatibility
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command: ["/bin/sh", "-ec"]
+          args: ['test "${RIVET_RUNTIME_CONFIG_PROTOCOL:-}" = "1"']
+          resources:
+{{ toYaml .Values.resources.api | nindent 12 }}
+        - name: executor-runtime-config-compatibility
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.executor) }}
+          imagePullPolicy: {{ .Values.images.executor.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command: ["/bin/sh", "-ec"]
+          args: ['test "${RIVET_RUNTIME_CONFIG_PROTOCOL:-}" = "1"']
+          resources:
+{{ toYaml .Values.resources.executor | nindent 12 }}
+        {{- end }}
       containers:
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}

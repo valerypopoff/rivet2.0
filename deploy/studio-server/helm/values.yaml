@@ -2,6 +2,12 @@ imagePullSecrets: []
 
 clusterDomain: cluster.local
 
+# External is the Kubernetes default: DevOps supplies the HTTP gateway/Ingress.
+# Embedded preserves the older in-chart nginx gateway for existing releases and
+# local test clusters only.
+gateway:
+  mode: external
+
 images:
   proxy:
     repository: example.invalid/rivet/proxy
@@ -112,7 +118,7 @@ hostedEvaluations:
     priorityClassName: ''
 autoscaling:
   proxy:
-    enabled: true
+    enabled: false
     minReplicas: 2
     maxReplicas: 5
     targetCPUUtilizationPercentage: 75
@@ -351,6 +357,10 @@ appSettings:
   legacyImport:
     # Optional one-time source from deployments that used the old shared app-data PVC.
     existingClaimName: ''
+
+compatibility:
+  # Set only by the verified forward-rollback command for predecessor images.
+  legacyStartupSettingsFiles: false
 
 tmpVolume:
   enabled: true

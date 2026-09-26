@@ -49,6 +49,7 @@ function writeLocalVerificationEnv() {
     'RIVET_K8S_DATABASE_CONNECTION_STRING=postgresql://db-user:db-pass@example-db:5432/rivet?sslmode=require',
     'RIVET_K8S_DATABASE_SSL_MODE=require',
     'RIVET_K8S_STORAGE_URL=https://test-bucket-111.sfo3.digitaloceanspaces.com',
+    'RIVET_K8S_STORAGE_REGION=sfo3',
     'RIVET_K8S_STORAGE_ACCESS_KEY_ID=test-access-key',
     'RIVET_K8S_STORAGE_ACCESS_KEY=test-secret-key',
     'RIVET_KEY=test-shared-key',

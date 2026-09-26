@@ -17,6 +17,8 @@
 {{- end -}}
 {{- include "rivet.env.vaultDotenv" $root }}
 {{ include "rivet.env.databasePool" $root }}
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: "replicated"
 - name: RIVET_APP_DATA_ROOT
   value: {{ $appDataRoot | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_MODE
@@ -52,6 +54,8 @@
   value: {{ $root.Values.objectStorage.bucket | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_REGION
   value: {{ $root.Values.objectStorage.region | quote }}
+- name: RIVET_DEPLOYMENT_STORAGE_PREFIX
+  value: {{ $root.Values.objectStorage.prefix | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_ENDPOINT
   value: {{ $root.Values.objectStorage.endpoint | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE
@@ -254,6 +258,10 @@
   value: /data/runtime-libraries
 - name: RIVET_RUNTIME_PROCESS_ROLE
   value: executor
+- name: RIVET_DEPLOYMENT_TOPOLOGY
+  value: replicated
+- name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL
+  value: {{ printf "http://127.0.0.1:%v/internal/executor-runtime-config" .apiPort | quote }}
 - name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER
   value: editor
 - name: RIVET_LLM_PROFILE_HEALTH_API_URL

@@ -29,16 +29,14 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- include "rivet.pod.placement" (dict "root" . "component" "execution") | nindent 6 }}
       {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      {{- if .Values.compatibility.legacyStartupSettingsFiles }}
       initContainers:
         - name: deployment-storage-settings
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
           {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
-          command:
-            - /bin/sh
-            - -ec
-          args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
+          command: ["/bin/sh", "-ec"]
+          args: [". /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; node /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs"]
           env:
 {{ include "rivet.env.deploymentStorageBootstrap" . | nindent 12 }}
           volumeMounts:
@@ -48,6 +46,7 @@ spec:
           resources:
 {{ toYaml .Values.resources.execution | nindent 12 }}
 {{ include "rivet.pod.appSettingsProjectionInitContainer" (dict "root" . "resources" .Values.resources.execution) | nindent 8 }}
+      {{- end }}
       containers:
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}

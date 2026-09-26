@@ -9,6 +9,7 @@ const bootstrapProxySettings = await import(
 ) as {
   NODE_EXECUTOR_PROXY_SETTINGS_RELATIVE_PATH: string;
   applyNodeExecutorProxySettingsToEnv(settings: unknown): void;
+  applyManagedNodeExecutorProxySettings(settings: unknown): Promise<void>;
   getNodeExecutorProxySettingsPath(): string;
   loadAndApplyNodeExecutorProxySettings(options?: {
     quiet?: boolean;
@@ -142,6 +143,23 @@ test('Node executor proxy bootstrap always bypasses launcher-owned local hosts',
 
     assert.equal(process.env.NO_PROXY, 'localhost,host.docker.internal');
     assert.equal(process.env.no_proxy, 'localhost,host.docker.internal');
+  });
+});
+
+test('managed executor proxy settings apply in memory and reject malformed refreshes without clearing the last value', async () => {
+  await withProxySettingsEnv(async (root) => {
+    await bootstrapProxySettings.applyManagedNodeExecutorProxySettings({
+      httpProxy: 'http://proxy.local:3128',
+      httpsProxy: 'http://proxy.local:3128',
+      noProxy: 'localhost',
+    });
+    assert.equal(process.env.HTTPS_PROXY, 'http://proxy.local:3128');
+    await assert.rejects(
+      bootstrapProxySettings.applyManagedNodeExecutorProxySettings({ httpsProxy: null }),
+      /invalid/,
+    );
+    assert.equal(process.env.HTTPS_PROXY, 'http://proxy.local:3128');
+    assert.equal(fs.existsSync(path.join(root, 'settings', 'node-executor-proxy.json')), false);
   });
 });
 

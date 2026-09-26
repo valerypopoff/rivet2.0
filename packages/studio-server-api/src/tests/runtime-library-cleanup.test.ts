@@ -13,7 +13,7 @@ const runtimeLibrariesConfig = await import('../runtime-libraries/config.js');
 const bootstrapConfig = await import(new URL('../../../studio-server-bootstrap/config.mjs', import.meta.url).href) as {
   isManagedRuntimeLibrariesEnabled: () => boolean;
   shouldBootstrapManagedRuntimeLibrariesInCurrentProcess: () => boolean;
-  getManagedRuntimeLibrariesConfig: () => Record<string, unknown>;
+  getManagedRuntimeLibrariesConfig: (settings?: Record<string, unknown>) => Record<string, unknown>;
 };
 const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 
@@ -241,6 +241,26 @@ test('API and bootstrap runtime-library config keep explicit replica-tier and jo
     assert.equal(bootstrapManagedConfig.jobWorkerEnabled, false);
     assert.deepEqual(bootstrapManagedConfig, apiConfig);
   });
+});
+
+test('managed runtime-library bootstrap accepts the authoritative settings snapshot without a projection file', () => {
+  const config = bootstrapConfig.getManagedRuntimeLibrariesConfig({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://user:pass@db.example.test/rivet',
+    databaseSslMode: 'require',
+    storageUrl: '',
+    objectStorageBucket: 'tenant-bucket',
+    objectStorageEndpoint: 'https://objects.example.test',
+    objectStorageRegion: 'provider-region-7',
+    objectStorageForcePathStyle: true,
+    storageAccessKeyId: 'access',
+    storageAccessKey: 'secret',
+  });
+  assert.equal(config.objectStorageBucket, 'tenant-bucket');
+  assert.equal(config.objectStorageRegion, 'provider-region-7');
+  assert.equal(config.objectStorageForcePathStyle, true);
+  assert.equal(config.databaseUrl, 'postgresql://user:pass@db.example.test/rivet');
 });
 
 test('managed runtime-library schema init serializes DDL behind an advisory lock', async () => {

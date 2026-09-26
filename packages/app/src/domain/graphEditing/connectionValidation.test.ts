@@ -8,7 +8,11 @@ import {
   type PortId,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { filterValidSubGraphConnections, getAsyncBranchTopologyViolation } from './connectionValidation.js';
+import {
+  filterValidSubGraphConnections,
+  getAsyncBranchTopologyViolation,
+  getWireDragAsyncBranchTopologyViolation,
+} from './connectionValidation.js';
 import {
   createTestNodeRegistry,
   makeConnection as makeBaseConnection,
@@ -261,6 +265,128 @@ test('getAsyncBranchTopologyViolation permits a Stop boundary to rejoin normal e
   });
 
   assert.equal(violation, undefined);
+});
+
+test('a Watch wire can be restored before the other prewired Stop branch is restored', () => {
+  const source = makeTextNode('source');
+  const watch = makeWatchStreamingOutputNode('watch');
+  const condition = makeTextNode('condition', '{{a}}');
+  const value = makeTextNode('value', '{{a}}');
+  const stop = makeStopWatchingStreamingOutputNode('stop');
+  const nodesById = Object.fromEntries([source, watch, condition, value, stop].map((node) => [node.id, node]));
+  const existingConnections = [
+    makeBaseConnection({
+      outputNodeId: source.id,
+      outputId: 'output' as PortId,
+      inputNodeId: watch.id,
+      inputId: 'stream' as PortId,
+    }),
+    makeBaseConnection({
+      outputNodeId: condition.id,
+      outputId: 'output' as PortId,
+      inputNodeId: stop.id,
+      inputId: '$if' as PortId,
+    }),
+    makeBaseConnection({
+      outputNodeId: value.id,
+      outputId: 'output' as PortId,
+      inputNodeId: stop.id,
+      inputId: 'value' as PortId,
+    }),
+  ];
+  const firstWire = makeBaseConnection({
+    outputNodeId: watch.id,
+    outputId: 'allStreamedOutput' as PortId,
+    inputNodeId: condition.id,
+    inputId: 'a' as PortId,
+  });
+  const partiallyRestored = [...existingConnections, firstWire];
+
+  assert.equal(getAsyncBranchTopologyViolation({ connections: partiallyRestored, nodesById })?.kind, 'externalInput');
+  assert.equal(
+    getWireDragAsyncBranchTopologyViolation({
+      connections: partiallyRestored,
+      proposedConnection: firstWire,
+      nodesById,
+      hasInputPorts: (nodeId) => nodeId === value.id,
+    }),
+    undefined,
+  );
+
+  const secondWire = makeBaseConnection({
+    outputNodeId: watch.id,
+    outputId: 'allStreamedOutput' as PortId,
+    inputNodeId: value.id,
+    inputId: 'a' as PortId,
+  });
+  assert.equal(
+    getAsyncBranchTopologyViolation({ connections: [...partiallyRestored, secondWire], nodesById }),
+    undefined,
+  );
+});
+
+test('Watch wire editing still blocks a Stop input from an already wired external branch', () => {
+  const source = makeTextNode('source');
+  const watch = makeWatchStreamingOutputNode('watch');
+  const condition = makeTextNode('condition', '{{a}}');
+  const value = makeTextNode('value', '{{a}}');
+  const external = makeTextNode('external');
+  const stop = makeStopWatchingStreamingOutputNode('stop');
+  const nodesById = Object.fromEntries(
+    [source, watch, condition, value, external, stop].map((node) => [node.id, node]),
+  );
+  const firstWire = makeBaseConnection({
+    outputNodeId: watch.id,
+    outputId: 'allStreamedOutput' as PortId,
+    inputNodeId: condition.id,
+    inputId: 'a' as PortId,
+  });
+  const connections = [
+    makeBaseConnection({
+      outputNodeId: source.id,
+      outputId: 'output' as PortId,
+      inputNodeId: watch.id,
+      inputId: 'stream' as PortId,
+    }),
+    makeBaseConnection({
+      outputNodeId: condition.id,
+      outputId: 'output' as PortId,
+      inputNodeId: stop.id,
+      inputId: '$if' as PortId,
+    }),
+    makeBaseConnection({
+      outputNodeId: value.id,
+      outputId: 'output' as PortId,
+      inputNodeId: stop.id,
+      inputId: 'value' as PortId,
+    }),
+    makeBaseConnection({
+      outputNodeId: external.id,
+      outputId: 'output' as PortId,
+      inputNodeId: value.id,
+      inputId: 'a' as PortId,
+    }),
+    firstWire,
+  ];
+
+  assert.equal(
+    getWireDragAsyncBranchTopologyViolation({
+      connections,
+      proposedConnection: firstWire,
+      nodesById,
+      hasInputPorts: (nodeId) => nodeId === value.id,
+    })?.kind,
+    'externalInput',
+  );
+  assert.equal(
+    getWireDragAsyncBranchTopologyViolation({
+      connections: connections.filter((connection) => connection.inputNodeId !== value.id),
+      proposedConnection: firstWire,
+      nodesById,
+      hasInputPorts: () => false,
+    })?.kind,
+    'externalInput',
+  );
 });
 
 test('getAsyncBranchTopologyViolation rejects a Stop boundary that reconnects to its own Watch branch', () => {

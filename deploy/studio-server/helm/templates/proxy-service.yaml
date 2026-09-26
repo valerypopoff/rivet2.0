@@ -1,3 +1,4 @@
+{{- if eq .Values.gateway.mode "embedded" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,3 +19,4 @@ spec:
       port: {{ .Values.metrics.proxyExporter.port }}
       targetPort: metrics
     {{- end }}
+{{- end }}

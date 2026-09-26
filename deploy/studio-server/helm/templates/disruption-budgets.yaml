@@ -1,6 +1,7 @@
 {{- if .Values.availability.disruptionBudget.enabled }}
 {{- $root := . }}
 {{- range $component := list "proxy" "web" "execution" }}
+{{- if or (ne $component "proxy") (eq $root.Values.gateway.mode "embedded") }}
 {{- $replicas := int (index $root.Values.replicaCount $component) }}
 {{- $autoscaling := index $root.Values.autoscaling $component }}
 {{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled }}
@@ -18,6 +19,7 @@ spec:
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 6 }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

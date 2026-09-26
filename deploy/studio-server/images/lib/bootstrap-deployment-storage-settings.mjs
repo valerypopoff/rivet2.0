@@ -60,6 +60,11 @@ function normalizeEndpoint(endpoint) {
 
 function buildStorageUrl() {
   const explicit = read('RIVET_DEPLOYMENT_STORAGE_URL');
+  if (explicit && read('RIVET_DEPLOYMENT_STORAGE_BUCKET')) {
+    throw new Error(
+      'RIVET_DEPLOYMENT_STORAGE_URL conflicts with the chart-owned bucket and S3 location fields; remove the legacy URL override.',
+    );
+  }
   if (explicit) {
     return explicit;
   }
@@ -69,7 +74,7 @@ function buildStorageUrl() {
     return '';
   }
 
-  const region = read('RIVET_DEPLOYMENT_STORAGE_REGION') || 'us-east-1';
+  const region = read('RIVET_DEPLOYMENT_STORAGE_REGION');
   const endpoint = normalizeEndpoint(read('RIVET_DEPLOYMENT_STORAGE_ENDPOINT'));
   const forcePathStyle = bool('RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE');
 
@@ -91,19 +96,37 @@ function getSettingsPath() {
 }
 
 function getSettings() {
+  if (read('RIVET_DEPLOYMENT_STORAGE_BUCKET') && !read('RIVET_DEPLOYMENT_STORAGE_REGION')) {
+    throw new Error('RIVET_DEPLOYMENT_STORAGE_REGION is required with an explicit object storage bucket');
+  }
   const storageMode = read('RIVET_DEPLOYMENT_STORAGE_MODE') || 'managed';
   const databaseMode = read('RIVET_DEPLOYMENT_DATABASE_MODE') || 'managed';
   const databaseConnectionString = buildDatabaseConnectionString();
   const storageUrl = buildStorageUrl();
+  const objectStorageBucket = read('RIVET_DEPLOYMENT_STORAGE_BUCKET');
+  const objectStorageRegion = read('RIVET_DEPLOYMENT_STORAGE_REGION');
+  const objectStorageEndpoint = normalizeEndpoint(read('RIVET_DEPLOYMENT_STORAGE_ENDPOINT'));
+  const objectStoragePrefix = read('RIVET_DEPLOYMENT_STORAGE_PREFIX') || 'workflows/';
+  const objectStorageForcePathStyle = bool('RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE');
 
   return {
     version: 1,
     storageMode,
     artifactsHostPath: read('RIVET_DEPLOYMENT_ARTIFACTS_HOST_PATH') || '../',
     databaseMode,
-    databaseSslMode: read('RIVET_DEPLOYMENT_DATABASE_SSL_MODE') || (databaseMode === 'local-docker' ? 'disable' : 'require'),
+    databaseSslMode:
+      read('RIVET_DEPLOYMENT_DATABASE_SSL_MODE') || (databaseMode === 'local-docker' ? 'disable' : 'require'),
     databaseConnectionString,
     storageUrl,
+    ...(objectStorageBucket
+      ? {
+          objectStorageBucket,
+          objectStorageRegion,
+          objectStorageEndpoint,
+          objectStoragePrefix,
+          objectStorageForcePathStyle,
+        }
+      : {}),
     storageAccessKeyId: read('RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID'),
     storageAccessKey: read('RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY'),
     updatedAt: new Date().toISOString(),
@@ -111,6 +134,12 @@ function getSettings() {
 }
 
 function validateSettings(settings) {
+  if (
+    read('RIVET_DEPLOYMENT_TOPOLOGY') === 'replicated' &&
+    (settings.storageMode !== 'managed' || settings.databaseMode !== 'managed')
+  ) {
+    throw new Error('Kubernetes requires managed workflow storage and managed PostgreSQL');
+  }
   if (settings.storageMode !== 'managed') {
     return;
   }

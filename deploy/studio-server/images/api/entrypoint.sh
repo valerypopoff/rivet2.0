@@ -16,7 +16,7 @@ deployment_published_execution_retry_after_seconds="${RIVET_DEPLOYMENT_PUBLISHED
 deployment_metrics_enabled="${RIVET_DEPLOYMENT_METRICS_ENABLED:-}"
 deployment_internal_published_workflows_base_url="${RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-}"
 deployment_internal_latest_workflows_base_url="${RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-}"
-load_optional_dotenv /vault/dotenv
+load_optional_dotenv_preserving_deployment_storage /vault/dotenv
 append_proxy_bootstrap_node_options
 
 # Kubernetes sets this deployment-owned policy separately from user/Vault env.
