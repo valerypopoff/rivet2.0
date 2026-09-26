@@ -82,6 +82,12 @@ securityContext:
 {{- include "rivet.pod.tmpVolumeMount" . }}
 {{- end -}}
 
+{{- define "rivet.pod.backendVolumeMounts" -}}
+{{- include "rivet.pod.apiVolumeMounts" . }}
+- name: app-data
+  mountPath: /home/rivet/.local/share/com.valerypopoff.rivet2
+{{- end -}}
+
 {{- define "rivet.pod.placement" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}

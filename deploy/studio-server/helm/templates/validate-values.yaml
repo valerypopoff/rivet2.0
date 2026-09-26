@@ -198,7 +198,17 @@
 {{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
 {{- fail "resourceLimitAcknowledgements must be a map" -}}
 {{- end -}}
-{{- $resourceComponents := list "web" "api" "executor" "execution" -}}
+{{- $resourceComponents := list "web" "api" "execution" -}}
+{{- if .Values.compatibility.legacyStartupSettingsFiles -}}
+{{- if hasKey .Values.resources "executor" -}}
+{{- $resourceComponents = append $resourceComponents "executor" -}}
+{{- end -}}
+{{- else -}}
+{{- $resourceComponents = append $resourceComponents "backend" -}}
+{{- if hasKey .Values.resources "executor" -}}
+{{- fail "resources.executor is retired in the combined backend; move its budget to resources.backend" -}}
+{{- end -}}
+{{- end -}}
 {{- if eq .Values.gateway.mode "embedded" -}}
 {{- $resourceComponents = append $resourceComponents "proxy" -}}
 {{- end -}}
@@ -632,6 +642,11 @@
 {{- fail (printf "availability.disruptionBudget.maxUnavailable must be less than the effective minimum replica count for %s" $component) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "service.backendHealth.targetPort" "value" .Values.service.backendHealth.targetPort) -}}
+{{- $healthPort := int .Values.service.backendHealth.targetPort -}}
+{{- if or (lt $healthPort 1) (gt $healthPort 65535) (eq $healthPort (int .Values.service.api.targetPort)) (eq $healthPort (int .Values.service.executor.targetPort)) (eq (int .Values.service.api.targetPort) (int .Values.service.executor.targetPort)) -}}
+{{- fail "backend API, executor, and health target ports must be distinct TCP ports" -}}
 {{- end -}}
 {{- end -}}
 {{- if and (eq .Values.gateway.mode "embedded") (empty (index .Values.env "RIVET_PROXY_RESOLVER")) -}}

@@ -160,11 +160,11 @@ TLS overlay.
 
 Useful variants:
 
-| Command                           | Behavior                                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `yarn studio-server:prod`         | Pull and run the published images                                                          |
-| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change             |
-| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                      |
+| Command                           | Behavior                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `yarn studio-server:prod`         | Pull and run the published images                                                                                  |
+| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                     |
+| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                              |
 | `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources |
 
 `yarn studio-server:clean` is a recovery tool for the whole selected Docker host, not only this Compose project. Start with:
@@ -181,13 +181,15 @@ For direct diagnostics:
 # Replace <project> with the project printed by the production launcher.
 # A fresh installation uses compose; a migrated installation can use ops.
 docker compose -p <project> --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml ps
-docker compose -p <project> --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml logs -f --tail=120 proxy web api executor
+docker compose -p <project> --env-file .env -f deploy/studio-server/compose/docker-compose.managed-services.yml -f deploy/studio-server/compose/docker-compose.yml logs -f --tail=120 proxy web api
 ```
 
 If an anonymous pull from public GHCR packages returns `denied`, clear stale
 credentials with `docker logout ghcr.io` and retry. Pin a release with
 `RIVET_IMAGE_TAG`, or override an individual image with `RIVET_PROXY_IMAGE`,
-`RIVET_WEB_IMAGE`, `RIVET_API_IMAGE`, or `RIVET_EXECUTOR_IMAGE`.
+`RIVET_WEB_IMAGE`, or `RIVET_API_IMAGE`. Production runs the API and executor
+processes inside the API image; the standalone executor image is retained for
+predecessor rollback and explicit standalone use, not pulled by the production launcher.
 
 ## Development
 

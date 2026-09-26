@@ -428,6 +428,9 @@ process.on('SIGTERM', () => {
 async function announceExecutorReady() {
   await sharedCodeWorkerPoolReady;
   executorWebSocketReady = true;
+  if (process.env.RIVET_RUNTIME_PROCESS_ROLE === 'executor') {
+    process.send?.({ type: 'rivet-executor-ready' });
+  }
   logRuntimeInfo(executorReadyMessage);
 }
 

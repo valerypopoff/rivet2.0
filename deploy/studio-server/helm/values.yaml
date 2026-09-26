@@ -157,6 +157,8 @@ service:
   executor:
     port: 21889
     targetPort: 21889
+  backendHealth:
+    targetPort: 21890
 
 ingress:
   enabled: false
@@ -420,10 +422,10 @@ resources:
     requests:
       cpu: 250m
       memory: 512Mi
-  executor:
+  backend:
     requests:
-      cpu: 250m
-      memory: 512Mi
+      cpu: 500m
+      memory: 1Gi
   execution:
     requests:
       cpu: 500m
@@ -447,7 +449,7 @@ resourceLimitAcknowledgements:
   api:
     memory: ''
     ephemeralStorage: ''
-  executor:
+  backend:
     memory: ''
     ephemeralStorage: ''
   execution:

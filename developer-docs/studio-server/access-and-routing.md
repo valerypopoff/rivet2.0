@@ -120,8 +120,8 @@ Important local-Docker wiring note:
 - the repo-local Docker stacks still run a single `api` container in `combined` mode
 - nginx therefore proxies `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` to that same container there
 - the control-plane vs execution-plane labels in the table describe the intended split topology and the route ownership enforced by `RIVET_API_PROFILE`, not a guarantee that local Docker physically runs two API services
-- the executor websocket upstream remains a separate internal service on port `21889`; it must not inherit the API `PORT` value from `.env`
-- in Docker modes the executor process binds to `0.0.0.0` inside its container so nginx can reach the `executor:21889` service; external clients should still use the proxy routes, not the executor container directly
+- the executor websocket remains on port `21889`; it must not inherit the API `PORT` value from `.env`
+- production Compose co-locates the API and executor processes in one backend container, and nginx reaches `api:21889`; Docker development retains a separate `executor:21889` service. Both bind the executor to `0.0.0.0` inside Docker so the separate proxy container can reach it. External clients use the proxy routes, never the executor port directly.
 
 ## Proxy address recovery and health
 

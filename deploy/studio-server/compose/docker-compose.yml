@@ -13,7 +13,7 @@ services:
       - RIVET_API_UPSTREAM_PORT=80
       - RIVET_EXECUTION_UPSTREAM_HOST=api
       - RIVET_EXECUTION_UPSTREAM_PORT=80
-      - RIVET_EXECUTOR_UPSTREAM_HOST=executor
+      - RIVET_EXECUTOR_UPSTREAM_HOST=api
       - RIVET_EXECUTOR_UPSTREAM_PORT=21889
       - RIVET_PROXY_RESOLVER=${RIVET_PROXY_RESOLVER:-127.0.0.11}
       - RIVET_APP_DATA_ROOT=/data/rivet-app
@@ -31,8 +31,6 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
-      executor:
-        condition: service_started
     volumes:
       - type: volume
         source: rivet_data
@@ -108,9 +106,10 @@ services:
     restart: "no"
   api:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
+    entrypoint: ["node", "/opt/rivet/backend-supervisor.mjs"]
     build:
       context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.api
+      dockerfile: deploy/studio-server/images/api/Dockerfile
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -132,6 +131,10 @@ services:
       - HOME=/home/rivet
       - npm_config_cache=/home/rivet/.npm
       - PORT=80
+      - RIVET_DEPLOYMENT_TOPOLOGY=single-host
+      - RIVET_BACKEND_API_PORT=80
+      - RIVET_BACKEND_EXECUTOR_PORT=21889
+      - RIVET_BACKEND_HEALTH_PORT=21890
       - RIVET_WORKSPACE_ROOT=/workspace
       - RIVET_WORKFLOWS_ROOT=/workflows
       - RIVET_WORKFLOW_RECORDINGS_ROOT=/workflow-recordings
@@ -152,6 +155,7 @@ services:
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
       - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-true}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
@@ -175,49 +179,6 @@ services:
         target: /data/rivet-app
         volume:
           nocopy: true
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
-    depends_on:
-      filesystem-artifacts-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 360s
-    stop_grace_period: 150s
-    restart: unless-stopped
-
-  executor:
-    image: ${RIVET_EXECUTOR_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/executor:${RIVET_IMAGE_TAG:-latest}}
-    build:
-      context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor
-    environment:
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - ALL_PROXY=${ALL_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
-      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
-      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
-      - all_proxy=${all_proxy:-${ALL_PROXY:-}}
-      - no_proxy=${no_proxy:-${NO_PROXY:-}}
-      - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
-      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
-      - PORT=21889
-      - RIVET_EXECUTOR_PORT=21889
-      - RIVET_EXECUTOR_HOST=0.0.0.0
-      - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
-      - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
-      - RIVET_RUNTIME_PROCESS_ROLE=executor
-      - RIVET_KEY=${RIVET_KEY:-}
-      - RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health
-      - RIVET_EXECUTION_ENVIRONMENT_API_URL=http://api:80/api/workflows/execution-environment
-      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
-      - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
-      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
-    volumes:
       - type: volume
         source: rivet_data
         target: /home/rivet/.local/share/com.valerypopoff.rivet2
@@ -227,6 +188,13 @@ services:
     depends_on:
       filesystem-artifacts-init:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:21890/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 360s
+    stop_grace_period: 150s
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,4 @@
+services:
+  api:
+    env_file:
+      - "${RIVET_RUNTIME_ENV_FILE}"

@@ -89,9 +89,9 @@ resourceLimitAcknowledgements:
   api:
     memory: 'Control API memory limit deferred until editor and maintenance high-water marks are measured.'
     ephemeralStorage: 'Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured.'
-  executor:
-    memory: 'Editor executor memory limit deferred until remote-debugger graph high-water marks are measured.'
-    ephemeralStorage: 'Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured.'
+  backend:
+    memory: 'Combined control API and editor executor memory limit deferred until their joint high-water mark is measured.'
+    ephemeralStorage: 'Combined backend node-ephemeral limit deferred until shared workspace and library high-water marks are measured.'
   execution:
     memory: 'Execution API memory limit deferred until the published-route load gate establishes a safe ceiling.'
     ephemeralStorage: 'Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling.'

@@ -16,6 +16,12 @@ deployment_published_execution_retry_after_seconds="${RIVET_DEPLOYMENT_PUBLISHED
 deployment_metrics_enabled="${RIVET_DEPLOYMENT_METRICS_ENABLED:-}"
 deployment_internal_published_workflows_base_url="${RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL:-}"
 deployment_internal_latest_workflows_base_url="${RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL:-}"
+deployment_api_profile="${RIVET_API_PROFILE:-}"
+deployment_runtime_process_role="${RIVET_RUNTIME_PROCESS_ROLE:-}"
+deployment_runtime_libraries_replica_tier="${RIVET_RUNTIME_LIBRARIES_REPLICA_TIER:-}"
+deployment_runtime_libraries_job_worker_enabled="${RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED:-}"
+deployment_runner_slot_id="${RIVET_RUNNER_SLOT_ID:-}"
+deployment_api_port="${PORT:-}"
 load_optional_dotenv_preserving_deployment_storage /vault/dotenv
 append_proxy_bootstrap_node_options
 
@@ -50,6 +56,12 @@ apply_deployment_owned_value RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS "$dep
 apply_deployment_owned_value RIVET_METRICS_ENABLED "$deployment_metrics_enabled"
 apply_deployment_owned_value RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL "$deployment_internal_published_workflows_base_url"
 apply_deployment_owned_value RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL "$deployment_internal_latest_workflows_base_url"
+apply_deployment_owned_value RIVET_API_PROFILE "$deployment_api_profile"
+apply_deployment_owned_value RIVET_RUNTIME_PROCESS_ROLE "$deployment_runtime_process_role"
+apply_deployment_owned_value RIVET_RUNTIME_LIBRARIES_REPLICA_TIER "$deployment_runtime_libraries_replica_tier"
+apply_deployment_owned_value RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED "$deployment_runtime_libraries_job_worker_enabled"
+apply_deployment_owned_value RIVET_RUNNER_SLOT_ID "$deployment_runner_slot_id"
+apply_deployment_owned_value PORT "$deployment_api_port"
 
 export PORT="${PORT:-8080}"
 export RIVET_WORKSPACE_ROOT="${RIVET_WORKSPACE_ROOT:-/workspace}"

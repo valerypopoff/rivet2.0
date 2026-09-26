@@ -4,9 +4,29 @@ set -eu
 . /opt/rivet/lib/load-env.sh
 
 deployment_executor_runtime_config_url="${RIVET_EXECUTOR_RUNTIME_CONFIG_URL:-}"
+deployment_executor_port="${RIVET_EXECUTOR_PORT:-}"
+deployment_executor_host="${RIVET_EXECUTOR_HOST:-}"
+deployment_runtime_libraries_replica_tier="${RIVET_RUNTIME_LIBRARIES_REPLICA_TIER:-}"
+deployment_llm_profile_health_api_url="${RIVET_LLM_PROFILE_HEALTH_API_URL:-}"
+deployment_execution_environment_api_url="${RIVET_EXECUTION_ENVIRONMENT_API_URL:-}"
 load_optional_dotenv_preserving_deployment_storage /vault/dotenv
 if [ -n "$deployment_executor_runtime_config_url" ]; then
   export RIVET_EXECUTOR_RUNTIME_CONFIG_URL="$deployment_executor_runtime_config_url"
+fi
+if [ -n "$deployment_executor_port" ]; then
+  export RIVET_EXECUTOR_PORT="$deployment_executor_port"
+fi
+if [ -n "$deployment_executor_host" ]; then
+  export RIVET_EXECUTOR_HOST="$deployment_executor_host"
+fi
+if [ -n "$deployment_runtime_libraries_replica_tier" ]; then
+  export RIVET_RUNTIME_LIBRARIES_REPLICA_TIER="$deployment_runtime_libraries_replica_tier"
+fi
+if [ -n "$deployment_llm_profile_health_api_url" ]; then
+  export RIVET_LLM_PROFILE_HEALTH_API_URL="$deployment_llm_profile_health_api_url"
+fi
+if [ -n "$deployment_execution_environment_api_url" ]; then
+  export RIVET_EXECUTION_ENVIRONMENT_API_URL="$deployment_execution_environment_api_url"
 fi
 append_proxy_bootstrap_node_options
 
