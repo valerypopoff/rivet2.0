@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -14,9 +14,21 @@ const name = `rivet-vm-nginx-${randomUUID().slice(0, 8)}`;
 const image = `rivet-vm-nginx-contract:${randomUUID().slice(0, 8)}`;
 const token = createHash('sha256').update('vm-nginx-fixture:proxy-auth').digest('hex');
 const redirectPort = process.env.RIVET_VM_TLS_FIXTURE_HTTPS_PORT ?? '443';
+const mockPorts = { web: 3300, api: 3301, execution: 3302, executor: 3303 };
 
 function docker(...args) {
-  return execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  return execFileSync('docker', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: args[0] === 'build' || args[0] === 'run' ? 180_000 : 15_000,
+  }).trim();
+}
+
+function startupDiagnostics(containerName) {
+  const options = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 };
+  const state = spawnSync('docker', ['inspect', '--format', '{{.State.Status}}', containerName], options);
+  const logs = spawnSync('docker', ['logs', '--tail', '50', containerName], options);
+  return `Docker state: ${(state.stdout || state.stderr || 'unavailable').trim()}\nRecent container logs:\n${`${logs.stdout || ''}${logs.stderr || ''}`.trim().slice(-8000)}`;
 }
 
 async function chooseLoopbackPorts() {
@@ -42,29 +54,7 @@ async function chooseLoopbackPorts() {
   }
 }
 
-function createMock(plane) {
-  const server = http.createServer((req, res) => {
-    if (plane === 'api' && req.url === '/ui-auth/check') {
-      res.writeHead(req.headers['x-rivet-proxy-auth'] === token ? 204 : 403);
-      res.end();
-      return;
-    }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ plane, path: req.url, headers: req.headers }));
-  });
-  server.on('upgrade', (req, socket) => {
-    const accept = createHash('sha1')
-      .update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
-      .digest('base64');
-    socket.write(
-      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nX-Mock-Plane: ${plane}\r\n\r\n`,
-    );
-    socket.end();
-  });
-  return server;
-}
-
-function request(port, host, requestPath, secure = false, headers = {}) {
+function request(port, host, requestPath, secure = false, headers = {}, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const transport = secure ? https : http;
     const req = transport.request(
@@ -75,7 +65,7 @@ function request(port, host, requestPath, secure = false, headers = {}) {
         servername: secure ? host : undefined,
         rejectUnauthorized: false,
         headers: { Host: host, ...headers },
-        timeout: 5000,
+        timeout: timeoutMs,
       },
       (res) => {
         const chunks = [];
@@ -133,14 +123,21 @@ function negotiatedProtocol(port, host) {
 }
 
 async function main() {
+  const providedCert = process.env.RIVET_VM_TLS_FIXTURE_CERT;
+  const providedKey = process.env.RIVET_VM_TLS_FIXTURE_KEY;
+  if (Boolean(providedCert) !== Boolean(providedKey)) {
+    throw new Error('RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together');
+  }
   const temp = mkdtempSync(path.join(tmpdir(), 'rivet-vm-nginx-'));
-  const servers = {};
-  let started = false;
-  let built = false;
+  const networkName = `${name}-network`;
+  const mockName = `${name}-mock`;
   try {
-    const cert = process.env.RIVET_VM_TLS_FIXTURE_CERT || path.join(temp, 'cert.pem');
-    const key = process.env.RIVET_VM_TLS_FIXTURE_KEY || path.join(temp, 'key.pem');
-    if (!process.env.RIVET_VM_TLS_FIXTURE_CERT || !process.env.RIVET_VM_TLS_FIXTURE_KEY) {
+    const cert = path.join(temp, 'cert.pem');
+    const key = path.join(temp, 'key.pem');
+    if (providedCert && providedKey) {
+      copyFileSync(providedCert, cert);
+      copyFileSync(providedKey, key);
+    } else {
       execFileSync(
         'openssl',
         [
@@ -161,33 +158,40 @@ async function main() {
         { stdio: 'ignore' },
       );
     }
+    // These copies exist only for the fixture. The temp directory remains
+    // private on the host, while the non-root nginx process can read the bind mounts.
+    chmodSync(cert, 0o644);
+    chmodSync(key, 0o644);
     docker('build', '-f', 'deploy/studio-server/images/proxy/Dockerfile', '-t', image, '.');
-    built = true;
-    const mapping = docker(
+    docker('network', 'create', networkName);
+    docker(
       'run',
-      '--rm',
-      '--add-host',
-      'host.docker.internal:host-gateway',
-      '--entrypoint',
-      'sh',
-      image,
-      '-c',
-      'grep host.docker.internal /etc/hosts',
+      '-d',
+      '--name',
+      mockName,
+      '--network',
+      networkName,
+      '--network-alias',
+      'mock',
+      '--read-only',
+      '--cap-drop',
+      'ALL',
+      '-e',
+      `RIVET_VM_TLS_MOCK_PORTS=${JSON.stringify(mockPorts)}`,
+      '-v',
+      `${path.resolve('deploy/studio-server/scripts/fixtures/vm-nginx-mock-upstreams.mjs')}:/mock-upstreams.mjs:ro`,
+      'node:24-alpine',
+      'node',
+      '/mock-upstreams.mjs',
     );
-    const gateway = mapping.match(/^([0-9]+(?:\.[0-9]+){3})\s+host\.docker\.internal/m)?.[1];
-    assert.ok(gateway, 'Docker host-gateway IPv4 address is unavailable');
-    for (const plane of ['web', 'api', 'execution', 'executor']) {
-      const server = createMock(plane);
-      await new Promise((resolve) => server.listen(0, '0.0.0.0', resolve));
-      servers[plane] = { server, port: server.address().port };
-    }
     const [httpPort, httpsPort] = await chooseLoopbackPorts();
     const args = [
       'run',
       '-d',
-      '--rm',
       '--name',
       name,
+      '--network',
+      networkName,
       '--read-only',
       '--cap-drop',
       'ALL',
@@ -220,19 +224,34 @@ async function main() {
       '-v',
       `${path.resolve('deploy/studio-server/images/proxy/vm-tls.conf.template')}:/etc/nginx/templates/vm-tls.conf.template:ro`,
     ];
-    for (const plane of ['web', 'api', 'execution', 'executor']) {
-      args.push('-e', `RIVET_${plane.toUpperCase()}_UPSTREAM_HOST=${gateway}`);
-      args.push('-e', `RIVET_${plane.toUpperCase()}_UPSTREAM_PORT=${servers[plane].port}`);
+    for (const [plane, port] of Object.entries(mockPorts)) {
+      args.push('-e', `RIVET_${plane.toUpperCase()}_UPSTREAM_HOST=mock`);
+      args.push('-e', `RIVET_${plane.toUpperCase()}_UPSTREAM_PORT=${port}`);
     }
     docker(...args, image);
-    started = true;
+    let lastReadinessResult = 'no response';
     for (let attempt = 0; attempt < 60; attempt++) {
       try {
-        if ((await request(httpPort, 'internal.test', '/api/echo')).status === 200) break;
-      } catch {
-        /* waiting for nginx */
+        const response = await request(httpPort, 'internal.test', '/api/echo', false, {}, 1000);
+        if (response.status === 200) break;
+        lastReadinessResult = `HTTP ${response.status}`;
+      } catch (error) {
+        lastReadinessResult = error instanceof Error ? error.message : String(error);
       }
-      if (attempt === 59) throw new Error('VM nginx gateway did not become ready');
+      if (attempt % 5 === 4) {
+        for (const containerName of [name, mockName]) {
+          if (docker('inspect', '--format', '{{.State.Running}}', containerName) !== 'true') {
+            throw new Error(
+              `VM TLS fixture container exited. ${startupDiagnostics(name)}\n${startupDiagnostics(mockName)}`,
+            );
+          }
+        }
+      }
+      if (attempt === 59) {
+        throw new Error(
+          `VM nginx gateway did not become ready (${lastReadinessResult}). ${startupDiagnostics(name)}\n${startupDiagnostics(mockName)}`,
+        );
+      }
       await delay(200);
     }
     const redirect = await request(httpPort, 'public.test', '/sample?x=1');
@@ -278,26 +297,18 @@ async function main() {
     assert.equal(await upgrade(httpsPort, 'public.test', '/ws/executor/internal'), 'executor');
     console.log('PASS: VM nginx TLS, host routing, trusted headers, published/latest planes, and executor websocket.');
   } finally {
-    if (started) {
+    for (const args of [
+      ['rm', '-f', name],
+      ['rm', '-f', mockName],
+      ['network', 'rm', networkName],
+      ['image', 'rm', image],
+    ]) {
       try {
-        docker('stop', name);
+        docker(...args);
       } catch {
-        /* may already be stopped */
+        /* the resource may not have been created */
       }
     }
-    if (built) {
-      try {
-        docker('image', 'rm', image);
-      } catch {
-        /* keep the original failure */
-      }
-    }
-    await Promise.all(
-      Object.values(servers).map(({ server }) => {
-        server.closeAllConnections();
-        return new Promise((resolve) => server.close(resolve));
-      }),
-    );
     rmSync(temp, { recursive: true, force: true });
   }
 }

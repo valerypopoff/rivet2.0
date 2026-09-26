@@ -603,8 +603,11 @@ adds `docker-compose.vm-tls.yml`. Public HTTP redirects to HTTPS; public HTTPS
 offers HTTP/2, and both public HTTPS and private-host HTTP pass through the
 unchanged Rivet route/auth proxy on a
 loopback-only listener. Unknown hostnames return 404. The certificate and key
-are mounted read-only and must be readable by container UID 10001. Recreate the
-proxy container after certificate rotation. A non-default `RIVET_HTTPS_PORT`
+are mounted read-only and must be readable by container UID 10001. A typical
+root-only `0600` private key will fail at nginx startup even though the launcher
+can see the file; grant UID 10001 read access to a dedicated key copy or via a
+restricted ACL, not by making the production private key world-readable.
+Recreate the proxy container after certificate rotation. A non-default `RIVET_HTTPS_PORT`
 is included in the HTTP redirect. Before switching traffic, render
 `yarn studio-server:prod:config`, verify ports 80/443 are free, and check the
 public HTTPS, private HTTP, WebSocket, SSE, OAuth, and published routes. Keep
@@ -624,10 +627,18 @@ Run `node deploy/studio-server/scripts/verify-vm-nginx-tls.mjs` to exercise the
 actual image with a disposable certificate, mock services, public/private
 hosts, forwarded-header spoofing, endpoint planes, and executor WebSocket. The
 fixture chooses temporary loopback host ports explicitly so its checks do not
-depend on Docker's automatic published-port discovery. The
+depend on Docker's automatic published-port discovery. Its mock upstreams run
+in a sibling container on a disposable private Docker network, rather than
+depending on container-to-host gateway access. The
 GitHub deployment-contract job runs this fixture on Linux. It needs Docker and
 OpenSSL; on a host without OpenSSL, supply disposable certificate/key paths as
-`RIVET_VM_TLS_FIXTURE_CERT` and `RIVET_VM_TLS_FIXTURE_KEY`.
+`RIVET_VM_TLS_FIXTURE_CERT` and `RIVET_VM_TLS_FIXTURE_KEY` together; a partial
+pair is rejected before the fixture starts. Generated or supplied TLS files are
+copied into a private temporary host directory, leaving supplied originals
+untouched while making the copies readable by the non-root nginx container. A
+startup failure includes bounded logs from both containers. Docker operations
+also have a timeout so a stalled daemon or image pull cannot hang this CI step
+indefinitely.
 
 The Docker launchers now render layered Compose files:
 

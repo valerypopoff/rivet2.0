@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
-import { extractBracedBlock, readRepoFile, readRepoJson } from './helpers/repo-contract-helpers.js';
+import { extractBracedBlock, readRepoFile, readRepoJson, repoRoot } from './helpers/repo-contract-helpers.js';
 
 const proxyTemplatePaths = [
   'deploy/studio-server/images/proxy/default.conf.template',
@@ -50,6 +54,7 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   const hop = readRepoFile('deploy/studio-server/images/proxy/vm-edge-proxy.conf');
   const normalizer = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   const fixture = readRepoFile('deploy/studio-server/scripts/verify-vm-nginx-tls.mjs');
+  const mock = readRepoFile('deploy/studio-server/scripts/fixtures/vm-nginx-mock-upstreams.mjs');
   assert.match(image, /ENV RIVET_PROXY_INTERNAL_LISTEN=8080/);
   assert.match(overlay, /read_only: true[\s\S]*cap_drop: \[ALL\][\s\S]*tmpfs:/);
   assert.match(overlay, /RIVET_PROXY_INTERNAL_LISTEN=127\.0\.0\.1:18081/);
@@ -72,6 +77,71 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   assert.match(fixture, /`127\.0\.0\.1:\$\{httpPort\}:8080`/);
   assert.match(fixture, /`127\.0\.0\.1:\$\{httpsPort\}:8443`/);
   assert.doesNotMatch(fixture, /docker\('port'/);
+  assert.match(fixture, /chmodSync\(cert, 0o644\);[\s\S]*chmodSync\(key, 0o644\)/);
+  assert.match(fixture, /copyFileSync\(providedCert, cert\);[\s\S]*copyFileSync\(providedKey, key\)/);
+  assert.match(fixture, /startupDiagnostics\(name\)/);
+  assert.match(fixture, /--network-alias',\s*'mock'/);
+  assert.doesNotMatch(fixture, /host\.docker\.internal|host-gateway/);
+  assert.match(fixture, /RIVET_VM_TLS_MOCK_PORTS=\$\{JSON\.stringify\(mockPorts\)\}/);
+  assert.match(mock, /process\.env\.RIVET_VM_TLS_MOCK_PORTS/);
+  assert.match(fixture, /RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together/);
+});
+
+test('VM TLS fixture rejects a partial certificate pair before touching a supplied file', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
+  const cert = path.join(directory, 'existing.pem');
+  try {
+    writeFileSync(cert, 'keep this file');
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '', RIVET_VM_TLS_FIXTURE_CERT: cert, RIVET_VM_TLS_FIXTURE_KEY: '' },
+        timeout: 5_000,
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together/);
+    assert.equal(readFileSync(cert, 'utf8'), 'keep this file');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('VM TLS fixture does not change the supplied certificate pair', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
+  const cert = path.join(directory, 'existing-cert.pem');
+  const key = path.join(directory, 'existing-key.pem');
+  try {
+    writeFileSync(cert, 'keep this certificate');
+    writeFileSync(key, 'keep this key');
+    if (process.platform !== 'win32') {
+      chmodSync(cert, 0o600);
+      chmodSync(key, 0o600);
+    }
+    const certMode = statSync(cert).mode;
+    const keyMode = statSync(key).mode;
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '', RIVET_VM_TLS_FIXTURE_CERT: cert, RIVET_VM_TLS_FIXTURE_KEY: key },
+        timeout: 5_000,
+      },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /docker/);
+    assert.equal(readFileSync(cert, 'utf8'), 'keep this certificate');
+    assert.equal(readFileSync(key, 'utf8'), 'keep this key');
+    assert.equal(statSync(cert).mode, certMode);
+    assert.equal(statSync(key).mode, keyMode);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('proxy templates route public workflow traffic to the right API plane', () => {
