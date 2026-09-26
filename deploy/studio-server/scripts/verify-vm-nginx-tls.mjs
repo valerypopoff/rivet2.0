@@ -99,7 +99,10 @@ function upgrade(port, host, requestPath) {
     });
     req.setTimeout(5000, () => req.destroy(new Error('VM gateway websocket timed out')));
     req.on('error', reject);
-    req.on('response', (res) => reject(new Error(`Expected upgrade, got HTTP ${res.statusCode}`)));
+    req.on('response', (res) => {
+      res.destroy();
+      reject(new Error(`Expected upgrade, got HTTP ${res.statusCode}`));
+    });
     req.on('upgrade', (res, socket) => {
       socket.destroy();
       resolve(res.headers['x-mock-plane']);
@@ -118,6 +121,7 @@ function negotiatedProtocol(port, host) {
         resolve(protocol);
       },
     );
+    socket.setTimeout(5000, () => socket.destroy(new Error('VM gateway TLS negotiation timed out')));
     socket.on('error', reject);
   });
 }
@@ -155,7 +159,7 @@ async function main() {
           '-subj',
           '/CN=public.test',
         ],
-        { stdio: 'ignore' },
+        { stdio: 'ignore', timeout: 30_000 },
       );
     }
     // These copies exist only for the fixture. The temp directory remains

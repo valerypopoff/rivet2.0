@@ -636,9 +636,14 @@ OpenSSL; on a host without OpenSSL, supply disposable certificate/key paths as
 pair is rejected before the fixture starts. Generated or supplied TLS files are
 copied into a private temporary host directory, leaving supplied originals
 untouched while making the copies readable by the non-root nginx container. A
-startup failure includes bounded logs from both containers. Docker operations
-also have a timeout so a stalled daemon or image pull cannot hang this CI step
-indefinitely.
+startup failure includes bounded logs from both containers. Certificate
+generation, Docker operations, and HTTP, WebSocket, and TLS probes have
+timeouts so a stalled daemon, image pull, or connection cannot hang this CI
+step indefinitely.
+Keep fixture regressions behavioral: the focused API contract tests invoke the
+fixture with invalid certificate configurations, while the Docker gate checks
+real routing and TLS. Do not add assertions over the fixture's source text;
+`yarn test:style` rejects new source-reading tests.
 
 The Docker launchers now render layered Compose files:
 

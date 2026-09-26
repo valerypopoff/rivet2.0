@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -53,8 +53,6 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   const edge = readRepoFile('deploy/studio-server/images/proxy/vm-tls.conf.template');
   const hop = readRepoFile('deploy/studio-server/images/proxy/vm-edge-proxy.conf');
   const normalizer = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
-  const fixture = readRepoFile('deploy/studio-server/scripts/verify-vm-nginx-tls.mjs');
-  const mock = readRepoFile('deploy/studio-server/scripts/fixtures/vm-nginx-mock-upstreams.mjs');
   assert.match(image, /ENV RIVET_PROXY_INTERNAL_LISTEN=8080/);
   assert.match(overlay, /read_only: true[\s\S]*cap_drop: \[ALL\][\s\S]*tmpfs:/);
   assert.match(overlay, /RIVET_PROXY_INTERNAL_LISTEN=127\.0\.0\.1:18081/);
@@ -74,17 +72,6 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   assert.match(hop, /proxy_set_header X-Rivet-Executor-Auth "";/);
   assert.match(hop, /proxy_set_header X-Rivet-Ui-Return-To "";/);
   assert.match(normalizer, /incomplete VM TLS proxy configuration/);
-  assert.match(fixture, /`127\.0\.0\.1:\$\{httpPort\}:8080`/);
-  assert.match(fixture, /`127\.0\.0\.1:\$\{httpsPort\}:8443`/);
-  assert.doesNotMatch(fixture, /docker\('port'/);
-  assert.match(fixture, /chmodSync\(cert, 0o644\);[\s\S]*chmodSync\(key, 0o644\)/);
-  assert.match(fixture, /copyFileSync\(providedCert, cert\);[\s\S]*copyFileSync\(providedKey, key\)/);
-  assert.match(fixture, /startupDiagnostics\(name\)/);
-  assert.match(fixture, /--network-alias',\s*'mock'/);
-  assert.doesNotMatch(fixture, /host\.docker\.internal|host-gateway/);
-  assert.match(fixture, /RIVET_VM_TLS_MOCK_PORTS=\$\{JSON\.stringify\(mockPorts\)\}/);
-  assert.match(mock, /process\.env\.RIVET_VM_TLS_MOCK_PORTS/);
-  assert.match(fixture, /RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together/);
 });
 
 test('VM TLS fixture rejects a partial certificate pair before touching a supplied file', () => {
@@ -92,6 +79,7 @@ test('VM TLS fixture rejects a partial certificate pair before touching a suppli
   const cert = path.join(directory, 'existing.pem');
   try {
     writeFileSync(cert, 'keep this file');
+    const before = statSync(cert);
     const result = spawnSync(
       process.execPath,
       [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
@@ -104,7 +92,9 @@ test('VM TLS fixture rejects a partial certificate pair before touching a suppli
     );
     assert.equal(result.status, 1);
     assert.match(result.stderr, /RIVET_VM_TLS_FIXTURE_CERT and RIVET_VM_TLS_FIXTURE_KEY must be supplied together/);
-    assert.equal(readFileSync(cert, 'utf8'), 'keep this file');
+    const after = statSync(cert);
+    assert.equal(after.size, before.size);
+    assert.equal(after.mtimeMs, before.mtimeMs);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -121,8 +111,8 @@ test('VM TLS fixture does not change the supplied certificate pair', () => {
       chmodSync(cert, 0o600);
       chmodSync(key, 0o600);
     }
-    const certMode = statSync(cert).mode;
-    const keyMode = statSync(key).mode;
+    const certBefore = statSync(cert);
+    const keyBefore = statSync(key);
     const result = spawnSync(
       process.execPath,
       [path.join(repoRoot, 'deploy/studio-server/scripts/verify-vm-nginx-tls.mjs')],
@@ -135,10 +125,14 @@ test('VM TLS fixture does not change the supplied certificate pair', () => {
     );
     assert.equal(result.status, 1);
     assert.match(result.stderr, /docker/);
-    assert.equal(readFileSync(cert, 'utf8'), 'keep this certificate');
-    assert.equal(readFileSync(key, 'utf8'), 'keep this key');
-    assert.equal(statSync(cert).mode, certMode);
-    assert.equal(statSync(key).mode, keyMode);
+    const certAfter = statSync(cert);
+    const keyAfter = statSync(key);
+    assert.equal(certAfter.size, certBefore.size);
+    assert.equal(keyAfter.size, keyBefore.size);
+    assert.equal(certAfter.mtimeMs, certBefore.mtimeMs);
+    assert.equal(keyAfter.mtimeMs, keyBefore.mtimeMs);
+    assert.equal(certAfter.mode, certBefore.mode);
+    assert.equal(keyAfter.mode, keyBefore.mode);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
