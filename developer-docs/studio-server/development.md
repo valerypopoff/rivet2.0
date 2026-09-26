@@ -598,6 +598,14 @@ RIVET_PORT=80
 RIVET_HTTPS_PORT=443
 ```
 
+Replace the single `RIVET_PORT=8080` entry from `.env.example` with
+`RIVET_PORT=80`; duplicate keys can leave Compose publishing 8080 even when
+the operator intended port 80. After the cutover is verified, the OS nginx
+service and its site configuration are not needed for Rivet. Keep the old site
+configuration available for rollback, and disable the host service at boot
+only after direct-origin checks pass. The Docker proxy remains nginx; this
+change moves TLS and routing into the app's Compose stack, not out of nginx.
+
 The production launcher validates both hostnames and certificate paths, then
 adds `docker-compose.vm-tls.yml`. Public HTTP redirects to HTTPS; public HTTPS
 offers HTTP/2, and both public HTTPS and private-host HTTP pass through the
@@ -620,7 +628,10 @@ is included in the HTTP redirect. Before switching traffic, render
 public HTTPS, private HTTP, WebSocket, SSE, OAuth, and published routes. Keep
 the old host nginx available for a controlled rollback until the new path is
 verified. Do not bind the private hostname to a publicly reachable interface
-without a firewall/network ACL: a Host header is not access control.
+without a firewall/network ACL: a Host header is not access control. The
+current Compose configuration does not itself enforce private-host isolation;
+see [the deferred isolation work](access-and-routing.md#future-work-enforce-private-host-isolation-on-a-single-vm)
+before treating that hostname as internal-only.
 
 The proxy image has a read-only root filesystem in production Compose. Nginx
 configuration, PID, and request-body scratch space use a bounded `/tmp`

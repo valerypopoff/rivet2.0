@@ -28,7 +28,26 @@ Edit `.env` before starting. Set `RIVET_ARTIFACTS_HOST_PATH` to a writable host 
 yarn studio-server:prod
 ```
 
-The command pulls the published Studio Server images, starts the Compose stack, and waits for it to become healthy. Open `http://localhost:8080` on the host (or use your chosen port). If you make the server available over the internet, put it behind HTTPS and configure access controls before inviting users.
+The command pulls the published Studio Server images, starts the Compose stack, and waits for it to become healthy. With the starting configuration, open `http://localhost:8080` on the host (or use your chosen port). Do not expose this HTTP-only setup directly to the internet.
+
+### Use HTTPS on a single VM
+
+For a VM deployment, Rivet's Docker Compose stack can run its own nginx HTTPS gateway. You do not need to write a site configuration for nginx on the VM. Arrange DNS for your public hostname and provide an existing TLS certificate and private key, then add these values to `.env` **before** starting the server:
+
+```dotenv
+RIVET_PROXY_PUBLIC_HOST=rivet.example.com
+RIVET_PROXY_INTERNAL_HOST=rivet-1.internal.example.com
+RIVET_PROXY_TLS_CERT_HOST_PATH=/absolute/path/to/cert.pem
+RIVET_PROXY_TLS_KEY_HOST_PATH=/absolute/path/to/key.pem
+RIVET_PORT=80
+RIVET_HTTPS_PORT=443
+```
+
+Replace the existing `RIVET_PORT=8080` line in `.env`; do not leave two `RIVET_PORT` entries. The certificate and key paths are **host** paths. The key must be readable by the proxy container's user (UID 10001) without making it world-readable. Ports 80 and 443 must be available on the VM. If another web server currently owns them, follow the [single-VM cutover and verification steps](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md#single-vm-https) before stopping it.
+
+Run `yarn studio-server:prod` to pull and start the TLS-enabled stack. The public HTTP address redirects to `https://rivet.example.com/`. Rivet still needs the correct DNS, certificate, key permissions, and network rules; bundling nginx does not provide those automatically. The internal hostname stays on HTTP and is **not** made private merely by its name: restrict access at the VM/network boundary before using it as an internal address. Before exposing the editor, enable its UI gate (`RIVET_SERVER_UI_AUTH_MODE=key` or configured OAuth); TLS does not replace the separate endpoint access controls.
+
+In Kubernetes, this VM TLS configuration does not apply. The cluster operator supplies the external gateway, hostname, and TLS termination; Rivet's production chart exposes HTTP services to that gateway rather than running the VM nginx container.
 
 For existing installations, keep the same `.env`, artifact folder, and Docker volumes when updating. See the [Studio Server deployment guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md) for upgrade precautions, troubleshooting commands, and the custom-image and Kubernetes options.
 

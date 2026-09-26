@@ -100,6 +100,64 @@ and make sure
 starting the monorepo checkout. Never use `docker compose down -v`, remove
 these volumes, or run a volume prune during the cutover.
 
+### Single-VM HTTPS
+
+For a production VM, the Compose `proxy` container can terminate TLS and route
+traffic itself. No nginx site configuration or nginx service is required on the
+host after a successful cutover; the proxy **inside Docker** is still nginx.
+Provide public and internal DNS names plus an existing certificate and key in
+the root `.env`:
+
+```dotenv
+RIVET_PROXY_PUBLIC_HOST=rivet.example.com
+RIVET_PROXY_INTERNAL_HOST=rivet-1.internal.example.com
+RIVET_PROXY_TLS_CERT_HOST_PATH=/absolute/path/to/cert.pem
+RIVET_PROXY_TLS_KEY_HOST_PATH=/absolute/path/to/key.pem
+RIVET_PORT=80
+RIVET_HTTPS_PORT=443
+```
+
+Replace the template's `RIVET_PORT=8080` line instead of adding a second
+`RIVET_PORT` entry. The paths are on the VM and are mounted read-only into the
+proxy container. The private key must be readable by its UID/GID 10001 without
+being world-readable. Check this **inside a temporary proxy container** before
+cutting over: a host ACL that looks correct may not survive the Docker bind
+mount. A restricted `root:10001` key with mode `0640` is an option only if
+host group 10001 has no unrelated members. Recheck access after certificate
+renewal and recreate the proxy so it loads the new files.
+
+The launcher validates the four TLS settings, enables the VM TLS Compose
+overlay, and publishes host ports 80 and 443. Public HTTP redirects to HTTPS;
+the internal hostname remains HTTP. Make DNS and firewall rules ready, render
+`yarn studio-server:prod:config`, and confirm the ports can be handed over.
+If host nginx currently owns them, preflight the container first, then stop
+host nginx and run `yarn studio-server:prod`. Verify that the Compose proxy is
+healthy and that direct-origin HTTP redirects and HTTPS serves the editor,
+before disabling the old host service at boot. Keep its configuration for a
+controlled rollback until the deployment is proven. The internal hostname is
+**not** an access boundary by itself: restrict origin access at the VM/network
+layer before relying on it as private. See the
+[VM cutover details](../../developer-docs/studio-server/development.md#single-vm-https-without-host-nginx)
+and [deferred private-host isolation work](../../developer-docs/studio-server/access-and-routing.md#future-work-enforce-private-host-isolation-on-a-single-vm).
+
+For a direct-origin check after startup, substitute your public hostname and
+run these on the VM. The HTTP response should be a `301` redirect to HTTPS;
+the HTTPS response should serve Rivet without bypassing certificate checks:
+
+```bash
+curl --noproxy '*' --resolve rivet.example.com:80:127.0.0.1 -I http://rivet.example.com/
+curl --noproxy '*' --resolve rivet.example.com:443:127.0.0.1 -I https://rivet.example.com/
+```
+
+These checks do not prove that the private hostname is isolated or that
+Cloudflare/DNS traffic reaches the intended origin. Verify those separately,
+along with your UI gate and published-route access policy, before public use.
+
+Without these four TLS settings, production Compose keeps its original HTTP
+listener, on port 8080 by default. Kubernetes uses a separate, external
+gateway for hostname, TLS, auth, and route handling; it does not use this VM
+TLS overlay.
+
 Useful variants:
 
 | Command                           | Behavior                                                                                   |
@@ -159,9 +217,11 @@ commands.
 ## Kubernetes Shape
 
 The supported topology separates low-volume editor traffic from high-volume
-published workflow traffic:
+published workflow traffic. The production chart defaults to an external
+gateway supplied by the cluster operator; the `proxy` tier below belongs only
+to its embedded compatibility mode:
 
-- `proxy`: scalable ingress tier
+- `proxy`: scalable ingress tier in embedded compatibility mode
 - `execution`: scalable published-workflow tier
 - `web`: one replica by default for the small editor audience
 - `backend`: one replica for control-plane APIs, latest execution, and the
@@ -175,7 +235,7 @@ release gates, and production handoff.
 ## Runtime Shape
 
 ```text
-Browser -> nginx (proxy)
+Browser -> nginx (Rivet proxy in Compose/embedded mode)
            |- / -> web
            |- /api/* -> control-plane api
            |- /workflows/* -> execution-plane api
@@ -183,6 +243,9 @@ Browser -> nginx (proxy)
            |- /ws/latest-debugger -> control-plane api
            `- /ws/executor* -> executor
 ```
+
+In production Kubernetes external-gateway mode, the cluster operator's gateway
+performs this routing instead of the Docker/embedded nginx proxy.
 
 The API consumes `@valerypopoff/rivet2-core`, `@valerypopoff/rivet2-node`, and
 the other Rivet packages through normal `workspace:^` dependencies. Image
