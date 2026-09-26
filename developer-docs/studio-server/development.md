@@ -623,6 +623,8 @@ its original single HTTP listener for an external TLS terminator.
 Run `node deploy/studio-server/scripts/verify-vm-nginx-tls.mjs` to exercise the
 actual image with a disposable certificate, mock services, public/private
 hosts, forwarded-header spoofing, endpoint planes, and executor WebSocket. The
+fixture chooses temporary loopback host ports explicitly so its checks do not
+depend on Docker's automatic published-port discovery. The
 GitHub deployment-contract job runs this fixture on Linux. It needs Docker and
 OpenSSL; on a host without OpenSSL, supply disposable certificate/key paths as
 `RIVET_VM_TLS_FIXTURE_CERT` and `RIVET_VM_TLS_FIXTURE_KEY`.

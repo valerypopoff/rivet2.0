@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -16,6 +17,29 @@ const redirectPort = process.env.RIVET_VM_TLS_FIXTURE_HTTPS_PORT ?? '443';
 
 function docker(...args) {
   return execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+async function chooseLoopbackPorts() {
+  const listeners = [net.createServer(), net.createServer()];
+  try {
+    for (const listener of listeners) {
+      await new Promise((resolve, reject) => {
+        listener.once('error', reject);
+        listener.listen(0, '127.0.0.1', resolve);
+      });
+    }
+    return listeners.map((listener) => listener.address().port);
+  } finally {
+    await Promise.all(
+      listeners.map(
+        (listener) =>
+          new Promise((resolve) => {
+            if (listener.listening) listener.close(resolve);
+            else resolve();
+          }),
+      ),
+    );
+  }
 }
 
 function createMock(plane) {
@@ -157,6 +181,7 @@ async function main() {
       await new Promise((resolve) => server.listen(0, '0.0.0.0', resolve));
       servers[plane] = { server, port: server.address().port };
     }
+    const [httpPort, httpsPort] = await chooseLoopbackPorts();
     const args = [
       'run',
       '-d',
@@ -169,9 +194,9 @@ async function main() {
       '--tmpfs',
       '/tmp:rw,nosuid,noexec,size=512m,uid=10001,gid=10001',
       '-p',
-      '127.0.0.1::8080',
+      `127.0.0.1:${httpPort}:8080`,
       '-p',
-      '127.0.0.1::8443',
+      `127.0.0.1:${httpsPort}:8443`,
       '-e',
       'RIVET_PROXY_VM_TLS=1',
       '-e',
@@ -201,9 +226,6 @@ async function main() {
     }
     docker(...args, image);
     started = true;
-    const port = (target) => Number(docker('port', name, `${target}/tcp`).split(':').at(-1));
-    const httpPort = port(8080);
-    const httpsPort = port(8443);
     for (let attempt = 0; attempt < 60; attempt++) {
       try {
         if ((await request(httpPort, 'internal.test', '/api/echo')).status === 200) break;

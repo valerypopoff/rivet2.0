@@ -49,6 +49,7 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   const edge = readRepoFile('deploy/studio-server/images/proxy/vm-tls.conf.template');
   const hop = readRepoFile('deploy/studio-server/images/proxy/vm-edge-proxy.conf');
   const normalizer = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
+  const fixture = readRepoFile('deploy/studio-server/scripts/verify-vm-nginx-tls.mjs');
   assert.match(image, /ENV RIVET_PROXY_INTERNAL_LISTEN=8080/);
   assert.match(overlay, /read_only: true[\s\S]*cap_drop: \[ALL\][\s\S]*tmpfs:/);
   assert.match(overlay, /RIVET_PROXY_INTERNAL_LISTEN=127\.0\.0\.1:18081/);
@@ -68,6 +69,9 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   assert.match(hop, /proxy_set_header X-Rivet-Executor-Auth "";/);
   assert.match(hop, /proxy_set_header X-Rivet-Ui-Return-To "";/);
   assert.match(normalizer, /incomplete VM TLS proxy configuration/);
+  assert.match(fixture, /`127\.0\.0\.1:\$\{httpPort\}:8080`/);
+  assert.match(fixture, /`127\.0\.0\.1:\$\{httpsPort\}:8443`/);
+  assert.doesNotMatch(fixture, /docker\('port'/);
 });
 
 test('proxy templates route public workflow traffic to the right API plane', () => {
