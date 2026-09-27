@@ -374,7 +374,7 @@ tmpVolume:
   nodeTmpSizeLimit: 1Gi
 
 # Every disposable writable volume receives a bounded starting capacity. Tune
-# these from the published-route load gate before raising them for production.
+# these from representative per-workload measurements before raising them for production.
 writableVolumeLimits:
   workspace: 2Gi
   workflows: 2Gi

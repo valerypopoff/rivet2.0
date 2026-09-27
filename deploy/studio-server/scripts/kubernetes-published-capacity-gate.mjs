@@ -83,7 +83,10 @@ function metricSum(text, metricName) {
     const match = line.match(pattern);
     if (!match) continue;
     matched = true;
-    total += Number(match[1]);
+    const value = Number(match[1]);
+    if (!Number.isFinite(value) || value < 0) return undefined;
+    total += value;
+    if (!Number.isFinite(total)) return undefined;
   }
   return matched ? total : undefined;
 }
@@ -102,6 +105,7 @@ async function observePrometheus(prometheus) {
         });
         const responseBody = await response.json().catch(() => null);
         const result = responseBody?.status === 'success' ? responseBody.data?.result : null;
+        const observedValue = Number(result?.[0]?.value?.[1]);
         if (
           !response.ok ||
           responseBody?.data?.resultType !== 'vector' ||
@@ -109,11 +113,12 @@ async function observePrometheus(prometheus) {
           result.length !== 1 ||
           !Array.isArray(result[0]?.value) ||
           typeof result[0].value[1] !== 'string' ||
-          !Number.isFinite(Number(result[0].value[1]))
+          !Number.isFinite(observedValue) ||
+          observedValue < 0
         ) {
           return { name, value: null };
         }
-        return { name, value: Number(result[0].value[1]) };
+        return { name, value: observedValue };
       } catch {
         return { name, value: null };
       }
@@ -405,15 +410,39 @@ export function evaluateCapacityCertificate(report, snapshots, config) {
     if (expectedStage.expect === 'overload' && stage.outcomes.capacityRejected === 0)
       failures.push(`${stage.name} expected visible admission rejection but observed none`);
   }
-  const workloadSnapshots = snapshots.filter((snapshot) => !snapshot.baseline && snapshot.podCount > 0);
+  const observedSnapshots = snapshots.filter((snapshot) => !snapshot.baseline);
+  const workloadSnapshots = observedSnapshots.filter((snapshot) => snapshot.podCount > 0);
+  const baseline = snapshots[0];
+  if (
+    baseline?.baseline !== true ||
+    !Number.isInteger(baseline.podCount) ||
+    baseline.podCount < 1 ||
+    Object.keys(baseline.restartCountsByPod ?? {}).length !== baseline.podCount ||
+    baseline.metricsAvailable !== true ||
+    baseline.eventsAvailable !== true ||
+    baseline.metrics?.activeRuns !== 0
+  )
+    failures.push('complete execution-pod baseline was unavailable before load');
+  if (observedSnapshots.some((snapshot) => !Number.isInteger(snapshot.podCount) || snapshot.podCount < 1))
+    failures.push('execution pod was unavailable during capacity run');
   if (config.capacity.requireExecutionMetrics && workloadSnapshots.length === 0)
     failures.push('no execution pod was observed while the capacity Job was running');
   else if (config.capacity.requireExecutionMetrics && workloadSnapshots.some((snapshot) => !snapshot.metricsAvailable))
     failures.push('execution metrics were unavailable for one or more execution-pod samples');
+  else if (
+    config.capacity.requireExecutionMetrics &&
+    !workloadSnapshots.some((snapshot) => Number.isFinite(snapshot.metrics?.activeRuns) && snapshot.metrics.activeRuns > 0)
+  )
+    failures.push('no active published run was observed in execution-pod samples');
   if (snapshots.some((snapshot) => !snapshot.eventsAvailable))
     failures.push('execution pod events were unavailable for one or more samples');
-  const baseline = snapshots[0];
   const baselineRestartCounts = baseline?.restartCountsByPod ?? {};
+  if (
+    Object.keys(baselineRestartCounts).some((podName) =>
+      workloadSnapshots.some((snapshot) => !Object.hasOwn(snapshot.restartCountsByPod ?? {}, podName)),
+    )
+  )
+    failures.push('baseline execution pod disappeared during capacity run');
   if (
     baseline &&
     snapshots
@@ -433,16 +462,16 @@ export function evaluateCapacityCertificate(report, snapshots, config) {
   if (baseline && snapshots.some((snapshot) => snapshot.evictedPods.some((pod) => !baseline.evictedPods.includes(pod))))
     failures.push('execution pod eviction observed during capacity run');
   if (config.capacity.prometheus) {
-    const observedSnapshots = snapshots.filter((snapshot) => !snapshot.baseline && snapshot.podCount > 0);
-    if (observedSnapshots.length === 0) {
+    if (workloadSnapshots.length === 0) {
       failures.push('no execution-pod sample was available for Prometheus high-water observations');
     } else if (
-      observedSnapshots.some(
+      workloadSnapshots.some(
         (snapshot) =>
           snapshot.prometheus?.available !== true ||
-          !Number.isFinite(snapshot.prometheus.values?.memoryHighWaterBytes) ||
-          !Number.isFinite(snapshot.prometheus.values?.nodeEphemeralHighWaterBytes) ||
-          !Number.isFinite(snapshot.prometheus.values?.downstreamConcurrency),
+          Object.keys(config.capacity.prometheus.queries).some(
+            (name) =>
+              !Number.isFinite(snapshot.prometheus.values?.[name]) || snapshot.prometheus.values[name] < 0,
+          ),
       )
     ) {
       failures.push('Prometheus high-water observations were unavailable for one or more execution-pod samples');
@@ -770,13 +799,12 @@ export class PublishedCapacityGate {
       const recordingDrops = metricSum(metric.stdout, 'rivet_workflow_recording_persistence_dropped_total');
       const recordingQueueDepth = metricSum(metric.stdout, 'rivet_workflow_recording_persistence_queue_depth');
       if (
-        activeRuns === undefined ||
-        admissionLimit === undefined ||
-        recordingDrops === undefined ||
-        recordingQueueDepth === undefined
+        [activeRuns, admissionLimit, recordingDrops, recordingQueueDepth].some(
+          (value) => !Number.isFinite(value) || value < 0,
+        )
       ) {
         snapshot.metricsAvailable = false;
-        snapshot.metricErrors.push(`required metrics missing from ${pod.metadata.name}`);
+        snapshot.metricErrors.push(`required metrics missing or invalid for ${pod.metadata.name}`);
         continue;
       }
       snapshot.metrics.activeRuns += activeRuns;

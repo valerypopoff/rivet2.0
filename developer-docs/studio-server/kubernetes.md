@@ -406,6 +406,13 @@ Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernet
 
 ### Published execution capacity calibration and certificate
 
+The [resource-sizing handoff](resource-sizing.md) records the preflight,
+representative workload matrix, evidence worksheet, and approval boundary for
+replacing provisional production limits. Keep those acknowledgements until
+DevOps can provide verified staging monitoring; this gate's deterministic
+traffic alone does not size the web, combined backend, migration, or arbitrary
+graph workloads.
+
 `yarn studio-server:verify:kubernetes:managed-capacity` is the protected **staging capacity** command for the high-volume published execution plane. It is not a generic load-test utility and it must never be aimed at production. GitHub **Build Images** has two mutually exclusive manual dispatches, both of which first run the provider gate to deploy the current immutable candidate image set in the protected `rivet-managed-staging` environment:
 
 - `run_managed_kubernetes_capacity_observe` records a baseline in `observe` mode. It never promotes candidate aliases, even if every ordinary release gate succeeds.
@@ -439,9 +446,8 @@ Add a `capacity` object to the existing protected provider-gate JSON. Keep the J
       "baseUrl": "https://prometheus.staging.example.test",
       "headers": { "authorization": "Bearer <prometheus-read-token>" },
       "queries": {
-        "memoryHighWaterBytes": "max(container_memory_working_set_bytes{app_kubernetes_io_name=\"rivet\"})",
-        "nodeEphemeralHighWaterBytes": "max(container_fs_usage_bytes{app_kubernetes_io_name=\"rivet\"})",
-        "downstreamConcurrency": "sum(rivet_provider_requests_in_flight)"
+        "memoryHighWaterBytes": "REPLACE_WITH_VALIDATED_EXECUTION_MEMORY_QUERY",
+        "nodeEphemeralHighWaterBytes": "REPLACE_WITH_VALIDATED_TOTAL_LOCAL_EPHEMERAL_QUERY"
       }
     },
     "stages": [
@@ -459,6 +465,19 @@ Add a `capacity` object to the existing protected provider-gate JSON. Keep the J
 }
 ```
 
+The two query values above are deliberately **non-runnable placeholders**.
+DevOps must replace and test them against live staging metrics before running
+the gate. The runner checks for one finite, nonnegative Prometheus vector sample, not that
+the labels select the right Pods or that a metric accounts for every disk-backed
+`emptyDir` and log. In particular, `container_fs_usage_bytes` alone is not a
+Pod's total local-ephemeral usage. An optional `downstreamConcurrency` query
+can be supplied if an actual provider/tool concurrency metric is available;
+the built-in fixture makes no downstream calls, so it is not required for its
+certificate. Rivet does not emit a built-in
+`rivet_provider_requests_in_flight` metric. Do not use a constant or an
+unrelated aggregate merely to make certification pass; see the
+[resource-sizing handoff](resource-sizing.md#before-running-a-trial).
+
 `serviceNamePrefix` is optional: omit it when the chart service prefix is the Helm release name, or set it to the actual service prefix when the staging Helm values use `fullnameOverride`; it identifies the proxy and control API ClusterIP Services. Stage names are unique lowercase DNS fragments; each stage is capped at 256 concurrent workers and 20,000 requests, with a 50,000-request cap for the whole run. At least one stage must explicitly expect overload. `fast` uses a 75 ms deterministic graph and `long` uses a 1.5 s deterministic graph. They intentionally prove request scheduling, admission, recording persistence, proxy routing, and Code-node execution without invoking an external LLM, tool, or provider. Add provider/tool scenarios only after their data, idempotency, and cost boundaries are separately approved.
 
 Before certification, enable direct execution metrics in the staging values:
@@ -474,7 +493,7 @@ The observe dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=observe` and uploads bot
 
 The certificate dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=certify`. Certification requires `requireExecutionMetrics: true`, the `capacity.prometheus` block, and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; every sampled live execution Pod must have all three external high-water values as one finite Prometheus vector sample. The gate otherwise fails if a required event/Prometheus sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Both modes require the exact staging acknowledgement and refuse non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, PromQL expression, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
-This certificate is deliberately not proof of final production sizing. It records provider-side memory/node-ephemeral high-water and downstream concurrency when certifying, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
+This certificate is deliberately not proof of final production sizing. It requires a healthy pre-load execution-Pod baseline with zero active runs, observes at least one active published run, and fails if a baseline Pod disappears; otherwise idle-only or replaced-Pod samples could understate the peak. It records staging execution memory/node-ephemeral observations and optional downstream concurrency, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
 
 ### Cross-store backup and restore drill
 
@@ -854,7 +873,7 @@ Helm validates every chart-owned integer that becomes a runtime limit or a Kuber
 
 Every chart-managed disposable writable volume is nevertheless bounded: `writableVolumeLimits` caps workspace, workflow materialization, app-data caches, and runtime-library cache storage; `tmpVolume.sizeLimit` caps `/var/tmp`, and `tmpVolume.nodeTmpSizeLimit` caps a separate `/tmp`. These prevent a single volume from growing without a bound, but their starting values are not capacity evidence or a substitute for whole-container `ephemeral-storage` limits. Both scratch volumes are ordinary node-disk-backed `emptyDir`, not RAM-backed tmpfs. The static web container has a read-only root filesystem; backend, execution, and Evaluation root filesystems remain writable pending a representative workflow/plugin compatibility gate.
 
-For a production release, Helm requires each deployed component (`web`, `api`, `executor`, and `execution`, plus `proxy` only in embedded mode) to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations with tested values after the published-route capacity gate.
+For a production release, Helm requires each deployed component (`web`, `api`, combined `backend`, and `execution`, plus `proxy` only in embedded mode and `evaluation` only when enabled) to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. `resources.api` also budgets the migration Job; `resources.executor` is reserved for the legacy startup-files compatibility path, not the current combined backend. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations only after the [resource-sizing handoff](resource-sizing.md) has complete evidence for each active workload, not merely a passing deterministic published-route capacity gate.
 
 The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally and keeps them as `ClusterIP`. In external mode it creates no Ingress; DevOps routes to the component Services outside the chart. Only embedded mode routes a chart Ingress to the `proxy` Service.
 
@@ -1120,7 +1139,7 @@ policy.
 
 ### Writable-volume and pod-resource policy
 
-`emptyDir` limits and pod resource limits solve different failure modes. The former bounds a particular disposable filesystem; the latter gives the scheduler an honest memory/node-ephemeral reservation and ceiling for the entire container. Configure both from the published-route load gate rather than copying the starting values into production unchanged:
+`emptyDir` limits and pod resource limits solve different failure modes. The former bounds a particular disposable filesystem; the latter gives the scheduler an honest memory/node-ephemeral reservation and ceiling for the entire container. Configure both from the representative per-workload measurements in the [resource-sizing handoff](resource-sizing.md), not from the deterministic published-route gate alone or by copying starting values into production unchanged:
 
 ```yaml
 writableVolumeLimits:

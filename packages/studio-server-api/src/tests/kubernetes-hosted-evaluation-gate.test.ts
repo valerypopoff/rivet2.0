@@ -108,7 +108,6 @@ test('joint hosted Evaluation/capacity configuration is separately confirmed and
           queries: {
             memoryHighWaterBytes: 'max(container_memory_working_set_bytes)',
             nodeEphemeralHighWaterBytes: 'max(container_fs_usage_bytes)',
-            downstreamConcurrency: 'sum(rivet_provider_requests_in_flight)',
           },
         },
         stages: [

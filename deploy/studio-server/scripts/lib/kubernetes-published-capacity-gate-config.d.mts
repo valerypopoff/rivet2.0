@@ -22,6 +22,15 @@ export type PublishedCapacityGateConfig = ManagedProviderGateConfig & {
     sampleIntervalMs: number;
     jobTimeoutSeconds: number;
     requireExecutionMetrics: boolean;
+    prometheus?: {
+      baseUrl: string;
+      headers: Record<string, string>;
+      queries: {
+        memoryHighWaterBytes: string;
+        nodeEphemeralHighWaterBytes: string;
+        downstreamConcurrency?: string;
+      };
+    };
     thresholds: {
       maximumP95Ms: Record<string, number>;
       maximumUnexpectedRate: number;

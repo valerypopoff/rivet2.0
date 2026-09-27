@@ -7,7 +7,8 @@ const stageNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/u;
 const scenarioNames = new Set(['fast', 'long']);
 const dnsLabelPattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/u;
 const modes = new Set(['observe', 'certify']);
-const externalObservationNames = ['memoryHighWaterBytes', 'nodeEphemeralHighWaterBytes', 'downstreamConcurrency'];
+const requiredObservationNames = ['memoryHighWaterBytes', 'nodeEphemeralHighWaterBytes'];
+const externalObservationNames = [...requiredObservationNames, 'downstreamConcurrency'];
 
 function assertObject(value, name) {
   if (!value || Array.isArray(value) || typeof value !== 'object') {
@@ -68,6 +69,7 @@ function parsePrometheusObservation(rawValue) {
   const queries = assertObject(value.queries, 'capacity.prometheus.queries');
   const normalizedQueries = {};
   for (const name of externalObservationNames) {
+    if (name === 'downstreamConcurrency' && !Object.hasOwn(queries, name)) continue;
     const query = queries[name];
     if (typeof query !== 'string' || !query.trim() || query.length > 4_096 || /[\r\n]/u.test(query)) {
       throw new Error(
@@ -231,7 +233,7 @@ export function buildPublishedCapacityGateConfig({ rootDir, env = process.env } 
   }
   if (mode === 'certify' && !capacity.prometheus) {
     throw new Error(
-      '[kubernetes-published-capacity-gate] certify mode requires capacity.prometheus memory, node-ephemeral, and downstream observations',
+      '[kubernetes-published-capacity-gate] certify mode requires capacity.prometheus memory and node-ephemeral observations',
     );
   }
   const artifactsDir = path.resolve(provider.artifactsDir, 'published-capacity');
