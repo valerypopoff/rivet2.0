@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
 
+import { createManagedBucketCommand } from '../managed-bucket-creation.js';
 import type { ManagedRuntimeLibrariesConfig } from '../runtime-libraries/config.js';
 import {
   deleteRuntimeLibrariesBlobObjects,
@@ -31,6 +32,34 @@ function createConfig(endpoint: string): ManagedRuntimeLibrariesConfig {
     jobWorkerEnabled: true,
   };
 }
+
+test('AWS bucket creation uses the regional constraint without imposing it on custom S3 endpoints', () => {
+  const bucket = 'rivet';
+  assert.deepEqual(
+    createManagedBucketCommand({
+      objectStorageBucket: bucket,
+      objectStorageRegion: 'eu-west-1',
+      objectStorageEndpoint: null,
+    }).input,
+    { Bucket: bucket, CreateBucketConfiguration: { LocationConstraint: 'eu-west-1' } },
+  );
+  assert.deepEqual(
+    createManagedBucketCommand({
+      objectStorageBucket: bucket,
+      objectStorageRegion: 'eu-west-1',
+      objectStorageEndpoint: 'https://s3.eu-west-1.amazonaws.com',
+    }).input,
+    { Bucket: bucket, CreateBucketConfiguration: { LocationConstraint: 'eu-west-1' } },
+  );
+  for (const location of [
+    { objectStorageRegion: 'us-east-1', objectStorageEndpoint: null },
+    { objectStorageRegion: 'eu-west-1', objectStorageEndpoint: 'https://storage.yandexcloud.net' },
+  ]) {
+    assert.deepEqual(createManagedBucketCommand({ objectStorageBucket: bucket, ...location }).input, {
+      Bucket: bucket,
+    });
+  }
+});
 
 test('managed blob stores accept a bucket created by another process after their first HEAD', async () => {
   let headRequests = 0;
@@ -92,9 +121,7 @@ test('managed runtime-library deletion fails visibly when S3 partially rejects a
 
   try {
     await assert.rejects(
-      deleteRuntimeLibrariesBlobObjects(createConfig(listener.baseUrl), [
-        'releases/rejected/release.tar',
-      ]),
+      deleteRuntimeLibrariesBlobObjects(createConfig(listener.baseUrl), ['releases/rejected/release.tar']),
       /releases\/rejected\/release\.tar \(AccessDenied\)/,
     );
   } finally {

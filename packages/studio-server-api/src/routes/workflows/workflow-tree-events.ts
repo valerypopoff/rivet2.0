@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { watchOperatorStreamAuthorization } from '../../watch-authorization.js';
+import { watchVmMigrationPassiveStream } from '../../vm-migration-maintenance.js';
 
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
@@ -62,7 +63,11 @@ export function notifyWorkflowTreeChanged(request: Request): WorkflowTreeChangeE
   return notifier.notify(getWorkflowTreeClientId(request));
 }
 
-function writeSseEvent(response: Response, event: string, payload: WorkflowTreeSyncState | WorkflowTreeChangeEvent): boolean {
+function writeSseEvent(
+  response: Response,
+  event: string,
+  payload: WorkflowTreeSyncState | WorkflowTreeChangeEvent,
+): boolean {
   if (response.destroyed || response.writableEnded) {
     return false;
   }
@@ -88,6 +93,7 @@ export function openWorkflowTreeEventStream(request: Request, response: Response
   response.setHeader('X-Accel-Buffering', 'no');
   response.flushHeaders?.();
   if (!watchOperatorStreamAuthorization(request, response)) return;
+  if (!watchVmMigrationPassiveStream(response)) return;
 
   let closed = false;
   let unsubscribe: (() => void) | null = null;

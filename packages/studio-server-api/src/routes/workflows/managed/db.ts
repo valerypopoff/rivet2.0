@@ -32,7 +32,9 @@ async function waitForManagedDbRetry(delayMs: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-export function getManagedDbConnectionConfig(config: ManagedWorkflowStorageConfig) {
+export function getManagedDbConnectionConfig(
+  config: Pick<ManagedWorkflowStorageConfig, 'databaseUrl' | 'databaseSslMode'>,
+) {
   const sharedConfig = {
     connectionString: config.databaseUrl,
     keepAlive: true,
@@ -53,7 +55,7 @@ export function getManagedDbConnectionConfig(config: ManagedWorkflowStorageConfi
   };
 }
 
-export function getManagedDbPoolConfig(config: ManagedWorkflowStorageConfig) {
+export function getManagedDbPoolConfig(config: Pick<ManagedWorkflowStorageConfig, 'databaseUrl' | 'databaseSslMode'>) {
   return withManagedPostgresPoolMax(getManagedDbConnectionConfig(config));
 }
 
@@ -291,11 +293,13 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
       lookupName: string,
     ): Promise<ManagedExecutionPointerLookupResult | null> {
       if (runKind === 'web-app' || runKind === 'latest-web-app') {
-        const row = await queryOne<CurrentDraftRevisionRow & {
-          ui_graph_id: string;
-          allowed_emails: string[] | null;
-          web_app_id: string;
-        }>(
+        const row = await queryOne<
+          CurrentDraftRevisionRow & {
+            ui_graph_id: string;
+            allowed_emails: string[] | null;
+            web_app_id: string;
+          }
+        >(
           client,
           `
             SELECT

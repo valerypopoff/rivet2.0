@@ -164,6 +164,7 @@ export function splitCurrentDraftRevisionRow(row: CurrentDraftRevisionRow): {
       published_version_id: row.published_version_id,
       endpoint_name: row.endpoint_name,
       published_endpoint_name: row.published_endpoint_name,
+      endpoint_access: row.endpoint_access,
       last_published_at: row.last_published_at,
     },
     revision: {

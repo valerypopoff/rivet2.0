@@ -1,5 +1,4 @@
 import {
-  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -13,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { createManagedObjectStorageHttpHandlerOptions } from '../../../managed-health.js';
+import { createManagedBucketCommand } from '../../../managed-bucket-creation.js';
 import { observeObjectStorageOperation, type MetricsObjectStorageDomain } from '../../../metrics.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
@@ -75,7 +75,18 @@ export function createManagedWorkflowBlobKey(...segments: string[]): string {
     .join('/');
 }
 
-export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowStorageConfig): S3ClientConfig {
+type ManagedWorkflowObjectStorageConfig = Pick<
+  ManagedWorkflowStorageConfig,
+  | 'objectStorageBucket'
+  | 'objectStorageEndpoint'
+  | 'objectStorageRegion'
+  | 'objectStoragePrefix'
+  | 'objectStorageForcePathStyle'
+  | 'objectStorageAccessKeyId'
+  | 'objectStorageSecretAccessKey'
+>;
+
+export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowObjectStorageConfig): S3ClientConfig {
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
@@ -98,10 +109,12 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
   readonly #bucket;
   readonly #prefix;
   readonly #metricsDomain;
+  readonly #bucketCreation;
 
-  constructor(config: ManagedWorkflowStorageConfig, metricsDomain: MetricsObjectStorageDomain = 'workflows') {
+  constructor(config: ManagedWorkflowObjectStorageConfig, metricsDomain: MetricsObjectStorageDomain = 'workflows') {
     this.#client = new S3Client(createManagedWorkflowS3ClientConfig(config));
     this.#bucket = config.objectStorageBucket;
+    this.#bucketCreation = createManagedBucketCommand(config);
     this.#prefix = normalizeKeyPrefix(config.objectStoragePrefix);
     this.#metricsDomain = metricsDomain;
   }
@@ -132,7 +145,7 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
         }
 
         try {
-          await this.#client.send(new CreateBucketCommand({ Bucket: this.#bucket }));
+          await this.#client.send(this.#bucketCreation);
         } catch (createError) {
           // Another API process may have created the bucket after HeadBucket.
           // Only a successful read proves this create failure is harmless.

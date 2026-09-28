@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
+import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
 import { checkRuntimeLibrariesHealth, disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import {
@@ -33,11 +34,24 @@ import {
   readDeploymentStorageRuntimeSettingsSync,
 } from './deployment-storage-settings.js';
 import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
+import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
+import { initializeLocalMetadataServing, assertLocalMetadataWritesAllowed } from './local-metadata/runtime-control.js';
+import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
+import { initializeLocalRuntimeLibraryAuthority } from './local-metadata/runtime-library-authority.js';
+import { enableWorkflowRecordingMigrationCopyMode } from './routes/workflows/recordings.js';
+import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
+import { getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
+import { assertVmMigrationTargetMayServe } from './vm-migration-target-gate.js';
+import {
+  getPostgresAppSettingsPoolConfigFromEnv,
+  isPostgresAppSettingsBackendEnabled,
+} from './app-settings/managed-settings-store.js';
 
 const PORT = parseInt(process.env.PORT ?? '3100', 10);
 const apiRuntimeProfile = getApiRuntimeProfile();
 const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
+let disposeLocalRuntimeLibraryAuthority: (() => void) | undefined;
 const runtimeHealthChecks: RuntimeHealthCheck[] = [
   {
     name: 'app-settings',
@@ -167,6 +181,8 @@ async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void>
   await disposeRuntimeLibrariesBackend().catch((error) => {
     console.error('[runtime-libraries] Failed to dispose backend during shutdown:', error);
   });
+  disposeLocalRuntimeLibraryAuthority?.();
+  disposeLocalRuntimeLibraryAuthority = undefined;
   await disposeAppSettingsRepositories().catch((error) => {
     console.error('[app-settings] Failed to dispose settings backend during shutdown:', error);
   });
@@ -256,13 +272,51 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
+    await initializeLocalMetadataServing();
+    // A paused migration survives a process restart. Disable source recording
+    // retention before storage initialization can run its startup cleanup.
+    const vmMigrationPaused = isVmMigrationMaintenanceActive();
+    if (vmMigrationPaused) enableWorkflowRecordingMigrationCopyMode();
     if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
       getPublishedExecutionAdmission();
     }
+    // PostgreSQL settings initialization seeds missing rows. An incomplete
+    // migration target must fail before that first potential target write.
+    if (isPostgresAppSettingsBackendEnabled()) {
+      const bootstrapPool = new Pool(getPostgresAppSettingsPoolConfigFromEnv());
+      try {
+        await assertVmMigrationTargetMayServe(bootstrapPool);
+      } finally {
+        await bootstrapPool.end();
+      }
+    }
     await initializeAppSettingsRepositories();
     assertStartupActive();
+    if (isManagedWorkflowStorageEnabled()) {
+      const gatePool = new Pool(getManagedDbPoolConfig(getManagedWorkflowStorageConfig()));
+      try {
+        await assertVmMigrationTargetMayServe(gatePool);
+      } finally {
+        await gatePool.end();
+      }
+    }
     assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
     let startManagedRuntimeLibraries: (() => Promise<void>) | undefined;
+    if (getLocalMetadataServingSelection()) {
+      if (readDeploymentStorageRuntimeSettingsSync().storageMode !== 'filesystem')
+        throw new Error('Local SQLite generation must keep local artifact storage selected.');
+      const apply = (
+        globalThis as typeof globalThis & {
+          __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
+        }
+      ).__rivetApplyNodeExecutorProxySettings;
+      if (!apply) throw new Error('Local SQL runtime bootstrap is not installed.');
+      await apply(nodeExecutorProxySettingsRepository.readSync().value);
+      disposeLocalRuntimeLibraryAuthority = await initializeLocalRuntimeLibraryAuthority(
+        getLocalMetadataServingSelection()!,
+        assertLocalMetadataWritesAllowed,
+      );
+    }
     if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
       const storageSettings = readDeploymentStorageRuntimeSettingsSync();
       const mismatchedFields =
@@ -291,7 +345,9 @@ async function startServer(): Promise<void> {
     await initializeWorkflowStorage();
     assertStartupActive();
     await startManagedRuntimeLibraries?.();
-    await reconcileRuntimeLibraries();
+    // Reconciliation can rewrite the source manifest or migrate a legacy
+    // release layout. Keep the frozen runtime-library tree untouched too.
+    if (!vmMigrationPaused) await reconcileRuntimeLibraries();
     assertStartupActive();
     if (apiRuntimeProfile !== 'evaluation') {
       webAppActionWebSockets = await initializeWebAppActionWebSockets(server);

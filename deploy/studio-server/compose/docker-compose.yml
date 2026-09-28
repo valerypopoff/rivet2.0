@@ -6,7 +6,7 @@ services:
       context: ../../..
       dockerfile: deploy/studio-server/images/proxy/Dockerfile
     ports:
-      - "${RIVET_PORT:-8080}:8080"
+      - '${RIVET_PORT:-8080}:8080'
     environment:
       - RIVET_WEB_UPSTREAM_HOST=web
       - RIVET_WEB_UPSTREAM_PORT=3000
@@ -83,7 +83,11 @@ services:
       - /tmp:rw,nosuid,size=128m,uid=10001,gid=10001
       - /var/tmp:rw,nosuid,size=128m,uid=10001,gid=10001
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:3000/'',r=>{process.exit(r.statusCode===200?0:1)}).on(''error'',()=>process.exit(1))"',
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -93,11 +97,11 @@ services:
   filesystem-artifacts-init:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
     read_only: true
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
+    user: '0:0'
+    entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
@@ -107,6 +111,7 @@ services:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
       - type: volume
         source: rivet_data
         target: /data/rivet-app
@@ -115,10 +120,10 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,size=128m
       - /var/tmp:rw,nosuid,size=128m
-    restart: "no"
+    restart: 'no'
   api:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
-    entrypoint: ["node", "/opt/rivet/backend-supervisor.mjs"]
+    entrypoint: ['node', '/opt/rivet/backend-supervisor.mjs']
     build:
       context: ../../..
       dockerfile: deploy/studio-server/images/api/Dockerfile
@@ -173,6 +178,11 @@ services:
       - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-true}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_VM_MIGRATION_ENABLED=${RIVET_VM_MIGRATION_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_UPGRADE_ENABLED=${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_CONTROL_ROOT=${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}
+      - RIVET_LOCAL_METADATA_ENCRYPTION_KEY=${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}
+      - RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB=${RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB:-32}
       - RIVET_ENABLE_DEVELOPMENT_AUTH=${RIVET_ENABLE_DEVELOPMENT_AUTH:-false}
       - RIVET_DEVELOPMENT_AUTH_CLIENTS=${RIVET_DEVELOPMENT_AUTH_CLIENTS:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -199,6 +209,7 @@ services:
         volume:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
     # Disposable, bounded RAM-backed scratch. Durable project and library data
     # remain on their existing host/named volumes.
     tmpfs:
@@ -208,7 +219,11 @@ services:
       filesystem-artifacts-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:21890/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:21890/readyz'',r=>{process.exit(r.statusCode===200?0:1)}).on(''error'',()=>process.exit(1))"',
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -217,6 +232,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  rivet_local_metadata:
+    driver: local
   rivet_workspace:
     driver: local
   rivet_data:

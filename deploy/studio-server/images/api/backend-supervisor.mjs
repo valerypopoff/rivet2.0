@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { acquireLocalMetadataOwnerLease, assertLegacyLocalMetadataStartup } from './local-metadata-owner-lease.mjs';
 
 const API_ENTRYPOINT = '/opt/rivet/api-entrypoint.sh';
 const EXECUTOR_ENTRYPOINT = '/opt/rivet/executor-entrypoint.sh';
@@ -48,7 +50,9 @@ export function childEnvironments(env = process.env) {
     delete executor.RIVET_LLM_PROFILE_HEALTH_API_URL;
     delete executor.RIVET_EXECUTION_ENVIRONMENT_API_URL;
   } else {
+    api.RIVET_VM_MIGRATION_EDITOR_CONTROL = '1';
     delete executor.RIVET_RUNTIME_LIBRARIES_REPLICA_TIER;
+    executor.RIVET_VM_MIGRATION_CONTROL_ROOT = env.RIVET_APP_DATA_ROOT || '/data/rivet-app';
     executor.RIVET_LLM_PROFILE_HEALTH_API_URL = `http://127.0.0.1:${apiPort}/api/workflows/llm-profile-health`;
     executor.RIVET_EXECUTION_ENVIRONMENT_API_URL = `http://127.0.0.1:${apiPort}/api/workflows/execution-environment`;
   }
@@ -71,12 +75,49 @@ export async function startBackendSupervisor({
   shutdownTimeoutMs = Number(env.RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS ?? 130_000),
 } = {}) {
   const config = childEnvironments(env);
+  let localMetadataLease;
+  if (env.RIVET_LOCAL_METADATA_CONTROL_ROOT) {
+    if ((env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') !== 'single-host')
+      throw new Error('Local metadata ownership is supported only on a single host.');
+    localMetadataLease = acquireLocalMetadataOwnerLease(env.RIVET_LOCAL_METADATA_CONTROL_ROOT);
+    try {
+      const selection = assertLegacyLocalMetadataStartup(
+        env.RIVET_LOCAL_METADATA_CONTROL_ROOT,
+        env.RIVET_APP_DATA_ROOT || '/data/rivet-app',
+        { allowSqlite: true },
+      );
+      for (const child of [config.api, config.executor]) {
+        child.RIVET_LOCAL_METADATA_SUPERVISED = '1';
+        child.RIVET_LOCAL_METADATA_BOOT_GENERATION = selection.generationId;
+        child.RIVET_LOCAL_METADATA_BOOT_REVISION = String(selection.revision);
+      }
+      if (selection.generationId) {
+        config.executor.RIVET_EXECUTOR_RUNTIME_CONFIG_URL = `http://127.0.0.1:${config.apiPort}/internal/executor-runtime-config`;
+        config.executor.RIVET_RUNTIME_CONFIG_PROTOCOL = '2';
+        config.executor.RIVET_RUNTIME_LIBRARIES_ROOT = path.join(
+          env.RIVET_LOCAL_METADATA_CONTROL_ROOT,
+          'generations',
+          selection.generationId,
+          'runtime-cache',
+        );
+        config.executor.RIVET_CODE_RUNNER_REQUIRE_ROOT = path.join(
+          config.executor.RIVET_RUNTIME_LIBRARIES_ROOT,
+          'current',
+          'node_modules',
+        );
+      }
+    } catch (error) {
+      localMetadataLease.release();
+      throw error;
+    }
+  }
   if (
     !Number.isFinite(apiStartupTimeoutMs) ||
     apiStartupTimeoutMs < 1_000 ||
     !Number.isFinite(shutdownTimeoutMs) ||
     shutdownTimeoutMs < 1_000
   ) {
+    localMetadataLease?.release();
     throw new Error('Backend startup and shutdown timeouts must be positive durations.');
   }
   let api;
@@ -129,10 +170,15 @@ export async function startBackendSupervisor({
         : live && executorReady && (await apiReady()) && (await executorListening());
     response.writeHead(healthy ? 200 : 503, { 'Cache-Control': 'no-store' }).end();
   });
-  await new Promise((resolve, reject) => {
-    health.once('error', reject);
-    health.listen(config.healthPort, '0.0.0.0', resolve);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      health.once('error', reject);
+      health.listen(config.healthPort, '0.0.0.0', resolve);
+    });
+  } catch (error) {
+    localMetadataLease?.release();
+    throw error;
+  }
 
   function finishIfStopped() {
     if (!stopping || !apiDone || !executorDone || finishing) return;
@@ -141,7 +187,10 @@ export async function startBackendSupervisor({
     signalSource.off('SIGINT', onSignal);
     signalSource.off('SIGTERM', onSignal);
     health.closeAllConnections();
-    health.close(() => finish(exitCode));
+    health.close(() => {
+      localMetadataLease?.release();
+      finish(exitCode);
+    });
   }
 
   function stop(code = 0) {

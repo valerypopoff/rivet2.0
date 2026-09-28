@@ -31,7 +31,7 @@ const handleRequest = async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify({ identity, url: req.url, method: req.method, body }));
+  res.end(JSON.stringify({ identity, url: req.url, method: req.method, body, host: req.headers.host }));
 };
 const handleUpgrade = (req, socket) => {
   const accept = createHash('sha1')

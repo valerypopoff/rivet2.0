@@ -9,7 +9,13 @@ import type {
   RuntimeLibraryLogSource,
   RuntimeLibraryPackageSpec,
 } from '../../../studio-server-shared/runtime-library-types.js';
-import { currentNodeModulesPath, ensureDirectories, getRootPath, readManifest } from './manifest.js';
+import {
+  currentNodeModulesPath,
+  ensureDirectories,
+  getRootPath,
+  readManifest,
+  prepareLocalRuntimeLibraries,
+} from './manifest.js';
 import { jobRunner } from './job-runner.js';
 import type { RuntimeLibrariesBackend } from './backend.js';
 import { conflict, createHttpError } from '../utils/httpError.js';
@@ -30,20 +36,22 @@ function mapRuntimeLibrariesFilesystemError(error: unknown, operation: 'read' | 
   );
 }
 
-function mapJob(job: {
-  id: string;
-  type: 'install' | 'remove';
-  status: JobStatus;
-  packages: Array<{ name: string; version: string }>;
-  logs: string[];
-  logEntries: RuntimeLibraryJobLogEntry[];
-  error?: string;
-  createdAt: string;
-  startedAt?: string;
-  finishedAt?: string;
-  lastProgressAt: string;
-  cancelRequestedAt?: string | null;
-} | null): RuntimeLibraryJobState | null {
+function mapJob(
+  job: {
+    id: string;
+    type: 'install' | 'remove';
+    status: JobStatus;
+    packages: Array<{ name: string; version: string }>;
+    logs: string[];
+    logEntries: RuntimeLibraryJobLogEntry[];
+    error?: string;
+    createdAt: string;
+    startedAt?: string;
+    finishedAt?: string;
+    lastProgressAt: string;
+    cancelRequestedAt?: string | null;
+  } | null,
+): RuntimeLibraryJobState | null {
   if (!job) {
     return null;
   }
@@ -78,7 +86,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async prepareForExecution(): Promise<void> {
-    // Filesystem mode already resolves directly from the local runtime root.
+    await prepareLocalRuntimeLibraries();
   }
 
   async dispose(): Promise<void> {
@@ -173,13 +181,19 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     res.flushHeaders();
 
     for (const entry of job.logEntries) {
-      res.write(`data: ${JSON.stringify({ type: 'log', message: entry.message, createdAt: entry.createdAt, source: entry.source })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ type: 'log', message: entry.message, createdAt: entry.createdAt, source: entry.source })}\n\n`,
+      );
     }
 
-    res.write(`data: ${JSON.stringify({ type: 'status', status: job.status, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({ type: 'status', status: job.status, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`,
+    );
 
     if (job.status === 'succeeded' || job.status === 'failed') {
-      res.write(`data: ${JSON.stringify({ type: 'done', status: job.status, error: job.error, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ type: 'done', status: job.status, error: job.error, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`,
+      );
       res.end();
       return;
     }
@@ -201,7 +215,9 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
 
       if (status === 'succeeded' || status === 'failed') {
         const finishedJob = jobRunner.getJob(jobId);
-        res.write(`data: ${JSON.stringify({ type: 'done', status, error: finishedJob?.error, createdAt: finishedJob?.lastProgressAt, cancelRequestedAt: finishedJob?.cancelRequestedAt ?? null })}\n\n`);
+        res.write(
+          `data: ${JSON.stringify({ type: 'done', status, error: finishedJob?.error, createdAt: finishedJob?.lastProgressAt, cancelRequestedAt: finishedJob?.cancelRequestedAt ?? null })}\n\n`,
+        );
         cleanup();
         res.end();
       }

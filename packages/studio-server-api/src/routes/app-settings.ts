@@ -1,4 +1,14 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { requireVmMigrationOperatorAuth, requireLocalUpgradeOperatorAuth } from '../middleware/auth.js';
+import {
+  getLocalUpgradeStatus,
+  getLocalUpgradeReport,
+  inspectLocalUpgradeSource,
+  localUpgradeBackupFingerprint,
+  pauseLocalUpgradeSource,
+  startLocalUpgradeCopy,
+  transitionLocalUpgrade,
+} from '../local-metadata/operator-service.js';
 import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
@@ -52,6 +62,20 @@ import { createHttpError } from '../utils/httpError.js';
 import { getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
+import { createJsonBodyParser } from '../middleware/body-parsers.js';
+import { z } from 'zod';
+import {
+  acknowledgeInterruptedVmMigration,
+  enterVmMigrationMode,
+  getVmMigrationStatus,
+  getVmMigrationSourceInventory,
+  leaveVmMigrationMode,
+  reviewVmMigrationDeployment,
+  startVmMigration,
+  startVmMigrationPrecopy,
+  testVmMigrationDatabase,
+  testVmMigrationObjectStorage,
+} from '../vm-migration-service.js';
 import {
   runRecordingsSettingsRepository,
   readRunRecordingsSettings,
@@ -62,6 +86,215 @@ export { readNodeExecutorProxySettings, writeNodeExecutorProxySettings } from '.
 export { readRunRecordingsSettings, writeRunRecordingsSettings } from './workflows/recordings-config.js';
 
 export const appSettingsRouter = Router();
+const migrationJsonBody = createJsonBodyParser(() => 16 * 1024);
+const migrationTargetSchema = z
+  .object({
+    databaseUrl: z.string().min(1),
+    databaseSslMode: z.enum(['disable', 'require', 'verify-full']),
+    bucket: z.string().min(1),
+    endpoint: z.string(),
+    region: z.string().min(1),
+    prefix: z.string().min(1),
+    forcePathStyle: z.boolean(),
+    accessKeyId: z.string().min(1),
+    secretAccessKey: z.string().min(1),
+    settingsEncryptionKey: z.string().min(1),
+    targetOffline: z.boolean(),
+    runtimePlatformCompatible: z.boolean(),
+  })
+  .strict();
+const migrationDatabaseSchema = migrationTargetSchema.pick({ databaseUrl: true, databaseSslMode: true });
+const migrationObjectStorageSchema = migrationTargetSchema.pick({
+  bucket: true,
+  endpoint: true,
+  region: true,
+  prefix: true,
+  forcePathStyle: true,
+  accessKeyId: true,
+  secretAccessKey: true,
+});
+const migrationDeploymentReviewSchema = z
+  .object({
+    target: migrationTargetSchema,
+    checks: z
+      .object({
+        backupCompleted: z.literal(true),
+        deploymentSettingsMatch: z.literal(true),
+        functionalRehearsalPassed: z.literal(true),
+        externalDependenciesReviewed: z.literal(true),
+        rollbackWindowUnderstood: z.literal(true),
+      })
+      .strict(),
+  })
+  .strict();
+
+appSettingsRouter.use('/vm-migration', requireVmMigrationOperatorAuth);
+appSettingsRouter.use('/local-upgrade', requireLocalUpgradeOperatorAuth);
+appSettingsRouter.get(
+  '/local-upgrade',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getLocalUpgradeStatus());
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/inventory',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await inspectLocalUpgradeSource());
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/fingerprint',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ sourceFingerprint: await localUpgradeBackupFingerprint() });
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/report',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getLocalUpgradeReport());
+  }),
+);
+appSettingsRouter.post(
+  '/local-upgrade/pause',
+  migrationJsonBody,
+  asyncHandler(async (_req, res) => {
+    await pauseLocalUpgradeSource();
+    res.sendStatus(204);
+  }),
+);
+appSettingsRouter.post(
+  '/local-upgrade/copy',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        revision: z.number().int().positive(),
+        backupReference: z.string().trim().min(1).max(512),
+        backupSourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+        backupRestored: z.literal(true),
+        encryptionKeyBackedUp: z.literal(true),
+        retryJobId: z.string().optional(),
+      })
+      .strict()
+      .parse(req.body);
+    await startLocalUpgradeCopy(input);
+    res.status(202).json({ started: true });
+  }),
+);
+appSettingsRouter.post(
+  '/local-upgrade/action',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        action: z.enum(['activate', 'validate', 'return-to-legacy', 'resume', 'cancel']),
+        revision: z.number().int().positive(),
+      })
+      .strict()
+      .parse(req.body);
+    await transitionLocalUpgrade(input.action, input.revision);
+    res.sendStatus(204);
+  }),
+);
+appSettingsRouter.get(
+  '/vm-migration',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getVmMigrationStatus());
+  }),
+);
+appSettingsRouter.get(
+  '/vm-migration/inventory',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getVmMigrationSourceInventory());
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/test-database',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    try {
+      await testVmMigrationDatabase(migrationDatabaseSchema.parse(req.body));
+    } catch {
+      throw createHttpError(
+        400,
+        'Could not read and write destination PostgreSQL. Check its connection and DDL permissions.',
+      );
+    }
+    res.set('Cache-Control', 'no-store').json({ ok: true });
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/test-object-storage',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    try {
+      await testVmMigrationObjectStorage(migrationObjectStorageSchema.parse(req.body));
+    } catch {
+      throw createHttpError(400, 'Could not read and write destination S3. Check its location and permissions.');
+    }
+    res.set('Cache-Control', 'no-store').json({ ok: true });
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/maintenance',
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await enterVmMigrationMode());
+  }),
+);
+appSettingsRouter.delete(
+  '/vm-migration/maintenance',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const target = req.is('application/json') ? migrationTargetSchema.parse(req.body) : undefined;
+    try {
+      await leaveVmMigrationMode(target);
+    } catch {
+      throw createHttpError(
+        409,
+        'The VM remains paused. Stop the destination pods and check its credentials before closing the startup gate.',
+      );
+    }
+    res.set('Cache-Control', 'no-store').json({ restartRequired: true });
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/recover',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    await acknowledgeInterruptedVmMigration(req.body?.importerStopped === true);
+    res.set('Cache-Control', 'no-store').json(await getVmMigrationStatus());
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/precopy',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const target = migrationTargetSchema.parse(req.body);
+    res
+      .set('Cache-Control', 'no-store')
+      .status(202)
+      .json(await startVmMigrationPrecopy(target));
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/run',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const target = migrationTargetSchema.parse(req.body);
+    res
+      .set('Cache-Control', 'no-store')
+      .status(202)
+      .json(await startVmMigration(target));
+  }),
+);
+appSettingsRouter.post(
+  '/vm-migration/deployment-review',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const { target, checks } = migrationDeploymentReviewSchema.parse(req.body);
+    res.set('Cache-Control', 'no-store').json(await reviewVmMigrationDeployment(target, checks));
+  }),
+);
 appSettingsRouter.get('/trusted-clients/current-request', (req, res) => {
   res.set('Cache-Control', 'no-store').json({
     clientAddress: getVerifiedClientAddress(req),

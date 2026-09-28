@@ -3,6 +3,62 @@
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
 See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)
+See also: [Local metadata storage upgrade](./local-metadata-upgrade.md)
+
+## Local metadata conversion verification
+
+The single-host local upgrade is disabled by default; deploy/provision the
+persistent control volume before enabling the operator UI. The owning runbook
+explains backup certification, paused activation, whole-backend restarts and
+key-free offline rollback. Never enable it on the production VM as a substitute
+for rehearsing a separately restored copy of that VM's data.
+
+Run the API `local-upgrade-runtime.test.ts` with the artifact/catalog/settings,
+candidate/snapshot/transition/recovery suites. It exercises durable copy,
+independent process startups, selected serving, restart fences and corrupt
+candidate recovery. Also run `studio-server:verify:production-cutover`, the
+API typecheck, executor build, formatting/test-style checks, and headless
+`studio-server:ui:observe local-storage-upgrade.spec.ts`. UI checks mock the
+operator API and never convert the development stack's data. Use Linux Node 24
+for container-runtime evidence as well as Windows checks. The runtime suite
+includes stage/commit termination, disk-full/permission failures and retry;
+`local-copy-capacity.test.ts` and `local-upgrade-diagnostics.test.ts` cover
+resource refusal and secret-safe failure categories.
+
+Run `studio-server:verify:local-upgrade-images` with exact API/web/proxy image
+references for the packaged, unmocked browser/conversion/restart/recovery gate.
+It owns disposable volumes only, keeps API/executor egress isolated, and must
+not point at VM/dev mounts. See the owning runbook for image environment names
+and the remaining actual-VM-data rehearsal. `local-metadata-control --capacity`
+provides a read-only resource preflight for that later rehearsal.
+
+Local conversion and the legacy VM-to-managed importer cannot operate together.
+The latter is blocked while local transition control is enabled, rather than
+silently exporting retained stale files after SQLite cutover.
+
+Both development and production Compose nginx templates preserve the complete
+request `Host`, including a non-default port, with the normal nginx fallback for
+Host-less HTTP/1.0 requests. Do not substitute `$host` directly on upstream
+requests: it strips the port, making the operator API reject a legitimate
+`Origin: http://localhost:8081` as cross-origin. Keep the API's origin check;
+never work around this by relaxing authentication or trusting forwarded headers.
+After changing a mounted template, restart only the dev proxy so its entrypoint
+renders the new configuration; a plain nginx reload does not render templates.
+
+`verify-proxy-dns.mjs` checks real upstream Host preservation through all three
+templates for hostname/port, IPv6/port and default-port authorities. Run headless
+`studio-server:ui:observe local-storage-upgrade-origin.spec.ts` on an enabled,
+provisioned dev instance to verify the real gateway/API boundary. It sends only
+malformed JSON to the action route, never a valid pause/copy/activation command,
+and checks unchanged maintenance/transition state. Cross-origin and missing-intent
+requests must remain forbidden. The ordinary `local-storage-upgrade.spec.ts`
+continues to mock operator mutations and is safe against existing dev data.
+
+Status polling has a ten-second request deadline. A hung response locks the
+operator controls just like a failed or expired session; polling retries and
+unlocks only after a fresh status response. Do not apply this short deadline to
+inventory, fingerprint, copy or validation actions. A rejected action's error
+must remain visible when status polling succeeds again.
 
 ## HTTP body lifecycle verification
 
@@ -164,6 +220,7 @@ Operational note:
 
 - `deploy/studio-server/.env.example` is the minimal single-host Docker Compose starting point: host port, durable artifact root, UI access mode, and shared key. The launchers and Compose own internal ports, service defaults, image selection, and role values. Kubernetes rehearsals use their dedicated `.env.kubernetes-local.example` template. Keep optional tuning and overrides in the relevant operator guidance, and keep App Settings values out of the copied environment template.
 - `Settings` -> `Storage` is the operator surface for choosing filesystem versus managed storage and saving managed database/object-storage credentials. Single-host deployments persist `settings/deployment-storage.json`. Kubernetes persists the same typed domain as encrypted PostgreSQL settings; migration seeds a missing row from validated Helm/Vault values in memory, APIs load it directly, and the co-located executor receives an authenticated loopback snapshot. No Kubernetes startup settings projection is written. If no value exists in single-host mode, built-in `Local folders` plus `Local Docker Postgres` defaults seed the first revision. Restart/recreate Docker services or roll out Kubernetes API/executor pods after changing storage settings so singleton backends are rebuilt.
+- Switching `Settings` -> `Storage` does **not** migrate existing data. `Settings` -> `Migration` on a filesystem-backed single-host VM tests the destination, activates a persistent source maintenance barrier, drains admitted work, then runs the copy and separate verify child processes. Its status file contains no credentials; an interrupted job must be retried with freshly entered secrets. The source remains paused after success. The detailed inventory, CLI fallback, and operator-controlled Kubernetes traffic cutover are in [VM to managed migration](vm-to-managed-migration.md). Never enable destination serving pods on a partial copy.
 - Kubernetes requires `appSettings.backend=postgres`. Prefer a dedicated Secret/Vault value for `RIVET_APP_SETTINGS_ENCRYPTION_KEY`; `RIVET_KEY` is a compatibility fallback. Rotation is a three-rollout operation: first deploy the old primary with the new key as the accepted secondary, then deploy the new primary with the old key as secondary, and remove the old key only after every pod runs the new primary. This prevents old rolling-update pods from encountering rows encrypted with a key they do not know.
 - `RIVET_ARTIFACTS_HOST_PATH` remains the launcher bootstrap/default for filesystem-mode host mounts
 - `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` remain compatibility overrides for the launcher
@@ -707,7 +764,7 @@ Current behavior:
 - App Settings -> `Web apps` -> `Auth`, `OAuth`, and `Server UI access` edit one web-app-auth domain. `Key`, `OAuth`, and `No gate` retain their existing behavior. The file backend uses owner-only `settings/web-app-auth.json`; Kubernetes stores the payload encrypted in PostgreSQL. Legacy web-app/OAuth env values are ignored. OAuth state and session cookies remain bound to the saved revision, so provider, credential, scope, allowlist, or session-policy changes fail closed and may require visitors to sign in again.
 - App Settings -> `Workflow endpoints` -> `Access control` writes workflow endpoint bearer-token policy to `settings/workflow-endpoint-auth.json`. It defaults to requiring `Authorization: Bearer <RIVET_KEY>`, and the legacy `RIVET_REQUIRE_WORKFLOW_KEY` env var is ignored so workflow endpoint auth has one operator-owned source of truth.
 - App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` edit one public-route settings domain. In file mode it is `settings/public-routes.json`, with the old `settings/web-app-routes.json` as a read-only import fallback. Kubernetes stores it in PostgreSQL. Slugs are unique single top-level path segments and cannot collide with reserved routes.
-- App Settings -> `Storage` writes workflow/runtime-library storage choices through the active settings repository. The tab keeps artifact storage and metadata database settings separate. `Local folders` uses launcher-mounted host paths; `Object storage` uses S3-compatible storage; the database section independently chooses local Docker or managed PostgreSQL. Secrets are never returned to the browser. Storage/database env values are ignored by Docker API/executor runtime. Restart Docker or roll out Kubernetes after changes so workflow and runtime-library singleton backends use the new configuration.
+- App Settings -> `Storage` writes workflow/runtime-library storage choices through the active settings repository. `Local folders` uses launcher-mounted host paths and hides the inactive metadata database controls; `Object storage + PostgreSQL` shows the S3-compatible storage and local Docker or managed PostgreSQL controls. Toggling back to local folders retains the saved database choice but does not use it, and switching storage mode does not migrate data. Secrets are never returned to the browser. Storage/database env values are ignored by Docker API/executor runtime. Restart Docker or roll out Kubernetes after changes so workflow and runtime-library singleton backends use the new configuration.
 - Managed workflow schema changes live in ordered immutable migrations under `packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts`. Migration 1 is the workflow baseline; migration 2 adds encrypted `app_settings`; migration 3 adds the fenced maintenance lease and deletion outbox; migration 4 adds reconciliation state and integrity findings. Never edit a released migration or checksum. The Helm pre-install/pre-upgrade Job validates deployment storage in memory and runs schema migration before enabling the PostgreSQL settings backend. Each absent row independently uses a matching regular, valid legacy JSON file or falls back to the candidate bootstrap/default; never switch the entire app-data root to a partial legacy tree. The missing deployment-storage row is seeded from validated Helm/Vault values, while an existing row remains authoritative. Serving API pods remain verify-only. Add each future change as N+1 with complete manifest, backward-compatibility declaration, and concurrency/upgrade coverage.
 - Web-app action graph context strips browser/session headers such as `cookie`, `authorization`, proxy auth, and verified client-address hints. Keep public web-app actions on that narrower context contract; workflow endpoint routes may still expose request headers because they are API-style execution surfaces with their own bearer/trusted-client contract.
 - Web-app actions carry a browser-owned `storage` snapshot for Rivet Stored Value nodes. Both the HTTP compatibility route and the WebSocket gateway must return the per-run `storagePatch`; do not persist or reuse that snapshot server-side unless a deliberate trusted host store is introduced.
@@ -1007,7 +1064,7 @@ Current repo-local baseline:
   - published-route-prefix overrides are rejected
   - the managed-only chart shape is enforced
 - `yarn studio-server:verify:kubernetes:managed-restore` is a protected, mutation-capable operator drill—not an ordinary CI or development command. Run it only from the clean promoted checkout named by its backup manifest, with a provider-owned disposable target and explicit confirmation; the runner enforces that clean-checkout requirement. It requires a non-local HTTPS DNS host and rejects production identity reuse without trusting letter case or a DNS trailing dot (including a reused host on a different port), reads each driver YAML once before validating and applying that exact content, forbids HTTP redirect-following during target probes, requires provider restore/integrity/cleanup Jobs with positive object recovery/reference evidence, atomically labels and re-verifies its disposable namespace before teardown, confirms disposable-target deletion before reporting success, and leaves a sanitized local report; scheduling or a secret-bearing GitHub workflow requires an explicit operations approval.
-- managed migration verification now has direct regression coverage for its comparison logic, but real import/cutover confidence still requires the managed Docker rehearsal described below.
+- VM migration has unit coverage for strict comparison, maintenance, authorization and durable progress, plus a PostgreSQL/MinIO copy-retry-verify fixture that exercises publication history, web-app policy, recordings, Evaluations, settings and runtime libraries. A real cutover still requires an isolated rehearsal using the exact production image, provider services and representative VM snapshot; the fixture is not deployment approval.
 
 For hosted editor shell changes, keep `packages/studio-server-web/index.html` loading the same font families that Rivet styles reference. Rivet uses both `Roboto` and `Roboto Mono`; loading only the monospace family leaves several upstream panels on browser fallbacks.
 

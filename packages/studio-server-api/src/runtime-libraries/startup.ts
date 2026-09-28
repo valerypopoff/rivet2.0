@@ -1,11 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { ensureDirectories, getRootPath, currentDir, currentNodeModulesPath, readManifest, writeManifest } from './manifest.js';
+import {
+  ensureDirectories,
+  getRootPath,
+  currentDir,
+  currentNodeModulesPath,
+  readManifest,
+  writeManifest,
+} from './manifest.js';
 import { getRuntimeLibrariesBackendMode } from './config.js';
 import { initializeRuntimeLibrariesBackend } from './backend.js';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
 
 export async function reconcileRuntimeLibraries(): Promise<void> {
+  if (getLocalMetadataServingSelection()) {
+    await initializeRuntimeLibrariesBackend();
+    return;
+  }
   if (!process.env.RIVET_RUNTIME_LIBRARIES_ROOT) {
     console.log('[runtime-libraries] No RIVET_RUNTIME_LIBRARIES_ROOT configured, skipping reconciliation');
     return;
@@ -38,7 +50,9 @@ export async function reconcileRuntimeLibraries(): Promise<void> {
     return;
   }
 
-  console.log(`[runtime-libraries] Active runtime libraries: current (${Object.keys(manifest.packages).length} packages)`);
+  console.log(
+    `[runtime-libraries] Active runtime libraries: current (${Object.keys(manifest.packages).length} packages)`,
+  );
 }
 
 function migrateLegacyReleaseLayoutIfNeeded(): void {

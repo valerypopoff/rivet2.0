@@ -6,6 +6,7 @@ import type { ChildProcess } from 'node:child_process';
 
 import {
   currentDir,
+  activateLocalRuntimeLibraryCandidate,
   ensureDirectories,
   readManifest,
   stagingDir,
@@ -14,7 +15,11 @@ import {
   type RuntimeLibraryManifest,
 } from './manifest.js';
 import { buildChildProcessEnv, execStreaming } from '../utils/exec.js';
-import type { JobStatus, RuntimeLibraryJobLogEntry, RuntimeLibraryLogSource } from '../../../studio-server-shared/runtime-library-types.js';
+import type {
+  JobStatus,
+  RuntimeLibraryJobLogEntry,
+  RuntimeLibraryLogSource,
+} from '../../../studio-server-shared/runtime-library-types.js';
 
 export type { JobStatus };
 export type JobType = 'install' | 'remove';
@@ -52,9 +57,7 @@ class JobRunner extends EventEmitter {
   }
 
   isRunning(): boolean {
-    return this.activeJob != null &&
-      this.activeJob.status !== 'succeeded' &&
-      this.activeJob.status !== 'failed';
+    return this.activeJob != null && this.activeJob.status !== 'succeeded' && this.activeJob.status !== 'failed';
   }
 
   startInstall(packages: Array<{ name: string; version: string }>): JobState {
@@ -195,71 +198,78 @@ class JobRunner extends EventEmitter {
     manifest: RuntimeLibraryManifest,
     candidatePackages: Record<string, RuntimeLibraryEntry>,
   ): Promise<void> {
-    const staging = stagingDir();
+    // Validation uses Node's resolver too. Reusing a path can retain the
+    // previous candidate's package.json main/exports after a version change.
+    const staging = fs.mkdtempSync(path.join(stagingDir(), 'candidate-'));
+    try {
+      const dependencies: Record<string, string> = {};
+      for (const entry of Object.values(candidatePackages)) {
+        dependencies[entry.name] = entry.version;
+      }
 
-    fs.rmSync(staging, { recursive: true, force: true });
-    fs.mkdirSync(staging, { recursive: true });
+      const packageJson = {
+        name: 'rivet-runtime-libraries',
+        private: true,
+        version: '1.0.0',
+        description: 'Managed runtime libraries for Rivet code nodes',
+        dependencies,
+      };
 
-    const dependencies: Record<string, string> = {};
-    for (const entry of Object.values(candidatePackages)) {
-      dependencies[entry.name] = entry.version;
-    }
+      fs.writeFileSync(path.join(staging, 'package.json'), JSON.stringify(packageJson, null, 2), 'utf8');
+      this.appendLog(job, `Generated package.json with ${Object.keys(dependencies).length} dependencies`);
+      this.throwIfCancelled(job);
 
-    const packageJson = {
-      name: 'rivet-runtime-libraries',
-      private: true,
-      version: '1.0.0',
-      description: 'Managed runtime libraries for Rivet code nodes',
-      dependencies,
-    };
+      if (Object.keys(dependencies).length === 0) {
+        this.appendLog(job, 'No dependencies to install, creating empty release');
+        fs.mkdirSync(path.join(staging, 'node_modules'), { recursive: true });
+      } else {
+        this.appendLog(job, 'Running npm install...');
+        const exitCode = await this.npmInstall(job, staging);
+        if (exitCode !== 0) {
+          this.throwIfCancelled(job);
+          this.failJob(job, new Error(`npm install failed with exit code ${exitCode}`));
+          return;
+        }
 
-    fs.writeFileSync(path.join(staging, 'package.json'), JSON.stringify(packageJson, null, 2), 'utf8');
-    this.appendLog(job, `Generated package.json with ${Object.keys(dependencies).length} dependencies`);
-    this.throwIfCancelled(job);
-
-    if (Object.keys(dependencies).length === 0) {
-      this.appendLog(job, 'No dependencies to install, creating empty release');
-      fs.mkdirSync(path.join(staging, 'node_modules'), { recursive: true });
-    } else {
-      this.appendLog(job, 'Running npm install...');
-      const exitCode = await this.npmInstall(job, staging);
-      if (exitCode !== 0) {
         this.throwIfCancelled(job);
-        this.failJob(job, new Error(`npm install failed with exit code ${exitCode}`));
+        this.appendLog(job, 'npm install completed successfully');
+      }
+
+      this.setStatus(job, 'validating');
+      this.appendLog(job, 'Validating installed packages...');
+      this.throwIfCancelled(job);
+      const validationErrors = this.validateCandidate(staging, candidatePackages);
+      if (validationErrors.length > 0) {
+        for (const err of validationErrors) {
+          this.appendLog(job, `Validation error: ${err}`);
+        }
+
+        this.failJob(job, new Error(`Validation failed: ${validationErrors.join('; ')}`));
         return;
       }
 
-      this.throwIfCancelled(job);
-      this.appendLog(job, 'npm install completed successfully');
-    }
+      this.appendLog(job, 'Validation passed');
 
-    this.setStatus(job, 'validating');
-    this.appendLog(job, 'Validating installed packages...');
-    this.throwIfCancelled(job);
-    const validationErrors = this.validateCandidate(staging, candidatePackages);
-    if (validationErrors.length > 0) {
-      for (const err of validationErrors) {
-        this.appendLog(job, `Validation error: ${err}`);
+      this.setStatus(job, 'activating');
+      this.appendLog(job, 'Promoting staged libraries...');
+      this.throwIfCancelled(job);
+      const nextManifest = { ...manifest, packages: candidatePackages, updatedAt: new Date().toISOString() };
+      if (!(await activateLocalRuntimeLibraryCandidate(staging, nextManifest))) {
+        this.activateStaging(staging);
+        writeManifest(nextManifest);
       }
 
-      this.failJob(job, new Error(`Validation failed: ${validationErrors.join('; ')}`));
-      return;
+      this.appendLog(job, 'Current runtime libraries are now active');
+      this.appendLog(job, '--- Job completed successfully ---');
+      this.setStatus(job, 'succeeded');
+      job.finishedAt = new Date().toISOString();
+    } finally {
+      try {
+        fs.rmSync(staging, { recursive: true, force: true });
+      } catch {
+        // Disposable candidate residue is not an activation authority.
+      }
     }
-
-    this.appendLog(job, 'Validation passed');
-
-    this.setStatus(job, 'activating');
-    this.appendLog(job, 'Promoting staged libraries...');
-    this.throwIfCancelled(job);
-    this.activateStaging(staging);
-
-    manifest.packages = candidatePackages;
-    writeManifest(manifest);
-
-    this.appendLog(job, 'Current runtime libraries are now active');
-    this.appendLog(job, '--- Job completed successfully ---');
-    this.setStatus(job, 'succeeded');
-    job.finishedAt = new Date().toISOString();
   }
 
   private npmInstall(job: JobState, cwd: string): Promise<number> {
@@ -360,12 +370,6 @@ class JobRunner extends EventEmitter {
     this.appendLog(job, `ERROR: ${message}`);
     this.appendLog(job, '--- Job failed ---');
     this.setStatus(job, 'failed');
-
-    try {
-      fs.rmSync(stagingDir(), { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
   }
 
   private throwIfCancelled(job: JobState): void {

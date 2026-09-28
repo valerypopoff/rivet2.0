@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { watchOperatorStreamAuthorization } from '../../watch-authorization.js';
+import { watchVmMigrationPassiveStream } from '../../vm-migration-maintenance.js';
 
 export const EVALUATION_LIBRARY_CLIENT_ID_HEADER = 'x-rivet-evaluation-library-client-id';
 
@@ -62,11 +63,7 @@ function writeEvent(response: Response, type: string, event: object): boolean {
 }
 
 /** Opens an authenticated, notification-only stream; clients fetch snapshots separately. */
-export function openEvaluationLibraryEventStream(
-  request: Request,
-  response: Response,
-  initialRevision: number,
-): void {
+export function openEvaluationLibraryEventStream(request: Request, response: Response, initialRevision: number): void {
   response.status(200);
   response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   response.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -74,6 +71,7 @@ export function openEvaluationLibraryEventStream(
   response.setHeader('X-Accel-Buffering', 'no');
   response.flushHeaders?.();
   if (!watchOperatorStreamAuthorization(request, response)) return;
+  if (!watchVmMigrationPassiveStream(response)) return;
 
   let closed = false;
   let unsubscribe: (() => void) | undefined;

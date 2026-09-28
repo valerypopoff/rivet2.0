@@ -12,31 +12,38 @@ import {
 } from './runtime-libraries-sync.mjs';
 
 const replicated = process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated';
+const localSqlite = !!process.env.RIVET_LOCAL_METADATA_BOOT_GENERATION;
+const fileFree = replicated || localSqlite;
 const executor = process.env.RIVET_RUNTIME_PROCESS_ROLE === 'executor' && isExecutorRuntimeEntryProcess();
 let disposeNodeExecutorProxySettingsPolling = () => {};
 let disposeRemoteSettingsPolling = () => {};
 
-if (!replicated) {
+if (!fileFree) {
   await loadAndApplyNodeExecutorProxySettings({
     clearBeforeLoad: true,
     clearWhenMissing: true,
     quiet: true,
   });
   disposeNodeExecutorProxySettingsPolling = setupNodeExecutorProxySettingsPolling();
-  globalThis.__rivetReloadNodeExecutorProxySettings = () => (
-    loadAndApplyNodeExecutorProxySettings({ clearBeforeLoad: true, clearWhenMissing: true, quiet: true })
-  );
+  globalThis.__rivetReloadNodeExecutorProxySettings = () =>
+    loadAndApplyNodeExecutorProxySettings({ clearBeforeLoad: true, clearWhenMissing: true, quiet: true });
 } else {
   globalThis.__rivetApplyNodeExecutorProxySettings = applyManagedNodeExecutorProxySettings;
   globalThis.__rivetStartManagedRuntimeLibraries = startManagedRuntimeLibrariesFromSettings;
 }
 
-if (replicated && executor) {
+if (fileFree && executor) {
   const url = process.env.RIVET_EXECUTOR_RUNTIME_CONFIG_URL?.trim();
   const sharedKey = process.env.RIVET_KEY?.trim();
   const parsedUrl = url ? new URL(url) : null;
-  if (!parsedUrl || parsedUrl.protocol !== 'http:' || parsedUrl.hostname !== '127.0.0.1' ||
-    parsedUrl.username || parsedUrl.password || !sharedKey) {
+  if (
+    !parsedUrl ||
+    parsedUrl.protocol !== 'http:' ||
+    parsedUrl.hostname !== '127.0.0.1' ||
+    parsedUrl.username ||
+    parsedUrl.password ||
+    !sharedKey
+  ) {
     throw new Error('The managed executor requires an authenticated loopback runtime configuration URL.');
   }
   const { Agent, fetch } = await import('undici');
@@ -53,11 +60,23 @@ if (replicated && executor) {
     });
     if (!response.ok) throw new Error(`Runtime configuration service returned ${response.status}.`);
     const settings = await response.json();
-    if (!settings || settings.protocolVersion !== 1 || settings.storage?.storageMode !== 'managed' ||
+    if (localSqlite) {
+      if (
+        !settings ||
+        settings.protocolVersion !== 2 ||
+        settings.generationId !== process.env.RIVET_LOCAL_METADATA_BOOT_GENERATION ||
+        settings.runtimeCacheRoot !== process.env.RIVET_RUNTIME_LIBRARIES_ROOT
+      )
+        throw new Error('Local executor runtime configuration differs from its supervised generation.');
+    } else if (
+      !settings ||
+      settings.protocolVersion !== 1 ||
+      settings.storage?.storageMode !== 'managed' ||
       typeof settings.storage.databaseConnectionString !== 'string' ||
       typeof settings.storage.objectStorageBucket !== 'string' ||
       typeof settings.storage.storageAccessKeyId !== 'string' ||
-      typeof settings.storage.storageAccessKey !== 'string') {
+      typeof settings.storage.storageAccessKey !== 'string'
+    ) {
       throw new Error('Runtime configuration service returned invalid storage settings.');
     }
     await applyManagedNodeExecutorProxySettings(settings.proxy);
@@ -69,32 +88,42 @@ if (replicated && executor) {
     try {
       settings = await fetchSettings();
     } catch (error) {
-      if (Date.now() >= deadline) throw new Error('Managed executor could not load its startup configuration.', { cause: error });
+      if (Date.now() >= deadline)
+        throw new Error('Managed executor could not load its startup configuration.', { cause: error });
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
   }
-  await startManagedRuntimeLibrariesFromSettings(settings.storage);
+  if (!localSqlite) await startManagedRuntimeLibrariesFromSettings(settings.storage);
   let refreshInFlight = false;
   let refreshFailureReported = false;
   const poller = setInterval(() => {
     if (refreshInFlight) return;
     refreshInFlight = true;
-    void fetchSettings().then(() => {
-      refreshFailureReported = false;
-    }).catch((error) => {
-      if (!refreshFailureReported) {
-        console.error('[node-executor-proxy] Could not refresh managed proxy settings; retaining the last valid settings:', error);
-      }
-      refreshFailureReported = true;
-    }).finally(() => {
-      refreshInFlight = false;
-    });
+    void fetchSettings()
+      .then(() => {
+        refreshFailureReported = false;
+      })
+      .catch((error) => {
+        if (!refreshFailureReported) {
+          console.error(
+            '[node-executor-proxy] Could not refresh managed proxy settings; retaining the last valid settings:',
+            error,
+          );
+        }
+        refreshFailureReported = true;
+      })
+      .finally(() => {
+        refreshInFlight = false;
+      });
   }, 5_000);
   poller.unref?.();
-  disposeRemoteSettingsPolling = () => { clearInterval(poller); void dispatcher.close(); };
+  disposeRemoteSettingsPolling = () => {
+    clearInterval(poller);
+    void dispatcher.close();
+  };
 }
 
-const shouldBootstrapManagedRuntimeLibraries = shouldBootstrapManagedRuntimeLibrariesInCurrentProcess();
+const shouldBootstrapManagedRuntimeLibraries = !localSqlite && shouldBootstrapManagedRuntimeLibrariesInCurrentProcess();
 
 if (shouldBootstrapManagedRuntimeLibraries) {
   setupManagedRuntimeLibrariesSync().catch((error) => {

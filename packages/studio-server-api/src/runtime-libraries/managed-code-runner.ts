@@ -74,7 +74,7 @@ let compiledCodeCache = createCompiledCodeCache(COMPILED_CODE_CACHE_LIMIT);
 const managedRequireCache = new LRUCache<string, NodeRequire>({
   max: MANAGED_REQUIRE_CACHE_LIMIT,
 });
-const managedRequireGroupKeys = new Map<string, string>();
+const managedRequireGroups = new Map<string, ManagedRequireSnapshot>();
 const managedRequireNodeModulesPaths = new Set<string>();
 let compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
 
@@ -169,7 +169,9 @@ function setCachedCompiledCode(cacheKey: string, fn: CompiledCodeFunction): void
 }
 
 function createCompiledCodeFunction(code: string, argNames: string[]): CompiledCodeFunction {
-  const AsyncFunction = async function () {}.constructor as new (...args: string[]) => (...args: unknown[]) => Promise<Outputs>;
+  const AsyncFunction = async function () {}.constructor as new (
+    ...args: string[]
+  ) => (...args: unknown[]) => Promise<Outputs>;
   return new AsyncFunction(...argNames, code);
 }
 
@@ -181,7 +183,7 @@ export function resetManagedCodeRunnerCacheForTests(): void {
   compiledCodeCacheLimit = COMPILED_CODE_CACHE_LIMIT;
   compiledCodeCache = createCompiledCodeCache(compiledCodeCacheLimit);
   managedRequireCache.clear();
-  managedRequireGroupKeys.clear();
+  managedRequireGroups.clear();
   managedRequireNodeModulesPaths.clear();
 }
 
@@ -226,12 +228,12 @@ function readRuntimeLibrariesSnapshotId(runtimeLibrariesRoot: string, nodeModule
 
 function getManagedRequireSnapshot(runtimeLibrariesRoot: string, nodeModulesPath: string): ManagedRequireSnapshot {
   const resolvedRoot = path.resolve(runtimeLibrariesRoot);
-  const resolvedNodeModulesPath = path.resolve(nodeModulesPath);
+  const resolvedNodeModulesPath = fs.realpathSync.native(nodeModulesPath);
   const snapshotId = readRuntimeLibrariesSnapshotId(runtimeLibrariesRoot, resolvedNodeModulesPath);
-  const groupKey = `${resolvedRoot}\0${resolvedNodeModulesPath}`;
+  const groupKey = `${resolvedRoot}\0${path.resolve(nodeModulesPath)}`;
 
   return {
-    cacheKey: `${groupKey}\0${snapshotId}`,
+    cacheKey: `${groupKey}\0${resolvedNodeModulesPath}\0${snapshotId}`,
     groupKey,
     nodeModulesPath: resolvedNodeModulesPath,
   };
@@ -256,17 +258,18 @@ function normalizeCachePathForComparison(value: string): string {
 }
 
 function invalidateManagedRequireCacheIfReleaseChanged(snapshot: ManagedRequireSnapshot): void {
-  const previousCacheKey = managedRequireGroupKeys.get(snapshot.groupKey);
-  if (previousCacheKey === snapshot.cacheKey) {
+  const previous = managedRequireGroups.get(snapshot.groupKey);
+  if (previous?.cacheKey === snapshot.cacheKey) {
     return;
   }
 
-  if (previousCacheKey) {
-    managedRequireCache.delete(previousCacheKey);
-    clearNodeRequireCacheUnder(snapshot.nodeModulesPath);
+  if (previous) {
+    managedRequireCache.delete(previous.cacheKey);
+    clearNodeRequireCacheUnder(previous.nodeModulesPath);
+    managedRequireNodeModulesPaths.delete(previous.nodeModulesPath);
   }
 
-  managedRequireGroupKeys.set(snapshot.groupKey, snapshot.cacheKey);
+  managedRequireGroups.set(snapshot.groupKey, snapshot);
 }
 
 function getCachedManagedRequire(snapshot: ManagedRequireSnapshot): NodeRequire {

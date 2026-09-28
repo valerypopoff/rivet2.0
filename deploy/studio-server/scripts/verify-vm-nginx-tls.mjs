@@ -292,14 +292,13 @@ async function main() {
     assert.notEqual(echoed.headers['x-rivet-client-ip'], '1.2.3.4');
     assert.equal(echoed.headers['x-forwarded-proto'], 'https');
     assert.equal(echoed.headers['x-forwarded-host'], publicHost);
-    assert.equal(
-      JSON.parse((await request(httpsPort, publicHost, '/workflows/demo', true)).body).plane,
-      'execution',
-    );
-    assert.equal(
-      JSON.parse((await request(httpsPort, publicHost, '/workflows-latest/demo', true)).body).plane,
-      'api',
-    );
+    const authority = `${publicHost}:${httpsPort}`;
+    const withPort = await request(httpsPort, publicHost, '/api/echo', true, { Host: authority });
+    assert.equal(withPort.status, 200);
+    assert.equal(JSON.parse(withPort.body).headers.host, authority);
+    assert.equal(JSON.parse(withPort.body).headers['x-forwarded-host'], authority);
+    assert.equal(JSON.parse((await request(httpsPort, publicHost, '/workflows/demo', true)).body).plane, 'execution');
+    assert.equal(JSON.parse((await request(httpsPort, publicHost, '/workflows-latest/demo', true)).body).plane, 'api');
     assert.equal((await request(httpsPort, publicHost, '/internal/workflows/demo', true)).status, 404);
     assert.equal(await upgrade(httpsPort, publicHost, '/ws/executor/internal'), 'executor');
     console.log('PASS: VM nginx TLS, host routing, trusted headers, published/latest planes, and executor websocket.');

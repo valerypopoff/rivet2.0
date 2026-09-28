@@ -536,6 +536,9 @@ test('workflow project stats cache is rebuilt when the project file changes', as
 test('workflow project stats cache is rebuilt when file ctime changes', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StatsCacheCtime');
   const projectContents = await fs.readFile(created.absolutePath, 'utf8');
+  // Use an exactly representable mtime so only ctime can invalidate this cache.
+  const fixedTime = new Date('2020-01-01T00:00:00Z');
+  await fs.utimes(created.absolutePath, fixedTime, fixedTime);
   const fileStats = await fs.stat(created.absolutePath);
   const sidecars = workflowFs.getProjectSidecarPaths(created.absolutePath);
 
@@ -544,10 +547,19 @@ test('workflow project stats cache is rebuilt when file ctime changes', async ()
   const cachedProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(cachedProject.stats?.totalNodeCount, 0);
 
-  await fs.writeFile(created.absolutePath, projectContents, 'utf8');
-  await fs.utimes(created.absolutePath, fileStats.atime, fileStats.mtime);
-  const updatedFileStats = await fs.stat(created.absolutePath);
+  let updatedFileStats = fileStats;
+  const deadline = performance.now() + 2_000;
+  do {
+    await fs.writeFile(created.absolutePath, projectContents, 'utf8');
+    await fs.utimes(created.absolutePath, fileStats.atime, fileStats.mtime);
+    updatedFileStats = await fs.stat(created.absolutePath);
+    if (updatedFileStats.ctimeMs !== fileStats.ctimeMs) break;
+    // Filesystem timestamps can share a clock tick even across awaited writes.
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  } while (performance.now() < deadline);
   assert.notEqual(updatedFileStats.ctimeMs, fileStats.ctimeMs);
+  assert.equal(updatedFileStats.mtimeMs, fileStats.mtimeMs);
+  assert.equal(updatedFileStats.size, fileStats.size);
 
   const rebuiltProject = await workflowQuery.getWorkflowProject(workflowsRoot, created.absolutePath);
   assert.equal(rebuiltProject.stats?.graphCount, 1);

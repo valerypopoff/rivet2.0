@@ -17,27 +17,31 @@ function waitForImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-async function withRunRecordingsAppSettings(
-  settings: { maxPendingWrites: number },
-  run: () => Promise<void> | void,
-) {
+async function withRunRecordingsAppSettings(settings: { maxPendingWrites: number }, run: () => Promise<void> | void) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-recording-settings-'));
   const settingsPath = path.join(tempRoot, RUN_RECORDINGS_SETTINGS_RELATIVE_PATH);
 
   try {
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-    await fs.writeFile(settingsPath, JSON.stringify({
-      version: 1,
-      maxPendingWrites: settings.maxPendingWrites,
-      maxRunsPerEndpoint: 100,
-      retentionDays: 14,
-    }));
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 1,
+        maxPendingWrites: settings.maxPendingWrites,
+        maxRunsPerEndpoint: 100,
+        retentionDays: 14,
+      }),
+    );
 
-    await withScopedEnv(recordingEnvKeys, {
-      RIVET_RECORDINGS_ENABLED: 'true',
-      RIVET_RECORDINGS_MAX_PENDING_WRITES: '1',
-      RIVET_APP_DATA_ROOT: tempRoot,
-    }, run);
+    await withScopedEnv(
+      recordingEnvKeys,
+      {
+        RIVET_RECORDINGS_ENABLED: 'true',
+        RIVET_RECORDINGS_MAX_PENDING_WRITES: '1',
+        RIVET_APP_DATA_ROOT: tempRoot,
+      },
+      run,
+    );
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -70,6 +74,24 @@ test('recordings store reuses storage initialization for the same root and reset
     'cleanup',
     'schema:2',
   ]);
+});
+
+test('offline migration can rebuild a recording index without applying retention cleanup', async () => {
+  const calls: string[] = [];
+  const store = createWorkflowRecordingStore({
+    async rebuildIndex() {
+      calls.push('rebuild');
+    },
+    async cleanupStorage() {
+      calls.push('cleanup');
+    },
+    async setSchemaVersion() {
+      calls.push('schema');
+    },
+    async resetDatabaseForTests() {},
+  });
+  await store.ensureStorage('/frozen-recordings', { skipCleanup: true });
+  assert.deepEqual(calls, ['rebuild', 'schema']);
 });
 
 test('recordings store reruns cleanup when a second cleanup request arrives mid-flight', async () => {
@@ -149,12 +171,15 @@ test('recordings store flush starts scheduled work and waits for persistence and
       async resetDatabaseForTests() {},
     });
 
-    assert.equal(store.enqueuePersistence(async () => {
-      events.push('persistence-started');
-      await persistenceGate;
-      events.push('persistence-finished');
-      store.scheduleCleanup();
-    }), true);
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        events.push('persistence-started');
+        await persistenceGate;
+        events.push('persistence-finished');
+        store.scheduleCleanup();
+      }),
+      true,
+    );
 
     let flushed = false;
     const flushPromise = store.flush().then(() => {
@@ -171,12 +196,7 @@ test('recordings store flush starts scheduled work and waits for persistence and
 
     releaseCleanup();
     await flushPromise;
-    assert.deepEqual(events, [
-      'persistence-started',
-      'persistence-finished',
-      'cleanup-started',
-      'cleanup-finished',
-    ]);
+    assert.deepEqual(events, ['persistence-started', 'persistence-finished', 'cleanup-started', 'cleanup-finished']);
     assert.equal(flushed, true);
   });
 });
@@ -234,20 +254,29 @@ test('recordings store enforces pending write limits while a persistence task is
       async resetDatabaseForTests() {},
     });
 
-    assert.equal(store.enqueuePersistence(async () => {
-      persisted.push('first');
-      await firstTask;
-    }), true);
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        persisted.push('first');
+        await firstTask;
+      }),
+      true,
+    );
 
     await waitForImmediate();
 
     assert.deepEqual(persisted, ['first']);
-    assert.equal(store.enqueuePersistence(async () => {
-      persisted.push('second');
-    }), true);
-    assert.equal(store.enqueuePersistence(async () => {
-      persisted.push('third');
-    }), false);
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        persisted.push('second');
+      }),
+      true,
+    );
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        persisted.push('third');
+      }),
+      false,
+    );
 
     releaseFirstTask();
     await waitForImmediate();
@@ -270,9 +299,12 @@ test('recordings store reset cancels a pending persistence worker start', async 
       },
     });
 
-    assert.equal(store.enqueuePersistence(async () => {
-      taskRan = true;
-    }), true);
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        taskRan = true;
+      }),
+      true,
+    );
 
     await store.resetForTests();
     await waitForImmediate();
@@ -306,9 +338,5 @@ test('recordings store startup does not fail permanently when cleanup logs a non
   await store.ensureStorage('/tmp/workflows-a');
   await store.ensureStorage('/tmp/workflows-a');
 
-  assert.deepEqual(initializedRoots, [
-    'rebuild:/tmp/workflows-a',
-    'cleanup:1',
-    'schema:2',
-  ]);
+  assert.deepEqual(initializedRoots, ['rebuild:/tmp/workflows-a', 'cleanup:1', 'schema:2']);
 });

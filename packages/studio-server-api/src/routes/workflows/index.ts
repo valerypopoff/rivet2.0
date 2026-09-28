@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { z } from 'zod';
 import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
 
@@ -63,9 +64,15 @@ import {
 } from './workflow-tree-events.js';
 import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { isTrustedExecutorRequest } from '../../auth.js';
-import { assembleRegistry, getProjectStreamableGraphOutputNodeIdsByGraph, resolveBuiltInPlugin, type ProjectId } from '@valerypopoff/rivet2-node';
+import {
+  assembleRegistry,
+  getProjectStreamableGraphOutputNodeIdsByGraph,
+  resolveBuiltInPlugin,
+  type ProjectId,
+} from '@valerypopoff/rivet2-node';
 
 export const workflowsRouter = Router();
+workflowsRouter.use('/local-catalog-io', localCatalogExecutorIoRouter);
 const timing = createResponseTimingMiddleware();
 const jsonBody = createControlPlaneJsonBodyParser();
 

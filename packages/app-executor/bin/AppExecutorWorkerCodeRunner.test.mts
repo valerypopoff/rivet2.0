@@ -1,6 +1,6 @@
 import { after, describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -425,6 +425,31 @@ void describe('AppExecutorWorkerCodeRunner', () => {
     });
   });
 
+  void it('refreshes runtime packages for Rivet-capable main-thread executions', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'rivet-main-thread-release-'));
+    const current = join(directory, 'current');
+    const previousRoot = process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
+    try {
+      await mkdir(join(current, 'node_modules', 'example'), { recursive: true });
+      await writeFile(join(current, 'node_modules', 'example', 'index.js'), 'module.exports=84;');
+      process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = join(current, 'node_modules');
+      const runner = new AppExecutorWorkerCodeRunner();
+      const options = defaultCodeRunnerOptions({ includeRequire: true, includeRivet: true });
+      const code = "return { output1: { type: 'number', value: require('example') } };";
+      assert.deepEqual(await runner.runCode(code, {}, options), { output1: { type: 'number', value: 84 } });
+      const next = join(directory, 'next');
+      await mkdir(join(next, 'node_modules', 'example'), { recursive: true });
+      await writeFile(join(next, 'node_modules', 'example', 'index.js'), 'module.exports=42;');
+      await rename(current, join(directory, 'retained'));
+      await rename(next, current);
+      assert.deepEqual(await runner.runCode(code, {}, options), { output1: { type: 'number', value: 42 } });
+    } finally {
+      if (previousRoot === undefined) delete process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT;
+      else process.env.RIVET_CODE_RUNNER_REQUIRE_ROOT = previousRoot;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   void it('resolves interpolation paths inside the worker without moving execution to the Rivet thread', async () => {
     const pool = new AppExecutorCodeWorkerPool({ size: 1 });
 
@@ -447,7 +472,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
           };
         `,
         {
-          payload: {
+          ['payload' as PortId]: {
             type: 'object',
             value: { items: [{ name: 'worker-value' }] },
           },
@@ -502,7 +527,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
           };
         `,
         {
-          payload: { type: 'any[]', value: ['isolated-value'] },
+          ['payload' as PortId]: { type: 'any[]', value: ['isolated-value'] },
         },
         defaultCodeRunnerOptions({ interpolationHelperIdentifier: '__resolveInterpolation' }),
       );
@@ -537,7 +562,7 @@ void describe('AppExecutorWorkerCodeRunner', () => {
         };
       `,
       {
-        payload: {
+        ['payload' as PortId]: {
           type: 'object',
           value: { items: [{ name: 'fallback-value' }] },
         },

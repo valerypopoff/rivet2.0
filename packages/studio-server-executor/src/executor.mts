@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { CatalogNativeApi } from '../../studio-server-shared/catalogNativeApi.js';
 import {
   NodeDatasetProvider,
   deserializeDatasets,
@@ -22,6 +23,44 @@ function createProxyAuthenticationHeaders(): HeadersInit {
 }
 
 const { healthServiceUrl, executionEnvironmentServiceUrl } = resolveHostedExecutorApiUrls(process.env);
+async function catalogRequest(request: unknown): Promise<any> {
+  const response = await fetch(new URL('/api/workflows/local-catalog-io', executionEnvironmentServiceUrl), {
+    method: 'POST',
+    cache: 'no-store',
+    signal: AbortSignal.timeout(30_000),
+    headers: { ...createProxyAuthenticationHeaders(), 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) throw new Error(`Selected local catalog could not be read (${response.status}).`);
+  const body = (await response.json()) as { result?: unknown };
+  if (!Object.hasOwn(body, 'result')) throw new Error('Invalid local catalog response.');
+  return body.result;
+}
+const localCatalogOptions = process.env.RIVET_LOCAL_METADATA_BOOT_GENERATION
+  ? {
+      nativeApi: new CatalogNativeApi({
+        root: process.env.RIVET_WORKFLOWS_ROOT!,
+        readText: async (path) => {
+          const result = await catalogRequest({ action: 'read-text', path });
+          if (typeof result !== 'string') throw new Error('Invalid local catalog contents.');
+          return result;
+        },
+        readDirectory: async (path, options) => {
+          const result = await catalogRequest({ action: 'read-directory', path, options });
+          if (!Array.isArray(result) || !result.every((item) => typeof item === 'string'))
+            throw new Error('Invalid local catalog directory.');
+          return result;
+        },
+      }),
+      projectReferenceLoader: {
+        loadProject: async (_path: string | undefined, reference: { id: string }) => {
+          const project = await catalogRequest({ action: 'project-reference', id: reference.id });
+          if (project?.metadata?.id !== reference.id) throw new Error('Referenced project identity differs.');
+          return project;
+        },
+      },
+    }
+  : {};
 const healthStore = createHttpRivetLLMProfileHealthStore({
   baseUrl: healthServiceUrl,
   headers: createProxyAuthenticationHeaders,
@@ -117,6 +156,7 @@ void startAppExecutor({
     getProxyToken: () => (createProxyAuthenticationHeaders() as Record<string, string>)['x-rivet-proxy-auth'] ?? '',
   }),
   createProcessorOptions: async ({ llmProfileHealthExecutionCorrelationId, recordSubgraphProjectRuns }) => ({
+    ...localCatalogOptions,
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,
     subgraphProjectLoader: { loadTarget: loadSubgraphTarget },

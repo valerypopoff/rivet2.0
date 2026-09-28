@@ -3,6 +3,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { SqliteAppSettingsBackend } from './sqlite-settings-store.js';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
+import { assertLocalMetadataWritesAllowed } from '../local-metadata/write-admission.js';
 
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import { writeJsonSettingsFile } from '../settings-file-writer.js';
@@ -130,11 +133,7 @@ function getLegacySettingsPath(settingsPath: string): string | null {
 
   const relativePath = path.relative(path.resolve(appDataRoot), path.resolve(settingsPath));
   const segments = relativePath.split(path.sep);
-  if (
-    segments.length !== 2
-    || segments[0] !== 'settings'
-    || path.extname(segments[1] ?? '') !== '.json'
-  ) {
+  if (segments.length !== 2 || segments[0] !== 'settings' || path.extname(segments[1] ?? '') !== '.json') {
     return null;
   }
 
@@ -167,17 +166,14 @@ export class VersionedSettingsRepository<T> {
     }
     const cached = this.#cache.get(settingsPath);
     if (cached) {
-      requestSettingsStorage.getStore()?.set(
-        this as VersionedSettingsRepository<unknown>,
-        cached as SettingsSnapshot<unknown>,
-      );
+      requestSettingsStorage
+        .getStore()
+        ?.set(this as VersionedSettingsRepository<unknown>, cached as SettingsSnapshot<unknown>);
       return cached;
     }
 
     if (sharedBackend) {
-      throw new Error(
-        `Managed app setting "${this.descriptor.key}" was read before repository initialization.`,
-      );
+      throw new Error(`Managed app setting "${this.descriptor.key}" was read before repository initialization.`);
     }
 
     return this.#loadSync(settingsPath);
@@ -204,16 +200,15 @@ export class VersionedSettingsRepository<T> {
       if (initialized) {
         return initialized;
       }
-      return sharedBackend
-        ? this.#initializeManaged(settingsPath)
-        : this.#refreshNow(settingsPath);
+      return sharedBackend ? this.#initializeManaged(settingsPath) : this.#refreshNow(settingsPath);
     });
   }
 
   async refresh(): Promise<SettingsSnapshot<T>> {
     const settingsPath = this.descriptor.getPath();
     return this.#enqueueOperation(settingsPath, () =>
-      sharedBackend ? this.#refreshManagedNow(settingsPath) : this.#refreshNow(settingsPath));
+      sharedBackend ? this.#refreshManagedNow(settingsPath) : this.#refreshNow(settingsPath),
+    );
   }
 
   async refreshIfChanged(): Promise<void> {
@@ -237,10 +232,7 @@ export class VersionedSettingsRepository<T> {
     });
   }
 
-  async update(
-    updateValue: (current: Readonly<T>) => T,
-    expectedRevision?: string,
-  ): Promise<SettingsSnapshot<T>> {
+  async update(updateValue: (current: Readonly<T>) => T, expectedRevision?: string): Promise<SettingsSnapshot<T>> {
     const settingsPath = this.descriptor.getPath();
     return this.#enqueueOperation(settingsPath, async () => {
       if (sharedBackend) {
@@ -310,6 +302,8 @@ export class VersionedSettingsRepository<T> {
     if (existing) {
       return this.#rememberManaged(settingsPath, existing);
     }
+    if (sharedBackend instanceof SqliteAppSettingsBackend)
+      throw new Error(`Selected local generation is missing the ${this.descriptor.key} settings domain.`);
 
     let initialValue: T | undefined;
     let sourceHash: string | null = null;
@@ -361,9 +355,7 @@ export class VersionedSettingsRepository<T> {
       value: serialized,
       sourceHash,
     });
-    return inserted
-      ? this.#rememberManaged(settingsPath, inserted)
-      : this.#refreshManagedNow(settingsPath);
+    return inserted ? this.#rememberManaged(settingsPath, inserted) : this.#refreshManagedNow(settingsPath);
   }
 
   async #refreshManagedNow(settingsPath: string): Promise<SettingsSnapshot<T>> {
@@ -470,28 +462,28 @@ export class VersionedSettingsRepository<T> {
   #remember(settingsPath: string, value: T): SettingsSnapshot<T> {
     const frozenValue = freezeValue(value);
     const revision = createHash('sha256')
-      .update(JSON.stringify({
-        version: this.descriptor.currentVersion,
-        ...this.descriptor.serialize(frozenValue as T),
-      }))
+      .update(
+        JSON.stringify({
+          version: this.descriptor.currentVersion,
+          ...this.descriptor.serialize(frozenValue as T),
+        }),
+      )
       .digest('base64url');
     const existing = this.#cache.get(settingsPath);
     if (existing?.revision === revision) {
       this.#errors.delete(settingsPath);
-      requestSettingsStorage.getStore()?.set(
-        this as VersionedSettingsRepository<unknown>,
-        existing as SettingsSnapshot<unknown>,
-      );
+      requestSettingsStorage
+        .getStore()
+        ?.set(this as VersionedSettingsRepository<unknown>, existing as SettingsSnapshot<unknown>);
       return existing;
     }
 
     const snapshot = Object.freeze({ path: settingsPath, revision, value: frozenValue });
     this.#errors.delete(settingsPath);
     this.#cache.set(settingsPath, snapshot);
-    requestSettingsStorage.getStore()?.set(
-      this as VersionedSettingsRepository<unknown>,
-      snapshot as SettingsSnapshot<unknown>,
-    );
+    requestSettingsStorage
+      .getStore()
+      ?.set(this as VersionedSettingsRepository<unknown>, snapshot as SettingsSnapshot<unknown>);
     for (const listener of this.#listeners) {
       try {
         listener(snapshot);
@@ -529,15 +521,24 @@ function subscribeToSharedBackend(backend: AppSettingsBackend): void {
   });
 }
 async function initializeSharedBackend(): Promise<void> {
-  if (!isPostgresAppSettingsBackendEnabled() || sharedBackend) {
+  const local = getLocalMetadataServingSelection();
+  if ((!local && !isPostgresAppSettingsBackendEnabled()) || sharedBackend) {
     return;
   }
 
   sharedBackendInitialization ??= (async () => {
-    const backend = createPostgresAppSettingsBackendFromEnv();
+    const backend = local
+      ? new SqliteAppSettingsBackend({
+          databasePath: local.settingsDatabasePath,
+          encryptionSecret: process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '',
+          requireExisting: true,
+          assertWritable: assertLocalMetadataWritesAllowed,
+        })
+      : createPostgresAppSettingsBackendFromEnv();
     try {
       await backend.initialize();
       sharedBackend = backend;
+      if (local) invalidateAppSettingsRepositories();
       subscribeToSharedBackend(backend);
     } catch (error) {
       await backend.dispose().catch(() => undefined);
@@ -582,6 +583,11 @@ export function runWithAppSettingsSnapshot<T>(callback: () => T): T {
   return requestSettingsStorage.run(snapshots, callback);
 }
 
+/** Migration preflight must not apply a domain's fail-closed recovery default to a corrupt source file. */
+export function parseSettingsTextForMigration<T>(descriptor: SettingsRepositoryDescriptor<T>, text: string): T {
+  return descriptor.parseStored(parseStoredObject(text, descriptor as SettingsRepositoryDescriptor<unknown>));
+}
+
 /** Long-lived transports must not reauthorize against their opening request's snapshot. */
 export function runOutsideAppSettingsSnapshot<T>(callback: () => T): T {
   return requestSettingsStorage.exit(callback);
@@ -593,20 +599,16 @@ export function invalidateAppSettingsRepositories(): void {
   }
 }
 
-export async function checkAppSettingsRepositoriesHealth(
-  context?: RuntimeHealthCheckContext,
-): Promise<void> {
+export async function checkAppSettingsRepositoriesHealth(context?: RuntimeHealthCheckContext): Promise<void> {
   await sharedBackend?.checkHealth?.(context);
   for (const repository of repositories) repository.readSync();
 }
 
-export function getAppSettingsBackendKind(): 'file' | 'postgres' {
-  return sharedBackend ? 'postgres' : 'file';
+export function getAppSettingsBackendKind(): 'file' | 'postgres' | 'sqlite' {
+  return sharedBackend instanceof SqliteAppSettingsBackend ? 'sqlite' : sharedBackend ? 'postgres' : 'file';
 }
 
-export async function configureAppSettingsBackendForTests(
-  backend: AppSettingsBackend | null,
-): Promise<void> {
+export async function configureAppSettingsBackendForTests(backend: AppSettingsBackend | null): Promise<void> {
   await disposeAppSettingsRepositories();
   sharedBackend = backend;
   if (backend) {
@@ -623,12 +625,18 @@ export async function disposeAppSettingsRepositories(): Promise<void> {
     clearInterval(settingsPollTimer);
     settingsPollTimer = undefined;
   }
+  const initialization = sharedBackendInitialization;
+  await initialization?.catch(() => undefined);
+  if (sharedBackendInitialization === initialization) sharedBackendInitialization = null;
+  // Initialization can install the subscription while disposal is waiting.
   unsubscribeSharedBackend?.();
   unsubscribeSharedBackend = undefined;
-  const initialization = sharedBackendInitialization;
-  sharedBackendInitialization = null;
-  await initialization?.catch(() => undefined);
   const backend = sharedBackend;
-  sharedBackend = null;
-  await backend?.dispose();
+  try {
+    // Queued post-commit refreshes must still resolve against the selected
+    // backend while it drains, never against stale retained JSON files.
+    await backend?.dispose();
+  } finally {
+    if (sharedBackend === backend) sharedBackend = null;
+  }
 }

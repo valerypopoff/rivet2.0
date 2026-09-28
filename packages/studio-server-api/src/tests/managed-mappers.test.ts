@@ -38,21 +38,25 @@ test('getWorkflowStatus keeps published when revision ids and normalized endpoin
 
 test('getWorkflowStatus returns unpublished_changes when endpoint normalization differs after publish', () => {
   assert.equal(
-    getWorkflowStatus(createWorkflowRow({
-      endpoint_name: 'hello-world-v2',
-    })),
+    getWorkflowStatus(
+      createWorkflowRow({
+        endpoint_name: 'hello-world-v2',
+      }),
+    ),
     'unpublished_changes',
   );
 });
 
 test('getWorkflowStatus returns unpublished without a published revision', () => {
   assert.equal(
-    getWorkflowStatus(createWorkflowRow({
-      published_revision_id: null,
-      published_version_id: null,
-      published_endpoint_name: '',
-      last_published_at: null,
-    })),
+    getWorkflowStatus(
+      createWorkflowRow({
+        published_revision_id: null,
+        published_version_id: null,
+        published_endpoint_name: '',
+        last_published_at: null,
+      }),
+    ),
     'unpublished',
   );
 });
@@ -128,6 +132,7 @@ test('splitCurrentDraftRevisionRow separates workflow and revision fields withou
     published_version_id: 'version-b',
     endpoint_name: 'hello-world',
     published_endpoint_name: 'hello-world',
+    endpoint_access: 'internal',
     last_published_at: '2026-04-07T09:00:00.000Z',
     revision_id: 'revision-a',
     revision_workflow_id: 'workflow-a',
@@ -143,6 +148,7 @@ test('splitCurrentDraftRevisionRow separates workflow and revision fields withou
 
   assert.equal(split.workflow.workflow_id, 'workflow-a');
   assert.equal(split.workflow.current_draft_revision_id, 'revision-a');
+  assert.equal(split.workflow.endpoint_access, 'internal');
   assert.equal(split.revision.revision_id, 'revision-a');
   assert.equal(split.revision.project_blob_key, 'project-blob');
   assert.equal(split.revision.stats_graph_count, 3);

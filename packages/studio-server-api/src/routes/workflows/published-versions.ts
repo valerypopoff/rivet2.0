@@ -13,6 +13,8 @@ import type {
 } from '../../../../studio-server-shared/workflow-types.js';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../utils/httpError.js';
+import { readMigrationSourceUtf8 } from '../../scripts/migration-source-utf8.js';
+import { withLocalSourceBudget } from '../../local-metadata/source-budget.js';
 import {
   ensureWorkflowsRoot,
   getPublishedSnapshotsRoot,
@@ -82,7 +84,8 @@ function normalizeStoredPublishedVersionMetadata(value: unknown): StoredPublishe
   if (
     (raw.isStarred !== undefined && typeof raw.isStarred !== 'boolean') ||
     (raw.comment !== undefined && typeof raw.comment !== 'string')
-  ) return null;
+  )
+    return null;
   const isStarred = raw.isStarred === true;
   const comment = normalizePublishedVersionCommentForStorage(raw.comment);
 
@@ -118,7 +121,10 @@ function normalizePublishedVersionCommentInput(value: unknown): string {
   }
 
   if (value.length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH) {
-    throw createHttpError(400, `Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`);
+    throw createHttpError(
+      400,
+      `Published version comment must be ${WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH} characters or fewer`,
+    );
   }
 
   return value.trim();
@@ -187,7 +193,10 @@ async function ensurePublishedSnapshotProjectIdMatches(
   }
 }
 
-async function readPublishedVersionMetadata(root: string, snapshotId: string): Promise<StoredPublishedVersionMetadata | null> {
+async function readPublishedVersionMetadata(
+  root: string,
+  snapshotId: string,
+): Promise<StoredPublishedVersionMetadata | null> {
   let metadataText: string;
   try {
     metadataText = await fs.readFile(getPublishedWorkflowSnapshotMetadataPath(root, snapshotId), 'utf8');
@@ -202,7 +211,9 @@ async function readPublishedVersionMetadata(root: string, snapshotId: string): P
     }
     return metadata;
   } catch (error) {
-    throw new Error(`Corrupt published-version metadata for ${snapshotId}; operator repair is required`, { cause: error });
+    throw new Error(`Corrupt published-version metadata for ${snapshotId}; operator repair is required`, {
+      cause: error,
+    });
   }
 }
 
@@ -283,7 +294,7 @@ export async function getCurrentPublishedWorkflowVersionMetadataChange(options: 
   }
 
   const snapshotPath = getPublishedWorkflowSnapshotPath(options.root, snapshotId);
-  if (!await pathExists(snapshotPath)) {
+  if (!(await pathExists(snapshotPath))) {
     return null;
   }
 
@@ -340,7 +351,10 @@ async function listPublishedVersionRecords(
       metadata = await readPublishedVersionMetadata(root, snapshotId);
     } catch (error) {
       if (snapshotId === currentSnapshotId) throw error;
-      console.warn(`[workflow-storage] Preserving but omitting corrupt noncurrent published-version metadata ${snapshotId}:`, error);
+      console.warn(
+        `[workflow-storage] Preserving but omitting corrupt noncurrent published-version metadata ${snapshotId}:`,
+        error,
+      );
       continue;
     }
     if (snapshotId === currentSnapshotId && metadata && metadata.projectId !== projectId) {
@@ -350,7 +364,7 @@ async function listPublishedVersionRecords(
       continue;
     }
 
-    if (!await pathExists(getPublishedWorkflowSnapshotPath(root, snapshotId))) {
+    if (!(await pathExists(getPublishedWorkflowSnapshotPath(root, snapshotId)))) {
       continue;
     }
 
@@ -372,10 +386,7 @@ async function listPublishedVersionRecordsForProject(
   const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   const records = await listPublishedVersionRecords(root, projectId, settings.publishedSnapshotId);
 
-  if (
-    settings.publishedSnapshotId &&
-    !records.some((record) => record.id === settings.publishedSnapshotId)
-  ) {
+  if (settings.publishedSnapshotId && !records.some((record) => record.id === settings.publishedSnapshotId)) {
     const legacyCurrentRecord = await createLegacyCurrentPublishedVersionRecord({
       root,
       projectPath,
@@ -389,6 +400,86 @@ async function listPublishedVersionRecordsForProject(
   }
 
   return records;
+}
+
+/** Ordinary history lists omit corrupt old entries; a migration must reject them before copying anything. */
+export async function validateFilesystemPublishedVersionArchiveForMigration(root: string): Promise<Set<string>> {
+  const publishedRoot = getPublishedSnapshotsRoot(root);
+  const rootStat = await fs.lstat(publishedRoot).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  });
+  if (rootStat && (!rootStat.isDirectory() || rootStat.isSymbolicLink())) {
+    throw new Error('Published-version archive root must be a regular directory');
+  }
+  const projectIds = new Set<string>();
+  const entries = await fs.readdir(publishedRoot, { withFileTypes: true }).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [] as Dirent[];
+    throw error;
+  });
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.json')) continue;
+    if (!entry.isFile()) throw new Error(`Published-version metadata is not a regular file: ${entry.name}`);
+    await readMigrationSourceUtf8(path.join(publishedRoot, entry.name));
+    const metadata = await readPublishedVersionMetadata(root, entry.name.slice(0, -'.json'.length));
+    if (!metadata) throw new Error(`Invalid published-version metadata: ${entry.name}`);
+    const snapshotPath = getPublishedWorkflowSnapshotPath(root, metadata.id);
+    const snapshotStat = await fs.lstat(snapshotPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!snapshotStat) {
+      throw new Error(`Published-version snapshot is missing: ${metadata.id}`);
+    }
+    if (!snapshotStat.isFile() || snapshotStat.isSymbolicLink()) {
+      throw new Error(`Published-version snapshot must be a regular file: ${metadata.id}`);
+    }
+    // Validate bytes under a per-document budget before parsing a graph.
+    await withLocalSourceBudget(() => readMigrationSourceUtf8(snapshotPath));
+    await ensurePublishedSnapshotProjectIdMatches(root, metadata.id, metadata.projectId);
+    projectIds.add(metadata.projectId);
+  }
+  return projectIds;
+}
+
+export async function readFilesystemPublishedVersionsForMigration(
+  root: string,
+  projectPath: string,
+): Promise<
+  Array<{
+    versionId: string;
+    endpointName: string;
+    publishedAt: string;
+    isStarred: boolean;
+    comment: string;
+    contents: string;
+    datasetsContents: string | null;
+  }>
+> {
+  const records = await listPublishedVersionRecordsForProject(root, projectPath);
+  const result = [];
+  for (const record of records)
+    result.push({
+      versionId: record.id,
+      endpointName: record.endpointName,
+      publishedAt: record.publishedAt,
+      isStarred: record.isStarred,
+      comment: record.comment,
+      contents: await readMigrationSourceUtf8(getPublishedWorkflowSnapshotPath(root, record.id)),
+      datasetsContents: await (async () => {
+        const datasetPath = getPublishedWorkflowSnapshotDatasetPath(root, record.id);
+        const datasetStat = await fs.lstat(datasetPath).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        });
+        if (!datasetStat) return null;
+        if (!datasetStat.isFile() || datasetStat.isSymbolicLink()) {
+          throw new Error(`Published-version dataset must be a regular file: ${record.id}`);
+        }
+        return readMigrationSourceUtf8(datasetPath);
+      })(),
+    });
+  return result;
 }
 
 async function resolveFilesystemPublishedVersion(
@@ -436,22 +527,20 @@ export async function createPublishedWorkflowVersionMetadataChange(options: {
   return publishedVersionMetadataChange(options.root, metadata);
 }
 
-export async function listWorkflowPublishedVersions(
-  relativePath: unknown,
-): Promise<WorkflowPublishedVersionsResponse> {
+export async function listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 
   const records = await listPublishedVersionRecordsForProject(root, projectPath);
-  const versions = records
-    .map(mapPublishedVersionRecordToSummary)
-    .sort(comparePublishedVersionsNewestFirst);
+  const versions = records.map(mapPublishedVersionRecordToSummary).sort(comparePublishedVersionsNewestFirst);
 
   return { versions };
 }
@@ -498,11 +587,13 @@ export async function setWorkflowPublishedVersionStar(
   }
 
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 
@@ -536,11 +627,13 @@ export async function setWorkflowPublishedVersionComment(
   const normalizedComment = normalizePublishedVersionCommentInput(comment);
 
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 
@@ -571,11 +664,13 @@ async function readWorkflowPublishedVersionSnapshot(
   }
 
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 
@@ -587,7 +682,7 @@ async function readWorkflowPublishedVersionSnapshot(
   const snapshotPath = getPublishedWorkflowSnapshotPath(root, record.id);
   const datasetPath = getPublishedWorkflowSnapshotDatasetPath(root, record.id);
   try {
-    const datasetsContents = await pathExists(datasetPath) ? await fs.readFile(datasetPath) : null;
+    const datasetsContents = (await pathExists(datasetPath)) ? await fs.readFile(datasetPath) : null;
     return {
       contents: await fs.readFile(snapshotPath, 'utf8'),
       datasetsContents,
@@ -635,11 +730,13 @@ export async function restoreWorkflowPublishedVersion(
   }
 
   const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 
@@ -680,22 +777,30 @@ export async function restoreWorkflowPublishedVersion(
     changes: [
       ...(legacyMetadataChange ? [legacyMetadataChange] : []),
       { path: getPublishedWorkflowSnapshotPath(root, restoredSnapshotId), contents: snapshot.contents },
-      ...(snapshot.datasetsContents == null ? [] : [{
-        path: getPublishedWorkflowSnapshotDatasetPath(root, restoredSnapshotId),
-        contents: snapshot.datasetsContents,
-      }]),
+      ...(snapshot.datasetsContents == null
+        ? []
+        : [
+            {
+              path: getPublishedWorkflowSnapshotDatasetPath(root, restoredSnapshotId),
+              contents: snapshot.datasetsContents,
+            },
+          ]),
       metadataChange,
       { path: projectPath, contents: snapshot.contents },
       { path: getWorkflowDatasetPath(projectPath), contents: snapshot.datasetsContents },
-      createStoredWorkflowProjectSettingsChange(projectPath, {
-        endpointName: record.endpointName,
-        endpointAccess: existingSettings.endpointAccess,
-        publishedEndpointName: record.endpointName,
-        publishedSnapshotId: restoredSnapshotId,
-        publishedStateHash,
-        lastPublishedAt,
-        publishedWebApps: existingSettings.publishedWebApps,
-      }, existingSettings),
+      createStoredWorkflowProjectSettingsChange(
+        projectPath,
+        {
+          endpointName: record.endpointName,
+          endpointAccess: existingSettings.endpointAccess,
+          publishedEndpointName: record.endpointName,
+          publishedSnapshotId: restoredSnapshotId,
+          publishedStateHash,
+          lastPublishedAt,
+          publishedWebApps: existingSettings.publishedWebApps,
+        },
+        existingSettings,
+      ),
     ],
   });
   onCommitted?.();

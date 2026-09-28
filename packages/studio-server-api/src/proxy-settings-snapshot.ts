@@ -8,14 +8,11 @@ import {
   getPublishedWorkflowsBasePath,
   publicRouteSettingsRepository,
 } from './public-route-settings.js';
-import {
-  readRuntimeLimitSettingsSync,
-  runtimeLimitSettingsRepository,
-} from './runtime-limit-settings.js';
+import { readRuntimeLimitSettingsSync, runtimeLimitSettingsRepository } from './runtime-limit-settings.js';
 
 export type ProxySettingsSnapshot = {
   revision: string;
-  backend: 'file' | 'postgres';
+  backend: 'file' | 'postgres' | 'sqlite';
   publishedWorkflowsBasePath: string;
   latestWorkflowsBasePath: string;
   publishedAppsBasePath: string;

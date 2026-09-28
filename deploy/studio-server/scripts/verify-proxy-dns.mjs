@@ -226,6 +226,43 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     const health = () => JSON.parse(docker('inspect', proxy))[0].State.Health.Status;
     await until(`${variant} startup`, async () => (await request('/')).status === 200 && health() === 'healthy');
     assert.equal(await (await request('/', { headers: {} })).text(), 'Fixture login');
+    // Exercise actual nginx forwarding, not template text. Operator Origin
+    // checks need the exact browser authority, including ports and IPv6.
+    for (const authority of ['localhost:8081', '[::1]:8081', 'example.test']) {
+      for (const route of ['/api/echo', '/__rivet_auth/nested/callback', '/']) {
+        // Node fetch can replace a supplied Host header with the URL host.
+        // Native HTTP sends the exact authority we intend to exercise.
+        const response = await new Promise((resolve, reject) => {
+          const req = http.request(
+            `${base}${route}`,
+            {
+              method: 'POST',
+              headers: { Cookie: 'fixture-auth=yes', Host: authority, Origin: `http://${authority}` },
+            },
+            (res) => {
+              let body = '';
+              res.setEncoding('utf8');
+              res.on('data', (chunk) => {
+                body += chunk;
+              });
+              res.on('error', reject);
+              res.on('end', () => {
+                try {
+                  resolve({ status: res.statusCode, body: JSON.parse(body) });
+                } catch (error) {
+                  reject(error);
+                }
+              });
+            },
+          );
+          req.setTimeout(2500, () => req.destroy(new Error('Authority probe timeout')));
+          req.on('error', reject);
+          req.end('generated fixture body');
+        });
+        assert.equal(response.status, 200);
+        assert.equal(response.body.host, authority, `${variant} must preserve ${route} authority`);
+      }
+    }
     for (const route of ['/api/echo?x=a%2Fb&x=two', '/__rivet_auth/nested/callback?code=a%2Bb']) {
       const response = await request(route, { method: 'POST', body: 'unchanged body' });
       const data = await response.json();

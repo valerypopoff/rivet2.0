@@ -22,8 +22,6 @@ export {
 export type { AppExecutorCodeWorkerPoolStats } from './codeRunnerWorkerPool.mjs';
 
 export class AppExecutorWorkerCodeRunner implements CodeRunner {
-  private readonly runtimeRequire = createCodeRunnerRequire();
-
   constructor(
     private readonly onConsole?: (message: CodeConsoleMessage) => void,
     private readonly options: {
@@ -55,7 +53,7 @@ export class AppExecutorWorkerCodeRunner implements CodeRunner {
         graphInputs,
         contextValues,
         globalValues,
-        this.runtimeRequire,
+        createCodeRunnerRequire(),
         this.onConsole,
         this.options.executionEnvironment,
       );

@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 import { watchAuthorization } from './watch-authorization.js';
 import { runOutsideAppSettingsSnapshot } from './app-settings/settings-repository.js';
 import type { IncomingMessage, Server } from 'node:http';
@@ -248,20 +249,22 @@ function checkResolvedWebAppSocketAuthorization(
     return Promise.resolve('unavailable');
   }
 
-  return lookups.read(
-    resolved.accessPolicyLookupKey,
-    () => runOutsideAppSettingsSnapshot(resolved.readCurrentAccessPolicy),
-    options,
-  ).then(
-    (policy) => {
-      try {
-        return runOutsideAppSettingsSnapshot(() => resolved.evaluateCurrentAccessPolicy(policy));
-      } catch {
-        return 'unavailable' as const;
-      }
-    },
-    () => 'unavailable' as const,
-  );
+  return lookups
+    .read(
+      resolved.accessPolicyLookupKey,
+      () => runOutsideAppSettingsSnapshot(resolved.readCurrentAccessPolicy),
+      options,
+    )
+    .then(
+      (policy) => {
+        try {
+          return runOutsideAppSettingsSnapshot(() => resolved.evaluateCurrentAccessPolicy(policy));
+        } catch {
+          return 'unavailable' as const;
+        }
+      },
+      () => 'unavailable' as const,
+    );
 }
 
 /**
@@ -555,6 +558,10 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
+    if (isVmMigrationMaintenanceActive()) {
+      rejectUpgrade(socket, 503, 'Service Unavailable');
+      return;
+    }
     if (!accepting) {
       rejectUpgrade(socket, 503, 'Service Unavailable');
       return;
@@ -567,9 +574,15 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
           rejectUpgrade(socket, resolved.statusCode, resolved.message);
           return;
         }
-        const initialAuthorization = await checkResolvedWebAppSocketAuthorization(resolved, policyLookups, { fresh: true });
+        const initialAuthorization = await checkResolvedWebAppSocketAuthorization(resolved, policyLookups, {
+          fresh: true,
+        });
         if (initialAuthorization !== 'authorized') {
-          rejectUpgrade(socket, initialAuthorization === 'unavailable' ? 503 : 403, initialAuthorization === 'unavailable' ? 'Service Unavailable' : 'Forbidden');
+          rejectUpgrade(
+            socket,
+            initialAuthorization === 'unavailable' ? 503 : 403,
+            initialAuthorization === 'unavailable' ? 'Service Unavailable' : 'Forbidden',
+          );
           return;
         }
         if (!accepting) {

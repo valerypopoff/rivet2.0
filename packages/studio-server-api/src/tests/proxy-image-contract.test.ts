@@ -751,13 +751,14 @@ test('Compose explicitly initializes every writable storage mount before runtime
     assert.match(initializer, /command:\s*\n\s*- \|/);
     assert.match(
       initializer,
-      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app; do/,
+      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app \/data\/local-metadata; do/,
     );
     assert.ok(initializer.includes('if [ "$$(stat -c \'%u:%g\' "$$directory")" != "10001:10001" ]; then'));
     assert.ok(initializer.includes('find "$$directory" -xdev -exec chown -h 10001:10001 {} +'));
     assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
     assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
     assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
+    assert.match(initializer, /- rivet_local_metadata:\/data\/local-metadata/);
     assert.match(
       initializer,
       /- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,

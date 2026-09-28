@@ -1,9 +1,7 @@
 import type { AttachedData, CombinedDataset, Project } from '@valerypopoff/rivet2-node';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../../studio-server-shared/workflow-recording-types.js';
 
-import type {
-  WorkflowProjectItem,
-} from '../../../../../studio-server-shared/workflow-types.js';
+import type { WorkflowProjectItem } from '../../../../../studio-server-shared/workflow-types.js';
 
 type TimestampValue = Date | string;
 
@@ -75,6 +73,7 @@ export type CurrentDraftRevisionRow = {
   published_version_id: string | null;
   endpoint_name: string;
   published_endpoint_name: string;
+  endpoint_access: 'public' | 'internal';
   last_published_at: TimestampValue | null;
   revision_id: string;
   revision_workflow_id: string;
@@ -192,21 +191,49 @@ export type ImportManagedWorkflowOptions = {
   contents: string;
   datasetsContents: string | null;
   endpointName: string;
+  endpointAccess?: 'public' | 'internal';
+  publicationVersion?: string;
+  /** Preserve a source tree's unpublished-changes status even if its bytes match the active snapshot. */
+  forceSeparatePublishedRevision?: boolean;
   publishedEndpointName: string;
+  publishedVersionId?: string | null;
   publishedContents?: string | null;
   publishedDatasetsContents?: string | null;
   lastPublishedAt?: string | null;
   updatedAt?: string | null;
   publishedWebApps?: ImportManagedWorkflowPublishedWebAppOptions[];
+  publishedVersions?: ImportManagedWorkflowPublishedVersionOptions[];
 };
 
 export type ImportManagedWorkflowPublishedWebAppOptions = {
+  appId?: string;
   uiGraphId: string;
+  uiGraphName?: string;
   slug: string;
   allowedEmails?: string[];
   publishedAt: string;
   contents: string;
   datasetsContents: string | null;
+};
+
+export type ImportManagedWorkflowPublishedVersionOptions = {
+  versionId: string;
+  endpointName: string;
+  publishedAt: string;
+  isStarred: boolean;
+  comment: string;
+  contents: string;
+  datasetsContents: string | null;
+};
+
+/** Raw imported state used only by the offline migration verifier. */
+export type ManagedWorkflowMigrationSnapshot = Omit<
+  ImportManagedWorkflowOptions,
+  'updatedAt' | 'publishedWebApps' | 'publishedVersions' | 'forceSeparatePublishedRevision'
+> & {
+  updatedAt: string;
+  publishedWebApps: ImportManagedWorkflowPublishedWebAppOptions[];
+  publishedVersions: ImportManagedWorkflowPublishedVersionOptions[];
 };
 
 export type ImportManagedWorkflowRecordingOptions = {

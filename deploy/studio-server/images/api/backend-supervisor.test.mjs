@@ -4,8 +4,10 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import { childEnvironments, startBackendSupervisor } from './backend-supervisor.mjs';
+import { acquireLocalMetadataOwnerLease } from './local-metadata-owner-lease.mjs';
 
 async function unusedPort() {
   const server = createServer();
@@ -24,8 +26,19 @@ async function ports() {
   return { apiPort, executorPort, healthPort };
 }
 
+function legacyTransitionFixture(root) {
+  const db = new DatabaseSync(join(root, 'transition.sqlite'));
+  try {
+    db.exec(
+      "PRAGMA application_id = 1380537418; PRAGMA user_version = 1; CREATE TABLE transition_state (phase TEXT, generation_id TEXT, revision INTEGER); INSERT INTO transition_state VALUES ('legacy', NULL, 1)",
+    );
+  } finally {
+    db.close();
+  }
+}
+
 function environment({ apiPort, executorPort, healthPort }) {
-  return {
+  const env = {
     ...process.env,
     RIVET_RUNTIME_CONFIG_PROTOCOL: '1',
     RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
@@ -34,6 +47,10 @@ function environment({ apiPort, executorPort, healthPort }) {
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
     RIVET_EXECUTOR_RUNTIME_CONFIG_URL: `http://127.0.0.1:${apiPort}/internal/executor-runtime-config`,
   };
+  // Each behavior fixture owns its control state; never inherit an operator's
+  // opt-in production/recovery root from the shell running these tests.
+  delete env.RIVET_LOCAL_METADATA_CONTROL_ROOT;
+  return env;
 }
 
 async function waitForReady(port) {
@@ -97,11 +114,14 @@ test('single-host backend keeps local executor configuration and shares only the
     RIVET_BACKEND_API_PORT: String(apiPort),
     RIVET_BACKEND_EXECUTOR_PORT: String(executorPort),
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
+    RIVET_APP_DATA_ROOT: '/data/rivet-app',
   };
   delete env.RIVET_EXECUTOR_RUNTIME_CONFIG_URL;
   const children = childEnvironments(env);
   assert.equal(children.api.PORT, String(apiPort));
+  assert.equal(children.api.RIVET_VM_MIGRATION_EDITOR_CONTROL, '1');
   assert.equal(children.executor.PORT, String(executorPort));
+  assert.equal(children.executor.RIVET_VM_MIGRATION_CONTROL_ROOT, '/data/rivet-app');
   assert.equal(children.executor.RIVET_EXECUTOR_RUNTIME_CONFIG_URL, undefined);
   assert.equal(children.executor.RIVET_RUNTIME_LIBRARIES_REPLICA_TIER, undefined);
   assert.equal(
@@ -120,6 +140,76 @@ test('single-host backend keeps local executor configuration and shares only the
       }),
     /local executor settings/,
   );
+});
+
+test('single-host supervisor keeps its metadata owner lease until both children stop', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rivet-backend-owner-'));
+  legacyTransitionFixture(dir);
+  const env = {
+    ...environment(await ports()),
+    RIVET_DEPLOYMENT_TOPOLOGY: 'single-host',
+    RIVET_APP_DATA_ROOT: dir,
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: dir,
+  };
+  delete env.RIVET_EXECUTOR_RUNTIME_CONFIG_URL;
+  const apiScript = join(dir, 'api.mjs');
+  const executorScript = join(dir, 'executor.mjs');
+  await writeFile(
+    apiScript,
+    `import {createServer} from 'node:http';
+    const server = createServer((_request, response) => response.writeHead(200).end());
+    server.listen(Number(process.env.PORT), '127.0.0.1');
+    process.on('SIGTERM', () => server.close(() => process.exit(0)));`,
+  );
+  await writeFile(
+    executorScript,
+    `import {createServer} from 'node:net';
+    const server = createServer(socket => socket.end());
+    server.listen(Number(process.env.PORT), '127.0.0.1', () => process.send?.({type:'rivet-executor-ready'}));
+    process.on('SIGTERM', () => server.close(() => process.exit(0)));`,
+  );
+  let supervisor;
+  try {
+    supervisor = await startBackendSupervisor({
+      env,
+      apiCommand: [process.execPath, apiScript],
+      executorCommand: [process.execPath, executorScript],
+      executorCwd: dir,
+      apiStartupTimeoutMs: 5_000,
+      shutdownTimeoutMs: 1_000,
+    });
+    await waitForReady(Number(env.RIVET_BACKEND_HEALTH_PORT));
+    assert.throws(() => acquireLocalMetadataOwnerLease(dir), /Another backend/);
+    await supervisor.stop();
+    const lease = acquireLocalMetadataOwnerLease(dir, { requireExisting: true });
+    lease.release();
+  } finally {
+    await supervisor?.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('supervisor releases the owner lease when its health listener fails before child launch', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rivet-backend-owner-listener-'));
+  legacyTransitionFixture(dir);
+  const listener = createServer();
+  await new Promise((resolve) => listener.listen(0, '0.0.0.0', resolve));
+  const env = {
+    ...environment(await ports()),
+    RIVET_DEPLOYMENT_TOPOLOGY: 'single-host',
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: dir,
+    RIVET_APP_DATA_ROOT: dir,
+    RIVET_BACKEND_HEALTH_PORT: String(listener.address().port),
+  };
+  delete env.RIVET_EXECUTOR_RUNTIME_CONFIG_URL;
+  try {
+    await assert.rejects(startBackendSupervisor({ env }), { code: 'EADDRINUSE' });
+    const lease = acquireLocalMetadataOwnerLease(dir, { requireExisting: true });
+    lease.release();
+  } finally {
+    await new Promise((resolve) => listener.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('combined backend becomes ready only after both children and exits when the executor fails', async () => {

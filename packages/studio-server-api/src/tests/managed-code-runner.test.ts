@@ -13,6 +13,10 @@ import {
   setManagedCodeRunnerCacheLimitForTests,
 } from '../runtime-libraries/managed-code-runner.js';
 import { withScopedEnv } from './helpers/runtime-library-harness.js';
+import { materializeLocalRuntimeLibraries } from '../local-metadata/runtime-library-authority.js';
+import { createRuntimeLibraryDirectoryArchive } from '../scripts/migrate-runtime-libraries.js';
+
+// test-style: fixture-read: reads only generated package-cache fixtures to verify activation and confined cleanup.
 
 const CODE_RUNNER_ENV_KEYS = [
   'RIVET_MANAGED_CODE_RUNNER_DISABLE_CACHE',
@@ -36,10 +40,123 @@ function getOutputValue(output: Record<string, { value?: unknown }>): unknown {
   return output.output?.value;
 }
 
+test(
+  'SQLite cache link replacement is atomic and a failed promotion preserves the current release',
+  { skip: process.platform === 'win32' },
+  async (context) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-atomic-cache-'));
+    const current = path.join(root, 'current');
+    const state = { manifest: { packages: {}, updatedAt: '' }, archive: null };
+    try {
+      await materializeLocalRuntimeLibraries(root, state);
+      const original = await fs.readlink(current);
+      const rename = fs.rename;
+      let replacements = 0;
+      context.mock.method(fs, 'rename', async (from: string, to: string) => {
+        assert.notEqual(
+          from,
+          current,
+          'Live activation cannot remove the current link before promoting the replacement.',
+        );
+        if (path.basename(from).startsWith('link-') && to === current) {
+          assert.equal(await fs.readlink(current), original);
+          await rename(from, to);
+          assert.notEqual(await fs.readlink(current), original);
+          replacements += 1;
+        } else await rename(from, to);
+      });
+      await materializeLocalRuntimeLibraries(root, state);
+      assert.equal(replacements, 1);
+      context.mock.restoreAll();
+
+      const active = await fs.readlink(current);
+      context.mock.method(fs, 'rename', async (from: string, to: string) => {
+        if (path.basename(from).startsWith('link-') && to === current)
+          throw Object.assign(new Error('synthetic permission failure'), { code: 'EACCES' });
+        return rename(from, to);
+      });
+      await assert.rejects(materializeLocalRuntimeLibraries(root, state), /synthetic permission failure/);
+      assert.equal(await fs.readlink(current), active);
+      assert.ok((await fs.stat(path.join(current, 'node_modules'))).isDirectory());
+      assert.equal((await fs.readdir(root)).filter((name) => name.startsWith('cache-')).length, 2);
+      assert.equal((await fs.readdir(root)).length, 3, 'Failed extraction and pending links are cleaned up.');
+    } finally {
+      context.mock.restoreAll();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test('SQLite package-cache activation refreshes main/exports and preserves in-flight lazy dependencies until startup', async () => {
+  await withRunnerEnv({}, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-versioned-cache-'));
+    const cache = path.join(root, 'cache');
+    let firstRequire: NodeRequire | undefined;
+    try {
+      for (const [name, value] of [
+        ['first', 84],
+        ['second', 42],
+      ] as const) {
+        const stage = path.join(root, name);
+        const pkg = path.join(stage, 'node_modules', 'fixture-package');
+        await fs.mkdir(pkg, { recursive: true });
+        await fs.writeFile(path.join(stage, 'package.json'), '{"private":true}');
+        await fs.writeFile(
+          path.join(pkg, 'package.json'),
+          JSON.stringify({ name: 'fixture-package', main: `${name}.cjs`, exports: { '.': `./${name}.cjs` } }),
+        );
+        await fs.writeFile(path.join(pkg, `${name}.cjs`), `module.exports=require('./value.cjs');`);
+        await fs.writeFile(path.join(pkg, 'value.cjs'), `module.exports=${value};`);
+        await materializeLocalRuntimeLibraries(cache, {
+          manifest: { packages: { 'fixture-package': { name: 'fixture-package', version: '1.0.0' } }, updatedAt: '' },
+          archive: await createRuntimeLibraryDirectoryArchive(stage),
+        });
+        const runner = new ManagedCodeRunner(cache, { prepareRuntimeLibraries: async () => {} });
+        const output = await runner.runCode(
+          'return { output: { type: "number", value: require("fixture-package") } };',
+          {},
+          requireOptions,
+        );
+        assert.equal(getOutputValue(output), value);
+        if (name === 'first') {
+          const { createRequire } = await import('node:module');
+          firstRequire = createRequire(path.join(await fs.realpath(path.join(cache, 'current')), 'package.json'));
+        } else {
+          assert.equal(firstRequire!('fixture-package'), 84, 'An older workflow still loads its own dependencies.');
+        }
+        const entries = await fs.readdir(cache);
+        assert.equal(entries.filter((entry) => entry.startsWith('cache-')).length, name === 'first' ? 1 : 2);
+      }
+      await materializeLocalRuntimeLibraries(
+        cache,
+        { manifest: { packages: {}, updatedAt: '' }, archive: null },
+        { pruneInactive: true },
+      );
+      assert.equal((await fs.readdir(cache)).length, 2, 'Startup prunes inactive caches before admitting executions.');
+      const outside = path.join(root, 'unowned');
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, 'keep'), 'untouched');
+      await fs.unlink(path.join(cache, 'current'));
+      await fs.symlink(outside, path.join(cache, 'current'), process.platform === 'win32' ? 'junction' : 'dir');
+      await assert.rejects(
+        materializeLocalRuntimeLibraries(cache, { manifest: { packages: {}, updatedAt: '' }, archive: null }),
+        /unexpected activation link/,
+      );
+      assert.equal(await fs.readFile(path.join(outside, 'keep'), 'utf8'), 'untouched');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 async function writeFixturePackage(runtimeLibrariesRoot: string, value: string): Promise<void> {
   const packageRoot = path.join(runtimeLibrariesRoot, 'current', 'node_modules', 'fixture-package');
   await fs.mkdir(packageRoot, { recursive: true });
-  await fs.writeFile(path.join(packageRoot, 'index.js'), `module.exports = { value: ${JSON.stringify(value)} };\n`, 'utf8');
+  await fs.writeFile(
+    path.join(packageRoot, 'index.js'),
+    `module.exports = { value: ${JSON.stringify(value)} };\n`,
+    'utf8',
+  );
 }
 
 async function writeRuntimeManifest(
@@ -462,7 +579,8 @@ test('managed require cache follows the active runtime-library manifest snapshot
     }
 
     try {
-      const code = 'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
+      const code =
+        'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
       await writeRelease('release-a', 'from-release-a');
       const firstRunner = new ManagedCodeRunner(runtimeLibrariesRoot, {
         prepareRuntimeLibraries: async () => {},
@@ -489,7 +607,8 @@ test('managed require cache uses manifest updatedAt when active release id is ab
     const runtimeLibrariesRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-managed-code-runner-'));
 
     try {
-      const code = 'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
+      const code =
+        'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
       await writeFixturePackage(runtimeLibrariesRoot, 'from-updated-a');
       await writeRuntimeManifest(runtimeLibrariesRoot, { updatedAt: '2026-05-25T00:00:00.000Z' });
       const firstRunner = new ManagedCodeRunner(runtimeLibrariesRoot, {
@@ -525,7 +644,8 @@ test('managed require cache falls back to node_modules timestamp without a usabl
     }
 
     try {
-      const code = 'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
+      const code =
+        'const fixture = require("fixture-package"); return { output: { type: "any", value: fixture.value } };';
       await writeTimestampedPackage('from-tree-a', new Date('2026-05-25T00:00:00.000Z'));
       const firstRunner = new ManagedCodeRunner(runtimeLibrariesRoot, {
         prepareRuntimeLibraries: async () => {},

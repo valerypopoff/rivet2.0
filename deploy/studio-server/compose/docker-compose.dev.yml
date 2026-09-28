@@ -118,7 +118,7 @@ services:
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
@@ -128,6 +128,7 @@ services:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
       - type: volume
         source: rivet_data
         target: /data/rivet-app
@@ -197,6 +198,11 @@ services:
       - RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES=${RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES:-536870912}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_VM_MIGRATION_ENABLED=${RIVET_VM_MIGRATION_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_UPGRADE_ENABLED=${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_CONTROL_ROOT=${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}
+      - RIVET_LOCAL_METADATA_ENCRYPTION_KEY=${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}
+      - RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB=${RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB:-32}
       - RIVET_ENABLE_DEVELOPMENT_AUTH=${RIVET_ENABLE_DEVELOPMENT_AUTH:-false}
       - RIVET_DEVELOPMENT_AUTH_CLIENTS=${RIVET_DEVELOPMENT_AUTH_CLIENTS:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -239,6 +245,7 @@ services:
         volume:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
     command: >
       sh -lc "
         corepack enable &&
@@ -268,6 +275,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  rivet_local_metadata:
+    driver: local
   web_node_modules:
     driver: local
   web_yarn_unplugged:
