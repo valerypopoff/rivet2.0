@@ -41,9 +41,9 @@ export const requireOperatorAuth: RequestHandler = (req, res, next) => {
 };
 
 /** Migration exports the complete installation, including secrets. General UI access and trusted-client bypass are insufficient. */
-function sensitiveStorageOperatorAuth(flag: string): RequestHandler {
+function sensitiveStorageOperatorAuth(flag?: string): RequestHandler {
   return (req, res, next) => {
-    if (process.env[flag] !== '1') {
+    if (flag && process.env[flag] !== '1') {
       return next(createHttpError(404, 'Not found'));
     }
     const mode = getServerUiAuthMode();
@@ -74,3 +74,4 @@ function sensitiveStorageOperatorAuth(flag: string): RequestHandler {
 }
 export const requireVmMigrationOperatorAuth = sensitiveStorageOperatorAuth('RIVET_VM_MIGRATION_ENABLED');
 export const requireLocalUpgradeOperatorAuth = sensitiveStorageOperatorAuth('RIVET_LOCAL_METADATA_UPGRADE_ENABLED');
+export const requireLocalUpgradeSetupOperatorAuth = sensitiveStorageOperatorAuth();

@@ -709,6 +709,39 @@ test('local recording metadata and replay bytes are exact, keyed by run ID, and 
   });
 });
 
+test('catalog verification compares payload bytes without reserializing them and ignores absent optional metadata', async () => {
+  await fixture(async (catalog) => {
+    await catalog.importProject(project());
+    const source = recording({
+      recordingContents: 'x'.repeat(1048576),
+      executionIdentity: { surface: 'workflow_endpoint', graphId: 'graph', graphName: undefined },
+    });
+    await catalog.importRecording(source);
+    const stringify = JSON.stringify;
+    JSON.stringify = ((value: unknown, ...args: unknown[]) => {
+      if (
+        value &&
+        typeof value === 'object' &&
+        typeof (value as { recordingContents?: unknown }).recordingContents === 'string'
+      ) {
+        throw new Error('Verification must not serialize the full recording payload.');
+      }
+      return Reflect.apply(stringify, JSON, [value, ...args]);
+    }) as typeof JSON.stringify;
+    try {
+      const reordered = { ...source, executionIdentity: { graphId: 'graph', surface: 'workflow_endpoint' as const } };
+      await catalog.importRecording(reordered);
+      await catalog.verifyRecordingsExact([reordered]);
+      await assert.rejects(
+        catalog.verifyRecordingsExact([{ ...reordered, recordingContents: `${source.recordingContents} ` }]),
+        /differs from source/,
+      );
+    } finally {
+      JSON.stringify = stringify;
+    }
+  });
+});
+
 test('local runtime-library activation and archive are exact across restart', async () => {
   await fixture(async (catalog, root) => {
     const state = {

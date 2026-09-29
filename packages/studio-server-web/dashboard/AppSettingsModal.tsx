@@ -33,6 +33,7 @@ import type { HostedRouteConfig } from './types';
 interface AppSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: AppSettingsTab;
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
 }
@@ -71,8 +72,13 @@ function describeActions(actions: TabSettingsAction[]) {
   return actions.map((action) => action.name).join(', ');
 }
 
-function OpenAppSettingsModal({ onClose, onRouteConfigChange, routeConfig }: Omit<AppSettingsModalProps, 'isOpen'>) {
-  const [activeTab, setActiveTab] = useState<AppSettingsTab>('general');
+function OpenAppSettingsModal({
+  onClose,
+  onRouteConfigChange,
+  routeConfig,
+  initialTab = 'general',
+}: Omit<AppSettingsModalProps, 'isOpen'>) {
+  const [activeTab, setActiveTab] = useState<AppSettingsTab>(initialTab);
   const [actionFeedback, setActionFeedback] = useState<TabActionFeedback>(null);
   const [savingTab, setSavingTab] = useState(false);
   const usesRuntimeLimits =

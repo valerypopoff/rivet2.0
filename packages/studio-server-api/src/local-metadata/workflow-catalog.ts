@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
@@ -184,17 +185,20 @@ function normalizedSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim();
 }
 
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => {
-    if (item && typeof item === 'object' && !Array.isArray(item)) {
-      return Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)));
-    }
-    return item;
-  });
+function comparableJson(value: unknown): unknown {
+  // Catalog snapshots are JSON data. Match persisted omission of optional
+  // undefined fields without serializing large artifact strings a second time.
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(comparableJson);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, field]) => field !== undefined)
+      .map(([key, field]) => [key, comparableJson(field)]),
+  );
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
-  return canonicalJson(left) === canonicalJson(right);
+  return isDeepStrictEqual(comparableJson(left), comparableJson(right));
 }
 
 function assertPath(value: string, kind: string): void {

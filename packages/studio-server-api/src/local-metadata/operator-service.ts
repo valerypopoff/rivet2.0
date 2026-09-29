@@ -44,6 +44,23 @@ import type { LocalUpgradeOperation } from '../../../studio-server-shared/local-
 
 let activeOperation: LocalUpgradeOperation | null = null;
 let runningJob: Promise<void> | null = null;
+/** Read-only operator onboarding, available before the upgrade flag and
+ * control journal are provisioned. Never return paths or secret material. */
+export function getLocalUpgradeSetupStatus() {
+  const sqliteSelected = getAppSettingsBackendKind() === 'sqlite';
+  return {
+    eligible:
+      process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
+      process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL === '1' &&
+      getServerUiAuthMode() !== 'none' &&
+      getWorkflowStorageBackendMode() === 'filesystem',
+    upgradeEnabled: process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED === '1',
+    controlRootConfigured: path.isAbsolute(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim() || ''),
+    encryptionKeyReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
+    sqliteSelected,
+    liveSqlite: sqliteSelected && !isVmMigrationMaintenanceActive(),
+  };
+}
 function assertAvailable(): void {
   if (
     process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED !== '1' ||

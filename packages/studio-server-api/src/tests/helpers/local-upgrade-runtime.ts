@@ -152,7 +152,68 @@ try {
   const selected = getLocalMetadataServingSelection();
   if (selected)
     disposeLibraries = await initializeLocalRuntimeLibraryAuthority(selected, assertLocalMetadataWritesAllowed);
-  if (command === 'inspect-capacity') {
+  if (command === 'setup-status') {
+    const { createApiApp } = await import('../../app.js');
+    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const original = {
+      enabled: process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED,
+      root: process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT,
+      key: process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY,
+      topology: process.env.RIVET_DEPLOYMENT_TOPOLOGY,
+    };
+    const setupUrl = `${listener.baseUrl}/api/app-settings/local-upgrade/setup`;
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+    };
+    try {
+      process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = '0';
+      process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = '';
+      process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = '';
+      const response = await fetch(setupUrl, { headers });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        eligible: true,
+        upgradeEnabled: false,
+        controlRootConfigured: false,
+        encryptionKeyReady: false,
+        sqliteSelected: false,
+        liveSqlite: false,
+      });
+      assert.equal(
+        (await fetch(setupUrl, { headers: { 'x-rivet-proxy-auth': headers['x-rivet-proxy-auth'] } })).status,
+        403,
+      );
+      assert.equal((await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade`, { headers })).status, 404);
+
+      process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = '1';
+      process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = original.root;
+      process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = original.key;
+      const ready = await fetch(setupUrl, { headers });
+      assert.equal(ready.status, 200);
+      assert.deepEqual(await ready.json(), {
+        eligible: true,
+        upgradeEnabled: true,
+        controlRootConfigured: true,
+        encryptionKeyReady: true,
+        sqliteSelected: false,
+        liveSqlite: false,
+      });
+      process.env.RIVET_DEPLOYMENT_TOPOLOGY = 'replicated';
+      assert.equal(((await (await fetch(setupUrl, { headers })).json()) as { eligible: boolean }).eligible, false);
+    } finally {
+      for (const [name, value] of [
+        ['RIVET_LOCAL_METADATA_UPGRADE_ENABLED', original.enabled],
+        ['RIVET_LOCAL_METADATA_CONTROL_ROOT', original.root],
+        ['RIVET_LOCAL_METADATA_ENCRYPTION_KEY', original.key],
+        ['RIVET_DEPLOYMENT_TOPOLOGY', original.topology],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await listener.close();
+    }
+  } else if (command === 'inspect-capacity') {
     const inspected = await inspectLocalUpgradeSource();
     assert.equal(inspected.capacity.fits, false);
     assert.ok(inspected.capacity.reasons.includes('payload-budget'));

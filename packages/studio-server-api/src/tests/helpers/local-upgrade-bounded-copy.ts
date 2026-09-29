@@ -8,6 +8,27 @@ import { createBlankProjectFile } from '../../routes/workflows/fs-helpers.js';
 import { getRecordingArtifactPath } from '../../routes/workflows/recordings-artifacts.js';
 import { stageLocalMetadataCandidate } from '../../local-metadata/stage-local-metadata-candidate.js';
 
+const checkpoints: Array<{
+  stage: string;
+  rssKiB: number;
+  peakRssKiB: number;
+  heapUsedKiB: number;
+  externalKiB: number;
+}> = [];
+function checkpoint(stage: string): void {
+  const usage = process.memoryUsage();
+  const measurement = {
+    stage,
+    rssKiB: Math.ceil(usage.rss / 1024),
+    peakRssKiB: process.resourceUsage().maxRSS,
+    heapUsedKiB: Math.ceil(usage.heapUsed / 1024),
+    externalKiB: Math.ceil(usage.external / 1024),
+  };
+  checkpoints.push(measurement);
+  if (process.env.RIVET_BOUNDED_COPY_DIAGNOSTICS === '1') console.error(JSON.stringify(measurement));
+}
+
+checkpoint('startup');
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bounded-conversion-'));
 process.env.RIVET_EXTRA_ROOTS = root;
 try {
@@ -19,12 +40,14 @@ try {
   const workflowId = loadProjectAndAttachedDataFromString(project)[0].metadata.id;
   await fs.writeFile(path.join(source.workflows, 'bounded.rivet-project'), project);
   const count = 192;
+  let decodedRecordingBytes = 0;
   for (let index = 0; index < count; index++) {
     const id = `run-${index}`;
     const bundle = path.join(source.recordings, workflowId, id);
     await fs.mkdir(bundle, { recursive: true });
     // Distinct bytes prevent artifact deduplication from disguising the test.
     const contents = JSON.stringify({ id, input: 'x'.repeat(1048576) });
+    decodedRecordingBytes += Buffer.byteLength(contents);
     await fs.writeFile(getRecordingArtifactPath(bundle, 'recording', 'gzip'), gzipSync(contents));
     await fs.writeFile(getRecordingArtifactPath(bundle, 'replay-project', 'identity'), project);
     await fs.writeFile(
@@ -53,18 +76,32 @@ try {
     settingsDatabasePath: path.join(root, 'candidate', 'settings.sqlite'),
     artifactRoot: path.join(root, 'candidate', 'objects'),
   };
+  checkpoint('fixture-ready');
   const report = await stageLocalMetadataCandidate({
     source,
     candidate,
     settingsEncryptionKey: 'test-only',
     assertFrozen: async () => {},
+    onStage: async (stage) => checkpoint(stage),
   });
+  checkpoint('verified');
   assert.equal(report.recordings, count);
   assert.equal(report.servingChecks.recordings, count);
   const peakRssKiB = process.resourceUsage().maxRSS;
-  assert.ok(peakRssKiB < 512 * 1024, `Peak RSS exceeded 512 MiB: ${peakRssKiB} KiB`);
+  assert.ok(
+    peakRssKiB < 512 * 1024,
+    `Peak RSS exceeded 512 MiB: ${peakRssKiB} KiB; checkpoints: ${JSON.stringify(checkpoints)}`,
+  );
   console.log(
-    JSON.stringify({ recordings: count, decodedRecordingBytes: count * 1048576, heapLimitMiB: 192, peakRssKiB }),
+    JSON.stringify({
+      recordings: count,
+      decodedRecordingBytes,
+      heapLimitMiB: 192,
+      peakRssKiB,
+      execArgv: process.execArgv,
+      nodeOptionsConfigured: Boolean(process.env.NODE_OPTIONS?.trim()),
+      checkpoints,
+    }),
   );
 } finally {
   await fs.rm(root, { recursive: true, force: true });

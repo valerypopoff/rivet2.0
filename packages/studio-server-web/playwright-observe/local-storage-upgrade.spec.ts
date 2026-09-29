@@ -1,11 +1,39 @@
 import { expect, test, type Page } from '@playwright/test';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
+test.beforeEach(async ({ page }) => {
+  // Panel scenarios begin after VM prerequisites. The separate prompt suite
+  // exercises missing setup; without this response the dashboard never asks
+  // for upgrade status and openLocalUpgrade would wait for the wrong request.
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    route.fulfill({
+      json: {
+        eligible: true,
+        upgradeEnabled: true,
+        controlRootConfigured: true,
+        encryptionKeyReady: true,
+        sqliteSelected: false,
+        liveSqlite: false,
+      },
+    }),
+  );
+});
+
+async function openSettings(page: Page) {
+  const prompt = page.getByTestId('local-storage-upgrade-prompt');
+  const promptShown = await prompt.waitFor({ state: 'visible', timeout: 1000 }).then(
+    () => true,
+    () => false,
+  );
+  if (promptShown) await prompt.getByRole('button', { name: /^(Postpone|Dismiss until next reload)$/ }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+}
+
 async function openLocalUpgrade(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   return page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
 }
@@ -231,7 +259,7 @@ for (const navigation of ['tab', 'modal'] as const) {
     if (navigation === 'tab') await modal.getByRole('tab', { name: 'General', exact: true }).click();
     else {
       await modal.getByRole('button', { name: 'Close app settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await openSettings(page);
     }
     await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
     await expect(inspect).toHaveAttribute('aria-busy', 'true');
@@ -385,6 +413,7 @@ for (const scenario of loadingActions) {
     await page.route('**/api/app-settings/local-upgrade**', async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       const basePath = '/api/app-settings/local-upgrade';
+      if (pathname === `${basePath}/setup`) return route.fallback();
       if (pathname === basePath)
         return route.fulfill({
           json: {
@@ -460,7 +489,7 @@ for (const scenario of loadingActions) {
       await page.goto('/', { waitUntil: 'domcontentloaded' });
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await openSettings(page);
       await page
         .getByTestId('app-settings-modal')
         .getByRole('tab', { name: 'Local storage upgrade', exact: true })
@@ -789,7 +818,7 @@ test('local upgrade actions and backup fields have separate readable rows at des
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   const modal = page.getByTestId('app-settings-modal');
   await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
@@ -971,7 +1000,7 @@ test('local storage upgrade requires backup certification and coordinated restar
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettings(page);
     await page
       .getByTestId('app-settings-modal')
       .getByRole('tab', { name: 'Local storage upgrade', exact: true })
@@ -995,6 +1024,7 @@ test('local storage upgrade requires backup certification and coordinated restar
   await panel.getByLabel('I backed up the local settings encryption key separately.').check();
   await expect(copy).toBeDisabled();
   await expect(panel.getByRole('alert').filter({ hasText: 'Copying is blocked' })).toBeVisible();
+  await expect(panel.getByRole('alert')).toContainText('restore its original key; do not generate a replacement');
   await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeEnabled();
   copyConfigurationReady = true;
   await expect(copy).toBeEnabled();
@@ -1014,7 +1044,7 @@ test('local storage upgrade requires backup certification and coordinated restar
   await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeDisabled();
   await panel.getByLabel('I reviewed the selected backend and its write-resumption recovery boundary.').check();
   await panel.getByRole('button', { name: 'Resume writes', exact: true }).click();
-  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
   expect(actions).toEqual(['activate', 'validate', 'resume']);
 });
 
@@ -1073,7 +1103,7 @@ for (const backend of ['sqlite', 'legacy'] as const) {
       await page.goto('/', { waitUntil: 'domcontentloaded' });
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
-      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await openSettings(page);
       await page
         .getByTestId('app-settings-modal')
         .getByRole('tab', { name: 'Local storage upgrade', exact: true })
@@ -1145,7 +1175,7 @@ test('local upgrade controls fail closed when the operator session is unauthoriz
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   await expect(panel.getByRole('alert')).toContainText('unavailable');
@@ -1212,7 +1242,7 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   await expect(panel.getByText(/Failure: disk-full at settings/)).toBeVisible();
@@ -1245,7 +1275,7 @@ test('Settings recovery controls remain reachable when the editor never becomes 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await expect(page.locator('.dashboard-main .dashboard-app-loading')).toBeVisible();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   await expect(page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true })).toBeVisible();
 });
@@ -1280,7 +1310,7 @@ test('expired operator status locks previously enabled controls and reconnect cl
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
@@ -1342,7 +1372,7 @@ test('a stalled status poll locks controls and recovery preserves a rejected pau
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   const inspect = panel.getByRole('button', { name: 'Inspect source', exact: true });
@@ -1393,7 +1423,7 @@ test('resumption acknowledgement belongs to the currently validated generation a
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSettings(page);
   await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   const acknowledgement = panel.getByLabel(

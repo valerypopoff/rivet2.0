@@ -37,6 +37,20 @@ Commit review also corrected the nginx-free restored runner's login path and ser
 
 These are local working-tree checks, not qualification of exact released image digests. Native Linux restored-copy orchestration, required hosted CI and rehearsal of an independently backed-up production dataset remain required before a live upgrade.
 
+### Upgrade reminder and recovery review (2026-09-30)
+
+The dashboard now distinguishes first-time VM setup, a postponed legacy upgrade, an in-progress paused transition and a completed SQLite runtime. The setup response is operator-authenticated but works before the upgrade flag is enabled; it returns readiness booleans only. A paused SQLite selection with disabled controls directs the operator to restore the original key and control volume, never to provision a new one. The reminder opens the existing upgrade tab and does not bypass backup, maintenance, verification or write-resumption gates. The panel hides rollback actions after SQLite has accepted writes. See the [upgrade contract](./local-metadata-upgrade.md) for phase-specific behavior.
+
+The setup endpoint, dashboard prompt and panel have focused API and headless browser coverage. This review is repository evidence only: it does not certify the production VM dataset, the exact released images or the future SQLite-to-managed PostgreSQL/S3 adapter.
+
+### Bounded-memory CI hardening (2026-09-29)
+
+CI reported a 570,812 KiB peak in the source/tsx worker, exceeding its 512 MiB total-RSS ceiling despite successful conversion. Exact Node 24.21.0 with Yarn PnP locally measured 439,440 KiB at worker startup, before creating any recordings, and 520,240 KiB peak across the original fixture. Loader/compiler/ZIP-cache overhead left an unstable margin rather than measuring the converter in its serving-runtime environment.
+
+The regression now compiles its unchanged synthetic workload and current runtime dependencies before starting a loader-free measured process. Its 192 MiB old-space budget and 512 MiB total-RSS ceiling remain unchanged. Three independent Linux Node 24.21.0/Yarn PnP runs passed at 250,936, 253,692 and 252,332 KiB peak (about 245–248 MiB); the Windows run passed at 199,152 KiB. Catalog verification also avoids full-payload JSON reserialization, with a regression proving optional metadata equivalence and changed-byte rejection. This is local regression evidence; the corrected exact-commit CI and production qualification gates remain required.
+
+All 73 affected Linux catalog, candidate, serving, source-budget, artifact and capacity checks passed; the overlapping Windows focused runs passed all 74 unique cases, including the memory worker. Four headless upgrade/recovery UI checks passed. API type checking, test-style, PnP install-state and documentation-link checks passed. The memory report counts the actual UTF-8 recording bytes created by the fixture, not an assumed aggregate size.
+
 Additional local verification on 2026-09-28:
 
 - The complete 106-file default API suite ran in an isolated Linux container with immutable dependencies and current source mounted read-only: 1,122 passed, four skipped (two Windows-only cases and two optional benchmark-fixture checks), and one timestamp fixture failed. That fixture assumed an immediate ctime change within one filesystem clock tick. It now uses a bounded observed-change wait and proves size/mtime are unchanged. All three corrected test files then passed 95 Linux cases; the complete filesystem-tree file passed all 49 Windows cases. The timestamp regression also passed twenty independent Linux process runs. This is a full-suite run plus targeted post-fix evidence, not a claimed all-green single full-suite rerun.

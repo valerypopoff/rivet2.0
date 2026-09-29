@@ -308,8 +308,9 @@ export function LocalStorageUpgradeSettingsTab() {
       {status?.available && status.copyConfigurationReady === false && (
         <p role="alert" className="app-settings-field-help app-settings-inline-note">
           Copying is blocked: configure RIVET_LOCAL_METADATA_ENCRYPTION_KEY with at least 32 securely generated
-          characters, recreate the backend and back up the key separately. Restarting the same container does not load
-          changed environment values. Recovery and legacy controls remain available.
+          characters, recreate the backend and back up the key separately. If this upgrade already has a candidate,
+          restore its original key; do not generate a replacement. Restarting the same container does not load changed
+          environment values. Recovery and legacy controls remain available.
         </p>
       )}
       {!status?.available && !statusError && !error && (
@@ -590,22 +591,26 @@ export function LocalStorageUpgradeSettingsTab() {
       </section>
       <section className="app-settings-section" aria-label="Recovery and verification report">
         <h4 className="app-settings-section-title">Recovery and report</h4>
-        <UpgradeActionButton
-          action="return-to-legacy"
-          loading={activeAction === 'return-to-legacy'}
-          disabled={disabled || !transition?.canReturnToLegacy || !quiet}
-          onClick={() => void action('return-to-legacy')}
-        >
-          Return to legacy while paused
-        </UpgradeActionButton>
-        <UpgradeActionButton
-          action="cancel"
-          loading={activeAction === 'cancel'}
-          disabled={disabled || !initial || !quiet || restartRequired}
-          onClick={() => void action('cancel')}
-        >
-          Resume unchanged legacy
-        </UpgradeActionButton>
+        {transition?.phase !== 'sqlite-live' && (
+          <>
+            <UpgradeActionButton
+              action="return-to-legacy"
+              loading={activeAction === 'return-to-legacy'}
+              disabled={disabled || !transition?.canReturnToLegacy || !quiet}
+              onClick={() => void action('return-to-legacy')}
+            >
+              Return to legacy while paused
+            </UpgradeActionButton>
+            <UpgradeActionButton
+              action="cancel"
+              loading={activeAction === 'cancel'}
+              disabled={disabled || !initial || !quiet || restartRequired}
+              onClick={() => void action('cancel')}
+            >
+              Resume unchanged legacy
+            </UpgradeActionButton>
+          </>
+        )}
         <UpgradeActionButton
           action="report"
           loading={activeAction === 'report'}

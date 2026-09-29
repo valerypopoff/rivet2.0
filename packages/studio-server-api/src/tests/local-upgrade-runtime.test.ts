@@ -142,6 +142,12 @@ test('operator copy, restart, validation, resume and ordinary serving select SQL
   });
 });
 
+test('operator setup status is available before opt-in without exposing configuration to unsigned sessions', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('setup-status');
+  });
+});
+
 test('operator inspection refuses oversized sources before parsing project or publication content', async () => {
   await fixture(async (source, _control, command) => {
     // Deliberately invalid project bytes: entering the inventory parser would

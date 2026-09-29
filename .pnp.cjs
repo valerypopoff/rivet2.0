@@ -16569,6 +16569,7 @@ const RAW_RUNTIME_STATE =
           ["@valerypopoff/rivet2-node", "workspace:packages/node"],\
           ["cors", "npm:2.8.5"],\
           ["dotenv", "npm:16.6.1"],\
+          ["esbuild", "npm:0.25.12"],\
           ["express", "npm:4.22.2"],\
           ["ipaddr.js", "npm:2.5.0"],\
           ["json-stream-es", "npm:1.2.1"],\

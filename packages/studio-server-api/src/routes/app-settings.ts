@@ -1,7 +1,12 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { requireVmMigrationOperatorAuth, requireLocalUpgradeOperatorAuth } from '../middleware/auth.js';
+import {
+  requireVmMigrationOperatorAuth,
+  requireLocalUpgradeOperatorAuth,
+  requireLocalUpgradeSetupOperatorAuth,
+} from '../middleware/auth.js';
 import {
   getLocalUpgradeStatus,
+  getLocalUpgradeSetupStatus,
   getLocalUpgradeReport,
   inspectLocalUpgradeSource,
   localUpgradeBackupFingerprint,
@@ -129,6 +134,13 @@ const migrationDeploymentReviewSchema = z
   .strict();
 
 appSettingsRouter.use('/vm-migration', requireVmMigrationOperatorAuth);
+appSettingsRouter.get(
+  '/local-upgrade/setup',
+  requireLocalUpgradeSetupOperatorAuth,
+  asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(getLocalUpgradeSetupStatus());
+  }),
+);
 appSettingsRouter.use('/local-upgrade', requireLocalUpgradeOperatorAuth);
 appSettingsRouter.get(
   '/local-upgrade',
