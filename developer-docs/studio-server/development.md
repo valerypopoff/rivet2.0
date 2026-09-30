@@ -107,8 +107,10 @@ tree, including Studio Server's container bootstrap and the documentation
 toolchain. Keep newly reported high-severity findings blocking unless a
 documented exception is deliberately reviewed. The root Yarn resolutions pin
 Joi 17.13.8 for Docusaurus and Undici 6.28.1 for its 6.x consumers; the
-bootstrap package also requires the patched Undici range. When changing these
-pins, regenerate `yarn.lock` and the committed PnP cache, then rerun the audit
+bootstrap package also requires the patched Undici range. Axios is kept at
+1.20.0 or later in its 1.x line for Gentrace consumers, covering the September
+2026 URL, redirect, proxy, HTTP/2, and option-handling advisories. When changing
+these pins, regenerate `yarn.lock` and the committed PnP cache, then rerun the audit
 and the bootstrap build. The three `brace-expansion` resolutions follow its
 separate 1.x, 2.x, and 5.x compatibility lines for the respective `minimatch`
 consumers; do not replace them with one cross-major override.
