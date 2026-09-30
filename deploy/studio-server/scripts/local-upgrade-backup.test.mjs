@@ -149,7 +149,11 @@ test('interruptions abort foreground launches but still stop owned clones and re
             cleaned.push(args);
             return {
               stdout: JSON.stringify([
-                { Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: true } },
+                {
+                  Id: 'a'.repeat(64),
+                  Config: { Labels: { 'rivet.local-upgrade.restored': owner } },
+                  State: { Running: true },
+                },
               ]),
             };
           },
@@ -164,7 +168,7 @@ test('interruptions abort foreground launches but still stop owned clones and re
     );
     assert.deepEqual(cleaned, [
       ['inspect', owner],
-      ['stop', '--time', '150', owner],
+      ['stop', '--time', '150', 'a'.repeat(64)],
     ]);
     assert.equal(events.listenerCount('SIGINT'), 0);
     assert.equal(events.listenerCount('SIGTERM'), 0);
@@ -200,7 +204,7 @@ test(
           });
         },owner,async args=>{
           console.log(JSON.stringify(args));
-          return {stdout:JSON.stringify([{Config:{Labels:{'rivet.local-upgrade.restored':owner}},State:{Running:true}}])};
+          return {stdout:JSON.stringify([{Id:'a'.repeat(64),Config:{Labels:{'rivet.local-upgrade.restored':owner}},State:{Running:true}}])};
         });
         try {await tracker.start(['generated-image']);}
         finally {console.log(JSON.stringify(await tracker.cleanup(false)));}
@@ -239,7 +243,7 @@ test(
         }
         assert.deepEqual(ended, { code: 1, signal: null });
         assert.ok(output.includes('["inspect","generated-signal-fixture"]'));
-        assert.ok(output.includes('["stop","--time","150","generated-signal-fixture"]'));
+        assert.ok(output.includes(`["stop","--time","150","${'a'.repeat(64)}"]`));
         assert.ok(output.includes('{"failed":false,"retained":["generated-signal-fixture"]}'));
         assert.ok(!output.includes('["rm"'));
       } finally {
@@ -687,10 +691,21 @@ test('failed Docker launches are still cleaned up by verified ownership, includi
   const tracker = createRestoredContainerTracker(async (args) => {
     calls.push(args);
     if (args[0] === 'run') throw Error('CLI failed after container creation');
+    if (args[0] === 'ps')
+      return {
+        stdout: calls
+          .filter((call) => call[0] === 'run')
+          .map((call) => call[call.indexOf('--name') + 1])
+          .join('\n'),
+      };
     if (args[0] === 'inspect')
       return {
         stdout: JSON.stringify([
-          { Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: true } },
+          {
+            Id: 'a'.repeat(64),
+            Config: { Labels: { 'rivet.local-upgrade.restored': owner } },
+            State: { Running: true },
+          },
         ]),
       };
     return { stdout: '' };
@@ -702,8 +717,40 @@ test('failed Docker launches are still cleaned up by verified ownership, includi
   assert.equal(result.failed, false);
   assert.equal(result.retained.length, 2);
   assert.equal(calls.filter((args) => args[0] === 'stop').length, 2);
+  assert.ok(calls.filter((args) => args[0] === 'stop').every((args) => args.at(-1) === 'a'.repeat(64)));
   assert.equal(calls.filter((args) => args[0] === 'rm').length, 0);
   assert.ok(result.retained.some((name) => name.startsWith(owner + '-tool-')));
+});
+test('cleanup accepts a verified auto-removed failed helper but never assumes the backend disappeared safely', async () => {
+  const owner = 'rivet-restored-rehearsal-test';
+  const tracker = createRestoredContainerTracker(async (args) => {
+    if (args[0] === 'run') throw Error('CLI failed');
+    if (args[0] === 'inspect') throw Error('No such container');
+    if (args[0] === 'ps') return { stdout: '' };
+    throw Error('Unexpected Docker operation');
+  }, owner);
+  await assert.rejects(tracker.runTool(['image']), /CLI failed/);
+  assert.deepEqual(await tracker.cleanup(false), { failed: false, retained: [] });
+  await assert.rejects(tracker.start(['image']), /CLI failed/);
+  assert.deepEqual(await tracker.cleanup(false), { failed: true, retained: [owner] });
+});
+test('owned backend cleanup removes the inspected container ID instead of its reusable name', async () => {
+  const owner = 'rivet-restored-rehearsal-test';
+  const id = 'a'.repeat(64);
+  const calls = [];
+  const tracker = createRestoredContainerTracker(async (args) => {
+    calls.push(args);
+    if (args[0] === 'inspect')
+      return {
+        stdout: JSON.stringify([
+          { Id: id, Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: false } },
+        ]),
+      };
+    return { stdout: '' };
+  }, owner);
+  await tracker.start(['image']);
+  assert.deepEqual(await tracker.cleanup(true), { failed: false, retained: [] });
+  assert.deepEqual(calls.find((args) => args[0] === 'rm'), ['rm', id]);
 });
 test('legacy rehearsal resumption is refenced before restart and cannot accept a new source fingerprint', async () => {
   const events = [];
@@ -738,6 +785,7 @@ test('rehearsal cleanup never stops a mismatched container and reports inability
         return {
           stdout: JSON.stringify([
             {
+              Id: 'a'.repeat(64),
               Config: { Labels: { 'rivet.local-upgrade.restored': mismatched ? 'another-owner' : owner } },
               State: { Running: true },
             },

@@ -143,11 +143,11 @@ export async function resumeRestoredLegacyFenced({ action, request, restart }) {
 /** Track ownership before launching: a failed Docker CLI call may still have
  * created a live container. Transient offline tools need the same cleanup. */
 export function createRestoredContainerTracker(runDocker, owner, cleanupDocker = runDocker) {
-  const pending = new Set();
+  const pending = new Map();
   let backendAttempted = false;
   const launch = async (args, transient) => {
     const name = transient ? `${owner}-tool-${randomUUID()}` : owner;
-    pending.add(name);
+    pending.set(name, transient);
     if (!transient) backendAttempted = true;
     const result = await runDocker([
       'run',
@@ -170,13 +170,28 @@ export function createRestoredContainerTracker(runDocker, owner, cleanupDocker =
     async cleanup(remove) {
       let failed = false;
       const retained = [];
-      for (const name of pending) {
+      for (const [name, transient] of pending) {
         try {
-          const inspection = JSON.parse((await cleanupDocker(['inspect', name])).stdout)[0];
+          const stillListed = async () =>
+            (await cleanupDocker(['ps', '-a', '--format', '{{.Names}}'])).stdout.split(/\r?\n/).includes(name);
+          let inspection;
+          try {
+            inspection = JSON.parse((await cleanupDocker(['inspect', name])).stdout)[0];
+          } catch (error) {
+            // Docker --rm can remove a failed one-shot helper before the CLI
+            // reports its nonzero exit. Never apply this exception to the
+            // persistent backend container, or to an unverifiable daemon.
+            if (transient && !(await stillListed())) continue;
+            throw error;
+          }
           assert.equal(inspection.Config.Labels?.['rivet.local-upgrade.restored'], owner);
+          assert.match(inspection.Id, /^[a-f0-9]{64}$/, 'Invalid owned container ID.');
           assert.equal(typeof inspection.State?.Running, 'boolean', 'Invalid owned container state.');
-          if (inspection.State.Running) await cleanupDocker(['stop', '--time', '150', name]);
-          if (remove) await cleanupDocker(['rm', name]);
+          // The inspected ID, unlike a reusable name, still identifies the
+          // same container if Docker auto-removes a helper during cleanup.
+          if (inspection.State.Running) await cleanupDocker(['stop', '--time', '150', inspection.Id]);
+          if (transient && !(await stillListed())) continue;
+          if (remove) await cleanupDocker(['rm', inspection.Id]);
           else retained.push(name);
         } catch {
           failed = true;
@@ -323,6 +338,10 @@ async function main(signal) {
     RIVET_BACKEND_API_PORT: '80',
     RIVET_BACKEND_EXECUTOR_PORT: '21889',
     RIVET_BACKEND_HEALTH_PORT: '21890',
+    // This isolated, write-fenced clone has no active executions to drain.
+    // Keep production's shutdown grace unchanged while allowing the several
+    // required rehearsal restarts to finish within the host gate deadline.
+    RIVET_SHUTDOWN_GRACE_SECONDS: '10',
     RIVET_WORKSPACE_ROOT: '/workspace',
     RIVET_WORKFLOWS_ROOT: mounts.workflows,
     RIVET_WORKFLOW_RECORDINGS_ROOT: mounts.recordings,
