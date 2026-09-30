@@ -83,7 +83,7 @@ jobs:
     name: Classify image release
     runs-on: ubuntu-latest
     outputs:
-      full_kubernetes: ${{ steps.classify.outputs.full_kubernetes }}
+      require_kind: ${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -462,7 +462,7 @@ jobs:
             artifacts/playwright/
           if-no-files-found: ignore
   managed-kubernetes-release-gate:
-    if: needs.changes.outputs.full_kubernetes == 'true'
+    if: needs.changes.outputs.require_kind == 'true'
     needs:
       - changes
       - build-and-push
@@ -927,7 +927,7 @@ jobs:
       - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.require_kind != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json

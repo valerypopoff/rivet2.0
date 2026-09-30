@@ -42,8 +42,12 @@ function findActionStep(job, uses, label) {
 
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
-assertIncludesAll(build.workflow.on.push.branches, ['develop', 'staging', 'main'], 'Build push branches');
-assertIncludesAll(build.workflow.on.pull_request.branches, ['develop', 'staging', 'main'], 'Build PR branches');
+assert.deepEqual(build.workflow.on.push.branches, ['develop', 'main'], 'Build pushes must skip VM-only staging.');
+assert.deepEqual(
+  build.workflow.on.pull_request.branches,
+  ['develop', 'main'],
+  'Staging PRs use Studio Server verification, not the repository-wide Build matrix.',
+);
 assertIncludesAll(
   Object.keys(buildJobs),
   [
@@ -154,7 +158,11 @@ assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must 
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
 
 const studio = parseWorkflow('.github/workflows/studio-server-verify.yml');
-assertIncludesAll(studio.workflow.on.push.branches, ['develop', 'staging'], 'Studio Server push branches');
+assert.deepEqual(
+  studio.workflow.on.push.branches,
+  ['develop'],
+  'Staging pushes use reusable Studio Server verification inside Build Images, not a duplicate standalone run.',
+);
 assertIncludesAll(studio.workflow.on.pull_request.branches, ['develop', 'staging'], 'Studio Server PR branches');
 const studioJobs = studio.workflow.jobs;
 assert.ok(studio.workflow.on.workflow_call, 'Studio Server verification must remain reusable by the image pipeline.');
@@ -343,7 +351,16 @@ assertIncludesAll(
   ],
   'Image jobs',
 );
-assert.match(String(imageJobs['managed-kubernetes-release-gate'].if), /full_kubernetes/);
+assert.equal(
+  imageJobs.changes.outputs.require_kind,
+  "${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}",
+  'Only automatic staging pushes may skip a required Kind gate.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-release-gate'].if,
+  "needs.changes.outputs.require_kind == 'true'",
+  'The Kind job must follow the single release classification decision.',
+);
 const promotionCondition = String(imageJobs['promote-images'].if);
 for (const requiredGate of [
   'verify-repository',
@@ -360,13 +377,13 @@ for (const requiredGate of [
 }
 assert.match(
   promotionCondition,
-  /full_kubernetes == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
-  'A full-Kubernetes release may be promoted only after the Kind gate succeeds.',
+  /require_kind == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
+  'A release requiring Kind may be promoted only after that gate succeeds.',
 );
 assert.match(
   promotionCondition,
-  /full_kubernetes != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
-  'A skipped Kind gate is acceptable only when classification selected the fast path.',
+  /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
+  'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
 assert.deepEqual(
