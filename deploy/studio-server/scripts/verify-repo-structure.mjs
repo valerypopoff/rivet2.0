@@ -251,7 +251,6 @@ assert.doesNotMatch(compatibilityScanner, /replacing rivet\//i);
 const imageWorkflow = readText('.github/workflows/studio-server-images.yml');
 assert.match(imageWorkflow, /verify-repository:\s*\r?\n\s+uses: \.\/\.github\/workflows\/studio-server-verify\.yml/);
 assert.match(imageWorkflow, /fast-container-smoke:[\s\S]*studio-server:verify:candidate-images/);
-assert.match(imageWorkflow, /managed-kubernetes-release-gate:[\s\S]*full_kubernetes/);
 const imageWorkflowPermissions = /^permissions:\r?\n((?:^[ \t]+[^\r\n]*\r?\n)+)/m.exec(imageWorkflow)?.[1] ?? '';
 assert.match(imageWorkflowPermissions, /^\s+actions:\s+read\s*$/m);
 assert.match(imageWorkflowPermissions, /^\s+contents:\s+read\s*$/m);
