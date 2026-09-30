@@ -57,6 +57,12 @@ overlays. `deploy/studio-server/scripts/` owns Studio Server launchers, local
 Kubernetes gates, and deployment verification. Shared monorepo build tooling
 continues to live under the root `scripts/` directory.
 
+`yarn studio-server:verify:repo-structure` checks repository layout and stable
+deployment entrypoints. Branch triggers and release-gate decisions belong to
+`scripts/checks/check-ci-workflows.mjs`, which runs under `yarn test:style`;
+keep their policy assertions there instead of duplicating them in the layout
+guard or the proxy image contract test.
+
 Linux shell scripts are LF-normalized by the root `.gitattributes` file.
 
 ## Documentation Ownership

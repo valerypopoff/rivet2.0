@@ -42,6 +42,12 @@ function findActionStep(job, uses, label) {
 
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
+assert.deepEqual(build.workflow.on.push.branches, ['develop', 'main'], 'Build pushes must skip VM-only staging.');
+assert.deepEqual(
+  build.workflow.on.pull_request.branches,
+  ['develop', 'main'],
+  'Staging PRs use Studio Server verification, not the repository-wide Build matrix.',
+);
 assertIncludesAll(
   Object.keys(buildJobs),
   [
@@ -152,6 +158,12 @@ assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must 
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
 
 const studio = parseWorkflow('.github/workflows/studio-server-verify.yml');
+assert.deepEqual(
+  studio.workflow.on.push.branches,
+  ['develop'],
+  'Staging pushes use reusable Studio Server verification inside Build Images, not a duplicate standalone run.',
+);
+assertIncludesAll(studio.workflow.on.pull_request.branches, ['develop', 'staging'], 'Studio Server PR branches');
 const studioJobs = studio.workflow.jobs;
 assert.ok(studio.workflow.on.workflow_call, 'Studio Server verification must remain reusable by the image pipeline.');
 assert.equal(
@@ -271,6 +283,7 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+assertIncludesAll(images.workflow.on.push.branches, ['staging', 'main'], 'Image push branches');
 const capacityDispatchInput = images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_capacity_gate;
 assert.equal(
   capacityDispatchInput?.type,
@@ -338,7 +351,16 @@ assertIncludesAll(
   ],
   'Image jobs',
 );
-assert.match(String(imageJobs['managed-kubernetes-release-gate'].if), /full_kubernetes/);
+assert.equal(
+  imageJobs.changes.outputs.require_kind,
+  "${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}",
+  'Only automatic staging pushes may skip a required Kind gate.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-release-gate'].if,
+  "needs.changes.outputs.require_kind == 'true'",
+  'The Kind job must follow the single release classification decision.',
+);
 const promotionCondition = String(imageJobs['promote-images'].if);
 for (const requiredGate of [
   'verify-repository',
@@ -355,13 +377,13 @@ for (const requiredGate of [
 }
 assert.match(
   promotionCondition,
-  /full_kubernetes == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
-  'A full-Kubernetes release may be promoted only after the Kind gate succeeds.',
+  /require_kind == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
+  'A release requiring Kind may be promoted only after that gate succeeds.',
 );
 assert.match(
   promotionCondition,
-  /full_kubernetes != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
-  'A skipped Kind gate is acceptable only when classification selected the fast path.',
+  /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
+  'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
 assert.deepEqual(
@@ -383,21 +405,26 @@ assertIncludesAll(
   ],
   'Image promotion dependencies',
 );
-const mainFreshness = findStep(
+const branchFreshness = findStep(
   imageJobs['promote-images'],
-  'Confirm main still points to this release',
+  'Confirm branch still points to this release',
   'Image promotion job',
 );
-assert.equal(mainFreshness.id, 'main_freshness');
+assert.equal(branchFreshness.id, 'branch_freshness');
 assert.match(
-  String(mainFreshness.if),
-  /github\.ref == 'refs\/heads\/main'/,
-  'Image promotion freshness applies to mutable main aliases only.',
+  String(branchFreshness.if),
+  /github\.ref_type == 'branch'/,
+  'Image promotion freshness must protect every mutable branch alias.',
 );
 assert.match(
-  mainFreshness.run,
-  /git ls-remote origin refs\/heads\/main/,
-  'Image promotion must re-read the current main head immediately before alias publication.',
+  branchFreshness.run,
+  /git ls-remote origin "\$GITHUB_REF"/,
+  'Image promotion must re-read the current branch head immediately before alias publication.',
+);
+assert.match(
+  branchFreshness.run,
+  /"\$GITHUB_REF" == 'refs\/heads\/staging'[\s\S]*?exit 1/,
+  'A superseded staging run must fail instead of looking like a successful VM candidate.',
 );
 for (const stepName of [
   'Promote Complete Image Set',
@@ -407,16 +434,35 @@ for (const stepName of [
 ]) {
   assert.match(
     String(findStep(imageJobs['promote-images'], stepName, 'Image promotion job').if),
-    /steps\.main_freshness\.outputs\.current == 'true'/,
-    `${stepName} must not run for a stale main release.`,
+    /steps\.branch_freshness\.outputs\.current == 'true'/,
+    `${stepName} must not run for a stale branch release.`,
   );
 }
+assert.match(
+  String(findStep(imageJobs['promote-images'], 'Advance durable production release pointer', 'Image promotion job').if),
+  /github\.ref == 'refs\/heads\/main'.*steps\.branch_freshness\.outputs\.current == 'true'/,
+  'Staging promotion must never advance the durable production pointer.',
+);
+assert.match(
+  findActionStep(
+    imageJobs['promote-images'],
+    'docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051',
+    'Image promotion job',
+  ).with.tags,
+  /type=raw,value=latest,enable=\$\{\{ github\.ref == 'refs\/heads\/main' \}\}/,
+  'Staging promotion must never retag production latest images.',
+);
 const candidatePredecessor = findStep(
   imageJobs['release-manifest'],
   'Resolve exact production predecessor',
   'Candidate release-manifest job',
 );
 assert.match(candidatePredecessor.run, /release-manifest-oci\.mjs pull/);
+assert.match(
+  candidatePredecessor.run,
+  /"\$GITHUB_REF" == refs\/heads\/\* && "\$GITHUB_REF" != 'refs\/heads\/main'/,
+  'A staging push must not repair or bootstrap the durable production lineage.',
+);
 assert.match(candidatePredecessor.run, /allow_release_lineage_bootstrap/i);
 assert.match(
   findStep(

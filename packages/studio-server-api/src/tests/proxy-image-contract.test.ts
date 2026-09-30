@@ -650,7 +650,6 @@ test('CI and production launchers publish and run the Studio Server image set fr
   const promotionIndex = /\r?\n  promote-images:\r?\n/.exec(imageBuildWorkflow)?.index ?? -1;
 
   assert.ok(promotionIndex > 0, 'expected a final image promotion job');
-  assert.match(imageBuildWorkflow, /branches:\s*\n\s*- main/);
   assert.match(imageBuildWorkflow, /permissions:\s*\n\s+actions: read\s*\n\s+contents: read\s*\n\s+packages: write/);
   assert.doesNotMatch(imageBuildWorkflow, /cloud-hosted-rivet2-wrapper/);
   assert.match(verificationWorkflow, /push:\r?\n\s+branches:\r?\n\s+- develop/);

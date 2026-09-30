@@ -3,6 +3,7 @@ name: Build Images
 on:
   push:
     branches:
+      - staging
       - main
     paths:
       - '.github/actions/setup-yarn/**'
@@ -82,7 +83,7 @@ jobs:
     name: Classify image release
     runs-on: ubuntu-latest
     outputs:
-      full_kubernetes: ${{ steps.classify.outputs.full_kubernetes }}
+      require_kind: ${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -230,6 +231,11 @@ jobs:
           if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
             echo "Candidate will be bound to the durable production release-manifest pointer."
             exit 0
+          fi
+
+          if [[ "$GITHUB_REF" == refs/heads/* && "$GITHUB_REF" != 'refs/heads/main' ]]; then
+            echo "::error::The production release-manifest pointer is missing. A non-main branch may read it but must not repair or bootstrap production lineage. Run the documented recovery from main before rebuilding this candidate."
+            exit 1
           fi
 
           # Manifest CLIs accept evidence only inside the checkout. Keep each
@@ -456,7 +462,7 @@ jobs:
             artifacts/playwright/
           if-no-files-found: ignore
   managed-kubernetes-release-gate:
-    if: needs.changes.outputs.full_kubernetes == 'true'
+    if: needs.changes.outputs.require_kind == 'true'
     needs:
       - changes
       - build-and-push
@@ -921,7 +927,7 @@ jobs:
       - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.full_kubernetes == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.full_kubernetes != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.require_kind != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
@@ -959,15 +965,15 @@ jobs:
             type=ref,event=tag
             type=sha,format=short
 
-      - name: Confirm main still points to this release
-        id: main_freshness
-        if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Confirm branch still points to this release
+        id: branch_freshness
+        if: ${{ github.ref_type == 'branch' }}
         shell: bash
         run: |
           set -euo pipefail
-          current_sha="$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')"
+          current_sha="$(git ls-remote origin "$GITHUB_REF" | awk 'NR == 1 { print $1 }')"
           if [[ ! "$current_sha" =~ ^[a-f0-9]{40}$ ]]; then
-            echo "::error::Could not resolve the current main branch head."
+            echo "::error::Could not resolve the current branch head for $GITHUB_REF."
             exit 1
           fi
           if [[ "$current_sha" == "$GITHUB_SHA" ]]; then
@@ -975,10 +981,14 @@ jobs:
             exit 0
           fi
           echo "current=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::Skipping mutable main image aliases: this run built $GITHUB_SHA, but main now points to $current_sha."
+          if [[ "$GITHUB_REF" == 'refs/heads/staging' ]]; then
+            echo "::error::This staging run built $GITHUB_SHA, but staging now points to $current_sha. The run cannot certify a VM candidate for the current staging head."
+            exit 1
+          fi
+          echo "::warning::Skipping mutable branch image aliases: this run built $GITHUB_SHA, but $GITHUB_REF now points to $current_sha."
 
       - name: Attest promoted release manifest
-        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -999,7 +1009,7 @@ jobs:
             "${current_args[@]}"
 
       - name: Publish immutable release manifest
-        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1011,7 +1021,7 @@ jobs:
           echo "PROMOTED_MANIFEST_REFERENCE=$manifest_reference" >> "$GITHUB_ENV"
 
       - name: Promote Complete Image Set
-        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}
         shell: bash
         env:
           PROXY_RELEASE_TAGS: ${{ steps.release-meta.outputs.tags }}
@@ -1054,14 +1064,14 @@ jobs:
           done
 
       - name: Advance durable production release pointer
-        if: ${{ github.ref == 'refs/heads/main' && steps.main_freshness.outputs.current == 'true' }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.branch_freshness.outputs.current == 'true' }}
         run: |
           node deploy/studio-server/scripts/release-manifest-oci.mjs retag \
             --source "$PROMOTED_MANIFEST_REFERENCE" \
             --destination "${RELEASE_MANIFEST_REPOSITORY}:production"
 
       - name: Upload promoted release manifest
-        if: ${{ github.ref != 'refs/heads/main' || steps.main_freshness.outputs.current == 'true' }}
+        if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: studio-server-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}

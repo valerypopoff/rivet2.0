@@ -837,6 +837,13 @@ async function main() {
     console.log(
       '[local-upgrade-rehearsal] Isolated production images ready; exercising the real browser/API/restart/recovery path.',
     );
+    // The browser fixture imports Core directly. A fresh image-gate checkout
+    // has the packaged containers but no host-side workspace build output.
+    await run(
+      process.execPath,
+      ['.yarn/releases/yarn-4.17.1.cjs', 'workspace', '@valerypopoff/rivet2-core', 'run', 'build'],
+      process.env,
+    );
     await run(
       process.execPath,
       ['.yarn/releases/yarn-4.17.1.cjs', 'studio-server:ui:observe', 'local-storage-upgrade-live.spec.ts'],
