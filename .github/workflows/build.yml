@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - develop
+      - staging
       - main
   pull_request:
     branches:
       - develop
+      - staging
       - main
 
 concurrency:

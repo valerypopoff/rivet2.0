@@ -13,6 +13,7 @@ import {
   renderManagedReleaseGateValues,
 } from './lib/kubernetes-managed-release-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
 import { summarizePodStartupState } from './lib/kubernetes-workload-diagnostics.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -853,11 +854,7 @@ class ManagedReleaseGate {
       { capture: true },
     );
     await this.artifact('installed/helm-manifest.yaml', manifest.stdout);
-    for (const [component, image] of Object.entries(this.config.images)) {
-      if (!manifest.stdout.includes(imageReference(image))) {
-        throw new Error(`[${runnerName}] ${component} manifest did not use the immutable candidate digest`);
-      }
-    }
+    assertCandidateManifestImages(manifest.stdout, this.config.images, runnerName);
   }
 
   async verifyPreviousApiSchemaCompatibility() {

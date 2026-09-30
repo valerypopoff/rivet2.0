@@ -173,6 +173,14 @@ compatibility aliases.
 
 The authorized cleanup can remove stopped containers, unused custom networks, unused images, and unused builder cache for **any** project on the selected host. It does not pass `--volumes`, run `docker volume prune` or `docker system prune`, or invoke Compose teardown. Local Compose volumes that may hold Postgres data, app data, workspace cache, or runtime-library state are preserved; filesystem workflow and recording host paths are also outside Docker's prune surface. The tradeoff is that stopped-container metadata/logs are lost, stopped stacks may need to recreate/pull images, and custom/dev builds may rebuild layers. `yarn studio-server:verify:clean` tests this contract without contacting Docker; a failure during a real prune stops subsequent steps and reports the already-completed, non-reversible cleanup.
 
+## Deploying a verified staging build to a VM
+
+Push Studio Server changes to `develop` for the normal Build and Verify Studio Server checks, then advance `staging`. A relevant `staging` push also runs Build Images: it builds four immutable candidate images, runs repository and image verification, and starts updating the `staging` image aliases only after the required gates pass. It never updates `latest` or the durable production release pointer; those remain `main`-only. Retagging the four images is not atomic, so a failed promotion can leave `staging` aliases at different versions. The alias alone is never proof that the latest push passed or that all four images match.
+
+For a VM rehearsal, wait for the **Build Images** run for the intended `staging` commit to succeed. In the VM `.env`, set exactly one `RIVET_IMAGE_TAG=candidate-<commit SHA>-<run ID>-<run attempt>` using that successful run's candidate tag, then run `yarn studio-server:prod`. Pinning this immutable tag prevents a later staging push from silently changing the image set selected on the VM. Verify the checkout and image run refer to the same commit before starting. Do not use the default `latest` tag to test staging; it is the main-branch production alias.
+
+Running staging images against the production VM's existing data is still a live deployment, not an isolated rehearsal. Back up and test restore of the persistent roots and encryption key first; after new writes or a storage/schema upgrade, changing the image tag back may not restore the old data contract. Promote to `main` only after the staging run and VM checks are satisfactory; the `main` run must pass its own gates before it advances `latest` and the production release pointer.
+
 ## Proxy DNS recovery and health
 
 Proxy service destinations use runtime DNS resolution consistently across the

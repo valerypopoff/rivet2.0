@@ -25,7 +25,16 @@ test('production images support real UI conversion, online/offline rollback and 
   const open = async () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const prompt = page.getByTestId('local-storage-upgrade-prompt');
+    const setupResponse = await page.request.get('/api/app-settings/local-upgrade/setup');
+    expect(setupResponse.ok()).toBe(true);
+    const setup = (await setupResponse.json()) as { eligible: boolean; liveSqlite: boolean };
+    if (setup.eligible && !setup.liveSqlite) await expect(prompt).toBeVisible();
+    if (await prompt.isVisible()) {
+      await prompt.getByRole('button', { name: /Review upgrade steps|Continue upgrade or recovery/u }).click();
+    } else {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    }
     await page
       .getByTestId('app-settings-modal')
       .getByRole('tab', { name: 'Local storage upgrade', exact: true })
@@ -91,7 +100,7 @@ test('production images support real UI conversion, online/offline rollback and 
   await resume();
   panel = await open();
   await expect(panel.getByText('Running backend: sqlite.', { exact: false })).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
   await evidence('conversion');
   // Exercise the actual embedded-editor save bridge before using its API to
   // make deterministic content changes. No mock or direct catalog write.
