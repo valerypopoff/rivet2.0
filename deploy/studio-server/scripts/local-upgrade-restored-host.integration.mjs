@@ -76,7 +76,7 @@ async function main() {
       await fs.mkdir(roots.workflows+'/empty');
       await fs.writeFile(roots.workflows+'/fixture.rivet-project',createBlankProjectFile('Host rehearsal'));
       await fs.mkdir(roots.appData+'/settings');
-      await fs.writeFile(roots.appData+'/settings/environment-variables.json',JSON.stringify({version:1,variables:[{id:'fixture',name:'FIXTURE_VALUE',value:'synthetic',browserAccess:false}]}));
+      await fs.writeFile(roots.appData+'/settings/environment-variables.json',JSON.stringify({version:1,variables:[{id:'fixture-env',name:'FIXTURE_VALUE',value:'synthetic',browserAccess:false}]}));
       const {FilesystemRivetEvaluationStore}=await import(base+'evaluation-runs/filesystem-store.js');
       const {FilesystemRivetLLMProfileHealthStore}=await import(base+'llm-profile-health/filesystem-store.js');
       const evaluations=new FilesystemRivetEvaluationStore(roots.appData+'/evaluation-runs.sqlite');
