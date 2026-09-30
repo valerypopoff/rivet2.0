@@ -5,7 +5,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createRestoredContainerTracker, assertRestoredRehearsalResult } from './local-upgrade-restored-rehearsal.mjs';
+import {
+  createRestoredContainerTracker,
+  assertRestoredRehearsalResult,
+  redactedRestoredFailureStep,
+} from './local-upgrade-restored-rehearsal.mjs';
 import { restoreLocalUpgradeBackup, assertBackupDirectory } from './local-upgrade-backup.mjs';
 
 // Runs directly on a Linux Docker host. No Docker socket is ever mounted into
@@ -43,6 +47,7 @@ async function main() {
   let volumeCreated = false;
   let phase = 'fixture-generation';
   let result;
+  let receipt;
   try {
     const existing = await docker(['volume', 'ls', '--filter', `name=^${volume}$`, '--format', '{{.Name}}']);
     assert.equal(existing.stdout.trim(), '');
@@ -74,6 +79,12 @@ async function main() {
       const roots=Object.fromEntries(['workflows','recordings','appData','runtimeLibraries'].map(domain=>[domain,'/fixture/source/'+domain]));
       for(const directory of Object.values(roots))await fs.mkdir(directory,{recursive:true,mode:0o700});
       await fs.mkdir(roots.workflows+'/empty');
+      // Model an already-running legacy server: its normal startup creates
+      // these empty roots. If omitted, first clone boot changes the frozen
+      // source fingerprint even though no user data was written.
+      for(const directory of ['.published','.rivet-move-transactions','.rivet-publication-transactions'])
+        await fs.mkdir(roots.workflows+'/'+directory);
+      await fs.mkdir(roots.runtimeLibraries+'/staging');
       await fs.writeFile(roots.workflows+'/fixture.rivet-project',createBlankProjectFile('Host rehearsal'));
       await fs.mkdir(roots.appData+'/settings');
       await fs.writeFile(roots.appData+'/settings/environment-variables.json',JSON.stringify({version:1,variables:[{id:'fixture-env',name:'FIXTURE_VALUE',value:'synthetic',browserAccess:false}]}));
@@ -93,7 +104,7 @@ async function main() {
     ]);
     assert.equal((await docker(['wait', owner])).stdout.trim(), '0', 'Fixture generation failed.');
     const logs = (await docker(['logs', owner])).stdout;
-    const receipt = JSON.parse(
+    receipt = JSON.parse(
       logs
         .trim()
         .split('\n')
@@ -134,9 +145,17 @@ async function main() {
       cpus: 1,
     });
   } catch {
+    let rehearsalStep = null;
+    try {
+      const privateResult = JSON.parse(await fs.readFile(path.join(output, 'run/result.json'), 'utf8'));
+      rehearsalStep = redactedRestoredFailureStep(privateResult, { imageId: image.Id, backupReceipt: receipt });
+    } catch {
+      // A preflight or interrupted run may have no private result yet.
+    }
     await writeSummary('failure.json', {
       passed: false,
       phase,
+      ...(rehearsalStep ? { rehearsalStep } : {}),
       imageId: image.Id,
       checkedAt: new Date().toISOString(),
     });

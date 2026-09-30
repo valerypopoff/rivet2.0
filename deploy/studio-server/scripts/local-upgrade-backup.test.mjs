@@ -19,7 +19,9 @@ import {
   assertRestoredSourceFingerprint,
   resumeRestoredLegacyFenced,
   RESTORED_REHEARSAL_PHASES,
+  RESTORED_REHEARSAL_STEPS,
   assertRestoredRehearsalResult,
+  redactedRestoredFailureStep,
   withRestoredRehearsalInterruptions,
   restoredReadinessProbeScript,
 } from './local-upgrade-restored-rehearsal.mjs';
@@ -111,6 +113,20 @@ test('restored gate refuses malformed or credential-bearing phase entries before
   }
   for (const change of [{ imageId: 'api:latest' }, { backupReceipt: 'edited' }])
     assert.throws(() => assertRestoredRehearsalResult(result, { ...expected, ...change }));
+});
+
+test('failed restored gate reports only a receipt-bound fixed operation name', () => {
+  const { result, expected } = restoredReceipt();
+  const failed = { ...result, passed: false, failureStep: 'initial-restart', rawError: 'secret value' };
+  assert.equal(redactedRestoredFailureStep(failed, expected), 'initial-restart');
+  for (const change of [
+    { passed: true },
+    { imageId: 'sha256:' + 'd'.repeat(64) },
+    { backupReceipt: 'e'.repeat(64) },
+    { failureStep: 'secret value' },
+  ])
+    assert.equal(redactedRestoredFailureStep({ ...failed, ...change }, expected), null);
+  assert.ok(RESTORED_REHEARSAL_STEPS.includes(failed.failureStep));
 });
 
 test('interruptions abort foreground launches but still stop owned clones and remove signal handlers', async () => {
