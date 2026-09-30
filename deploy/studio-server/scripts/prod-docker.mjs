@@ -9,9 +9,17 @@ import {
   printFailureDiagnostics,
   readDockerWaitTimeoutSeconds,
   run,
+  runArgsCapture,
   runCapture,
 } from './lib/docker-launcher.mjs';
 import { assertNoRetiredEnv, dropAmbientNodeOptionsForDocker } from './lib/docker-launcher-env.mjs';
+import {
+  assertPinnedComposeImages,
+  assertStagingDataMounts,
+  assertStagingCheckout,
+  pinStagingImages,
+  singleContainerId,
+} from './lib/staging-docker.mjs';
 const rootDir = process.cwd();
 // Older standalone deployments used either Compose project name below, depending
 // on the Docker Compose version that first created their named volumes. Detect a
@@ -108,6 +116,43 @@ async function dockerVolumeExists(volumeName, environment) {
   return result.exitCode === 0;
 }
 
+async function prepareStagingDeployment({ composeBase, environment }) {
+  const git = (args) => runArgsCapture('git', args, environment, { cwd: rootDir });
+  const [branch, revision, status] = await Promise.all([
+    git(['branch', '--show-current']),
+    git(['rev-parse', '--verify', 'HEAD']),
+    git(['status', '--porcelain', '--untracked-files=no']),
+  ]);
+  const expectedRevision = assertStagingCheckout({
+    branch: branch.stdout,
+    revision: revision.stdout,
+    status: status.stdout,
+  });
+
+  const config = JSON.parse(
+    (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
+  );
+  const existingId = singleContainerId(
+    (await runCapture(`${composeBase} ps -a -q api`, environment, { cwd: rootDir })).stdout,
+  );
+  const docker = (args) => runArgsCapture('docker', args, environment, { cwd: rootDir });
+  if (!existingId) throw new Error('Staging requires an existing API container to verify data continuity.');
+  const existing = JSON.parse((await docker(['inspect', existingId])).stdout)[0];
+  if (!existing) throw new Error('Could not inspect the existing API container.');
+  assertStagingDataMounts(config, environment, existing);
+
+  const pinned = await pinStagingImages(docker, expectedRevision);
+  Object.assign(environment, pinned);
+  const pinnedConfig = JSON.parse(
+    (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
+  );
+  assertPinnedComposeImages(pinnedConfig, pinned);
+  assertStagingDataMounts(pinnedConfig, environment, existing);
+  console.log(
+    `[prod-docker] Staging images match ${expectedRevision}; using immutable digests and unchanged artifact mounts.`,
+  );
+}
+
 function composeCommand(project, suffix) {
   return `docker compose -p ${project} ${suffix}`;
 }
@@ -157,6 +202,10 @@ async function main() {
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'prod-docker', envFileLabel });
 
+  if (action === 'staging') {
+    await prepareStagingDeployment({ composeBase, environment: mergedEnv });
+  }
+
   if (action === 'custom') {
     if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
       mergedEnv.COMPOSE_PARALLEL_LIMIT = '1';
@@ -172,16 +221,13 @@ async function main() {
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
   const httpsPort = vmTls.enabled ? assertValidPort(mergedEnv.RIVET_HTTPS_PORT, 443) : undefined;
   if (httpsPort === proxyPort) throw new Error('VM HTTP and HTTPS host ports must differ.');
+  const recreate = `${composeBase} up -d --no-build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`;
   const commandsByAction = {
     config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
     services: [`${composeBase} config --services`],
-    prebuilt: [
-      `${composeBase} pull proxy web api`,
-      `${composeBase} up -d --no-build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-    ],
-    restart: [
-      `${composeBase} up -d --no-build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-    ],
+    prebuilt: [`${composeBase} pull proxy web api`, recreate],
+    staging: [recreate],
+    restart: [recreate],
     custom: [
       `${composeBase} up -d --build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
     ],
@@ -191,7 +237,7 @@ async function main() {
 
   if (!commands) {
     console.error(`Unknown action: ${action}`);
-    console.error('Usage: yarn studio-server:prod[:config|:services|:restart|:custom]');
+    console.error('Usage: yarn studio-server:prod[:config|:services|:restart|:custom] or yarn studio-server:staging');
     process.exit(1);
   }
 

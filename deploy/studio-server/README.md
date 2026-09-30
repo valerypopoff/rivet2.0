@@ -175,6 +175,7 @@ Useful variants:
 | Command                           | Behavior                                                                                                           |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `yarn studio-server:prod`         | Pull and run the published images                                                                                  |
+| `yarn studio-server:staging`      | On a clean staging checkout with an existing API container, verify matching staging images and all existing data mounts, then run digest-pinned images in the same VM stack |
 | `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                     |
 | `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                              |
 | `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources |
@@ -202,6 +203,13 @@ credentials with `docker logout ghcr.io` and retry. Pin a release with
 `RIVET_WEB_IMAGE`, or `RIVET_API_IMAGE`. Production runs the API and executor
 processes inside the API image; the standalone executor image is retained for
 predecessor rollback and explicit standalone use, not pulled by the production launcher.
+
+For a staging VM trial, first confirm that the staging commit's **Build Images**
+workflow succeeded, then use `yarn studio-server:staging` from that clean branch.
+It resolves all staging aliases to matching commit-labelled immutable digests
+and checks the rendered artifact bind mounts and named data volumes against the existing API container
+before recreating anything. It uses the same data volumes and does not migrate
+storage or change `.env`. See the [staging VM procedure](../../developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
 
 ## Development
 

@@ -208,6 +208,7 @@ for (const scriptName of [
   'studio-server:clean',
   'studio-server:prod',
   'studio-server:prod:prebuilt',
+  'studio-server:staging',
   'studio-server:verify:clean',
   'studio-server:verify:dev-watcher',
   'studio-server:verify:host-compatibility',

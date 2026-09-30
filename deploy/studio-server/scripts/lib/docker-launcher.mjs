@@ -55,13 +55,35 @@ export function runCapture(command, env, options = {}) {
     });
 
     child.on('error', reject);
-    child.on('exit', (code) => {
+    child.on('close', (code) => {
       const exitCode = code == null ? 1 : code;
       if (exitCode === 0 || allowFailure) {
         resolve({ exitCode, stdout, stderr });
       } else {
         reject(new Error(`Command failed with exit code ${exitCode}: ${command}\n${stderr}`.trim()));
       }
+    });
+  });
+}
+
+/** Run fixed argument vectors without shell interpolation (for image refs and Git). */
+export function runArgsCapture(file, args, env, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else
+        reject(new Error(`${file} ${args.slice(0, 2).join(' ')} failed (exit ${code ?? 'unknown'}). ${stderr.trim()}`));
     });
   });
 }
@@ -77,13 +99,35 @@ export function assertValidPort(value, fallback) {
 
 export function ensurePortAvailable(port, options) {
   const { envFileLabel, label } = options;
+  const busyError = () =>
+    new Error(
+      `[${label}] Host port ${port} is already in use. Set RIVET_PORT in ${envFileLabel} to a free port, or stop the process currently listening on ${port}.`,
+    );
+  const probePrivilegedPort =
+    options.probePrivilegedPort ??
+    (async () => {
+      const result = await runCapture(`ss -H -ltn '( sport = :${port} )'`, options.env ?? process.env, {
+        allowFailure: true,
+      });
+      if (result.exitCode !== 0) throw new Error(`Cannot verify whether host port ${port} is free.`);
+      return result.stdout.trim().length > 0;
+    });
 
   return new Promise((resolve, reject) => {
-    const server = net.createServer();
+    const server = (options.createServer ?? net.createServer)();
 
     server.once('error', (error) => {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE') {
-        reject(new Error(`[${label}] Host port ${port} is already in use. Set RIVET_PORT in ${envFileLabel} to a free port, or stop the process currently listening on ${port}.`));
+        reject(busyError());
+        return;
+      }
+      // Linux reserves low ports for privileged binders. A non-root launcher
+      // cannot bind-test them even though Docker's daemon can publish them.
+      // Check the host listener table instead; if unavailable, fail closed.
+      if (error?.code === 'EACCES' && (options.platform ?? process.platform) === 'linux' && port < 1024) {
+        Promise.resolve()
+          .then(probePrivilegedPort)
+          .then((inUse) => (inUse ? reject(busyError()) : resolve()), reject);
         return;
       }
 
