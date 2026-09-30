@@ -7,6 +7,14 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
+# Preserve the browser authority, including a non-default port, so operator
+# same-origin checks see the same Host as the request's Origin. HTTP/1.0
+# requests without Host retain nginx's normal host fallback.
+map $http_host $rivet_request_host {
+    default $http_host;
+    '' $host;
+}
+
 map "${RIVET_TRUST_INCOMING_FORWARDED_HEADERS}:$http_x_forwarded_host" $rivet_forwarded_host {
     default $http_host;
     ~^1:(.+)$ $1;
@@ -62,7 +70,7 @@ server {
         auth_request /__rivet_ui_auth_check;
 
         proxy_pass $web_upstream;
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -75,7 +83,7 @@ server {
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
         proxy_set_header X-Rivet-Ui-Return-To $request_uri;
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -92,7 +100,7 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -105,7 +113,7 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -120,7 +128,7 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -138,7 +146,7 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -156,7 +164,7 @@ server {
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header X-Rivet-Token-Free-Host "";
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
@@ -174,7 +182,7 @@ server {
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;
@@ -190,7 +198,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;
@@ -206,7 +214,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
+        proxy_set_header Host $rivet_request_host;
         proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
         proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
         proxy_read_timeout 86400s;

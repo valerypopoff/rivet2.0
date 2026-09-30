@@ -1,5 +1,6 @@
-import { lazy, Suspense, type Dispatch, type FC, type SetStateAction } from 'react';
+import { lazy, Suspense, useState, type Dispatch, type FC, type SetStateAction } from 'react';
 import { AppSettingsModal } from './AppSettingsModal';
+import { LocalStorageUpgradePrompt } from './LocalStorageUpgradePrompt';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { PublishedItemsModal } from './PublishedItemsModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
@@ -32,6 +33,7 @@ export const WorkflowLibraryModals: FC<{
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
 }> = ({ controller, routeConfig, onRouteConfigChange }) => {
+  const [upgradeTabRequested, setUpgradeTabRequested] = useState(false);
   const {
     settingsModalOpen,
     settingsModalProject,
@@ -67,6 +69,21 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      <LocalStorageUpgradePrompt
+        suppressed={
+          appSettingsOpen ||
+          settingsModalOpen ||
+          runRecordingsOpen ||
+          runStatisticsOpen ||
+          publishedItemsOpen ||
+          publishedHistoryProject != null ||
+          projectModalProject != null
+        }
+        onStart={() => {
+          setUpgradeTabRequested(true);
+          setAppSettingsOpen(true);
+        }}
+      />
       {settingsModalOpen && settingsModalProject ? (
         <ProjectSettingsModal
           key={settingsModalProject.id}
@@ -110,7 +127,11 @@ export const WorkflowLibraryModals: FC<{
       />
       <AppSettingsModal
         isOpen={appSettingsOpen}
-        onClose={() => setAppSettingsOpen(false)}
+        initialTab={upgradeTabRequested ? 'local-upgrade' : 'general'}
+        onClose={() => {
+          setAppSettingsOpen(false);
+          setUpgradeTabRequested(false);
+        }}
         routeConfig={routeConfig}
         onRouteConfigChange={onRouteConfigChange}
       />

@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { isTrustedProxyRequest } from './auth.js';
 import { isServerUiAuthRequestAllowed } from './server-ui-auth.js';
 import { watchAuthorization } from './watch-authorization.js';
+import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 
 export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 
@@ -53,6 +54,11 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
         return;
       }
 
+      if (isVmMigrationMaintenanceActive()) {
+        rejectWebSocketUpgrade(socket, 503, 'Service Unavailable');
+        return;
+      }
+
       let authorized: boolean;
       try {
         authorized = isTrustedProxyRequest(request) && isServerUiAuthRequestAllowed(request);
@@ -72,7 +78,10 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
       }
 
       const handleUpgradeComplete = (webSocket: import('ws').WebSocket) => {
-        const stop = watchAuthorization(() => isServerUiAuthRequestAllowed(request), () => webSocket.terminate());
+        const stop = watchAuthorization(
+          () => isServerUiAuthRequestAllowed(request),
+          () => webSocket.terminate(),
+        );
         webSocket.once('close', stop);
         if (webSocket.readyState !== 1) return;
         webSocketServer.emit('connection', webSocket, request);

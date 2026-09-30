@@ -20,6 +20,8 @@ export type AppSettingsTab =
   | 'general'
   | 'shell-execution'
   | 'storage'
+  | 'vm-migration'
+  | 'local-upgrade'
   | 'deployment-status'
   | 'node-executor-proxy'
   | 'environment-variables'
@@ -58,7 +60,10 @@ export type TrustedClientSettingsForm = {
 };
 
 export type WorkflowEndpointAuthSettingsForm = Pick<WorkflowEndpointAuthSettings, 'requireBearerAuth'>;
-export type ExecutorUrlOverrideSettingsForm = Pick<ExecutorUrlOverrideSettings, 'executorWsUrl' | 'remoteDebuggerDefaultWs'>;
+export type ExecutorUrlOverrideSettingsForm = Pick<
+  ExecutorUrlOverrideSettings,
+  'executorWsUrl' | 'remoteDebuggerDefaultWs'
+>;
 
 export type WebAppAuthSettingsForm = {
   mode: WebAppAuthMode;
@@ -187,9 +192,7 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
   };
 }
 
-export function createEnvironmentVariableForm(
-  settings: EnvironmentVariableSettings,
-): EnvironmentVariableSettingsForm {
+export function createEnvironmentVariableForm(settings: EnvironmentVariableSettings): EnvironmentVariableSettingsForm {
   return {
     variables: settings.variables.map((entry) => ({
       clientId: entry.id,
@@ -236,15 +239,27 @@ export function createRuntimeLimitForm(settings: RuntimeLimitSettings): RuntimeL
 }
 
 export function parseDelimitedListText(value: string): string[] {
-  return value.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(/[\s,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-export function createTrustedClientForm(settings: Pick<TrustedClientSettings, 'trustedClients' | 'legacyTrustedHosts' | 'policyError'>): TrustedClientSettingsForm {
-  return { trustedClientsText: settings.trustedClients.join('\n'), legacyTrustedHosts: settings.legacyTrustedHosts ?? [], policyError: settings.policyError };
+export function createTrustedClientForm(
+  settings: Pick<TrustedClientSettings, 'trustedClients' | 'legacyTrustedHosts' | 'policyError'>,
+): TrustedClientSettingsForm {
+  return {
+    trustedClientsText: settings.trustedClients.join('\n'),
+    legacyTrustedHosts: settings.legacyTrustedHosts ?? [],
+    policyError: settings.policyError,
+  };
 }
 
 export function publicRouteSettingsMatchConfig(
-  settings: Pick<PublicRouteSettings, 'publishedWorkflowsBasePath' | 'latestWorkflowsBasePath' | 'publishedAppsBasePath' | 'latestAppsBasePath'>,
+  settings: Pick<
+    PublicRouteSettings,
+    'publishedWorkflowsBasePath' | 'latestWorkflowsBasePath' | 'publishedAppsBasePath' | 'latestAppsBasePath'
+  >,
   config: Partial<HostedRouteConfig>,
 ): boolean {
   return (

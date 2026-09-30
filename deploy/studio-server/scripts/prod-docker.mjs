@@ -19,7 +19,7 @@ const rootDir = process.cwd();
 export const DEFAULT_PRODUCTION_COMPOSE_PROJECT = 'compose';
 export const LEGACY_PRODUCTION_COMPOSE_PROJECTS = ['ops', DEFAULT_PRODUCTION_COMPOSE_PROJECT];
 const composeProjectNamePattern = /^[a-z0-9][a-z0-9_-]*$/;
-const diagnosticServices = 'api web executor proxy';
+const diagnosticServices = 'api web proxy';
 const dnsLabelPattern = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function resolveVmTlsConfiguration(environment) {
@@ -176,7 +176,7 @@ async function main() {
     config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
     services: [`${composeBase} config --services`],
     prebuilt: [
-      `${composeBase} pull proxy web api executor`,
+      `${composeBase} pull proxy web api`,
       `${composeBase} up -d --no-build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
     ],
     restart: [

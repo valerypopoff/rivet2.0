@@ -1,9 +1,9 @@
 import { fsync as fsyncCallback } from 'node:fs';
 import fs from 'node:fs/promises';
 
-function syncFileDescriptor(descriptor: number): Promise<void> {
+export function syncFileDescriptor(descriptor: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    fsyncCallback(descriptor, (error) => error ? reject(error) : resolve());
+    fsyncCallback(descriptor, (error) => (error ? reject(error) : resolve()));
   });
 }
 
@@ -14,7 +14,10 @@ export async function syncDirectory(directory: string): Promise<void> {
     await syncFileDescriptor(handle.fd);
   } catch (error) {
     // Windows does not consistently support fsync on directory descriptors.
-    if (process.platform !== 'win32' || !['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+    if (
+      process.platform !== 'win32' ||
+      !['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')
+    ) {
       throw error;
     }
   } finally {

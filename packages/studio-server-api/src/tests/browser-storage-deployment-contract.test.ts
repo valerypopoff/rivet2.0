@@ -35,7 +35,7 @@ test('Docker and Helm expose bounded browser-storage RPC defaults only to API ac
       api,
       /RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES=\$\{RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES:-536870912\}/,
     );
-    for (const service of ['proxy', 'web', 'executor']) {
+    for (const service of ['proxy', 'web']) {
       assert.doesNotMatch(composeServiceBlock(compose, service), /RIVET_WEB_APP_BROWSER_STORAGE_/);
     }
   }

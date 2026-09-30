@@ -18,6 +18,7 @@ import {
 } from '../routes/workflows/filesystem-project-transactions.js';
 import { createBlankProjectFile, getWorkflowDatasetPath } from '../routes/workflows/fs-helpers.js';
 import { loadProjectAndAttachedDataFromString, serializeDatasets, serializeProject } from '@valerypopoff/rivet2-node';
+import { withEnvOverride } from './helpers/workflow-api-harness.js';
 
 const preCommitCheckpoints: FilesystemProjectTransactionCheckpoint[] = [
   'staged-project',
@@ -581,29 +582,44 @@ test('a later save waits for cleanup of the previous transaction evidence', asyn
 });
 
 test('filesystem reads wait until an active write operation releases', async () => {
-  let releaseWrite!: () => void;
-  let writeStarted!: () => void;
-  const writeStartedPromise = new Promise<void>((resolve) => {
-    writeStarted = resolve;
-  });
-  const releaseWritePromise = new Promise<void>((resolve) => {
-    releaseWrite = resolve;
-  });
-  const order: string[] = [];
+  const fixture = await createFixture();
+  try {
+    await withEnvOverride('RIVET_WORKFLOWS_ROOT', fixture.root, async () => {
+      let releaseWrite!: () => void;
+      let writeStarted!: () => void;
+      const writeStartedPromise = new Promise<void>((resolve) => {
+        writeStarted = resolve;
+      });
+      const releaseWritePromise = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const order: string[] = [];
 
-  const write = withFilesystemWorkflowStorageWrite(async () => {
-    order.push('write-start');
-    writeStarted();
-    await releaseWritePromise;
-    order.push('write-end');
-  });
-  await writeStartedPromise;
-  const read = withFilesystemWorkflowStorageRead(async () => {
-    order.push('read');
-  });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(order, ['write-start']);
-  releaseWrite();
-  await Promise.all([write, read]);
-  assert.deepEqual(order, ['write-start', 'write-end', 'read']);
+      const write = withFilesystemWorkflowStorageWrite(async () => {
+        order.push('write-start');
+        writeStarted();
+        await releaseWritePromise;
+        order.push('write-end');
+      });
+      let read: Promise<void> | undefined;
+      try {
+        // Propagate a failed write preflight instead of waiting forever for its callback.
+        await Promise.race([writeStartedPromise, write]);
+        read = withFilesystemWorkflowStorageRead(async () => {
+          order.push('read');
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(order, ['write-start']);
+        releaseWrite();
+        await Promise.all([write, read]);
+        assert.deepEqual(order, ['write-start', 'write-end', 'read']);
+      } finally {
+        releaseWrite();
+        await Promise.allSettled(read ? [write, read] : [write]);
+      }
+    });
+  } finally {
+    resetFilesystemProjectTransactionStateForTests(fixture.root);
+    await fs.rm(fixture.tempRoot, { recursive: true, force: true });
+  }
 });

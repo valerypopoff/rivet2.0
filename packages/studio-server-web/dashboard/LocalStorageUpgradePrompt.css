@@ -1,0 +1,36 @@
+.local-storage-upgrade-prompt {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  color: var(--grey-light);
+}
+
+.local-storage-upgrade-prompt h2 {
+  margin: 0;
+  color: var(--grey-lightest);
+  font-size: 20px;
+}
+
+.local-storage-upgrade-prompt p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.local-storage-upgrade-prompt ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  line-height: 1.45;
+}
+
+.local-storage-upgrade-prompt code {
+  overflow-wrap: anywhere;
+}
+
+.local-storage-upgrade-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}

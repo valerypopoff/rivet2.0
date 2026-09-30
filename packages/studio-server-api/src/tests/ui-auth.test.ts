@@ -8,13 +8,11 @@ import express from 'express';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { getServerUiAuthMode } from '../server-ui-auth.js';
+import { requireOperatorAuth, requireVmMigrationOperatorAuth } from '../middleware/auth.js';
 import { uiAuthRouter } from '../routes/ui-auth.js';
+import { appSettingsRouter } from '../routes/app-settings.js';
 import { writeWebAppAuthSettings } from '../web-app-auth-settings.js';
-import {
-  addUiAuthErrorToReturnTo,
-  removeUiAuthErrorFromReturnTo,
-  sanitizeUiAuthReturnTo,
-} from '../ui-auth-utils.js';
+import { addUiAuthErrorToReturnTo, removeUiAuthErrorFromReturnTo, sanitizeUiAuthReturnTo } from '../ui-auth-utils.js';
 
 const SERVER_UI_AUTH_ENV_KEYS = [
   'RIVET_ENABLE_DEVELOPMENT_AUTH',
@@ -23,9 +21,10 @@ const SERVER_UI_AUTH_ENV_KEYS = [
   'RIVET_APP_DATA_ROOT',
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_SERVER_UI_AUTH_MODE',
+  'RIVET_VM_MIGRATION_ENABLED',
 ] as const;
 
-type ServerUiAuthEnv = Partial<Record<typeof SERVER_UI_AUTH_ENV_KEYS[number], string | undefined>>;
+type ServerUiAuthEnv = Partial<Record<(typeof SERVER_UI_AUTH_ENV_KEYS)[number], string | undefined>>;
 
 const RETIRED_SERVER_UI_OAUTH_ENV_KEYS = [
   'RIVET_SERVER_UI_OAUTH_PROVIDER',
@@ -94,6 +93,8 @@ async function withUiAuthServer(run: (baseUrl: string) => Promise<void>): Promis
   const app = express();
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
+  app.all('/migration-test', requireOperatorAuth, requireVmMigrationOperatorAuth, (_req, res) => res.status(204).end());
+  app.use('/api/app-settings', requireOperatorAuth, appSettingsRouter);
   app.use('/', uiAuthRouter);
   const server = http.createServer(app);
 
@@ -104,7 +105,7 @@ async function withUiAuthServer(run: (baseUrl: string) => Promise<void>): Promis
     await run(`http://127.0.0.1:${address.port}`);
   } finally {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
+      server.close((error) => (error ? reject(error) : resolve()));
     });
   }
 }
@@ -124,6 +125,58 @@ function getCookieValue(setCookieHeader: string, name: string): string {
   assert.ok(match, `Expected ${name} cookie`);
   return match[1]!;
 }
+
+test('VM migration requires explicit enablement, a real operator session and same-origin intent', async () => {
+  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+    await withUiAuthServer(async (baseUrl) => {
+      const cookie = `rivet_ui_token=${getExpectedUiSessionToken()}`;
+      const request = (headers: Record<string, string> = {}) =>
+        fetch(`${baseUrl}/migration-test`, {
+          method: 'POST',
+          headers: trustedProxyHeaders({ cookie, ...headers }),
+        });
+      assert.equal((await request({ 'x-rivet-migration-intent': '1' })).status, 404);
+      process.env.RIVET_VM_MIGRATION_ENABLED = '1';
+      assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: baseUrl })).status, 204);
+      assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: 'http://127.0.0.1:1' })).status, 403);
+      assert.equal((await request()).status, 403);
+      assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: 'https://evil.example' })).status, 403);
+      assert.equal((await request({ 'x-rivet-migration-intent': '1', 'sec-fetch-site': 'cross-site' })).status, 403);
+      assert.equal((await request({ 'x-rivet-migration-intent': '1' })).status, 204);
+      assert.equal(
+        (
+          await fetch(`${baseUrl}/migration-test`, {
+            method: 'POST',
+            headers: trustedProxyHeaders({ 'x-rivet-migration-intent': '1' }),
+          })
+        ).status,
+        403,
+      );
+    });
+  });
+  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'none', RIVET_VM_MIGRATION_ENABLED: '1' }, async () => {
+    await withUiAuthServer(async (baseUrl) => {
+      assert.equal(
+        (
+          await fetch(`${baseUrl}/migration-test`, {
+            method: 'POST',
+            headers: trustedProxyHeaders({ 'x-rivet-migration-intent': '1' }),
+          })
+        ).status,
+        403,
+      );
+      // Status was once registered before the migration-specific gate.
+      assert.equal(
+        (
+          await fetch(`${baseUrl}/api/app-settings/vm-migration`, {
+            headers: trustedProxyHeaders(),
+          })
+        ).status,
+        403,
+      );
+    });
+  });
+});
 
 test('UI auth return paths preserve local app routes', () => {
   assert.equal(sanitizeUiAuthReturnTo('/'), '/');
@@ -212,116 +265,125 @@ test('server UI prompts keep the error message but retry against a clean return 
     });
   });
 
-  await withServerUiAuthEnv({
-    RIVET_SERVER_UI_AUTH_MODE: 'oauth',
-  }, async () => {
-    await writeDummyServerUiOAuthSettings(['admin@example.test']);
-    await withUiAuthServer(async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/ui-auth/prompt`, {
-        headers: trustedProxyHeaders({
-          'x-rivet-ui-return-to': '/apps/example?auth_error=oauth_denied',
-        }),
+  await withServerUiAuthEnv(
+    {
+      RIVET_SERVER_UI_AUTH_MODE: 'oauth',
+    },
+    async () => {
+      await writeDummyServerUiOAuthSettings(['admin@example.test']);
+      await withUiAuthServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/ui-auth/prompt`, {
+          headers: trustedProxyHeaders({
+            'x-rivet-ui-return-to': '/apps/example?auth_error=oauth_denied',
+          }),
+        });
+        const html = await response.text();
+        assert.equal(response.status, 200);
+        assert.match(html, /OAuth provider rejected/);
+        assert.match(html, /\/__rivet_auth\/oauth\/start\?return_to=%2Fapps%2Fexample"/);
+        assert.doesNotMatch(html, /auth_error=oauth_denied/);
       });
-      const html = await response.text();
-      assert.equal(response.status, 200);
-      assert.match(html, /OAuth provider rejected/);
-      assert.match(html, /\/__rivet_auth\/oauth\/start\?return_to=%2Fapps%2Fexample"/);
-      assert.doesNotMatch(html, /auth_error=oauth_denied/);
-    });
-  });
+    },
+  );
 });
 
 test('server UI dummy OAuth creates an admin session and rejects non-admin email', async () => {
-  await withServerUiAuthEnv({
-    RIVET_SERVER_UI_AUTH_MODE: 'oauth',
-  }, async () => {
-    await writeDummyServerUiOAuthSettings(['admin@example.test']);
-    await withUiAuthServer(async (baseUrl) => {
-      const start = await fetch(`${baseUrl}/ui-auth/oauth/start?return_to=%2Fprojects`, {
-        redirect: 'manual',
-        headers: trustedProxyHeaders({ host: '127.0.0.1' }),
-      });
-      assert.equal(start.status, 302);
-      const stateCookie = getCookieValue(start.headers.get('set-cookie') ?? '', 'rivet_ui_oauth_state');
-      const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
-      assert.ok(state);
+  await withServerUiAuthEnv(
+    {
+      RIVET_SERVER_UI_AUTH_MODE: 'oauth',
+    },
+    async () => {
+      await writeDummyServerUiOAuthSettings(['admin@example.test']);
+      await withUiAuthServer(async (baseUrl) => {
+        const start = await fetch(`${baseUrl}/ui-auth/oauth/start?return_to=%2Fprojects`, {
+          redirect: 'manual',
+          headers: trustedProxyHeaders({ host: '127.0.0.1' }),
+        });
+        assert.equal(start.status, 302);
+        const stateCookie = getCookieValue(start.headers.get('set-cookie') ?? '', 'rivet_ui_oauth_state');
+        const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
+        assert.ok(state);
 
-      const deniedDummy = await fetch(`${baseUrl}/ui-auth/oauth/dummy`, {
-        method: 'POST',
-        redirect: 'manual',
-        headers: {
-          ...trustedProxyHeaders({ host: '127.0.0.1' }),
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({ state, email: 'other@example.test' }),
-      });
-      const deniedCallbackPath = deniedDummy.headers.get('location') ?? '';
-      const deniedCallback = await fetch(`${baseUrl}${deniedCallbackPath.replace('/__rivet_auth', '/ui-auth')}`, {
-        redirect: 'manual',
-        headers: trustedProxyHeaders({
-          host: '127.0.0.1',
-          cookie: `rivet_ui_oauth_state=${stateCookie}`,
-        }),
-      });
-      assert.equal(deniedCallback.status, 303);
-      assert.equal(deniedCallback.headers.get('location'), '/projects?auth_error=oauth_forbidden');
-      assert.doesNotMatch(deniedCallback.headers.get('set-cookie') ?? '', /rivet_ui_oauth_session=/);
+        const deniedDummy = await fetch(`${baseUrl}/ui-auth/oauth/dummy`, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: {
+            ...trustedProxyHeaders({ host: '127.0.0.1' }),
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({ state, email: 'other@example.test' }),
+        });
+        const deniedCallbackPath = deniedDummy.headers.get('location') ?? '';
+        const deniedCallback = await fetch(`${baseUrl}${deniedCallbackPath.replace('/__rivet_auth', '/ui-auth')}`, {
+          redirect: 'manual',
+          headers: trustedProxyHeaders({
+            host: '127.0.0.1',
+            cookie: `rivet_ui_oauth_state=${stateCookie}`,
+          }),
+        });
+        assert.equal(deniedCallback.status, 303);
+        assert.equal(deniedCallback.headers.get('location'), '/projects?auth_error=oauth_forbidden');
+        assert.doesNotMatch(deniedCallback.headers.get('set-cookie') ?? '', /rivet_ui_oauth_session=/);
 
-      const allowedDummy = await fetch(`${baseUrl}/ui-auth/oauth/dummy`, {
-        method: 'POST',
-        redirect: 'manual',
-        headers: {
-          ...trustedProxyHeaders({ host: '127.0.0.1' }),
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({ state, email: 'admin@example.test' }),
-      });
-      const allowedCallbackPath = allowedDummy.headers.get('location') ?? '';
-      const allowedCallback = await fetch(`${baseUrl}${allowedCallbackPath.replace('/__rivet_auth', '/ui-auth')}`, {
-        redirect: 'manual',
-        headers: trustedProxyHeaders({
-          host: '127.0.0.1',
-          cookie: `rivet_ui_oauth_state=${stateCookie}`,
-        }),
-      });
-      assert.equal(allowedCallback.status, 303);
-      assert.equal(allowedCallback.headers.get('location'), '/projects');
-      const sessionCookie = getCookieValue(allowedCallback.headers.get('set-cookie') ?? '', 'rivet_ui_oauth_session');
+        const allowedDummy = await fetch(`${baseUrl}/ui-auth/oauth/dummy`, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: {
+            ...trustedProxyHeaders({ host: '127.0.0.1' }),
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({ state, email: 'admin@example.test' }),
+        });
+        const allowedCallbackPath = allowedDummy.headers.get('location') ?? '';
+        const allowedCallback = await fetch(`${baseUrl}${allowedCallbackPath.replace('/__rivet_auth', '/ui-auth')}`, {
+          redirect: 'manual',
+          headers: trustedProxyHeaders({
+            host: '127.0.0.1',
+            cookie: `rivet_ui_oauth_state=${stateCookie}`,
+          }),
+        });
+        assert.equal(allowedCallback.status, 303);
+        assert.equal(allowedCallback.headers.get('location'), '/projects');
+        const sessionCookie = getCookieValue(allowedCallback.headers.get('set-cookie') ?? '', 'rivet_ui_oauth_session');
 
-      const authorized = await fetch(`${baseUrl}/ui-auth/check`, {
-        headers: trustedProxyHeaders({
-          cookie: `rivet_ui_oauth_session=${sessionCookie}`,
-        }),
-      });
-      assert.equal(authorized.status, 204);
+        const authorized = await fetch(`${baseUrl}/ui-auth/check`, {
+          headers: trustedProxyHeaders({
+            cookie: `rivet_ui_oauth_session=${sessionCookie}`,
+          }),
+        });
+        assert.equal(authorized.status, 204);
 
-      await writeDummyServerUiOAuthSettings(['someone-else@example.test']);
-      const stale = await fetch(`${baseUrl}/ui-auth/check`, {
-        headers: trustedProxyHeaders({
-          cookie: `rivet_ui_oauth_session=${sessionCookie}`,
-        }),
+        await writeDummyServerUiOAuthSettings(['someone-else@example.test']);
+        const stale = await fetch(`${baseUrl}/ui-auth/check`, {
+          headers: trustedProxyHeaders({
+            cookie: `rivet_ui_oauth_session=${sessionCookie}`,
+          }),
+        });
+        assert.equal(stale.status, 401);
       });
-      assert.equal(stale.status, 401);
-    });
-  });
+    },
+  );
 });
 
 test('server UI OAuth uses saved app settings instead of retired server OAuth env', async () => {
-  await withServerUiAuthEnv({
-    RIVET_SERVER_UI_AUTH_MODE: 'oauth',
-  }, async () => {
-    process.env.RIVET_SERVER_UI_OAUTH_PROVIDER = 'external';
-    process.env.RIVET_SERVER_UI_OAUTH_ADMIN_EMAILS = 'other@example.test';
-    process.env.RIVET_SERVER_UI_OAUTH_SESSION_SECRET = 'retired-secret';
-    await writeDummyServerUiOAuthSettings(['admin@example.test']);
+  await withServerUiAuthEnv(
+    {
+      RIVET_SERVER_UI_AUTH_MODE: 'oauth',
+    },
+    async () => {
+      process.env.RIVET_SERVER_UI_OAUTH_PROVIDER = 'external';
+      process.env.RIVET_SERVER_UI_OAUTH_ADMIN_EMAILS = 'other@example.test';
+      process.env.RIVET_SERVER_UI_OAUTH_SESSION_SECRET = 'retired-secret';
+      await writeDummyServerUiOAuthSettings(['admin@example.test']);
 
-    await withUiAuthServer(async (baseUrl) => {
-      const start = await fetch(`${baseUrl}/ui-auth/oauth/start?return_to=%2Fprojects`, {
-        redirect: 'manual',
-        headers: trustedProxyHeaders({ host: '127.0.0.1' }),
+      await withUiAuthServer(async (baseUrl) => {
+        const start = await fetch(`${baseUrl}/ui-auth/oauth/start?return_to=%2Fprojects`, {
+          redirect: 'manual',
+          headers: trustedProxyHeaders({ host: '127.0.0.1' }),
+        });
+        assert.equal(start.status, 302);
+        assert.match(start.headers.get('location') ?? '', /\/__rivet_auth\/oauth\/dummy\?/);
       });
-      assert.equal(start.status, 302);
-      assert.match(start.headers.get('location') ?? '', /\/__rivet_auth\/oauth\/dummy\?/);
-    });
-  });
+    },
+  );
 });

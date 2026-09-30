@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import type { ProjectId } from "@valerypopoff/rivet2-node";
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import type { ProjectId } from '@valerypopoff/rivet2-node';
 import {
   assertEvaluationDatasetSnapshot,
   assertEvaluationRecordingArtifact,
@@ -14,9 +14,12 @@ import {
   type EvaluationRecordingArtifact,
   type EvaluationRun,
   type EvaluationRunEvent,
-} from "@valerypopoff/rivet2-evaluations";
+} from '@valerypopoff/rivet2-evaluations';
 
-import { getAppDataRoot } from "../security.js";
+import { getAppDataRoot } from '../security.js';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
+import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
+import { assertLocalMetadataWritesAllowed } from '../local-metadata/write-admission.js';
 import {
   EvaluationLibraryConflictError,
   applyCheckedEvaluationLibraryMutation,
@@ -24,7 +27,7 @@ import {
   toEvaluationLibrarySyncSnapshot,
   type EvaluationLibrarySnapshot,
   type RivetStudioEvaluationStore,
-} from "./store.js";
+} from './store.js';
 
 type Row = { run_json: string };
 type RecordingRow = { artifact_json: string };
@@ -32,25 +35,21 @@ type DatasetSnapshotRow = { snapshot_json: string };
 type LibraryRow = { revision: number; library_json: string };
 
 export function getFilesystemEvaluationRunsDatabasePath(): string {
-  return path.join(getAppDataRoot(), "evaluation-runs.sqlite");
+  return path.join(getLocalMetadataServingSelection()?.operationalRoot ?? getAppDataRoot(), 'evaluation-runs.sqlite');
 }
 
 function parseRun(row: Row | undefined): EvaluationRun | undefined {
   return row ? normalizeEvaluationRun(JSON.parse(row.run_json)) : undefined;
 }
 
-function parseRecording(
-  row: RecordingRow | undefined,
-): EvaluationRecordingArtifact | undefined {
+function parseRecording(row: RecordingRow | undefined): EvaluationRecordingArtifact | undefined {
   if (!row) return undefined;
   const artifact = JSON.parse(row.artifact_json) as EvaluationRecordingArtifact;
   assertEvaluationRecordingArtifact(artifact);
   return artifact;
 }
 
-function parseDatasetSnapshot(
-  row: DatasetSnapshotRow | undefined,
-): EvaluationDatasetSnapshot | undefined {
+function parseDatasetSnapshot(row: DatasetSnapshotRow | undefined): EvaluationDatasetSnapshot | undefined {
   if (!row) return undefined;
   const snapshot = JSON.parse(row.snapshot_json) as EvaluationDatasetSnapshot;
   assertEvaluationDatasetSnapshot(snapshot);
@@ -58,24 +57,31 @@ function parseDatasetSnapshot(
 }
 function isExpired(artifact: EvaluationRecordingArtifact): boolean {
   return (
-    artifact.reference.retention === "temporary" &&
+    artifact.reference.retention === 'temporary' &&
     artifact.reference.expiresAt != null &&
     Date.parse(artifact.reference.expiresAt) <= Date.now()
   );
 }
 
-function withImmediateTransaction<T>(
-  database: DatabaseSync,
-  operation: () => T,
-): T {
-  database.exec("BEGIN IMMEDIATE");
+function localRetentionIsWritable(): boolean {
+  if (!getLocalMetadataServingSelection()) return true;
+  try {
+    assertLocalMetadataWritesAllowed();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function withImmediateTransaction<T>(database: DatabaseSync, operation: () => T): T {
+  database.exec('BEGIN IMMEDIATE');
   try {
     const result = operation();
-    database.exec("COMMIT");
+    database.exec('COMMIT');
     return result;
   } catch (error) {
     try {
-      database.exec("ROLLBACK");
+      database.exec('ROLLBACK');
     } catch {
       // Preserve the operation error; SQLite may already have rolled back a
       // transaction after a fatal statement failure.
@@ -85,9 +91,7 @@ function withImmediateTransaction<T>(
 }
 
 /** SQLite's project ID predicates are the storage isolation boundary. */
-export class FilesystemRivetEvaluationStore
-  implements RivetStudioEvaluationStore
-{
+export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStore {
   readonly #databasePath: string;
   #databasePromise: Promise<DatabaseSync> | null = null;
   #disposePromise: Promise<void> | null = null;
@@ -100,14 +104,22 @@ export class FilesystemRivetEvaluationStore
 
   async #database(): Promise<DatabaseSync> {
     if (this.#disposed) {
-      throw new Error(
-        "The filesystem evaluation run store is already disposed.",
-      );
+      throw new Error('The filesystem evaluation run store is already disposed.');
     }
     this.#databasePromise ??= (async () => {
+      if (getLocalMetadataServingSelection()) {
+        const stat = await fs.lstat(this.#databasePath);
+        if (!stat.isFile() || stat.isSymbolicLink())
+          throw new Error('Selected evaluation database is missing or invalid.');
+      }
       await fs.mkdir(path.dirname(this.#databasePath), { recursive: true });
       const database = new DatabaseSync(this.#databasePath);
       try {
+        if (getLocalMetadataServingSelection()) {
+          assertLocalOperationalSchema(database, 'evaluations');
+          database.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = DELETE;');
+          return database;
+        }
         database.exec(`
           PRAGMA busy_timeout = 5000;
           PRAGMA journal_mode = DELETE;
@@ -174,10 +186,9 @@ export class FilesystemRivetEvaluationStore
    * later evaluation write or a request for the exact expired recording to
    * reclaim that storage.
    */
-  #deleteExpiredTemporaryRecordings(
-    database: DatabaseSync,
-    projectId: ProjectId,
-  ): void {
+  #deleteExpiredTemporaryRecordings(database: DatabaseSync, projectId: ProjectId): void {
+    // Reads during paused validation must not mutate the certified snapshot.
+    if (!localRetentionIsWritable()) return;
     database
       .prepare(
         `
@@ -193,20 +204,16 @@ export class FilesystemRivetEvaluationStore
 
   #assertProjectWritable(database: DatabaseSync, projectId: ProjectId): void {
     const deleted = database
-      .prepare("SELECT 1 FROM evaluation_deleted_projects WHERE project_id = ?")
+      .prepare('SELECT 1 FROM evaluation_deleted_projects WHERE project_id = ?')
       .get(String(projectId));
     if (deleted) {
-      throw new Error(
-        "Evaluation history cannot be written after its project was deleted.",
-      );
+      throw new Error('Evaluation history cannot be written after its project was deleted.');
     }
   }
 
   #readLibrarySnapshot(database: DatabaseSync): EvaluationLibrarySnapshot {
     const row = database
-      .prepare(
-        "SELECT revision, library_json FROM evaluation_library WHERE singleton_key = 1",
-      )
+      .prepare('SELECT revision, library_json FROM evaluation_library WHERE singleton_key = 1')
       .get<LibraryRow>();
     if (!row) {
       return { revision: 0, library: createEmptyEvaluationLibrary() };
@@ -217,17 +224,13 @@ export class FilesystemRivetEvaluationStore
         library: normalizeEvaluationLibrary(JSON.parse(row.library_json)),
       };
     } catch (error) {
-      throw new Error("The filesystem evaluation library is unreadable.", {
+      throw new Error('The filesystem evaluation library is unreadable.', {
         cause: error,
       });
     }
   }
 
-  #writeLibrary(
-    database: DatabaseSync,
-    revision: number,
-    library: EvaluationLibrary,
-  ): EvaluationLibrarySnapshot {
+  #writeLibrary(database: DatabaseSync, revision: number, library: EvaluationLibrary): EvaluationLibrarySnapshot {
     const normalized = normalizeEvaluationLibrary(library);
     database
       .prepare(
@@ -279,7 +282,7 @@ export class FilesystemRivetEvaluationStore
     return snapshot;
   }
 
-  async mutateLibrary(input: import("@valerypopoff/rivet2-evaluations").EvaluationLibraryMutation) {
+  async mutateLibrary(input: import('@valerypopoff/rivet2-evaluations').EvaluationLibraryMutation) {
     const database = await this.#database();
     const snapshot = withImmediateTransaction(database, () => {
       const current = this.#readLibrarySnapshot(database);
@@ -291,9 +294,7 @@ export class FilesystemRivetEvaluationStore
   }
 
   async putLibrary(library: EvaluationLibrary): Promise<void> {
-    const expectedRevision =
-      this.#observedLibraryRevision ??
-      (await this.getLibrarySnapshot()).revision;
+    const expectedRevision = this.#observedLibraryRevision ?? (await this.getLibrarySnapshot()).revision;
     await this.replaceLibrary({ expectedRevision, library });
   }
 
@@ -305,22 +306,15 @@ export class FilesystemRivetEvaluationStore
     const snapshot = withImmediateTransaction(database, () => {
       const current = this.#readLibrarySnapshot(database);
       const imported = database
-        .prepare(
-          "SELECT 1 FROM evaluation_library_imports WHERE source_fingerprint = ?",
-        )
+        .prepare('SELECT 1 FROM evaluation_library_imports WHERE source_fingerprint = ?')
         .get(input.sourceFingerprint);
       if (imported) return current;
 
       const merged = mergeEvaluationLibraries(current.library, input.library);
-      const changed =
-        JSON.stringify(merged) !== JSON.stringify(current.library);
-      const next = changed
-        ? this.#writeLibrary(database, current.revision + 1, merged)
-        : current;
+      const changed = JSON.stringify(merged) !== JSON.stringify(current.library);
+      const next = changed ? this.#writeLibrary(database, current.revision + 1, merged) : current;
       database
-        .prepare(
-          "INSERT INTO evaluation_library_imports (source_fingerprint, imported_at_ms) VALUES (?, ?)",
-        )
+        .prepare('INSERT INTO evaluation_library_imports (source_fingerprint, imported_at_ms) VALUES (?, ?)')
         .run(input.sourceFingerprint, Date.now());
       return next;
     });
@@ -335,9 +329,7 @@ export class FilesystemRivetEvaluationStore
       this.#assertProjectWritable(database, incoming.projectId);
       const existing = parseRun(
         database
-          .prepare(
-            "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-          )
+          .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
           .get<Row>(String(incoming.projectId), incoming.id),
       );
       const next = reconcileEvaluationRunSnapshots(existing, incoming);
@@ -354,14 +346,7 @@ export class FilesystemRivetEvaluationStore
           updated_at_ms = excluded.updated_at_ms
       `,
         )
-        .run(
-          String(next.projectId),
-          next.id,
-          next.suiteId,
-          next.startedAt,
-          JSON.stringify(next),
-          Date.now(),
-        );
+        .run(String(next.projectId), next.id, next.suiteId, next.startedAt, JSON.stringify(next), Date.now());
     });
   }
 
@@ -374,58 +359,39 @@ export class FilesystemRivetEvaluationStore
     return withImmediateTransaction(database, () => {
       const existing = parseRun(
         database
-          .prepare(
-            "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-          )
+          .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
           .get<Row>(String(input.projectId), input.runId),
       );
       if (!existing) return undefined;
       const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
       database
-        .prepare(
-          "UPDATE evaluation_runs SET run_json = ?, updated_at_ms = ? WHERE project_id = ? AND run_id = ?",
-        )
-        .run(
-          JSON.stringify(renamed),
-          Date.now(),
-          String(input.projectId),
-          input.runId,
-        );
+        .prepare('UPDATE evaluation_runs SET run_json = ?, updated_at_ms = ? WHERE project_id = ? AND run_id = ?')
+        .run(JSON.stringify(renamed), Date.now(), String(input.projectId), input.runId);
       return renamed;
     });
   }
 
-  async get(input: {
-    projectId: ProjectId;
-    runId: string;
-  }): Promise<EvaluationRun | undefined> {
+  async get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined> {
     const database = await this.#database();
     this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     return parseRun(
       database
-        .prepare(
-          "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-        )
+        .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
         .get<Row>(String(input.projectId), input.runId),
     );
   }
 
-  async list(input: {
-    projectId: ProjectId;
-    suiteId?: string;
-  }): Promise<readonly EvaluationRun[]> {
+  async list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]> {
     const database = await this.#database();
     this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     const rows =
       input.suiteId == null
         ? database
-            .prepare(
-              "SELECT run_json FROM evaluation_runs WHERE project_id = ? ORDER BY started_at DESC, run_id DESC",
-            )
+            .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? ORDER BY started_at DESC, run_id DESC')
             .all<Row>(String(input.projectId))
         : database
             .prepare(
-              "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND suite_id = ? ORDER BY started_at DESC, run_id DESC",
+              'SELECT run_json FROM evaluation_runs WHERE project_id = ? AND suite_id = ? ORDER BY started_at DESC, run_id DESC',
             )
             .all<Row>(String(input.projectId), input.suiteId);
     return rows.map((row) => parseRun(row)!);
@@ -435,14 +401,10 @@ export class FilesystemRivetEvaluationStore
     const database = await this.#database();
     withImmediateTransaction(database, () => {
       database
-        .prepare(
-          "DELETE FROM evaluation_recordings WHERE project_id = ? AND run_id = ?",
-        )
+        .prepare('DELETE FROM evaluation_recordings WHERE project_id = ? AND run_id = ?')
         .run(String(input.projectId), input.runId);
       database
-        .prepare(
-          "DELETE FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-        )
+        .prepare('DELETE FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
         .run(String(input.projectId), input.runId);
     });
   }
@@ -460,12 +422,7 @@ export class FilesystemRivetEvaluationStore
         ON CONFLICT(project_id, dataset_fingerprint) DO NOTHING
       `,
         )
-        .run(
-          String(snapshot.projectId),
-          snapshot.fingerprint,
-          JSON.stringify(snapshot),
-          Date.now(),
-        );
+        .run(String(snapshot.projectId), snapshot.fingerprint, JSON.stringify(snapshot), Date.now());
     });
   }
 
@@ -477,7 +434,7 @@ export class FilesystemRivetEvaluationStore
     return parseDatasetSnapshot(
       database
         .prepare(
-          "SELECT snapshot_json FROM evaluation_dataset_snapshots WHERE project_id = ? AND dataset_fingerprint = ?",
+          'SELECT snapshot_json FROM evaluation_dataset_snapshots WHERE project_id = ? AND dataset_fingerprint = ?',
         )
         .get<DatasetSnapshotRow>(String(input.projectId), input.fingerprint),
     );
@@ -494,19 +451,11 @@ export class FilesystemRivetEvaluationStore
       this.#deleteExpiredTemporaryRecordings(database, artifact.projectId);
       const existing = parseRecording(
         database
-          .prepare(
-            "SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?",
-          )
+          .prepare('SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
           .get<RecordingRow>(String(artifact.projectId), artifact.reference.id),
       );
-      if (
-        existing &&
-        (existing.runId !== artifact.runId ||
-          existing.trialId !== artifact.trialId)
-      ) {
-        throw new Error(
-          "An evaluation recording ID cannot be reassigned to another run or trial.",
-        );
+      if (existing && (existing.runId !== artifact.runId || existing.trialId !== artifact.trialId)) {
+        throw new Error('An evaluation recording ID cannot be reassigned to another run or trial.');
       }
       const next = structuredClone(artifact);
       if (existing) next.reference = structuredClone(existing.reference);
@@ -521,13 +470,7 @@ export class FilesystemRivetEvaluationStore
           created_at_ms = excluded.created_at_ms
       `,
         )
-        .run(
-          String(artifact.projectId),
-          artifact.reference.id,
-          artifact.runId,
-          JSON.stringify(next),
-          Date.now(),
-        );
+        .run(String(artifact.projectId), artifact.reference.id, artifact.runId, JSON.stringify(next), Date.now());
     });
   }
 
@@ -539,16 +482,13 @@ export class FilesystemRivetEvaluationStore
     this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     const artifact = parseRecording(
       database
-        .prepare(
-          "SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?",
-        )
+        .prepare('SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
         .get<RecordingRow>(String(input.projectId), input.recordingId),
     );
     if (!artifact || !isExpired(artifact)) return artifact;
+    if (!localRetentionIsWritable()) return undefined;
     database
-      .prepare(
-        "DELETE FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?",
-      )
+      .prepare('DELETE FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
       .run(String(input.projectId), input.recordingId);
     return undefined;
   }
@@ -556,70 +496,51 @@ export class FilesystemRivetEvaluationStore
   async updateRecordingRetention(input: {
     projectId: ProjectId;
     recordingId: string;
-    retention: EvaluationRecordingArtifact["reference"]["retention"];
+    retention: EvaluationRecordingArtifact['reference']['retention'];
     expiresAt?: string;
   }): Promise<boolean> {
     const database = await this.#database();
     return withImmediateTransaction(database, () => {
       const artifact = parseRecording(
         database
-          .prepare(
-            "SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?",
-          )
+          .prepare('SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
           .get<RecordingRow>(String(input.projectId), input.recordingId),
       );
       if (!artifact) return false;
       artifact.reference = {
         id: artifact.reference.id,
         retention: input.retention,
-        ...(input.expiresAt === undefined
-          ? {}
-          : { expiresAt: input.expiresAt }),
+        ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       };
       database
-        .prepare(
-          "UPDATE evaluation_recordings SET artifact_json = ? WHERE project_id = ? AND recording_id = ?",
-        )
-        .run(
-          JSON.stringify(artifact),
-          String(input.projectId),
-          input.recordingId,
-        );
+        .prepare('UPDATE evaluation_recordings SET artifact_json = ? WHERE project_id = ? AND recording_id = ?')
+        .run(JSON.stringify(artifact), String(input.projectId), input.recordingId);
       return true;
     });
   }
 
-  async promoteBaseline(input: {
-    projectId: ProjectId;
-    runId: string;
-  }): Promise<void> {
+  async promoteBaseline(input: { projectId: ProjectId; runId: string }): Promise<void> {
     const database = await this.#database();
     withImmediateTransaction(database, () => {
       const rows = database
-        .prepare(
-          "SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND run_id = ?",
-        )
+        .prepare('SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND run_id = ?')
         .all<RecordingRow>(String(input.projectId), input.runId);
       const update = database.prepare(
-        "UPDATE evaluation_recordings SET artifact_json = ? WHERE project_id = ? AND recording_id = ?",
+        'UPDATE evaluation_recordings SET artifact_json = ? WHERE project_id = ? AND recording_id = ?',
       );
       for (const row of rows) {
         const artifact = parseRecording(row)!;
         artifact.reference = {
           id: artifact.reference.id,
-          retention: "baseline",
+          retention: 'baseline',
         };
-        update.run(
-          JSON.stringify(artifact),
-          String(input.projectId),
-          artifact.reference.id,
-        );
+        update.run(JSON.stringify(artifact), String(input.projectId), artifact.reference.id);
       }
     });
   }
 
   async applyRunEvent(event: EvaluationRunEvent): Promise<void> {
-    if (event.type === "run-started" || event.type === "run-finalized") {
+    if (event.type === 'run-started' || event.type === 'run-finalized') {
       await this.put(event.run);
       return;
     }
@@ -629,34 +550,24 @@ export class FilesystemRivetEvaluationStore
       this.#assertProjectWritable(database, event.projectId);
       const existing = parseRun(
         database
-          .prepare(
-            "SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?",
-          )
+          .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
           .get<Row>(String(event.projectId), event.runId),
       );
       if (!existing) {
-        throw new Error(
-          "Evaluation run checkpoint arrived before its run-started event.",
-        );
+        throw new Error('Evaluation run checkpoint arrived before its run-started event.');
       }
       if (existing.suiteId !== event.suiteId) {
-        throw new Error("Evaluation run checkpoint does not match its suite.");
+        throw new Error('Evaluation run checkpoint does not match its suite.');
       }
       if ((existing.revision ?? 0) >= event.revision) return;
 
       const trials = [...existing.trials];
       const trialIndex = trials.findIndex(
-        (trial) =>
-          trial.caseId === event.trial.caseId &&
-          trial.trialIndex === event.trial.trialIndex,
+        (trial) => trial.caseId === event.trial.caseId && trial.trialIndex === event.trial.trialIndex,
       );
       if (trialIndex >= 0) trials[trialIndex] = event.trial;
       else trials.push(event.trial);
-      trials.sort(
-        (left, right) =>
-          left.caseIndex - right.caseIndex ||
-          left.trialIndex - right.trialIndex,
-      );
+      trials.sort((left, right) => left.caseIndex - right.caseIndex || left.trialIndex - right.trialIndex);
       const next = normalizeEvaluationRun({
         ...existing,
         revision: event.revision,
@@ -664,15 +575,8 @@ export class FilesystemRivetEvaluationStore
         trials,
       });
       database
-        .prepare(
-          "UPDATE evaluation_runs SET run_json = ?, updated_at_ms = ? WHERE project_id = ? AND run_id = ?",
-        )
-        .run(
-          JSON.stringify(next),
-          Date.now(),
-          String(event.projectId),
-          event.runId,
-        );
+        .prepare('UPDATE evaluation_runs SET run_json = ?, updated_at_ms = ? WHERE project_id = ? AND run_id = ?')
+        .run(JSON.stringify(next), Date.now(), String(event.projectId), event.runId);
     });
   }
 
@@ -687,17 +591,9 @@ export class FilesystemRivetEvaluationStore
            ON CONFLICT(project_id) DO UPDATE SET deleted_at_ms = excluded.deleted_at_ms`,
         )
         .run(key, Date.now());
-      database
-        .prepare(
-          "DELETE FROM evaluation_dataset_snapshots WHERE project_id = ?",
-        )
-        .run(key);
-      database
-        .prepare("DELETE FROM evaluation_recordings WHERE project_id = ?")
-        .run(key);
-      database
-        .prepare("DELETE FROM evaluation_runs WHERE project_id = ?")
-        .run(key);
+      database.prepare('DELETE FROM evaluation_dataset_snapshots WHERE project_id = ?').run(key);
+      database.prepare('DELETE FROM evaluation_recordings WHERE project_id = ?').run(key);
+      database.prepare('DELETE FROM evaluation_runs WHERE project_id = ?').run(key);
     });
   }
 

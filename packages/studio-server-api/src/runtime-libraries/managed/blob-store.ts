@@ -1,5 +1,4 @@
 import {
-  CreateBucketCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
@@ -11,6 +10,7 @@ import {
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { createManagedObjectStorageHttpHandlerOptions } from '../../managed-health.js';
+import { createManagedBucketCommand } from '../../managed-bucket-creation.js';
 import { observeObjectStorageOperation } from '../../metrics.js';
 import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import type { ManagedRuntimeLibrariesConfig } from '../config.js';
@@ -165,8 +165,7 @@ export async function deleteRuntimeLibrariesBlobObjects(
           }),
         );
         if (response.Errors?.length) {
-          const details = response.Errors
-            .slice(0, 3)
+          const details = response.Errors.slice(0, 3)
             .map((error) => `${error.Key ?? 'unknown key'} (${error.Code ?? 'unknown error'})`)
             .join(', ');
           throw new Error(
@@ -186,10 +185,12 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
   readonly #client;
   readonly #bucket;
   readonly #prefix;
+  readonly #bucketCreation;
 
   constructor(config: ManagedRuntimeLibrariesConfig) {
     this.#client = new S3Client(createRuntimeLibrariesS3ClientConfig(config));
     this.#bucket = config.objectStorageBucket;
+    this.#bucketCreation = createManagedBucketCommand(config);
     this.#prefix = normalizeKeyPrefix(config.objectStoragePrefix);
   }
 
@@ -219,7 +220,7 @@ export class S3RuntimeLibrariesBlobStore implements RuntimeLibrariesBlobStore {
         }
 
         try {
-          await this.#client.send(new CreateBucketCommand({ Bucket: this.#bucket }));
+          await this.#client.send(this.#bucketCreation);
         } catch (createError) {
           // A second process can win the initial bucket-creation race.
           try {

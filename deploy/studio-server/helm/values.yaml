@@ -157,6 +157,8 @@ service:
   executor:
     port: 21889
     targetPort: 21889
+  backendHealth:
+    targetPort: 21890
 
 ingress:
   enabled: false
@@ -367,9 +369,12 @@ tmpVolume:
   name: var-tmp
   path: /var/tmp
   sizeLimit: 2Gi
+  # Node, npm, and other libraries normally use /tmp rather than /var/tmp.
+  # Keep the two directories independent so files cannot alias across paths.
+  nodeTmpSizeLimit: 1Gi
 
 # Every disposable writable volume receives a bounded starting capacity. Tune
-# these from the published-route load gate before raising them for production.
+# these from representative per-workload measurements before raising them for production.
 writableVolumeLimits:
   workspace: 2Gi
   workflows: 2Gi
@@ -420,10 +425,10 @@ resources:
     requests:
       cpu: 250m
       memory: 512Mi
-  executor:
+  backend:
     requests:
-      cpu: 250m
-      memory: 512Mi
+      cpu: 500m
+      memory: 1Gi
   execution:
     requests:
       cpu: 500m
@@ -447,7 +452,7 @@ resourceLimitAcknowledgements:
   api:
     memory: ''
     ephemeralStorage: ''
-  executor:
+  backend:
     memory: ''
     ephemeralStorage: ''
   execution:

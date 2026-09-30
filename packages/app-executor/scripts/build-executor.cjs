@@ -12,6 +12,7 @@ const LINUX_EXECUTOR_TARGETS = {
   'x86_64-unknown-linux-gnu': 'node18-linux-x64',
 };
 
+/** @param {{ platform: string, desktopTarget?: string, rustHostTarget?: string }} options */
 function resolveExecutorBuildPlan({ platform, desktopTarget, rustHostTarget }) {
   const targetTriple = desktopTarget || rustHostTarget;
 

@@ -214,9 +214,16 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   /** Cached policies are authoritative only while the complete revision index is fresh. */
   assertSynchronized(): void {
     const maximumAgeMs = Math.max(15_000, this.#pollIntervalMs * 3);
-    if (!this.#initialized || this.#disposed || this.#revisionIndexError ||
-      this.#lastRevisionIndexAt === null || performance.now() - this.#lastRevisionIndexAt >= maximumAgeMs) {
-      throw new Error('Managed app settings synchronization is unavailable or stale.', { cause: this.#revisionIndexError });
+    if (
+      !this.#initialized ||
+      this.#disposed ||
+      this.#revisionIndexError ||
+      this.#lastRevisionIndexAt === null ||
+      performance.now() - this.#lastRevisionIndexAt >= maximumAgeMs
+    ) {
+      throw new Error('Managed app settings synchronization is unavailable or stale.', {
+        cause: this.#revisionIndexError,
+      });
     }
   }
 
@@ -544,6 +551,18 @@ function buildConnectionString(env: NodeJS.ProcessEnv): string {
   );
 }
 
+export function getPostgresAppSettingsPoolConfigFromEnv(env: NodeJS.ProcessEnv = process.env): PoolConfig {
+  const sslMode = env.RIVET_DEPLOYMENT_DATABASE_SSL_MODE?.trim().toLowerCase() || 'require';
+  return {
+    connectionString: buildConnectionString(env),
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 30_000,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
+    ...(sslMode === 'disable' ? {} : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),
+  };
+}
+
 export function createPostgresAppSettingsBackendFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): PostgresAppSettingsBackend {
@@ -552,18 +571,8 @@ export function createPostgresAppSettingsBackendFromEnv(
     throw new Error('PostgreSQL app settings require RIVET_APP_SETTINGS_ENCRYPTION_KEY or RIVET_KEY.');
   }
 
-  const sslMode = env.RIVET_DEPLOYMENT_DATABASE_SSL_MODE?.trim().toLowerCase() || 'require';
-  const poolConfig: PoolConfig = {
-    connectionString: buildConnectionString(env),
-    keepAlive: true,
-    keepAliveInitialDelayMillis: 30_000,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
-    ...(sslMode === 'disable' ? {} : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),
-  };
-
   return new PostgresAppSettingsBackend({
-    poolConfig,
+    poolConfig: getPostgresAppSettingsPoolConfigFromEnv(env),
     encryptionSecret,
     previousEncryptionSecret: env.RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS,
     pollIntervalMs: Number.parseInt(env.RIVET_APP_SETTINGS_POLL_INTERVAL_MS ?? '', 10),

@@ -192,13 +192,35 @@
 {{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.sizeLimit))) -}}
 {{- fail "tmpVolume.sizeLimit must be a positive binary Kubernetes quantity such as 2Gi when tmpVolume.enabled=true" -}}
 {{- end -}}
+{{- if and .Values.tmpVolume.enabled (or (not (kindIs "string" .Values.tmpVolume.nodeTmpSizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" .Values.tmpVolume.nodeTmpSizeLimit))) -}}
+{{- fail "tmpVolume.nodeTmpSizeLimit must be a positive binary Kubernetes quantity such as 1Gi when tmpVolume.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (eq .Values.tmpVolume.name "node-tmp") -}}
+{{- fail "tmpVolume.name must differ from the reserved node-tmp volume name" -}}
+{{- end -}}
+{{- if and .Values.tmpVolume.enabled (ne .Values.tmpVolume.path "/var/tmp") -}}
+{{- fail "tmpVolume.path must be /var/tmp, which the migration Job uses for scratch" -}}
+{{- end -}}
+{{- if and .Values.release.production.enabled (not .Values.tmpVolume.enabled) -}}
+{{- fail "production requires tmpVolume.enabled=true so /tmp and /var/tmp are bounded" -}}
+{{- end -}}
 
 {{- $resourceLimitAcknowledgements := .Values.resourceLimitAcknowledgements -}}
 {{- $productionReleaseEnabled := .Values.release.production.enabled -}}
 {{- if not (kindIs "map" $resourceLimitAcknowledgements) -}}
 {{- fail "resourceLimitAcknowledgements must be a map" -}}
 {{- end -}}
-{{- $resourceComponents := list "web" "api" "executor" "execution" -}}
+{{- $resourceComponents := list "web" "api" "execution" -}}
+{{- if .Values.compatibility.legacyStartupSettingsFiles -}}
+{{- if hasKey .Values.resources "executor" -}}
+{{- $resourceComponents = append $resourceComponents "executor" -}}
+{{- end -}}
+{{- else -}}
+{{- $resourceComponents = append $resourceComponents "backend" -}}
+{{- if hasKey .Values.resources "executor" -}}
+{{- fail "resources.executor is retired in the combined backend; move its budget to resources.backend" -}}
+{{- end -}}
+{{- end -}}
 {{- if eq .Values.gateway.mode "embedded" -}}
 {{- $resourceComponents = append $resourceComponents "proxy" -}}
 {{- end -}}
@@ -632,6 +654,11 @@
 {{- fail (printf "availability.disruptionBudget.maxUnavailable must be less than the effective minimum replica count for %s" $component) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "service.backendHealth.targetPort" "value" .Values.service.backendHealth.targetPort) -}}
+{{- $healthPort := int .Values.service.backendHealth.targetPort -}}
+{{- if or (lt $healthPort 1) (gt $healthPort 65535) (eq $healthPort (int .Values.service.api.targetPort)) (eq $healthPort (int .Values.service.executor.targetPort)) (eq (int .Values.service.api.targetPort) (int .Values.service.executor.targetPort)) -}}
+{{- fail "backend API, executor, and health target ports must be distinct TCP ports" -}}
 {{- end -}}
 {{- end -}}
 {{- if and (eq .Values.gateway.mode "embedded") (empty (index .Values.env "RIVET_PROXY_RESOLVER")) -}}

@@ -36,13 +36,13 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
                 disabled={storage.controlsDisabled}
                 onClick={() => update('storageMode', 'managed')}
               >
-                Object storage
+                Object storage + PostgreSQL
               </ModeButton>
             </ModeGroup>
             <span className="app-settings-field-help">
               {form.storageMode === 'filesystem'
                 ? 'Saved projects, recordings, published snapshots, and runtime libraries use the mounted local folders.'
-                : 'Saved projects, recordings, published snapshots, and runtime-library artifacts use S3-compatible object storage. Metadata is controlled by the database section below.'}
+                : 'Saved projects, recordings, published snapshots, and runtime-library artifacts use S3-compatible object storage; PostgreSQL stores metadata. Changing storage mode does not migrate existing data.'}
             </span>
           </div>
 
@@ -156,95 +156,97 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
         </div>
       </section>
 
-      <section className="app-settings-section" aria-label="Metadata database">
-        <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
-          <div className="app-settings-field">
-            <span className="app-settings-field-label">Metadata database</span>
-            <ModeGroup label="Database backend" wide>
-              <ModeButton
-                active={form.databaseMode === 'local-docker'}
-                disabled={storage.controlsDisabled}
-                onClick={() => {
-                  storage.setForm((current) => ({
-                    ...current,
-                    databaseMode: 'local-docker',
-                    databaseSslMode: 'disable',
-                  }));
-                  storage.clearFeedback();
-                }}
-              >
-                Local Docker Postgres
-              </ModeButton>
-              <ModeButton
-                active={form.databaseMode === 'managed'}
-                disabled={storage.controlsDisabled}
-                onClick={() => {
-                  storage.setForm((current) => ({ ...current, databaseMode: 'managed', databaseSslMode: 'require' }));
-                  storage.clearFeedback();
-                }}
-              >
-                Managed Postgres
-              </ModeButton>
-            </ModeGroup>
-            <span className="app-settings-field-help">
-              {form.databaseMode === 'local-docker'
-                ? 'Use the optional Compose Postgres service for local managed-storage rehearsals. It must already be running before object storage mode can apply.'
-                : 'Use an external PostgreSQL cluster for managed metadata. These fields can be prepared before switching project artifact storage to object storage.'}
-            </span>
-          </div>
+      {form.storageMode === 'managed' ? (
+        <section className="app-settings-section" aria-label="Metadata database">
+          <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
+            <div className="app-settings-field">
+              <span className="app-settings-field-label">Metadata database</span>
+              <ModeGroup label="Database backend" wide>
+                <ModeButton
+                  active={form.databaseMode === 'local-docker'}
+                  disabled={storage.controlsDisabled}
+                  onClick={() => {
+                    storage.setForm((current) => ({
+                      ...current,
+                      databaseMode: 'local-docker',
+                      databaseSslMode: 'disable',
+                    }));
+                    storage.clearFeedback();
+                  }}
+                >
+                  Local Docker Postgres
+                </ModeButton>
+                <ModeButton
+                  active={form.databaseMode === 'managed'}
+                  disabled={storage.controlsDisabled}
+                  onClick={() => {
+                    storage.setForm((current) => ({ ...current, databaseMode: 'managed', databaseSslMode: 'require' }));
+                    storage.clearFeedback();
+                  }}
+                >
+                  Managed Postgres
+                </ModeButton>
+              </ModeGroup>
+              <span className="app-settings-field-help">
+                {form.databaseMode === 'local-docker'
+                  ? 'Use the optional Compose Postgres service for local managed-storage rehearsals. It must already be running before object storage mode can apply.'
+                  : 'Use an external PostgreSQL cluster for managed metadata.'}
+              </span>
+            </div>
 
-          {form.databaseMode === 'managed' ? (
-            <>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">PostgreSQL connection string</span>
-                <TextField
-                  aria-label="PostgreSQL connection string"
-                  type="password"
-                  value={form.databaseConnectionString}
-                  isDisabled={storage.controlsDisabled}
-                  placeholder={
-                    form.databaseConnectionStringConfigured
-                      ? 'Already saved; leave blank to keep it'
-                      : 'postgresql://user:password@host:5432/database'
-                  }
-                  onChange={(event) => update('databaseConnectionString', event.currentTarget.value)}
-                />
-                <span className="app-settings-field-help">
-                  {form.databaseConnectionStringConfigured
-                    ? 'A connection string is saved. Enter a new value only when rotating it.'
-                    : 'Required before object storage mode can use a managed PostgreSQL cluster.'}
-                </span>
-              </label>
-              <div className="app-settings-field">
-                <span className="app-settings-field-label">PostgreSQL SSL</span>
-                <ModeGroup label="PostgreSQL SSL mode">
-                  <ModeButton
-                    active={form.databaseSslMode === 'require'}
-                    disabled={storage.controlsDisabled}
-                    onClick={() => update('databaseSslMode', 'require')}
-                  >
-                    Require
-                  </ModeButton>
-                  <ModeButton
-                    active={form.databaseSslMode === 'verify-full'}
-                    disabled={storage.controlsDisabled}
-                    onClick={() => update('databaseSslMode', 'verify-full')}
-                  >
-                    Verify full
-                  </ModeButton>
-                  <ModeButton
-                    active={form.databaseSslMode === 'disable'}
-                    disabled={storage.controlsDisabled}
-                    onClick={() => update('databaseSslMode', 'disable')}
-                  >
-                    Disable
-                  </ModeButton>
-                </ModeGroup>
-              </div>
-            </>
-          ) : null}
-        </div>
-      </section>
+            {form.databaseMode === 'managed' ? (
+              <>
+                <label className="app-settings-field">
+                  <span className="app-settings-field-label">PostgreSQL connection string</span>
+                  <TextField
+                    aria-label="PostgreSQL connection string"
+                    type="password"
+                    value={form.databaseConnectionString}
+                    isDisabled={storage.controlsDisabled}
+                    placeholder={
+                      form.databaseConnectionStringConfigured
+                        ? 'Already saved; leave blank to keep it'
+                        : 'postgresql://user:password@host:5432/database'
+                    }
+                    onChange={(event) => update('databaseConnectionString', event.currentTarget.value)}
+                  />
+                  <span className="app-settings-field-help">
+                    {form.databaseConnectionStringConfigured
+                      ? 'A connection string is saved. Enter a new value only when rotating it.'
+                      : 'Required before object storage mode can use a managed PostgreSQL cluster.'}
+                  </span>
+                </label>
+                <div className="app-settings-field">
+                  <span className="app-settings-field-label">PostgreSQL SSL</span>
+                  <ModeGroup label="PostgreSQL SSL mode">
+                    <ModeButton
+                      active={form.databaseSslMode === 'require'}
+                      disabled={storage.controlsDisabled}
+                      onClick={() => update('databaseSslMode', 'require')}
+                    >
+                      Require
+                    </ModeButton>
+                    <ModeButton
+                      active={form.databaseSslMode === 'verify-full'}
+                      disabled={storage.controlsDisabled}
+                      onClick={() => update('databaseSslMode', 'verify-full')}
+                    >
+                      Verify full
+                    </ModeButton>
+                    <ModeButton
+                      active={form.databaseSslMode === 'disable'}
+                      disabled={storage.controlsDisabled}
+                      onClick={() => update('databaseSslMode', 'disable')}
+                    >
+                      Disable
+                    </ModeButton>
+                  </ModeGroup>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

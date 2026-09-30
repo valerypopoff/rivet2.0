@@ -324,6 +324,27 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
       const updatedAt = options.updatedAt?.trim() || new Date().toISOString();
       const lastPublishedAt = options.lastPublishedAt?.trim() || null;
       const importedWebApps = options.publishedWebApps ?? [];
+      const importedVersions = options.publishedVersions ?? [];
+      const publicationVersion = options.publicationVersion ?? '0';
+      if (!/^(0|[1-9]\d*)$/.test(publicationVersion) || BigInt(publicationVersion) > 9_223_372_036_854_775_807n) {
+        throw createHttpError(400, 'Invalid imported publication version');
+      }
+      if (publishedEndpointName && options.publishedContents == null) {
+        throw createHttpError(400, 'Imported published endpoint is missing its snapshot');
+      }
+      if (options.publishedVersionId && !publishedEndpointName) {
+        throw createHttpError(400, 'Imported current published version has no published endpoint');
+      }
+      const currentImportedVersion = importedVersions.find(
+        (version) => version.versionId === options.publishedVersionId,
+      );
+      if (
+        currentImportedVersion &&
+        (currentImportedVersion.contents !== options.publishedContents ||
+          currentImportedVersion.datasetsContents !== options.publishedDatasetsContents)
+      ) {
+        throw createHttpError(400, 'Imported current published version differs from its active snapshot');
+      }
 
       return deps.withTransaction(async (client, hooks) => {
         await deps.ensureFolderChain(client, folderRelativePath);
@@ -347,7 +368,8 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         const shouldCreateSeparatePublishedRevision =
           publishedEndpointName &&
           (options.publishedContents != null || options.publishedDatasetsContents != null) &&
-          (options.publishedContents !== options.contents ||
+          (options.forceSeparatePublishedRevision ||
+            options.publishedContents !== options.contents ||
             options.publishedDatasetsContents !== options.datasetsContents);
 
         if (publishedEndpointName) {
@@ -363,7 +385,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             publishedRevisionId = draftRevision.revision_id;
           }
 
-          publishedVersionId = randomUUID();
+          publishedVersionId = options.publishedVersionId || randomUUID();
         }
 
         const revisionIdsByContents = new Map<string, string>([
@@ -380,14 +402,54 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         }
 
         const importedWebAppRevisions: RevisionRow[] = [];
+        const importedHistoryRows: Array<{
+          versionId: string;
+          endpointName: string;
+          publishedAt: string;
+          isStarred: boolean;
+          comment: string;
+          revisionId: string;
+        }> = [];
+        const importedVersionIds = new Set<string>();
+        for (const version of importedVersions) {
+          if (!version.versionId || importedVersionIds.has(version.versionId)) {
+            throw createHttpError(400, 'Invalid or duplicate imported published version ID');
+          }
+          importedVersionIds.add(version.versionId);
+          const contentsKey = getManagedRevisionContentsKey(version.contents, version.datasetsContents);
+          let revisionId = revisionIdsByContents.get(contentsKey);
+          if (!revisionId) {
+            const revision = await deps.createRevision(options.workflowId, version.contents, version.datasetsContents);
+            deps.scheduleRevisionBlobCleanup(hooks, revision);
+            importedWebAppRevisions.push(revision);
+            revisionId = revision.revision_id;
+            revisionIdsByContents.set(contentsKey, revisionId);
+          }
+          importedHistoryRows.push({
+            versionId: version.versionId,
+            endpointName: normalizeStoredEndpointName(version.endpointName),
+            publishedAt: version.publishedAt,
+            isStarred: version.isStarred,
+            comment: version.comment,
+            revisionId,
+          });
+        }
+        if (publishedVersionId && importedVersions.length > 0 && !importedVersionIds.has(publishedVersionId)) {
+          throw createHttpError(400, 'Current published version is absent from imported history');
+        }
         const importedWebAppRows: Array<{
           uiGraphId: string;
           slug: string;
           publishedAt: string;
           revisionId: string;
           allowedEmails: string[];
+          appId: string;
         }> = [];
         for (const webApp of importedWebApps) {
+          const slug = normalizeStoredEndpointName(webApp.slug);
+          if (!webApp.uiGraphId || !slug) {
+            throw createHttpError(400, 'Imported web app is missing its graph ID or slug');
+          }
           const revisionContentsKey = getManagedRevisionContentsKey(webApp.contents, webApp.datasetsContents);
           let revisionId = revisionIdsByContents.get(revisionContentsKey);
           if (!revisionId) {
@@ -398,17 +460,13 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             revisionIdsByContents.set(revisionContentsKey, revisionId);
           }
 
-          const slug = normalizeStoredEndpointName(webApp.slug);
-          if (!webApp.uiGraphId || !slug) {
-            continue;
-          }
-
           importedWebAppRows.push({
             uiGraphId: webApp.uiGraphId,
             slug,
             publishedAt: webApp.publishedAt.trim() || updatedAt,
             revisionId,
             allowedEmails: normalizeEmailList(webApp.allowedEmails),
+            appId: webApp.appId || randomUUID(),
           });
         }
 
@@ -416,9 +474,10 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
           `
             INSERT INTO workflows (
               workflow_id, name, file_name, relative_path, folder_relative_path, updated_at,
-              current_draft_revision_id, published_revision_id, published_version_id, endpoint_name, published_endpoint_name, last_published_at
+              current_draft_revision_id, published_revision_id, published_version_id, endpoint_name, published_endpoint_name, last_published_at,
+              endpoint_access, publication_version
             )
-            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12::timestamptz)
+            VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14::bigint)
           `,
           [
             options.workflowId,
@@ -433,6 +492,8 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             draftEndpointName,
             publishedEndpointName,
             lastPublishedAt,
+            options.endpointAccess ?? 'public',
+            publicationVersion,
           ],
         );
         await deps.insertRevision(client, draftRevision);
@@ -442,7 +503,24 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         for (const revision of importedWebAppRevisions) {
           await deps.insertRevision(client, revision);
         }
-        if (publishedVersionId && publishedRevisionId) {
+        if (importedHistoryRows.length > 0) {
+          for (const version of importedHistoryRows) {
+            await client.query(
+              `INSERT INTO workflow_published_versions
+                (version_id, workflow_id, revision_id, endpoint_name, published_at, is_starred, comment)
+               VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7)`,
+              [
+                version.versionId,
+                options.workflowId,
+                version.revisionId,
+                version.endpointName,
+                version.publishedAt,
+                version.isStarred,
+                version.comment,
+              ],
+            );
+          }
+        } else if (publishedVersionId && publishedRevisionId) {
           await client.query(
             `
               INSERT INTO workflow_published_versions (version_id, workflow_id, revision_id, endpoint_name, published_at)
@@ -467,7 +545,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
                 VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8::timestamptz)
               `,
               [
-                randomUUID(),
+                webApp.appId,
                 options.workflowId,
                 webApp.revisionId,
                 webApp.uiGraphId,

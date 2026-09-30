@@ -17,15 +17,7 @@ export const PUBLIC_ROUTE_SETTINGS_RELATIVE_PATH = path.join('settings', 'public
 export const LEGACY_WEB_APP_ROUTE_SETTINGS_RELATIVE_PATH = path.join('settings', 'web-app-routes.json');
 
 const MAX_ROUTE_SLUG_LENGTH = 64;
-const RESERVED_ROUTE_SLUGS = new Set([
-  '__rivet_auth',
-  'api',
-  'assets',
-  'internal',
-  'node_modules',
-  'ui-auth',
-  'ws',
-]);
+const RESERVED_ROUTE_SLUGS = new Set(['__rivet_auth', 'api', 'assets', 'internal', 'node_modules', 'ui-auth', 'ws']);
 
 type RuntimePublicRouteSettings = PublicRouteSettings;
 
@@ -60,20 +52,14 @@ const routeFields: RouteField[] = [
 
 function getEnvPublishedAppsBasePath(): string {
   return normalizeBasePathFromAliases(
-    [
-      process.env.RIVET_PUBLISHED_APPS_BASE_PATH,
-      process.env.RIVET_WEB_APPS_BASE_PATH,
-    ],
+    [process.env.RIVET_PUBLISHED_APPS_BASE_PATH, process.env.RIVET_WEB_APPS_BASE_PATH],
     '/apps',
   );
 }
 
 function getEnvLatestAppsBasePath(): string {
   return normalizeBasePathFromAliases(
-    [
-      process.env.RIVET_LATEST_APPS_BASE_PATH,
-      process.env.RIVET_LATEST_WEB_APPS_BASE_PATH,
-    ],
+    [process.env.RIVET_LATEST_APPS_BASE_PATH, process.env.RIVET_LATEST_WEB_APPS_BASE_PATH],
     '/apps-latest',
   );
 }
@@ -150,7 +136,10 @@ function normalizeStoredPublicRouteSettings(value: unknown): RuntimePublicRouteS
 }
 
 function normalizeLegacyWebAppRouteSettings(value: unknown): RuntimePublicRouteSettings {
-  const raw = toSettingsRecord(value) as Pick<PublicRouteSettingsDraft, 'publishedAppsBasePath' | 'latestAppsBasePath'> & { updatedAt?: unknown };
+  const raw = toSettingsRecord(value) as Pick<
+    PublicRouteSettingsDraft,
+    'publishedAppsBasePath' | 'latestAppsBasePath'
+  > & { updatedAt?: unknown };
   const fallback = getDefaultPublicRouteSettings();
   const settings = normalizePublicRouteSettingsDraft({
     ...fallback,
@@ -163,6 +152,10 @@ function normalizeLegacyWebAppRouteSettings(value: unknown): RuntimePublicRouteS
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
     source: 'app-settings',
   };
+}
+
+export function parseLegacyPublicRouteSettingsForMigration(raw: string | null): RuntimePublicRouteSettings {
+  return raw === null ? getDefaultPublicRouteSettings() : normalizeLegacyWebAppRouteSettings(JSON.parse(raw));
 }
 
 function getSettingsRoot(): string {
@@ -212,12 +205,20 @@ export async function readPublicRouteSettings(): Promise<PublicRouteSettings> {
   return (await publicRouteSettingsRepository.read()).value;
 }
 
-export async function writePublicRouteSettings(draft: unknown, expectedRevision?: string): Promise<PublicRouteSettings> {
-  return (await publicRouteSettingsRepository.update((previousSettings) => ({
-    ...normalizePublicRouteSettingsDraft(draft, previousSettings),
-    updatedAt: new Date().toISOString(),
-    source: 'app-settings',
-  }), expectedRevision)).value;
+export async function writePublicRouteSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<PublicRouteSettings> {
+  return (
+    await publicRouteSettingsRepository.update(
+      (previousSettings) => ({
+        ...normalizePublicRouteSettingsDraft(draft, previousSettings),
+        updatedAt: new Date().toISOString(),
+        source: 'app-settings',
+      }),
+      expectedRevision,
+    )
+  ).value;
 }
 
 export function getPublishedWebAppsBasePath(): string {
@@ -250,15 +251,26 @@ export async function readWebAppRouteSettings(): Promise<WebAppRouteSettings> {
   };
 }
 
-export async function writeWebAppRouteSettings(draft: unknown, expectedRevision?: string): Promise<WebAppRouteSettings> {
-  const settings = (await publicRouteSettingsRepository.update((current) => ({
-    ...normalizePublicRouteSettingsDraft({
-      ...current,
-      ...toSettingsRecord(draft),
-    }, current),
-    updatedAt: new Date().toISOString(),
-    source: 'app-settings',
-  }), expectedRevision)).value;
+export async function writeWebAppRouteSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<WebAppRouteSettings> {
+  const settings = (
+    await publicRouteSettingsRepository.update(
+      (current) => ({
+        ...normalizePublicRouteSettingsDraft(
+          {
+            ...current,
+            ...toSettingsRecord(draft),
+          },
+          current,
+        ),
+        updatedAt: new Date().toISOString(),
+        source: 'app-settings',
+      }),
+      expectedRevision,
+    )
+  ).value;
 
   return {
     publishedAppsBasePath: settings.publishedAppsBasePath,

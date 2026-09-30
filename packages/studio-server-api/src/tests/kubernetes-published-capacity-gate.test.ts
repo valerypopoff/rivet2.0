@@ -74,7 +74,6 @@ function providerConfig() {
         queries: {
           memoryHighWaterBytes: 'max(container_memory_working_set_bytes{app="rivet"})',
           nodeEphemeralHighWaterBytes: 'max(container_fs_usage_bytes{app="rivet"})',
-          downstreamConcurrency: 'sum(rivet_provider_requests_in_flight)',
         },
       },
       stages: [
@@ -91,6 +90,20 @@ function providerConfig() {
   };
 }
 
+function providerConfigWithDownstreamQuery(query: string) {
+  const config = providerConfig();
+  return {
+    ...config,
+    capacity: {
+      ...config.capacity,
+      prometheus: {
+        ...config.capacity.prometheus,
+        queries: { ...config.capacity.prometheus.queries, downstreamConcurrency: query },
+      },
+    },
+  };
+}
+
 test('published capacity gate is explicit, staging-only, bounded, and redacts request credentials', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-capacity-gate-test-'));
   const configFile = path.join(directory, 'provider-gate.json');
@@ -102,10 +115,24 @@ test('published capacity gate is explicit, staging-only, bounded, and redacts re
     assert.equal(config.mode, 'certify');
     assert.equal(config.capacity.stages.length, 2);
     assert.equal(config.capacity.serviceNamePrefix, 'rivet-staging');
+    assert.ok(config.capacity.prometheus);
+    assert.deepEqual(Object.keys(config.capacity.prometheus.queries), [
+      'memoryHighWaterBytes',
+      'nodeEphemeralHighWaterBytes',
+    ]);
     assert.equal(JSON.stringify(redactPublishedCapacityGateConfig(config)).includes('capacity-secret'), false);
     assert.equal(
       JSON.stringify(redactPublishedCapacityGateConfig(config)).includes('prometheus-capacity-secret'),
       false,
+    );
+    await fs.writeFile(configFile, JSON.stringify(providerConfigWithDownstreamQuery('max(test_provider_requests_in_flight)')));
+    const optionalQueryConfig = buildPublishedCapacityGateConfig({ rootDir, env: createEnvironment(configFile, valuesFile) });
+    assert.ok(optionalQueryConfig.capacity.prometheus);
+    assert.equal(Object.keys(optionalQueryConfig.capacity.prometheus.queries).length, 3);
+    await fs.writeFile(configFile, JSON.stringify(providerConfigWithDownstreamQuery('')));
+    assert.throws(
+      () => buildPublishedCapacityGateConfig({ rootDir, env: createEnvironment(configFile, valuesFile) }),
+      /queries\.downstreamConcurrency must be one non-empty PromQL expression/,
     );
     assert.throws(
       () =>
@@ -306,6 +333,9 @@ test('capacity certification fails closed on malformed evidence and requires ove
       ],
       controlCanaryEveryRequests: 2,
       requireExecutionMetrics: true,
+      prometheus: {
+        queries: { memoryHighWaterBytes: 'memory', nodeEphemeralHighWaterBytes: 'ephemeral' },
+      },
       thresholds: {
         maximumP95Ms: { steady: 100, overload: 100 },
         maximumUnexpectedRate: 0,
@@ -356,10 +386,12 @@ test('capacity certification fails closed on malformed evidence and requires ove
   const snapshots = [
     {
       baseline: true,
-      podCount: 0,
+      podCount: 1,
       eventsAvailable: true,
+      metricsAvailable: true,
+      metrics: { activeRuns: 0 },
       restartCount: 0,
-      restartCountsByPod: {},
+      restartCountsByPod: { 'rivet-execution-original': 0 },
       oomKilledPods: [],
       evictedPods: [],
     },
@@ -369,14 +401,73 @@ test('capacity certification fails closed on malformed evidence and requires ove
       metricsAvailable: true,
       eventsAvailable: true,
       restartCount: 0,
-      restartCountsByPod: { 'rivet-execution-replacement': 0 },
+      restartCountsByPod: { 'rivet-execution-original': 0 },
       oomKilledPods: [],
       evictedPods: [],
+      metrics: { activeRuns: 1 },
       recordingDropsObserved: 0,
+      prometheus: {
+        available: true,
+        values: { memoryHighWaterBytes: 1024, nodeEphemeralHighWaterBytes: 2048 },
+      },
     },
   ];
 
   assert.deepEqual(evaluateCapacityCertificate(report, snapshots, config), []);
+  const idleOnlySnapshots = structuredClone(snapshots);
+  idleOnlySnapshots[1].metrics.activeRuns = 0;
+  assert.match(
+    evaluateCapacityCertificate(report, idleOnlySnapshots, config).join('\n'),
+    /no active published run was observed/,
+  );
+  const missingBaseline = structuredClone(snapshots);
+  missingBaseline[0].podCount = 0;
+  assert.match(
+    evaluateCapacityCertificate(report, missingBaseline, config).join('\n'),
+    /complete execution-pod baseline was unavailable/,
+  );
+  const busyBaseline = structuredClone(snapshots);
+  busyBaseline[0].metrics.activeRuns = 1;
+  assert.match(
+    evaluateCapacityCertificate(report, busyBaseline, config).join('\n'),
+    /complete execution-pod baseline was unavailable/,
+  );
+  const replacedBaseline: Array<Record<string, unknown>> = structuredClone(snapshots);
+  replacedBaseline[1].restartCountsByPod = { 'rivet-execution-replacement': 0 };
+  assert.match(
+    evaluateCapacityCertificate(report, replacedBaseline, config).join('\n'),
+    /baseline execution pod disappeared/,
+  );
+  const unavailablePod = structuredClone(snapshots);
+  unavailablePod[1].podCount = 0;
+  assert.match(
+    evaluateCapacityCertificate(report, unavailablePod, config).join('\n'),
+    /execution pod was unavailable/,
+  );
+  const optionalDownstreamConfig = {
+    capacity: {
+      ...config.capacity,
+      prometheus: {
+        queries: { ...config.capacity.prometheus.queries, downstreamConcurrency: 'downstream' },
+      },
+    },
+  };
+  assert.match(
+    evaluateCapacityCertificate(report, snapshots, optionalDownstreamConfig).join('\n'),
+    /Prometheus high-water observations were unavailable/,
+  );
+  const missingPrometheusSample = structuredClone(snapshots);
+  missingPrometheusSample[1].prometheus!.values.nodeEphemeralHighWaterBytes = Number.NaN;
+  assert.match(
+    evaluateCapacityCertificate(report, missingPrometheusSample, config).join('\n'),
+    /Prometheus high-water observations were unavailable/,
+  );
+  const negativePrometheusSample = structuredClone(snapshots);
+  negativePrometheusSample[1].prometheus!.values.nodeEphemeralHighWaterBytes = -1;
+  assert.match(
+    evaluateCapacityCertificate(report, negativePrometheusSample, config).join('\n'),
+    /Prometheus high-water observations were unavailable/,
+  );
   assert.match(
     evaluateCapacityCertificate({ ...report, stages: [] }, snapshots, config).join('\n'),
     /does not contain exactly the configured capacity stages/,
@@ -410,7 +501,7 @@ test('capacity certification fails closed on malformed evidence and requires ove
   );
 
   const restartedReplacement = structuredClone(snapshots);
-  restartedReplacement[1].restartCountsByPod = { 'rivet-execution-replacement': 1 };
+  restartedReplacement[1].restartCountsByPod = { 'rivet-execution-original': 1 };
   assert.match(
     evaluateCapacityCertificate(report, restartedReplacement, config).join('\n'),
     /execution pod restart observed/,

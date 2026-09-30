@@ -132,6 +132,24 @@ let indexRepairTimer: ReturnType<typeof setTimeout> | null = null;
 let indexRepairPromise: Promise<void> | null = null;
 let pendingIndexRepairRoot = '';
 let lastIndexRepairStartedAt = 0;
+let migrationCopyMode = false;
+
+/** Offline importer only: rebuild the derived index without applying source retention. */
+export function enableWorkflowRecordingMigrationCopyMode(): void {
+  migrationCopyMode = true;
+}
+
+/** Quiesce derived index repair as well as queued writes on the live VM. */
+export async function prepareWorkflowRecordingsForVmMigration(): Promise<void> {
+  migrationCopyMode = true;
+  if (indexRepairTimer) {
+    clearTimeout(indexRepairTimer);
+    indexRepairTimer = null;
+    pendingIndexRepairRoot = '';
+  }
+  await indexRepairPromise;
+  await workflowRecordingStore.flush();
+}
 
 export function enqueueWorkflowExecutionRecordingPersistence(task: () => Promise<void>): boolean {
   return workflowRecordingStore.enqueuePersistence(task);
@@ -169,7 +187,7 @@ function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRe
 
 async function ensureWorkflowRecordingStorage(root?: string): Promise<string> {
   const recordingsRoot = getWorkflowRecordingsRoot(root);
-  await workflowRecordingStore.ensureStorage(recordingsRoot);
+  await workflowRecordingStore.ensureStorage(recordingsRoot, { skipCleanup: migrationCopyMode });
   return recordingsRoot;
 }
 
@@ -349,7 +367,12 @@ function startWorkflowRecordingIndexRepair(recordingsRoot: string): void {
 }
 
 function scheduleWorkflowRecordingIndexRepair(recordingsRoot: string): void {
-  if (indexRepairTimer || indexRepairPromise || Date.now() - lastIndexRepairStartedAt < INDEX_REPAIR_MIN_INTERVAL_MS) {
+  if (
+    migrationCopyMode ||
+    indexRepairTimer ||
+    indexRepairPromise ||
+    Date.now() - lastIndexRepairStartedAt < INDEX_REPAIR_MIN_INTERVAL_MS
+  ) {
     return;
   }
 
@@ -377,7 +400,7 @@ export async function flushWorkflowRecordingIndexRepairForTests(): Promise<void>
 
 export async function initializeWorkflowRecordingStorage(root?: string): Promise<void> {
   const recordingsRoot = await ensureWorkflowRecordingsRoot(root);
-  await workflowRecordingStore.ensureStorage(recordingsRoot);
+  await workflowRecordingStore.ensureStorage(recordingsRoot, { skipCleanup: migrationCopyMode });
   lastIndexRepairStartedAt = Date.now();
 }
 

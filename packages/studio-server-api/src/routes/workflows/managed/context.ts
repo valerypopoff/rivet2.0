@@ -75,6 +75,7 @@ export type ManagedWorkflowContext = {
 export function createManagedWorkflowContext(
   config: ManagedWorkflowStorageConfig,
   blobStore?: ManagedWorkflowBlobStore,
+  options?: { migrationMode?: 'copy' | 'verify' },
 ): ManagedWorkflowContext {
   const poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
   const { pool } = poolLease;
@@ -82,6 +83,7 @@ export function createManagedWorkflowContext(
   const executionCache = new ManagedWorkflowExecutionCache();
   const queries = createManagedWorkflowQueries(pool);
   const staleUploadRetentionConfig = getManagedStaleUploadRetentionConfig(process.env);
+  const runBackgroundTasks = options?.migrationMode === undefined;
   const maintenance = createManagedWorkflowMaintenance({
     pool,
     blobStore: resolvedBlobStore,
@@ -91,7 +93,7 @@ export function createManagedWorkflowContext(
   // maintenance owner. Execution replicas must not allocate audit work or an
   // extra object-store client for the high-volume published endpoint path.
   const runtimeLibrariesBlobStore =
-    maintenance.config.enabled && !blobStore
+    runBackgroundTasks && maintenance.config.enabled && !blobStore
       ? new S3ManagedWorkflowBlobStore(
           {
             ...config,
@@ -100,7 +102,7 @@ export function createManagedWorkflowContext(
           'runtime_libraries',
         )
       : undefined;
-  if (maintenance.config.enabled) {
+  if (runBackgroundTasks && maintenance.config.enabled) {
     maintenance.registerTask(
       'managed-evaluation-retention',
       createManagedEvaluationRetentionTask({
@@ -168,11 +170,17 @@ export function createManagedWorkflowContext(
     if (!schemaReadyPromise) {
       schemaReadyPromise = (async () => {
         // Blob storage must exist before the schema can reference uploaded objects.
-        await resolvedBlobStore.initialize?.();
+        if (options?.migrationMode === 'verify') await resolvedBlobStore.checkHealth?.();
+        else await resolvedBlobStore.initialize?.();
         // Every API process reaches this path. The database-wide migration protocol
         // serializes mutation, while Kubernetes API pods can use verify-only mode
         // after the dedicated migration Job has completed.
-        const schemaMode = getManagedWorkflowSchemaMode();
+        const schemaMode =
+          options?.migrationMode === 'verify'
+            ? 'verify'
+            : options?.migrationMode === 'copy'
+              ? 'migrate'
+              : getManagedWorkflowSchemaMode();
         await withManagedDbRetry(`managed schema ${schemaMode}`, () =>
           schemaMode === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
         );
@@ -187,7 +195,7 @@ export function createManagedWorkflowContext(
     // Starting the timer is intentionally separate from running a pass. A
     // registered domain task may use withTransaction(), which itself waits for
     // initialize(); starting it synchronously here would create a cycle.
-    await maintenance.initialize();
+    if (runBackgroundTasks) await maintenance.initialize();
   };
 
   const checkHealth = async (context?: RuntimeHealthCheckContext): Promise<void> => {

@@ -11,6 +11,7 @@ import {
   getManagedWorkflowStorageConfigFromSettings,
 } from '../routes/workflows/storage-config.js';
 import { readDeploymentStorageBootstrapSettings } from '../deployment-storage-settings.js';
+import { assertVmMigrationTargetMayServe } from '../vm-migration-target-gate.js';
 
 function readCommand(): ManagedWorkflowSchemaMode {
   const command = process.argv[2]?.trim().toLowerCase();
@@ -23,19 +24,17 @@ function readCommand(): ManagedWorkflowSchemaMode {
 
 async function main(): Promise<void> {
   const command = readCommand();
-  const storageConfig = process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated'
-    ? getManagedWorkflowStorageConfigFromSettings(readDeploymentStorageBootstrapSettings())
-    : getManagedWorkflowStorageConfig();
+  const storageConfig =
+    process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated'
+      ? getManagedWorkflowStorageConfigFromSettings(readDeploymentStorageBootstrapSettings())
+      : getManagedWorkflowStorageConfig();
   const pool = new Pool(getManagedDbPoolConfig(storageConfig));
   try {
+    await assertVmMigrationTargetMayServe(pool);
     const result = await withManagedDbRetry(`managed schema ${command}`, () =>
-      command === 'migrate'
-        ? migrateManagedWorkflowSchema(pool)
-        : verifyManagedWorkflowSchema(pool),
+      command === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
     );
-    console.log(
-      `[managed-workflow-schema] ${command} succeeded at version ${result.currentVersion}.`,
-    );
+    console.log(`[managed-workflow-schema] ${command} succeeded at version ${result.currentVersion}.`);
   } finally {
     await pool.end();
   }

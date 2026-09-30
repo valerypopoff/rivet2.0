@@ -14,7 +14,7 @@ ready: Helm will remove the embedded proxy and Ingress during the upgrade.
 This repo supports one Kubernetes application topology today:
 
 - `web`: fixed at `1` in the current endpoint-heavy recommended shape
-- `backend`: singleton
+- `backend`: singleton with one application container supervising the control API and hosted editor executor as separate Node processes
 - `execution`: scalable
 
 ### External gateway contract
@@ -406,6 +406,13 @@ Run it from **Build Images** -> **Run workflow**, enabling `run_managed_kubernet
 
 ### Published execution capacity calibration and certificate
 
+The [resource-sizing handoff](resource-sizing.md) records the preflight,
+representative workload matrix, evidence worksheet, and approval boundary for
+replacing provisional production limits. Keep those acknowledgements until
+DevOps can provide verified staging monitoring; this gate's deterministic
+traffic alone does not size the web, combined backend, migration, or arbitrary
+graph workloads.
+
 `yarn studio-server:verify:kubernetes:managed-capacity` is the protected **staging capacity** command for the high-volume published execution plane. It is not a generic load-test utility and it must never be aimed at production. GitHub **Build Images** has two mutually exclusive manual dispatches, both of which first run the provider gate to deploy the current immutable candidate image set in the protected `rivet-managed-staging` environment:
 
 - `run_managed_kubernetes_capacity_observe` records a baseline in `observe` mode. It never promotes candidate aliases, even if every ordinary release gate succeeds.
@@ -439,9 +446,8 @@ Add a `capacity` object to the existing protected provider-gate JSON. Keep the J
       "baseUrl": "https://prometheus.staging.example.test",
       "headers": { "authorization": "Bearer <prometheus-read-token>" },
       "queries": {
-        "memoryHighWaterBytes": "max(container_memory_working_set_bytes{app_kubernetes_io_name=\"rivet\"})",
-        "nodeEphemeralHighWaterBytes": "max(container_fs_usage_bytes{app_kubernetes_io_name=\"rivet\"})",
-        "downstreamConcurrency": "sum(rivet_provider_requests_in_flight)"
+        "memoryHighWaterBytes": "REPLACE_WITH_VALIDATED_EXECUTION_MEMORY_QUERY",
+        "nodeEphemeralHighWaterBytes": "REPLACE_WITH_VALIDATED_TOTAL_LOCAL_EPHEMERAL_QUERY"
       }
     },
     "stages": [
@@ -459,6 +465,19 @@ Add a `capacity` object to the existing protected provider-gate JSON. Keep the J
 }
 ```
 
+The two query values above are deliberately **non-runnable placeholders**.
+DevOps must replace and test them against live staging metrics before running
+the gate. The runner checks for one finite, nonnegative Prometheus vector sample, not that
+the labels select the right Pods or that a metric accounts for every disk-backed
+`emptyDir` and log. In particular, `container_fs_usage_bytes` alone is not a
+Pod's total local-ephemeral usage. An optional `downstreamConcurrency` query
+can be supplied if an actual provider/tool concurrency metric is available;
+the built-in fixture makes no downstream calls, so it is not required for its
+certificate. Rivet does not emit a built-in
+`rivet_provider_requests_in_flight` metric. Do not use a constant or an
+unrelated aggregate merely to make certification pass; see the
+[resource-sizing handoff](resource-sizing.md#before-running-a-trial).
+
 `serviceNamePrefix` is optional: omit it when the chart service prefix is the Helm release name, or set it to the actual service prefix when the staging Helm values use `fullnameOverride`; it identifies the proxy and control API ClusterIP Services. Stage names are unique lowercase DNS fragments; each stage is capped at 256 concurrent workers and 20,000 requests, with a 50,000-request cap for the whole run. At least one stage must explicitly expect overload. `fast` uses a 75 ms deterministic graph and `long` uses a 1.5 s deterministic graph. They intentionally prove request scheduling, admission, recording persistence, proxy routing, and Code-node execution without invoking an external LLM, tool, or provider. Add provider/tool scenarios only after their data, idempotency, and cost boundaries are separately approved.
 
 Before certification, enable direct execution metrics in the staging values:
@@ -474,7 +493,7 @@ The observe dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=observe` and uploads bot
 
 The certificate dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=certify`. Certification requires `requireExecutionMetrics: true`, the `capacity.prometheus` block, and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; every sampled live execution Pod must have all three external high-water values as one finite Prometheus vector sample. The gate otherwise fails if a required event/Prometheus sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Both modes require the exact staging acknowledgement and refuse non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, PromQL expression, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
-This certificate is deliberately not proof of final production sizing. It records provider-side memory/node-ephemeral high-water and downstream concurrency when certifying, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
+This certificate is deliberately not proof of final production sizing. It requires a healthy pre-load execution-Pod baseline with zero active runs, observes at least one active published run, and fails if a baseline Pod disappears; otherwise idle-only or replaced-Pod samples could understate the peak. It records staging execution memory/node-ephemeral observations and optional downstream concurrency, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
 
 ### Cross-store backup and restore drill
 
@@ -852,9 +871,9 @@ The chart ships baseline CPU and memory requests for every workload so CPU HPAs 
 
 Helm validates every chart-owned integer that becomes a runtime limit or a Kubernetes integer field from its raw value. This rejects fractional native YAML/JSON values instead of allowing Helm's `int` conversion to truncate them before the pod starts. The coverage includes hosted Evaluation quotas, published-execution admission, PostgreSQL pool/capacity values, API replica and HPA bounds, lifecycle/probe settings, schema/maintenance controls, and availability settings. Component service and database ports must also be whole TCP ports in the `1`–`65535` range. Keep these fields as ordinary whole numbers in environment overlays and generated release values; do not rely on `--set-json` or a JSON/YAML value being coerced safely.
 
-Every chart-managed disposable writable volume is nevertheless bounded: `writableVolumeLimits` caps workspace, workflow materialization, app-data caches, and runtime-library cache storage; the existing `tmpVolume.sizeLimit` caps `/var/tmp`. These prevent a single pod from consuming unbounded node ephemeral storage, but their starting values are not capacity evidence.
+Every chart-managed disposable writable volume is nevertheless bounded: `writableVolumeLimits` caps workspace, workflow materialization, app-data caches, and runtime-library cache storage; `tmpVolume.sizeLimit` caps `/var/tmp`, and `tmpVolume.nodeTmpSizeLimit` caps a separate `/tmp`. These prevent a single volume from growing without a bound, but their starting values are not capacity evidence or a substitute for whole-container `ephemeral-storage` limits. Both scratch volumes are ordinary node-disk-backed `emptyDir`, not RAM-backed tmpfs. The static web container has a read-only root filesystem; backend, execution, and Evaluation root filesystems remain writable pending a representative workflow/plugin compatibility gate.
 
-For a production release, Helm requires each deployed component (`web`, `api`, `executor`, and `execution`, plus `proxy` only in embedded mode) to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations with tested values after the published-route capacity gate.
+For a production release, Helm requires each deployed component (`web`, `api`, combined `backend`, and `execution`, plus `proxy` only in embedded mode and `evaluation` only when enabled) to provide either both memory request/limit and both `ephemeral-storage` request/limit values, or a non-trivial component-specific explanation under `resourceLimitAcknowledgements`. `resources.api` also budgets the migration Job; `resources.executor` is reserved for the legacy startup-files compatibility path, not the current combined backend. Those values must be Kubernetes quantity strings (for example `750Mi`, `2Gi`, or `1G`); Helm rejects non-string values and common unsupported quantity forms before a release reaches the cluster, while Kubernetes remains the final admission authority. The acknowledgement is a deliberate temporary decision, not a second configuration source: Helm rejects it once the corresponding complete resource policy exists. The supplied production overlay records the current measured-limit deferral explicitly. Replace those explanations only after the [resource-sizing handoff](resource-sizing.md) has complete evidence for each active workload, not merely a passing deterministic published-route capacity gate.
 
 The sample `service.type: NodePort` / single `service.targetPort` pattern from simple apps does not apply here. This chart creates component services internally and keeps them as `ClusterIP`. In external mode it creates no Ingress; DevOps routes to the component Services outside the chart. Only embedded mode routes a chart Ingress to the `proxy` Service.
 
@@ -1032,7 +1051,9 @@ In Kubernetes, production should stay on managed storage:
 
 Kubernetes requires `appSettings.backend=postgres`. Every App Settings domain is stored in the managed PostgreSQL `app_settings` table as an AES-256-GCM-encrypted payload with a monotonic revision. Compare-and-swap writes prevent silent administrative overwrites. PostgreSQL notifications invalidate replica caches quickly, and a five-second revision poll converges after dropped notifications. Notification failure cannot change the result of an already-committed save, and replicas acknowledge revisions only after successful repository refresh so transient failures remain retryable. Each HTTP request captures one immutable settings snapshot.
 
-Backend and execution pods receive separate pod-local `emptyDir` app-data volumes for other reconstructible state. The control pod still mounts its local volume at `/data/rivet-app` for the API and at `/home/rivet/.local/share/com.valerypopoff.rivet2` for the co-located executor, but managed mode writes neither `deployment-storage.json` nor `node-executor-proxy.json`. APIs initialize from PostgreSQL before starting managed runtime-library sync. The co-located executor waits for the authenticated loopback `/internal/executor-runtime-config` response before accepting work; that route is restricted to the control API, loopback socket, and both service tokens, and is never a browser API. It supplies the authoritative storage snapshot at startup and refreshes proxy settings every five seconds. An unavailable initial response prevents executor startup; later refresh failures retain the last valid proxy policy. Both API and executor images declare runtime-config protocol 1, which read-only init containers verify before the control pod starts; the executor also checks the API response protocol. Deploy API and executor images from the same verified release manifest. Hosted package plugins remain pod-local, reconstructible caches. The proxy mounts no app-data volume: it polls the authenticated control-plane `/internal/app-settings/proxy-config` endpoint, which returns only route prefixes, timeout/body limits, an empty legacy trusted-host list, backend kind, and a revision. Failed fetches preserve the last valid nginx config, and every candidate still passes `nginx -t` before reload.
+Backend and execution pods receive separate pod-local `emptyDir` app-data volumes for other reconstructible state. The control pod mounts its local volume at `/data/rivet-app` for the API and at `/home/rivet/.local/share/com.valerypopoff.rivet2` for the co-located executor. A single backend container runs both existing processes under a supervisor; it does not merge their graph runtimes or change their service ports. The executor still starts with `/app` as its working directory, matching its standalone image. API profile, process role, and listening port, plus executor port, host, and runtime-library tier, remain deployment-owned after Vault dotenv loading; a stale dotenv cannot make the API listen on a different port than the supervisor probes. The supervisor starts the API first, waits for `/readyz`, then launches the executor. It reports readiness only after the executor signals that its code workers and WebSocket listener are ready and the listener accepts connections. A child exit terminates the other process and restarts the pod. The combined container's initial CPU/memory request is the sum of the former API and executor requests; it has one shared resource limit and OOM fate. This is container-count compliance, not an expected memory reduction.
+
+Managed mode writes neither `deployment-storage.json` nor `node-executor-proxy.json`. APIs initialize from PostgreSQL before starting managed runtime-library sync. The executor waits for the authenticated loopback `/internal/executor-runtime-config` response before accepting work; that route is restricted to the control API, loopback socket, and both service tokens, and is never a browser API. It supplies the authoritative storage snapshot at startup and refreshes proxy settings every five seconds. An unavailable initial response prevents executor startup; later refresh failures retain the last valid proxy policy. The combined image declares runtime-config protocol 1 and checks the loopback URL before launching either process; the executor also checks the API response protocol. The executor derives its LLM-profile-health and execution-environment service routes from that same verified loopback origin instead of trusting separate dotenv URLs, because those requests carry service authentication headers and can return environment values or referenced project contents. Production VM/Compose uses the same supervisor but retains single-host file-backed settings and does not use the runtime-config API; its two service URLs are supervisor-owned across dotenv loading. The standalone executor image remains a separate release artifact for predecessor rollback and explicit standalone use. Hosted package plugins remain pod-local, reconstructible caches. The proxy mounts no app-data volume: it polls the authenticated control-plane `/internal/app-settings/proxy-config` endpoint, which returns only route prefixes, timeout/body limits, an empty legacy trusted-host list, backend kind, and a revision. Failed fetches preserve the last valid nginx config, and every candidate still passes `nginx -t` before reload.
 
 This change removes **startup settings-file writes**, not all pod-local writes. Runtime-library caches, package preparation, temporary files, and other `emptyDir` use remain; do not describe this chart as wholly disk-write-free. Standalone and local-Docker deployments retain their file-backed settings/bootstrap behavior.
 
@@ -1042,24 +1063,24 @@ The managed schema also stores short-lived web-app action runs, sequenced replay
 
 Runtime-library local files are caches/workspaces, not the source of truth in managed mode. The default is `emptyDir` for execution replicas. Only set `runtimeLibraries.cache.existingClaimName` if the PVC can be mounted by every pod that needs it; with more than one `execution` replica, that usually means an RWX-capable volume. A single RWO claim reused by multiple execution pods can leave pods stuck waiting for volume attachment.
 
-`tmpVolume` is an `emptyDir` mounted at `/var/tmp` with a default `2Gi` size limit. Increase `tmpVolume.sizeLimit` if workflows write larger temporary files; do not use the unsupported generic `writableDirs` overlay key.
+`tmpVolume` creates independent bounded `emptyDir` volumes at `/var/tmp` (default `2Gi`) and `/tmp` (default `1Gi`) for backend, execution, Evaluation, migration, web, and the optional embedded proxy. Node's `os.tmpdir()` and the API's native-I/O temporary root use `/tmp`; the migration Job explicitly stages its app data under `/var/tmp`. Keep both mounts: moving only one leaves the other on the container writable layer. Production rendering requires `tmpVolume.enabled=true`; the chart validates both sizes and reserves the `/tmp` volume name. Increase the limits only after measuring actual package-install, workflow, and migration high-water marks. Do not use the unsupported generic `writableDirs` overlay key. These mounts do not make Kubernetes disk-write-free: root writable layers for graph-capable containers, logs, and container images still use node storage. API/executor image defaults route npm and XDG caches under `/tmp`, and replicated entrypoints restore `TMPDIR`, the npm cache, and `XDG_CACHE_HOME` after loading Vault dotenv so stale secrets cannot redirect scratch. They also clear uppercase `NPM_CONFIG_CACHE`, which npm prefers over the lowercase cache setting. Hosted plugin installs pass an explicit scratch-local pnpm store; package trees and release artifacts remain in their existing app-data/runtime-library mounts. Application data is not redirected to scratch.
 
 ### Gateway and public routes
 
 In external mode, the cluster-owned gateway implements the [external gateway contract](#external-gateway-contract) and routes to these chart Services. In embedded compatibility mode, the chart-owned Ingress enters the in-chart proxy, which applies the same routing:
 
-| Public path                                | Internal target                                           |
-| ------------------------------------------ | --------------------------------------------------------- |
-| `/`                                        | `web`                                                     |
-| `/api/*` and `/ui-auth`                    | singleton `backend` API                                   |
-| `/workflows/*`                             | scalable `execution` API                                  |
-| `/workflows-latest/*`                      | singleton `backend` API                                   |
-| `/apps/*`                                  | scalable `execution` API                                  |
-| `/apps-latest/*`                           | singleton `backend` API                                   |
-| `/apps/*/actions/ws`                       | scalable `execution` API websocket                        |
-| `/apps-latest/*/actions/ws`                | singleton `backend` API websocket                         |
-| `/ws/latest-debugger`                      | singleton `backend` API websocket                         |
-| `/ws/executor/internal` and `/ws/executor` | executor container in the singleton `backend` StatefulSet |
+| Public path                                | Internal target                                       |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `/`                                        | `web`                                                 |
+| `/api/*` and `/ui-auth`                    | singleton `backend` API                               |
+| `/workflows/*`                             | scalable `execution` API                              |
+| `/workflows-latest/*`                      | singleton `backend` API                               |
+| `/apps/*`                                  | scalable `execution` API                              |
+| `/apps-latest/*`                           | singleton `backend` API                               |
+| `/apps/*/actions/ws`                       | scalable `execution` API websocket                    |
+| `/apps-latest/*/actions/ws`                | singleton `backend` API websocket                     |
+| `/ws/latest-debugger`                      | singleton `backend` API websocket                     |
+| `/ws/executor/internal` and `/ws/executor` | executor process in the singleton `backend` container |
 
 Keep gateway body-size limits high enough for project import/export and keep websocket timeouts long. The tracked nginx overlay examples use `100m` body size and `86400` second read/send timeouts. In external mode, the gateway must replace the embedded proxy's authentication and trusted-header boundary before routing `/workflows` to `execution`; merely forwarding HTTP to the Service is unsafe.
 
@@ -1118,7 +1139,7 @@ policy.
 
 ### Writable-volume and pod-resource policy
 
-`emptyDir` limits and pod resource limits solve different failure modes. The former bounds a particular disposable filesystem; the latter gives the scheduler an honest memory/node-ephemeral reservation and ceiling for the entire container. Configure both from the published-route load gate rather than copying the starting values into production unchanged:
+`emptyDir` limits and pod resource limits solve different failure modes. The former bounds a particular disposable filesystem; the latter gives the scheduler an honest memory/node-ephemeral reservation and ceiling for the entire container. Configure both from the representative per-workload measurements in the [resource-sizing handoff](resource-sizing.md), not from the deterministic published-route gate alone or by copying starting values into production unchanged:
 
 ```yaml
 writableVolumeLimits:
@@ -1138,7 +1159,7 @@ resources:
       ephemeral-storage: <measured-ceiling>
 ```
 
-The control pod's read-only API and executor protocol compatibility init containers use their corresponding resource maps. They reject images lacking the same runtime-configuration protocol before either serving process starts. This keeps Kubernetes scheduling and a future measured ceiling honest across compatibility verification and the running processes. While a safe measured ceiling is not yet available, production may instead retain a component-specific `resourceLimitAcknowledgements.execution.memory` and `.ephemeralStorage` rationale. It must explain the deferral; the production chart rejects a missing/short rationale, and it also rejects a stale rationale once both request and limit are set. This makes a deferred limit reviewable without silently claiming that the chart has a tested capacity envelope. Do not use an acknowledgement to bypass a known safe limit.
+The backend has one resource map and one resource-limit acknowledgement for both processes. Move any old `resources.executor` override to `resources.backend`; the normal chart rejects that retired resource key rather than silently ignoring its limits. Move the old executor limit rationale to `resourceLimitAcknowledgements.backend` as well. An old acknowledgement key may remain in reused Helm values during upgrade, but it no longer authorizes the active backend. The explicit predecessor-rollback mode can still use the old executor resource override and validates only the resource maps used by that mode. The supervisor checks the shared runtime-configuration protocol at startup; no compatibility init container is rendered in the normal file-free mode. While a safe measured ceiling is not yet available, production may retain a component-specific `resourceLimitAcknowledgements.backend` or `.execution` memory/ephemeral-storage rationale. It must explain the deferral; the production chart rejects a missing/short rationale, and it also rejects a stale rationale once both request and limit are set. Do not use an acknowledgement to bypass a known safe limit.
 
 ### Health, lifecycle, and availability
 
@@ -1168,15 +1189,16 @@ Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Sh
 
 The rendered probe contract is:
 
-| Workload               | Container  | Startup        | Liveness       | Readiness      |
-| ---------------------- | ---------- | -------------- | -------------- | -------------- |
-| `backend` StatefulSet  | `api`      | `GET /livez`   | `GET /livez`   | `GET /readyz`  |
-| `backend` StatefulSet  | `executor` | TCP `21889`    | TCP `21889`    | TCP `21889`    |
-| `execution` Deployment | `api`      | `GET /livez`   | `GET /livez`   | `GET /readyz`  |
-| `proxy` Deployment     | `proxy`    | TCP proxy port | TCP proxy port | TCP proxy port |
-| `web` Deployment       | `web`      | `GET /`        | `GET /`        | `GET /`        |
+| Workload               | Container | Startup                  | Liveness                | Readiness                |
+| ---------------------- | --------- | ------------------------ | ----------------------- | ------------------------ |
+| `backend` StatefulSet  | `backend` | supervisor `GET /readyz` | supervisor `GET /livez` | supervisor `GET /readyz` |
+| `execution` Deployment | `api`     | `GET /livez`             | `GET /livez`            | `GET /readyz`            |
+| `proxy` Deployment     | `proxy`   | TCP proxy port           | TCP proxy port          | TCP proxy port           |
+| `web` Deployment       | `web`     | `GET /`                  | `GET /`                 | `GET /`                  |
 
 Startup probes tolerate cold reconciliation without letting liveness restart a valid slow boot forever. Permanent failures remain bounded by `lifecycle.probes.startup.failureThreshold` and its period.
+
+The supervisor health listener is not exposed by a Service or public gateway. Its readiness combines the API's own `/readyz`, an executor-ready IPC signal after code-worker prewarming, and a loopback connection to the executor listener. Its liveness checks child-process state and the executor listener, without treating a PostgreSQL/S3 outage as a reason to restart the pod. The backend startup probe allows the API startup budget plus the executor's bounded configuration wait. Kubernetes still routes the API and executor through their existing Services and named ports.
 
 Termination is coordinated across Kubernetes and the API:
 
@@ -1197,7 +1219,7 @@ The backend remains a validated singleton. Managed web-app action run history/re
 
 Runtime images source `/vault/dotenv` at startup and also accept the Vault Injector default fallback path `/vault/secrets/<dotenvFileName>`. API and executor workloads receive the configured full dotenv; in embedded mode only, the proxy's chart-owned template writes only `RIVET_KEY` to that path.
 
-The chart's typed dotenv contract emits `agent-pre-populate-only: "true"` and `agent-init-first: "true"`. The latter ensures the schema-migration Job and serving containers can source `/vault/dotenv` before using credentials. The API and executor compatibility init containers do not read secrets. Vault also receives explicit CPU, memory, and node-ephemeral requests and limits from `vault.agentResources` (`50m`/`64Mi`/`64Mi` requested and `250m`/`128Mi`/`256Mi` limited by default). These small bounds are intentionally separate from the long-running graph workloads, because the injected agent only renders the dotenv file. The Injector owns the shared in-memory secret volume and its standard annotations do not expose a chart-owned `sizeLimit`; do not use this dotenv contract for large rendered payloads.
+The chart's typed dotenv contract emits `agent-pre-populate-only: "true"` and `agent-init-first: "true"`. The latter ensures the schema-migration Job and serving containers can source `/vault/dotenv` before using credentials. Vault still injects a pre-population init container even though the backend now has one running application container. If the cluster's one-container-per-pod rule also counts init containers, DevOps must supply an approved secret-delivery replacement before claiming policy compliance; do not disable Vault injection without replacing its credentials. Vault also receives explicit CPU, memory, and node-ephemeral requests and limits from `vault.agentResources` (`50m`/`64Mi`/`64Mi` requested and `250m`/`128Mi`/`256Mi` limited by default). These small bounds are intentionally separate from the long-running graph workloads, because the injected agent only renders the dotenv file. The Injector owns the shared in-memory secret volume and its standard annotations do not expose a chart-owned `sizeLimit`; do not use this dotenv contract for large rendered payloads.
 
 `vault.annotations` remains available for extra Injector configuration, but chart-owned dotenv injection, ordering, and agent-resource annotations render afterward and take precedence over the same annotation keys. The chart validates all six `vault.agentResources` quantities as positive Kubernetes quantities whenever its typed injector is active. Helm can prove only the admission annotations; a provider-backed staging release must inspect a resulting Pod and confirm that `vault-agent-init` is first, has those resources, and rendered the expected file. See HashiCorp's [Vault Agent Injector annotation reference](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/injector/annotations) before changing the injector implementation or annotation names.
 
@@ -1363,7 +1385,7 @@ yarn studio-server:kubernetes:release -- \
 
 That operation disables the schema-migration Job, uses the predecessor's immutable images, and widens only that API's verify-only schema upper bound to the candidate schema version. A sibling, older ancestor, modified manifest, bootstrap release, or lineage-less failed release is rejected even when its schema number falls in the broad compatibility interval. If the command rejects either identity or schema compatibility, do not force Helm rollback: use a forward repair release or the provider-backed database restore procedure.
 
-The forward-rollback values also enable `compatibility.legacyStartupSettingsFiles` for predecessor images that still require their pod-local startup projections. Normal releases set it to `false` and write neither settings file. The compatibility switch is not an operator storage mode and must not be enabled on an ordinary release. The predecessor images still cannot read a newly activated custom workflow prefix; use the separate verified storage-restore procedure for that case.
+The forward-rollback values also enable `compatibility.legacyStartupSettingsFiles` for predecessor images that still require their pod-local startup projections. That emergency mode restores the predecessor's separate API and executor containers; older API images have no combined-backend supervisor. It temporarily uses the API resource request for each container. Normal releases set the switch to `false`, run one backend application container, and write neither settings file. The compatibility switch is not an operator storage mode and must not be enabled on an ordinary release. The predecessor images still cannot read a newly activated custom workflow prefix; use the separate verified storage-restore procedure for that case.
 
 With release name `rivet`, the default Kubernetes object names are prefixed as `rivet-rivet-*` because the chart name is also `rivet`. Set `fullnameOverride: rivet` in the environment values if the desired object prefix is just `rivet-*`.
 

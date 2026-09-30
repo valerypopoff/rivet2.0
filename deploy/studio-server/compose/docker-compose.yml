@@ -1,11 +1,12 @@
 services:
   proxy:
     image: ${RIVET_PROXY_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/proxy:${RIVET_IMAGE_TAG:-latest}}
+    read_only: true
     build:
       context: ../../..
       dockerfile: deploy/studio-server/images/proxy/Dockerfile
     ports:
-      - "${RIVET_PORT:-8080}:8080"
+      - '${RIVET_PORT:-8080}:8080'
     environment:
       - RIVET_WEB_UPSTREAM_HOST=web
       - RIVET_WEB_UPSTREAM_PORT=3000
@@ -13,7 +14,7 @@ services:
       - RIVET_API_UPSTREAM_PORT=80
       - RIVET_EXECUTION_UPSTREAM_HOST=api
       - RIVET_EXECUTION_UPSTREAM_PORT=80
-      - RIVET_EXECUTOR_UPSTREAM_HOST=executor
+      - RIVET_EXECUTOR_UPSTREAM_HOST=api
       - RIVET_EXECUTOR_UPSTREAM_PORT=21889
       - RIVET_PROXY_RESOLVER=${RIVET_PROXY_RESOLVER:-127.0.0.11}
       - RIVET_APP_DATA_ROOT=/data/rivet-app
@@ -31,8 +32,6 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
-      executor:
-        condition: service_started
     volumes:
       - type: volume
         source: rivet_data
@@ -40,10 +39,13 @@ services:
         read_only: true
         volume:
           nocopy: true
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=512m,uid=10001,gid=10001
     restart: unless-stopped
 
   web:
     image: ${RIVET_WEB_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/web:${RIVET_IMAGE_TAG:-latest}}
+    read_only: true
     build:
       context: ../../..
       dockerfile: deploy/studio-server/compose/docker/Dockerfile.web
@@ -74,10 +76,18 @@ services:
       - all_proxy=${all_proxy:-${ALL_PROXY:-}}
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
-      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
+      - npm_config_cache=/tmp/npm-cache
+      - YARN_CACHE_FOLDER=/tmp/yarn-cache
+      - TMPDIR=/tmp
+    tmpfs:
+      - /tmp:rw,nosuid,size=128m,uid=10001,gid=10001
+      - /var/tmp:rw,nosuid,size=128m,uid=10001,gid=10001
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:3000/'',r=>{process.exit(r.statusCode===200?0:1)}).on(''error'',()=>process.exit(1))"',
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -86,11 +96,12 @@ services:
 
   filesystem-artifacts-init:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
+    read_only: true
+    user: '0:0'
+    entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
@@ -100,17 +111,22 @@ services:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
       - type: volume
         source: rivet_data
         target: /data/rivet-app
         volume:
           nocopy: true
-    restart: "no"
+    tmpfs:
+      - /tmp:rw,nosuid,size=128m
+      - /var/tmp:rw,nosuid,size=128m
+    restart: 'no'
   api:
     image: ${RIVET_API_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/api:${RIVET_IMAGE_TAG:-latest}}
+    entrypoint: ['node', '/opt/rivet/backend-supervisor.mjs']
     build:
       context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.api
+      dockerfile: deploy/studio-server/images/api/Dockerfile
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -130,8 +146,14 @@ services:
       - all_proxy=${all_proxy:-${ALL_PROXY:-}}
       - no_proxy=${no_proxy:-${NO_PROXY:-}}
       - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
+      - TMPDIR=/tmp
+      - npm_config_cache=/tmp/npm-cache
+      - XDG_CACHE_HOME=/tmp/cache
       - PORT=80
+      - RIVET_DEPLOYMENT_TOPOLOGY=single-host
+      - RIVET_BACKEND_API_PORT=80
+      - RIVET_BACKEND_EXECUTOR_PORT=21889
+      - RIVET_BACKEND_HEALTH_PORT=21890
       - RIVET_WORKSPACE_ROOT=/workspace
       - RIVET_WORKFLOWS_ROOT=/workflows
       - RIVET_WORKFLOW_RECORDINGS_ROOT=/workflow-recordings
@@ -152,9 +174,15 @@ services:
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
       - RIVET_ENABLE_LATEST_REMOTE_DEBUGGER=${RIVET_ENABLE_LATEST_REMOTE_DEBUGGER:-true}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_VM_MIGRATION_ENABLED=${RIVET_VM_MIGRATION_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_UPGRADE_ENABLED=${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_CONTROL_ROOT=${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}
+      - RIVET_LOCAL_METADATA_ENCRYPTION_KEY=${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}
+      - RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB=${RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB:-32}
       - RIVET_ENABLE_DEVELOPMENT_AUTH=${RIVET_ENABLE_DEVELOPMENT_AUTH:-false}
       - RIVET_DEVELOPMENT_AUTH_CLIENTS=${RIVET_DEVELOPMENT_AUTH_CLIENTS:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -175,12 +203,27 @@ services:
         target: /data/rivet-app
         volume:
           nocopy: true
+      - type: volume
+        source: rivet_data
+        target: /home/rivet/.local/share/com.valerypopoff.rivet2
+        volume:
+          nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
+    # Disposable, bounded RAM-backed scratch. Durable project and library data
+    # remain on their existing host/named volumes.
+    tmpfs:
+      - /tmp:rw,nosuid,exec,size=${RIVET_API_TMPFS_SIZE:-512m},uid=10001,gid=10001
+      - /var/tmp:rw,nosuid,exec,size=${RIVET_API_VAR_TMPFS_SIZE:-512m},uid=10001,gid=10001
     depends_on:
       filesystem-artifacts-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:80/readyz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))\""]
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:21890/readyz'',r=>{process.exit(r.statusCode===200?0:1)}).on(''error'',()=>process.exit(1))"',
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -188,48 +231,9 @@ services:
     stop_grace_period: 150s
     restart: unless-stopped
 
-  executor:
-    image: ${RIVET_EXECUTOR_IMAGE:-ghcr.io/valerypopoff/rivet2.0-studio-server/executor:${RIVET_IMAGE_TAG:-latest}}
-    build:
-      context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.executor
-    environment:
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - ALL_PROXY=${ALL_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
-      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
-      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
-      - all_proxy=${all_proxy:-${ALL_PROXY:-}}
-      - no_proxy=${no_proxy:-${NO_PROXY:-}}
-      - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
-      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
-      - PORT=21889
-      - RIVET_EXECUTOR_PORT=21889
-      - RIVET_EXECUTOR_HOST=0.0.0.0
-      - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
-      - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
-      - RIVET_RUNTIME_PROCESS_ROLE=executor
-      - RIVET_KEY=${RIVET_KEY:-}
-      - RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health
-      - RIVET_EXECUTION_ENVIRONMENT_API_URL=http://api:80/api/workflows/execution-environment
-      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
-      - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
-      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
-    volumes:
-      - type: volume
-        source: rivet_data
-        target: /home/rivet/.local/share/com.valerypopoff.rivet2
-        volume:
-          nocopy: true
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
-    depends_on:
-      filesystem-artifacts-init:
-        condition: service_completed_successfully
-    restart: unless-stopped
-
 volumes:
+  rivet_local_metadata:
+    driver: local
   rivet_workspace:
     driver: local
   rivet_data:

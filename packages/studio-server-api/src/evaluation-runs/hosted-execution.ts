@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createLocalCatalogNativeApi } from '../local-metadata/execution-io.js';
 
 import {
   createProcessor,
@@ -89,6 +90,7 @@ export function createHostedEvaluationGraphRunner(
           executionEnvironment: await readExecutionEnvironmentVariables(),
         }) as any,
         projectPath,
+        nativeApi: createLocalCatalogNativeApi(),
         projectReferenceLoader: await dependencies.createProjectReferenceLoader(),
         datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
         llmProfileHealthStore: dependencies.llmProfileHealthStore,

@@ -272,18 +272,26 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(renderedChart, /name: RIVET_API_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
   assert.match(renderedChart, /name: RIVET_EXECUTION_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
   assert.match(renderedChart, /name: RIVET_EXECUTOR_UPSTREAM_HOST[\s\S]*svc\.cluster\.local/);
-  assert.match(
-    renderedChart,
-    /name: RIVET_LLM_PROFILE_HEALTH_API_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/api\/workflows\/llm-profile-health"/,
-  );
-  assert.match(
-    renderedChart,
-    /name: RIVET_EXECUTION_ENVIRONMENT_API_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/api\/workflows\/execution-environment"/,
-  );
   assert.doesNotMatch(renderedChart, /- name: deployment-storage-settings|- name: managed-app-settings-projection/);
   assert.doesNotMatch(renderedChart, /bootstrap-deployment-storage-settings\.mjs/);
-  assert.match(renderedChart, /- name: api-runtime-config-compatibility/);
-  assert.match(renderedChart, /- name: executor-runtime-config-compatibility/);
+  assert.doesNotMatch(
+    renderedChart,
+    /- name: api-runtime-config-compatibility|- name: executor-runtime-config-compatibility/,
+  );
+  assert.match(renderedChart, /- name: backend\s*\n\s*image: rivet-local\/api:dev/);
+  const backendWorkload = renderedChart.match(
+    /# Source: rivet\/templates\/backend-statefulset\.yaml[\s\S]*?(?=\n---|$)/,
+  )?.[0];
+  assert.ok(backendWorkload, 'the chart must render its backend StatefulSet');
+  assert.equal((backendWorkload.split('      volumes:')[0].match(/^        - name: /gm) ?? []).length, 1);
+  assert.doesNotMatch(backendWorkload, /^      initContainers:/m);
+  assert.doesNotMatch(
+    backendWorkload,
+    /name: RIVET_LLM_PROFILE_HEALTH_API_URL|name: RIVET_EXECUTION_ENVIRONMENT_API_URL/,
+  );
+  assert.match(renderedChart, /name: backend-health\s*\n\s*containerPort: 21890/);
+  assert.match(renderedChart, /name: RIVET_BACKEND_EXECUTOR_PORT\s*\n\s*value: "21889"/);
+  assert.match(renderedChart, /command:\s*\["node", "\/opt\/rivet\/backend-supervisor\.mjs"\]/);
   assert.match(
     renderedChart,
     /name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL\s*\n\s*value: "http:\/\/127\.0\.0\.1:8080\/internal\/executor-runtime-config"/,
@@ -299,7 +307,8 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     ['workflows', '2Gi', 2],
     ['app-data', '1Gi', 2],
     ['runtime-libraries', '8Gi', 2],
-    ['var-tmp', '2Gi', 4],
+    ['var-tmp', '2Gi', 5],
+    ['node-tmp', '1Gi', 5],
   ] as const;
   for (const [volumeName, sizeLimit, expectedOccurrences] of boundedWritableVolumes) {
     assert.equal(
@@ -317,6 +326,19 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
     /emptyDir: \{\}/,
     'the managed local render must not leave writable emptyDirs unbounded',
   );
+  assert.equal((renderedChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 5);
+  assert.equal((renderedChart.match(/mountPath: \/var\/tmp\s*$/gm) ?? []).length, 5);
+  const webWorkload = renderedChart.split('# Source: rivet/templates/web-deployment.yaml')[1]?.split('\n---\n')[0];
+  assert.ok(webWorkload);
+  assert.match(webWorkload, /readOnlyRootFilesystem: true/);
+  assert.match(webWorkload, /name: node-tmp\s*\n\s*mountPath: \/tmp/);
+  const unsandboxedLocalChart = await renderLocalKubernetesChartWithOverrides(['tmpVolume.enabled=false']);
+  const unsandboxedWeb = unsandboxedLocalChart.split('# Source: rivet/templates/web-deployment.yaml')[1]?.split('\n---\n')[0];
+  assert.ok(unsandboxedWeb);
+  assert.match(unsandboxedWeb, /readOnlyRootFilesystem: false/);
+  const evaluationChart = await renderLocalKubernetesChartWithOverrides(['hostedEvaluations.enabled=true']);
+  assert.equal((evaluationChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 6);
+  assert.equal((evaluationChart.match(/- name: node-tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit: 1Gi/g) ?? []).length, 6);
   assert.match(renderedChart, /project-managed-app-settings\.js/);
   assert.match(renderedChart, /name: RIVET_APP_SETTINGS_BACKEND\s*\n\s*value: "postgres"/);
   assert.match(
@@ -342,8 +364,20 @@ test('verified predecessor rollback can restore the older images startup setting
   ]);
   assert.match(rendered, /- name: deployment-storage-settings/);
   assert.match(rendered, /- name: managed-app-settings-projection/);
+  assert.match(rendered, /containers:\s*\n\s*- name: api\s*\n\s*image: rivet-local\/api:dev/);
+  assert.match(rendered, /- name: executor\s*\n\s*image: rivet-local\/executor:dev/);
+  assert.doesNotMatch(rendered, /- name: backend\s*\n\s*image:/);
   assert.doesNotMatch(rendered, /- name: api-runtime-config-compatibility/);
   assert.doesNotMatch(rendered, /- name: executor-runtime-config-compatibility/);
+  await renderLocalKubernetesChartWithOverrides([
+    'compatibility.legacyStartupSettingsFiles=true',
+    'workflowSchema.migrationJob.enabled=false',
+    'resources.backend.requests.memory=invalid-unused-budget',
+  ]);
+  await assert.rejects(
+    renderLocalKubernetesChartWithOverrides(['resources.backend.requests.memory=invalid-unused-budget']),
+    /resources.backend.requests.memory must be a positive Kubernetes quantity/,
+  );
   await assert.rejects(
     renderLocalKubernetesChartWithOverrides(['compatibility.legacyStartupSettingsFiles=true']),
     /reserved for verified predecessor rollback/,
@@ -381,6 +415,20 @@ test('Kubernetes restores chart-owned storage values after Vault dotenv loading'
   ]) {
     assert.match(readRepoFile(file), /load_optional_dotenv_preserving_deployment_storage \/vault\/dotenv/, file);
   }
+  const apiEntrypoint = readRepoFile('deploy/studio-server/images/api/entrypoint.sh');
+  for (const name of [
+    'RIVET_API_PROFILE',
+    'RIVET_RUNTIME_PROCESS_ROLE',
+    'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER',
+    'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED',
+    'RIVET_RUNNER_SLOT_ID',
+  ]) {
+    assert.match(apiEntrypoint, new RegExp(`apply_deployment_owned_value ${name} `));
+  }
+  const executorEntrypoint = readRepoFile('deploy/studio-server/images/executor/entrypoint.sh');
+  for (const name of ['RIVET_EXECUTOR_PORT', 'RIVET_EXECUTOR_HOST', 'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER']) {
+    assert.match(executorEntrypoint, new RegExp(`export ${name}=`));
+  }
 });
 
 test('Vault may supply S3 credentials but cannot override Kubernetes object location', (context) => {
@@ -411,6 +459,31 @@ test('Vault may supply S3 credentials but cannot override Kubernetes object loca
     },
   );
   assert.equal(output, 'replicated|managed|chart-bucket|tenant/workflows/|from-vault');
+});
+
+test('dotenv cannot redirect replicated or single-host scratch paths but standalone remains configurable', (context) => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
+  if (process.platform === 'win32' && !fs.existsSync(shell)) {
+    context.skip('A POSIX shell is unavailable on this Windows host');
+    return;
+  }
+  const script =
+    '. deploy/studio-server/images/lib/load-env.sh\n' +
+    'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; TMPDIR=/home/rivet/unsafe; npm_config_cache=/home/rivet/.npm; NPM_CONFIG_CACHE=/home/rivet/uppercase; XDG_CACHE_HOME=/home/rivet/.cache; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
+    'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
+    'printf "%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$TMPDIR" "$npm_config_cache" "$XDG_CACHE_HOME" "${NPM_CONFIG_CACHE-unset}" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY"';
+  const run = (topology: string) =>
+    execFileSync(shell, ['-c', script], {
+      cwd: repoRoot,
+      env: { ...process.env, RIVET_DEPLOYMENT_TOPOLOGY: topology },
+      encoding: 'utf8',
+    });
+  assert.equal(run('replicated'), 'replicated|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
+  assert.equal(run('single-host'), 'single-host|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
+  assert.equal(
+    run('standalone'),
+    'standalone|/home/rivet/unsafe|/home/rivet/.npm|/home/rivet/.cache|/home/rivet/uppercase|from-vault',
+  );
 });
 
 test('Vault may supply a database password but cannot redirect Kubernetes PostgreSQL', (context) => {
@@ -557,6 +630,22 @@ test('chart owns the published execution admission policy only on execution API 
   await assertHelmTemplateFails(
     ['writableVolumeLimits.workspace=0Gi'],
     /writableVolumeLimits\.workspace must be a positive binary Kubernetes quantity such as 2Gi/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.nodeTmpSizeLimit=0Gi'],
+    /tmpVolume\.nodeTmpSizeLimit must be a positive binary Kubernetes quantity such as 1Gi/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.path=/tmp'],
+    /tmpVolume\.path must be \/var\/tmp/,
+  );
+  await assertHelmTemplateFails(
+    ['tmpVolume.name=node-tmp'],
+    /tmpVolume\.name must differ from the reserved node-tmp volume name/,
+  );
+  await assertHelmTemplateFails(
+    ['release.production.enabled=true', 'tmpVolume.enabled=false'],
+    /production requires tmpVolume\.enabled=true/,
   );
   await assertHelmTemplateFails(
     ['resources.execution.requests.memory=not-a-quantity'],
@@ -997,11 +1086,11 @@ test('chart budgets PostgreSQL connections against the maximum execution replica
 test('chart renders profile-aware probes, graceful lifecycle, and replicated-tier availability policies', async () => {
   const renderedChart = await renderLocalKubernetesChart();
 
-  assert.equal((renderedChart.match(/path: \/readyz/g) ?? []).length, 2);
-  assert.equal((renderedChart.match(/path: \/livez/g) ?? []).length, 4);
-  assert.equal((renderedChart.match(/startupProbe:/g) ?? []).length, 5);
-  assert.equal((renderedChart.match(/livenessProbe:/g) ?? []).length, 5);
-  assert.equal((renderedChart.match(/readinessProbe:/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/path: \/readyz/g) ?? []).length, 3);
+  assert.equal((renderedChart.match(/path: \/livez/g) ?? []).length, 3);
+  assert.equal((renderedChart.match(/startupProbe:/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/livenessProbe:/g) ?? []).length, 4);
+  assert.equal((renderedChart.match(/readinessProbe:/g) ?? []).length, 4);
   assert.equal(
     (renderedChart.match(/name: RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS\s*\n\s*value: "120"/g) ?? []).length,
     2,
@@ -1019,7 +1108,7 @@ test('chart renders profile-aware probes, graceful lifecycle, and replicated-tie
     2,
   );
   assert.equal((renderedChart.match(/terminationGracePeriodSeconds: 150/g) ?? []).length, 4);
-  assert.equal((renderedChart.match(/command: \["\/bin\/sh", "-c", "sleep 5"\]/g) ?? []).length, 5);
+  assert.equal((renderedChart.match(/command: \["\/bin\/sh", "-c", "sleep 5"\]/g) ?? []).length, 4);
   assert.equal((renderedChart.match(/type: RollingUpdate/g) ?? []).length, 4);
   assert.equal((renderedChart.match(/maxUnavailable: 0/g) ?? []).length, 3);
   assert.equal((renderedChart.match(/topologySpreadConstraints:/g) ?? []).length, 4);
@@ -1256,8 +1345,8 @@ test('chart forwards arbitrary runtime credentials without a provider-specific t
 
   assert.equal(
     (renderedChart.match(/name: BILLING_OPENAI_KEY\s*\n\s*value: "chart-test-secret"/g) ?? []).length,
-    3,
-    'only the control API, execution API, and editor executor should receive arbitrary runtime credentials',
+    2,
+    'only the combined backend and execution API should receive arbitrary runtime credentials',
   );
   assert.match(
     readRepoFile('deploy/studio-server/helm/templates/proxy-deployment.yaml'),
@@ -1298,5 +1387,13 @@ test('chart validation rejects placeholder images and unsupported filesystem top
   await assertHelmTemplateFails(
     ['env.RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION=3'],
     /workflowSchema\.compatibility through the immutable release manifest/,
+  );
+  await assertHelmTemplateFails(
+    ['service.backendHealth.targetPort=8080'],
+    /backend API, executor, and health target ports must be distinct TCP ports/,
+  );
+  await assertHelmTemplateFails(
+    ['resources.executor.requests.memory=512Mi'],
+    /resources\.executor is retired in the combined backend; move its budget to resources\.backend/,
   );
 });

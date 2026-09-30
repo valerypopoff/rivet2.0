@@ -85,39 +85,51 @@ export async function projectNodeExecutorProxySettings(): Promise<void> {
     return;
   }
   const settings = nodeExecutorProxySettingsRepository.readSync().value;
-  await writeJsonSettingsFile(getNodeExecutorProxySettingsPath(), {
-    version: 1,
-    httpProxy: settings.httpProxy,
-    httpsProxy: settings.httpsProxy,
-    noProxy: settings.noProxy,
-    updatedAt: settings.updatedAt,
-  }, 0o600);
+  await writeJsonSettingsFile(
+    getNodeExecutorProxySettingsPath(),
+    {
+      version: 1,
+      httpProxy: settings.httpProxy,
+      httpsProxy: settings.httpsProxy,
+      noProxy: settings.noProxy,
+      updatedAt: settings.updatedAt,
+    },
+    0o600,
+  );
 }
 
 export async function writeNodeExecutorProxySettings(
   draft: unknown,
   expectedRevision?: string,
 ): Promise<NodeExecutorProxySettings> {
-  const settings = (await nodeExecutorProxySettingsRepository.update((previous) => ({
-    ...normalizeNodeExecutorProxySettingsDraft({
-      ...previous,
-      ...toSettingsRecord(draft),
-    }),
-    updatedAt: new Date().toISOString(),
-    source: 'app-settings',
-  }), expectedRevision)).value;
+  const settings = (
+    await nodeExecutorProxySettingsRepository.update(
+      (previous) => ({
+        ...normalizeNodeExecutorProxySettingsDraft({
+          ...previous,
+          ...toSettingsRecord(draft),
+        }),
+        updatedAt: new Date().toISOString(),
+        source: 'app-settings',
+      }),
+      expectedRevision,
+    )
+  ).value;
   await projectNodeExecutorProxySettings();
   return settings;
 }
 
 nodeExecutorProxySettingsRepository.subscribe(() => {
-  if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
-    const apply = (globalThis as typeof globalThis & {
-      __rivetApplyNodeExecutorProxySettings?: (settings: NodeExecutorProxySettings) => Promise<void>;
-    }).__rivetApplyNodeExecutorProxySettings;
-    if (apply) void apply(nodeExecutorProxySettingsRepository.readSync().value).catch((error) => {
-      console.error('[node-executor-proxy] Failed to refresh in-memory proxy settings:', error);
-    });
+  if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated' || getAppSettingsBackendKind() === 'sqlite') {
+    const apply = (
+      globalThis as typeof globalThis & {
+        __rivetApplyNodeExecutorProxySettings?: (settings: NodeExecutorProxySettings) => Promise<void>;
+      }
+    ).__rivetApplyNodeExecutorProxySettings;
+    if (apply)
+      void apply(nodeExecutorProxySettingsRepository.readSync().value).catch((error) => {
+        console.error('[node-executor-proxy] Failed to refresh in-memory proxy settings:', error);
+      });
     return;
   }
   void projectNodeExecutorProxySettings().catch((error) => {

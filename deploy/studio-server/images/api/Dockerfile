@@ -32,6 +32,7 @@ RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-shared run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-bootstrap run build && \
+    YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-executor run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-api run build
 
 FROM node:24-alpine
@@ -55,24 +56,30 @@ ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
 RUN apk add --no-cache git && \
-    corepack enable && \
-    corepack prepare pnpm@10.18.3 --activate && \
+    npm install -g pnpm@10.18.3 && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
-    mkdir -p /workspace /workflows /data/rivet-app/plugins /data/rivet-app/logs /data/runtime-libraries /home/rivet /opt/rivet/lib /app && \
+    mkdir -p /workspace /workflows /data/rivet-app/plugins /data/rivet-app/logs /data/runtime-libraries /home/rivet/.local/share/com.valerypopoff.rivet2/plugins /opt/rivet/lib /app && \
     chown -R 10001:10001 /workspace /workflows /data /home/rivet /opt/rivet /app
 
 WORKDIR /app/packages/studio-server-api
 
 COPY --from=builder --chown=10001:10001 /app/node_modules /app/node_modules
 COPY --from=builder --chown=10001:10001 /app/packages /app/packages
+COPY --from=builder --chown=10001:10001 /app/packages/studio-server-executor/dist/executor-bundle.cjs /app/executor-bundle.cjs
 COPY --chown=10001:10001 deploy/studio-server/images/lib/load-env.sh /opt/rivet/lib/load-env.sh
 COPY --chown=10001:10001 deploy/studio-server/images/lib/bootstrap-deployment-storage-settings.mjs /opt/rivet/lib/bootstrap-deployment-storage-settings.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/entrypoint.sh /opt/rivet/api-entrypoint.sh
+COPY --chown=10001:10001 deploy/studio-server/images/executor/entrypoint.sh /opt/rivet/executor-entrypoint.sh
+COPY --chown=10001:10001 deploy/studio-server/images/api/backend-supervisor.mjs /opt/rivet/backend-supervisor.mjs
+COPY --chown=10001:10001 deploy/studio-server/images/api/local-metadata-owner-lease.mjs /opt/rivet/local-metadata-owner-lease.mjs
 
-RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh
+RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh /opt/rivet/executor-entrypoint.sh
 
 ENV HOME=/home/rivet
+ENV TMPDIR=/tmp
+ENV npm_config_cache=/tmp/npm-cache
+ENV XDG_CACHE_HOME=/tmp/cache
 ENV PORT=8080
 ENV RIVET_WORKSPACE_ROOT=/workspace
 ENV RIVET_WORKFLOWS_ROOT=/workflows

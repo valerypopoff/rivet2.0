@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
+import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
 
 import type {
   ProjectId,
@@ -35,7 +37,10 @@ import type { RivetStudioLLMProfileHealthStore } from './store.js';
 type StoredRow = { key: string; entryJson: string };
 
 export function getFilesystemLLMProfileHealthDatabasePath(): string {
-  return path.join(getAppDataRoot(), 'llm-profile-health.sqlite');
+  return path.join(
+    getLocalMetadataServingSelection()?.operationalRoot ?? getAppDataRoot(),
+    'llm-profile-health.sqlite',
+  );
 }
 
 /**
@@ -48,24 +53,21 @@ export async function getFilesystemLLMProfileHealthHeldRecordingIds(): Promise<R
   try {
     await fs.access(databasePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !getLocalMetadataServingSelection()) return new Set();
     throw error;
   }
 
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     database.exec('PRAGMA busy_timeout = 5000;');
-    const rows = database.prepare(
-      'SELECT key, entry_json AS entryJson FROM llm_profile_health',
-    ).all<StoredRow>();
+    if (getLocalMetadataServingSelection()) assertLocalOperationalSchema(database, 'health');
+    const rows = database.prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health').all<StoredRow>();
     return new Set(rows.flatMap((row) => getLLMProfileHealthHeldRecordingIds(parseEntry(row)!)));
   } finally {
     database.close();
   }
 }
-function requireProjectId(
-  identity: RivetLLMProfileHealthBeginRequest['identity'],
-): void {
+function requireProjectId(identity: RivetLLMProfileHealthBeginRequest['identity']): void {
   if (identity.projectId == null || String(identity.projectId).trim() === '') {
     throw new Error('Studio Server LLM Profile health operations require a projectId.');
   }
@@ -90,9 +92,19 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
 
   async #getDatabase(): Promise<DatabaseSync> {
     this.#databasePromise ??= (async () => {
+      if (getLocalMetadataServingSelection()) {
+        const stat = await fs.lstat(this.#databasePath);
+        if (!stat.isFile() || stat.isSymbolicLink())
+          throw new Error('Selected profile-health database is missing or invalid.');
+      }
       await fs.mkdir(path.dirname(this.#databasePath), { recursive: true });
       const database = new DatabaseSync(this.#databasePath);
       try {
+        if (getLocalMetadataServingSelection()) {
+          assertLocalOperationalSchema(database, 'health');
+          database.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = DELETE;');
+          return database;
+        }
         database.exec(`
           PRAGMA busy_timeout = 5000;
           PRAGMA journal_mode = DELETE;
@@ -124,17 +136,28 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
   }
 
   #read(database: DatabaseSync, key: string): StoredLLMProfileHealthEntry | null {
-    return parseEntry(database.prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health WHERE key = ?').get<StoredRow>(key));
+    return parseEntry(
+      database.prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health WHERE key = ?').get<StoredRow>(key),
+    );
   }
 
   #write(database: DatabaseSync, key: string, entry: StoredLLMProfileHealthEntry): void {
-    database.prepare(`
+    database
+      .prepare(
+        `
       INSERT INTO llm_profile_health (key, project_id, entry_json, updated_at_ms) VALUES (?, ?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET
         project_id = excluded.project_id,
         entry_json = excluded.entry_json,
         updated_at_ms = excluded.updated_at_ms
-    `).run(key, entry.identity.projectId == null ? null : String(entry.identity.projectId), JSON.stringify(entry), entry.updatedAt);
+    `,
+      )
+      .run(
+        key,
+        entry.identity.projectId == null ? null : String(entry.identity.projectId),
+        JSON.stringify(entry),
+        entry.updatedAt,
+      );
   }
 
   async #transaction<T>(run: (database: DatabaseSync) => T): Promise<T> {
@@ -145,7 +168,11 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
       database.exec('COMMIT');
       return result;
     } catch (error) {
-      try { database.exec('ROLLBACK'); } catch { /* Preserve the operation error. */ }
+      try {
+        database.exec('ROLLBACK');
+      } catch {
+        /* Preserve the operation error. */
+      }
       throw error;
     }
   }
@@ -189,35 +216,46 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
 
   async resetProjectKey(projectId: ProjectId, key: string): Promise<boolean> {
     return this.#transaction((database) => {
-      const result = database.prepare(
-        'DELETE FROM llm_profile_health WHERE project_id = ? AND key = ?',
-      ).run(String(projectId), key);
+      const result = database
+        .prepare('DELETE FROM llm_profile_health WHERE project_id = ? AND key = ?')
+        .run(String(projectId), key);
       return result.changes > 0;
     });
   }
 
   async list(request: RivetLLMProfileHealthListRequest = {}): Promise<RivetLLMProfileHealthSnapshot[]> {
     const database = await this.#getDatabase();
-    const rows = request.projectId == null
-      ? database.prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health ORDER BY updated_at_ms DESC, key ASC').all<StoredRow>()
-      : database.prepare(`
+    const rows =
+      request.projectId == null
+        ? database
+            .prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health ORDER BY updated_at_ms DESC, key ASC')
+            .all<StoredRow>()
+        : database
+            .prepare(
+              `
           SELECT key, entry_json AS entryJson
           FROM llm_profile_health
           WHERE project_id = ?
           ORDER BY updated_at_ms DESC, key ASC
-        `).all<StoredRow>(String(request.projectId));
+        `,
+            )
+            .all<StoredRow>(String(request.projectId));
     const now = Date.now();
     return rows.map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now));
   }
 
   async listAdmin(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]> {
     const database = await this.#getDatabase();
-    const rows = database.prepare(`
+    const rows = database
+      .prepare(
+        `
       SELECT key, entry_json AS entryJson
       FROM llm_profile_health
       WHERE project_id = ?
       ORDER BY updated_at_ms DESC, key ASC
-    `).all<StoredRow>(String(input.projectId));
+    `,
+      )
+      .all<StoredRow>(String(input.projectId));
     const now = Date.now();
     return rows.map((row) => {
       const entry = parseEntry(row)!;
@@ -231,9 +269,9 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
   async recordRecordingOutcome(input: LLMProfileHealthRecordingOutcome): Promise<void> {
     await this.#transaction((database) => {
       const correlationNeedle = `"correlationId":${JSON.stringify(input.correlationId)}`;
-      const rows = database.prepare(
-        'SELECT key, entry_json AS entryJson FROM llm_profile_health WHERE instr(entry_json, ?) > 0',
-      ).all<StoredRow>(correlationNeedle);
+      const rows = database
+        .prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health WHERE instr(entry_json, ?) > 0')
+        .all<StoredRow>(correlationNeedle);
       const now = Date.now();
       for (const row of rows) {
         const entry = parseEntry(row)!;
@@ -246,9 +284,7 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
 
   async markRecordingDeleted(recordingId: string): Promise<void> {
     await this.#transaction((database) => {
-      const rows = database.prepare(
-        'SELECT key, entry_json AS entryJson FROM llm_profile_health',
-      ).all<StoredRow>();
+      const rows = database.prepare('SELECT key, entry_json AS entryJson FROM llm_profile_health').all<StoredRow>();
       const now = Date.now();
       for (const row of rows) {
         const entry = parseEntry(row)!;

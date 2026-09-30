@@ -13,6 +13,30 @@ boundary. The disposable local/release-gate overlays explicitly use the old
 `gateway.mode: embedded` proxy. See [Kubernetes external gateway contract](./kubernetes.md#external-gateway-contract)
 before exposing the cluster Services publicly.
 
+### Future work: enforce private-host isolation on a single VM
+
+The VM Compose proxy currently publishes HTTP on all host interfaces and uses
+the request's `Host` header to select either the public redirect or the
+private-host HTTP site. A caller who can reach the VM's origin port 80 can
+choose the private hostname in that header; private DNS alone does not restrict
+access. Whether this is externally reachable depends on the VM's actual
+network/firewall rules and has not been established by the local or
+Cloudflare-routed health checks. This is not, by itself, a bypass of Rivet's
+existing UI or endpoint authentication, and the inner proxy still rejects
+`/internal/` routes. The previous host-level nginx setup had the same
+host-header boundary.
+
+Before relying on the VM private hostname as internal-only, design and enforce
+an actual network boundary: for example, a private-interface listener or a
+source-address allowlist on the private server block. A port-only firewall rule
+cannot distinguish the two sites when public HTTP redirects and private HTTP
+share the same origin address and port. Preserve public HTTP-to-HTTPS redirects,
+public HTTPS, existing auth, and trusted-header handling. Verify from outside
+the trusted network that a forged private `Host` header is denied, while a
+trusted internal client still works; cover IPv4 and IPv6 and add a behavioral
+VM proxy regression test. This isolation change is deferred; current
+deployments must not treat the private hostname itself as access control.
+
 The current runtime split keeps:
 
 - `control plane`
@@ -96,8 +120,8 @@ Important local-Docker wiring note:
 - the repo-local Docker stacks still run a single `api` container in `combined` mode
 - nginx therefore proxies `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}` to that same container there
 - the control-plane vs execution-plane labels in the table describe the intended split topology and the route ownership enforced by `RIVET_API_PROFILE`, not a guarantee that local Docker physically runs two API services
-- the executor websocket upstream remains a separate internal service on port `21889`; it must not inherit the API `PORT` value from `.env`
-- in Docker modes the executor process binds to `0.0.0.0` inside its container so nginx can reach the `executor:21889` service; external clients should still use the proxy routes, not the executor container directly
+- the executor websocket remains on port `21889`; it must not inherit the API `PORT` value from `.env`
+- production and development Compose co-locate the API and executor processes in one backend container, and nginx reaches `api:21889`. Both bind the executor to `0.0.0.0` inside Docker so the separate proxy container can reach it. External clients use the proxy routes, never the executor port directly.
 
 ## Proxy address recovery and health
 

@@ -50,11 +50,14 @@ function composeServiceNames(compose: string): string[] {
 test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-only hop', () => {
   const image = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
   const overlay = readRepoFile('deploy/studio-server/compose/docker-compose.vm-tls.yml');
+  const compose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const edge = readRepoFile('deploy/studio-server/images/proxy/vm-tls.conf.template');
   const hop = readRepoFile('deploy/studio-server/images/proxy/vm-edge-proxy.conf');
   const normalizer = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   assert.match(image, /ENV RIVET_PROXY_INTERNAL_LISTEN=8080/);
-  assert.match(overlay, /read_only: true[\s\S]*cap_drop: \[ALL\][\s\S]*tmpfs:/);
+  assert.match(composeServiceBlock(compose, 'proxy'), /read_only: true/);
+  assert.match(overlay, /cap_drop: \[ALL\]/);
+  assert.match(composeServiceBlock(compose, 'proxy'), /tmpfs:[\s\S]*\/tmp:rw,nosuid,noexec,size=512m/);
   assert.match(overlay, /RIVET_PROXY_INTERNAL_LISTEN=127\.0\.0\.1:18081/);
   assert.match(overlay, /RIVET_PROXY_HTTPS_PORT=\$\{RIVET_HTTPS_PORT:-443\}/);
   assert.match(overlay, /RIVET_TRUSTED_FORWARDING_PROXIES=127\.0\.0\.1\/32/);
@@ -311,7 +314,7 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
       /proxy:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+read_only: true\s+volume:\s+nocopy: true/,
     );
   }
-  assert.match(devCompose, /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_API_PORT:-3100\}:80"/);
+  assert.match(devCompose, /['"]\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_API_PORT:-3100\}:80['"]/);
   assert.match(
     managedCompose,
     /"\$\{RIVET_LOCAL_BIND_HOST:-127\.0\.0\.1\}:\$\{RIVET_WORKFLOWS_LOCAL_DOCKER_POSTGRES_PORT:-54329\}:5432"/,
@@ -356,21 +359,21 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Proto \\\$rivet_forwarded_proto;/);
 });
 
-test('dev Compose exposes the host machine to both Node execution paths', () => {
+test('dev backend exposes the host machine to both Node execution processes', () => {
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
 
-  assert.equal((devCompose.match(/host\.docker\.internal:host-gateway/g) ?? []).length, 2);
+  assert.equal((devCompose.match(/host\.docker\.internal:host-gateway/g) ?? []).length, 1);
   assert.equal(
     (devCompose.match(/RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=\$\{RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-\}/g) ?? [])
       .length,
-    2,
+    1,
   );
 });
 
 test('dev Compose recreates Nginx when its upstream container is recreated', () => {
   const proxy = composeServiceBlock(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), 'proxy');
 
-  for (const service of ['web', 'api', 'executor']) {
+  for (const service of ['web', 'api']) {
     assert.match(
       proxy,
       new RegExp(
@@ -444,7 +447,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   assert.doesNotMatch(devCompose, /RIVET_PROXY_READ_TIMEOUT/);
 });
 
-test('executor image and compose contracts keep the websocket service independent from API PORT', () => {
+test('executor image and Compose contracts keep the websocket port independent from API PORT', () => {
   const executorEntrypoint = readRepoFile('deploy/studio-server/images/executor/entrypoint.sh');
   const executorDockerfile = readRepoFile('deploy/studio-server/images/executor/Dockerfile');
   const executorBundler = readRepoFile('packages/studio-server-executor/build/bundle-executor.cjs');
@@ -474,39 +477,39 @@ test('executor image and compose contracts keep the websocket service independen
   assert.match(executorHost, /startAppExecutor/);
   assert.match(executorHost, /createHttpRivetLLMProfileHealthStore/);
 
-  for (const compose of [prodCompose, devCompose]) {
-    assert.match(
-      compose,
-      /executor:[\s\S]*- PORT=21889[\s\S]*- RIVET_EXECUTOR_PORT=21889[\s\S]*- RIVET_EXECUTOR_HOST=0\.0\.0\.0/,
-    );
-    assert.match(
-      compose,
-      /RIVET_RUNTIME_PROCESS_ROLE=executor[\s\S]*RIVET_LLM_PROFILE_HEALTH_API_URL=http:\/\/api:80\/api\/workflows\/llm-profile-health/,
-    );
-    assert.match(
-      compose,
-      /api:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,
-    );
-    assert.match(
-      compose,
-      /executor:[\s\S]*?- type: volume\s+source: rivet_data\s+target: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2\s+volume:\s+nocopy: true/,
-    );
-  }
+  const developmentApi = composeServiceBlock(devCompose, 'api');
+  assert.doesNotMatch(devCompose, /^  executor:/m);
+  assert.match(developmentApi, /RIVET_BACKEND_EXECUTOR_PORT=21889/);
+  assert.match(developmentApi, /dev-backend-supervisor\.mjs/);
+  assert.match(developmentApi, /target: \/data\/rivet-app/);
+  assert.match(developmentApi, /target: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2/);
+  assert.match(
+    readRepoFile('deploy/studio-server/compose/nginx/default.dev.conf.template'),
+    /http:\/\/api:21889\/internal/,
+  );
+  const productionApi = composeServiceBlock(prodCompose, 'api');
+  assert.doesNotMatch(prodCompose, /^  executor:/m);
+  assert.match(productionApi, /entrypoint: \[['"]node['"], ['"]\/opt\/rivet\/backend-supervisor\.mjs['"]\]/);
+  assert.match(productionApi, /RIVET_BACKEND_EXECUTOR_PORT=21889/);
+  assert.match(productionApi, /target: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2/);
+  assert.match(composeServiceBlock(prodCompose, 'proxy'), /RIVET_EXECUTOR_UPSTREAM_HOST=api/);
 });
 
-test('Docker launchers attach the selected dotenv only to API and executor runtimes', () => {
+test('Docker launchers attach the selected dotenv only to the combined backend', () => {
   const runtimeEnvCompose = readRepoFile('deploy/studio-server/compose/docker-compose.runtime-env.yml');
   const devLauncher = readRepoFile('deploy/studio-server/scripts/dev-docker.mjs');
   const prodLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
 
-  assert.match(runtimeEnvCompose, /services:\s*\n\s*api:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
-  assert.match(runtimeEnvCompose, /\n\s*executor:\s*\n\s*env_file:\s*\n\s*- "\$\{RIVET_RUNTIME_ENV_FILE\}"/);
-  assert.doesNotMatch(runtimeEnvCompose, /\n\s*(?:web|proxy):\s*\n/);
-
+  assert.match(
+    runtimeEnvCompose,
+    /services:\s*\n\s*api:\s*\n\s*env_file:\s*\n\s*- ['"]\$\{RIVET_RUNTIME_ENV_FILE\}['"]/,
+  );
+  assert.doesNotMatch(runtimeEnvCompose, /\n\s*(?:executor|web|proxy):\s*\n/);
   for (const launcher of [devLauncher, prodLauncher]) {
     assert.match(launcher, /mergedEnv\.RIVET_RUNTIME_ENV_FILE = envPath/);
-    assert.match(launcher, /deploy\/studio-server\/compose\/docker-compose\.runtime-env\.yml/);
   }
+  assert.match(devLauncher, /deploy\/studio-server\/compose\/docker-compose\.runtime-env\.yml/);
+  assert.match(prodLauncher, /deploy\/studio-server\/compose\/docker-compose\.runtime-env\.yml/);
   for (const launcher of [devLauncher, prodLauncher]) {
     assert.match(launcher, /config --no-interpolate --no-env-resolution --no-path-resolution/);
     assert.match(launcher, /services: \[`\$\{composeBase\} config --services`\]/);
@@ -545,11 +548,30 @@ test('images and local launchers build directly from the monorepo workspace', ()
 
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /context: \.\.\/\.\.\/\.\./);
-    assert.match(compose, /dockerfile: deploy\/studio-server\/compose\/docker\/Dockerfile\.api/);
     assert.doesNotMatch(compose, /additional_contexts|rivet_source|rivet_dependency_metadata|\/workspace\/rivet/);
     assert.match(compose, /api:[\s\S]*healthcheck:[\s\S]*\/readyz/);
     assert.match(compose, /api:[\s\S]*stop_grace_period: 150s/);
   }
+  assert.match(prodCompose, /dockerfile: deploy\/studio-server\/images\/api\/Dockerfile/);
+  for (const [service, paths] of [
+    ['proxy', ['/tmp']],
+    ['web', ['/tmp', '/var/tmp']],
+    ['filesystem-artifacts-init', ['/tmp', '/var/tmp']],
+    ['api', ['/tmp', '/var/tmp']],
+  ] as const) {
+    const block = composeServiceBlock(prodCompose, service);
+    for (const scratchPath of paths) {
+      assert.match(block, new RegExp(`${scratchPath}:rw,nosuid,[^\\n]*size=[^\\n]+`));
+    }
+  }
+  for (const service of ['proxy', 'web', 'filesystem-artifacts-init']) {
+    assert.match(composeServiceBlock(prodCompose, service), /read_only: true/);
+  }
+  assert.match(composeServiceBlock(prodCompose, 'api'), /- TMPDIR=\/tmp/);
+  assert.match(composeServiceBlock(prodCompose, 'api'), /- npm_config_cache=\/tmp\/npm-cache/);
+  assert.match(apiDockerfile, /ENV TMPDIR=\/tmp/);
+  assert.match(apiDockerfile, /ENV npm_config_cache=\/tmp\/npm-cache/);
+  assert.match(devCompose, /dockerfile: deploy\/studio-server\/compose\/docker\/Dockerfile\.api/);
   assert.match(devCompose, /com\.valerypopoff\.rivet2\.dev-stack-input-fingerprint/);
   for (const service of composeServiceNames(devCompose)) {
     assert.match(composeServiceBlock(devCompose, service), /labels: \*dev-stack-labels/);
@@ -569,7 +591,7 @@ test('images and local launchers build directly from the monorepo workspace', ()
     /\.\/nginx\/default\.dev\.conf\.template:\/etc\/nginx\/templates\/default\.conf\.template:ro/,
   );
   assert.doesNotMatch(devCompose, /\.\.\/nginx\/default\.dev\.conf\.template/);
-  for (const service of ['web', 'api', 'executor']) {
+  for (const service of ['web', 'api']) {
     const serviceBlock = composeServiceBlock(devCompose, service);
     assert.match(serviceBlock, /- YARN_CACHE_FOLDER=\/home\/rivet\/\.cache\/yarn/);
     assert.match(serviceBlock, /- YARN_NODE_LINKER=node-modules/);
@@ -678,7 +700,8 @@ test('CI and production launchers publish and run the Studio Server image set fr
         `- service: ${service}\\s+dockerfile: deploy/studio-server/images/${service}/Dockerfile\\s+image: ghcr\\.io/valerypopoff/rivet2\\.0-studio-server/${service}\\s+platforms: ${platforms.replace(/\//g, '\\/')}`,
       ),
     );
-    assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}`));
+    if (service !== 'executor')
+      assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}`));
   }
 
   assert.equal(packageJson.scripts['studio-server:prod'], 'yarn studio-server:prod:prebuilt');
@@ -706,7 +729,7 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.equal(packageJson.scripts['studio-server:dev:docker'], 'node deploy/studio-server/scripts/dev-docker.mjs dev');
   assert.equal(packageJson.scripts['studio-server:dev:down'], 'yarn studio-server:dev:docker:down');
   assert.equal(packageJson.scripts['studio-server:dev:recreate'], 'yarn studio-server:dev:docker:recreate');
-  assert.match(prodDockerLauncher, /pull proxy web api executor/);
+  assert.match(prodDockerLauncher, /pull proxy web api/);
   assert.match(prodDockerLauncher, /--no-build --force-recreate --remove-orphans --wait/);
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);
 });
@@ -728,13 +751,14 @@ test('Compose explicitly initializes every writable storage mount before runtime
     assert.match(initializer, /command:\s*\n\s*- \|/);
     assert.match(
       initializer,
-      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app; do/,
+      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app \/data\/local-metadata; do/,
     );
     assert.ok(initializer.includes('if [ "$$(stat -c \'%u:%g\' "$$directory")" != "10001:10001" ]; then'));
     assert.ok(initializer.includes('find "$$directory" -xdev -exec chown -h 10001:10001 {} +'));
     assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
     assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
     assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
+    assert.match(initializer, /- rivet_local_metadata:\/data\/local-metadata/);
     assert.match(
       initializer,
       /- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,
@@ -742,12 +766,10 @@ test('Compose explicitly initializes every writable storage mount before runtime
     assert.match(initializer, /restart: ['"]no['"]/);
     assert.doesNotMatch(initializer, /rivet_workspace|\/workspace/);
 
-    for (const service of ['api', 'executor']) {
-      assert.match(
-        composeServiceBlock(compose, service),
-        /depends_on:[\s\S]*?\n\s*filesystem-artifacts-init:\s*\n\s*condition: service_completed_successfully/,
-      );
-    }
+    assert.match(
+      composeServiceBlock(compose, 'api'),
+      /depends_on:[\s\S]*?\n\s*filesystem-artifacts-init:\s*\n\s*condition: service_completed_successfully/,
+    );
   }
 });
 
@@ -765,7 +787,6 @@ test('Compose and candidate smoke keep metrics enabled only on the direct API pa
       `${topology} API enables metrics only through the explicit opt-in`,
     );
     assert.doesNotMatch(composeServiceBlock(compose, 'proxy'), /RIVET_METRICS_ENABLED/);
-    assert.doesNotMatch(composeServiceBlock(compose, 'executor'), /RIVET_METRICS_ENABLED/);
   }
 
   assert.match(candidateSmoke, /RIVET_METRICS_ENABLED: 'true'/);

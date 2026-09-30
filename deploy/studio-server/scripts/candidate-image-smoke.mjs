@@ -155,7 +155,6 @@ async function main() {
   const env = {
     ...process.env,
     RIVET_API_IMAGE: `${imageNamespace}/api:${sourceTag}`,
-    RIVET_EXECUTOR_IMAGE: `${imageNamespace}/executor:${sourceTag}`,
     RIVET_PROXY_IMAGE: `${imageNamespace}/proxy:${sourceTag}`,
     RIVET_WEB_IMAGE: `${imageNamespace}/web:${sourceTag}`,
     RIVET_PORT: String(port),

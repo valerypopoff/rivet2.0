@@ -1494,6 +1494,7 @@ export async function createWebAppProcessorOptions(
     context: getWebAppWorkflowExecutionContext(req),
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
+    nativeApi: createLocalCatalogNativeApi(),
     projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
     subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
     ...(isWorkflowRecordingEnabled()
@@ -1653,6 +1654,7 @@ async function executeWorkflowEndpoint(
       executionEnvironment,
     }) as any,
     projectPath: projectVirtualPath,
+    nativeApi: createLocalCatalogNativeApi(),
     datasetProvider,
     projectReferenceLoader,
     subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
@@ -1996,3 +1998,4 @@ latestWebAppsRouter.get(
     await handleWebAppHtmlRequest(req, res, 'latest');
   }),
 );
+import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';

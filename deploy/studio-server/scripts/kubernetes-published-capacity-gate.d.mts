@@ -6,6 +6,7 @@ export function evaluateCapacityCertificate(
       stages: Array<{ name: string; scenario: string; expect: string; requests: number }>;
       controlCanaryEveryRequests: number;
       requireExecutionMetrics: boolean;
+      prometheus?: { queries: Record<string, string> };
       thresholds: {
         maximumP95Ms: Record<string, number>;
         maximumUnexpectedRate: number;

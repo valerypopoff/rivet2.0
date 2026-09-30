@@ -70,8 +70,8 @@ publishedExecutionAdmission:
   maxActiveRunsPerPod: 4
   retryAfterSeconds: 1
 
-# Initial node-ephemeral caps for disposable content. Tune from the
-# published-route load gate; use a persistent cache claim when a larger
+# Initial node-ephemeral caps for disposable content. Tune from representative
+# per-workload measurements; use a persistent cache claim when a larger
 # runtime-library cache is deliberately required.
 writableVolumeLimits:
   workspace: 2Gi
@@ -81,20 +81,22 @@ writableVolumeLimits:
 
 # No generic memory/node-ephemeral resource limits are assumed to be safe for
 # long-running graphs. These acknowledgements make that temporary decision
-# deliberate; replace each with measured limits after the capacity load gate.
+# deliberate. The deterministic capacity load gate alone is not sizing evidence
+# for every workload. Follow developer-docs/studio-server/resource-sizing.md
+# before replacing each acknowledgement with measured requests and limits.
 resourceLimitAcknowledgements:
   web:
     memory: 'Web memory limit deferred until the low-volume control-plane profile is measured.'
     ephemeralStorage: 'Web node-ephemeral limit deferred until the low-volume control-plane profile is measured.'
   api:
-    memory: 'Control API memory limit deferred until editor and maintenance high-water marks are measured.'
-    ephemeralStorage: 'Control API node-ephemeral limit deferred until projection, workspace, and maintenance high-water marks are measured.'
-  executor:
-    memory: 'Editor executor memory limit deferred until remote-debugger graph high-water marks are measured.'
-    ephemeralStorage: 'Editor executor node-ephemeral limit deferred until shared workspace and runtime-library high-water marks are measured.'
+    memory: 'Migration Job and legacy API memory limit deferred until their high-water marks are measured.'
+    ephemeralStorage: 'Migration Job and legacy API node-ephemeral limit deferred until staging high-water marks are measured.'
+  backend:
+    memory: 'Combined control API and editor executor memory limit deferred until their joint high-water mark is measured.'
+    ephemeralStorage: 'Combined backend node-ephemeral limit deferred until shared workspace and library high-water marks are measured.'
   execution:
-    memory: 'Execution API memory limit deferred until the published-route load gate establishes a safe ceiling.'
-    ephemeralStorage: 'Execution API node-ephemeral limit deferred until the published-route load gate establishes a safe ceiling.'
+    memory: 'Execution API memory limit deferred until representative published runs establish a safe ceiling.'
+    ephemeralStorage: 'Execution API node-ephemeral limit deferred until representative published runs establish a safe ceiling.'
 
 autoscaling:
   web:

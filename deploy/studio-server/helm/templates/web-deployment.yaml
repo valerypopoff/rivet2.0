@@ -41,6 +41,7 @@ spec:
             runAsUser: 10001
             runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.tmpVolume.enabled }}
           ports:
             - name: http
               containerPort: {{ .Values.service.web.targetPort }}
@@ -66,5 +67,13 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 2
           {{- include "rivet.pod.preStop" . | nindent 10 }}
+          {{- if .Values.tmpVolume.enabled }}
+          volumeMounts:
+{{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
+          {{- end }}
           resources:
 {{ toYaml .Values.resources.web | nindent 12 }}
+      {{- if .Values.tmpVolume.enabled }}
+      volumes:
+{{ include "rivet.pod.tmpVolume" . | nindent 8 }}
+      {{- end }}

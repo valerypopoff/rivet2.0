@@ -21,7 +21,11 @@ import type {
   HostedProjectReconciliationContext,
   HostedProjectConflictSnapshot,
 } from '../../studio-server-shared/editor-bridge';
-import type { WorkflowFolderItem, WorkflowProjectEditorBinding, WorkflowProjectItem } from '../../studio-server-shared/workflow-types';
+import type {
+  WorkflowFolderItem,
+  WorkflowProjectEditorBinding,
+  WorkflowProjectItem,
+} from '../../studio-server-shared/workflow-types';
 import { acceptConflictSnapshot, useHostedProjectConflictNotices } from './useHostedProjectConflictNotices';
 import {
   RIVET_EXECUTOR_WS_URL,
@@ -204,9 +208,11 @@ export const DashboardPage: FC = () => {
         const tree = await fetchWorkflowTree();
         const matches = findSubgraphProjects(tree.folders, tree.projects, projectId);
         if (matches.length !== 1) {
-          throw new Error(matches.length === 0
-            ? 'The selected Subgraph project is no longer available.'
-            : 'More than one project has the selected Subgraph project ID. Resolve the duplicate before opening it.');
+          throw new Error(
+            matches.length === 0
+              ? 'The selected Subgraph project is no longer available.'
+              : 'More than one project has the selected Subgraph project ID. Resolve the duplicate before opening it.',
+          );
         }
         const project = matches[0]!;
         handleOpenProject(project.absolutePath, {
@@ -649,12 +655,6 @@ export const DashboardPage: FC = () => {
       className={`dashboard-page${sidebarResizing ? ' dashboard-page-resizing' : ''}`}
       style={{ ['--workflow-dashboard-sidebar-width' as string]: `${visibleSidebarWidth}px` }}
     >
-      {showEditorLoading ? (
-        <div className="dashboard-app-loading">
-          <div className="dashboard-editor-loading-spinner" aria-hidden="true" />
-          <div className="dashboard-editor-loading-message">Loading...</div>
-        </div>
-      ) : null}
       <aside
         className={`dashboard-sidebar${sidebarCollapsed ? ' dashboard-sidebar-collapsed' : ''}${sidebarResizing ? ' dashboard-sidebar-resizing' : ''}`}
         onTransitionEnd={handleSidebarTransitionEnd}
@@ -696,6 +696,12 @@ export const DashboardPage: FC = () => {
         />
       ) : null}
       <main className="dashboard-main">
+        {showEditorLoading ? (
+          <div className="dashboard-app-loading">
+            <div className="dashboard-editor-loading-spinner" aria-hidden="true" />
+            <div className="dashboard-editor-loading-message">Loading...</div>
+          </div>
+        ) : null}
         {openProjectCount === 0 ? (
           <div className="dashboard-empty-state">
             <div className="dashboard-empty-state-message">

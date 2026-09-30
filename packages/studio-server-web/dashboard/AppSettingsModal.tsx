@@ -13,6 +13,8 @@ import { RuntimeLibrariesSettingsTab } from './app-settings/tabs/RuntimeLibrarie
 import { ServerUiAccessSettingsTab } from './app-settings/tabs/ServerUiAccessSettingsTab';
 import { ShellExecutionSettingsTab } from './app-settings/tabs/ShellExecutionSettingsTab';
 import { StorageSettingsTab } from './app-settings/tabs/StorageSettingsTab';
+import { VmMigrationSettingsTab } from './app-settings/tabs/VmMigrationSettingsTab';
+import { LocalStorageUpgradeSettingsTab } from './app-settings/tabs/LocalStorageUpgradeSettingsTab';
 import { WebAppsSettingsTab } from './app-settings/tabs/WebAppsSettingsTab';
 import { WorkflowEndpointsSettingsTab } from './app-settings/tabs/WorkflowEndpointsSettingsTab';
 import { isWebAppAuthSettingsTab, type AppSettingsTab } from './app-settings/model';
@@ -31,6 +33,7 @@ import type { HostedRouteConfig } from './types';
 interface AppSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: AppSettingsTab;
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
 }
@@ -40,6 +43,8 @@ const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'shell-execution', label: 'Shell execution' },
   { id: 'server-ui-access', label: 'Server UI access' },
   { id: 'storage', label: 'Storage' },
+  { id: 'vm-migration', label: 'Migration' },
+  { id: 'local-upgrade', label: 'Local storage upgrade' },
   { id: 'deployment-status', label: 'Deployment' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
@@ -71,16 +76,16 @@ function OpenAppSettingsModal({
   onClose,
   onRouteConfigChange,
   routeConfig,
+  initialTab = 'general',
 }: Omit<AppSettingsModalProps, 'isOpen'>) {
-  const [activeTab, setActiveTab] = useState<AppSettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<AppSettingsTab>(initialTab);
   const [actionFeedback, setActionFeedback] = useState<TabActionFeedback>(null);
   const [savingTab, setSavingTab] = useState(false);
-  const usesRuntimeLimits = (
+  const usesRuntimeLimits =
     activeTab === 'shell-execution' ||
     activeTab === 'workflow-endpoints' ||
     activeTab === 'web-apps' ||
-    activeTab === 'docker'
-  );
+    activeTab === 'docker';
   const usesPublicRoutes = activeTab === 'workflow-endpoints' || activeTab === 'web-apps';
 
   const limits = useRuntimeLimitsForm(usesRuntimeLimits);
@@ -94,182 +99,212 @@ function OpenAppSettingsModal({
   const environmentVariables = useEnvironmentVariablesForm(activeTab === 'environment-variables');
   const webAppAuth = useWebAppAuthForm(isWebAppAuthSettingsTab(activeTab), onRouteConfigChange);
 
-  const panel = activeTab === 'general'
-    ? <GeneralSettingsTab trustedClients={trustedClients} />
-    : activeTab === 'shell-execution'
-      ? <ShellExecutionSettingsTab limits={limits} />
-      : activeTab === 'server-ui-access'
-      ? <ServerUiAccessSettingsTab auth={webAppAuth} />
-      : activeTab === 'storage'
-        ? <StorageSettingsTab storage={storage} />
-        : activeTab === 'deployment-status'
-          ? <DeploymentStatusSettingsTab deployment={deploymentStatus} />
-        : activeTab === 'workflow-endpoints'
-          ? <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
-          : activeTab === 'run-recordings'
-            ? <RunRecordingsSettingsTab recordings={recordings} />
-            : activeTab === 'runtime-libraries'
-              ? <RuntimeLibrariesSettingsTab />
-            : activeTab === 'node-executor-proxy'
-              ? <NodeExecutorSettingsTab nodeExecutor={nodeExecutor} routeConfig={routeConfig} />
-              : activeTab === 'environment-variables'
-                ? <EnvironmentVariablesSettingsTab environmentVariables={environmentVariables} />
-              : activeTab === 'web-apps'
-                ? <WebAppsSettingsTab auth={webAppAuth} limits={limits} routes={routes} />
-                : activeTab === 'oauth'
-                  ? <OAuthSettingsTab auth={webAppAuth} routeConfig={routeConfig} />
-                  : <DockerSettingsTab limits={limits} />;
+  const panel =
+    activeTab === 'general' ? (
+      <GeneralSettingsTab trustedClients={trustedClients} />
+    ) : activeTab === 'shell-execution' ? (
+      <ShellExecutionSettingsTab limits={limits} />
+    ) : activeTab === 'server-ui-access' ? (
+      <ServerUiAccessSettingsTab auth={webAppAuth} />
+    ) : activeTab === 'storage' ? (
+      <StorageSettingsTab storage={storage} />
+    ) : activeTab === 'vm-migration' ? (
+      <VmMigrationSettingsTab />
+    ) : activeTab === 'local-upgrade' ? (
+      <LocalStorageUpgradeSettingsTab />
+    ) : activeTab === 'deployment-status' ? (
+      <DeploymentStatusSettingsTab deployment={deploymentStatus} />
+    ) : activeTab === 'workflow-endpoints' ? (
+      <WorkflowEndpointsSettingsTab auth={workflowAuth} limits={limits} routes={routes} />
+    ) : activeTab === 'run-recordings' ? (
+      <RunRecordingsSettingsTab recordings={recordings} />
+    ) : activeTab === 'runtime-libraries' ? (
+      <RuntimeLibrariesSettingsTab />
+    ) : activeTab === 'node-executor-proxy' ? (
+      <NodeExecutorSettingsTab nodeExecutor={nodeExecutor} routeConfig={routeConfig} />
+    ) : activeTab === 'environment-variables' ? (
+      <EnvironmentVariablesSettingsTab environmentVariables={environmentVariables} />
+    ) : activeTab === 'web-apps' ? (
+      <WebAppsSettingsTab auth={webAppAuth} limits={limits} routes={routes} />
+    ) : activeTab === 'oauth' ? (
+      <OAuthSettingsTab auth={webAppAuth} routeConfig={routeConfig} />
+    ) : (
+      <DockerSettingsTab limits={limits} />
+    );
 
-  const tabActions: TabSettingsAction[] = activeTab === 'deployment-status' || activeTab === 'runtime-libraries'
-    ? []
-    : activeTab === 'general'
-    ? [{
-        changed: trustedClients.changed,
-        disabled: trustedClients.controlsDisabled,
-        error: trustedClients.error,
-        name: 'trusted clients',
-        revert: trustedClients.revert,
-        save: trustedClients.save,
-      }]
-    : activeTab === 'shell-execution'
-      ? [{
-          changed: limits.changed.shell,
-          disabled: limits.controlsDisabled,
-          error: limits.status === 'shell' || limits.status === null ? limits.error : null,
-          name: 'shell execution',
-          revert: () => limits.revert('shell'),
-          save: () => limits.save('shell'),
-        }]
-      : activeTab === 'server-ui-access'
-      ? [{
-          changed: webAppAuth.changed.serverUiAccess,
-          disabled: webAppAuth.controlsDisabled,
-          error: webAppAuth.status === 'server-ui-access' ? webAppAuth.error : null,
-          name: 'server UI access',
-          revert: () => webAppAuth.revert('server-ui-access'),
-          save: () => webAppAuth.save('server-ui-access'),
-        }]
-      : activeTab === 'storage'
-        ? [{
-            changed: storage.changed,
-            disabled: storage.controlsDisabled,
-            error: storage.error,
-            name: 'storage',
-            revert: storage.revert,
-            save: storage.save,
-            savedMessage: 'Saved. Restart Docker services to apply storage changes.',
-          }]
-        : activeTab === 'workflow-endpoints'
+  const tabActions: TabSettingsAction[] =
+    activeTab === 'deployment-status' ||
+    activeTab === 'runtime-libraries' ||
+    activeTab === 'vm-migration' ||
+    activeTab === 'local-upgrade'
+      ? []
+      : activeTab === 'general'
+        ? [
+            {
+              changed: trustedClients.changed,
+              disabled: trustedClients.controlsDisabled,
+              error: trustedClients.error,
+              name: 'trusted clients',
+              revert: trustedClients.revert,
+              save: trustedClients.save,
+            },
+          ]
+        : activeTab === 'shell-execution'
           ? [
               {
-                changed: routes.changed.workflowEndpoints,
-                disabled: routes.controlsDisabled,
-                error: routes.status === 'workflow-endpoints' ? routes.error : null,
-                name: 'workflow endpoint routes',
-                revert: () => routes.revert('workflow-endpoints'),
-                save: () => routes.save('workflow-endpoints'),
-              },
-              {
-                changed: workflowAuth.changed,
-                disabled: workflowAuth.controlsDisabled,
-                error: workflowAuth.error,
-                name: 'workflow endpoint access control',
-                revert: workflowAuth.revert,
-                save: workflowAuth.save,
-              },
-              {
-                changed: limits.changed.proxyTimeout,
+                changed: limits.changed.shell,
                 disabled: limits.controlsDisabled,
-                error: limits.status === 'proxy-timeout' || limits.status === null ? limits.error : null,
-                name: 'workflow endpoint timeout',
-                revert: () => limits.revert('proxy-timeout'),
-                save: () => limits.save('proxy-timeout'),
+                error: limits.status === 'shell' || limits.status === null ? limits.error : null,
+                name: 'shell execution',
+                revert: () => limits.revert('shell'),
+                save: () => limits.save('shell'),
               },
             ]
-          : activeTab === 'run-recordings'
-            ? [{
-                changed: recordings.changed,
-                disabled: recordings.controlsDisabled,
-                error: recordings.error,
-                name: 'run recordings',
-                revert: recordings.revert,
-                save: recordings.save,
-              }]
-            : activeTab === 'node-executor-proxy'
+          : activeTab === 'server-ui-access'
+            ? [
+                {
+                  changed: webAppAuth.changed.serverUiAccess,
+                  disabled: webAppAuth.controlsDisabled,
+                  error: webAppAuth.status === 'server-ui-access' ? webAppAuth.error : null,
+                  name: 'server UI access',
+                  revert: () => webAppAuth.revert('server-ui-access'),
+                  save: () => webAppAuth.save('server-ui-access'),
+                },
+              ]
+            : activeTab === 'storage'
               ? [
                   {
-                    changed: nodeExecutor.proxy.changed,
-                    disabled: !nodeExecutor.proxy.loaded || nodeExecutor.proxy.loading || nodeExecutor.proxy.saving,
-                    error: nodeExecutor.proxy.error,
-                    name: 'Node executor proxy',
-                    revert: nodeExecutor.proxy.revert,
-                    save: nodeExecutor.proxy.save,
-                  },
-                  {
-                    changed: nodeExecutor.urls.changed,
-                    disabled: !nodeExecutor.urls.loaded || nodeExecutor.urls.loading || nodeExecutor.urls.saving,
-                    error: nodeExecutor.urls.error,
-                    name: 'websocket URL overrides',
-                    revert: nodeExecutor.urls.revert,
-                    save: nodeExecutor.urls.save,
-                    savedMessage: 'Saved. Reload the editor to apply websocket URL overrides to active sessions.',
+                    changed: storage.changed,
+                    disabled: storage.controlsDisabled,
+                    error: storage.error,
+                    name: 'storage',
+                    revert: storage.revert,
+                    save: storage.save,
+                    savedMessage: 'Saved. Restart Docker services to apply storage changes.',
                   },
                 ]
-              : activeTab === 'web-apps'
+              : activeTab === 'workflow-endpoints'
                 ? [
                     {
-                      changed: routes.changed.webApps,
+                      changed: routes.changed.workflowEndpoints,
                       disabled: routes.controlsDisabled,
-                      error: routes.status === 'web-apps' ? routes.error : null,
-                      name: 'web app routes',
-                      revert: () => routes.revert('web-apps'),
-                      save: () => routes.save('web-apps'),
+                      error: routes.status === 'workflow-endpoints' ? routes.error : null,
+                      name: 'workflow endpoint routes',
+                      revert: () => routes.revert('workflow-endpoints'),
+                      save: () => routes.save('workflow-endpoints'),
                     },
                     {
-                      changed: webAppAuth.changed.mode,
-                      disabled: webAppAuth.controlsDisabled,
-                      error: webAppAuth.status === 'web-apps' ? webAppAuth.error : null,
-                      name: 'web app authentication',
-                      revert: () => webAppAuth.revert('web-apps'),
-                      save: () => webAppAuth.save('web-apps'),
+                      changed: workflowAuth.changed,
+                      disabled: workflowAuth.controlsDisabled,
+                      error: workflowAuth.error,
+                      name: 'workflow endpoint access control',
+                      revert: workflowAuth.revert,
+                      save: workflowAuth.save,
                     },
                     {
-                      changed: limits.changed.webAppRequestSize,
+                      changed: limits.changed.proxyTimeout,
                       disabled: limits.controlsDisabled,
-                      error: limits.status === 'web-app-request-size' || limits.status === null ? limits.error : null,
-                      name: 'web app button data limit',
-                      revert: () => limits.revert('web-app-request-size'),
-                      save: () => limits.save('web-app-request-size'),
-                      savedMessage: 'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
+                      error: limits.status === 'proxy-timeout' || limits.status === null ? limits.error : null,
+                      name: 'workflow endpoint timeout',
+                      revert: () => limits.revert('proxy-timeout'),
+                      save: () => limits.save('proxy-timeout'),
                     },
                   ]
-                : activeTab === 'environment-variables'
-                  ? [{
-                      changed: environmentVariables.changed,
-                      disabled: environmentVariables.controlsDisabled,
-                      error: environmentVariables.error,
-                      name: 'environment variables',
-                      revert: environmentVariables.revert,
-                      save: environmentVariables.save,
-                      savedMessage: 'Saved. New runs now use these values.',
-                    }]
-                : activeTab === 'oauth'
-                  ? [{
-                      changed: webAppAuth.changed.oauth,
-                      disabled: webAppAuth.controlsDisabled,
-                      error: webAppAuth.status === 'oauth' ? webAppAuth.error : null,
-                      name: 'OAuth settings',
-                      revert: () => webAppAuth.revert('oauth'),
-                      save: () => webAppAuth.save('oauth'),
-                    }]
-                  : [{
-                      changed: limits.changed.docker,
-                      disabled: limits.controlsDisabled,
-                      error: limits.status === 'docker' || limits.status === null ? limits.error : null,
-                      name: 'Docker launcher',
-                      revert: () => limits.revert('docker'),
-                      save: () => limits.save('docker'),
-                    }];
+                : activeTab === 'run-recordings'
+                  ? [
+                      {
+                        changed: recordings.changed,
+                        disabled: recordings.controlsDisabled,
+                        error: recordings.error,
+                        name: 'run recordings',
+                        revert: recordings.revert,
+                        save: recordings.save,
+                      },
+                    ]
+                  : activeTab === 'node-executor-proxy'
+                    ? [
+                        {
+                          changed: nodeExecutor.proxy.changed,
+                          disabled:
+                            !nodeExecutor.proxy.loaded || nodeExecutor.proxy.loading || nodeExecutor.proxy.saving,
+                          error: nodeExecutor.proxy.error,
+                          name: 'Node executor proxy',
+                          revert: nodeExecutor.proxy.revert,
+                          save: nodeExecutor.proxy.save,
+                        },
+                        {
+                          changed: nodeExecutor.urls.changed,
+                          disabled: !nodeExecutor.urls.loaded || nodeExecutor.urls.loading || nodeExecutor.urls.saving,
+                          error: nodeExecutor.urls.error,
+                          name: 'websocket URL overrides',
+                          revert: nodeExecutor.urls.revert,
+                          save: nodeExecutor.urls.save,
+                          savedMessage: 'Saved. Reload the editor to apply websocket URL overrides to active sessions.',
+                        },
+                      ]
+                    : activeTab === 'web-apps'
+                      ? [
+                          {
+                            changed: routes.changed.webApps,
+                            disabled: routes.controlsDisabled,
+                            error: routes.status === 'web-apps' ? routes.error : null,
+                            name: 'web app routes',
+                            revert: () => routes.revert('web-apps'),
+                            save: () => routes.save('web-apps'),
+                          },
+                          {
+                            changed: webAppAuth.changed.mode,
+                            disabled: webAppAuth.controlsDisabled,
+                            error: webAppAuth.status === 'web-apps' ? webAppAuth.error : null,
+                            name: 'web app authentication',
+                            revert: () => webAppAuth.revert('web-apps'),
+                            save: () => webAppAuth.save('web-apps'),
+                          },
+                          {
+                            changed: limits.changed.webAppRequestSize,
+                            disabled: limits.controlsDisabled,
+                            error:
+                              limits.status === 'web-app-request-size' || limits.status === null ? limits.error : null,
+                            name: 'web app button data limit',
+                            revert: () => limits.revert('web-app-request-size'),
+                            save: () => limits.save('web-app-request-size'),
+                            savedMessage:
+                              'Saved. Nginx reloads shortly; restart the API to apply the new WebSocket message limit.',
+                          },
+                        ]
+                      : activeTab === 'environment-variables'
+                        ? [
+                            {
+                              changed: environmentVariables.changed,
+                              disabled: environmentVariables.controlsDisabled,
+                              error: environmentVariables.error,
+                              name: 'environment variables',
+                              revert: environmentVariables.revert,
+                              save: environmentVariables.save,
+                              savedMessage: 'Saved. New runs now use these values.',
+                            },
+                          ]
+                        : activeTab === 'oauth'
+                          ? [
+                              {
+                                changed: webAppAuth.changed.oauth,
+                                disabled: webAppAuth.controlsDisabled,
+                                error: webAppAuth.status === 'oauth' ? webAppAuth.error : null,
+                                name: 'OAuth settings',
+                                revert: () => webAppAuth.revert('oauth'),
+                                save: () => webAppAuth.save('oauth'),
+                              },
+                            ]
+                          : [
+                              {
+                                changed: limits.changed.docker,
+                                disabled: limits.controlsDisabled,
+                                error: limits.status === 'docker' || limits.status === null ? limits.error : null,
+                                name: 'Docker launcher',
+                                revert: () => limits.revert('docker'),
+                                save: () => limits.save('docker'),
+                              },
+                            ];
   const tabError = tabActions.find((action) => action.error)?.error ?? actionFeedback?.error ?? null;
 
   useEffect(() => {
@@ -288,7 +323,9 @@ function OpenAppSettingsModal({
       const results = await Promise.all(changedActions.map((action) => action.save()));
       const failedActions = changedActions.filter((_, index) => results[index] === undefined);
       if (failedActions.length > 0) {
-        setActionFeedback({ error: `Could not save ${describeActions(failedActions)}. Review the values and try again.` });
+        setActionFeedback({
+          error: `Could not save ${describeActions(failedActions)}. Review the values and try again.`,
+        });
         return;
       }
 

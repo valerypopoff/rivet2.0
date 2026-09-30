@@ -46,8 +46,8 @@ That managed facade keeps the supported runtime modes visible instead of hiding 
 
 Canonical managed config lives in App Settings -> `Storage`:
 
-- project artifact storage: `Local folders` or `Object storage` in the UI (`filesystem` or `managed` in the saved settings file)
-- metadata database: `Local Docker Postgres` or `Managed Postgres` in the UI (`local-docker` or `managed` in the saved settings file)
+- project artifact storage: `Local folders` or `Object storage + PostgreSQL` in the UI (`filesystem` or `managed` in the saved settings file)
+- metadata database: `Local Docker Postgres` or `Managed Postgres` in the UI only when managed storage is selected (`local-docker` or `managed` in the saved settings file; inactive in filesystem mode)
 - managed PostgreSQL connection string and SSL mode
 - S3-compatible object-storage URL, access key ID, and secret access key
 
@@ -132,6 +132,33 @@ of truth is:
 - object storage for immutable `runtime-libraries/releases/<releaseId>/release.tar` artifacts
 
 ## Execution bootstrap
+
+Rivet-capable editor Code nodes run in the executor's main thread. Before each
+such invocation, the require helper resolves the configured runtime directory
+with uncached native realpath and checks its physical identity. Changed releases
+invalidate their previous and current CommonJS `node_modules` trees, including
+nested dependencies. Ordinary Code workers already have invocation-local module
+caches. Desktop launches without a configured hosted require root retain ordinary
+Node resolution.
+
+In SQLite-backed local mode, `runtime-cache/current` is a confined activation
+link to a unique `cache-<UUID>` directory. API and editor resolvers anchor at that
+physical directory, not the mutable `current` alias. Subsequent POSIX activations
+replace the link with a single atomic rename, so concurrent editor readers see
+the old or new release, never an absent `current` between two renames. A failed
+replacement leaves the old link usable; older directory caches and Windows
+junctions use the startup/compatibility swap path. This also isolates Node's
+package-entry/exports resolution caches, which cannot be refreshed by deleting
+`require.cache` alone. Activation still commits the authoritative SQL archive
+first and repairs extraction from it on failure/restart. Live promotion retains
+earlier physical caches so an in-flight workflow can still lazy-load its own
+dependencies. Supervised startup prunes inactive owned caches before admitting
+executions; do not prune them during running work. Disk sizing must allow package
+changes between restarts as well as extraction overhead. Interrupted extraction
+can leave disposable orphans, not a second business-data authority. Legacy source
+folders and managed cache layouts are not converted by this change. The packaged rehearsal changes
+both `main` and `exports` between installed package versions to check the selected
+SQLite path in endpoint and editor execution.
 
 Runtime-library sync is part of execution wiring, not only the admin UI:
 
@@ -265,7 +292,7 @@ Install and remove both rebuild a complete candidate release:
 
 1. Read the active package set from the selected backend.
 2. Add or remove the requested package entries from the candidate set.
-3. Recreate a temporary candidate directory.
+3. Create a unique temporary candidate directory, preventing Node's package-resolution cache from remembering an earlier candidate's entry points. Clean up that candidate after completion/failure; never reuse it for another install.
 4. Generate a synthetic `package.json` with the candidate dependencies.
 5. Run `npm install --omit=dev --no-audit --no-fund` when dependencies are present.
 6. Validate every requested package by resolving it from the candidate `node_modules`.
@@ -392,6 +419,17 @@ Integrity rule:
 - post-prune verification fails if any retained release still points to a missing artifact
 
 ## UI behavior
+
+After the opt-in [local metadata upgrade](local-metadata-upgrade.md), local
+runtime-library activation and its immutable package archive are authoritative
+in the SQLite catalog, not `manifest.json`. The API rebuilds a disposable cache
+from that archive; the co-located executor obtains its generation/cache path
+and current outbound proxy settings through the authenticated loopback startup
+protocol. Package activation commits the SQL archive pointer before changing
+the cache; a failed cache promotion stays unavailable until repair, never falls
+back to legacy libraries. Conversion/validation forbids library mutations and
+does not modify the retained source. Existing filesystem job UI remains used;
+transient job logs and extracted packages are not business-data authorities.
 
 The current wrapper UI exposes a simple single-package workflow:
 

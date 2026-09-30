@@ -43,9 +43,11 @@ import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
 import { createManagedWorkflowRevisionService } from './revisions.js';
+import { readManagedWorkflowMigrationSnapshot } from './migration-snapshot.js';
 import type {
   ImportManagedWorkflowOptions,
   ImportManagedWorkflowRecordingOptions,
+  ManagedWorkflowMigrationSnapshot,
   LoadHostedProjectResult,
   PersistWorkflowExecutionRecordingOptions,
   SaveHostedProjectResult,
@@ -62,10 +64,16 @@ export class ManagedWorkflowBackend {
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
   readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
   readonly #evaluationStore: PostgresRivetEvaluationStore;
-  readonly #hostedEvaluationCoordinator: HostedEvaluationCoordinator;
+  readonly #hostedEvaluationCoordinator?: HostedEvaluationCoordinator;
+  readonly #runBackgroundTasks: boolean;
 
-  constructor(config: ManagedWorkflowStorageConfig, blobStore?: ManagedWorkflowBlobStore) {
-    this.#context = createManagedWorkflowContext(config, blobStore);
+  constructor(
+    config: ManagedWorkflowStorageConfig,
+    blobStore?: ManagedWorkflowBlobStore,
+    options?: { migrationMode?: 'copy' | 'verify' },
+  ) {
+    this.#runBackgroundTasks = options?.migrationMode === undefined;
+    this.#context = createManagedWorkflowContext(config, blobStore, options);
     this.#executionService = new ManagedWorkflowExecutionService({
       context: this.#context,
     });
@@ -84,25 +92,30 @@ export class ManagedWorkflowBackend {
     });
     this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
     this.#evaluationStore = new PostgresRivetEvaluationStore(this.#context.pool);
-    this.#hostedEvaluationCoordinator = new HostedEvaluationCoordinator({
-      pool: this.#context.pool,
-      runStore: this.#evaluationStore,
-      config: getHostedEvaluationsCoordinatorConfig(),
-      runGraph: createHostedEvaluationGraphRunner({
-        evaluationStore: this.#evaluationStore,
-        llmProfileHealthStore: this.#llmProfileHealthStore,
-        createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
-      }),
-    });
+    if (this.#runBackgroundTasks) {
+      this.#hostedEvaluationCoordinator = new HostedEvaluationCoordinator({
+        pool: this.#context.pool,
+        runStore: this.#evaluationStore,
+        config: getHostedEvaluationsCoordinatorConfig(),
+        runGraph: createHostedEvaluationGraphRunner({
+          evaluationStore: this.#evaluationStore,
+          llmProfileHealthStore: this.#llmProfileHealthStore,
+          createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
+        }),
+      });
+    }
   }
 
   async initialize(): Promise<void> {
-    await this.#recordings.initialize();
-    this.#hostedEvaluationCoordinator.start();
+    // Migration verification must not run startup retention or start a
+    // scheduler against an offline destination being compared byte-for-byte.
+    if (this.#runBackgroundTasks) await this.#recordings.initialize();
+    else await this.#context.initialize();
+    this.#hostedEvaluationCoordinator?.start();
   }
 
   async dispose(): Promise<void> {
-    await this.#hostedEvaluationCoordinator.stop();
+    await this.#hostedEvaluationCoordinator?.stop();
     await this.#context.dispose();
   }
 
@@ -135,6 +148,10 @@ export class ManagedWorkflowBackend {
 
   async importWorkflow(options: ImportManagedWorkflowOptions): Promise<WorkflowProjectItem> {
     return this.#revisions.importWorkflow(options);
+  }
+
+  async readWorkflowMigrationSnapshot(relativePath: string): Promise<ManagedWorkflowMigrationSnapshot | null> {
+    return readManagedWorkflowMigrationSnapshot(this.#context, relativePath);
   }
 
   async readHostedText(filePath: string): Promise<string> {
@@ -233,6 +250,9 @@ export class ManagedWorkflowBackend {
 
   async getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator> {
     await this.initialize();
+    if (!this.#hostedEvaluationCoordinator) {
+      throw new Error('Hosted Evaluation coordination is unavailable in migration mode.');
+    }
     return this.#hostedEvaluationCoordinator;
   }
 
@@ -278,11 +298,19 @@ export class ManagedWorkflowBackend {
     return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions);
   }
 
-  async publishWorkflowProjectItem(relativePath: unknown, settings: unknown, preconditions: WorkflowDraftPublicationPreconditions): Promise<WorkflowProjectItem> {
+  async publishWorkflowProjectItem(
+    relativePath: unknown,
+    settings: unknown,
+    preconditions: WorkflowDraftPublicationPreconditions,
+  ): Promise<WorkflowProjectItem> {
     return this.#publication.publishWorkflowProjectItem(relativePath, settings, preconditions);
   }
 
-  async updateWorkflowEndpointAccess(relativePath: unknown, access: WorkflowEndpointAccess, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+  async updateWorkflowEndpointAccess(
+    relativePath: unknown,
+    access: WorkflowEndpointAccess,
+    preconditions: WorkflowPublicationPreconditions,
+  ): Promise<WorkflowProjectItem> {
     return this.#publication.updateWorkflowEndpointAccess(relativePath, access, preconditions);
   }
 
@@ -306,11 +334,18 @@ export class ManagedWorkflowBackend {
     return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
   }
 
-  async unpublishWorkflowProjectWebApp(relativePath: unknown, uiGraphId: unknown, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+  async unpublishWorkflowProjectWebApp(
+    relativePath: unknown,
+    uiGraphId: unknown,
+    preconditions: WorkflowPublicationPreconditions,
+  ): Promise<WorkflowProjectItem> {
     return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
   }
 
-  async unpublishWorkflowProjectItem(relativePath: unknown, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+  async unpublishWorkflowProjectItem(
+    relativePath: unknown,
+    preconditions: WorkflowPublicationPreconditions,
+  ): Promise<WorkflowProjectItem> {
     return this.#publication.unpublishWorkflowProjectItem(relativePath, preconditions);
   }
 
@@ -318,12 +353,18 @@ export class ManagedWorkflowBackend {
     return this.#catalog.deleteWorkflowProjectItem(relativePath);
   }
 
-  async loadPublishedExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
+  async loadPublishedExecutionProject(
+    endpointName: string,
+    requireFreshPointer = false,
+  ): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
     return this.#executionService.loadPublishedExecutionProject(endpointName, requireFreshPointer);
   }
 
-  async loadLatestExecutionProject(endpointName: string, requireFreshPointer = false): Promise<ManagedExecutionProjectResult | null> {
+  async loadLatestExecutionProject(
+    endpointName: string,
+    requireFreshPointer = false,
+  ): Promise<ManagedExecutionProjectResult | null> {
     await this.initialize();
     return this.#executionService.loadLatestExecutionProject(endpointName, requireFreshPointer);
   }

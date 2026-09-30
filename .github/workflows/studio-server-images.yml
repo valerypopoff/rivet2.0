@@ -417,7 +417,7 @@ jobs:
     needs:
       - build-and-push
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -436,6 +436,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Exercise Candidate Image Set
         run: yarn studio-server:verify:candidate-images
+      - name: Install Playwright Chromium and Linux dependencies
+        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
+      - name: Rehearse local SQLite conversion and recovery with candidate images
+        run: yarn studio-server:verify:local-upgrade-images
+      - name: Exercise restored-copy orchestration directly on the Linux host
+        run: sudo --preserve-env=IMAGE_NAMESPACE,SOURCE_TAG,GITHUB_SHA "$(command -v node)" deploy/studio-server/scripts/local-upgrade-restored-host.integration.mjs
+      - name: Upload local upgrade rehearsal diagnostics
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: local-upgrade-rehearsal-${{ github.sha }}
+          path: |
+            artifacts/local-upgrade/rivet-local-upgrade-rehearsal-*/result.json
+            artifacts/local-upgrade/rivet-local-upgrade-rehearsal-*/container-fixture.log
+            artifacts/local-upgrade/host-summary-*/result.json
+            artifacts/local-upgrade/host-summary-*/failure.json
+            artifacts/local-upgrade/host-summary-*/cleanup-failure.json
+            artifacts/playwright/
+          if-no-files-found: ignore
   managed-kubernetes-release-gate:
     if: needs.changes.outputs.full_kubernetes == 'true'
     needs:

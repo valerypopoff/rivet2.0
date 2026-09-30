@@ -1,4 +1,6 @@
 import { performance } from 'node:perf_hooks';
+import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
+import { localUpgradeFailure } from './local-metadata/upgrade-diagnostics.js';
 
 import express, {
   type Express,
@@ -51,6 +53,7 @@ import {
 } from './runtime-profile.js';
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
+import { vmMigrationRequestBarrier } from './vm-migration-maintenance.js';
 import { closeResponseConnectionAfterFlush, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
@@ -80,7 +83,8 @@ function getMetricsHttpRoute(req: Request): MetricsHttpRoute {
   if (matchesPath(pathname, getPublishedWebAppsBasePath())) return 'published_web_app';
   if (matchesPath(pathname, getLatestWorkflowsBasePath())) return 'latest_workflow';
   if (matchesPath(pathname, getLatestWebAppsBasePath())) return 'latest_web_app';
-  if (matchesPath(pathname, '/internal/workflows') || matchesPath(pathname, '/internal/workflows-latest')) return 'internal_workflow';
+  if (matchesPath(pathname, '/internal/workflows') || matchesPath(pathname, '/internal/workflows-latest'))
+    return 'internal_workflow';
   if (matchesPath(pathname, '/api')) return 'api';
   return 'other';
 }
@@ -291,9 +295,10 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   app.get('/internal/executor-runtime-config', (req, res) => {
     const address = req.socket.remoteAddress;
     if (
-      process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' ||
+      (process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' && !getLocalMetadataServingSelection()) ||
       !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '') ||
-      !isTrustedProxyRequest(req) || !isTrustedExecutorRequest(req)
+      !isTrustedProxyRequest(req) ||
+      !isTrustedExecutorRequest(req)
     ) {
       res.sendStatus(403);
       return;
@@ -301,6 +306,16 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
     res.set('Cache-Control', 'no-store');
     const storage = readDeploymentStorageRuntimeSettingsSync();
     const proxy = nodeExecutorProxySettingsRepository.readSync().value;
+    const local = getLocalMetadataServingSelection();
+    if (local) {
+      res.json({
+        protocolVersion: 2,
+        generationId: local.generationId,
+        runtimeCacheRoot: local.runtimeCacheRoot,
+        proxy: { httpProxy: proxy.httpProxy, httpsProxy: proxy.httpsProxy, noProxy: proxy.noProxy },
+      });
+      return;
+    }
     res.json({
       protocolVersion: 1,
       storage: {
@@ -387,6 +402,8 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   // Do not count platform probes or Prometheus scrapes as application traffic.
   app.use(createMetricsRequestObserver(metrics));
 
+  app.use(vmMigrationRequestBarrier);
+
   app.use(captureAppSettingsSnapshot);
 
   if (isControlPlaneApiProfile(profile) || profile === 'execution') {
@@ -408,7 +425,22 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
     const response = getApiErrorResponse(err);
     if (response.status >= 500) {
-      console.error('[' + getRequestCorrelationId(req) + '] Unhandled API error:', err);
+      if (
+        matchesPath(req.path, '/api/app-settings/local-upgrade') ||
+        matchesPath(req.path, '/api/app-settings/vm-migration')
+      ) {
+        // Parsers and storage drivers may embed source values, SQL or provider
+        // credentials in errors. Keep operator diagnostics in fixed vocabulary
+        // even when failure happens before the durable copy job starts.
+        const code = localUpgradeFailure('preflight', err).code;
+        response.body = {
+          error: 'Storage operation failed. Check source integrity and reload status before retrying.',
+          code,
+        };
+        console.error('[' + getRequestCorrelationId(req) + '] Storage operator API error:', { code });
+      } else {
+        console.error('[' + getRequestCorrelationId(req) + '] Unhandled API error:', err);
+      }
     }
     const retryAfterSeconds = (err as { retryAfterSeconds?: unknown }).retryAfterSeconds;
     if (typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds)) {

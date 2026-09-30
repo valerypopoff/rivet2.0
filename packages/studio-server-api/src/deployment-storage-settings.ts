@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 
 import type {
   AppSettingsSource,
@@ -107,9 +108,12 @@ export function readDeploymentStorageBootstrapSettings(): DeploymentStorageRunti
   const username = deploymentEnv('RIVET_DEPLOYMENT_DATABASE_USERNAME');
   const password = process.env.RIVET_DEPLOYMENT_DATABASE_PASSWORD ?? '';
   if (!explicitDatabaseUrl && (!host || !database || !username || !password)) {
-    throw new Error('Managed deployment storage requires a PostgreSQL connection string or complete host, database, username and password settings.');
+    throw new Error(
+      'Managed deployment storage requires a PostgreSQL connection string or complete host, database, username and password settings.',
+    );
   }
-  const databaseConnectionString = explicitDatabaseUrl ||
+  const databaseConnectionString =
+    explicitDatabaseUrl ||
     `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${deploymentEnv('RIVET_DEPLOYMENT_DATABASE_PORT') || '5432'}/${encodeURIComponent(database)}`;
   const bucket = deploymentEnv('RIVET_DEPLOYMENT_STORAGE_BUCKET');
   const legacyUrl = deploymentEnv('RIVET_DEPLOYMENT_STORAGE_URL');
@@ -120,13 +124,15 @@ export function readDeploymentStorageBootstrapSettings(): DeploymentStorageRunti
   if (pathStyle && !['true', 'false'].includes(pathStyle)) {
     throw new Error('RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE must be true or false.');
   }
-  const location = bucket ? validateObjectStorageLocation({
-    objectStorageBucket: bucket,
-    objectStorageEndpoint: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_ENDPOINT').replace(/\/+$/, ''),
-    objectStorageRegion: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_REGION'),
-    objectStoragePrefix: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_PREFIX') || 'workflows/',
-    objectStorageForcePathStyle: pathStyle === 'true',
-  }) : undefined;
+  const location = bucket
+    ? validateObjectStorageLocation({
+        objectStorageBucket: bucket,
+        objectStorageEndpoint: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_ENDPOINT').replace(/\/+$/, ''),
+        objectStorageRegion: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_REGION'),
+        objectStoragePrefix: deploymentEnv('RIVET_DEPLOYMENT_STORAGE_PREFIX') || 'workflows/',
+        objectStorageForcePathStyle: pathStyle === 'true',
+      })
+    : undefined;
   if (!location && !legacyUrl) {
     throw new Error('Managed deployment storage requires an object storage bucket or URL.');
   }
@@ -342,7 +348,9 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
   getManagedBootstrap: () => {
     if (process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated') return undefined;
     if (process.env.RIVET_DEPLOYMENT_STORAGE_SEED_MISSING !== '1') {
-      throw new Error('The authoritative deployment-storage settings row is missing. Run the Kubernetes migration Job before serving.');
+      throw new Error(
+        'The authoritative deployment-storage settings row is missing. Run the Kubernetes migration Job before serving.',
+      );
     }
     return readDeploymentStorageBootstrapSettings();
   },
@@ -409,6 +417,10 @@ export async function writeDeploymentStorageSettings(
   }
   const saved = await deploymentStorageSettingsRepository.update((previous) => {
     const next = normalizeSettings(draft, previous, 'app-settings');
+    if (getLocalMetadataServingSelection() && next.storageMode !== 'filesystem')
+      throw badRequest(
+        'This installation uses local SQLite metadata. Changing backend requires a separate verified managed migration, not a Storage-tab toggle.',
+      );
     if (
       previous.objectStorageBucket &&
       (previous.objectStorageBucket !== next.objectStorageBucket ||

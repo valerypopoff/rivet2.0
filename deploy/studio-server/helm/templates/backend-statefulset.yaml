@@ -31,8 +31,8 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- include "rivet.pod.placement" (dict "root" . "component" "backend") | nindent 6 }}
       {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      {{- if .Values.compatibility.legacyStartupSettingsFiles }}
       initContainers:
-        {{- if .Values.compatibility.legacyStartupSettingsFiles }}
         - name: deployment-storage-settings
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
@@ -48,25 +48,11 @@ spec:
           resources:
 {{ toYaml .Values.resources.api | nindent 12 }}
 {{ include "rivet.pod.appSettingsProjectionInitContainer" (dict "root" . "resources" .Values.resources.api) | nindent 8 }}
-        {{- else }}
-        - name: api-runtime-config-compatibility
-          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
-          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
-          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
-          command: ["/bin/sh", "-ec"]
-          args: ['test "${RIVET_RUNTIME_CONFIG_PROTOCOL:-}" = "1"']
-          resources:
-{{ toYaml .Values.resources.api | nindent 12 }}
-        - name: executor-runtime-config-compatibility
-          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.executor) }}
-          imagePullPolicy: {{ .Values.images.executor.pullPolicy }}
-          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
-          command: ["/bin/sh", "-ec"]
-          args: ['test "${RIVET_RUNTIME_CONFIG_PROTOCOL:-}" = "1"']
-          resources:
-{{ toYaml .Values.resources.executor | nindent 12 }}
-        {{- end }}
+      {{- end }}
       containers:
+        {{- if .Values.compatibility.legacyStartupSettingsFiles }}
+        # Predecessor API images do not contain the combined-backend supervisor.
+        # Keep the two original containers only for the verified rollback path.
         - name: api
           image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
@@ -74,7 +60,6 @@ spec:
           ports:
             - name: api-http
               containerPort: {{ .Values.service.api.targetPort }}
-
           {{- include "rivet.pod.apiProbes" (dict "root" . "port" "api-http") | nindent 10 }}
           {{- include "rivet.pod.preStop" . | nindent 10 }}
           env:
@@ -118,7 +103,65 @@ spec:
           volumeMounts:
 {{ include "rivet.pod.executorVolumeMounts" . | nindent 12 }}
           resources:
-{{ toYaml .Values.resources.executor | nindent 12 }}
+{{ toYaml (default .Values.resources.api (index .Values.resources "executor")) | nindent 12 }}
+        {{- else }}
+        - name: backend
+          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          command: ["node", "/opt/rivet/backend-supervisor.mjs"]
+          ports:
+            - name: api-http
+              containerPort: {{ .Values.service.api.targetPort }}
+            - name: executor-http
+              containerPort: {{ .Values.service.executor.targetPort }}
+            - name: backend-health
+              containerPort: {{ .Values.service.backendHealth.targetPort }}
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: backend-health
+            periodSeconds: {{ .Values.lifecycle.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.lifecycle.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ add .Values.lifecycle.probes.startup.failureThreshold (div 120 .Values.lifecycle.probes.startup.periodSeconds) 5 }}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: backend-health
+            periodSeconds: {{ .Values.lifecycle.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.lifecycle.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.lifecycle.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: backend-health
+            periodSeconds: {{ .Values.lifecycle.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.lifecycle.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.lifecycle.probes.readiness.failureThreshold }}
+          {{- include "rivet.pod.preStop" . | nindent 10 }}
+          env:
+{{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.api.targetPort "profile" "control" "storageBackend" .Values.workflowStorage.backend "replicaTier" "none" "jobWorkerEnabled" "true") | nindent 12 }}
+            - name: RIVET_RUNNER_SLOT_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RIVET_BACKEND_API_PORT
+              value: {{ .Values.service.api.targetPort | quote }}
+            - name: RIVET_BACKEND_EXECUTOR_PORT
+              value: {{ .Values.service.executor.targetPort | quote }}
+            - name: RIVET_BACKEND_HEALTH_PORT
+              value: {{ .Values.service.backendHealth.targetPort | quote }}
+            - name: RIVET_BACKEND_API_STARTUP_TIMEOUT_MS
+              value: {{ mul .Values.lifecycle.probes.startup.failureThreshold .Values.lifecycle.probes.startup.periodSeconds 1000 | quote }}
+            - name: RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS
+              value: {{ mul (add .Values.lifecycle.shutdownGraceSeconds 10) 1000 | quote }}
+            - name: RIVET_EXECUTOR_RUNTIME_CONFIG_URL
+              value: {{ printf "http://127.0.0.1:%v/internal/executor-runtime-config" .Values.service.api.targetPort | quote }}
+          volumeMounts:
+{{ include "rivet.pod.backendVolumeMounts" . | nindent 12 }}
+          resources:
+{{ toYaml .Values.resources.backend | nindent 12 }}
+        {{- end }}
       volumes:
         - name: workspace
           emptyDir:

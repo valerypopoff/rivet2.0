@@ -81,6 +81,7 @@ COPY --from=serve-installer /usr/local/lib/node_modules/serve /usr/local/lib/nod
 COPY --from=builder --chown=10001:10001 /app/packages/studio-server-web/dist /app/dist
 
 ENV HOME=/home/rivet
+ENV TMPDIR=/tmp
 
 EXPOSE 3000
 USER 10001:10001

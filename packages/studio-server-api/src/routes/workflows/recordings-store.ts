@@ -163,7 +163,7 @@ export function createWorkflowRecordingStore(options: {
       return true;
     },
 
-    async ensureStorage(root: string): Promise<void> {
+    async ensureStorage(root: string, storageOptions?: { skipCleanup?: boolean }): Promise<void> {
       if (storageReadyPromise && storageReadyRoot === root) {
         return storageReadyPromise;
       }
@@ -171,7 +171,7 @@ export function createWorkflowRecordingStore(options: {
       storageReadyRoot = root;
       storageReadyPromise = (async () => {
         await options.rebuildIndex(root);
-        await options.cleanupStorage();
+        if (!storageOptions?.skipCleanup) await options.cleanupStorage();
         await options.setSchemaVersion('2');
       })();
 

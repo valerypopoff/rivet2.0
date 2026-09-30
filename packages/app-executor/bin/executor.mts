@@ -19,6 +19,8 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { match } from 'ts-pattern';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { platform, homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -29,6 +31,7 @@ import {
 } from './codeRunnerWorkerPool.mjs';
 import { parseExecutorHostFromArgs, parseExecutorPortFromArgs } from './executorConfig.mjs';
 import { getAppExecutorHostOptions, markAppExecutorModuleLoaded } from './executorHostState.mjs';
+import { assertLocalMetadataExecutorAdmission } from './localMetadataAdmission.mjs';
 
 markAppExecutorModuleLoaded();
 
@@ -112,6 +115,40 @@ const host = parseExecutorHostFromArgs(executorArgs);
 const executorReadyMessage = `Rivet app executor websocket listening on ${host}:${port}`;
 let executorWebSocketReady = false;
 let exitingAfterStartupError = false;
+
+function acquireVmMigrationEditorLease(): (() => void) | null {
+  const controlRoot = process.env.RIVET_VM_MIGRATION_CONTROL_ROOT?.trim();
+  if (process.env.RIVET_RUNTIME_PROCESS_ROLE !== 'executor' || !controlRoot) return () => undefined;
+  const activeRoot = join(controlRoot, 'vm-migration-active-editor-runs');
+  mkdirSync(activeRoot, { recursive: true });
+  const leasePath = join(activeRoot, `${process.pid}-${randomUUID()}`);
+  writeFileSync(leasePath, '', { flag: 'wx', mode: 0o600 });
+  const release = () => rmSync(leasePath, { force: true });
+  // Creating the lease before checking the marker closes the race with the
+  // API's maintenance barrier: a run is either rejected or visible to drain.
+  let maintenance = false;
+  try {
+    maintenance = true;
+    lstatSync(join(controlRoot, 'vm-migration-maintenance.json'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') maintenance = false;
+    else {
+      release();
+      throw error;
+    }
+  }
+  if (maintenance) {
+    release();
+    return null;
+  }
+  try {
+    assertLocalMetadataExecutorAdmission();
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
+}
 
 process.on('unhandledRejection', (reason) => {
   handleTopLevelSidecarError('Unhandled promise rejection in app executor sidecar.', reason);
@@ -271,6 +308,18 @@ const rivetDebugger = startDebuggerServer({
       return;
     }
 
+    let releaseMigrationLease: (() => void) | null;
+    try {
+      releaseMigrationLease = acquireVmMigrationEditorLease();
+    } catch (error) {
+      sendGraphRunError(client, requestId, error);
+      return;
+    }
+    if (!releaseMigrationLease) {
+      sendGraphRunError(client, requestId, new Error('Rivet Server is paused for storage migration.'));
+      return;
+    }
+
     let processorForConsole: ReturnType<typeof createProcessor>['processor'] | undefined;
 
     try {
@@ -387,7 +436,7 @@ const rivetDebugger = startDebuggerServer({
         context: contextValues,
         storedValueStore: webAppStorage?.store,
         projectPath,
-        projectReferenceLoader: new NodeProjectReferenceLoader(),
+        projectReferenceLoader: hostProcessorOptions.projectReferenceLoader ?? new NodeProjectReferenceLoader(),
       });
       processorForConsole = processor.processor;
 
@@ -412,6 +461,7 @@ const rivetDebugger = startDebuggerServer({
       logRuntimeError(`Graph ${graphId} failed.`, err, { requestId });
       sendGraphRunError(client, requestId, err);
     } finally {
+      releaseMigrationLease();
       if (processorForConsole) {
         rivetDebugger.detach(processorForConsole);
         untrackClientProcessor(processorForConsole);
@@ -428,6 +478,9 @@ process.on('SIGTERM', () => {
 async function announceExecutorReady() {
   await sharedCodeWorkerPoolReady;
   executorWebSocketReady = true;
+  if (process.env.RIVET_RUNTIME_PROCESS_ROLE === 'executor') {
+    process.send?.({ type: 'rivet-executor-ready' });
+  }
   logRuntimeInfo(executorReadyMessage);
 }
 

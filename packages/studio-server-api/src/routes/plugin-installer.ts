@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { getAppDataRoot, validatePath } from '../security.js';
@@ -178,7 +179,7 @@ export async function downloadAndExtractPlugin(pkg: string, tag: string, addLog:
 
   if (hasPackageJson && !skipInstall) {
     addLog('Installing NPM dependencies...');
-    const installResult = await exec('pnpm', ['install', '--prod', '--ignore-scripts'], {
+    const installResult = await exec('pnpm', ['--store-dir', path.join(os.tmpdir(), 'rivet-pnpm-store'), 'install', '--prod', '--ignore-scripts'], {
       cwd: pluginFilesPath,
       timeoutMs: 120_000,
     });

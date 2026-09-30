@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
 
 import type { RuntimeLibraryEntry } from '../../../studio-server-shared/runtime-library-types.js';
 
@@ -16,7 +17,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getRuntimeLibrariesRoot(): string {
-  return process.env.RIVET_RUNTIME_LIBRARIES_ROOT ?? '/data/runtime-libraries';
+  return (
+    getLocalMetadataServingSelection()?.runtimeCacheRoot ??
+    process.env.RIVET_RUNTIME_LIBRARIES_ROOT ??
+    '/data/runtime-libraries'
+  );
+}
+
+let localAuthority: {
+  read(): RuntimeLibraryManifest;
+  prepare(): Promise<void>;
+  activate(staging: string, manifest: RuntimeLibraryManifest): Promise<void>;
+} | null = null;
+export function configureLocalRuntimeLibraryAuthority(authority: typeof localAuthority): void {
+  localAuthority = authority;
+}
+export async function prepareLocalRuntimeLibraries(): Promise<void> {
+  if (!getLocalMetadataServingSelection()) return;
+  if (!localAuthority) throw new Error('Local runtime-library authority is not initialized.');
+  await localAuthority.prepare();
+}
+export async function activateLocalRuntimeLibraryCandidate(
+  staging: string,
+  manifest: RuntimeLibraryManifest,
+): Promise<boolean> {
+  if (!getLocalMetadataServingSelection()) return false;
+  if (!localAuthority) throw new Error('Local runtime-library authority is not initialized.');
+  await localAuthority.activate(staging, manifest);
+  return true;
 }
 
 export function getRootPath(): string {
@@ -84,6 +112,10 @@ export function normalizeManifest(value: unknown): RuntimeLibraryManifest {
 }
 
 export function readManifest(): RuntimeLibraryManifest {
+  if (getLocalMetadataServingSelection()) {
+    if (!localAuthority) throw new Error('Local runtime-library authority is not initialized.');
+    return structuredClone(localAuthority.read());
+  }
   try {
     const raw = fs.readFileSync(manifestPath(), 'utf8');
     return normalizeManifest(JSON.parse(raw) as unknown);
@@ -98,6 +130,8 @@ export function readManifest(): RuntimeLibraryManifest {
 }
 
 export function writeManifest(manifest: RuntimeLibraryManifest): void {
+  if (getLocalMetadataServingSelection())
+    throw new Error('SQLite runtime-library activation requires a durable archive and CAS.');
   ensureDirectories();
   const nextManifest: RuntimeLibraryManifest = {
     ...manifest,

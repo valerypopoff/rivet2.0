@@ -1,0 +1,93 @@
+.local-storage-upgrade-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  width: 100%;
+}
+
+.local-storage-upgrade-panel :is(h3, h4, p, dl) {
+  margin: 0;
+}
+
+.local-storage-upgrade-panel .app-settings-section {
+  gap: 14px;
+  min-width: 0;
+}
+
+.local-storage-upgrade-panel .local-upgrade-action {
+  align-self: flex-start;
+  align-items: center;
+  max-width: 100%;
+  height: auto !important;
+  min-height: var(--workflow-button-height-l);
+  white-space: normal;
+  text-align: left;
+}
+
+.local-storage-upgrade-panel .local-upgrade-action > span {
+  min-height: 0;
+  white-space: normal;
+}
+
+.local-storage-upgrade-panel .local-upgrade-action[aria-busy='true'] {
+  --ds-icon-subtle: var(--grey-lightest);
+}
+
+.local-upgrade-backup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.local-upgrade-backup-form legend {
+  margin-bottom: 10px;
+  padding: 0;
+}
+
+.local-storage-upgrade-panel .app-settings-checkbox-field {
+  align-items: flex-start;
+}
+
+.local-storage-upgrade-panel .app-settings-checkbox-field input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.local-upgrade-inventory {
+  display: grid;
+  gap: 10px;
+}
+
+.local-upgrade-validation-result {
+  padding: 10px 12px;
+  border: 1px solid rgba(126, 231, 135, 0.25);
+  border-radius: 6px;
+  background: rgba(126, 231, 135, 0.08);
+  font-size: var(--workflow-library-font-size-s);
+  line-height: 1.4;
+}
+
+.local-upgrade-source-roots {
+  display: grid;
+  gap: 8px;
+}
+
+.local-upgrade-source-roots dt {
+  color: var(--grey-lightest);
+  font-weight: 700;
+}
+
+.local-upgrade-source-roots dd {
+  margin: 2px 0 0;
+}
+
+.local-upgrade-source-roots dd,
+.local-upgrade-fingerprint code,
+.local-storage-upgrade-panel .app-settings-field-help {
+  overflow-wrap: anywhere;
+}

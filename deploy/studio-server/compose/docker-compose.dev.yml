@@ -6,7 +6,7 @@ services:
     labels: *dev-stack-labels
     image: nginx:alpine
     ports:
-      - "${RIVET_PORT:-8080}:80"
+      - '${RIVET_PORT:-8080}:80'
     environment:
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
@@ -29,9 +29,9 @@ services:
         read_only: true
         volume:
           nocopy: true
-    entrypoint: ["/bin/sh", "/normalize-workflow-paths.sh"]
+    entrypoint: ['/bin/sh', '/normalize-workflow-paths.sh']
     healthcheck:
-      test: ["CMD", "/bin/sh", "/healthcheck-dev.sh"]
+      test: ['CMD', '/bin/sh', '/healthcheck-dev.sh']
       interval: 10s
       timeout: 12s
       retries: 3
@@ -45,9 +45,6 @@ services:
         restart: true
       api:
         condition: service_healthy
-        restart: true
-      executor:
-        condition: service_started
         restart: true
     restart: unless-stopped
 
@@ -103,9 +100,9 @@ services:
     healthcheck:
       test:
         [
-          "CMD",
-          "node",
-          "-e",
+          'CMD',
+          'node',
+          '-e',
           "require('node:http').get('http://127.0.0.1:5174/', (res) => process.exit(res.statusCode && res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
         ]
       start_period: 180s
@@ -117,11 +114,11 @@ services:
   filesystem-artifacts-init:
     labels: *dev-stack-labels
     image: node:20-alpine
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
+    user: '0:0'
+    entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
@@ -131,12 +128,13 @@ services:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
       - type: volume
         source: rivet_data
         target: /data/rivet-app
         volume:
           nocopy: true
-    restart: "no"
+    restart: 'no'
   api:
     labels: *dev-stack-labels
     # The production image entrypoint serves the built API. Development must run
@@ -159,12 +157,12 @@ services:
         condition: service_healthy
       filesystem-artifacts-init:
         condition: service_completed_successfully
-    user: "0:0"
+    user: '0:0'
     working_dir: /workspace
     ports:
-      - "${RIVET_LOCAL_BIND_HOST:-127.0.0.1}:${RIVET_API_PORT:-3100}:80"
+      - '${RIVET_LOCAL_BIND_HOST:-127.0.0.1}:${RIVET_API_PORT:-3100}:80'
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - 'host.docker.internal:host-gateway'
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
@@ -181,6 +179,10 @@ services:
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
       - PORT=80
+      - RIVET_DEPLOYMENT_TOPOLOGY=single-host
+      - RIVET_BACKEND_API_PORT=80
+      - RIVET_BACKEND_EXECUTOR_PORT=21889
+      - RIVET_BACKEND_HEALTH_PORT=21890
       - RIVET_WORKSPACE_ROOT=/workspace
       - RIVET_WORKFLOWS_ROOT=/workflows
       - RIVET_WORKFLOW_RECORDINGS_ROOT=/workflow-recordings
@@ -196,6 +198,11 @@ services:
       - RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES=${RIVET_WEB_APP_BROWSER_STORAGE_MAX_ACTIVE_BYTES:-536870912}
       - RIVET_KEY=${RIVET_KEY:-}
       - RIVET_SERVER_UI_AUTH_MODE=${RIVET_SERVER_UI_AUTH_MODE:-}
+      - RIVET_VM_MIGRATION_ENABLED=${RIVET_VM_MIGRATION_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_UPGRADE_ENABLED=${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-0}
+      - RIVET_LOCAL_METADATA_CONTROL_ROOT=${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}
+      - RIVET_LOCAL_METADATA_ENCRYPTION_KEY=${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}
+      - RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB=${RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB:-32}
       - RIVET_ENABLE_DEVELOPMENT_AUTH=${RIVET_ENABLE_DEVELOPMENT_AUTH:-false}
       - RIVET_DEVELOPMENT_AUTH_CLIENTS=${RIVET_DEVELOPMENT_AUTH_CLIENTS:-}
       - RIVET_REQUIRE_UI_GATE_KEY=${RIVET_REQUIRE_UI_GATE_KEY:-false}
@@ -206,6 +213,7 @@ services:
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
       - RIVET_LATEST_WEB_APPS_BASE_PATH=${RIVET_LATEST_WEB_APPS_BASE_PATH:-/apps-latest}
       - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
+      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
       - RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=${RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-}
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=300
@@ -231,7 +239,13 @@ services:
         target: /data/rivet-app
         volume:
           nocopy: true
+      - type: volume
+        source: rivet_data
+        target: /home/rivet/.local/share/com.valerypopoff.rivet2
+        volume:
+          nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
+      - rivet_local_metadata:/data/local-metadata
     command: >
       sh -lc "
         corepack enable &&
@@ -243,15 +257,15 @@ services:
         fi &&
         yarn build:runtime &&
         yarn workspace @valerypopoff/rivet2-evaluations run build &&
-        NODE_OPTIONS='${NODE_OPTIONS:-} --import=/workspace/packages/studio-server-bootstrap/bootstrap.mjs' yarn workspace @valerypopoff/rivet-studio-server-api run dev
+        node /workspace/deploy/studio-server/scripts/dev-backend-supervisor.mjs
       "
     healthcheck:
       test:
         [
-          "CMD",
-          "node",
-          "-e",
-          "require('node:http').get('http://127.0.0.1:80/readyz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:21890/readyz', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
         ]
       start_period: 360s
       interval: 10s
@@ -260,74 +274,9 @@ services:
     stop_grace_period: 150s
     restart: unless-stopped
 
-  executor:
-    labels: *dev-stack-labels
-    image: node:20-alpine
-    user: "0:0"
-    entrypoint: []
-    working_dir: /workspace
-    depends_on:
-      filesystem-artifacts-init:
-        condition: service_completed_successfully
-    environment:
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - ALL_PROXY=${ALL_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
-      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
-      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
-      - all_proxy=${all_proxy:-${ALL_PROXY:-}}
-      - no_proxy=${no_proxy:-${NO_PROXY:-}}
-      - HOME=/home/rivet
-      - npm_config_cache=/home/rivet/.npm
-      - YARN_CACHE_FOLDER=/home/rivet/.cache/yarn
-      - YARN_NODE_LINKER=node-modules
-      - YARN_CHECKSUM_BEHAVIOR=ignore
-      - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
-      - PORT=21889
-      - RIVET_EXECUTOR_PORT=21889
-      - RIVET_EXECUTOR_HOST=0.0.0.0
-      - RIVET_APP_DATA_ROOT=/home/rivet/.local/share/com.valerypopoff.rivet2
-      - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
-      - RIVET_RUNTIME_PROCESS_ROLE=executor
-      - RIVET_KEY=${RIVET_KEY:-}
-      - RIVET_LLM_PROFILE_HEALTH_API_URL=http://api:80/api/workflows/llm-profile-health
-      - RIVET_EXECUTION_ENVIRONMENT_API_URL=http://api:80/api/workflows/execution-environment
-      - PINECONE_API_KEY=${PINECONE_API_KEY:-}
-      - RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS
-      - RIVET_NODE_EXECUTOR_PROXY_SETTINGS_POLL_INTERVAL_MS
-      - RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS=${RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS:-}
-      - CHOKIDAR_USEPOLLING=true
-      - CHOKIDAR_INTERVAL=300
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ../../..:/workspace
-      - executor_node_modules:/workspace/node_modules
-      - executor_yarn_unplugged:/workspace/.yarn/unplugged
-      - npm_cache:/home/rivet/.npm
-      - yarn_cache:/home/rivet/.cache/yarn
-      - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
-      - type: volume
-        source: rivet_data
-        target: /home/rivet/.local/share/com.valerypopoff.rivet2
-        volume:
-          nocopy: true
-      - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
-    command: >
-      sh -lc "
-        corepack enable &&
-        cd /workspace &&
-        if [ ! -f node_modules/.studio-server-yarn-install-ok ] || [ ! -f node_modules/.yarn.lock ] || ! cmp -s yarn.lock node_modules/.yarn.lock; then
-          sh /tmp/preserve-host-pnp-during-command.sh /workspace env YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable &&
-          cp yarn.lock node_modules/.yarn.lock &&
-          touch node_modules/.studio-server-yarn-install-ok;
-        fi &&
-        RIVET_EXECUTOR_CHILD_NODE_OPTIONS='${NODE_OPTIONS:-} --import=/workspace/packages/studio-server-bootstrap/bootstrap.mjs' NODE_OPTIONS='' yarn workspace @valerypopoff/rivet-studio-server-executor run dev
-      "
-    restart: unless-stopped
-
 volumes:
+  rivet_local_metadata:
+    driver: local
   web_node_modules:
     driver: local
   web_yarn_unplugged:
@@ -335,10 +284,6 @@ volumes:
   api_node_modules:
     driver: local
   api_yarn_unplugged:
-    driver: local
-  executor_node_modules:
-    driver: local
-  executor_yarn_unplugged:
     driver: local
   npm_cache:
     driver: local

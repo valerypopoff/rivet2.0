@@ -855,15 +855,16 @@ test.describe('Workflow library layout', () => {
     await appSettingsModal.getByRole('tab', { name: 'Storage' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Storage' })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(2);
+    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(1);
     await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    await expect(appSettingsModal.getByRole('button', { name: 'Object storage' })).toHaveAttribute(
+    await expect(appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
+    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
     await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
     await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveAttribute('readonly', '');
     await expect(
@@ -873,12 +874,30 @@ test.describe('Workflow library layout', () => {
     ).toBeVisible();
     const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
     await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
+    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
+    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toBeVisible();
     await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
-    await appSettingsModal.getByRole('button', { name: 'Object storage' }).click();
     await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
+    await appSettingsModal.getByRole('button', { name: 'Local folders' }).click();
+    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
+    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
+    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await appSettingsModal.getByRole('button', { name: 'Managed Postgres' }).click();
+    await expect(appSettingsModal.getByLabel('PostgreSQL connection string')).toBeVisible();
+    await appSettingsModal.getByRole('button', { name: 'Local folders' }).click();
+    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
+    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
+    await expect(appSettingsModal.getByRole('button', { name: 'Managed Postgres' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' }).click();
     await expect(
       appSettingsModal.getByText('It must already be running before object storage mode can apply.'),
     ).toBeVisible();
