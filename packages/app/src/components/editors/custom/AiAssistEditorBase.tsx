@@ -1,4 +1,7 @@
 import { useContext, useEffect, useRef, useState } from 'react';
+import { useNodeEditorSessionContext } from '../../nodeEditor/NodeEditorSessionContext.js';
+import type { NodeChanged } from '../../NodeEditor.js';
+import { isEqual } from 'lodash-es';
 import {
   getError,
   type ChartNode,
@@ -175,7 +178,7 @@ export interface AiAssistEditorBaseProps<TNodeData, TOutputs> {
   isReadonly: boolean;
   isDisabled: boolean;
   editor: CustomEditorDefinition<ChartNode>;
-  onChange: (node: ChartNode) => void;
+  onChange: NodeChanged;
   graphName: string;
   updateData: (data: TNodeData, result: TOutputs) => TNodeData | null;
   placeholder: string;
@@ -217,6 +220,7 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
   getErrorMessage,
   getIsError,
 }: AiAssistEditorBaseProps<TNodeData, TOutputs>) => {
+  const session = useNodeEditorSessionContext();
   const [prompt, setPrompt] = useState('');
   const [working, setWorking] = useState(false);
   const [footerModalOpen, setFooterModalOpen] = useState(false);
@@ -225,12 +229,9 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
   const activeGenerationIdRef = useRef<symbol | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
-  const currentNodeIdRef = useRef(node.id);
   const latestNodeRef = useRef(node);
-  const latestDataRef = useRef(data);
 
   latestNodeRef.current = node;
-  latestDataRef.current = data;
 
   const settings = useAtomValue(settingsState);
   const plugins = useDependsOnPlugins();
@@ -255,6 +256,12 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
 
   const abortGeneration = () => {
     abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON);
+    // Cancellation releases the UI immediately. A provider that ignores the
+    // signal must not keep Generate disabled or finish a newer request later.
+    activeGenerationIdRef.current = null;
+    abortControllerRef.current = null;
+    generationInFlightRef.current = false;
+    setWorking(false);
   };
 
   const closeFooterModal = () => {
@@ -272,10 +279,8 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
   }, []);
 
   useEffect(() => {
-    if (currentNodeIdRef.current === node.id) {
-      return;
-    }
-
+    // A logical owner can return with a new lifetime without changing node IDs.
+    // Release its old UI/in-flight state even if a provider ignores cancellation.
     abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON);
     activeGenerationIdRef.current = null;
     abortControllerRef.current = null;
@@ -283,8 +288,9 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
     setWorking(false);
     setFooterModalOpen(false);
     setSelectedTextContext(undefined);
-    currentNodeIdRef.current = node.id;
-  }, [node.id]);
+    setPrompt('');
+    return session?.onRetire(() => abortControllerRef.current?.abort(AI_ASSIST_CANCEL_REASON));
+  }, [node.id, session]);
 
   useEffect(() => {
     if (!useFooterTrigger) {
@@ -339,15 +345,24 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
   };
 
   const generate = async () => {
-    if (isReadonly || isDisabled || assistModel.missingConfiguration || generationInFlightRef.current) {
+    if (
+      isReadonly ||
+      isDisabled ||
+      (session && !session.canWrite()) ||
+      assistModel.missingConfiguration ||
+      generationInFlightRef.current
+    ) {
       return;
     }
 
     const generationId = Symbol('ai-assist-generation');
     const generationNodeId = node.id;
+    const sourceData = session?.getNode()?.data ?? data;
     const abortController = new AbortController();
     const isCurrentGenerationCanceled = () =>
       abortController.signal.aborted ||
+      !isMountedRef.current ||
+      (session && !session.canWrite()) ||
       activeGenerationIdRef.current !== generationId ||
       latestNodeRef.current.id !== generationNodeId;
 
@@ -396,8 +411,10 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
       const isErrorResponse = getIsError ? getIsError(outputs) : false;
 
       if (!isErrorResponse) {
-        const baseNode = latestNodeRef.current.id === node.id ? latestNodeRef.current : node;
-        const baseData = latestNodeRef.current.id === node.id ? latestDataRef.current : data;
+        const baseNode = session?.getNode() ?? latestNodeRef.current;
+        // Do not overwrite intervening user edits with delayed generated text.
+        if (!isEqual(baseNode.data, sourceData)) return;
+        const baseData = baseNode.data as TNodeData;
         const updatedData = updateData(baseData, outputs);
 
         if (updatedData) {
@@ -406,7 +423,7 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
             data: updatedData,
           };
 
-          onChange(updatedNode);
+          onChange(updatedNode, undefined, baseNode);
 
           // Call success callback if provided
           if (onSuccess) {
@@ -425,7 +442,7 @@ const AiAssistEditorContent = <TNodeData, TOutputs>({
         });
       }
     } catch (err) {
-      if (abortController.signal.aborted) {
+      if (isCurrentGenerationCanceled()) {
         return;
       }
 

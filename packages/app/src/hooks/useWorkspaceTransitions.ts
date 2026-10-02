@@ -18,6 +18,8 @@ import {
   graphNavigationStackState,
   lastCanvasPositionByGraphState,
   selectedNodesState,
+  nodeEditorSessionRevisionState,
+  nodeEditorContentRevisionState,
 } from '../state/graphBuilder.js';
 import { projectEditorStateByProjectIdState } from '../state/projectEditor.js';
 import {
@@ -65,6 +67,8 @@ import { clearUiGraphPreviewSessions } from '../components/rivetWebApps/uiGraphP
 import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
 import { runDeduplicatedProjectSave } from '../utils/projectSaveCoordinator.js';
 import { runStaticDataCacheOperation } from '../utils/staticDataCacheCoordinator.js';
+import { commandHistoryStackStatePerGraph, redoStackStatePerGraph } from '../commands/Command.js';
+import { recoverableNodeConnectionsStatePerGraph } from '../state/recoverableNodeConnections.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -238,7 +242,21 @@ export function useWorkspaceTransitions() {
           setProjectDataUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, targetProjectId, false));
         }
 
+        store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
+        if (projectInfo.markClean) {
+          store.set(nodeEditorContentRevisionState, (revisions) => ({
+            ...revisions,
+            [targetProjectId]: (revisions[targetProjectId] ?? 0) + 1,
+          }));
+        }
         setProject(transition.project);
+        if (projectInfo.markClean) {
+          // Reloaded bytes must not inherit Undo/wire recovery from the content
+          // they replaced, even if all graph and node IDs still match.
+          store.set(commandHistoryStackStatePerGraph, {});
+          store.set(redoStackStatePerGraph, {});
+          store.set(recoverableNodeConnectionsStatePerGraph, {});
+        }
         setNavigationStack(transition.navigationStack);
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
         setIsReadOnlyGraph(false);
@@ -328,6 +346,7 @@ export function useWorkspaceTransitions() {
         cleanupNodeAtomFamilies(transition.cleanupNodeIds);
       }
 
+      store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
       setGraph(transition.graph);
       setSelectedNodes(transition.selectedNodes);
       setIsReadOnlyGraph(false);
@@ -362,6 +381,7 @@ export function useWorkspaceTransitions() {
     ) {
       const { latestProject } = persistCurrentGraphWorkspace();
 
+      store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
       setSelectedNodes([...(options.selectedNodeIds ?? [])]);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);
@@ -374,6 +394,7 @@ export function useWorkspaceTransitions() {
     switchToUiGraph(uiGraphId: UiGraphId) {
       const { latestProject } = persistCurrentGraphWorkspace();
 
+      store.set(nodeEditorSessionRevisionState, (revision) => revision + 1);
       setSelectedNodes([]);
       setIsReadOnlyGraph(false);
       setHistoricalGraph(null);

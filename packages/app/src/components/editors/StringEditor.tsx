@@ -4,6 +4,7 @@ import { type StringEditorDefinition, type ChartNode } from '@valerypopoff/rivet
 import { type FC, useCallback, useEffect, useRef, useState } from 'react';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { getHelperMessage } from './editorUtils';
+import { useNodeEditorDataChange } from '../nodeEditor/NodeEditorSessionContext.js';
 
 function useDebouncedStringCommit(onChange: (value: string | undefined) => void, debounceMs: number | undefined) {
   const timeoutRef = useRef<number | undefined>();
@@ -68,6 +69,7 @@ export const DefaultStringEditor: FC<
 > = ({ node, isReadonly, isDisabled, onChange, editor, onClose }) => {
   const data = node.data as Record<string, unknown>;
   const helperMessage = getHelperMessage(editor, node.data);
+  const changeData = useNodeEditorDataChange(node, onChange);
   return (
     <StringEditor
       value={data[editor.dataKey] as string | undefined}
@@ -75,19 +77,14 @@ export const DefaultStringEditor: FC<
       isDisabled={isDisabled}
       autoFocus={editor.autoFocus}
       onChange={(newValue) => {
-        onChange({
-          ...node,
-          data: {
-            ...data,
-            [editor.dataKey]: newValue,
-          },
-        });
+        if (!isReadonly && !isDisabled) changeData(editor.dataKey, newValue);
       }}
       label={editor.label}
       name={editor.dataKey}
       placeholder={editor.placeholder}
       maxLength={editor.maxLength}
-      commitDebounceMs={editor.commitDebounceMs}
+      // Canonical node data must include the last keystroke before Save/switch.
+      // Generic non-node fields may still opt into commit debouncing.
       helperMessage={helperMessage}
       onClose={onClose}
     />

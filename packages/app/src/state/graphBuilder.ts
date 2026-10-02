@@ -24,6 +24,11 @@ export const selectedNodesState = atom<NodeId[]>([]);
 
 export const editingNodeState = atom<NodeId | null>(null);
 
+// Retire editor callbacks at a workspace replacement, even when cloned nodes
+// have identical IDs or the user switches A -> B -> A before React renders.
+export const nodeEditorSessionRevisionState = atom(0);
+export const nodeEditorContentRevisionState = atom<Record<string, number>>({});
+
 export const fullscreenOutputNodeState = atom<NodeId | null>(null);
 
 export type CanvasPosition = { x: number; y: number; zoom: number; fromSaved?: boolean };

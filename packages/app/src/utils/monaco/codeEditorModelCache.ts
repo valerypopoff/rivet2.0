@@ -5,6 +5,8 @@ const MAX_CACHED_CODE_EDITOR_MODELS = 12;
 type CachedCodeEditorModel = {
   model: monaco.editor.ITextModel;
   lastInputText: string;
+  users: number;
+  pendingRemoval?: boolean;
 };
 
 const modelCache = new Map<string, CachedCodeEditorModel>();
@@ -27,21 +29,26 @@ export function getOrCreateCodeEditorModel(params: {
   text: string;
   getExistingModel?: () => monaco.editor.ITextModel | null;
   createModel: () => monaco.editor.ITextModel;
+  retain?: boolean;
 }): {
   model: monaco.editor.ITextModel;
   isCached: boolean;
+  release(): void;
 } {
-  const { cacheKey, text, createModel, getExistingModel } = params;
+  const { cacheKey, text, createModel, getExistingModel, retain = false } = params;
 
   if (!cacheKey) {
     return {
       model: createModel(),
       isCached: false,
+      release: () => {},
     };
   }
 
   const cached = modelCache.get(cacheKey);
   if (cached) {
+    cached.pendingRemoval = false;
+    if (retain) cached.users++;
     modelCache.delete(cacheKey);
     modelCache.set(cacheKey, cached);
 
@@ -54,16 +61,35 @@ export function getOrCreateCodeEditorModel(params: {
     return {
       model: cached.model,
       isCached: true,
+      release: createModelRelease(cacheKey, cached, retain),
     };
   }
 
   const model = getExistingModel?.() ?? createModel();
-  modelCache.set(cacheKey, { model, lastInputText: text });
+  const entry = { model, lastInputText: text, users: retain ? 1 : 0 };
+  modelCache.set(cacheKey, entry);
   evictOldModels();
 
   return {
     model,
     isCached: true,
+    release: createModelRelease(cacheKey, entry, retain),
+  };
+}
+
+function createModelRelease(cacheKey: string, entry: CachedCodeEditorModel, retained: boolean): () => void {
+  let released = false;
+  return () => {
+    if (!retained || released) return;
+    released = true;
+    entry.users--;
+    if (modelCache.get(cacheKey) !== entry) return;
+    if (entry.pendingRemoval && entry.users === 0) {
+      entry.model.dispose();
+      modelCache.delete(cacheKey);
+      viewStateCache.delete(cacheKey);
+    }
+    evictOldModels();
   };
 }
 
@@ -71,8 +97,11 @@ export function clearCodeEditorModelCacheForProject(projectId: string): void {
   const prefix = getCodeEditorModelProjectPrefix(projectId);
   for (const [cacheKey, cached] of modelCache) {
     if (cacheKey.startsWith(prefix)) {
-      cached.model.dispose();
-      modelCache.delete(cacheKey);
+      if (cached.users > 0) cached.pendingRemoval = true;
+      else {
+        cached.model.dispose();
+        modelCache.delete(cacheKey);
+      }
     }
   }
   for (const cacheKey of viewStateCache.keys()) {
@@ -80,6 +109,13 @@ export function clearCodeEditorModelCacheForProject(projectId: string): void {
       viewStateCache.delete(cacheKey);
     }
   }
+}
+
+// Source acknowledgement is separate from the model buffer: JSON drafts may
+// be invalid, and formatting-equivalent input should retain its cursor/undo.
+export function acknowledgeCodeEditorModelSource(cacheKey: string | undefined, text: string): void {
+  const cached = cacheKey ? modelCache.get(cacheKey) : undefined;
+  if (cached) cached.lastInputText = text;
 }
 
 export function clearCodeEditorModelCache(): void {
@@ -115,7 +151,9 @@ export function saveCodeEditorViewState(
 
 function evictOldModels(): void {
   while (modelCache.size > MAX_CACHED_CODE_EDITOR_MODELS) {
-    const oldestKey = modelCache.keys().next().value as string | undefined;
+    // Several node fields can be visible together. Never dispose a model that
+    // an attached Monaco editor is using merely to meet the warm-cache limit.
+    const oldestKey = [...modelCache].find(([, cached]) => cached.users === 0)?.[0];
     if (!oldestKey) {
       return;
     }

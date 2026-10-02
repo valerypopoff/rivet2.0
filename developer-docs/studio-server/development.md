@@ -1095,6 +1095,86 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 
 ## Safe verification workflow
 
+For node-settings changes, preserve project/graph/node/field ownership rather
+than using a node ID as global identity. Workspace replacement paths must
+advance `nodeEditorSessionRevisionState` before replacing content; authoritative
+file reloads also advance `nodeEditorContentRevisionState` for the project.
+Do not put ordinary node edits in either generation counter. New asynchronous
+node-editor controls should use `NodeEditorSessionContext` and check the session
+after awaits, before mutations, notifications or markers. Retired work cannot
+become current again when the user returns to the same tab. Code/string/metadata
+field commits are synchronous; debounce expensive derived work, not canonical data.
+Generic non-node string controls may still explicitly request debouncing.
+`NodeChanged` accepts an optional third comparison baseline. Field helpers that
+patch a live node must pass that live baseline, so an immediate edit back to a
+rendered value is not mistaken for an unchanged stale field.
+
+Regression coverage:
+
+- `NodeEditorSessionContext.test.tsx` exercises real Jotai/React ownership,
+  StrictMode cleanup, batched A → B → A, replacement/deletion/read-only guards,
+  variants/library sources and consecutive edits/commands without a render.
+  A round trip or close/reopen must create a fresh writable lifetime without
+  reviving retained callbacks; StrictMode must not retire a still-mounted owner.
+  A real Subgraph editor holds its version request across renewal: fresh controls
+  release loading, the retired request cannot publish reference/node changes,
+  and a fresh version selection still succeeds.
+- `nodeLibrary.test.ts` checks atomic library commits, consecutive source edits,
+  preservation of live graph overlays and project metadata, and rejection of
+  retired/read-only owners. It also checks failure before commit and ensures
+  stale graph snapshots cannot resurrect explicitly deleted wires. Use
+  `updateNodeLibraryState` for library mutations;
+  do not reconstruct a project from a component render snapshot. Source edits
+  must target a prefab ID, and canvas patches must merge against their rendered
+  baseline instead of overwriting a newer source wholesale.
+- `nodeEditorSession.test.ts` checks irrevocable retirement, sibling patches and
+  cancellation that clears optional metadata explicitly. The partial edit-node
+  command treats an omitted field as "keep", so clearing must pass `undefined`.
+- `codeEditorModelCache.test.ts` checks scoped models, source acknowledgement,
+  partial drafts and attached-model eviction protection.
+- `node-editor-ownership.spec.ts` uses isolated mocked API fixtures with cloned
+  graph/node IDs for Object, current/legacy Code and Prompt nodes, both focused
+  and unfocused. It checks the visible settings, underlying node bodies, dirty
+  indicators, immediate Save bytes, read-only variants and same-project activation.
+  Object/Code library fixtures also exercise multiple sources, graph/library
+  sources sharing IDs, cloned-project tab switching and exact saved source data.
+  It includes immediate title/description commits and Escape-to-cancel metadata,
+  with no false dirty flag when restoring a previously absent description.
+  It also checks incomplete JSON-object drafts and formatting-equivalent source
+  acknowledgements, including restored validation errors. Prompt coverage delays
+  dictionary loading and overlaps spellchecks to prove a cancelled check cannot
+  clear the newest markers; editing then clears both markers and status.
+  Metadata uses canonical controlled values: do not recommit an internal form
+  buffer on blur/confirmation. Keep global node controls non-shrinking in the
+  scrolling panel so tall Code editors cannot overlap the variant selector. Run it with
+  `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
+  node-editor-ownership.spec.ts` against a candidate app URL. The CI browser
+  configuration includes it. Also run `project-tree-activation.spec.ts` and the
+  affected recovery/save suites. Use a fixed build/preview for final browser
+  checks so HMR cannot split the editor's session context during a test.
+- `node-editor-lifecycle.spec.ts` adds held-save/newer-keystroke races, sibling
+  toggles, immediate panel close, exact checkpoint/reload recovery, reused IDs
+  across graphs, focused Monaco Undo/Redo, and an explicit same-ID disk reload.
+  Its synthetic AI provider intentionally ignores abort. It checks late results
+  after switching/deleting/editing, successful current-owner output, and cancel
+  followed by retry while the old request is still pending. No provider egress
+  or real credentials are used. The warm-cache eviction case reopens canonical
+  node data after visiting more than twelve fields.
+  A held Subgraph preview crosses a project switch, then recreates the control
+  to verify that shared reference state was not contaminated; a normal version
+  selection and exact Save are the positive control. Guard every referenced-
+  project write, including menu refresh, before calling the node-change handler.
+  Run `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
+  node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts
+  project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts`.
+  Both node-editor suites are included in the CI browser configuration.
+  The lifecycle suite also records input-to-next-frame p95/high-water and exact
+  saved text on a 350-node synthetic graph, attaching `typing-frame-latency.json`
+  to the Playwright report. These timings are measurements, not a brittle shared-CI
+  performance threshold or a promise about production graphs/hardware. Inspect
+  them when changing synchronous commits; never delay canonical text to optimize
+  expensive derived validation/port analysis.
+
 For Studio Server API changes:
 
 1. `yarn workspace @valerypopoff/rivet-studio-server-api run test`

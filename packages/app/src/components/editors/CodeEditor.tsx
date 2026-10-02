@@ -1,6 +1,6 @@
 import { HelperMessage, Label } from '@atlaskit/form';
 import { type CodeEditorDefinition, type ChartNode } from '@valerypopoff/rivet2-core';
-import { useLatest, useDebounceFn } from 'ahooks';
+import { useLatest } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import {
   type FC,
@@ -9,6 +9,7 @@ import {
   useContext,
   useRef,
   useEffect,
+  useLayoutEffect,
   Suspense,
   useMemo,
   useState,
@@ -19,6 +20,9 @@ import { type monaco } from '../../utils/monaco';
 import { themeState } from '../../state/settings.js';
 import { graphMetadataState } from '../../state/graph.js';
 import { projectState } from '../../state/savedGraphs.js';
+import { nodeEditorContentRevisionState } from '../../state/graphBuilder.js';
+import { useNodeEditorDataChange, useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext.js';
+import { acknowledgeCodeEditorModelSource } from '../../utils/monaco/codeEditorModelCache.js';
 import { LazyCodeEditor } from '../LazyComponents';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { getHelperMessage, getPostEditorHelperMessage } from './editorUtils';
@@ -222,30 +226,11 @@ export const DefaultCodeEditor: FC<
 > = ({ node, isReadonly, isDisabled, onChange, editor: editorDef, onClose, footerLeft }) => {
   const helperMessage = getHelperMessage(editorDef, node.data);
   const postEditorHelperMessage = getPostEditorHelperMessage(editorDef, node.data);
-  const nodeLatest = useLatest(node);
-  const isMounted = useRef(true);
-
-  const debouncedOnChange = useDebounceFn<(node: ChartNode) => void>(onChange, { wait: 100 });
-
-  useEffect(() => {
-    isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-      debouncedOnChange.cancel();
-    };
-  }, [debouncedOnChange]);
+  const changeData = useNodeEditorDataChange(node, onChange);
 
   const onEditorChange = (newText: string) => {
-    if (!isMounted.current) return;
-    const currentNode = nodeLatest.current;
-    if (!currentNode) return;
-    debouncedOnChange.run({
-      ...currentNode,
-      data: {
-        ...(currentNode.data as Record<string, unknown> | undefined),
-        [editorDef.dataKey]: newText,
-      },
-    });
+    if (isReadonly || isDisabled) return;
+    changeData(editorDef.dataKey, newText);
   };
 
   const editorProps: CodeEditorProps = {
@@ -302,6 +287,7 @@ type CodeEditorProps = {
   name?: string;
   helperMessage?: string;
   postEditorHelperMessage?: string;
+  validateValue?: (text: string) => string | undefined;
   onClose?: () => void;
   theme?: string;
   language?: string;
@@ -313,9 +299,29 @@ type CodeEditorProps = {
   showTextStats?: boolean;
   errorLineHighlight?: CodeNodeErrorLineHighlight;
   footerLeft?: ReactNode;
+  isEquivalentValue?: (text: string, source: string) => boolean;
+  preserveUncommittedDraft?: boolean;
 };
 
-export const CodeEditor: FC<CodeEditorProps> = ({
+export const CodeEditor: FC<CodeEditorProps> = (props) => {
+  const projectId = useAtomValue(projectState).metadata.id;
+  const graphId = useAtomValue(graphMetadataState)?.id;
+  const session = useNodeEditorSessionContext();
+  const contentRevision = useAtomValue(nodeEditorContentRevisionState)[projectId] ?? 0;
+  const ownerKey = JSON.stringify([
+    projectId,
+    graphId,
+    props.id,
+    props.name ?? props.label,
+    session?.modelScope,
+    contentRevision,
+  ]);
+  return (
+    <OwnedCodeEditor key={ownerKey} {...props} modelScope={session?.modelScope} contentRevision={contentRevision} />
+  );
+};
+
+const OwnedCodeEditor: FC<CodeEditorProps & { modelScope?: string; contentRevision: number }> = ({
   value,
   onChange,
   isReadonly,
@@ -325,6 +331,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   name,
   helperMessage,
   postEditorHelperMessage,
+  validateValue,
   onClose,
   theme,
   language,
@@ -336,10 +343,18 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   showTextStats = false,
   errorLineHighlight,
   footerLeft = null,
+  modelScope,
+  contentRevision,
+  isEquivalentValue,
+  preserveUncommittedDraft = false,
 }) => {
   const editorInstance = useRef<monaco.editor.IStandaloneCodeEditor>();
+  const session = useNodeEditorSessionContext();
+  const synchronizing = useRef(false);
+  const previousSource = useRef(value ?? '');
   const spellcheckRunId = useRef(0);
   const [displayValue, setDisplayValue] = useState(value ?? '');
+  const displayHelperMessage = validateValue?.(displayValue) ?? postEditorHelperMessage;
   const [dismissedErrorLineHighlightKey, setDismissedErrorLineHighlightKey] = useState<string>();
   const [mountedEditorState, setMountedEditorState] = useState<MountedEditorState>();
   const [spellcheckStatus, setSpellcheckStatus] = useState<SpellcheckStatus>();
@@ -362,6 +377,8 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     editorKey: editorIdentityKey,
     language,
     interpolationSyntax,
+    scope: modelScope,
+    contentRevision,
   });
   const editorMountKey = `${id ?? 'node-editor'}::${editorIdentityKey}::${language ?? 'language'}::${resolvedTheme ?? 'theme'}::${
     interpolationSyntax ?? 'no-interpolation'
@@ -405,6 +422,9 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     <CodeEditorFooter center={footerCenter} left={footerLeft} fontSize={fontSize} onAdjustFontSize={adjustFontSize} />
   );
   const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+    // A warm same-owner model may contain an incomplete JSON draft. Restore
+    // its display without pretending that mounting is a new data edit.
+    setDisplayValue(editor.getValue());
     setMountedEditorState({ editor, editorMountKey });
   };
 
@@ -420,27 +440,40 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     return () => window.clearTimeout(timeout);
   }, [displayValue, editorMountKey, interpolationSyntax]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const source = value ?? '';
+    const sourceChanged = previousSource.current !== source;
+    previousSource.current = source;
+    acknowledgeCodeEditorModelSource(modelCacheKey, source);
     if (editorInstance.current) {
-      const currentValue = value;
-      const textChanged = editorInstance.current.getValue() !== currentValue;
-      const hasTextFocus = editorInstance.current.hasTextFocus();
-
-      // Only set the text explicitly if we're not editing it and have a cursor position.
-      if (textChanged && !hasTextFocus) {
-        editorInstance.current.setValue(currentValue ?? '');
+      const currentValue = source;
+      const text = editorInstance.current.getValue();
+      const textChanged = text !== currentValue && !isEquivalentValue?.(text, currentValue);
+      // Authoritative changes (including Undo/Redo) also apply while focused.
+      // They are not user edits and must not create another command/dirty mark.
+      if (textChanged && (sourceChanged || !preserveUncommittedDraft)) {
+        spellcheckRunId.current += 1;
+        clearCodeEditorSpellcheckMarkers(editorInstance.current);
+        setSpellcheckStatus(undefined);
+        synchronizing.current = true;
+        try {
+          editorInstance.current.setValue(currentValue ?? '');
+        } finally {
+          synchronizing.current = false;
+        }
         setDisplayValue(currentValue ?? '');
       }
 
       editorInstance.current.updateOptions({
         readOnly: isEditorReadOnly,
       });
-    } else {
+    } else if (sourceChanged) {
       setDisplayValue(value ?? '');
     }
-  }, [value, isEditorReadOnly]);
+  }, [value, displayValue, isEditorReadOnly, modelCacheKey, isEquivalentValue, preserveUncommittedDraft]);
 
   const handleEditorChange = (newText: string) => {
+    if (synchronizing.current || isEditorReadOnly || (session && !session.canWrite())) return;
     setDisplayValue(newText);
     spellcheckRunId.current += 1;
     clearCodeEditorSpellcheckMarkers(editorInstance.current);
@@ -470,24 +503,24 @@ export const CodeEditor: FC<CodeEditorProps> = ({
   const handleCheckSpelling = async () => {
     const editor = editorInstance.current;
 
-    if (!editor) {
+    if (!editor || (session && !session.isCurrent())) {
       return;
     }
 
     const runId = spellcheckRunId.current + 1;
     spellcheckRunId.current = runId;
+    const isCurrent = () =>
+      editorInstance.current === editor && spellcheckRunId.current === runId && (!session || session.isCurrent());
     setSpellcheckStatus({ type: 'checking' });
 
     try {
-      const result = await runCodeEditorSpellcheck(editor);
+      const result = await runCodeEditorSpellcheck(editor, isCurrent);
 
-      if (spellcheckRunId.current === runId) {
+      if (isCurrent()) {
         setSpellcheckStatus({ type: 'done', result });
-      } else {
-        clearCodeEditorSpellcheckMarkers(editor);
       }
     } catch {
-      if (spellcheckRunId.current === runId) {
+      if (isCurrent()) {
         setSpellcheckStatus({ type: 'error', message: 'Spellcheck failed to load' });
       }
     }
@@ -530,6 +563,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           editorMountKey={editorMountKey}
           editorInstance={editorInstance}
           text={displayValue}
+          sourceText={value ?? ''}
           onChange={handleEditorChange}
           theme={resolvedTheme}
           language={language}
@@ -554,6 +588,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           editorMountKey={editorMountKey}
           editorInstance={editorInstance}
           text={displayValue}
+          sourceText={value ?? ''}
           onChange={handleEditorChange}
           theme={resolvedTheme}
           language={language}
@@ -573,9 +608,9 @@ export const CodeEditor: FC<CodeEditorProps> = ({
           footer={footer}
         />
       )}
-      {postEditorHelperMessage && (
+      {displayHelperMessage && (
         <div className="node-editor-code-helper node-editor-code-helper-after">
-          <HelperMessage>{postEditorHelperMessage}</HelperMessage>
+          <HelperMessage>{displayHelperMessage}</HelperMessage>
         </div>
       )}
     </div>
@@ -586,6 +621,7 @@ type ViewportProps = {
   editorMountKey: string;
   editorInstance: MutableRefObject<monaco.editor.IStandaloneCodeEditor | undefined>;
   text: string;
+  sourceText: string;
   onChange: ((value: string) => void) | undefined;
   theme: string | undefined;
   language: string | undefined;
@@ -614,6 +650,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
   editorMountKey,
   editorInstance,
   text,
+  sourceText,
   onChange,
   theme,
   language,
@@ -632,6 +669,7 @@ const SuspendedCodeEditor: FC<ViewportProps> = ({
       key={editorMountKey}
       editorRef={editorInstance}
       text={text}
+      sourceText={sourceText}
       onChange={onChange}
       theme={theme}
       language={language}

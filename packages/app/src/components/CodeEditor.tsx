@@ -12,10 +12,7 @@ import {
   installCodeEditorCapabilities,
   installCodeEditorSpellcheckAction,
 } from '../utils/monaco/editorCapabilities.js';
-import {
-  resolveCodeEditorCapabilities,
-  type CodeEditorCapabilities,
-} from '../utils/monaco/editorCapabilityModel.js';
+import { resolveCodeEditorCapabilities, type CodeEditorCapabilities } from '../utils/monaco/editorCapabilityModel.js';
 import {
   getCodeEditorModelUri,
   getCodeEditorViewState,
@@ -51,6 +48,8 @@ export type CodeEditorDisplayOptions = Pick<
 
 export type CodeEditorProps = {
   text: string;
+  /** Canonical source for a cached field whose visible buffer may be a draft. */
+  sourceText?: string;
   isReadonly?: boolean;
   onChange?: (newText: string) => void;
   language?: string;
@@ -83,6 +82,7 @@ export type CodeEditorProps = {
 
 export const CodeEditor: FC<CodeEditorProps> = ({
   text,
+  sourceText,
   isReadonly,
   onChange,
   language,
@@ -136,9 +136,10 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     }
 
     const modelUri = modelCacheKey ? monaco.Uri.parse(getCodeEditorModelUri(modelCacheKey)) : undefined;
-    const { model, isCached } = getOrCreateCodeEditorModel({
+    const { model, isCached, release } = getOrCreateCodeEditorModel({
       cacheKey: modelCacheKey,
-      text,
+      text: sourceText ?? text,
+      retain: true,
       getExistingModel: modelUri ? () => monaco.editor.getModel(modelUri) : undefined,
       createModel: () => monaco.editor.createModel(text, language, modelUri),
     });
@@ -227,21 +228,9 @@ export const CodeEditor: FC<CodeEditorProps> = ({
     }
     onEditorMount?.(editor);
 
-    const currentOnChange = onChangeLatest.current;
-
-    if (model.getValue() !== text) {
-      currentOnChange?.(model.getValue());
-    }
-
     return () => {
-      // An editor that is conditionally hidden can unmount immediately after a
-      // sibling control changes its node data. Re-emitting an unchanged value
-      // here would use that editor's stale callback and undo the sibling edit.
-      // Still flush genuine in-progress edits that have not reached the parent.
-      const finalText = editor.getValue();
-      if (finalText !== text) {
-        currentOnChange?.(finalText);
-      }
+      // Model-content events commit user input synchronously. Mount/unmount
+      // must never replay a buffer through an old owner or sibling snapshot.
       saveCodeEditorViewState(modelCacheKey, editor.saveViewState());
       spellcheckActionDisposable.current?.dispose();
       spellcheckActionDisposable.current = undefined;
@@ -254,6 +243,7 @@ export const CodeEditor: FC<CodeEditorProps> = ({
       clearCodeEditorSpellcheckMarkers(editor);
       delete editor.__rivetSpellcheckMarkers;
       editor.dispose();
+      release();
       if (!isCached) {
         model.dispose();
       }

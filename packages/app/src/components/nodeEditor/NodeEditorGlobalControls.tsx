@@ -98,7 +98,7 @@ export const NodeEditorGlobalControls: FC<{
   variantOptions: { value: string; label: string }[];
   selectedVariantOption: { value: string; label: string } | undefined;
   onTitleChange: (title: string) => void;
-  onDescriptionChange: (description: string) => void;
+  onDescriptionChange: (description: string | undefined) => void;
   onColorChange: (color: NodeColor | undefined) => void;
   onDisabledChange: (disabled: boolean) => void;
   onUpdateNode: (node: ChartNode) => void;
@@ -257,9 +257,7 @@ export const NodeEditorGlobalControls: FC<{
           )}
         </section>
         <section className="variants">
-          {showVariantsButton && !showVariantEditor && (
-            <VariantsButton onClick={() => setAddVariantPopupOpen(true)} />
-          )}
+          {showVariantsButton && !showVariantEditor && <VariantsButton onClick={() => setAddVariantPopupOpen(true)} />}
         </section>
       </div>
       {showVariantEditor && (
