@@ -53,6 +53,127 @@ function fixture(name: string): { project: WorkflowProjectItem; contents: string
   };
 }
 
+test('tree selection survives folder toggles and row padding until another project is selected', async ({ page }) => {
+  const a = fixture('selection-a');
+  const b = fixture('selection-b');
+  a.project.relativePath = `owner/${a.project.fileName}`;
+  a.project.absolutePath = `/workflows/${a.project.relativePath}`;
+  const loads: string[] = [];
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        sync: { epoch: 'selection-fixture', revision: 0 },
+        folders: [
+          {
+            id: 'owner',
+            name: 'Owner folder',
+            relativePath: 'owner',
+            absolutePath: '/workflows/owner',
+            updatedAt: a.project.updatedAt,
+            folders: [],
+            projects: [a.project],
+          },
+          ...Array.from({ length: 30 }, (_, index) => ({
+            id: `spacer-${index}`,
+            name: `Spacer ${index}`,
+            relativePath: `spacer-${index}`,
+            absolutePath: `/workflows/spacer-${index}`,
+            updatedAt: a.project.updatedAt,
+            folders: [],
+            projects: [],
+          })),
+          {
+            id: 'other',
+            name: 'Other folder',
+            relativePath: 'other',
+            absolutePath: '/workflows/other',
+            updatedAt: a.project.updatedAt,
+            folders: [],
+            projects: [],
+          },
+        ],
+        projects: [b.project],
+      } satisfies WorkflowTreeResponse,
+    }),
+  );
+  await page.route('**/api/projects/load', (route) => {
+    const { path } = route.request().postDataJSON() as { path: string };
+    loads.push(path);
+    const entry = [a, b].find((item) => item.project.absolutePath === path);
+    expect(entry).toBeDefined();
+    return route.fulfill({ json: { contents: entry!.contents, datasetsContents: null, revisionId: null } });
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click();
+  const aRow = page.locator('.project-row', { hasText: a.project.name });
+  const bRow = page.locator('.project-row', { hasText: b.project.name });
+  const card = page.locator('.active-project-section');
+  const tabs = page.frameLocator('iframe.dashboard-editor-frame').locator('.projects-container .project:not(.opening)');
+  await expect(aRow).toBeEnabled({ timeout: 120_000 });
+  await aRow.dblclick();
+  await expect(tabs.filter({ hasText: a.project.name })).toHaveClass(/\bactive\b/);
+  const expectSelection = async () => {
+    await expect(card).toContainText(a.project.name);
+    await expect(aRow).toHaveClass(/\bactive\b/);
+  };
+  await expectSelection();
+
+  // Click actual padding on both sides, not inside the project row.
+  const body = page.locator('.workflow-library-panel .body');
+  const bodyBox = (await body.boundingBox())!;
+  const rowBox = (await aRow.boundingBox())!;
+  for (const x of [bodyBox.x + 2, bodyBox.x + bodyBox.width - 2]) {
+    const y = rowBox.y + rowBox.height / 2;
+    expect(
+      await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.project-row'), { x, y }),
+    ).toBe(false);
+    await page.mouse.click(x, y);
+    await expectSelection();
+  }
+  await page.getByRole('button', { name: 'Expand Other folder', exact: true }).click();
+  await expectSelection();
+  // Keeping a selection must not scroll a large tree away from the folder
+  // the user is navigating. Let any scheduled automatic scroll settle.
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
+  await expect(page.getByRole('button', { name: 'Collapse Other folder', exact: true })).toBeInViewport();
+  await page.getByRole('button', { name: 'Collapse Other folder', exact: true }).click();
+  await expectSelection();
+  const otherFolder = page.locator('.folder-row', { hasText: 'Other folder' });
+  await otherFolder.press('Enter');
+  await expect(otherFolder).toHaveAttribute('aria-expanded', 'true');
+  await expectSelection();
+  await otherFolder.press('Space');
+  await expect(otherFolder).toHaveAttribute('aria-expanded', 'false');
+  await expectSelection();
+  await page.getByRole('button', { name: 'Collapse Owner folder', exact: true }).click();
+  await expect(aRow).toHaveCount(0);
+  await expect(card).toContainText(a.project.name);
+  await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click();
+  await expectSelection();
+  await expect(aRow).toBeInViewport();
+  await page.getByRole('button', { name: 'Collapse Owner folder', exact: true }).click({ modifiers: ['Control'] });
+  await expect(aRow).toHaveCount(0);
+  await expect(card).toContainText(a.project.name);
+  await page.getByRole('button', { name: 'Expand Owner folder', exact: true }).click({ modifiers: ['Control'] });
+  await expectSelection();
+  await expect(aRow).toBeInViewport();
+  await body.click({ position: { x: 2, y: bodyBox.height - 2 } });
+  await expectSelection();
+  expect(loads).toEqual([a.project.absolutePath]);
+
+  await bRow.click();
+  await expect(bRow).toHaveClass(/\bactive\b/);
+  await expect(aRow).not.toHaveClass(/\bactive\b/);
+  await expect(card).toContainText(b.project.name);
+  await expect(tabs.filter({ hasText: b.project.name })).toHaveClass(/\bactive\b/);
+});
+
 test('tree activation preserves active and inactive edits, dirty dots, and the saved baseline', async ({ page }) => {
   const a = fixture('activation-a');
   const b = fixture('activation-b');

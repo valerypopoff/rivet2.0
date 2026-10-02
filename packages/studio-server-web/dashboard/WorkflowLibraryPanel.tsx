@@ -156,7 +156,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     handleRootDragOver,
     handleRootDragLeave,
     handleRootDrop,
-    handlePanelBodyClick,
     onProjectPreviewOpen,
     onProjectPersistentOpen,
     setProjectRowRef,
@@ -251,7 +250,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           onDragOver={handleRootDragOver}
           onDragLeave={handleRootDragLeave}
           onDrop={(event) => void handleRootDrop(event)}
-          onClick={handlePanelBodyClick}
         >
           {!editorReady ? <div className="body-status body-status-top">Loading editor...</div> : null}
           {bodyContent}

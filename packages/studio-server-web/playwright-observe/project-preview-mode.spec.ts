@@ -152,10 +152,9 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await expect(page.locator('.active-project-save-button')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
 
-  await page.locator('.workflow-library-panel .body').evaluate((element) => {
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-  });
-  await expect(page.locator('.active-project-placeholder')).toContainText('Select a project');
+  await page.locator('.workflow-library-panel .body').click({ position: { x: 2, y: 2 } });
+  await expect(page.locator('.active-project-section')).toContainText(firstProject.name);
+  await expect(firstRow).toHaveClass(/\bactive\b/);
   await expect(page.locator('.active-project-save-button')).toHaveCount(0);
   await expect(firstEditorTab).toBeVisible();
   await expect(editorTabs).toHaveCount(1);
