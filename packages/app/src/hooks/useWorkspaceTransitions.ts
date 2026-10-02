@@ -44,10 +44,7 @@ import {
 import { handleError } from '../utils/errorHandling.js';
 import { useStaticDataDatabase } from './useStaticDataDatabase.js';
 import { resolveOpenedProjectSavePath, updateOpenedProjectMetadata } from '../utils/openedProjects.js';
-import {
-  resolveCanvasPositionsForProject,
-  resolveProjectEditorRestoreTarget,
-} from '../utils/projectEditorState.js';
+import { resolveCanvasPositionsForProject, resolveProjectEditorRestoreTarget } from '../utils/projectEditorState.js';
 import { flushHybridStorageGroup } from '../state/storage.js';
 import { useCurrentProjectEditorSnapshot } from './useCurrentProjectEditorSnapshot.js';
 import { canSaveProjectDataNoPrompt } from '../utils/projectSaveCapabilities.js';
@@ -67,6 +64,7 @@ import {
 import { clearUiGraphPreviewSessions } from '../components/rivetWebApps/uiGraphPreviewSession.js';
 import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
 import { runDeduplicatedProjectSave } from '../utils/projectSaveCoordinator.js';
+import { runStaticDataCacheOperation } from '../utils/staticDataCacheCoordinator.js';
 
 export function useWorkspaceTransitions() {
   const ioProvider = useIOProvider();
@@ -94,14 +92,11 @@ export function useWorkspaceTransitions() {
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
   const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
   const evaluations = useAtomValue(evaluationsState);
-  const legacyCanvasPositionsByGraph = useAtomValue(lastCanvasPositionByGraphState);
-  const {
-    graphNavigationStack,
-    persistOpenedProjectSnapshot,
-    persistCurrentProjectEditorSnapshot,
-  } = useCurrentProjectEditorSnapshot();
+  const { persistOpenedProjectSnapshot, persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
 
   const persistCurrentGraphWorkspace = () => {
+    const project = store.get(projectState);
+    const currentGraph = store.get(graphState);
     const currentTarget = store.get(projectWorkspaceTargetsState)[project.metadata.id];
     const leavePolicy = getProjectWorkspaceLeavePolicy(currentTarget);
     const currentGraphId = currentGraph.metadata?.id;
@@ -121,38 +116,29 @@ export function useWorkspaceTransitions() {
   };
 
   async function applyStaticData(data: Project['data'] | undefined) {
-    setProjectData(data);
-
-    try {
-      await database.clear();
-    } catch (err) {
-      handleError(err, 'Failed to clear static data cache while loading project', {
-        metadata: {
-          projectId: project.metadata.id,
-          projectPath: loadedProject.path,
-        },
-        toastError: false,
-      });
-    }
-
-    if (!data) {
-      return;
-    }
-
-    for (const [id, dataValue] of Object.entries(data)) {
+    // Undefined is an empty payload here, not an invitation for the startup
+    // cache reader to merge the previous project's database back into this one.
+    setProjectData(data ?? {});
+    const projectId = store.get(projectState).metadata.id;
+    await runStaticDataCacheOperation(database, async () => {
+      if (store.get(projectState).metadata.id !== projectId) return;
       try {
-        await database.insert(id as DataId, dataValue!);
-      } catch (err) {
-        handleError(err, `Failed to hydrate static data entry "${id}" while loading project`, {
-          metadata: {
-            dataId: id,
-            projectId: project.metadata.id,
-            projectPath: loadedProject.path,
-          },
+        await database.clear();
+        // Edits may arrive while clearing. Hydrate the latest live payload, not
+        // the older open input; queued edits then follow this operation.
+        if (store.get(projectState).metadata.id !== projectId) return;
+        for (const [id, value] of Object.entries(store.get(projectDataState) ?? {})) {
+          await database.insert(id as DataId, value);
+        }
+      } catch (error) {
+        // A failed clear must not be followed by inserts into another tab's
+        // residual cache. Live project data remains available for saving.
+        handleError(error, 'Failed to hydrate static data cache while loading project', {
+          metadata: { projectId, projectPath: store.get(loadedProjectState).path },
           toastError: false,
         });
       }
-    }
+    });
   }
 
   return {
@@ -167,7 +153,14 @@ export function useWorkspaceTransitions() {
       graphView?: GraphViewContext;
       markClean?: boolean;
       executorMode?: ProjectExecutorMode;
+      /** Register the tab/snapshot at the synchronous commit, before cache IO. */
+      onLoaded?: () => void;
     }): Promise<boolean> {
+      // Loading can follow asynchronous IO or a queued tab activation. React's
+      // render closure may still describe the project that was active earlier.
+      const project = store.get(projectState);
+      const currentGraph = store.get(graphState);
+      const legacyCanvasPositionsByGraph = store.get(lastCanvasPositionByGraphState);
       try {
         const currentProjectId = project.metadata.id;
         const targetProjectId = projectInfo.project.metadata.id;
@@ -266,7 +259,9 @@ export function useWorkspaceTransitions() {
             : targetProjectExecutionSnapshot,
         );
         applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
-        await applyStaticData(projectInfo.data);
+        // Project identity and its path/Evaluation owner must change together.
+        // Hydration yields to events such as a remote move; a delayed path
+        // assignment would overwrite that newer path with the old load input.
         setLoadedProject(transition.loadedProject);
         setEvaluationsState((current) =>
           resetEvaluationsForProjectLoad(
@@ -279,6 +274,12 @@ export function useWorkspaceTransitions() {
         if (!targetProjectHasOpenTab) {
           clearUiGraphPreviewSessions(targetProjectId);
         }
+        projectInfo.onLoaded?.();
+        // Payload authority is synchronous; the derived cache must not hold
+        // later tab selections hostage to IndexedDB or a custom provider.
+        void applyStaticData(projectInfo.data).catch((error) => {
+          handleError(error, 'Failed to hydrate project cache', { toastError: false });
+        });
         return true;
       } catch (err) {
         hostCallbacks.onOpenError?.({
@@ -304,6 +305,10 @@ export function useWorkspaceTransitions() {
       savedGraph: typeof currentGraph,
       options: { graphView?: GraphViewContext; pushHistory?: boolean } = {},
     ) {
+      const project = store.get(projectState);
+      const currentGraph = store.get(graphState);
+      const graphNavigationStack = store.get(graphNavigationStackState);
+      const legacyCanvasPositionsByGraph = store.get(lastCanvasPositionByGraphState);
       persistCurrentGraphWorkspace();
 
       const transition = createGraphSwitchTransition({
@@ -378,16 +383,6 @@ export function useWorkspaceTransitions() {
       });
     },
 
-    buildProjectForSave() {
-      const savedGraph = saveCurrentGraph();
-      const projectToPersist = mergeCurrentGraphIntoProject(store.get(projectState), savedGraph);
-      return withDerivedProjectPluginSpecs(projectToPersist, {
-        appPluginStates: store.get(pluginsState),
-        currentGraph: savedGraph,
-        registry: store.get(projectNodeRegistryState),
-      });
-    },
-
     saveProject(options: { forceSaveAs?: boolean } = {}): Promise<boolean> {
       const projectId = store.get(projectState).metadata.id as ProjectId | undefined;
       if (!projectId) {
@@ -427,6 +422,9 @@ export function useWorkspaceTransitions() {
             },
           );
           const projectDataToPersist = store.get(projectDataState);
+          // Capture the payload together with graph content before any await.
+          // Providers serialize this snapshot, not whichever tab is active later.
+          const projectFileToPersist: Project = { ...projectToPersist, data: projectDataToPersist };
           const savedProjectDigest = getProjectContentDigest({ project: projectToPersist });
           const saveInPlaceProvider = canSaveProjectDataNoPrompt(ioProvider, savePath) ? ioProvider : undefined;
           shouldUseSaveAs = options.forceSaveAs || !latestLoadedProject.loaded || !savePath || !saveInPlaceProvider;
@@ -440,32 +438,30 @@ export function useWorkspaceTransitions() {
           persistCurrentProjectEditorSnapshot({
             project: projectToPersist,
           });
-          await flushHybridStorageGroup('graph');
-          await flushHybridStorageGroup('project');
           // Legacy evaluation resources may be about to disappear from the
           // project file/sidecar. Commit their one-way migration before any
           // project save can replace those legacy files.
           await flushHybridStorageGroup('evaluation-library');
 
           if (shouldUseSaveAs) {
-            const filePath = await ioProvider.saveProjectData(projectToPersist);
+            const filePath = await ioProvider.saveProjectData(projectFileToPersist);
 
             if (filePath) {
               savedPath = filePath;
-              await flushHybridStorageGroup('graph');
-              await flushHybridStorageGroup('project');
             }
           } else {
             if (!saveInPlaceProvider || !savePath) {
               throw new Error('The active project cannot be saved in place.');
             }
-            const canonicalSavePath = await saveInPlaceProvider.saveProjectDataNoPrompt(projectToPersist, savePath);
+            const canonicalSavePath = await saveInPlaceProvider.saveProjectDataNoPrompt(projectFileToPersist, savePath);
             savedPath = canonicalSavePath ?? savePath;
-            await flushHybridStorageGroup('graph');
-            await flushHybridStorageGroup('project');
           }
 
           if (!savedPath) {
+            return false;
+          }
+          if (ioProvider.projectSaveConfirmation === 'download-only') {
+            toast.info('Project download requested. Confirm the downloaded file; edits remain marked unsaved.');
             return false;
           }
 
@@ -570,6 +566,12 @@ export function useWorkspaceTransitions() {
               toastError: false,
             });
           }
+
+          // The actual file is already saved. A browser checkpoint failure is
+          // a separate recovery problem, never a false project-save failure.
+          void flushHybridStorageGroup('project').catch((error) => {
+            handleError(error, 'Project saved, but browser recovery is unavailable.', { toastError: false });
+          });
 
           return true;
         } catch (err) {

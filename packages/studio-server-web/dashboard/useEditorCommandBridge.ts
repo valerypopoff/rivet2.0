@@ -119,14 +119,14 @@ export function useEditorCommandBridge({
       },
       getCurrentProject: () => currentProjectRef.current,
       getSelectedExecutor: () => selectedExecutorRef.current,
-      loadProjectData: async (path) => {
+      loadProjectData: async (path, options) => {
         const provider = ioProvider as {
-          loadProjectDataNoPrompt?: (path: string) => ReturnType<typeof ioProvider.loadProjectData>;
+          loadProjectDataNoPrompt?: EditorCommandBridgeContext['loadProjectData'];
         };
         if (typeof provider.loadProjectDataNoPrompt !== 'function') {
           throw new Error('The active IO provider does not support reloading projects by path.');
         }
-        return provider.loadProjectDataNoPrompt(path);
+        return provider.loadProjectDataNoPrompt(path, options);
       },
       getLoadedProject: () => loadedProjectRef.current,
       getOpenProject: () => openProjectRef.current,

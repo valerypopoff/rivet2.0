@@ -47,7 +47,15 @@ export type DataRefReader = Pick<DataRefStore, 'get'>;
 
 export type AppDatasetProvider = DatasetProvider & {
   loadDatasets?(projectId: ProjectId): Promise<void>;
-  importDatasetsForProject?(projectId: ProjectId, datasets: CombinedDataset[]): Promise<void>;
+  importDatasetsForProject?(
+    projectId: ProjectId,
+    datasets: CombinedDataset[],
+    options?: {
+      isCurrent?: () => boolean;
+      signal?: AbortSignal;
+      activate?: boolean;
+    },
+  ): Promise<void>;
 };
 
 export type EnvironmentProvider = {

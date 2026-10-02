@@ -68,27 +68,42 @@ function run(commandArgs) {
   });
 }
 
-export async function runAppTests({ shardIndex = 0, shardCount = 1 } = {}) {
-  const files = listDiscoveredAppTests();
+export function createAppTestCommands(files, shardIndex = 0, shardCount = 1) {
   const selectedFiles = selectAppTestShard(files, shardIndex, shardCount);
   if (selectedFiles.length === 0) {
     throw new Error(`App test shard ${shardIndex + 1}/${shardCount} is empty.`);
   }
+
+  const workspace = ['workspace', '@valerypopoff/rivet-app', 'run'];
+  if (shardCount !== 1) {
+    return [[...workspace, 'test:files', '--', ...selectedFiles]];
+  }
+
+  // Node/tsx discovery omits TSX. Keep discovery for the larger TypeScript
+  // suite, then explicitly run React tests in bounded Windows-safe batches.
+  const commands = [[...workspace, 'test']];
+  const reactFiles = selectedFiles.filter((file) => file.endsWith('.tsx'));
+  for (let index = 0; index < reactFiles.length; index += 32) {
+    commands.push([...workspace, 'test:files', '--', ...reactFiles.slice(index, index + 32)]);
+  }
+  return commands;
+}
+
+export async function runAppTests({ shardIndex = 0, shardCount = 1 } = {}) {
+  const files = listDiscoveredAppTests();
+  const commands = createAppTestCommands(files, shardIndex, shardCount);
 
   // App tests import Core through its published ESM export. Build that
   // prerequisite here so local full and sharded App-test runs are self-contained;
   // CI independently verifies the restored artifact before this runner starts.
   await run(['workspace', '@valerypopoff/rivet2-core', 'run', 'build:esm']);
 
-  if (shardCount === 1) {
-    // Keep the full local suite on tsx discovery. Expanding every App test path
-    // would exceed Windows' command-line limit before the test runner starts.
-    await run(['workspace', '@valerypopoff/rivet-app', 'run', 'test']);
-    return;
+  if (shardCount !== 1) {
+    console.log(`[app-tests] Running shard ${shardIndex + 1}/${shardCount}: ${commands[0].length - 5} files.`);
   }
-
-  console.log(`[app-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedFiles.length} files.`);
-  await run(['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--', ...selectedFiles]);
+  for (const command of commands) {
+    await run(command);
+  }
 }
 
 async function main() {

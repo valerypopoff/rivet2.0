@@ -22,7 +22,8 @@ export type MoveProjectPathsInput = ProjectPathMovesInput;
 export type RivetProjectCleanBaselineSnapshotInput = {
   project: Project | Omit<Project, 'data'>;
   // Accepted for parity with save/open snapshots. Static data is not included
-  // in the content digest, but mark-clean calls clear its dirty flag.
+  // in the content digest. Newer live content/data stay dirty when this
+  // represents an earlier persisted snapshot.
   data?: Project['data'];
 };
 
@@ -79,6 +80,8 @@ export type RivetWorkspaceHost = {
    * persistence fails through the normal handled-error path.
    */
   saveCurrentProject(): Promise<boolean>;
+  /** Activate an open tab without replacing its content or resetting its saved baseline. */
+  activateProject(projectId: ProjectId, options?: { preferredGraphId?: GraphId }): Promise<boolean>;
   openProjectSnapshot(snapshot: RivetProjectSnapshotInput, options?: RivetProjectOpenOptions): Promise<boolean>;
   openProjectPath(path: string): Promise<boolean>;
   closeProject(projectId?: ProjectId): Promise<boolean>;

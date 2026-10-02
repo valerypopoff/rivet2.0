@@ -9,8 +9,9 @@ import {
 } from '@valerypopoff/rivet2-core';
 import {
   deserializeLegacyEvaluationProjectData,
-  type EvaluationProjectFileData,
   type IOProvider,
+  type LoadedProjectData,
+  type ProjectLoadOptions,
 } from './IOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
@@ -57,10 +58,7 @@ async function ensureFileHandlePermission(
   }
 }
 
-async function writeProjectFile(
-  fileHandle: FileSystemFileHandle,
-  project: Project,
-): Promise<void> {
+async function writeProjectFile(fileHandle: FileSystemFileHandle, project: Project): Promise<void> {
   const canWrite = await ensureFileHandlePermission(fileHandle, 'readwrite');
 
   if (!canWrite) {
@@ -128,18 +126,20 @@ export class BrowserIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
+    callback: (data: LoadedProjectData & { path: string }) => void | Promise<void>,
+    options?: ProjectLoadOptions,
   ): Promise<void> {
     const projectFile = await this.openProjectFile();
     if (!projectFile) return;
 
     const text = await projectFile.file.text();
+    options?.signal?.throwIfAborted();
 
     const [project, attachedData] = deserializeProject(text);
 
     const evaluationData = deserializeLegacyEvaluationProjectData(attachedData?.evaluations);
 
-    callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: projectFile.path });
+    await callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: projectFile.path });
   }
 
   private async openProjectFile(): Promise<{ file: File; path: string } | undefined> {

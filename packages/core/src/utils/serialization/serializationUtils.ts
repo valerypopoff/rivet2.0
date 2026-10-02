@@ -40,6 +40,10 @@ export function validateProject(project: unknown): ProjectValidationResult {
 
   const p = project as Record<string, unknown>;
 
+  if (!isValidProjectStaticData(p.data)) {
+    errors.push('Project data must be a record of static-data strings');
+  }
+
   // Metadata checks
   if (!p.metadata || typeof p.metadata !== 'object') {
     errors.push('Missing project metadata');
@@ -151,6 +155,12 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+export function isValidProjectStaticData(value: unknown): boolean {
+  return (
+    value === undefined || (isPlainRecord(value) && Object.values(value).every((entry) => typeof entry === 'string'))
+  );
 }
 
 function validateUiGraphs(uiGraphs: unknown, errors: string[]): void {

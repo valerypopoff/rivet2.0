@@ -1,5 +1,5 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
-import type { EvaluationProjectFileData } from '../../app/src/io/IOProvider.js';
+import type { LoadedProjectData, ProjectLoadOptions } from '../../app/src/io/IOProvider.js';
 
 import type { RivetWorkspaceHost } from '../../app/src/host';
 import type { OpenedProjectInfo, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
@@ -37,7 +37,7 @@ export type EditorCommandBridgeContext = {
   rebindLoadedRecordingPath(fromPath: string, toPath: string): void;
   getCurrentProject(): Project;
   getSelectedExecutor(): DefaultExecutor;
-  loadProjectData(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
+  loadProjectData(path: string, options?: ProjectLoadOptions): Promise<LoadedProjectData>;
   getLoadedProject(): LoadedProjectInfo;
   getOpenProject(): ReturnType<typeof useOpenWorkflowProject>;
   getProjects(): OpenedProjectsInfo;

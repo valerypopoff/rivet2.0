@@ -11,10 +11,8 @@ import {
   openedProjectsState,
   openedProjectsSortedIdsState,
   projectDataState,
-  projectUnsavedChangesState,
   projectState,
   projectsState,
-  savedProjectContentDigestsState,
 } from '../../../app/src/state/savedGraphs';
 import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../../../app/src/utils/openedProjects.js';
 import { useExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
@@ -23,11 +21,7 @@ import {
   resolveCurrentProjectExecutorMode,
   type ProjectExecutorMode,
 } from '../../../app/src/utils/projectExecutorMode.js';
-import {
-  markProjectClean,
-  markProjectDirtyFlag,
-  resolveProjectContentDirtyState,
-} from '../../../app/src/utils/projectUnsavedChanges.js';
+import { useSyncProjectDirtyState } from '../../../app/src/hooks/useSyncProjectDirtyState.js';
 import { selectedExecutorState } from '../state/settings';
 import { normalizeHostedProjectExecutorMode } from '../utils/hostedExecutorMode';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from '../../dashboard/openedProjectMetadata';
@@ -182,8 +176,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const setProjects = useSetAtom(projectsState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
-  const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
-  const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
+  useSyncProjectDirtyState(enabled);
 
   const currentProject = useAtomValue(projectState);
   const currentProjectData = useAtomValue(projectDataState);
@@ -203,7 +196,6 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
         : null,
     [executorTargetType, executorTargetUrl],
   );
-  const savedProjectContentDigests = useAtomValue(savedProjectContentDigestsState);
   const openedProjects = useAtomValue(openedProjectsState);
   const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
   const openedProjectIds = useAtomValue(openedProjectsSortedIdsState);
@@ -396,38 +388,5 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     loadedProject.path,
     openedProjectIds,
     setProjects,
-  ]);
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
-    if (!currentProjectId || !currentGraph) {
-      return;
-    }
-
-    const dirtyState = resolveProjectContentDirtyState(savedProjectContentDigests, {
-      project: currentProject,
-      graph: currentGraph,
-    });
-
-    if (!dirtyState.hasSavedDigest) {
-      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, dirtyState.snapshot));
-      setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, currentProjectId, false));
-      return;
-    }
-
-    setProjectUnsavedChanges((previousFlags) =>
-      markProjectDirtyFlag(previousFlags, currentProjectId, dirtyState.isDirty),
-    );
-  }, [
-    currentGraph,
-    currentProject,
-    enabled,
-    savedProjectContentDigests,
-    setProjectUnsavedChanges,
-    setSavedProjectContentDigests,
   ]);
 }

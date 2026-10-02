@@ -1,8 +1,7 @@
 import { type DatasetId, type DatasetMetadata, type ProjectId } from '@valerypopoff/rivet2-core';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { datasetsState } from '../state/dataStudio';
 import { useAtom } from 'jotai';
-import { useStableCallback } from './useStableCallback';
 import { useDatasetProvider } from '../providers/ProvidersContext';
 import { handleError } from '../utils/errorHandling.js';
 
@@ -10,24 +9,16 @@ export function useDatasets(projectId: ProjectId) {
   const datasetProvider = useDatasetProvider();
   const [datasets, setDatasets] = useAtom(datasetsState);
 
-  const initDatasets = useStableCallback(async () => {
-    try {
-      await datasetProvider.loadDatasets?.(projectId);
-      await reloadDatasets();
-    } catch (err) {
-      handleError(err, 'Failed to initialize datasets', {
-        metadata: {
-          projectId,
-        },
-      });
-    }
-  });
+  const selectedProject = useRef(projectId);
+  selectedProject.current = projectId;
+  const mounted = useRef(true);
 
   const reloadDatasets = async () => {
     try {
       const datasets = await datasetProvider.getDatasetsForProject(projectId);
-      setDatasets(datasets);
+      if (mounted.current && selectedProject.current === projectId) setDatasets(datasets);
     } catch (err) {
+      if (!mounted.current || selectedProject.current !== projectId) return;
       handleError(err, 'Failed to reload datasets', {
         metadata: {
           projectId,
@@ -42,8 +33,26 @@ export function useDatasets(projectId: ProjectId) {
   };
 
   useEffect(() => {
-    initDatasets();
-  }, [projectId, initDatasets]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let current = true;
+    void (async () => {
+      await datasetProvider.loadDatasets?.(projectId);
+      if (!current) return;
+      const datasets = await datasetProvider.getDatasetsForProject(projectId);
+      if (current && selectedProject.current === projectId) setDatasets(datasets);
+    })().catch((err) => {
+      if (current) handleError(err, 'Failed to initialize datasets', { metadata: { projectId } });
+    });
+    return () => {
+      current = false;
+    };
+  }, [datasetProvider, projectId, setDatasets]);
 
   const putDataset = async (dataset: DatasetMetadata) => {
     await updateDatasets(async () => {

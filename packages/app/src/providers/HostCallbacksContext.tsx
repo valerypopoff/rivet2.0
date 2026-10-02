@@ -31,6 +31,8 @@ export type RivetAppHostOpenErrorEvent = {
 };
 
 export type RivetAppHostCallbacks = {
+  /** Bootstrap failed before the normal workspace/bridge could mount. */
+  onInitializationError?: (error: unknown) => void;
   onProjectSaved?: (event: RivetAppHostProjectSavedEvent) => void;
   onActiveProjectChanged?: (event: RivetAppHostActiveProjectChangedEvent) => void;
   onOpenProjectCountChanged?: (event: RivetAppHostOpenProjectCountChangedEvent) => void;

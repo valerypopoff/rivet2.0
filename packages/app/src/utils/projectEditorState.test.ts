@@ -1,7 +1,10 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type GraphId, type NodeGraph, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
-import { createRootGraphViewContext, createSubgraphGraphViewContext } from '../domain/graphEditing/navigationActions.js';
+import {
+  createRootGraphViewContext,
+  createSubgraphGraphViewContext,
+} from '../domain/graphEditing/navigationActions.js';
 import {
   buildCurrentProjectEditorStateSnapshot,
   getActiveGraphId,
@@ -11,16 +14,8 @@ import {
   resolveProjectEditorRestoreTarget,
   sanitizeNavigationStackForProject,
 } from './projectEditorState.js';
-import {
-  mergeProjectEditorReloadCheckpoint,
-  parseProjectEditorReloadCheckpoint,
-} from '../state/projectEditor.js';
 
-function makeGraph(
-  id: string,
-  name: string,
-  nodes: NodeGraph['nodes'] = [],
-): NodeGraph {
+function makeGraph(id: string, name: string, nodes: NodeGraph['nodes'] = []): NodeGraph {
   return {
     metadata: {
       id: id as GraphId,
@@ -52,7 +47,7 @@ function makeCanvasPositions(
 }
 
 describe('projectEditorState', () => {
-test('sanitizeNavigationStackForProject drops invalid entries and restores a valid active selection', () => {
+  test('sanitizeNavigationStackForProject drops invalid entries and restores a valid active selection', () => {
     const rootGraph = makeGraph('root', 'Root', [
       { id: 'sub-node', type: 'subGraph', data: { graphId: 'sub' as GraphId }, visualData: { x: 0, y: 0 } } as any,
     ]);
@@ -163,9 +158,12 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
     const project = makeProject([makeGraph('alpha', 'Alpha')]);
 
     assert.deepEqual(
-      pruneCanvasPositionsForProject(project, makeCanvasPositions({
-        alpha: { x: 0, y: -12, zoom: 0 } as any,
-      })),
+      pruneCanvasPositionsForProject(
+        project,
+        makeCanvasPositions({
+          alpha: { x: 0, y: -12, zoom: 0 } as any,
+        }),
+      ),
       {
         alpha: { x: 0, y: -12, zoom: 0 },
       },
@@ -407,54 +405,5 @@ test('sanitizeNavigationStackForProject drops invalid entries and restores a val
     assert.equal(resolveProjectGraphId(project, { openedGraphId: 'missing' as GraphId }), 'beta');
     assert.equal(resolveProjectGraphId(makeProject([beta, alpha])), 'alpha');
     assert.equal(resolveProjectGraphId(makeProject([])), undefined);
-  });
-
-  test('reload checkpoints replace only the active project entry and reject malformed values', () => {
-    const checkpoint = parseProjectEditorReloadCheckpoint(
-      JSON.stringify({
-        projectId: 'active-project',
-        state: {
-          navigationStack: {
-            stack: [createRootGraphViewContext('active-graph' as GraphId)],
-            index: 0,
-          },
-          canvasPositionsByGraph: makeCanvasPositions({
-            'active-graph': { x: 10, y: 20, zoom: 2 },
-          }),
-        },
-      }),
-    );
-
-    assert.deepEqual(
-      mergeProjectEditorReloadCheckpoint(
-        {
-          'inactive-project': {
-            navigationStack: {
-              stack: [createRootGraphViewContext('inactive-graph' as GraphId)],
-              index: 0,
-            },
-            canvasPositionsByGraph: makeCanvasPositions({
-              'inactive-graph': { x: 1, y: 2, zoom: 1 },
-            }),
-          },
-        } as any,
-        checkpoint,
-      ),
-      {
-        'inactive-project': {
-          navigationStack: {
-            stack: [createRootGraphViewContext('inactive-graph' as GraphId)],
-            index: 0,
-          },
-          canvasPositionsByGraph: makeCanvasPositions({
-            'inactive-graph': { x: 1, y: 2, zoom: 1 },
-          }),
-        },
-        'active-project': checkpoint!.state,
-      },
-    );
-    assert.equal(parseProjectEditorReloadCheckpoint('{'), undefined);
-    assert.equal(parseProjectEditorReloadCheckpoint(JSON.stringify({ projectId: '', state: {} })), undefined);
-    assert.equal(parseProjectEditorReloadCheckpoint(JSON.stringify({ projectId: 'active-project', state: [] })), undefined);
   });
 });

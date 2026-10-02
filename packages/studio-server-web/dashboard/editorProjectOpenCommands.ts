@@ -9,11 +9,7 @@ import {
   type EditorCommandBridgeContext,
   type SerializedEditorCommand,
 } from './editorCommandBridgeContext';
-import {
-  getHostedProjectRevisionState,
-  beginHostedProjectReload,
-  restoreHostedProjectRevisionState,
-} from '../io/hostedProjectRevisionTracker';
+import { beginHostedProjectReload } from '../io/hostedProjectRevisionTracker';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
 
 function resolveOpeningProjectTitle(command: Extract<DashboardToEditorCommand, { type: 'open-project' }>): string {
@@ -78,7 +74,10 @@ export async function handleOpenProjectCommand(
     }
 
     const replaceCurrent = Boolean(command.replaceCurrent || shouldReplaceActivePreview);
-    const replacedPath = replaceCurrent ? context.getLoadedProject().path : '';
+    const replacedPath =
+      replaceCurrent && (!existingOpenedProject || command.reloadFromDisk === true)
+        ? context.getLoadedProject().path
+        : '';
     const canStartOpeningTabBeforeLoad =
       !existingOpenedProject && command.reloadFromDisk !== true && (!replaceCurrent || shouldReplaceActivePreview);
     if (canStartOpeningTabBeforeLoad) {
@@ -162,16 +161,26 @@ export async function handleRefreshOpenProjectCommand(
   if (!openedProject) {
     return false;
   }
-  const revisionStateBeforeRefresh = getHostedProjectRevisionState(openedProject.projectId);
   const inactive = normalizeWorkflowPath(context.getLoadedProject().path) !== normalizeWorkflowPath(command.path);
   const finishReload = beginHostedProjectReload(openedProject.projectId);
   let replacementSucceeded = false;
   try {
     if (inactive) {
-      const loaded = await context.loadProjectData(command.path);
+      const isCurrent = () => {
+        const latest = findOpenedProjectByPath(context, command.path);
+        return (
+          latest?.projectId === openedProject.projectId &&
+          latest.fsPath === openedProject.fsPath &&
+          normalizeWorkflowPath(context.getLoadedProject().path) !== normalizeWorkflowPath(command.path)
+        );
+      };
+      const loaded = await context.loadProjectData(command.path, { deferCommit: true, activateDatasets: false });
+      if (!isCurrent()) return false;
       if (loaded.project.metadata.id !== openedProject.projectId) {
         throw new Error('Reloaded project has a different project ID.');
       }
+      if (loaded.commit && !(await loaded.commit(isCurrent))) return false;
+      if (!isCurrent()) return false;
       const { data, ...project } = loaded.project;
       const replaced = await context.getWorkspace().replaceProjectSnapshot(openedProject.projectId, {
         project,
@@ -200,7 +209,8 @@ export async function handleRefreshOpenProjectCommand(
       previewTab: false,
     });
     if (!openResult.opened) {
-      throw new Error('Rivet could not reload the restored project.');
+      // A newer selection or a declined confirmation is not a failed load.
+      return false;
     }
     replacementSucceeded = true;
     if (openResult.projectId) {
@@ -211,16 +221,16 @@ export async function handleRefreshOpenProjectCommand(
     postMessageToDashboard({ type: 'project-opened', path: command.path });
     return true;
   } catch (error) {
-    if (!replacementSucceeded) {
-      restoreHostedProjectRevisionState(openedProject.projectId, revisionStateBeforeRefresh);
-    }
     const message = getError(error).message;
-    console.error(inactive
-      ? 'Failed to refresh inactive workflow project from storage:'
-      : 'Failed to refresh workflow project from storage:', error);
+    console.error(
+      inactive
+        ? 'Failed to refresh inactive workflow project from storage:'
+        : 'Failed to refresh workflow project from storage:',
+      error,
+    );
     postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
     return false;
   } finally {
-    finishReload();
+    finishReload(replacementSucceeded);
   }
 }

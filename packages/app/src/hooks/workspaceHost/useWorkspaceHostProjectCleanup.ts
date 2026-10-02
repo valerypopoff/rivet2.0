@@ -1,10 +1,11 @@
-import { useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import type { ProjectExecutionSnapshot } from '../../state/dataFlow.js';
 import {
   openedProjectSnapshotsState,
   projectDataUnsavedChangesState,
   projectUnsavedChangesState,
+  projectsState,
   releaseProjectContextState,
   savedProjectContentDigestsState,
 } from '../../state/savedGraphs.js';
@@ -18,11 +19,12 @@ import { useStableCallback } from '../useStableCallback.js';
 import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
 import { clearUiGraphPreviewSessions } from '../../components/rivetWebApps/uiGraphPreviewSession.js';
 
-function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
+function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId, isStillClosed: () => boolean): void {
   window.setTimeout(() => {
+    if (!isStillClosed()) return;
     void import('../../utils/monaco/codeEditorModelCache.js')
       .then(({ clearCodeEditorModelCacheForProject }) => {
-        clearCodeEditorModelCacheForProject(projectId);
+        if (isStillClosed()) clearCodeEditorModelCacheForProject(projectId);
       })
       .catch((error) => {
         handleError(error, 'Failed to clear code editor model cache', {
@@ -35,6 +37,7 @@ function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId): void {
 }
 
 export function useWorkspaceHostProjectCleanup() {
+  const store = useStore();
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
   const setViewingProjectComparisonNode = useSetAtom(viewingProjectComparisonNodeState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
@@ -52,8 +55,10 @@ export function useWorkspaceHostProjectCleanup() {
       removeProjectExecutionSnapshot(projectId, {
         currentSnapshot: options.currentExecutionSnapshot,
       });
-      setProjectCompareReference((reference) => (reference?.projectId === projectId ? undefined : reference));
-      setViewingProjectComparisonNode(undefined);
+      if (store.get(projectCompareReferenceState)?.projectId === projectId) {
+        setProjectCompareReference(undefined);
+        setViewingProjectComparisonNode(undefined);
+      }
       setOpenedProjectSnapshots((snapshots) => {
         const nextSnapshots = { ...snapshots };
         delete nextSnapshots[projectId];
@@ -66,7 +71,7 @@ export function useWorkspaceHostProjectCleanup() {
       removeWorkspaceTarget(projectId);
       executorSessionRegistry.removeProject(projectId);
       releaseProjectContextState(projectId);
-      clearCodeEditorModelCacheForClosedProject(projectId);
+      clearCodeEditorModelCacheForClosedProject(projectId, () => !store.get(projectsState).openedProjects[projectId]);
     },
   );
 }

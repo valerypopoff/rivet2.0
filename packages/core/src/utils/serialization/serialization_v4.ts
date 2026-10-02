@@ -9,8 +9,9 @@ import type {
   ProjectId,
   ChartNodeVariant,
   NodePrefabId,
+  DataId,
 } from '../../index.js';
-import { type AttachedData, doubleCheckProject } from './serializationUtils.js';
+import { type AttachedData, doubleCheckProject, isValidProjectStaticData } from './serializationUtils.js';
 import { entries } from '../typeSafety.js';
 import type { PluginLoadSpec } from '../../model/PluginLoadSpec.js';
 import type { CombinedDataset } from './serialization.js';
@@ -37,6 +38,7 @@ type SerializedProject = {
   attachedData?: AttachedData;
   plugins?: PluginLoadSpec[];
   references?: SerializedProjectReference[];
+  data?: Record<DataId, string>;
 };
 
 type SerializedProjectReference = {
@@ -95,6 +97,9 @@ export function graphV4Deserializer(data: unknown): NodeGraph {
 }
 
 export function projectV4Serializer(project: Project, attachedData?: AttachedData): unknown {
+  if (!isValidProjectStaticData(project.data)) {
+    throw new Error('Project data must be a record of static-data strings');
+  }
   // Project Settings canonicalizes these values, but integrations and callers
   // can author Project objects directly. Never write a project file that will
   // later fail its own project-global validation at load or execution time.
@@ -132,6 +137,7 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
     attachedData,
     plugins: project.plugins ?? [],
     references: project.references ?? [],
+    data: project.data,
   };
 }
 
@@ -150,6 +156,7 @@ function fromSerializedProject(serializedProject: SerializedProject): [Project, 
       uiGraphs: Object.keys(uiGraphs).length > 0 ? uiGraphs : undefined,
       plugins: serializedProject.plugins ?? [],
       references: serializedProject.references ?? [],
+      ...(serializedProject.data !== undefined ? { data: serializedProject.data } : {}),
     },
     serializedProject.attachedData ?? {},
   ];

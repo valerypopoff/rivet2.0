@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { graphState } from '../../state/graph.js';
 import {
@@ -14,36 +14,27 @@ import {
   normalizeProjectPathMoves,
   updateOpenedProjectMetadata,
 } from '../../utils/openedProjects.js';
-import {
-  applyProjectMetadataPatch,
-  hasProjectMetadataPatchChanges,
-} from '../../utils/projectMetadataUpdates.js';
+import { applyProjectMetadataPatch, hasProjectMetadataPatchChanges } from '../../utils/projectMetadataUpdates.js';
 import {
   buildCurrentProjectContentSnapshot,
   hasProjectContentChangedFromCleanDigest,
-  markProjectClean as markProjectContentClean,
   markProjectDirtyFlag,
+  patchSavedProjectMetadata,
 } from '../../utils/projectUnsavedChanges.js';
 import { useStableCallback } from '../useStableCallback.js';
-import type {
-  MoveProjectPathsInput,
-  RivetProjectMetadataPatch,
-  RivetProjectMetadataUpdateOptions,
-} from './types.js';
+import type { MoveProjectPathsInput, RivetProjectMetadataPatch, RivetProjectMetadataUpdateOptions } from './types.js';
 
 export function useWorkspaceHostProjectMetadata() {
-  const [projects, setProjects] = useAtom(projectsState);
-  const [loadedProject, setLoadedProject] = useAtom(loadedProjectState);
-  const [openedProjectSnapshots, setOpenedProjectSnapshots] = useAtom(openedProjectSnapshotsState);
-  const currentProject = useAtomValue(projectState);
+  const store = useStore();
+  const setProjects = useSetAtom(projectsState);
+  const setLoadedProject = useSetAtom(loadedProjectState);
+  const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setCurrentProject = useSetAtom(projectState);
-  const currentGraph = useAtomValue(graphState);
-  const savedProjectContentDigests = useAtomValue(savedProjectContentDigestsState);
-  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
   const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
 
   const moveProjectPaths = useStableCallback((moves: MoveProjectPathsInput) => {
+    const loadedProject = store.get(loadedProjectState);
     const normalizedMoves = normalizeProjectPathMoves(moves);
     setProjects((previousProjects) => moveOpenedProjectPaths(previousProjects, normalizedMoves));
 
@@ -65,6 +56,11 @@ export function useWorkspaceHostProjectMetadata() {
       metadataPatch: RivetProjectMetadataPatch,
       options: RivetProjectMetadataUpdateOptions = {},
     ) => {
+      const currentProject = store.get(projectState);
+      const currentGraph = store.get(graphState);
+      const projects = store.get(projectsState);
+      const openedProjectSnapshots = store.get(openedProjectSnapshotsState);
+      const savedProjectContentDigests = store.get(savedProjectContentDigestsState);
       const isCurrentProject = currentProject.metadata.id === projectId;
       const openedProject = projects.openedProjects[projectId];
       if (!openedProject && !isCurrentProject) {
@@ -78,16 +74,6 @@ export function useWorkspaceHostProjectMetadata() {
       const hasMetadataChanges = projectBeforePatch
         ? hasProjectMetadataPatchChanges(projectBeforePatch.metadata, metadataPatch)
         : typeof metadataPatch?.title === 'string' && metadataPatch.title !== openedProject?.title;
-      const contentBeforePatch = projectBeforePatch
-        ? isCurrentProject
-          ? buildCurrentProjectContentSnapshot({
-              project: projectBeforePatch,
-              graph: currentGraph,
-            })
-          : {
-              project: projectBeforePatch,
-            }
-        : undefined;
       const patchedProject = projectBeforePatch
         ? applyProjectMetadataPatch(projectBeforePatch, metadataPatch)
         : undefined;
@@ -135,23 +121,23 @@ export function useWorkspaceHostProjectMetadata() {
         return true;
       }
 
-      const wasProjectDirty =
-        projectUnsavedChanges[projectId] === true ||
-        hasProjectContentChangedFromCleanDigest(savedProjectContentDigests, contentBeforePatch);
-
       if (options.persistedExternally) {
-        if (!wasProjectDirty && patchedProject) {
-          const cleanBaseline = isCurrentProject
-            ? buildCurrentProjectContentSnapshot({
-                project: patchedProject,
-                graph: currentGraph,
-              })
-            : {
-                project: patchedProject,
-              };
-
-          setSavedProjectContentDigests((previousDigests) => markProjectContentClean(previousDigests, cleanBaseline));
-          setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
+        if (savedProjectContentDigests[projectId] != null && patchedProject) {
+          const nextDigests = patchSavedProjectMetadata(savedProjectContentDigests, projectId, metadataPatch);
+          const patchedContent = isCurrentProject
+            ? buildCurrentProjectContentSnapshot({ project: patchedProject, graph: currentGraph })
+            : { project: patchedProject };
+          setSavedProjectContentDigests(nextDigests);
+          setProjectUnsavedChanges((flags) =>
+            markProjectDirtyFlag(
+              flags,
+              projectId,
+              hasProjectContentChangedFromCleanDigest(nextDigests, patchedContent),
+            ),
+          );
+        } else if (patchedProject) {
+          // Persisting a title does not certify a recovered graph as saved.
+          setProjectUnsavedChanges((flags) => markProjectDirtyFlag(flags, projectId, true));
         }
       } else {
         setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, true));

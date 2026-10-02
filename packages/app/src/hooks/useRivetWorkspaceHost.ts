@@ -29,7 +29,7 @@ export type {
 
 export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const saveCurrentProject = useWorkspaceHostSave();
-  const { openProjectSnapshot, openProjectPath, replaceCurrent } = useWorkspaceHostOpenProject();
+  const { activateProject, openProjectSnapshot, openProjectPath, replaceCurrent } = useWorkspaceHostOpenProject();
   const replaceProjectSnapshot = useWorkspaceHostReplaceProjectSnapshot(replaceCurrent);
   const closeProject = useWorkspaceHostCloseProject();
   const { startOpeningProjectTab, finishOpeningProjectTab, cancelOpeningProjectTab } =
@@ -42,6 +42,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   return useMemo(
     () => ({
       saveCurrentProject,
+      activateProject,
       openProjectSnapshot,
       openProjectPath,
       closeProject,
@@ -59,6 +60,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       stopProjectCompare,
     }),
     [
+      activateProject,
       cancelOpeningProjectTab,
       closeProject,
       finishOpeningProjectTab,

@@ -13,6 +13,19 @@ export type EvaluationProjectFileData = {
   evaluationDatasets: EvaluationDataset[];
 };
 
+export type ProjectLoadOptions = {
+  signal?: AbortSignal;
+  deferCommit?: boolean;
+  /** Refresh an inactive snapshot without replacing the live dataset owner. */
+  activateDatasets?: boolean;
+};
+export type LoadedProjectData = {
+  project: Project;
+  evaluation: EvaluationProjectFileData;
+  /** Optional provider preparation, invoked only while this selection is current. */
+  commit?: (isCurrent: () => boolean) => Promise<boolean>;
+};
+
 /**
  * Evaluation attachments are an optional, one-way migration input. A bad
  * legacy payload must not prevent the project itself from opening or replace
@@ -29,6 +42,8 @@ export function deserializeLegacyEvaluationProjectData(value: unknown): Evaluati
 
 /** Base IO interface - all platforms (browser, Tauri, web) support these methods. */
 export interface IOProvider {
+  /** Download-only providers cannot confirm a completed storage write. */
+  readonly projectSaveConfirmation?: 'download-only';
   saveGraphData(graphData: NodeGraph): Promise<void>;
 
   saveProjectData(project: Project): Promise<string | undefined>;
@@ -36,7 +51,8 @@ export interface IOProvider {
   loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void>;
 
   loadProjectData(
-    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
+    callback: (data: LoadedProjectData & { path: string }) => void | Promise<void>,
+    options?: ProjectLoadOptions,
   ): Promise<void>;
 
   loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void>;
@@ -53,7 +69,7 @@ export interface PathBasedIOProvider extends IOProvider {
   /** Returns the canonical persisted path when the storage provider rebases a stale path. */
   saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
 
-  loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }>;
+  loadProjectDataNoPrompt(path: string, options?: ProjectLoadOptions): Promise<LoadedProjectData>;
 
   openDirectory(): Promise<string | string[] | null>;
 

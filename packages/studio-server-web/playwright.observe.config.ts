@@ -12,10 +12,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   outputDir: '../../artifacts/playwright/test-results',
-  reporter: [
-    ['list'],
-    ['html', { open: 'never', outputFolder: '../../artifacts/playwright/report' }],
-  ],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/report' }]],
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:8080',
     headless,
@@ -28,6 +25,7 @@ export default defineConfig({
     },
     launchOptions: {
       slowMo: Number.isFinite(slowMo) ? slowMo : 300,
+      executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined,
     },
   },
   projects: [

@@ -13,11 +13,16 @@ import { canvasPositionState, graphNavigationStackState } from '../state/graphBu
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { projectEditorHydratedState, projectEditorStateByProjectIdState } from '../state/projectEditor.js';
 import { projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
-import { configureHybridStorageBackend, flushHybridStorageGroup, MemoryAsyncStorage } from '../state/storage.js';
+import {
+  configureHybridStorageBackend,
+  flushHybridStorageGroup,
+  getWorkspaceRecoveryStorage,
+  MemoryAsyncStorage,
+} from '../state/storage.js';
 import { useCurrentProjectEditorSnapshot } from './useCurrentProjectEditorSnapshot.js';
 import { useSyncCurrentProjectEditorState } from './useSyncCurrentProjectEditorState.js';
 
-test('only an open graph workspace can replace its remembered viewport or create a reload checkpoint', async () => {
+test('only an open graph workspace replaces its viewport and navigation shares the complete checkpoint', async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://rivet.test' });
   const globals = ['window', 'document', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const descriptors = globals.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -26,7 +31,8 @@ test('only an open graph workspace can replace its remembered viewport or create
     document: { configurable: true, value: dom.window.document },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
-  const previousBackend = configureHybridStorageBackend(new MemoryAsyncStorage());
+  const backend = new MemoryAsyncStorage();
+  const previousBackend = configureHybridStorageBackend(backend);
   const store = createStore();
   const root = createRoot(dom.window.document.getElementById('root')!);
   const project = createBlankProjectWithDefaultGraph();
@@ -52,7 +58,13 @@ test('only an open graph workspace can replace its remembered viewport or create
     store.set(projectsState, emptyTabs);
     store.set(projectEditorStateByProjectIdState, { [project.metadata.id]: remembered });
     store.set(projectEditorHydratedState, true);
-    await act(async () => root.render(<Provider store={store}><Harness /></Provider>));
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <Harness />
+        </Provider>,
+      ),
+    );
     assert.deepEqual(store.get(projectEditorStateByProjectIdState)[project.metadata.id], remembered);
     assert.equal(snapshot!.persistCurrentProjectEditorSnapshot(), undefined);
     dom.window.dispatchEvent(new dom.window.PageTransitionEvent('pagehide'));
@@ -76,8 +88,10 @@ test('only an open graph workspace can replace its remembered viewport or create
     assert.equal(snapshot!.persistCurrentProjectEditorSnapshot(), undefined);
     dom.window.dispatchEvent(new dom.window.PageTransitionEvent('pagehide'));
     assert.deepEqual(store.get(projectEditorStateByProjectIdState)[project.metadata.id], updated);
-    const checkpoint = JSON.parse(dom.window.sessionStorage.getItem('rivet-project-editor-reload-v1')!);
-    assert.deepEqual(checkpoint.state, updated);
+    await flushHybridStorageGroup('project');
+    const checkpoint = JSON.parse((await backend.getItem(getWorkspaceRecoveryStorage().key))!);
+    assert.deepEqual(checkpoint.groups.project.projectEditorStateByProjectId[project.metadata.id], updated);
+    assert.equal(dom.window.sessionStorage.getItem('rivet-project-editor-reload-v1'), null);
     dom.window.sessionStorage.clear();
 
     await act(async () => {
