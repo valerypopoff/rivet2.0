@@ -4,6 +4,32 @@ Baseline: `6dd9466af`. Scope: the 41 Markdown files then present under
 `developer-docs/`, including Studio Server and its audits. The new
 [Refactor Baseline](./REFACTOR-BASELINE.md) and this report are additions.
 
+## Source reconciliation — 2026-10-03
+
+The September audit below retains its original baseline and evidence limits.
+The latest source review through `6fff1e3bf` reconciled the editor ownership fix,
+workspace recovery/activation changes in `d5f460da6`, and staging launch/CI work
+in `5e0ec3ddc` with their owning guides:
+
+- [Workspace state](./EDITOR-WORKSPACE-STATE.md): cancellable preparation,
+  unchanged-content activation, coherent per-document recovery, truthful Save
+  acknowledgement and derived static-data cache ownership.
+- [Monaco/editor surfaces](./MONACO-EDITOR-SURFACES.md): full node/library owner
+  identity, irreversible callback lifetime, synchronous canonical writes,
+  authoritative refresh and bounded warm-model drafts.
+- [Hosted contracts](./HOSTED-WEB-APP-CONTRACTS.md) and
+  [Editor Bridge](./studio-server/editor-bridge.md): deferred guarded imports,
+  current commands/events and the separate ordered dashboard command lane.
+- [Build/CI](./BUILD-AND-CI.md): Evaluations plus TSX test discovery, branch-specific
+  gates, and digest/mount-verified staging VM deployment.
+
+App/Studio architecture summaries now point to those canonical owners instead
+of duplicating the editor-session contract. The index exposes local SQLite
+upgrade/backup and managed-migration runbooks. This is documentation/source
+reconciliation, not a new production rehearsal or a claim that the selected-SQLite
+to managed-storage adapter exists; the [migration runbook](./studio-server/vm-to-managed-migration.md#source-and-destination)
+still explicitly excludes that unsupported source.
+
 ## Method and confidence
 
 The whole collection was inventoried for navigation, document purpose, local

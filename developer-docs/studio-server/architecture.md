@@ -198,82 +198,22 @@ Filesystem deployments use upstream's process-local action ledger. Managed deplo
 
 ## Hosted UI model
 
-Node settings belong to an editor session, not a node ID alone. Duplicated
-projects can retain graph/node IDs. `NodeEditor` remounts its local panel state
-for project/graph/node/type or workspace replacement changes, and variant
-fields have a separate read-only session. `NodeEditorSessionContext` checks
-live Jotai ownership, node existence, selection and editability before applying
-changes. Leaving a session permanently retires its callbacks, including an
-A → B → A round trip before React renders; a same-ID reload advances its
-content generation. An intermediate retirement also schedules a fresh lifetime
-for the returned owner, even if React sees identical final IDs. The old token
-never becomes writable again.
-Session-bound mutation/close callbacks remain stable only within that lifetime;
-a retained callback cannot borrow a replacement session through a latest-callback
-ref after a batched round trip. Node-library source editing uses its own authority
-rather than pretending that the source is a node in the selected graph. Library sessions
-and Monaco scopes include the exact prefab ID; imported sources with colliding
-node IDs cannot be mistaken for the currently edited prefab. Closing a panel,
-like editing it, is guarded against callbacks from retired sessions.
+The shared App owns node settings and browser recovery in every host. See the
+canonical [node-editor sessions and Monaco models](../MONACO-EDITOR-SURFACES.md#node-settings-ownership)
+and [workspace activation/recovery](../EDITOR-WORKSPACE-STATE.md) guides; Studio
+Server must not implement another buffer, baseline or checkpoint authority.
+Cloned graph/node IDs are intentionally supported. Complete owner identities,
+irreversible session tokens and project-scoped Undo prevent cross-project edits;
+canonical text commits synchronously while expensive derived work may debounce.
 
-AI cancellation invalidates the active generation and releases its UI immediately,
-without waiting for a provider to honor abort. A late completion cannot update
-the node, report success or clear the working state of a newer generation. A
-new session resets its prompt, selection context and in-flight UI as well as
-aborting the previous request.
-
-Library mutations commit through `updateNodeLibraryState`: one owner-checked
-Jotai transaction reads the latest project, references and active graph overlay,
-then publishes sources, reconciled graphs and wire-recovery pools together.
-The active graph is reconciled only from its live overlay, never first from its
-stale saved snapshot. Consecutive source edits preserve newer sibling sources
-and project fields; canvas position/size patches also preserve newer node data.
-Deletion usage checks and partial edit-command overrides read live sources.
-Rejected updates cannot attach payloads or change selection.
-
-Code, ordinary node-string fields and node title/description metadata commit
-canonical data synchronously, so Save and tab switches see the last keystroke.
-Field changes patch the latest owning node and the command dispatcher reads
-current graph state at invocation, preserving sibling changes between renders.
-The final node-change callback retains its render baseline instead of forwarding
-through a latest-callback ref: delayed custom-editor updates patch only their
-changed fields, not newer siblings. Callers can pass an explicit live baseline
-when constructing a change from the current authoritative node.
-Monaco mount/unmount is not an edit and never re-emits a stale buffer. Warm
-models are scoped by project, graph, node, field, variant/library context,
-language and content generation;
-attached models cannot be evicted by warm-cache pressure. Same-owner partial
-JSON drafts and cursor/undo state remain in that bounded in-memory cache (not
-a durable recovery guarantee). JSON-object validation is derived from the
-visible buffer, so restored incomplete drafts keep their error message without
-being committed as valid data. Source acknowledgements are tracked separately
-from draft text; authoritative Undo/Redo changes synchronize even while focused
-without generating another edit. Read-only variants never reuse live buffers.
-AI work is cancelled when its editor session retires and cannot overwrite
-intervening node-data edits; asynchronous editor definitions and spellcheck
-also discard results from retired owners. None of these checks depend on
-disabling autofocus or on storage/backend migration.
-
-Subgraph version selection and preview refresh check the same session before
-writing referenced-project state, not just before changing the node. Control
-requests also expire on unmount, project/graph, scope or version changes;
-monotonic request generations prevent an old preview from replacing a newer
-reference after the control reopens. Canvas controls check their live owner too.
-
-Metadata inputs display canonical title/description values. Blur/confirmation
-ends editing but never replays a separate form buffer over a newer update;
-Escape explicitly restores the pre-edit value, including an absent description
-rather than introducing an empty field and a false dirty flag. Spellcheck is
-guarded by both its request generation and mounted editor identity. Superseded
-checks do no cleanup: only a new check, content change or unmount clears markers,
-so a late old completion cannot erase the current check's results.
-
-Graph command history, Redo and recoverable-wire pools are also project scoped,
-because clones can share graph IDs. The existing graph-keyed atom APIs project
-the active project's transient records. An authoritative reload clears that
-project's old command/wire history; ordinary tab activation preserves it.
-
-Browser workspace recovery runs silently in normal operation: pending and verified checkpoint writes do not render a status panel or recovery buttons. `WorkspaceRecoveryStatus` remains mounted to checkpoint on hidden visibility and warn before unloading unprotected edits. A single automatic retry loop retries the **latest** in-memory workspace after checkpoint or reload-reference failure (250 ms, 1 s, 2.5 s, then at most once per 30 s); focus, returning visibility, and online events can retry sooner without overlapping attempts. Transient failures produce no toast or panel. After the initial retries fail, a warning appears only while there is unsaved work, with Save instructions and an optional retry; successful checkpointing or saving all projects removes it. Memory-only storage offers Save instructions only when needed, not disabled recovery controls. Startup retries transient hydration twice before offering Retry loading. Missing/corrupt authorities never fall back to older or empty records automatically; choosing a retained workspace or explicitly starting empty is reserved for blocked bootstrap, not offered as a repair for a live editor write failure. Replaced/unmounted/retired recovery owners stop automatic retries, and failed session-storage-object access can be reacquired without interpreting an unknown reference as permission to import legacy state. Jotai IndexedDB storage reopens a silently closed connection once on `InvalidStateError`; transaction aborts and quota errors still reject, and checkpoint read-back verification is still mandatory.
+Hosted asynchronous AI, Subgraph loading and provider imports must retain those
+guards at their mutation boundaries. Cancellation does not assume the provider
+honors abort. Warm invalid JSON drafts are not durable checkpoint content.
+Browser recovery stays invisible when healthy or pending, retries transient
+failures automatically, and warns only for blocked bootstrap or unsaved work at
+risk. Actual project Save success is separate from recovery acknowledgement.
+The focused browser/owner checks are listed in
+[Development](./development.md#node-settings-ownership-regressions).
 
 - The top-level page is the wrapper dashboard. It renders the workflow library, project settings, app settings, runtime libraries, run recordings, an About dialog with the app name and version, and an `<iframe src="/?editor">`. The workflow-library footer keeps its primary utilities in the stable order `Run recordings`, `Run statistics`, and `Settings`; recordings and settings use the established recording and Project settings icon language. Runtime-library administration lives in the dedicated `Settings` tab instead of a second modal.
 - The editor owns the active graph and canvas viewport as project-scoped browser workspace state. It snapshots the latest graph position continuously while a graph is active; Node library and UI-graph canvases never overwrite that snapshot. Navigation is part of the coherent document-local recovery checkpoint, not an independent synchronous `sessionStorage` fragment. The app shell requests a checkpoint on hidden visibility while the page is still alive; non-bfcache `pagehide` flushing is best effort and cannot guarantee completion after the document closes. The one-time workspace restore waits for the storage-backed atoms' post-mount render so it cannot accept atom defaults before hydration. Restoring or reopening an existing hosted tab prefers its valid last-open graph and that graph's saved viewport; the main graph is only a fallback. This state is local editor UI state and is not written into project YAML or treated as a collaborative project edit.

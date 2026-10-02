@@ -152,7 +152,8 @@ Runs the default runtime/package test matrix:
 
 - `yarn workspace @valerypopoff/rivet2-core run test`
 - `yarn workspace @valerypopoff/rivet2-node run test`
-- `yarn workspace @valerypopoff/rivet-app run test`
+- `yarn workspace @valerypopoff/rivet2-evaluations run test`
+- `yarn test:app` (Core ESM prerequisite, TypeScript discovery and explicit TSX batches)
 - `yarn workspace @valerypopoff/rivet-app-executor run test`
 - `yarn workspace @valerypopoff/rivet2-cli run test`
 
@@ -188,7 +189,8 @@ Focused root scripts cover workspace test suites plus repository-level checks:
 
 - `yarn test:core`: `@valerypopoff/rivet2-core`
 - `yarn test:node`: `@valerypopoff/rivet2-node`
-- `yarn test:app`: `@valerypopoff/rivet-app`
+- `yarn test:evaluations`: `@valerypopoff/rivet2-evaluations`
+- `yarn test:app`: App suite through `scripts/ci/run-app-tests.mjs`, including TSX component tests
 - `yarn test:app-executor`: `@valerypopoff/rivet-app-executor`
 - `yarn test:cli`: `@valerypopoff/rivet2-cli`
 - `yarn test:docs`: docs workspace typecheck (`tsc --noEmit`)
@@ -270,16 +272,16 @@ fixture changes require the full Kubernetes gate. The Studio Server aggregate
 accepts a skip only after successful classification explicitly returns `false`;
 a failed classifier or missing decision fails verification.
 
-The App test script lets the Node/tsx test runner discover its test files
-instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
-the runner: expanding the app's full test list exceeds the Windows command-line
-limit before tests can start. `yarn test:app` preserves that full-suite discovery
-locally. CI passes `--shard-index <zero-based-index> --shard-count 4` to the
-root script, which sorts discovered tests and launches only the selected subset
-through a direct Node child process. Do not replace this with shell globbing or
-one expanded full-suite command; every shard must stay deterministic and every
-test must belong to exactly one shard. The explicit shards include `.tsx` tests
-that Node/tsx discovery historically missed. Both App test commands preload
+The root App runner builds Core's ESM prerequisite, then lets Node/tsx discover
+TypeScript tests and runs the missed `.tsx` component tests explicitly in batches
+of at most 32 files. Calling the App workspace's `test` directly does not include
+those TSX tests. Keep discovery internal to the runner: expanding the app's full
+test list exceeds the Windows command-line limit before tests can start. CI passes
+`--shard-index <zero-based-index> --shard-count 4` to the root script, which sorts
+both TypeScript and TSX files and launches only the selected subset through a direct
+Node child process. Every test belongs to exactly one deterministic shard. Use
+the App workspace's `test:files` for a small explicit set, not one expanded
+full-suite shell glob. Both App test commands preload
 `packages/app/scripts/register-test-browser-assets.mjs`, which supplies Node-only
 stand-ins for Vite-managed asset imports and the browser-oriented component
 entry points whose CommonJS shape Node exposes differently from Vite. Its
@@ -842,6 +844,33 @@ contracts, Code-family runtime-permission changes, and wrapper/embedder seams.
 ## CI Workflows
 
 Workflows live under [`.github/workflows/`](../.github/workflows/).
+
+### Develop, staging and main
+
+| Event | Workflows and scope |
+| --- | --- |
+| Push to `develop` | Repository-wide **Build** plus changed-path **Verify Studio Server** |
+| PR into `staging` | **Verify Studio Server** against the proposed merge; no general Build/desktop/Rust matrix |
+| Relevant push to `staging` | **Build Images**, including one reusable Studio Server verifier, four candidate images, Compose smoke and local-upgrade image/Linux-host rehearsals |
+| Push to `main` | Repository-wide **Build**; relevant image changes also run **Build Images** and its applicable release gates |
+
+The PR's displayed source branch can be `develop` while its post-merge image run
+shows `staging`; these are different events and revisions. A staging push does not
+launch a duplicate standalone verifier or desktop application build. It skips the
+managed Kubernetes Kind gate; protected provider/capacity/Evaluation gates are
+explicit manual dispatches, not ordinary staging VM trials. Main image releases
+still apply changed-path Kubernetes classification; tags, schedules and forced
+manual release options have their own gate requirements.
+
+Promotion is gated by verification and candidate rehearsals. Staging publishes
+the staging branch and short-SHA aliases, never `latest` or the durable production
+release pointer. Alias retags are not atomic and are not evidence that a run passed.
+Wait for the intended **Build Images** run to succeed, then use
+`yarn studio-server:staging` from the clean matching staging checkout. It checks
+existing data mounts/volumes, commit labels and immutable digests before recreating
+the current VM stack; it does not start a storage conversion. See
+[the VM procedure](./studio-server/development.md#deploying-a-verified-staging-build-to-a-vm)
+for environment/TLS handling and production-data risks.
 
 ### Shared setup and cache behavior
 

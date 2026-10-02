@@ -8,8 +8,9 @@ contracts, or source layout. User-facing docs live under `packages/docs/docs`.
 For a behavior-preserving refactor, start with the
 [Refactor Baseline And Verification](./REFACTOR-BASELINE.md). It maps ownership,
 observable invariants, regression suites, manual scenarios, and evidence limits.
-The [documentation audit](./DOCUMENTATION-AUDIT.md) records this documentation
-review's scope and remaining verification obligations.
+The [documentation audit](./DOCUMENTATION-AUDIT.md) records the dated review
+baseline, later source reconciliations and remaining verification obligations;
+it is not a certificate that all current runtime/deployment gates passed.
 
 ## Core Docs
 
@@ -46,6 +47,9 @@ review's scope and remaining verification obligations.
 - [Editor Bridge](./studio-server/editor-bridge.md)
 - [Workflow Publication](./studio-server/workflow-publication.md)
 - [Runtime Libraries](./studio-server/runtime-libraries.md)
+- [Local Metadata SQLite Upgrade And Recovery](./studio-server/local-metadata-upgrade.md)
+- [Restored-Backup Rehearsal](./studio-server/local-metadata-backup-rehearsal.md)
+- [VM To Managed PostgreSQL/S3 Migration](./studio-server/vm-to-managed-migration.md)
 - [Published Web-App Browser Storage](./studio-server/web-app-browser-storage.md)
 - [Deployment Status UI](./studio-server/deployment-status.md)
 - [Kubernetes And Operational Gates](./studio-server/kubernetes.md)

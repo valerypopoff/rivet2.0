@@ -90,6 +90,34 @@ Project v4 includes an optional `data` string record for static file/image paylo
 
 The active `projectDataState` is persisted with the workspace's `project` group. Mount it in `RivetAppLoader` before legacy cache recovery, so a clear/hydrate failure cannot make the next reload restore another tab's residual cache. `useLoadStaticData` imports the old cache only when no authoritative payload exists, overlays concurrent edits, and rejects results after any newer activation, including same-project reload. Nonempty legacy cache imports remain dirty until a real save; recovery alone cannot certify that their payload reached the project file. Deferred Monaco cleanup must recheck that the project is still closed both before and after importing the cleanup module; an immediate reopen may be using those models again.
 
+## Node settings ownership regressions
+
+The canonical [editor-session and Monaco contract](../MONACO-EDITOR-SURFACES.md#node-settings-ownership)
+covers cloned project/graph/node IDs, irreversible callback lifetimes, synchronous
+canonical edits and warm-buffer limits. [Workspace state](../EDITOR-WORKSPACE-STATE.md)
+owns activation, dirty baselines and isolated browser recovery; these guarantees
+apply to desktop/custom providers too, not just Studio Server.
+
+Run the focused `NodeEditorSessionContext.test.tsx`, `nodeEditorSession.test.ts`,
+`codeEditorModelCache.test.ts` and `nodeLibrary.test.ts` owner suites, then the App
+typecheck and affected App/web suites. The root `yarn test:app` includes component
+TSX tests; direct workspace `test` alone does not.
+
+For the browser gate, use a fresh production build/preview rather than HMR,
+set `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0` and `PLAYWRIGHT_BASE_URL` to
+that preview, then run:
+
+```sh
+yarn studio-server:ui:observe node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts
+```
+
+Inspect `artifacts/playwright/` for the current run. Tests must retain autofocus
+and check both visible text and saved/recovered node data, including immediate
+switch/Save/close, Undo/Redo while focused, authoritative reload, read-only variants
+and AI completion after switching or cancellation. These browser fixtures mock
+hosted IO and do not certify a production backend or native file dialog. No
+database migration or Kubernetes rehearsal is needed for these editor changes.
+
 ## Setup commands
 
 - `corepack enable`
@@ -194,7 +222,7 @@ compatibility aliases.
 | `yarn studio-server:ui:observe`                                                                                                                                                                                                 | Runs the headed slow-motion Playwright flow against the current hosted app                                                                                                                                               | Watch the browser click through a real scenario                                                                     |
 | `yarn studio-server:ui:observe:debug`                                                                                                                                                                                           | Runs the same flow with Playwright Inspector enabled                                                                                                                                                                     | Step through or pause browser actions                                                                               |
 | `yarn studio-server:ui:observe:report`                                                                                                                                                                                          | Opens the last Playwright HTML report                                                                                                                                                                                    | Review traces, screenshots, and videos after a run                                                                  |
-| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs the narrow headless hosted-editor regression set against a fresh Vite host                                                                                                                                          | Reproduce the CI output-paging and sidebar interaction gate locally after installing Chromium                       |
+| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs headless hosted-editor regressions against a fresh Vite host, including output paging, sidebar, streaming, workspace recovery and node-editor ownership/lifecycles                                                   | Reproduce the current hosted-editor CI browser gate locally after installing Chromium                               |
 
 `yarn studio-server:clean` is intentionally Docker-volume-safe but Docker-host-wide. It first prints the selected Docker context/endpoint, a concise Docker disk summary, and counted stopped-container, custom-network, and image inventories (showing at most 20 rows from each inventory). Docker evaluates the latter two inventories for unused resources only at prune time. Run `yarn studio-server:clean -- --dry-run` to stop there. An interactive terminal must then type `PRUNE`; automation must pass `--confirm-host-prune`. The command rejects remote or unknown endpoints before Docker preflight unless the caller also supplies both `--allow-remote-docker-host` and `--confirm-host-prune`. When it resolves the currently selected context, it pins that context on every later Docker invocation so a concurrent `docker context use` cannot retarget the cleanup. This prevents an inherited Docker context or `DOCKER_HOST` from silently cleaning another machine.
 
