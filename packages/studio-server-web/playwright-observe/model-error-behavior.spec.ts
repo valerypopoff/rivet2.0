@@ -6,7 +6,7 @@ import {
   serializeProject,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 test.use({ actionTimeout: 15_000, navigationTimeout: 30_000 });
 
@@ -50,6 +50,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       return route.fulfill({ json: { path: item.absolutePath, revisionId: `save-${saved.length}` } });
     });
     await page.goto('/');
+    await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await page.locator('.project-row', { hasText: item.name }).dblclick();
     const editor = page.frameLocator('iframe.dashboard-editor-frame');
@@ -90,6 +91,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       catchRequestFailed: true,
     });
     await page.reload();
+    await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await expect(card).toContainText('Catch all failures: Enabled', { timeout: 120_000 });
     await card.locator('.edit-button').dispatchEvent('click');

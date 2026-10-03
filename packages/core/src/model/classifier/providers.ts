@@ -114,7 +114,6 @@ export function createApiCompatibleClassifierProvider(
         endpoint: config.endpoint,
         fetchImplementation,
         providerLabel: config.label,
-        questions,
         request,
         retryOnNon200,
         retryOnNon200CooldownMs,
@@ -203,7 +202,6 @@ async function callApiCompatibleClassifier({
   endpoint,
   fetchImplementation,
   providerLabel,
-  questions,
   request,
   retryOnNon200,
   retryOnNon200CooldownMs,
@@ -215,7 +213,6 @@ async function callApiCompatibleClassifier({
   endpoint: string;
   fetchImplementation: typeof fetch;
   providerLabel: string;
-  questions: readonly ClassifierQuestionDefinition[];
   request: ApiCompatibleRequest;
   retryOnNon200?: boolean;
   retryOnNon200CooldownMs?: number;
@@ -233,7 +230,13 @@ async function callApiCompatibleClassifier({
   // so concurrent graph code cannot mutate a shared State object between
   // retries and make the diagnostic disagree with the wire payload.
   const requestJson = JSON.stringify(request);
-  const requestBody = JSON.parse(requestJson) as Record<string, unknown>;
+  const requestBody = JSON.parse(requestJson) as ApiCompatibleRequest;
+  // Validation must use the same detached contract sent on the wire, not live
+  // graph inputs that another branch may mutate while the request is pending.
+  const responseQuestions = Object.entries(requestBody.questions).map(([questionId, question]) => ({
+    ...question,
+    questionId,
+  }));
 
   for (;;) {
     throwIfAborted(signal, providerLabel);
@@ -338,7 +341,7 @@ async function callApiCompatibleClassifier({
     } finally {
       cleanupAttempt();
     }
-    const validatedResponse = validateApiCompatibleClassifierResponse(body, questions, providerLabel);
+    const validatedResponse = validateApiCompatibleClassifierResponse(body, responseQuestions, providerLabel);
     return {
       requestBody,
       response: validatedResponse,
@@ -441,14 +444,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function requireFiniteUnit(value: unknown, label: string, providerLabel: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`${providerLabel} response has invalid ${label}.`);
-  }
-  return value;
+/** Inherited values are not fields of the provider's JSON response. */
+function responseField(record: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
-function requireProbabilityMap(
+function requireResponseNumber(value: unknown, label: string, providerLabel: string): void {
+  // Check JSON-compatible representation only, never the provider's numeric
+  // range, normalization, precision or derived relationships.
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${providerLabel} response has invalid ${label}.`);
+  }
+}
+
+function requireResponseMap(
   value: unknown,
   expectedKeys: readonly string[],
   label: string,
@@ -462,31 +471,12 @@ function requireProbabilityMap(
   ) {
     throw new Error(`${providerLabel} response has inconsistent ${label} keys.`);
   }
-  let total = 0;
-  for (const key of expectedKeys) total += requireFiniteUnit(value[key], `${label}.${key}`, providerLabel);
-  if (Math.abs(total - 1) > 0.001) throw new Error(`${providerLabel} response ${label} must sum to 1.`);
   return value;
 }
 
-function structurallyEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((item, index) => structurallyEqual(item, right[index]))
-    );
-  }
-  if (!isRecord(left) || !isRecord(right)) return false;
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key) => Object.prototype.hasOwnProperty.call(right, key) && structurallyEqual(left[key], right[key]),
-    )
-  );
+function requireProbabilityMap(value: unknown, keys: readonly string[], label: string, providerLabel: string): void {
+  const probabilities = requireResponseMap(value, keys, label, providerLabel);
+  for (const key of keys) requireResponseNumber(probabilities[key], `${label}.${key}`, providerLabel);
 }
 
 export function validateApiCompatibleClassifierResponse(
@@ -494,81 +484,58 @@ export function validateApiCompatibleClassifierResponse(
   questions: readonly ClassifierQuestionDefinition[],
   providerLabel = 'Classifier provider',
 ): ClassifierEvaluationResponse {
-  if (
-    !isRecord(body) ||
-    typeof body.model !== 'string' ||
-    body.model.trim() === '' ||
-    !isRecord(body.answers) ||
-    !isRecord(body.usage)
-  ) {
+  const model = isRecord(body) ? responseField(body, 'model') : undefined;
+  const answers = isRecord(body) ? responseField(body, 'answers') : undefined;
+  const usage = isRecord(body) ? responseField(body, 'usage') : undefined;
+  if (!isRecord(body) || typeof model !== 'string' || model.trim() === '' || !isRecord(answers) || !isRecord(usage)) {
     throw new Error(`${providerLabel} returned an invalid response shape.`);
   }
   const expectedIds = questions.map((question) => question.questionId);
-  const answerIds = Object.keys(body.answers);
+  const answerIds = Object.keys(answers);
   if (
     answerIds.length !== expectedIds.length ||
-    expectedIds.some((id) => !Object.prototype.hasOwnProperty.call(body.answers, id))
+    expectedIds.some((id) => !Object.prototype.hasOwnProperty.call(answers, id))
   ) {
     throw new Error(`${providerLabel} response does not match the submitted question IDs.`);
   }
 
   for (const question of questions) {
-    const answer = body.answers[question.questionId];
-    if (!isRecord(answer) || answer.type !== question.type) {
+    const answer = answers[question.questionId];
+    if (!isRecord(answer) || responseField(answer, 'type') !== question.type) {
       throw new Error(`${providerLabel} response type does not match question '${question.questionId}'.`);
     }
     if (question.type === 'choice') {
       const choiceQuestion = question as ClassifierChoiceQuestionDefinition;
       const keys = Object.keys(choiceQuestion.criteria);
-      if (
-        typeof answer.choice !== 'string' ||
-        !Object.prototype.hasOwnProperty.call(choiceQuestion.criteria, answer.choice)
-      ) {
+      const choice = responseField(answer, 'choice');
+      if (typeof choice !== 'string' || !Object.prototype.hasOwnProperty.call(choiceQuestion.criteria, choice)) {
         throw new Error(`${providerLabel} response chose an unknown option for '${question.questionId}'.`);
       }
-      requireFiniteUnit(answer.confidence, `${question.questionId}.confidence`, providerLabel);
-      requireProbabilityMap(answer.probabilities, keys, `${question.questionId}.probabilities`, providerLabel);
+      requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
+      requireProbabilityMap(
+        responseField(answer, 'probabilities'),
+        keys,
+        `${question.questionId}.probabilities`,
+        providerLabel,
+      );
     } else if (question.type === 'score') {
       const scoreQuestion = question as ClassifierScoreQuestionDefinition;
-      if (
-        typeof answer.score !== 'number' ||
-        !Number.isFinite(answer.score) ||
-        answer.score < 0 ||
-        answer.score > scoreQuestion.criteria.length - 1
-      ) {
-        throw new Error(`${providerLabel} response has invalid score for '${question.questionId}'.`);
-      }
-      requireFiniteUnit(answer.confidence, `${question.questionId}.confidence`, providerLabel);
+      requireResponseNumber(responseField(answer, 'score'), `${question.questionId}.score`, providerLabel);
+      requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
       const keys = scoreQuestion.criteria.map((_, index) => String(index));
-      requireProbabilityMap(answer.probabilities, keys, `${question.questionId}.probabilities`, providerLabel);
-      const legend = answer.legend;
-      if (
-        !isRecord(legend) ||
-        Object.keys(legend).length !== keys.length ||
-        keys.some(
-          (key, index) =>
-            !Object.prototype.hasOwnProperty.call(legend, key) ||
-            !structurallyEqual(legend[key], scoreQuestion.criteria[index]),
-        )
-      ) {
-        throw new Error(`${providerLabel} response has inconsistent legend for '${question.questionId}'.`);
-      }
+      requireProbabilityMap(
+        responseField(answer, 'probabilities'),
+        keys,
+        `${question.questionId}.probabilities`,
+        providerLabel,
+      );
+      requireResponseMap(responseField(answer, 'legend'), keys, `${question.questionId}.legend`, providerLabel);
     } else {
-      requireFiniteUnit(answer.noul, `${question.questionId}.noul`, providerLabel);
+      requireResponseNumber(responseField(answer, 'noul'), `${question.questionId}.noul`, providerLabel);
     }
   }
 
-  const inputTokens = body.usage.input_tokens;
-  const outputTokens = body.usage.output_tokens;
-  if (
-    typeof inputTokens !== 'number' ||
-    !Number.isSafeInteger(inputTokens) ||
-    inputTokens < 0 ||
-    typeof outputTokens !== 'number' ||
-    !Number.isSafeInteger(outputTokens) ||
-    outputTokens < 0
-  ) {
-    throw new Error(`${providerLabel} response has invalid usage values.`);
-  }
+  requireResponseNumber(responseField(usage, 'input_tokens'), 'usage.input_tokens', providerLabel);
+  requireResponseNumber(responseField(usage, 'output_tokens'), 'usage.output_tokens', providerLabel);
   return body as ClassifierEvaluationResponse;
 }

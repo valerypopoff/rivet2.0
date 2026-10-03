@@ -257,9 +257,11 @@ yarn workspace @valerypopoff/rivet2-core exec tsx --test --test-concurrency=4 te
 PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe model-error-behavior.spec.ts jev-nodes.spec.ts --grep 'Error behavior switches|Classifier cards|legacy Jev'
 ```
 
-The browser regression checks both Error behavior toggles, dynamic ports, body
-summaries, exact saved fields and reload, plus the adjacent Classifier card and
-legacy-Jev editor regressions. Expand collapsed settings sections and click
+The browser regression signs in through `authenticateIfNeeded` when the local UI
+gate is enabled; `RIVET_KEY` must be available to the runner. It checks both Error
+behavior toggles, dynamic ports, body summaries, exact saved fields and reload,
+plus the adjacent Classifier card and legacy-Jev editor regressions. Expand
+collapsed settings sections and click
 visible switch labels rather than the hidden checkbox underneath their styled
 track. Core tests cover the switch matrix, configuration/response failures,
 causal errors, retry recovery, valid 2XX

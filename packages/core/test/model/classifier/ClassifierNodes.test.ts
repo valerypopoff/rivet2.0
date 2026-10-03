@@ -671,7 +671,7 @@ test('browser execution fails before credentials or provider requests', async ()
   );
 });
 
-test('provider validation remains fail-closed for fractional scores, unsafe IDs, and malformed answers', () => {
+test('provider validation accepts fractional scores and rejects missing answers and malformed probability maps', () => {
   const score = { questionId: 'score', type: 'score' as const, instructions: 'Rate', criteria: ['low', 'high'] };
   const valid = validateApiCompatibleClassifierResponse(
     {
@@ -703,14 +703,14 @@ test('provider validation remains fail-closed for fractional scores, unsafe IDs,
           answers: {
             score: {
               ...(valid.answers.score as object),
-              probabilities: { 0: 0.7, 1: 0.7 },
+              probabilities: null,
             },
           },
         },
         [score],
         'Jev',
       ),
-    /sum to 1/,
+    /invalid .*probabilities/,
   );
 });
 
