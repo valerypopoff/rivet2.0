@@ -626,7 +626,33 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
 }
 
 test.describe('Workflow library layout', () => {
-  test('orders the footer actions and shows the requested icons', async ({ page }) => {
+  test('aligns footer labels with indented project text and keeps icons in the left gutter', async ({ page }) => {
+    const rootProject = createStatusProject('published');
+    const project = {
+      ...rootProject,
+      relativePath: `Workflows/${rootProject.fileName}`,
+      absolutePath: `/managed/workflows/Workflows/${rootProject.fileName}`,
+    };
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: {
+          root: '/managed/workflows',
+          sync: { epoch: 'footer-alignment', revision: 0 },
+          projects: [],
+          folders: [
+            {
+              id: 'footer-folder',
+              name: 'Workflows',
+              relativePath: 'Workflows',
+              absolutePath: '/managed/workflows/Workflows',
+              updatedAt: project.updatedAt,
+              folders: [],
+              projects: [project],
+            },
+          ],
+        },
+      }),
+    );
     await page.route('**/?editor', (route) =>
       route.fulfill({
         contentType: 'text/html',
@@ -650,16 +676,31 @@ test.describe('Workflow library layout', () => {
     await expect(recordingsButton.locator('svg')).toHaveCount(1);
     await expect(publishedButton.locator('svg')).toHaveCount(0);
     await expect(settingsButton.locator('svg')).toHaveCount(1);
-    const recordingsLabel = recordingsButton.locator(':scope > span', { hasText: 'Run recordings' });
-    const settingsLabel = settingsButton.locator(':scope > span', { hasText: 'Settings' });
-    await expect(recordingsLabel).toBeVisible();
-    await expect(settingsLabel).toBeVisible();
-    const [recordingsLabelBox, settingsLabelBox] = await Promise.all([
-      recordingsLabel.boundingBox(),
-      settingsLabel.boundingBox(),
-    ]);
-    expect(recordingsLabelBox?.width).toBeGreaterThan(80);
-    expect(settingsLabelBox?.width).toBeGreaterThan(80);
+    await expect(bottomActions.locator('.panel-bottom-button-label')).toHaveCount(4);
+    await page.locator('.workflow-library-panel .folder-row').click();
+    const projectLabel = page.locator('.workflow-library-panel .project-row .label');
+    await expect(projectLabel).toBeVisible();
+    for (const width of [1600, 700]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const projectBox = await projectLabel.boundingBox();
+      expect(projectBox).not.toBeNull();
+      for (const label of await bottomActions.locator('.panel-bottom-button-label').all()) {
+        await expect(label).toBeVisible();
+        const labelBox = await label.boundingBox();
+        expect(labelBox).not.toBeNull();
+        expect(Math.abs(labelBox!.x - projectBox!.x)).toBeLessThanOrEqual(1);
+      }
+      for (const button of [recordingsButton, settingsButton]) {
+        const iconBox = await button.locator('svg').boundingBox();
+        const labelBox = await button.locator('.panel-bottom-button-label').boundingBox();
+        const buttonBox = await button.boundingBox();
+        expect(iconBox).not.toBeNull();
+        expect(labelBox).not.toBeNull();
+        expect(buttonBox).not.toBeNull();
+        expect(iconBox!.x + iconBox!.width).toBeLessThan(labelBox!.x);
+        expect(iconBox!.x).toBeGreaterThanOrEqual(buttonBox!.x);
+      }
+    }
   });
 
   test('trusted clients explains legacy hosts and unavailable client identity', async ({ page }) => {
@@ -743,7 +784,7 @@ test.describe('Workflow library layout', () => {
     await expect(appSettingsTabList).toHaveAttribute('aria-orientation', 'vertical');
     const [generalTabBox, storageTabBox, panelRegionBox] = await Promise.all([
       appSettingsModal.getByRole('tab', { name: 'General' }).boundingBox(),
-      appSettingsModal.getByRole('tab', { name: 'Storage' }).boundingBox(),
+      appSettingsModal.getByRole('tab', { name: 'Storage', exact: true }).boundingBox(),
       appSettingsModal.locator('.app-settings-panel-region').boundingBox(),
     ]);
     expect(generalTabBox).not.toBeNull();
@@ -852,8 +893,8 @@ test.describe('Workflow library layout', () => {
       })
       .toBeGreaterThan(0.9);
 
-    await appSettingsModal.getByRole('tab', { name: 'Storage' }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Storage' })).toHaveAttribute('aria-selected', 'true');
+    await appSettingsModal.getByRole('tab', { name: 'Storage', exact: true }).click();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Storage', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
     await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(1);
     await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute(
@@ -1241,7 +1282,7 @@ test.describe('Workflow library layout', () => {
     await waitForDashboardReady(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const modal = page.getByTestId('app-settings-modal');
-    await modal.getByRole('tab', { name: 'Storage' }).click();
+    await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
     await expect(modal.getByText('Kubernetes deployment storage is managed by the operator.')).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Local folders' })).toBeDisabled();
     await expect(modal.getByLabel('Object storage bucket')).toBeDisabled();

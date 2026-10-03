@@ -265,11 +265,13 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             <Button
               appearance="subtle"
               className="panel-bottom-button project-settings-secondary-button button-size-m"
-              iconBefore={<RecordingIcon aria-hidden="true" />}
               onClick={openRunRecordingsModal}
               title="Browse workflow run recordings and load them into the editor"
             >
-              Run recordings
+              <span className="panel-bottom-button-icon" aria-hidden="true">
+                <RecordingIcon />
+              </span>
+              <span className="panel-bottom-button-label">Run recordings</span>
             </Button>
             {runRecordingsRetained ? (
               <div className="panel-bottom-action-summary">Found: {runRecordingsFoundCount}</div>
@@ -281,7 +283,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             onClick={() => setRunStatisticsOpen(true)}
             title="Compare recorded workflow and web app execution time"
           >
-            Run statistics
+            <span className="panel-bottom-button-label">Run statistics</span>
           </Button>
           <Button
             appearance="subtle"
@@ -289,16 +291,18 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             onClick={() => setPublishedItemsOpen(true)}
             title="Browse published workflow endpoints and web apps"
           >
-            Published
+            <span className="panel-bottom-button-label">Published</span>
           </Button>
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"
-            iconBefore={<SettingsCogIcon aria-hidden="true" />}
             onClick={() => setAppSettingsOpen(true)}
             title="Open app settings"
           >
-            Settings
+            <span className="panel-bottom-button-icon" aria-hidden="true">
+              <SettingsCogIcon />
+            </span>
+            <span className="panel-bottom-button-label">Settings</span>
           </Button>
         </div>
 
