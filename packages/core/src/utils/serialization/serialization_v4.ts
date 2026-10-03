@@ -1,4 +1,5 @@
 import { mapValues } from 'lodash-es';
+import { normalizeSerializedLLMTemperatureData } from '../../model/chat-v2/llmChatV2NodeMigration.js';
 import type {
   NodeGraph,
   Project,
@@ -251,6 +252,7 @@ function fromSerializedGraph(serializedGraph: SerializedGraph): NodeGraph {
 }
 
 function toSerializedNode(node: ChartNode, allNodes: ChartNode[], allConnections: NodeConnection[]): SerializedNode {
+  const data = normalizeSerializedLLMTemperatureData(node.type, node.data);
   const outgoingConnections = allConnections
     .filter((connection) => connection.outputNodeId === node.id)
     .map((connection) => serializeConnection(connection, allNodes))
@@ -262,9 +264,15 @@ function toSerializedNode(node: ChartNode, allNodes: ChartNode[], allConnections
     splitRunMax: node.isSplitRun ? node.splitRunMax : undefined,
     splitRunConcurrency: node.isSplitRun ? node.splitRunConcurrency : undefined,
     isSplitSequential: node.isSplitSequential ? true : undefined,
-    data: Object.keys(node.data ?? {}).length > 0 ? node.data : undefined,
+    data: Object.keys(data ?? {}).length > 0 ? data : undefined,
     outgoingConnections: outgoingConnections.length > 0 ? outgoingConnections : undefined,
-    variants: (node.variants?.length ?? 0) > 0 ? node.variants : undefined,
+    variants:
+      (node.variants?.length ?? 0) > 0
+        ? node.variants!.map((variant) => ({
+            ...variant,
+            data: normalizeSerializedLLMTemperatureData(node.type, variant.data),
+          }))
+        : undefined,
     disabled: node.disabled ? true : undefined,
     isConditional: node.isConditional,
   };

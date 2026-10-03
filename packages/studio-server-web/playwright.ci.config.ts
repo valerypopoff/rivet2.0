@@ -16,6 +16,7 @@ export default defineConfig({
     'project-tree-activation.spec.ts',
     'node-editor-ownership.spec.ts',
     'node-editor-lifecycle.spec.ts',
+    'llm-temperature.spec.ts',
   ],
   timeout: 180_000,
   expect: {

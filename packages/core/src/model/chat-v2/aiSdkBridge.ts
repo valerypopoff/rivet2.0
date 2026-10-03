@@ -11,6 +11,7 @@ import type {
 } from './chatV2Types.js';
 import { ChatV2ProviderTimeoutError } from './chatV2Types.js';
 import { isChatV2StructuredResponseFormat } from './chatV2ResponseFormat.js';
+import { normalizeTemperature } from './temperature.js';
 
 type GenerateTextArgs = Parameters<typeof generateText>[0];
 type GenerateStepToolCall = NonNullable<ChatV2GenerateHandle['toolCalls']>[number];
@@ -182,7 +183,8 @@ function buildTextArgs(options: StreamChatV2Options): Parameters<typeof streamTe
 
   if (options.tools !== undefined) args.tools = options.tools;
   if (options.maxTokens !== undefined) args.maxOutputTokens = options.maxTokens;
-  if (options.temperature !== undefined) args.temperature = options.temperature;
+  const temperature = normalizeTemperature(options.temperature);
+  if (temperature !== undefined) args.temperature = temperature;
   if (options.topP !== undefined) args.topP = options.topP;
   if (options.topK !== undefined) args.topK = options.topK;
   if (options.presencePenalty !== undefined) args.presencePenalty = options.presencePenalty;
@@ -251,11 +253,11 @@ async function* streamWithDeadlines(
       const kind = hasUsefulOutput ? 'stream-inactivity' : 'first-output';
       const configuredTimeout = hasUsefulOutput ? options.streamInactivityTimeoutMs : options.firstOutputTimeoutMs;
       const timeoutMs =
-        configuredTimeout == null
-          ? undefined
-          : Math.max(1, configuredTimeout - (Date.now() - lastUsefulOutputAt));
+        configuredTimeout == null ? undefined : Math.max(1, configuredTimeout - (Date.now() - lastUsefulOutputAt));
       const timeout =
-        timeoutMs == null ? undefined : timeoutPromise<IteratorResult<ChatV2StreamPart>>(timeoutMs, kind, options.onTimeout);
+        timeoutMs == null
+          ? undefined
+          : timeoutPromise<IteratorResult<ChatV2StreamPart>>(timeoutMs, kind, options.onTimeout);
       let next: IteratorResult<ChatV2StreamPart>;
       try {
         next = await (timeout == null ? iterator.next() : Promise.race([iterator.next(), timeout.promise]));
@@ -292,11 +294,7 @@ async function waitForGeneratedResponse(
   options: StreamChatV2Options,
 ): Promise<ChatV2GenerateHandle> {
   if (options.firstOutputTimeoutMs == null) return await executorPromise;
-  const timeout = timeoutPromise<ChatV2GenerateHandle>(
-    options.firstOutputTimeoutMs,
-    'first-output',
-    options.onTimeout,
-  );
+  const timeout = timeoutPromise<ChatV2GenerateHandle>(options.firstOutputTimeoutMs, 'first-output', options.onTimeout);
   try {
     return await Promise.race([executorPromise, timeout.promise]);
   } finally {
@@ -304,10 +302,7 @@ async function waitForGeneratedResponse(
   }
 }
 
-async function waitForPostResponseFinalization<T>(
-  finalization: Promise<T>,
-  options: StreamChatV2Options,
-): Promise<T> {
+async function waitForPostResponseFinalization<T>(finalization: Promise<T>, options: StreamChatV2Options): Promise<T> {
   const timeoutMs = options.streamInactivityTimeoutMs ?? options.firstOutputTimeoutMs;
   if (timeoutMs == null) return await finalization;
   const timeout = timeoutPromise<T>(
@@ -345,10 +340,7 @@ async function resolveGenerateUsage(result: ChatV2GenerateHandle) {
   return (await resolveOptionalValue(result.totalUsage)) ?? (await resolveOptionalValue(result.usage));
 }
 
-function notifyResponseReceived(
-  options: StreamChatV2Options,
-  response: ChatV2ResponseEvidence,
-): void {
+function notifyResponseReceived(options: StreamChatV2Options, response: ChatV2ResponseEvidence): void {
   try {
     options.onResponseReceived?.(response);
   } catch {
@@ -401,8 +393,7 @@ async function executeStream(
   const responseText = isStructuredOutput
     ? collapseRepeatedStructuredJsonText(streamed.responseText)
     : streamed.responseText;
-  const usagePromise =
-    streamed.usage != null ? Promise.resolve(streamed.usage) : resolveOptionalValue(handle.usage);
+  const usagePromise = streamed.usage != null ? Promise.resolve(streamed.usage) : resolveOptionalValue(handle.usage);
   let evidence: ChatV2ResponseEvidence = {
     text: responseText,
     functionCalls: streamed.functionCalls,

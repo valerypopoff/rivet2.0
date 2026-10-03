@@ -1,9 +1,10 @@
-import { Field, HelperMessage } from '@atlaskit/form';
+import { ErrorMessage, Field, HelperMessage } from '@atlaskit/form';
 import TextField from '@atlaskit/textfield';
 import { type ChartNode, type NumberEditorDefinition } from '@valerypopoff/rivet2-core';
-import { type FC } from 'react';
+import { type FC, useLayoutEffect, useRef, useState } from 'react';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { getHelperMessage } from './editorUtils';
+import { resolveNumberEditorChange } from './numberEditorValue';
 
 export const DefaultNumberEditor: FC<
   SharedEditorProps & {
@@ -76,8 +77,20 @@ export const NumberEditor: FC<{
   storageMultiplier = 1,
 }) => {
   const toDisplayValue = (storedValue: number | undefined): number | undefined =>
-    storedValue == null ? undefined : storedValue / storageMultiplier;
-  const toStoredValue = (displayValue: number): number => Math.round(displayValue * storageMultiplier);
+    storedValue == null || !Number.isFinite(storedValue) ? undefined : storedValue / storageMultiplier;
+  const displayValue = toDisplayValue(value ?? defaultValue);
+  const [draft, setDraft] = useState(String(displayValue ?? ''));
+  const [invalid, setInvalid] = useState(false);
+  const pendingAcknowledgement = useRef<{ value: number | undefined } | null>(null);
+  useLayoutEffect(() => {
+    const pending = pendingAcknowledgement.current;
+    pendingAcknowledgement.current = null;
+    // A typing acknowledgement must not canonicalize a still-edited "0.10"
+    // into "0.1". External changes (including Undo/Redo) still replace the draft.
+    if (pending && Object.is(pending.value, displayValue)) return;
+    setDraft(String(displayValue ?? ''));
+    setInvalid(false);
+  }, [displayValue]);
 
   return (
     <Field name={name ?? label} label={label} isDisabled={isDisabled}>
@@ -90,14 +103,38 @@ export const NumberEditor: FC<{
             min={toDisplayValue(min)}
             max={toDisplayValue(max)}
             step={toDisplayValue(step)}
-            defaultValue={toDisplayValue(value ?? defaultValue)}
+            value={draft}
+            isInvalid={invalid}
             isReadOnly={isReadonly}
             autoFocus={autoFocus}
-            onChange={(e) => {
-              if (allowEmpty && (e.target as HTMLInputElement).value === '') {
-                onChange(undefined);
-              } else {
-                onChange(toStoredValue((e.target as HTMLInputElement).valueAsNumber));
+            onInput={(e) => {
+              const input = e.target as HTMLInputElement;
+              setDraft(input.value);
+              const change = resolveNumberEditorChange(
+                input.value,
+                input.valueAsNumber,
+                allowEmpty === true,
+                storageMultiplier,
+                input.validity.badInput,
+              );
+              setInvalid(!change.valid);
+              if (change.valid) {
+                pendingAcknowledgement.current = { value: toDisplayValue(change.value ?? defaultValue) };
+                onChange(change.value);
+              }
+            }}
+            onBlur={(e) => {
+              fieldProps.onBlur?.();
+              pendingAcknowledgement.current = null;
+              // Parents may clamp/reject an edit without changing their stored
+              // value, so an effect alone cannot reconcile that valid draft.
+              if (displayValue !== undefined || allowEmpty) {
+                const restored = String(displayValue ?? '');
+                // An invalid native draft may already expose value="". Reset
+                // it explicitly even when React's controlled value is unchanged.
+                e.currentTarget.value = restored;
+                setDraft(restored);
+                setInvalid(false);
               }
             }}
             onKeyDown={(e) => {
@@ -106,6 +143,9 @@ export const NumberEditor: FC<{
               }
             }}
           />
+          {invalid && (
+            <ErrorMessage>Enter a finite number{allowEmpty ? ' or leave this field blank' : ''}.</ErrorMessage>
+          )}
         </>
       )}
     </Field>

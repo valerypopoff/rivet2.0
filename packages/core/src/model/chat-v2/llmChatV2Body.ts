@@ -98,7 +98,7 @@ function getOptionalNumberBodyField(
     return { label, value: '(Using Input)' };
   }
 
-  return value === undefined ? undefined : { label, value: `${value}` };
+  return value == null || !Number.isFinite(value) ? undefined : { label, value: `${value}` };
 }
 
 function getOptionalStringBodyField(label: string, value: unknown, usesInput: boolean): LLMChatV2BodyField | undefined {
@@ -330,7 +330,7 @@ function getParameterBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
 
   return [
     ...(reasoningEffort ? [{ label: 'Reasoning effort', value: reasoningEffort }] : []),
-    { label: 'Temperature', value: data.useTemperatureInput ? '(Using Input)' : `${data.temperature}` },
+    getOptionalNumberBodyField('Temperature', data.temperature, data.useTemperatureInput),
     { label: 'Max output tokens', value: data.useMaxTokensInput ? '(Using Input)' : `${data.maxTokens}` },
     getOptionalNumberBodyField('Top P', data.topP, data.useTopPInput),
     getOptionalNumberBodyField('Top K', data.topK, data.useTopKInput),

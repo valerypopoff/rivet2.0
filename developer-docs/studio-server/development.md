@@ -504,6 +504,35 @@ Current behavior:
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
+- `llm-temperature.spec.ts` uses two projects with cloned graph/node IDs and
+  mocked workflow storage to cover incomplete exponent input, sequential typing
+  with trailing zeroes, decimal/zero precision, clearing optional
+  Temperature, immediate saves and tab switching, required-field invalid drafts,
+  Undo/Redo, settings close/reopen and committed unsaved recovery after reload.
+  Legacy saved variants load as empty read-only Temperature without making the
+  project dirty; returning to current settings retains the current value.
+  It also verifies rounded unit conversion and parent-clamped values after blur,
+  including rejection that leaves the stored value unchanged, and Prompt Designer's
+  actual preview requests against an owned loopback-only mock provider, cloned
+  attachment identities and restarting/closing a delayed preview.
+  Run headlessly with `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`, and
+  `yarn studio-server:ui:observe llm-temperature.spec.ts` against the current
+  checkout. Core's `test/model/chat-v2/temperature.test.ts` covers profile
+  normalization, historical repair, input validation, serialization and both
+  SDK transports including actual mocked provider wire bodies. Legacy YAML
+  tests inject `null` and `.nan` after serialization and verify repair on load
+  for main node data, saved variants and node-library source variants. A full
+  Profile → JSON recovery → Chat pipeline check also proves an unset value is
+  omitted from requests instead of resurrecting Chat's creation default. App's
+  `src/components/editors/numberEditorValue.test.ts` covers optional/required
+  blanks, fractional precision, integer unit conversion and overflow. These
+  checks are supplemented by
+  `src/components/promptDesigner/usePromptDesignerRunActions.test.tsx`, which
+  holds settings lookups and transport responses past restart, attachment
+  change and unmount (including A → B → A and a transport ignoring abort).
+  Only the current request may update the result or clear its progress state.
+  All these tests use no real provider credentials or production project writes. The
+  Temperature browser scenarios are also included in the CI browser gate.
 - `watch-conditional-remote.spec.ts` runs a real Node processor and debugger
   WebSocket against the hosted editor with a controlled local LLM stream. It
   covers a conditional producing Subgraph feeding two calls to the same Watch

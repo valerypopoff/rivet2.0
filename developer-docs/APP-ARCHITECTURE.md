@@ -911,6 +911,12 @@ Current responsibilities:
 - `usePromptDesignerAttachedNode`
 - `usePromptDesignerRunActions`
 - `PromptDesignerConfigPanel`
+  reuses the shared numeric editor for Temperature and output-token drafts.
+  Blank Temperature means provider default, including the preview request; zero
+  and decimals are preserved. Invalid numeric drafts never enter configuration.
+  Blur reconciles the displayed draft with the stored value, even if a parent's
+  clamp rejected an edit without changing that value; it never adds another edit.
+  Text events capture their values before scheduling functional state updates.
 - `PromptDesignerMessageList`
 - `PromptDesignerResponsePane`
 - `PromptDesignerComponents`
@@ -919,7 +925,16 @@ Current architectural detail:
 
 - [`packages/app/src/components/PromptDesigner.tsx`](../packages/app/src/components/PromptDesigner.tsx) now acts as the overlay shell and high-level coordinator
 - attached-node syncing and config hydration live in [`packages/app/src/components/promptDesigner/usePromptDesignerAttachedNode.ts`](../packages/app/src/components/promptDesigner/usePromptDesignerAttachedNode.ts)
+  and use project/graph/node/run identity, not node ID alone. Changing attachment
+  resets numeric drafts and messages; missing historical inputs do not retain
+  another attachment's prompts. Reopening the same attachment preserves its
+  ephemeral preview configuration.
 - ad-hoc run orchestration and abort handling live in [`packages/app/src/components/promptDesigner/usePromptDesignerRunActions.ts`](../packages/app/src/components/promptDesigner/usePromptDesignerRunActions.ts)
+  and are fenced by the current request and attachment lifetime. Closing,
+  switching attachment or starting a newer preview retires the old request;
+  late results cannot change the response or clear the newer run's progress.
+  The preview action stays available as **Restart preview** while running, with
+  inline progress feedback rather than cancellation-error notifications.
 - the left and center panes are rendered through [`packages/app/src/components/promptDesigner/PromptDesignerMessageList.tsx`](../packages/app/src/components/promptDesigner/PromptDesignerMessageList.tsx) and [`packages/app/src/components/promptDesigner/PromptDesignerResponsePane.tsx`](../packages/app/src/components/promptDesigner/PromptDesignerResponsePane.tsx)
 - **Open in Evaluations** is the only repeated-testing surface. It keeps prompt tuning from owning a second suite, sampling, evaluator, and reporting implementation. Evaluation suites target complete graphs, bind named dataset inputs, and use the current graph snapshot when they run.
 

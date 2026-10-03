@@ -49,6 +49,48 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                |
 | `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                  |
 
+## LLM numeric settings
+
+LLM Chat and LLM Profile share optional Temperature semantics: blank means use
+the provider default. The node body omits an unset Temperature and SDK request
+construction omits the argument; explicit zero and finite decimals are preserved.
+The creation default remains `0.5`, but profile normalization must not reintroduce
+that default into a saved/recovered profile with a missing Temperature. Historical
+`null` and `NaN` values are treated as unset at the node-specific deserialization,
+profile and execution boundaries, including JSON recovery that bypasses project
+deserialization. Compatibility reads do not automatically rewrite server files.
+Normal Save/export repairs untouched legacy recovery data and saved variants
+without mutating the live editor snapshot or its dirty baseline.
+Compatibility project/graph reads also normalize saved variant payloads and
+node-library source variants, before those values can be selected in the editor.
+Malformed supplied inputs fail before making a provider request; absent inputs
+retain the configured-value fallback when input mode is enabled.
+
+The shared numeric editor commits optional blanks as `undefined`, keeps invalid
+required-field drafts out of node data, and synchronizes external changes such as
+Undo/Redo. Ordinary numbers retain fractional precision. Explicit display-unit
+conversion (for example seconds to integer milliseconds via `storageMultiplier`)
+continues to round the converted storage value. Temporary drafts belong to the
+existing project/graph/node/field editor owner, not a shared cross-tab buffer.
+Browser `badInput` is distinguished from a deliberate blank, so incomplete
+numbers such as `1e` never clear an optional setting. Typing acknowledgements
+preserve the local spelling (including trailing zeroes); authoritative external
+changes still synchronize the draft.
+The editor observes native input events: React change events can suppress an
+incomplete number when the exposed value remains empty.
+Blurring an invalid optional draft restores its authoritative value, including
+an unset blank, rather than leaving an error on an otherwise valid setting.
+All numeric fields synchronize to the actual stored value on blur, including
+rounded unit conversions and parent-clamped/rejected edits that leave the stored
+value unchanged. Typing retains its spelling until then; blur does not write
+another edit. Prompt Designer reuses this numeric editor rather than maintaining a
+second interpretation of blank Temperature; its settings remain an ephemeral
+preview configuration, not edits to the attached graph node.
+Preview attachment identity includes project, graph, node and run, so copied node
+IDs cannot carry preview drafts or prompts into another project's attachment.
+Preview requests are also scoped to that attachment and current request: retired
+callbacks cannot publish partial/final responses, errors or completion state.
+
 ## Message flow
 
 The bridge's dashboard command lane is ordered; it is not the shared App's

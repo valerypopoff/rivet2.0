@@ -66,7 +66,7 @@ export function resolveLLMProfileNodeValue(params: {
     ...data,
     model,
     useModelInput: false,
-    temperature: generation.temperature ?? data.temperature,
+    temperature: generation.temperature,
     useTemperatureInput: false,
     maxTokens: generation.maxTokens ?? data.maxTokens,
     useMaxTokensInput: false,

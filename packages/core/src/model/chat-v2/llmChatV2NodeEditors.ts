@@ -315,9 +315,10 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
       {
         type: 'number',
         label: 'Temperature',
-        helperMessage: 'Provider-dependent; some reasoning models may ignore this setting.',
+        helperMessage: 'Leave blank to use the provider default. Some reasoning models may ignore this setting.',
         dataKey: 'temperature',
         useInputToggleDataKey: 'useTemperatureInput',
+        allowEmpty: true,
         min: 0,
         max: 2,
         step: 0.1,
