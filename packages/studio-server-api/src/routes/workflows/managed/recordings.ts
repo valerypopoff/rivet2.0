@@ -592,6 +592,9 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       const normalizedPage = Math.max(1, Math.floor(page));
       const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
       const offset = (normalizedPage - 1) * normalizedPageSize;
+      // Empty workflow ID represents the all-workflow scope, never a stored ID.
+      // Keep its bound parameter so cursor/limit placeholders use the same positions in both scopes.
+      const workflowClause = workflowId ? 'workflow_id = $1' : '$1::text IS NOT NULL';
       const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
       const inputAfterCursor = inputFilter
         ? parseWorkflowRecordingInputAfter(inputAfter, { workflowId, statusFilter, filter: inputFilter })
@@ -601,7 +604,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         ? null
         : await deps.queryOne<{ total_runs: number }>(
             deps.pool,
-            `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE workflow_id = $1 ${filterClause}`,
+            `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE ${workflowClause} ${filterClause}`,
             [workflowId],
           );
       const loadWindow = async (after: string | undefined, legacyOffset: number, queryLimit: number) => {
@@ -625,7 +628,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
                  TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                    AS recording_cursor_created_at
           FROM workflow_recordings
-          WHERE workflow_id = $1 ${filterClause} ${inputAfterClause}
+          WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
           ORDER BY created_at DESC, recording_id DESC
           LIMIT ${limitParameter} OFFSET ${offsetParameter}
         `,

@@ -80,6 +80,10 @@
   overflow: hidden;
 }
 
+.run-recordings-details-any {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .run-recordings-workflow-summary,
 .run-recordings-runs-panel {
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -772,17 +776,36 @@
     max-height: calc(100vh - 20px);
   }
 
+  [data-testid='run-recordings-modal--body'] {
+    overflow-y: auto;
+  }
+
   .run-recordings-help {
     max-width: none;
   }
 
   .run-recordings-shell {
-    max-height: 100%;
+    flex: 0 0 auto;
+    max-height: none;
+  }
+
+  .run-recordings-content {
+    flex: 0 0 auto;
+  }
+
+  .run-recordings-content,
+  .run-recordings-layout,
+  .run-recordings-details {
+    overflow: visible;
   }
 
   .run-recordings-layout,
   .run-recordings-details {
     grid-template-rows: auto auto;
+  }
+
+  .run-recordings-details-any {
+    grid-template-rows: auto;
   }
 
   .run-recordings-workflow-fields {

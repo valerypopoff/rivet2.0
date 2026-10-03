@@ -356,7 +356,7 @@ function VirtualizedRecordingList({
 }
 
 type RecordingRunsTableProps = {
-  selectedWorkflow: WorkflowRecordingWorkflowSummary;
+  selectedWorkflow: WorkflowRecordingWorkflowSummary | null;
   selectedWorkflowEndpoint: string;
   selectedWorkflowStatusLabel: string;
   overallRunsCount: number;
@@ -456,30 +456,32 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
     : null;
 
   return (
-    <section className="run-recordings-details">
-      <div className="run-recordings-workflow-summary">
-        <div className="run-recordings-workflow-heading-row">
-          <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
-            {selectedWorkflowStatusLabel}
-          </span>
-          <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
-        </div>
+    <section className={`run-recordings-details${selectedWorkflow ? '' : ' run-recordings-details-any'}`}>
+      {selectedWorkflow ? (
+        <div className="run-recordings-workflow-summary">
+          <div className="run-recordings-workflow-heading-row">
+            <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
+              {selectedWorkflowStatusLabel}
+            </span>
+            <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
+          </div>
 
-        <div className="run-recordings-workflow-fields">
-          <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
-            <div className="run-recordings-field-label">Endpoint</div>
-            <div className="run-recordings-field-value run-recordings-field-code">
-              {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+          <div className="run-recordings-workflow-fields">
+            <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
+              <div className="run-recordings-field-label">Endpoint</div>
+              <div className="run-recordings-field-value run-recordings-field-code">
+                {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+              </div>
             </div>
-          </div>
-          <div className="run-recordings-workflow-field">
-            <div className="run-recordings-field-label">Project path</div>
-            <div className="run-recordings-field-value run-recordings-field-code">
-              {selectedWorkflow.project.relativePath}
+            <div className="run-recordings-workflow-field">
+              <div className="run-recordings-field-label">Project path</div>
+              <div className="run-recordings-field-value run-recordings-field-code">
+                {selectedWorkflow.project.relativePath}
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="run-recordings-runs-panel">
         <div className="run-recordings-runs-header">

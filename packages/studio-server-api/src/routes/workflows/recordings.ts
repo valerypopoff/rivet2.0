@@ -25,6 +25,7 @@ import type {
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
+import { sumWorkflowRecordingCounts } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import {
   countWorkflowRecordingRuns,
@@ -468,7 +469,7 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
   });
 
   scheduleWorkflowRecordingIndexRepair(recordingsRoot);
-  return { workflows };
+  return { workflows, totals: sumWorkflowRecordingCounts(recordingWorkflows) };
 }
 
 export async function listWorkflowRecordingRunsPage(

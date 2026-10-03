@@ -72,6 +72,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     inputFilterError,
     deletingRecordingId,
     overallRunsCount,
+    allWorkflowsRunsCount,
     badRunsCount,
     filteredRunsCount,
     totalPages,
@@ -107,8 +108,16 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   }, [isOpen, resetToken]);
 
   const workflowOptions = useMemo<RecordingWorkflowOption[]>(
-    () =>
-      workflows.map((workflow) => {
+    () => [
+      {
+        label: 'Any',
+        value: '',
+        description: 'Runs across all workflows',
+        endpoint: '',
+        statusLabel: '',
+        recordingCount: allWorkflowsRunsCount,
+      },
+      ...workflows.map((workflow) => {
         const endpoint = getWorkflowEndpoint(workflow);
         const statusLabel = getWorkflowProjectStatusLabel(workflow.project.settings.status);
 
@@ -123,7 +132,8 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
           statusLabel,
         };
       }),
-    [workflows],
+    ],
+    [allWorkflowsRunsCount, workflows],
   );
 
   const selectedWorkflowEndpoint = selectedWorkflow ? getWorkflowEndpoint(selectedWorkflow) : '';
@@ -179,7 +189,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               <div className="project-settings-modal-heading run-recordings-heading">
                 <div className="project-settings-modal-title run-recordings-title">Run recordings</div>
                 <div className="run-recordings-help">
-                  Choose a workflow, inspect its published run history, and open any recording in the editor.
+                  Choose Any or a workflow, filter its run history, and open any recording in the editor.
                 </div>
               </div>
               <button
@@ -201,11 +211,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
 
               {workflowsLoading ? <div className="run-recordings-empty-state">Loading recordings...</div> : null}
 
-              {!workflowsLoading && workflows.length === 0 ? (
-                <div className="run-recordings-empty-state">No published or previously published workflows yet.</div>
-              ) : null}
-
-              {!workflowsLoading && workflows.length > 0 ? (
+              {!workflowsLoading ? (
                 <div className="run-recordings-layout">
                   <RecordingWorkflowSelect
                     workflowOptions={workflowOptions}
@@ -216,7 +222,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                     }}
                   />
 
-                  {selectedWorkflow ? (
+                  {selectedWorkflow || !selectedWorkflowId ? (
                     <RecordingRunsTable
                       selectedWorkflow={selectedWorkflow}
                       selectedWorkflowEndpoint={selectedWorkflowEndpoint}

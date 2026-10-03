@@ -424,6 +424,72 @@ test('workflow recording runs endpoint paginates and filters failed runs server-
   });
 });
 
+test('all-workflow recordings paginate, filter status and search inputs with scope-bound continuations', async () => {
+  const ids: string[] = [];
+  const projectPaths: string[] = [];
+  for (const [index, status] of (['succeeded', 'failed', 'suspicious'] as const).entries()) {
+    const item = await workflowMutations.createWorkflowProjectItem('', `Any ${index}`);
+    const [project, attached] = await rivetNode.loadProjectAndAttachedDataFromFile(item.absolutePath);
+    ids.push(project.metadata.id!);
+    projectPaths.push(item.absolutePath);
+    await workflowRecordings.persistWorkflowExecutionRecording({
+      workflowsRoot,
+      sourceProject: project,
+      sourceProjectPath: item.absolutePath,
+      executedProject: project,
+      executedAttachedData: attached,
+      executedDatasets: [],
+      endpointName: `any-${index}`,
+      runKind: 'editor',
+      status,
+      durationMs: index,
+      recordingSerialized: JSON.stringify({
+        version: 1,
+        strings: {},
+        assets: {},
+        recording: {
+          events: [{ type: 'start', data: { inputs: { input: { type: 'any', value: { match: true } } } } }],
+        },
+      }),
+    });
+  }
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const get = async (query: string) =>
+      readJson<import('../../../studio-server-shared/workflow-recording-types.js').WorkflowRecordingRunsPageResponse>(
+        await fetch(`${apiBaseUrl}/recordings/runs?${query}`),
+      );
+    const first = await get('page=1&pageSize=2&status=all');
+    const second = await get('page=2&pageSize=2&status=all');
+    assert.equal(first.workflowId, '');
+    assert.equal(first.totalRuns, 3);
+    assert.equal(first.runs.length, 2);
+    assert.equal(second.runs.length, 1);
+    assert.deepEqual(new Set([...first.runs, ...second.runs].map((run) => run.workflowId)), new Set(ids));
+    const bad = await get('status=failed');
+    assert.equal(bad.totalRuns, 2);
+    assert.deepEqual(new Set(bad.runs.map((run) => run.status)), new Set(['failed', 'suspicious']));
+    const query = new URLSearchParams({ pageSize: '1', inputPath: '$.match', inputOperator: '==', inputValue: 'true' });
+    const matches = await get(String(query));
+    assert.equal(matches.runs.length, 1);
+    assert.ok(matches.nextInputAfter);
+    query.set('inputAfter', matches.nextInputAfter);
+    const next = await get(String(query));
+    assert.equal(next.runs.length, 1);
+    assert.notEqual(next.runs[0]!.id, matches.runs[0]!.id);
+    const wrongScope = await fetch(`${apiBaseUrl}/recordings/workflows/${ids[0]}/runs?${query}`);
+    assert.equal(wrongScope.status, 400);
+
+    // Host-side removal leaves a retained recording without a tree entry.
+    await fs.unlink(projectPaths[2]!);
+    const catalog = await readJson<
+      import('../../../studio-server-shared/workflow-recording-types.js').WorkflowRecordingWorkflowListResponse
+    >(await fetch(`${apiBaseUrl}/recordings/workflows`));
+    assert.equal(catalog.workflows.length, 2);
+    assert.deepEqual(catalog.totals, { totalRuns: 3, failedRuns: 1, suspiciousRuns: 1 });
+    assert.equal((await get('status=all')).totalRuns, 3);
+  });
+});
+
 test('workflow recording classification marks control-flow-excluded outputs as suspicious', () => {
   assert.equal(
     workflowExecution.getWorkflowRecordingStatusFromOutputs({

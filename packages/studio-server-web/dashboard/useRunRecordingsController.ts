@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { sumWorkflowRecordingCounts } from '../../studio-server-shared/workflow-recording-types';
 import {
   deleteWorkflowRecording as deleteWorkflowRecordingRequest,
   fetchWorkflowRecordingRuns,
@@ -21,16 +22,15 @@ type InputSearchProgress = {
 };
 
 function getAvailableInputSearchRuns(
-  selectedWorkflow: WorkflowRecordingWorkflowListResponse['workflows'][number] | null,
+  response: WorkflowRecordingWorkflowListResponse | null,
+  workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
 ): number {
-  if (!selectedWorkflow) {
-    return 0;
-  }
-
-  return statusFilter === 'failed'
-    ? selectedWorkflow.failedRuns + selectedWorkflow.suspiciousRuns
-    : selectedWorkflow.totalRuns;
+  const counts = workflowId
+    ? response?.workflows.find((workflow) => workflow.workflowId === workflowId)
+    : response?.totals ?? sumWorkflowRecordingCounts(response?.workflows ?? []);
+  if (!counts) return 0;
+  return statusFilter === 'failed' ? counts.failedRuns + counts.suspiciousRuns : counts.totalRuns;
 }
 
 function getNextInputSearchProgress(
@@ -38,13 +38,16 @@ function getNextInputSearchProgress(
   response: WorkflowRecordingRunsPageResponse,
 ): InputSearchProgress {
   const responseAnalyzedRuns = response.inputSearchAnalyzedRuns ?? response.nextInputCursor;
-  const analyzedRuns = response.hasMore
-    ? Math.max(currentProgress.analyzedRuns, responseAnalyzedRuns ?? currentProgress.analyzedRuns)
-    : currentProgress.availableRuns;
+  const analyzedRuns = Math.max(
+    currentProgress.analyzedRuns,
+    responseAnalyzedRuns ?? (response.hasMore ? currentProgress.analyzedRuns : currentProgress.availableRuns),
+  );
 
   return {
-    ...currentProgress,
-    analyzedRuns: Math.min(currentProgress.availableRuns, analyzedRuns),
+    // Catalog counts are an estimate, not a frozen search snapshot. Use the
+    // scanner's cumulative count once it reaches the end of its keyset.
+    availableRuns: response.hasMore ? Math.max(currentProgress.availableRuns, analyzedRuns) : analyzedRuns,
+    analyzedRuns,
   };
 }
 
@@ -70,7 +73,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const [deletingRecordingId, setDeletingRecordingId] = useState<string | null>(null);
   const inputSearchAbortControllerRef = useRef<AbortController | null>(null);
   const inputSearchSeenIdsRef = useRef(new Set<string>());
-  const selectedWorkflowRef = useRef<WorkflowRecordingWorkflowListResponse['workflows'][number] | null>(null);
+  const workflowsRef = useRef<WorkflowRecordingWorkflowListResponse | null>(null);
   const runsRequestVersionRef = useRef(0);
   const deletionRequestRef = useRef<object | null>(null);
 
@@ -162,16 +165,11 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   }, [isOpen, loadWorkflowRecordingWorkflows, workflowsResponse]);
 
   const workflows = useMemo(() => workflowsResponse?.workflows ?? [], [workflowsResponse]);
+  const workflowsReady = workflowsResponse !== null;
 
   useEffect(() => {
-    if (workflows.length === 0) {
+    if (selectedWorkflowId && !workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) {
       setSelectedWorkflowId('');
-      setPage(1);
-      return;
-    }
-
-    if (!workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) {
-      setSelectedWorkflowId(workflows[0]!.workflowId);
       setPage(1);
     }
   }, [selectedWorkflowId, workflows]);
@@ -182,14 +180,14 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   );
 
   useEffect(() => {
-    selectedWorkflowRef.current = selectedWorkflow;
-  }, [selectedWorkflow]);
+    workflowsRef.current = workflowsResponse;
+  }, [workflowsResponse]);
 
   useEffect(() => {
     const requestVersion = ++runsRequestVersionRef.current;
     deletionRequestRef.current = null;
     setDeletingRecordingId(null);
-    if (!selectedWorkflowId) {
+    if (!workflowsReady) {
       setInputSearchProgress(null);
       return;
     }
@@ -208,7 +206,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       setInputSearchStatus('searching');
       setInputSearchProgress({
         analyzedRuns: 0,
-        availableRuns: getAvailableInputSearchRuns(selectedWorkflowRef.current, statusFilter),
+        availableRuns: getAvailableInputSearchRuns(workflowsRef.current, selectedWorkflowId, statusFilter),
       });
 
       void (async () => {
@@ -323,10 +321,12 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     runsPerPage,
     selectedWorkflowId,
     statusFilter,
+    workflowsReady,
   ]);
 
-  const overallRunsCount = selectedWorkflow?.totalRuns ?? 0;
-  const badRunsCount = (selectedWorkflow?.failedRuns ?? 0) + (selectedWorkflow?.suspiciousRuns ?? 0);
+  const allWorkflowsRunsCount = getAvailableInputSearchRuns(workflowsResponse, '', 'all');
+  const overallRunsCount = getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'all');
+  const badRunsCount = getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
   const visibleRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
   const filteredRunsCount = appliedInputFilter
     ? inputFilterRuns.length
@@ -334,10 +334,13 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil(filteredRunsCount / runsPerPage));
 
   useEffect(() => {
+    // Loading clears runsPage. Do not clamp against a possibly stale catalog
+    // while the requested page's authoritative total is still in flight.
+    if (runsLoading || !runsPage || appliedInputFilter) return;
     if (page > totalPages) {
       setPage(totalPages);
     }
-  }, [page, totalPages]);
+  }, [appliedInputFilter, page, runsLoading, runsPage, totalPages]);
 
   const handleApplyInputFilter = useCallback(() => {
     const path = inputFilterPath.trim();
@@ -412,7 +415,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       const currentPageSize = runsPerPage;
       const currentStatusFilter = statusFilter;
       const currentInputFilter = appliedInputFilter;
-      const currentInputSearchStatus = inputSearchStatus;
       const requestVersion = runsRequestVersionRef.current;
       const deletionRequest = {};
       deletionRequestRef.current = deletionRequest;
@@ -421,6 +423,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
       try {
         abortInputSearch();
+        if (currentInputFilter && inputSearchStatus === 'searching') setInputSearchStatus('stopped');
         setDeletingRecordingId(recordingId);
         setRunsLoading(true);
         setError(null);
@@ -434,7 +437,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
         const refreshedWorkflow =
           nextWorkflowsResponse.workflows.find((workflow) => workflow.workflowId === currentWorkflowId) ?? null;
-        if (!refreshedWorkflow) {
+        if (currentWorkflowId && !refreshedWorkflow) {
           setRunsPage(null);
           setInputFilterRuns([]);
           return;
@@ -442,13 +445,16 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
         if (currentInputFilter) {
           setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
-          setInputSearchStatus(currentInputSearchStatus === 'searching' ? 'stopped' : currentInputSearchStatus);
           setInputSearchProgress((currentProgress) => {
             if (!currentProgress) {
               return currentProgress;
             }
 
-            const availableRuns = getAvailableInputSearchRuns(refreshedWorkflow, currentStatusFilter);
+            const availableRuns = getAvailableInputSearchRuns(
+              nextWorkflowsResponse,
+              currentWorkflowId,
+              currentStatusFilter,
+            );
             return {
               availableRuns,
               analyzedRuns: Math.min(currentProgress.analyzedRuns, availableRuns),
@@ -459,7 +465,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         }
 
         setRunsPage(null);
-        const nextRunsPage = await loadWorkflowRecordingRunsPage(refreshedWorkflow.workflowId, {
+        const nextRunsPage = await loadWorkflowRecordingRunsPage(currentWorkflowId, {
           page: currentPage,
           pageSize: currentPageSize,
           status: currentStatusFilter,
@@ -516,6 +522,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     inputFilterError,
     deletingRecordingId,
     overallRunsCount,
+    allWorkflowsRunsCount,
     badRunsCount,
     filteredRunsCount,
     totalPages,

@@ -10,7 +10,7 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 ### Finding recordings in Rivet Server
 
-Open **Run recordings**, choose a workflow, and use **Filter by input** to search its captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
+Open **Run recordings** and leave the workflow selector on **Any** to browse all workflows, or choose an individual workflow. **Any** is always the first option and the default for a newly opened recordings session. The workflow details card appears only when an individual workflow is selected. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
 When a Subgraph runs a graph in another Studio Server project, its run also appears under the called project. Search the called project's run using the values actually passed to that graph: for a Graph Input named `prompt`, use a path such as `$.prompt.requestId`; for a Graph Input named `input`, its value is the search root, so use `$.requestId`. Hosted editor child runs require **Record local graph executions** to be enabled; server endpoint runs follow the server's recording setting.
 
@@ -19,6 +19,8 @@ Search shows an initial match promptly, then collects larger batches automatical
 **Search complete** means the scan finished. **Search stopped** means the results may be incomplete, including when an unreadable or malformed recording caused an error. Check the displayed error before treating an empty result as proof that no matching run exists.
 
 Deleting a recording temporarily disables row actions in that view until deletion and refresh finish. You can switch workflows or close the modal while it is pending; this does not undo the deletion, and its late response will not replace the new view's results.
+
+Deleting also stops an active input search and keeps its collected matches. If deletion fails, the error is shown and the search stays stopped; use **Apply** to run the search again.
 
 ### Loading a recording file
 

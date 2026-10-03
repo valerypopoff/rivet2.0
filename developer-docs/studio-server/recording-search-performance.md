@@ -1,5 +1,21 @@
 # Recording input search performance
 
+## All-workflow scope
+
+The workflow-details card (name, status, endpoint and project path) is rendered only for an individual workflow. Any omits the entire card, including its heading; the runs panel and filters remain visible. Browser coverage checks both the default Any view and switching from a workflow back to Any.
+
+At widths up to 720 px, the modal body owns vertical scrolling and its content uses natural height. The recording list still has a bounded, independently scrollable viewport for virtualization. Do not constrain the outer layout and hide overflow here: adding the workflow card or filter form would clip pagination. A narrow-screen browser regression uses actual mouse-wheel scrolling to verify controls remain reachable in both scopes with the filter form open.
+
+The catalog may supply aggregate `totals` independently of its selectable workflow summaries. Legacy storage includes retained recordings whose project file was removed outside Rivet. The Any badge, status counters, and input-search progress use these totals rather than counting only current tree entries. Responses without totals retain the summed-workflow fallback; managed and SQLite authorities enforce recording/project ownership. All-workflow queries preserve each recording's real workflow ID.
+
+The Run recordings workflow selector starts with **Any**, selected by default and available even when its workflow catalog is empty. Status filters, ordinary pagination, progressive input search, replay and deletion work in this scope as well as for an individual workflow. Switching scope resets pagination and cancels obsolete searches; deleting the last recording of a removed catalog entry returns to Any.
+
+The controller initializes and resets its selection to the empty all-workflow scope. Explicitly closing the modal starts a fresh session on Any when reopened; a temporary dismissal retains the existing search and selection. The browser regression `a fresh session defaults to Any after closing a workflow-specific view` protects this default independently of option ordering.
+
+Catalog counters are snapshots, not pagination or search authorities. Clamp an out-of-range page only after its runs response has loaded; never use catalog estimates while that request is pending. Search progress uses the scanner's cumulative analyzed count, expanding the estimate if needed and reconciling it on completion instead of inventing analyzed runs from stale totals. Deletion stops an active search immediately, even if the mutation fails; retained matches remain available and Apply can retry. Browser regressions cover counts growing/shrinking since catalog load, Any pagination beyond the old catalog's last page, and failed deletion during a held continuation.
+
+`GET /api/workflows/recordings/runs` uses the same backend query path as `/recordings/workflows/:workflowId/runs`, with an empty workflow ID representing the all-workflow query scope (never a persisted recording owner). All three storage backends omit the workflow restriction while retaining status filtering and stable newest-first `(created_at, recording_id)` ordering. Each returned run keeps its actual workflow ID. Input continuations bind to this scope and cannot be reused in a single-workflow search. Do not implement Any by concatenating independently paginated workflow responses: that breaks global ordering, pagination and bounded search.
+
 ## Scope and invariants
 
 Optimization changes request scheduling, metadata-query indexes, and transient process-local work. Recording artifacts, compression, retention, input matching, missing-input semantics, newest-first ordering, and precise PostgreSQL cursor timestamps remain unchanged. Cursors advance through consumed candidates, not completed speculative reads. Errors are not silently converted into non-matches.
@@ -89,6 +105,15 @@ The benchmark-only `json-stream-es` prototype tokenizes/decompresses the entire 
 Small 32 KiB artifacts were also slower with tokenization (17–19 ms versus under 1 ms). Retain native full parsing: the measured memory reduction does not justify the latency regression. The prototype would additionally require duplicate-container/invalid-wrapper semantic hardening before production use. Neither these fixtures nor a late string table prove every possible tokenizer will perform poorly.
 
 ## Verification and remaining limits
+
+Focused regression commands for all-workflow browsing and input search:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/managed-recordings.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/recording-input-query-plan.test.ts src/tests/recording-input-filter.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api run test:files --test-name-pattern="all-workflow recordings" src/tests/workflow-recordings-http.test.ts
+```
+
+With the development server running, set `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`, then run `yarn studio-server:ui:observe run-recordings-modal.spec.ts`. This covers Any defaults, global pagination/filtering/deletion, retained recordings without a catalog project, stale counters, cancellation races, and narrow-screen control visibility. Use `PLAYWRIGHT_BASE_URL` if the server is not at the runner's default URL.
 
 - Deterministic tests cover dense pagination (1,000 matches in 51 requests), sparse multi-window batching, budget expiry before admission, ready-result draining, cancellation, memory admission, handoff reuse/expiry, and worker recovery.
 - Compiled worker tests require an API build; they do not rely on the source-mode inline extractor.

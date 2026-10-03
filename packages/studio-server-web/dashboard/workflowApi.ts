@@ -234,7 +234,7 @@ export async function fetchWorkflowRecordingRuns(
     }
   }
   const response = await fetch(
-    `${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`,
+    `${API}/workflows/recordings/${workflowId ? `workflows/${encodeURIComponent(workflowId)}/runs` : 'runs'}?${query}`,
     {
       cache: 'no-store',
       signal: options.signal,

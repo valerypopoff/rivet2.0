@@ -1074,7 +1074,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     signal?: AbortSignal,
     inputAfter?: string,
   ): Promise<WorkflowRecordingRunsPageResponse> {
-    if (!this.#catalog.findProjectPathById(workflowId)) throw createHttpError(404, 'Project not found');
+    if (workflowId && !this.#catalog.findProjectPathById(workflowId)) throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),
       size = Math.min(100, Math.max(1, Math.floor(pageSize)));
     if (

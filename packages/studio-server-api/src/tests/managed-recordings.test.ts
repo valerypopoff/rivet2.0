@@ -189,6 +189,67 @@ test('managed recording statistics preserve web-app action identity and run-kind
   assert.equal(page.runs[1]?.executionIdentity?.surface, 'subgraph_project');
 });
 
+test('managed Any scope applies status, pagination and input continuations without a workflow restriction', async () => {
+  const rows = [
+    createRecordingRow('new-b', 'b', '2026-08-04T12:00:00.000Z', 10, 'workflow-b'),
+    { ...createRecordingRow('old-a', 'a', '2026-08-03T12:00:00.000Z'), status: 'suspicious' as const },
+  ];
+  const scopedRows = (sql: string, parameters: unknown[]) => {
+    assert.match(sql, /WHERE \$1::text IS NOT NULL/);
+    assert.equal(parameters[0], '');
+    return sql.includes("status IN ('failed', 'suspicious')") ? rows.filter((row) => row.status !== 'succeeded') : rows;
+  };
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {},
+    maintenance: { registerTask: () => () => {} },
+    db: {
+      queryOne: async (_pool: unknown, sql: string, parameters: unknown[]) => ({
+        total_runs: scopedRows(sql, parameters).length,
+      }),
+      queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
+        const available = scopedRows(sql, parameters);
+        const after = parameters.length === 5;
+        const offset = after
+          ? available.findIndex((row) => row.recording_id === parameters[2]) + 1
+          : Number(parameters[2]);
+        return available.slice(offset, offset + Number(parameters[after ? 3 : 1]));
+      },
+    },
+    blobStore: {
+      getText: async () =>
+        JSON.stringify({
+          strings: {},
+          recording: { events: [{ type: 'start', data: { inputs: { input: { value: { matched: true } } } } }] },
+        }),
+    },
+    mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: unknown) => String(value) },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const page = await service.listWorkflowRecordingRunsPage('', 1, 1, 'all');
+  assert.equal(page.totalRuns, 2);
+  assert.equal(page.runs[0]!.workflowId, 'workflow-b');
+  assert.equal((await service.listWorkflowRecordingRunsPage('', 2, 1, 'all')).runs[0]!.workflowId, 'workflow-a');
+  const bad = await service.listWorkflowRecordingRunsPage('', 1, 20, 'failed');
+  assert.equal(bad.totalRuns, 1);
+  assert.equal(bad.runs[0]!.status, 'suspicious');
+  const filter = { path: '$.matched', operator: '==' as const, value: 'true' };
+  const firstMatch = await service.listWorkflowRecordingRunsPage('', 1, 1, 'all', filter);
+  assert.ok(firstMatch.nextInputAfter);
+  const nextMatch = await service.listWorkflowRecordingRunsPage(
+    '',
+    1,
+    1,
+    'all',
+    filter,
+    0,
+    undefined,
+    firstMatch.nextInputAfter,
+  );
+  assert.equal(nextMatch.runs[0]!.id, 'old-a');
+});
+
 test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {
   const rows = Array.from({ length: 25 }, (_, index) =>
     createRecordingRow(

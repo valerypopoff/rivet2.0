@@ -482,7 +482,7 @@ workflowsRouter.post(
 );
 
 workflowsRouter.get(
-  '/recordings/workflows/:workflowId/runs',
+  ['/recordings/runs', '/recordings/workflows/:workflowId/runs'],
   asyncHandler(async (req, res) => {
     const parsedQuery = recordingsRunsQuerySchema.parse(req.query);
     const requestAbort = createRequestAbortSignal(req, res);

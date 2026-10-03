@@ -490,6 +490,8 @@ async function installRunRecordingRoutes(
     beforeDelete?: (recordingId: string) => Promise<number | void>;
     beforeRuns?: (url: URL) => Promise<void>;
     inputSearchError?: string;
+    missingSourceProject?: boolean;
+    staleCatalog?: boolean;
   } = {},
 ) {
   // Keep mocked recordings tests independent of a live API/key gate. The actual
@@ -532,6 +534,8 @@ async function installRunRecordingRoutes(
     }),
   );
   const { workflows, runsByWorkflow } = createRunRecordingsFixture(options.includeResponseInspectorRun);
+  const initialWorkflows = workflows.map((workflow) => ({ ...workflow }));
+  const initialRuns = [...runsByWorkflow.values()].flat();
   if (options.subgraphRun) {
     const run = runsByWorkflow.get('workflow-a')![0]!;
     run.runKind = 'editor';
@@ -589,10 +593,21 @@ async function installRunRecordingRoutes(
     const parts = url.pathname.split('/').filter(Boolean);
 
     if (request.method() === 'GET' && url.pathname.endsWith('/workflows')) {
+      const allRuns = options.staleCatalog ? initialRuns : [...runsByWorkflow.values()].flat();
+      const catalogWorkflows = options.staleCatalog ? initialWorkflows : workflows;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ workflows }),
+        body: JSON.stringify({
+          workflows: options.missingSourceProject
+            ? catalogWorkflows.filter((workflow) => workflow.workflowId !== 'workflow-a')
+            : catalogWorkflows,
+          totals: {
+            totalRuns: allRuns.length,
+            failedRuns: allRuns.filter((run) => run.status === 'failed').length,
+            suspiciousRuns: allRuns.filter((run) => run.status === 'suspicious').length,
+          },
+        }),
       });
       return;
     }
@@ -604,14 +619,18 @@ async function installRunRecordingRoutes(
         await route.fulfill({ status: 500, json: { error: options.inputSearchError } });
         return;
       }
-      const workflowId = parts[parts.length - 2]!;
+      const workflowId = url.pathname.endsWith('/recordings/runs') ? '' : parts[parts.length - 2]!;
       const status = (url.searchParams.get('status') ?? 'all') as WorkflowRecordingFilterStatus;
       const pageNumber = Number(url.searchParams.get('page') ?? '1');
       const pageSize = Number(url.searchParams.get('pageSize') ?? '20');
       const inputCursor = Number(url.searchParams.get('inputCursor') ?? '0');
       const inputAfter = url.searchParams.get('inputAfter');
       const hasInputFilter = url.searchParams.has('inputPath');
-      const sourceRuns = runsByWorkflow.get(workflowId) ?? [];
+      const sourceRuns = workflowId
+        ? runsByWorkflow.get(workflowId) ?? []
+        : [...runsByWorkflow.values()]
+            .flat()
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
       const filteredRuns =
         status === 'failed'
           ? sourceRuns.filter((run) => run.status === 'failed' || run.status === 'suspicious')
@@ -789,6 +808,209 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  test('a fresh session defaults to Any after closing a workflow-specific view', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    const modal = await openLatestFlowRecordings(page);
+    await modal.getByLabel('Close run recordings').click();
+    await expect(modal).toBeHidden();
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    await expect(modal.locator('.run-recordings-selector-section .run-recordings-select__single-value')).toHaveText('Any');
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+  });
+
+  test('Any remains available when no workflows have recordings', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    await page.route('**/api/workflows/recordings/**', async (route) => {
+      const url = new URL(route.request().url());
+      await route.fulfill({
+        json: url.pathname.endsWith('/workflows')
+          ? { workflows: [] }
+          : {
+              workflowId: '',
+              page: 1,
+              pageSize: 20,
+              totalRuns: 0,
+              totalRunsExact: true,
+              hasMore: false,
+              statusFilter: 'all',
+              runs: [],
+            },
+      });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await modal.locator('.run-recordings-select__control').click();
+    await expect(page.locator('.run-recordings-select__option')).toHaveCount(1);
+    await expect(page.locator('.run-recordings-select__option').first()).toContainText('Any');
+    await page.locator('.run-recordings-select__option').first().click();
+    await modal.getByRole('button', { name: /^Bad only/ }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(0);
+  });
+
+  test('Any is first and filters, paginates and deletes runs across workflows', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+    await expect(modal.locator('.run-recordings-run').first()).toBeVisible();
+    await expect(modal.locator('.run-recordings-details')).toHaveCSS('grid-template-rows', /^[\d.]+px$/);
+    await modal.locator('.run-recordings-select__control').click();
+    await expect(page.locator('.run-recordings-select__option').first()).toContainText('Any');
+    await page.locator('.run-recordings-select__option').first().click();
+    await choosePageSizeTen(modal);
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(4);
+    await modal.getByRole('button', { name: /^Bad only/ }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(4);
+    await modal.getByRole('button', { name: /^All/ }).click();
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByPlaceholder('$.foo').fill('$.foo');
+    await modal.getByPlaceholder('bar', { exact: true }).fill('bar');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal).toContainText('Search complete, 3 matches found');
+    await deleteFirstRun(page, modal);
+    await expect(modal).toContainText('Search complete, 2 matches found');
+    await selectPublishedFlow(page, modal);
+    await expect(modal.locator('.run-recordings-workflow-summary')).toBeVisible();
+    await expect(modal.locator('.run-recordings-workflow-summary')).toContainText('Endpoint');
+    await expect(modal.locator('.run-recordings-workflow-summary')).toContainText('Project path');
+    await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').first().click();
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await expect(modal).toContainText('Search complete, 2 matches found');
+  });
+
+  test('Any counts and searches retained runs whose project is missing from the tree', async ({ page }) => {
+    await installRunRecordingRoutes(page, { missingSourceProject: true });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await expect(modal.getByRole('button', { name: /^All/ })).toContainText('14');
+    await expect(modal.getByRole('button', { name: /^Bad only/ })).toContainText('4');
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByPlaceholder('$.foo').fill('$.foo');
+    await modal.getByPlaceholder('bar', { exact: true }).fill('bar');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal).toContainText('Search complete, 3 matches found');
+    await expect(modal).toContainText('14 of 14');
+    await deleteFirstRun(page, modal);
+    await expect(modal.getByRole('button', { name: /^All/ })).toContainText('13');
+    await expect(modal).toContainText('13 of 13');
+  });
+
+  test('workflow details and recording controls remain reachable on a narrow screen', async ({ page }) => {
+    await page.setViewportSize({ width: 700, height: 800 });
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    const scrollModal = async (delta: number) => {
+      await modal.hover({ position: { x: 10, y: 100 } });
+      await page.mouse.wheel(0, delta);
+    };
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await choosePageSizeTen(modal);
+    await scrollModal(2000);
+    await expect(modal.locator('.run-recordings-pagination-footer')).toBeInViewport({ ratio: 1 });
+    await scrollModal(-2000);
+    await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' }).click();
+    await expect(modal.locator('.run-recordings-workflow-summary')).toBeVisible();
+    await scrollModal(2000);
+    await expect(modal.locator('.run-recordings-pagination-footer')).toBeInViewport({ ratio: 1 });
+    await scrollModal(-2000);
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await scrollModal(400);
+    await expect(modal.getByRole('button', { name: 'Apply', exact: true })).toBeInViewport({ ratio: 1 });
+    await scrollModal(2000);
+    await expect(modal.locator('.run-recordings-pagination-footer')).toBeInViewport({ ratio: 1 });
+    await scrollModal(-2000);
+    await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').first().click();
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
+    await scrollModal(2000);
+    await expect(modal.locator('.run-recordings-pagination-footer')).toBeInViewport({ ratio: 1 });
+  });
+
+  test('stale catalog counts do not pull Any pagination back to an earlier page', async ({ page }) => {
+    await installRunRecordingRoutes(page, { latestFlowRunCount: 30, staleCatalog: true });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await choosePageSizeTen(modal, 4);
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 2 of 4');
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 3 of 4');
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 4 of 4');
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+  });
+
+  for (const runCount of [5, 30]) {
+    test(`stale catalog counts do not falsify search progress after ${runCount} workflow runs`, async ({ page }) => {
+      await installRunRecordingRoutes(page, { latestFlowRunCount: runCount, staleCatalog: true });
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.getByRole('button', { name: 'Run recordings' }).click();
+      const modal = page.getByTestId('run-recordings-modal');
+      await modal.getByRole('button', { name: 'Filter by input' }).click();
+      await modal.getByLabel('Input JSON path').fill('$.foo');
+      await modal.getByLabel('Value').fill('bar');
+      await modal.getByRole('button', { name: 'Apply' }).click();
+      await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+      await expect(modal.getByRole('progressbar')).toHaveAttribute(
+        'aria-valuetext',
+        `Analyzed ${runCount + 2} of ${runCount + 2} available runs (100%)`,
+      );
+    });
+  }
+
+  test('a failed deletion stops an interrupted input search without losing its results', async ({ page }) => {
+    const continuation = responseGate();
+    await installRunRecordingRoutes(page, {
+      latestFlowRunCount: 30,
+      beforeRuns: async (url) => {
+        if (url.searchParams.has('inputAfter')) await continuation.promise;
+      },
+      beforeDelete: async () => 500,
+    });
+    const modal = await openLatestFlowRecordings(page, 30);
+    await choosePageSizeTen(modal, 3);
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await modal.getByLabel('Input JSON path').fill('$.foo');
+    await modal.getByLabel('Value').fill('bar');
+    await modal.getByRole('button', { name: 'Apply' }).click();
+    try {
+      await expect(modal.getByRole('button', { name: 'Stop search' })).toBeVisible();
+      await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+      await deleteFirstRun(page, modal);
+      await expect(modal.locator('.run-recordings-error')).toContainText('Delayed deletion failed');
+      await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search stopped, 2 matches found');
+      await expect(modal.getByRole('button', { name: 'Stop search' })).toHaveCount(0);
+      await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+      await expect(modal.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    } finally {
+      continuation.release();
+    }
+  });
+
   test('labels a called-project recording as a Subgraph run', async ({ page }) => {
     await installRunRecordingRoutes(page, { subgraphRun: true });
     const modal = await openLatestFlowRecordings(page);
@@ -861,6 +1083,9 @@ test.describe('Run recordings modal', () => {
           await modal.getByLabel('Close run recordings').click();
           await expect(modal).toBeHidden();
           await page.getByRole('button', { name: 'Run recordings' }).click();
+          // Explicit close starts a fresh session on Any. Select the workflow
+          // whose replacement request this race fixture deliberately holds.
+          await selectPublishedFlow(page, modal);
         } else {
           await selectPublishedFlow(page, modal);
         }
@@ -882,11 +1107,11 @@ test.describe('Run recordings modal', () => {
     });
   }
 
-  test('deleting the final recording selects a remaining workflow', async ({ page }) => {
+  test('deleting the final recording returns to Any', async ({ page }) => {
     await installRunRecordingRoutes(page, { latestFlowRunCount: 1 });
     const modal = await openLatestFlowRecordings(page, 1);
     await deleteFirstRun(page, modal);
-    await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Published Flow');
+    await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
     await expect(modal.locator('.run-recordings-error')).toHaveCount(0);
   });

@@ -994,6 +994,64 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
     });
     assert.equal(filtered.runs.length, 1);
     assert.equal(filtered.runs[0]!.id, ids[2]);
+    const other = await createExecutable(backend, 'Other recording owner');
+    const [otherProject, otherAttached] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(other.absolutePath)).contents,
+    );
+    const otherId = await backend.persistWorkflowExecutionRecording({
+      sourceProject: otherProject,
+      sourceProjectPath: other.absolutePath,
+      executedProject: otherProject,
+      executedAttachedData: otherAttached,
+      executedDatasets: [],
+      endpointName: 'other',
+      runKind: 'editor',
+      status: 'failed',
+      durationMs: 1,
+      recordingSerialized: JSON.stringify({
+        version: 1,
+        strings: {},
+        recording: {
+          events: [{ type: 'start', data: { inputs: { input: { type: 'any', value: { value: 2 } } } } }],
+        },
+      }),
+    });
+    assert.ok(otherId);
+    const any = await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all');
+    assert.equal(any.totalRuns, 4);
+    assert.deepEqual(
+      new Set(any.runs.map((run) => run.workflowId)),
+      new Set([item.projectMetadataId, other.projectMetadataId]),
+    );
+    const anyBad = await backend.listWorkflowRecordingRunsPage('', 1, 1, 'failed');
+    assert.equal(anyBad.totalRuns, 3);
+    assert.equal(anyBad.runs.length, 1);
+    assert.equal(anyBad.hasMore, true);
+    const anyMatches = await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all', {
+      path: '$.value',
+      operator: '==',
+      value: '2',
+    });
+    const foundIds = new Set(anyMatches.runs.map((run) => run.id));
+    let batch = anyMatches;
+    while (batch.hasMore) {
+      batch = await backend.listWorkflowRecordingRunsPage(
+        '',
+        1,
+        20,
+        'all',
+        {
+          path: '$.value',
+          operator: '==',
+          value: '2',
+        },
+        batch.nextInputCursor,
+        undefined,
+        batch.nextInputAfter,
+      );
+      batch.runs.forEach((run) => foundIds.add(run.id));
+    }
+    assert.deepEqual(foundIds, new Set([ids[2], otherId]));
     const replay = loadProjectAndAttachedDataFromString(
       await backend.readWorkflowRecordingArtifact(ids[0]!, 'replay-project'),
     )[0];
@@ -1006,7 +1064,12 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
       includeWarnings: true,
     });
     assert.equal(statistics.current.runCount, 3);
-    assert.equal((await backend.listWorkflowRecordingWorkflows()).workflows[0]!.totalRuns, 3);
+    assert.equal(
+      (await backend.listWorkflowRecordingWorkflows()).workflows.find(
+        (workflow) => workflow.workflowId === item.projectMetadataId,
+      )!.totalRuns,
+      3,
+    );
     await backend.deleteWorkflowRecording(ids[0]!);
     assert.equal((await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 20)).totalRuns, 2);
     await assert.rejects(backend.readWorkflowRecordingArtifact(ids[0]!, 'recording'), /not found/);

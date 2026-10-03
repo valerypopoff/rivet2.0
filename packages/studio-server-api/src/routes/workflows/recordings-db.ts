@@ -555,9 +555,9 @@ function buildRecordingWindowQuery(
   workflowId: string,
   options: Parameters<typeof listWorkflowRecordingRunRowsForWorkflowWindow>[1],
 ) {
-  const whereClause = buildRunFilterClause(options.statusFilter);
+  const whereClause = buildRunFilterClause(workflowId, options.statusFilter);
   const afterClause = options.after ? 'AND (created_at, id) < (?, ?)' : '';
-  const parameters: Array<string | number> = [workflowId];
+  const parameters: Array<string | number> = workflowId ? [workflowId] : [];
   if (options.after) {
     parameters.push(options.after.createdAt, options.after.recordingId);
   }
@@ -579,10 +579,10 @@ export async function countWorkflowRecordingRuns(
   statusFilter: WorkflowRecordingFilterStatus,
 ): Promise<number> {
   const db = await getDatabase();
-  const whereClause = buildRunFilterClause(statusFilter);
+  const whereClause = buildRunFilterClause(workflowId, statusFilter);
   const row = db
     .prepare(`SELECT COUNT(id) AS count FROM recording_runs ${whereClause}`)
-    .get<{ count: number | bigint }>(workflowId);
+    .get<{ count: number | bigint }>(...(workflowId ? [workflowId] : []));
 
   return toNumber(row?.count ?? 0);
 }
@@ -856,10 +856,8 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
   };
 }
 
-function buildRunFilterClause(statusFilter: WorkflowRecordingFilterStatus): string {
-  return statusFilter === 'failed'
-    ? `WHERE workflow_id = ? AND status IN ('failed', 'suspicious')`
-    : 'WHERE workflow_id = ?';
+function buildRunFilterClause(workflowId: string, statusFilter: WorkflowRecordingFilterStatus): string {
+  return `WHERE ${workflowId ? 'workflow_id = ?' : '1 = 1'}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
 }
 
 function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {

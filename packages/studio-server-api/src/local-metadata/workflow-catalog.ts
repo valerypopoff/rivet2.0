@@ -765,9 +765,9 @@ export class LocalWorkflowCatalog {
   countRecordings(workflowId: string, failedOnly = false): number {
     const row = this.#database()
       .prepare(
-        `SELECT COUNT(*) AS count FROM recordings WHERE workflow_id = ? ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
+        `SELECT COUNT(*) AS count FROM recordings WHERE ${workflowId ? 'workflow_id = ?' : '1 = 1'} ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
       )
-      .get(workflowId) as { count: number };
+      .get(...(workflowId ? [workflowId] : [])) as { count: number };
     return row.count;
   }
 

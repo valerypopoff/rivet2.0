@@ -81,9 +81,28 @@ export type WorkflowRecordingWorkflowSummary = {
 
 export type WorkflowRecordingWorkflowListResponse = {
   workflows: WorkflowRecordingWorkflowSummary[];
+  /** Includes retained recordings even when their source project is no longer in the catalog. */
+  totals?: WorkflowRecordingCounts;
 };
 
+export type WorkflowRecordingCounts = Pick<
+  WorkflowRecordingWorkflowSummary,
+  'totalRuns' | 'failedRuns' | 'suspiciousRuns'
+>;
+
+export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCounts[]): WorkflowRecordingCounts {
+  return rows.reduce(
+    (counts, row) => ({
+      totalRuns: counts.totalRuns + row.totalRuns,
+      failedRuns: counts.failedRuns + row.failedRuns,
+      suspiciousRuns: counts.suspiciousRuns + row.suspiciousRuns,
+    }),
+    { totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
+  );
+}
+
 export type WorkflowRecordingRunsPageResponse = {
+  /** Empty for the all-workflow scope; each run retains its actual workflowId. */
   workflowId: string;
   page: number;
   pageSize: number;
