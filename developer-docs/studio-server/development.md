@@ -1,5 +1,21 @@
 # Development
 
+## HTTP Call settings regression
+
+HTTP Call keeps retry, fail-on-status and catch controls in the final shared
+collapsible **Error behavior** group. Its nested retry toggle still owns Repeat
+times and Cooldown; Binary Output remains outside the group. This is layout-only:
+serialized keys, output ports and runtime handling are unchanged. The Core
+`HttpCallNode.editors.test.ts` checks the hierarchy, and the headless observer
+`http-call-failure-headers.spec.ts` checks folding, retained values after retry is
+disabled/re-enabled, independent fail/catch controls, control/body wiring and
+terminal retry-response evidence. Core also checks that constructing the grouped
+editors does not mutate authored data or change the node's port definitions.
+
+Run all `test/model/nodes/HttpCallNode.*.test.ts` files in the Core workspace,
+then `yarn studio-server:ui:observe http-call-failure-headers.spec.ts` with
+`PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0` against the current frontend.
+
 ## Tunnel-friendly development
 
 Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a

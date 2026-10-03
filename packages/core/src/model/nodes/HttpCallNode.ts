@@ -497,51 +497,57 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         enableFolding: true,
       },
       {
-        type: 'group',
-        label: 'Retry on non-200',
-        toggleDataKey: 'retryOnNon200',
-        editors: [
-          {
-            type: 'number',
-            label: 'Repeat times',
-            dataKey: 'retryOnNon200RepeatTimes',
-            defaultValue: DEFAULT_RETRY_ON_NON_200_REPEAT_TIMES,
-            min: 1,
-            step: 1,
-            layout: 'inline',
-            helperMessage: 'Times to repeat after the initial request',
-          },
-          {
-            type: 'number',
-            label: 'Cooldown, ms',
-            dataKey: 'retryOnNon200CooldownMs',
-            defaultValue: DEFAULT_RETRY_ON_NON_200_COOLDOWN_MS,
-            min: 0,
-            step: 1,
-            layout: 'inline',
-            helperMessage: 'Milliseconds to wait between repeats',
-          },
-        ],
-      },
-      {
         type: 'toggle',
         label: 'Binary Output',
         dataKey: 'isBinaryOutput',
         helperMessage: 'Toggle on if the response is expected to be binary data',
       },
       {
-        type: 'toggle',
-        label: 'Fail on non-2XX status code',
-        dataKey: 'errorOnNon200',
-        helperMessage: (data) =>
-          data.retryOnNon200
-            ? 'With Retry on non-200 enabled, only the final response after all retries is checked.'
-            : undefined,
-      },
-      {
-        type: 'toggle',
-        label: 'Catch all request failures',
-        dataKey: 'catchRequestFailed',
+        type: 'group',
+        label: 'Error behavior',
+        editors: [
+          {
+            type: 'group',
+            label: 'Retry on non-200',
+            toggleDataKey: 'retryOnNon200',
+            editors: [
+              {
+                type: 'number',
+                label: 'Repeat times',
+                dataKey: 'retryOnNon200RepeatTimes',
+                defaultValue: DEFAULT_RETRY_ON_NON_200_REPEAT_TIMES,
+                min: 1,
+                step: 1,
+                layout: 'inline',
+                helperMessage: 'Times to repeat after the initial request',
+              },
+              {
+                type: 'number',
+                label: 'Cooldown, ms',
+                dataKey: 'retryOnNon200CooldownMs',
+                defaultValue: DEFAULT_RETRY_ON_NON_200_COOLDOWN_MS,
+                min: 0,
+                step: 1,
+                layout: 'inline',
+                helperMessage: 'Milliseconds to wait between repeats',
+              },
+            ],
+          },
+          {
+            type: 'toggle',
+            label: 'Fail on non-2XX status code',
+            dataKey: 'errorOnNon200',
+            helperMessage: (data) =>
+              data.retryOnNon200
+                ? 'With Retry on non-200 enabled, only the final response after all retries is checked.'
+                : undefined,
+          },
+          {
+            type: 'toggle',
+            label: 'Catch all request failures',
+            dataKey: 'catchRequestFailed',
+          },
+        ],
       },
     ];
   }
