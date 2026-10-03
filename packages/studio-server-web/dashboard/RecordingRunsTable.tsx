@@ -12,6 +12,8 @@ import {
   type WorkflowRecordingWorkflowSummary,
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import { RecordingInputPathField } from './RecordingInputPathField';
+import { deleteInputPath, readInputPathHistory, rememberInputPath } from './recording-input-path-history';
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -383,7 +385,7 @@ type RecordingRunsTableProps = {
   onSetInputFilterPath: (path: string) => void;
   onSetInputFilterOperator: (operator: WorkflowRecordingInputFilterOperator) => void;
   onSetInputFilterValue: (value: string) => void;
-  onApplyInputFilter: () => void;
+  onApplyInputFilter: () => boolean;
   onClearInputFilter: () => void;
   onStopInputSearch: () => void;
   onSetRunsPerPage: (pageSize: number) => void;
@@ -428,6 +430,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   onDeleteRecording,
   onOpenRecording,
 }) => {
+  const [inputPathHistory, setInputPathHistory] = useState(() => readInputPathHistory());
   const allRunsLabel = overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
   const badRunsLabel = badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
   const valueInputDisabled = inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists';
@@ -545,19 +548,18 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             className="run-recordings-input-filter"
             onSubmit={(event) => {
               event.preventDefault();
-              onApplyInputFilter();
+              if (onApplyInputFilter()) {
+                setInputPathHistory(rememberInputPath(inputFilterPath));
+              }
             }}
           >
-            <label className="run-recordings-input-filter-field">
-              <span className="run-recordings-field-label">Input JSON path</span>
-              <input
-                type="text"
-                value={inputFilterPath}
-                onChange={(event) => onSetInputFilterPath(event.target.value)}
-                placeholder="$.foo"
-                aria-label="Input JSON path"
-              />
-            </label>
+            <RecordingInputPathField
+              value={inputFilterPath}
+              paths={inputPathHistory}
+              onChange={onSetInputFilterPath}
+              onRefresh={() => setInputPathHistory(readInputPathHistory())}
+              onDelete={(path) => setInputPathHistory(deleteInputPath(path))}
+            />
 
             <label className="run-recordings-input-filter-field run-recordings-input-filter-operator">
               <span className="run-recordings-field-label">Operator</span>

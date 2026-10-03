@@ -814,7 +814,9 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Close run recordings').click();
     await expect(modal).toBeHidden();
     await page.getByRole('button', { name: 'Run recordings' }).click();
-    await expect(modal.locator('.run-recordings-selector-section .run-recordings-select__single-value')).toHaveText('Any');
+    await expect(modal.locator('.run-recordings-selector-section .run-recordings-select__single-value')).toHaveText(
+      'Any',
+    );
     await expect(modal.locator('.run-recordings-workflow-summary')).toHaveCount(0);
     await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
   });
@@ -982,6 +984,193 @@ test.describe('Run recordings modal', () => {
     });
   }
 
+  test('remembers applied input paths without duplicates and supports selection and permanent deletion', async ({
+    page,
+  }, testInfo) => {
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    const path = modal.getByRole('combobox', { name: 'Input JSON path' });
+    const apply = modal.getByRole('button', { name: 'Apply', exact: true });
+    const history = modal.getByRole('dialog', { name: 'Saved input JSON paths' });
+    await path.fill('not-a-path');
+    await apply.click();
+    await expect(modal.locator('.run-recordings-input-filter-error')).toHaveText('JSON path must start with $');
+    await path.click();
+    await expect(history).toHaveCount(0);
+    await modal.getByLabel('Value', { exact: true }).fill('bar');
+    for (const value of [' $.foo ', '$.foo', '$.missing']) {
+      await path.fill(value);
+      await apply.click();
+      await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    }
+    await path.click();
+    await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.missing', '$.foo']);
+    await page.screenshot({ path: testInfo.outputPath('input-path-history.png') });
+    await history.getByRole('button', { name: '$.foo', exact: true }).click();
+    await expect(path).toHaveValue('$.foo');
+    await expect(history).toHaveCount(0);
+    // Choosing a suggestion only edits the draft; it does not start another search.
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('0 matches found');
+    await path.press('ArrowDown');
+    await expect(history.getByRole('button', { name: '$.missing', exact: true })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(path).toBeFocused();
+    await expect(history).toHaveCount(0);
+    await path.click();
+    await history.getByRole('button', { name: 'Delete saved path $.missing', exact: true }).click();
+    await expect(path).toHaveValue('$.foo');
+    await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.foo']);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await path.click();
+    await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.foo']);
+    await selectPublishedFlow(page, modal);
+    await path.click();
+    await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.foo']);
+    await history.getByRole('button', { name: 'Delete saved path $.foo', exact: true }).click();
+    await expect(history).toHaveCount(0);
+    await expect(path).toBeFocused();
+  });
+
+  test('input path history remains usable when browser storage writes are denied', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('rivet.run-recordings.input-path-history.v1', JSON.stringify(['$.old']));
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (
+          key === 'rivet.run-recordings.input-path-history.v1' &&
+          localStorage.getItem('history-write-enabled') !== '1'
+        ) {
+          throw new Error('Storage denied');
+        }
+        original.call(this, key, value);
+      };
+    });
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    const path = modal.getByRole('combobox', { name: 'Input JSON path' });
+    await path.fill('$.foo');
+    await modal.getByLabel('Value', { exact: true }).fill('bar');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    await path.click();
+    const history = modal.getByRole('dialog', { name: 'Saved input JSON paths' });
+    await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.foo', '$.old']);
+    await expect(history.getByRole('button', { name: '$.foo', exact: true })).toBeVisible();
+    await history.getByRole('button', { name: 'Delete saved path $.foo', exact: true }).click();
+    await history.getByRole('button', { name: 'Delete saved path $.old', exact: true }).click();
+    await expect(history).toHaveCount(0);
+    await modal.getByLabel('Value', { exact: true }).click();
+    await path.click();
+    await expect(history).toHaveCount(0);
+    await expect(path).toHaveValue('$.foo');
+    await modal.getByLabel('Close run recordings').click();
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    await path.click();
+    await expect(history).toHaveCount(0);
+    await page.evaluate(() => localStorage.setItem('history-write-enabled', '1'));
+    await modal.getByLabel('Value', { exact: true }).click();
+    await path.click();
+    await expect(history).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('rivet.run-recordings.input-path-history.v1')))
+      .toBe('[]');
+  });
+
+  test('pending input path edits preserve unrelated changes from another browser tab', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('rivet.run-recordings.input-path-history.v1', JSON.stringify(['$.base']));
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (
+          key === 'rivet.run-recordings.input-path-history.v1' &&
+          localStorage.getItem('history-write-enabled') !== '1'
+        ) {
+          throw new Error('Storage denied');
+        }
+        original.call(this, key, value);
+      };
+    });
+    const openFilter = async (target: Page) => {
+      await installRunRecordingRoutes(target);
+      await target.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(target);
+      await waitForDashboardReady(target);
+      await target.getByRole('button', { name: 'Run recordings' }).click();
+      const modal = target.getByTestId('run-recordings-modal');
+      await modal.getByRole('button', { name: 'Filter by input' }).click();
+      await modal.getByLabel('Value', { exact: true }).fill('bar');
+      return modal;
+    };
+    const modal = await openFilter(page);
+    const path = modal.getByRole('combobox', { name: 'Input JSON path' });
+    await path.fill('$.foo');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+    const other = await page.context().newPage();
+    try {
+      const otherModal = await openFilter(other);
+      const otherPath = otherModal.getByRole('combobox', { name: 'Input JSON path' });
+      await otherPath.fill('$.remote');
+      await otherModal.getByRole('button', { name: 'Apply', exact: true }).click();
+      await expect(otherModal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
+      await otherPath.click();
+      await otherModal.getByRole('button', { name: 'Delete saved path $.base', exact: true }).click();
+      await path.click();
+      const history = modal.getByRole('dialog', { name: 'Saved input JSON paths' });
+      await expect(history.locator('.run-recordings-input-path-select')).toHaveText(['$.foo', '$.remote']);
+      await page.evaluate(() => localStorage.setItem('history-write-enabled', '1'));
+      await modal.getByLabel('Value', { exact: true }).click();
+      await path.click();
+      await expect
+        .poll(() => other.evaluate(() => localStorage.getItem('rivet.run-recordings.input-path-history.v1')))
+        .toBe('["$.foo","$.remote"]');
+    } finally {
+      await other.close();
+    }
+  });
+
+  test('long input path history can be focused and scrolled without dismissing the dropdown', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'rivet.run-recordings.input-path-history.v1',
+        JSON.stringify(Array.from({ length: 40 }, (_, index) => `$.field_${index}`)),
+      );
+    });
+    await installRunRecordingRoutes(page);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await modal.getByRole('button', { name: 'Filter by input' }).click();
+    const path = modal.getByRole('combobox', { name: 'Input JSON path' });
+    await path.click();
+    const history = modal.getByRole('dialog', { name: 'Saved input JSON paths' });
+    await history.click({ position: { x: 2, y: 2 } });
+    await expect(history).toBeFocused();
+    await history.hover();
+    await page.mouse.wheel(0, 2000);
+    const lastPath = history.getByRole('button', { name: '$.field_39', exact: true });
+    await expect(lastPath).toBeInViewport();
+    await lastPath.click();
+    await expect(path).toHaveValue('$.field_39');
+    await expect(history).toHaveCount(0);
+  });
+
   test('a failed deletion stops an interrupted input search without losing its results', async ({ page }) => {
     const continuation = responseGate();
     await installRunRecordingRoutes(page, {
@@ -1002,7 +1191,9 @@ test.describe('Run recordings modal', () => {
       await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
       await deleteFirstRun(page, modal);
       await expect(modal.locator('.run-recordings-error')).toContainText('Delayed deletion failed');
-      await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search stopped, 2 matches found');
+      await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+        'Search stopped, 2 matches found',
+      );
       await expect(modal.getByRole('button', { name: 'Stop search' })).toHaveCount(0);
       await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
       await expect(modal.getByRole('button', { name: 'Apply' })).toBeEnabled();

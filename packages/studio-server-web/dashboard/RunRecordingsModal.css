@@ -395,6 +395,56 @@
   border-color: rgba(126, 226, 148, 0.36);
 }
 
+.run-recordings-input-path-field {
+  position: relative;
+}
+
+.run-recordings-input-path-history {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin-top: 4px;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: #25262b;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.run-recordings-input-path-history-row {
+  display: flex;
+}
+
+.run-recordings-input-path-history-row button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--grey-lightest);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.run-recordings-input-path-history-row button:hover,
+.run-recordings-input-path-history-row button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.run-recordings-input-path-select {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-recordings-input-path-history-row .run-recordings-input-path-delete {
+  flex: 0 0 32px;
+  text-align: center;
+}
+
 .run-recordings-input-filter-operator .run-recordings-select__control {
   min-height: 34px !important;
   border-radius: 8px !important;

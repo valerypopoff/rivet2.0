@@ -1,5 +1,38 @@
 # Development
 
+## Recording input-path history
+
+Run recordings remembers trimmed input JSON paths when Apply accepts the filter.
+The history is browser-local (`rivet.run-recordings.input-path-history.v1` in
+localStorage), shared across workflow scopes and browser tabs on the same origin,
+and retained across modal close and page reload. Only paths are remembered, not
+filter values or recording payloads; history is not stored in server settings.
+Exact, case-sensitive paths are deduplicated and ordered most recently
+used first. Focusing or clicking the path field opens the saved-path dropdown;
+Arrow Down enters it, Tab navigates its selection/delete buttons, and Escape
+returns to the field without closing the recording modal. Selecting a path edits
+only the draft; deleting one affects only history, not the draft or active search.
+Paths rejected by Apply's client-side validation are not remembered. Unavailable
+browser storage falls back to in-memory history without preventing searches or
+showing recovery warnings.
+Uncommitted history changes remain authoritative in memory after a failed write,
+so refocusing cannot forget a new path or resurrect a deleted one from stale
+storage. The helper retains this fallback for the browser document, including
+modal close/reopen. Pending per-path add/delete actions are retried against the
+latest readable list, rather than overwriting it with an old whole-list snapshot.
+This preserves unrelated additions and deletions made in another browser tab.
+Shared history is still a best-effort browser preference, not transactional
+multi-writer project storage. The dropdown itself can take focus so clicking its
+padding or scrolling a long list does not dismiss it.
+It cannot preserve failed writes across a page reload while storage is unavailable.
+Cleared storage is treated as an empty history, not as an inaccessible backend.
+
+The Web workspace test `recording-input-path-history.test.ts` covers normalization
+and unavailable storage, including pending-edit rebasing. Run
+`yarn studio-server:ui:observe run-recordings-modal.spec.ts --grep "input path"`
+headlessly for deduplication, workflow switching, selection, deletion, keyboard
+behavior, long-list scrolling, shared-origin tabs and reload persistence.
+
 ## HTTP Call settings regression
 
 HTTP Call keeps retry, fail-on-status and catch controls in the final shared

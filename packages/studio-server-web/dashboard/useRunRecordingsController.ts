@@ -346,7 +346,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     const path = inputFilterPath.trim();
     if (!path.startsWith('$')) {
       setInputFilterError('JSON path must start with $');
-      return;
+      return false;
     }
 
     setInputFilterError(null);
@@ -360,6 +360,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     setInputSearchStatus('searching');
     setInputSearchProgress(null);
     setPage(1);
+    return true;
   }, [inputFilterOperator, inputFilterPath, inputFilterValue]);
 
   const handleClearInputFilter = useCallback(() => {
