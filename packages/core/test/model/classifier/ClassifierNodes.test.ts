@@ -317,7 +317,9 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
   );
   assert.equal(inputs.find((input) => input.id === 'state')?.required, false);
   assert.ok(inputs.filter((input) => input.id === 'state' || input.id.startsWith('question')).every((input) => input.splitRunBehavior === 'preserve-array'));
-  const providerEditor = instance.getEditors().find((editor) => editor.type === 'dropdown' && editor.dataKey === 'provider');
+  const modelGroup = instance.getEditors()[0];
+  assert.ok(modelGroup?.type === 'group');
+  const providerEditor = modelGroup.editors.find((editor) => editor.type === 'dropdown' && editor.dataKey === 'provider');
   assert.deepEqual(providerEditor && 'options' in providerEditor ? providerEditor.options : undefined, [{ value: 'jev', label: 'Jev' }]);
   assert.deepEqual(instance.getOutputDefinitions().map((output) => output.id), ['answers', 'usage']);
   const body = instance.getBody();
@@ -360,6 +362,52 @@ test('Classifier Evaluate sends an empty string when optional State is omitted',
 
   assert.equal(requestBodies[0]?.state, '');
   assert.equal((outputs.requestBody!.value as Record<string, unknown>).state, '');
+});
+
+test('Classifier Evaluate groups provider, model and credentials in an initially expanded Model section', () => {
+  const editors = evaluateNode().getEditors();
+  const modelGroup = editors[0];
+  assert.ok(modelGroup?.type === 'group');
+  assert.equal(modelGroup.label, 'Model');
+  assert.equal(modelGroup.defaultOpen, true);
+  assert.deepEqual(
+    modelGroup.editors.map((editor) => editor.label),
+    ['Provider', 'Model', 'API key source', 'Configured API key names'],
+  );
+  assert.deepEqual(
+    editors.map((editor) => editor.label),
+    ['Model', 'Outputs', 'Advanced', 'Error behavior'],
+  );
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'string');
+  assert.equal(modelEditor.useInputToggleDataKey, 'useModelInput');
+  const credentials = modelGroup.editors.find((editor) => editor.label === 'Configured API key names');
+  assert.equal(credentials?.hideIf?.({ apiKeySource: 'input' }), true);
+  assert.equal(credentials?.hideIf?.({ apiKeySource: 'configured' }), false);
+});
+
+test('Classifier Evaluate editor grouping preserves authored settings and existing input connections', () => {
+  const instance = evaluateNode({
+    model: 'pinned-model',
+    useModelInput: true,
+    apiKeySource: 'input',
+    apiKeyNamesByProvider: {
+      jev: { programmaticName: 'customKey', environmentVariableName: 'CUSTOM_KEY' },
+    },
+  });
+  const connections: NodeConnection[] = ['model', 'apiKey', 'question1'].map((port) => ({
+    inputNodeId: instance.chartNode.id,
+    inputId: port as PortId,
+    outputNodeId: 'source' as NodeId,
+    outputId: 'output' as PortId,
+  }));
+  const before = structuredClone({ data: instance.data, connections });
+  const inputs = instance.getInputDefinitions(connections);
+  instance.getEditors();
+  instance.getEditors();
+  assert.deepEqual({ data: instance.data, connections }, before);
+  assert.deepEqual(instance.getInputDefinitions(connections), inputs);
+  assert.deepEqual(inputs.map((input) => input.id), ['state', 'model', 'apiKey', 'question1', 'question2']);
 });
 
 test('Classifier Evaluate exposes provider HTTP body outputs only when enabled in Outputs', () => {

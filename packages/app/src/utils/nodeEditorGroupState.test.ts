@@ -64,6 +64,30 @@ test('node editor group state does not leak between node types', () => {
   );
 });
 
+test('Classifier Model preference is independent of its other sections and LLM Chat', () => {
+  const state = setNodeEditorGroupOpen(
+    { classifierEvaluate: { 'group:Outputs:1': true } },
+    { nodeType: 'classifierEvaluate', groupKey: 'group:Model:0', isOpen: false },
+  );
+  assert.equal(
+    resolveNodeEditorGroupOpen({ state, nodeType: 'classifierEvaluate', groupKey: 'group:Model:0', defaultOpen: true }),
+    false,
+  );
+  assert.equal(
+    resolveNodeEditorGroupOpen({
+      state,
+      nodeType: 'classifierEvaluate',
+      groupKey: 'group:Outputs:1',
+      defaultOpen: false,
+    }),
+    true,
+  );
+  assert.equal(
+    resolveNodeEditorGroupOpen({ state, nodeType: 'llmChatV2', groupKey: 'group:Model:0', defaultOpen: true }),
+    true,
+  );
+});
+
 test('resolveNodeEditorGroupOpen ignores invalid root state', () => {
   assert.equal(
     resolveNodeEditorGroupOpen({

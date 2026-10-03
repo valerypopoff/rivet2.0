@@ -348,11 +348,29 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   // edit action so this assertion exercises switching inspectors instead of relying
   // on page-level keyboard focus across the editor iframe.
   await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const modelSection = editor.getByRole('button', { name: 'Model', exact: true }).and(editor.locator('button'));
+  const modelContent = modelSection
+    .locator('xpath=ancestor::div[@class="Collapsible"][1]')
+    .locator(':scope > .Collapsible__contentOuter');
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
   await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
+  await modelSection.click();
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'false');
+  // react-collapsible clips mounted controls rather than display:none-ing them;
+  // Playwright's toBeVisible does not account for this ancestor clipping.
+  await expect(modelContent).toHaveCSS('height', '0px');
+  await expect(modelContent).toHaveCSS('overflow', 'hidden');
+  await expect(modelContent.getByText('Provider', { exact: true })).toHaveCount(1);
+  await expect(modelContent.getByRole('group', { name: 'API key source' })).toHaveCount(1);
+  await modelSection.click();
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
+  await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
   const outputsHeading = editor.getByText('Outputs', { exact: true });
   if (

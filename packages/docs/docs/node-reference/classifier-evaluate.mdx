@@ -10,6 +10,8 @@ Evaluates one shared state against a batch of independent typed questions in exa
 
 ## Settings
 
+**Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
+
 - **Provider**: selects the classifier protocol implementation. The first built-in provider is **Jev**.
 - **Model**: defaults to `jev-latest` for Jev. New nodes resolve the selected provider's default model unless you enter an explicit model, so switching Provider does not retain Jev's default accidentally. Pin a version when downstream thresholds were calibrated against it.
 - **API key source**: use an API Key input port or a configured provider key. Jev defaults to the `typesafeApiKey` programmatic setting and `TYPESAFE_API_KEY` environment variable. The Rivet app also provides Settings → Classifier → Jev API Key.

@@ -135,36 +135,43 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
     return [
       {
-        type: 'dropdown',
-        label: 'Provider',
-        dataKey: 'provider',
-        defaultValue: 'jev',
-        options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
-      },
-      {
-        type: 'string',
+        type: 'group',
         label: 'Model',
-        dataKey: 'model',
-        useInputToggleDataKey: 'useModelInput',
-        placeholder: 'jev-latest',
-      },
-      {
-        type: 'segmented',
-        label: 'API key source',
-        ariaLabel: 'API key source',
-        dataKey: 'apiKeySource',
-        defaultValue: 'configured',
-        options: [
-          { value: 'configured', label: 'Configured key' },
-          { value: 'input', label: 'Input port' },
+        defaultOpen: true,
+        editors: [
+          {
+            type: 'dropdown',
+            label: 'Provider',
+            dataKey: 'provider',
+            defaultValue: 'jev',
+            options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
+          },
+          {
+            type: 'string',
+            label: 'Model',
+            dataKey: 'model',
+            useInputToggleDataKey: 'useModelInput',
+            placeholder: 'jev-latest',
+          },
+          {
+            type: 'segmented',
+            label: 'API key source',
+            ariaLabel: 'API key source',
+            dataKey: 'apiKeySource',
+            defaultValue: 'configured',
+            options: [
+              { value: 'configured', label: 'Configured key' },
+              { value: 'input', label: 'Input port' },
+            ],
+            helperMessage: getApiKeySourceHelperMessage,
+          },
+          {
+            type: 'custom',
+            label: 'Configured API key names',
+            customEditorId: 'ClassifierCredentialNames',
+            hideIf: (data) => data.apiKeySource === 'input',
+          },
         ],
-        helperMessage: getApiKeySourceHelperMessage,
-      },
-      {
-        type: 'custom',
-        label: 'Configured API key names',
-        customEditorId: 'ClassifierCredentialNames',
-        hideIf: (data) => data.apiKeySource === 'input',
       },
       {
         type: 'group',

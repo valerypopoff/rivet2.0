@@ -13,6 +13,10 @@ Provider IDs are serialized graph contracts. Add future API-compatible providers
 
 ### Card presentation
 
+Classifier Evaluate begins with the shared collapsible **Model** group containing Provider, Model (including its input-source toggle), API key source and the conditional configured-key-name editor. It is initially expanded like LLM Chat; `defaultOpen` is only the fallback until a section preference is stored. Folding must not write node data or mark the project dirty. Serialized settings, connections and execution behavior are unchanged. UI preferences use the existing debounced, best-effort storage: an immediate reload can lose a recent fold/unfold choice, not project data.
+
+Core coverage checks the editor hierarchy and preservation of authored settings/input connections; App coverage checks preference isolation from Outputs and LLM Chat. The hosted `jev-nodes.spec.ts` and `model-error-behavior.spec.ts` regressions cover folding, Model/API Key input modes, retained credential names, saved data, reload persistence and absence of false dirty indicators. Preference reload coverage waits for its database commit separately from the project save.
+
 Classifier Question and Classifier Evaluate cards must use the shared `LLMNodeBody` React component, never a Markdown approximation. Its 3 px within-section field rhythm and 8 px bordered section boundary are the LLM Chat card contract. `getClassifierQuestionBodySections` and `getClassifierEvaluateBodySections` are Core-owned presentation models consumed by those cards. Keep the Markdown fallback generated from the same fields and section boundaries.
 
 Concatenate fallback block markup directly: a newline between block tags becomes a visible blank row because node bodies use `white-space: pre-wrap`. Do not rely on inline styles or Markdown backslash escaping: the sanitizer removes inline styles and literal backslashes visibly leak into card text. The React card must preserve authored punctuation, including `{{subject}}`, dots, and hyphens, as literal text.
