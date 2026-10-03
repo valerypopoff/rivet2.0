@@ -38,9 +38,10 @@
   --workflow-library-folder-indent: 24px;
   --workflow-library-project-marker-width: 8px;
   --workflow-library-row-gap: 8px;
+  --workflow-library-row-padding: 6px;
   --workflow-library-footer-label-inset: calc(
-    var(--workflow-library-body-inset) + var(--workflow-library-folder-indent) +
-    var(--workflow-library-project-indent) + var(--workflow-library-project-marker-width) + var(--workflow-library-row-gap)
+    var(--workflow-library-body-inset) + var(--workflow-library-row-padding) +
+    var(--workflow-button-height-s) + var(--workflow-library-row-gap)
   );
   position: relative;
   display: flex;
@@ -799,8 +800,8 @@
   color: inherit;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px;
+  gap: var(--workflow-library-row-gap);
+  padding: var(--workflow-library-row-padding);
   border-radius: 6px;
   text-align: left;
   font-size: var(--workflow-library-font-size-s);

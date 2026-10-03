@@ -626,7 +626,7 @@ async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): P
 }
 
 test.describe('Workflow library layout', () => {
-  test('aligns footer labels with indented project text and keeps icons in the left gutter', async ({ page }) => {
+  test('aligns footer labels with root folder text and keeps icons in the left gutter', async ({ page }) => {
     const rootProject = createStatusProject('published');
     const project = {
       ...rootProject,
@@ -677,18 +677,22 @@ test.describe('Workflow library layout', () => {
     await expect(publishedButton.locator('svg')).toHaveCount(0);
     await expect(settingsButton.locator('svg')).toHaveCount(1);
     await expect(bottomActions.locator('.panel-bottom-button-label')).toHaveCount(4);
-    await page.locator('.workflow-library-panel .folder-row').click();
-    const projectLabel = page.locator('.workflow-library-panel .project-row .label');
-    await expect(projectLabel).toBeVisible();
+    const folderRow = page.locator('.workflow-library-panel .folder-row');
+    const folderLabel = folderRow.locator('.label');
+    await expect(folderLabel).toBeVisible();
     for (const width of [1600, 700]) {
       await page.setViewportSize({ width, height: 1000 });
-      const projectBox = await projectLabel.boundingBox();
-      expect(projectBox).not.toBeNull();
-      for (const label of await bottomActions.locator('.panel-bottom-button-label').all()) {
-        await expect(label).toBeVisible();
-        const labelBox = await label.boundingBox();
-        expect(labelBox).not.toBeNull();
-        expect(Math.abs(labelBox!.x - projectBox!.x)).toBeLessThanOrEqual(1);
+      for (const expanded of [true, false]) {
+        await folderRow.click();
+        await expect(page.locator('.workflow-library-panel .project-row')).toHaveCount(expanded ? 1 : 0);
+        const folderBox = await folderLabel.boundingBox();
+        expect(folderBox).not.toBeNull();
+        for (const label of await bottomActions.locator('.panel-bottom-button-label').all()) {
+          await expect(label).toBeVisible();
+          const labelBox = await label.boundingBox();
+          expect(labelBox).not.toBeNull();
+          expect(Math.abs(labelBox!.x - folderBox!.x)).toBeLessThanOrEqual(1);
+        }
       }
       for (const button of [recordingsButton, settingsButton]) {
         const iconBox = await button.locator('svg').boundingBox();
