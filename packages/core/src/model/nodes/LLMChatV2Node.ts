@@ -34,6 +34,12 @@ import {
 } from '../chat-v2/llmChatV2NodeRuntime.js';
 import { projectLLMChatV2EditorCacheHit, writeLLMChatV2EditorCache } from '../chat-v2/llmChatV2CacheBoundary.js';
 import { cloneLLMChatV2Outputs } from '../chat-v2/llmChatV2OutputClone.js';
+import {
+  createCaughtRunFailureOutputs,
+  getRunFailureOutputDefinitions,
+  shouldCatchRunFailure,
+  withRunSuccessOutputs,
+} from '../nodeRunFailure.js';
 
 export type {
   LLMChatV2ApiKeySource,
@@ -285,7 +291,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       });
     }
 
-    return outputs;
+    return [...outputs, ...getRunFailureOutputDefinitions(this.data)];
   }
 
   static getUIData(): NodeUIData {
@@ -315,6 +321,23 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    let failureEvidence: Outputs | undefined;
+    try {
+      context.signal.throwIfAborted();
+      return await this.processRun(inputs, context, (outputs) => {
+        failureEvidence = outputs;
+      });
+    } catch (error) {
+      if (!shouldCatchRunFailure(this.data, error, context.signal)) throw error;
+      return createCaughtRunFailureOutputs(this.getOutputDefinitions(), error, failureEvidence);
+    }
+  }
+
+  private async processRun(
+    inputs: Inputs,
+    context: InternalProcessContext,
+    onFailure: (outputs: Outputs) => void,
+  ): Promise<Outputs> {
     const invocationJournal = new LLMInvocationJournal();
     let profileAttemptSequence = 0;
     let latestFailureEvidence: Outputs | undefined;
@@ -348,12 +371,14 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
         });
       },
     });
+    context.signal.throwIfAborted();
     const toolCallContinuation = context.toolCallContinuation;
 
     const cacheHit = projectLLMChatV2EditorCacheHit(runtime);
     if (cacheHit != null) {
       context.markResultAsEditorCacheHit?.();
-      return cacheHit;
+      context.signal.throwIfAborted();
+      return withRunSuccessOutputs(this.data, cacheHit);
     }
 
     let invocation: Awaited<ReturnType<typeof executeLLMInvocation>>;
@@ -386,8 +411,9 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
           profileSummary: runtime.getProfileSummary?.(),
         });
         const failureOutputs = mergeLLMInvocationFailureOutputs(latestFailureEvidence, diagnostics);
+        onFailure(failureOutputs);
 
-        if (Object.keys(failureOutputs).length > 0) {
+        if (!shouldCatchRunFailure(this.data, error, context.signal) && Object.keys(failureOutputs).length > 0) {
           // This checkpoint is the durable terminal counterpart to the live
           // partial-output stream. GraphProcessor attaches it to nodeError,
           // so recordings and remote executors cannot lose evidence merely
@@ -408,6 +434,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       throw error;
     }
 
+    context.signal.throwIfAborted();
     const { result, terminalSnapshot } = invocation;
     projectLLMInvocationResult({
       result,
@@ -417,6 +444,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       llmAttempts: invocationJournal.llmAttempts,
       profileSummary: runtime.getProfileSummary?.(),
     });
+    result.commonOutputs = withRunSuccessOutputs(this.data, result.commonOutputs);
 
     // The final display page is taken after result projection, so it exactly
     // matches the one graph-semantic output map returned below.
@@ -439,6 +467,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       toolCallContinuation.release();
     }
 
+    context.signal.throwIfAborted();
     writeLLMChatV2EditorCache({ runtime, result });
 
     return result.commonOutputs;

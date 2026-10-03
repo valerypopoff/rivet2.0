@@ -14,15 +14,9 @@ import type {
 import { isChatV2ProviderTimeoutError } from './chatV2Types.js';
 import { chatV2ToolsToAiSdk } from './toolConverter.js';
 import { buildChatV2RequestPlan, type ChatV2RequestPlan } from './chatV2RequestPlan.js';
-import {
-  getChatV2ProviderErrorStatusCode,
-  normalizeChatV2ProviderError,
-} from './chatV2Errors.js';
+import { getChatV2ProviderErrorStatusCode, normalizeChatV2ProviderError } from './chatV2Errors.js';
 import { createLLMChatV2RetryAbortError, waitForLLMChatV2RetryCooldown } from './chatV2Retry.js';
-import {
-  createChatV2CommonOutputs,
-  normalizeChatV2Usage,
-} from './chatV2Outputs.js';
+import { createChatV2CommonOutputs, normalizeChatV2Usage } from './chatV2Outputs.js';
 import { materializeLLMResponse } from './llmResponseMaterializer.js';
 
 type ChatV2WithRetryResult = {
@@ -115,6 +109,7 @@ async function runChatV2WithRetry(
   };
 
   for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
@@ -165,13 +160,16 @@ async function runChatV2WithRetry(
         transportMode === 'generate'
           ? await generateChatV2(attemptChatOptions)
           : await streamChatV2(attemptChatOptions);
+      signal.throwIfAborted();
       await options.responseBodyCapture?.flush();
+      signal.throwIfAborted();
       publishAndRetireResponseEvidence();
       const statusCode = result.requestStatus ?? 200;
+      const statusSucceeded = statusCode >= 200 && statusCode < 300;
       notifyChatV2CallFinished(options, {
         callId,
         attemptIndex: attempt,
-        outcome: statusCode === 200 ? 'success' : 'provider-failure',
+        outcome: statusSucceeded ? 'success' : 'provider-failure',
         result,
         startedAt: callStartedAt,
         durationMs: Math.max(0, Date.now() - callStartedAt),
@@ -180,9 +178,9 @@ async function runChatV2WithRetry(
 
       notifyProviderAttempt(options, {
         attemptIndex: attempt,
-        outcome: statusCode === 200 ? 'success' : 'provider-failure',
+        outcome: statusSucceeded ? 'success' : 'provider-failure',
         status: statusCode,
-        ...(statusCode === 200 ? {} : { error: buildNon200StatusError(statusCode) }),
+        ...(statusSucceeded ? {} : { error: buildNon200StatusError(statusCode) }),
       });
 
       if (!retryPlan.enabled || statusCode === 200) {
@@ -192,7 +190,7 @@ async function runChatV2WithRetry(
       const responseError = buildNon200StatusError(statusCode);
 
       if (attempt >= retryPlan.repeatTimes) {
-        return { result, responseError };
+        return { result, ...(statusSucceeded ? {} : { responseError }) };
       }
 
       await prepareProviderRetry();
@@ -228,7 +226,7 @@ async function runChatV2WithRetry(
         // The provider may reject concurrently with graph cancellation. The
         // cancellation wins: it must neither retry nor masquerade as a
         // provider failure to profile fallback and run activity.
-        throw createLLMChatV2RetryAbortError();
+        throw signal.reason ?? createLLMChatV2RetryAbortError();
       }
 
       if (isChatV2ProviderTimeoutError(error) || !retryPlan.enabled || statusCode == null || statusCode === 200) {
@@ -402,7 +400,8 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
   };
 
   const providerRoundFailure =
-    chatResponse.responseError ?? (requestStatus === 200 ? undefined : buildNon200StatusError(requestStatus));
+    chatResponse.responseError ??
+    (requestStatus >= 200 && requestStatus < 300 ? undefined : buildNon200StatusError(requestStatus));
   if (providerRoundFailure != null) {
     const rawError = providerRoundFailure;
     return {

@@ -11,7 +11,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { type EditorDefinition, type InternalProcessContext } from '../../index.js';
 import { coerceType, dedent, getInputOrData } from '../../utils/index.js';
-import { getError } from '../../utils/errors.js';
+import { getError, isAbortError, formatCaughtRunError as formatCaughtRequestFailureError } from '../../utils/errors.js';
 
 const REQUEST_FAILED_OUTPUT_ID = 'requestFailed' as PortId;
 const REQUEST_ERROR_OUTPUT_ID = 'requestError' as PortId;
@@ -32,54 +32,8 @@ type ExcludedOutput = {
   value: undefined;
 };
 
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  return signal.aborted || getError(error).name === 'AbortError';
-}
-
 function buildNon2xxStatusCodeError(statusCode: number): Error {
   return new Error(`HTTP call returned non-2XX status code: ${statusCode}`);
-}
-
-function stringifyNonErrorValue(value: unknown): string {
-  if (value == null) {
-    return String(value);
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (typeof value !== 'object') {
-    return String(value);
-  }
-
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch (_error) {
-    return String(value);
-  }
-}
-
-function formatCaughtRequestFailureError(error: unknown, seen = new Set<unknown>()): string {
-  if (error && typeof error === 'object') {
-    if (seen.has(error)) {
-      return '[Circular error reference]';
-    }
-    seen.add(error);
-  }
-
-  if (error instanceof Error) {
-    const errorText = error.stack?.trim() || `${error.name}: ${error.message}`.trim();
-    const cause = (error as Error & { cause?: unknown }).cause;
-
-    if (cause == null) {
-      return errorText;
-    }
-
-    return `${errorText}\n\nCaused by: ${formatCaughtRequestFailureError(cause, seen)}`;
-  }
-
-  return stringifyNonErrorValue(error);
 }
 
 function createHttpCallRequestAttempts(): HttpCallRequestAttempts {

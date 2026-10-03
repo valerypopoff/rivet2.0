@@ -49,6 +49,58 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                |
 | `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                  |
 
+## Model-node error behavior
+
+LLM Chat and Classifier Evaluate expose `Fail on non-2XX status code` and
+`Catch all failures` in their Error behavior group. The node-owned fields are
+`errorOnNon200` (default true, including older nodes without this field) and
+`catchRequestFailed` (default false). They are not LLM Profile fields.
+Retries and profile fallback run first; catching does not bypass either policy.
+
+When Catch all failures is enabled, or HTTP-status throwing is disabled, the
+canvas exposes scalar `Run failed` (`runFailed`, boolean) and `Run error`
+(`runError`, string) outputs. Success returns false and excludes Run error.
+A handled failure returns true and the complete error/cause chain, excluding
+normal response, answers, usage and tool-call outputs. Disabled status throwing
+handles only typed non-2XX errors; malformed responses, credentials and other
+errors still throw unless Catch all failures is enabled. A provider's rejected
+response is not a usable generated answer, unlike an HTTP Call's raw body.
+LLM opt-in request/response/attempt diagnostics remain available on handled
+failures. Explicit graph cancellation escapes both controls, and caught errors
+do not publish a terminal `nodeError` checkpoint or enter the editor response cache.
+
+Catch all failures wraps the entire awaited node implementation: input and
+credential validation, provider configuration, transport and provider timeouts,
+response decoding/validation, LLM tool continuation, result projection and cache
+processing. Only an aborted caller signal proves graph cancellation; a provider
+`AbortError` while that signal is live is a catchable node failure. Observational
+callbacks remain isolated rather than turning successful execution into failure.
+The control cannot catch upstream-node errors, scheduler/setup failures before
+the node runs, or process/browser termination. A scheduler-excluded node did not
+run and does not emit a caught failure.
+
+Caller cancellation is checked before preparation and after asynchronous work;
+late successful LLM replies cannot publish successful activity or enter the cache.
+Classifier's overall deadline covers both headers and JSON receipt, including
+injected transports that ignore abort signals. Waiting settles on cancellation;
+late replies are discarded and late rejections consumed. Response-read errors
+retain their underlying cause instead of reporting only an invalid-JSON summary.
+
+HTTP and model nodes share error-text handling, so unusual thrown values cannot
+make error formatting fail. Classifier releases rejected response bodies on both
+retries and terminal failures, including when failures are caught and the graph continues.
+Foreign-realm errors retain their stack/message and causal chain; they must not
+be reduced to an empty JSON object merely because `instanceof Error` is false.
+Cleanup is best-effort and cannot block the final failure or the next retry.
+Synchronous cleanup errors cannot mask the original HTTP status either.
+
+The body displays `Throw on non-2XX` and `Catch all failures` when enabled.
+Valid 2XX provider results remain successful even when the status is not 200;
+the separately named Retry on non-200 policy retains its existing repeat rule.
+Split runs aggregate Run failed as boolean arrays. Mixed success/failure ports
+infer their array type from a non-excluded item in either order, preserving
+undefined slots at excluded indices; entirely excluded ports remain excluded.
+
 ## LLM numeric settings
 
 LLM Chat and LLM Profile share optional Temperature semantics: blank means use

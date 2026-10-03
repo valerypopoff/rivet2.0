@@ -647,6 +647,21 @@ function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
   return group('Error behavior', [
     {
       type: 'toggle',
+      label: 'Fail on non-2XX status code',
+      dataKey: 'errorOnNon200',
+      defaultValue: true,
+      helperMessage:
+        'After retries and profile fallback, throw on a rejected HTTP request. When disabled, return Run failed and Run error; unavailable response outputs are excluded.',
+    },
+    {
+      type: 'toggle',
+      label: 'Catch all failures',
+      dataKey: 'catchRequestFailed',
+      helperMessage:
+        'Return any node execution failure through Run failed and Run error instead of stopping the graph. Explicit graph cancellation is never caught.',
+    },
+    {
+      type: 'toggle',
       label: 'Retry on non-200',
       dataKey: 'retryOnNon200',
       helperMessage: 'Retries provider requests when Vercel reports a non-200 HTTP status.',

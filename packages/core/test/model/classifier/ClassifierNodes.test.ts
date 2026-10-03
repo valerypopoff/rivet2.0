@@ -327,6 +327,8 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     text: [
       '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Provider:</span> <span class="rivet-node-body-field-value">Jev</span></div>',
       '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Model:</span> <span class="rivet-node-body-field-value">jev-latest</span></div>',
+      '<div class="rivet-node-body-separator"></div>',
+      '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Throw on non-2XX:</span> <span class="rivet-node-body-field-value">Enabled</span></div>',
     ].join(''),
   });
   assert.doesNotMatch(body.text, /Batch: one request/);
@@ -395,12 +397,14 @@ test('Classifier Evaluate mirrors LLM Chat Error behavior settings and its node-
 
   assert.equal(errorGroup.label, 'Error behavior');
   assert.deepEqual(errorGroup.editors.map((editor: any) => editor.dataKey), [
+    'errorOnNon200',
+    'catchRequestFailed',
     'retryOnNon200',
     'retryOnNon200RepeatTimes',
     'retryOnNon200CooldownMs',
   ]);
-  assert.equal(errorGroup.editors[1].hideIf({ retryOnNon200: false }), true);
-  assert.equal(errorGroup.editors[1].hideIf({ retryOnNon200: true }), false);
+  assert.equal(errorGroup.editors[3].hideIf({ retryOnNon200: false }), true);
+  assert.equal(errorGroup.editors[3].hideIf({ retryOnNon200: true }), false);
   const body = instance.getBody().text;
   assert.match(body, /Retry on non-200:<\/span> <span class="rivet-node-body-field-value">Enabled/);
   assert.match(body, /Repeat times:<\/span> <span class="rivet-node-body-field-value">2/);

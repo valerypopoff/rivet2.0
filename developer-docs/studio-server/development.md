@@ -60,6 +60,44 @@ unlocks only after a fresh status response. Do not apply this short deadline to
 inventory, fingerprint, copy or validation actions. A rejected action's error
 must remain visible when status polling succeeds again.
 
+## Model-node failure controls
+
+LLM Chat and Classifier Evaluate share the node-owned error boundary documented
+in [editor-bridge.md](./editor-bridge.md#model-node-error-behavior). The default
+still throws failures. Explicit Catch all failures returns scalar Run failed /
+Run error ports and excludes ordinary answer outputs. Disabling status throwing
+handles only typed non-2XX failures. Keep explicit graph cancellation uncaught,
+preserve retry and profile-fallback ordering, and do not cache caught failures or publish them
+through the display-only terminal nodeError channel.
+
+Focused verification:
+
+```sh
+yarn workspace @valerypopoff/rivet2-core exec tsx --test --test-concurrency=4 test/model/nodes/RunFailureNodes.test.ts test/model/nodes/LLMChatV2Node.test.ts test/model/chat-v2/*.test.ts test/model/classifier/*.test.ts test/model/nodes/HttpCallNode.*.test.ts test/model/SplitRunProcessor.test.ts test/model/GraphProcessor*.test.ts
+PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe model-error-behavior.spec.ts jev-nodes.spec.ts --grep 'Error behavior switches|Classifier cards|legacy Jev'
+```
+
+The browser regression checks both Error behavior toggles, dynamic ports, body
+summaries, exact saved fields and reload, plus the adjacent Classifier card and
+legacy-Jev editor regressions. Expand collapsed settings sections and click
+visible switch labels rather than the hidden checkbox underneath their styled
+track. Core tests cover the switch matrix, configuration/response failures,
+causal errors, retry recovery, valid 2XX
+responses, cancellation, profile fallback, diagnostics and editor cache hits.
+They also cover null-prototype/cyclic thrown values, throwing accessors,
+provider AbortErrors versus actual caller cancellation, Classifier local timeouts,
+tool-continuation and cache failures, and Classifier rejected-body cleanup on final
+failures, automatic retries, cleanup errors and indefinitely pending cleanup promises.
+Real GraphProcessor split-run cases mix caught failures with successes in either
+order and verify aligned failure flags, errors and normal-output array types.
+Cancellation races also exercise a provider returning success after abort: no
+successful model activity or cache entry may be published. Classifier deadline
+tests cover late headers, late JSON reads, indefinitely pending transports and
+disposing late responses; stream interruption must exclude partial LLM answers.
+Keep response-read causes and HTTP statuses intact even if body cleanup fails.
+The formatter regression creates real foreign-realm errors, including a nested
+cause, rather than testing only same-realm objects with an AbortError name.
+
 ## HTTP body lifecycle verification
 
 Media admission must match the JSON parser (`application/json` and `application/*+json`, not arbitrary `+json` suffixes). Check already-disconnected requests before installing stream listeners: authorization can await storage while the client disconnects, so relying only on future abort events strands parser capacity until timeout.

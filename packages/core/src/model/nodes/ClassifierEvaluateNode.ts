@@ -2,11 +2,24 @@ import { nanoid } from 'nanoid/non-secure';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { NodeBodySpec } from '../NodeBodySpec.js';
-import type { ChartNode, NodeConnection, NodeId, NodeInputDefinition, NodeOutputDefinition, PortId } from '../NodeBase.js';
+import type {
+  ChartNode,
+  NodeConnection,
+  NodeId,
+  NodeInputDefinition,
+  NodeOutputDefinition,
+  PortId,
+} from '../NodeBase.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownSeparator } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import {
+  createCaughtRunFailureOutputs,
+  getRunFailureOutputDefinitions,
+  shouldCatchRunFailure,
+  withRunSuccessOutputs,
+} from '../nodeRunFailure.js';
 import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 import {
   type ClassifierApiKeySource,
@@ -42,6 +55,8 @@ export type ClassifierEvaluateNodeData = {
   /** Adds calculated provider cost details to the existing Usage output. */
   outputUsage?: boolean;
   retryOnNon200?: boolean;
+  errorOnNon200?: boolean;
+  catchRequestFailed?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   timeoutMs?: number;
@@ -70,7 +85,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       // Keep the default model in the provider descriptor rather than
       // serializing Jev's model into every new node. A future provider then
       // receives its own default when an author changes the Provider field.
-      data: { provider: 'jev', timeoutMs: 30_000 },
+      data: { provider: 'jev', timeoutMs: 30_000, errorOnNon200: true, catchRequestFailed: false },
     };
   }
 
@@ -114,7 +129,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     if (this.data.outputResponseBody === true) {
       outputs.push({ id: 'responseBody' as PortId, title: 'Classifier response body', dataType: 'object' });
     }
-    return outputs;
+    return [...outputs, ...getRunFailureOutputDefinitions(this.data)];
   }
 
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
@@ -200,6 +215,21 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         editors: [
           {
             type: 'toggle',
+            label: 'Fail on non-2XX status code',
+            dataKey: 'errorOnNon200',
+            defaultValue: true,
+            helperMessage:
+              'After retries, throw on a rejected HTTP request. When disabled, return Run failed and Run error; unavailable answer outputs are excluded.',
+          },
+          {
+            type: 'toggle',
+            label: 'Catch all failures',
+            dataKey: 'catchRequestFailed',
+            helperMessage:
+              'Return any node execution failure through Run failed and Run error instead of stopping the graph. Explicit graph cancellation is never caught.',
+          },
+          {
+            type: 'toggle',
             label: 'Retry on non-200',
             dataKey: 'retryOnNon200',
             helperMessage:
@@ -250,12 +280,25 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     return {
       contextMenuTitle: 'Classifier Evaluate',
       infoBoxTitle: 'Classifier Evaluate',
-      infoBoxBody: 'Evaluates one shared state against a batch of independent typed classifier questions in one request.',
+      infoBoxBody:
+        'Evaluates one shared state against a batch of independent typed classifier questions in one request.',
       group: ['Classifier'],
     };
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    try {
+      context.signal.throwIfAborted();
+      const outputs = await this.processRun(inputs, context);
+      context.signal.throwIfAborted();
+      return withRunSuccessOutputs(this.data, outputs);
+    } catch (error) {
+      if (!shouldCatchRunFailure(this.data, error, context.signal)) throw error;
+      return createCaughtRunFailureOutputs(this.getOutputDefinitions(), error);
+    }
+  }
+
+  private async processRun(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const provider = getClassifierProvider(this.data.provider);
     if (!provider.browserExecutionSupported && context.executor === 'browser') {
       throw new Error(
@@ -353,13 +396,22 @@ export function getClassifierEvaluateBodySections(
       ],
     },
   ];
-  if (data.retryOnNon200) {
+  if (data.errorOnNon200 !== false || data.catchRequestFailed || data.retryOnNon200) {
     sections.push({
       id: 'error-behavior',
       fields: [
-        { label: 'Retry on non-200', value: 'Enabled' },
-        { label: 'Repeat times', value: `${normalizeClassifierNon200RetryCount(data.retryOnNon200RepeatTimes)}` },
-        { label: 'Cooldown, ms', value: `${normalizeClassifierNon200RetryCooldownMs(data.retryOnNon200CooldownMs)}` },
+        ...(data.errorOnNon200 !== false ? [{ label: 'Throw on non-2XX', value: 'Enabled' }] : []),
+        ...(data.catchRequestFailed ? [{ label: 'Catch all failures', value: 'Enabled' }] : []),
+        ...(data.retryOnNon200
+          ? [
+              { label: 'Retry on non-200', value: 'Enabled' },
+              { label: 'Repeat times', value: `${normalizeClassifierNon200RetryCount(data.retryOnNon200RepeatTimes)}` },
+              {
+                label: 'Cooldown, ms',
+                value: `${normalizeClassifierNon200RetryCooldownMs(data.retryOnNon200CooldownMs)}`,
+              },
+            ]
+          : []),
       ],
     });
   }
@@ -412,7 +464,9 @@ function validateQuestion(question: ClassifierQuestionDefinition): void {
     if (!Array.isArray(criteria) || criteria.length < 2 || criteria.length > 10) {
       throw new Error(`Score question '${question.questionId}' requires 2 to 10 levels.`);
     }
-    criteria.forEach((entry, index) => assertClassifierEntry(entry, `Question '${question.questionId}' criteria[${index}]`));
+    criteria.forEach((entry, index) =>
+      assertClassifierEntry(entry, `Question '${question.questionId}' criteria[${index}]`),
+    );
   } else {
     const criteria = (question as ClassifierNoulQuestionDefinition).criteria;
     if (criteria !== undefined) {
@@ -433,7 +487,8 @@ function validateQuestion(question: ClassifierQuestionDefinition): void {
 
 function assertClassifierState(value: unknown): asserts value is string | Record<string, unknown> | unknown[] {
   if (typeof value === 'string') return;
-  if (typeof value !== 'object' || value === null) throw new Error('State must be a string, JSON object, or JSON array.');
+  if (typeof value !== 'object' || value === null)
+    throw new Error('State must be a string, JSON object, or JSON array.');
   assertJsonCompatible(value, 'State', new Set());
 }
 

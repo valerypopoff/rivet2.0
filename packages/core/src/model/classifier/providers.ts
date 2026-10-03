@@ -224,9 +224,7 @@ async function callApiCompatibleClassifier({
   timeoutMs: number;
 }): Promise<ClassifierProviderEvaluationResult> {
   const deadline = Date.now() + timeoutMs;
-  const configuredRetryCount = retryOnNon200
-    ? normalizeClassifierNon200RetryCount(retryOnNon200RepeatTimes)
-    : 0;
+  const configuredRetryCount = retryOnNon200 ? normalizeClassifierNon200RetryCount(retryOnNon200RepeatTimes) : 0;
   const configuredCooldownMs = normalizeClassifierNon200RetryCooldownMs(retryOnNon200CooldownMs);
   let automaticRetryCount = 0;
   let configuredRetryCountUsed = 0;
@@ -250,16 +248,26 @@ async function callApiCompatibleClassifier({
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
     };
+    const assertAttemptActive = () => {
+      throwIfAborted(signal, providerLabel);
+      if (controller.signal.aborted || Date.now() >= deadline) {
+        throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
+      }
+    };
 
     let response: Response;
     try {
-      response = await fetchImplementation(endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: requestJson,
-        signal: controller.signal,
-      });
-    } catch {
+      response = await waitForAttempt(
+        fetchImplementation(endpoint, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: requestJson,
+          signal: controller.signal,
+        }),
+        controller.signal,
+        discardResponseBody,
+      );
+    } catch (error) {
       cleanupAttempt();
       if (signal.aborted) throwAbort(signal, providerLabel);
       if (Date.now() >= deadline || controller.signal.aborted) {
@@ -268,50 +276,65 @@ async function callApiCompatibleClassifier({
       if (automaticRetryCount >= MAX_AUTOMATIC_ATTEMPTS - 1) {
         throw new Error(
           `${providerLabel} request failed after ${MAX_AUTOMATIC_ATTEMPTS} attempts due to a transport error.`,
+          { cause: error },
         );
       }
       automaticRetryCount += 1;
-      await waitForRetry(
-        Math.min(250 * 2 ** (automaticRetryCount - 1), deadline - Date.now()),
-        signal,
-        providerLabel,
-      );
+      await waitForRetry(Math.min(250 * 2 ** (automaticRetryCount - 1), deadline - Date.now()), signal, providerLabel);
       continue;
+    }
+
+    try {
+      assertAttemptActive();
+    } catch (error) {
+      cleanupAttempt();
+      discardResponseBody(response);
+      throw error;
     }
 
     if (!response.ok) {
       cleanupAttempt();
+      // Rejected bodies are not answer outputs. Release every response, not just
+      // retries, so caught terminal failures cannot leave connections occupied.
+      // Initiate cancellation without awaiting a hostile stream's cleanup;
+      // neither the final error nor the next bounded retry may depend on it.
+      discardResponseBody(response);
       if (RETRYABLE_STATUSES.has(response.status) && automaticRetryCount < MAX_AUTOMATIC_ATTEMPTS - 1) {
         automaticRetryCount += 1;
         const delayMs = getRetryDelayMs(response.headers.get('retry-after'), automaticRetryCount, deadline);
-        await response.body?.cancel().catch(() => undefined);
         await waitForRetry(delayMs, signal, providerLabel);
         continue;
       }
       if (response.status === 401 || response.status === 403) {
-        throw new Error(`${providerLabel} authentication failed. Check the ${providerLabel} API key.`);
+        throw Object.assign(new Error(`${providerLabel} authentication failed. Check the ${providerLabel} API key.`), {
+          statusCode: response.status,
+        });
       }
       if (response.status === 422 || response.status === 400) {
-        throw new Error(`${providerLabel} rejected the request (HTTP ${response.status}).`);
+        throw Object.assign(new Error(`${providerLabel} rejected the request (HTTP ${response.status}).`), {
+          statusCode: response.status,
+        });
       }
       if (configuredRetryCountUsed < configuredRetryCount && !RETRYABLE_STATUSES.has(response.status)) {
         configuredRetryCountUsed += 1;
-        await response.body?.cancel().catch(() => undefined);
         await waitForRetry(Math.min(configuredCooldownMs, deadline - Date.now()), signal, providerLabel);
         continue;
       }
-      throw new Error(`${providerLabel} request failed (HTTP ${response.status}).`);
+      throw Object.assign(new Error(`${providerLabel} request failed (HTTP ${response.status}).`), {
+        statusCode: response.status,
+      });
     }
 
     let body: unknown;
     try {
-      body = await response.json();
-    } catch {
+      body = await waitForAttempt(response.json(), controller.signal);
+      assertAttemptActive();
+    } catch (error) {
       if (signal.aborted) throwAbort(signal, providerLabel);
       if (controller.signal.aborted || Date.now() >= deadline) {
         throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
       }
-      throw new Error(`${providerLabel} returned an invalid JSON response.`);
+      throw new Error(`${providerLabel} returned an invalid JSON response.`, { cause: error });
     } finally {
       cleanupAttempt();
     }
@@ -325,14 +348,47 @@ async function callApiCompatibleClassifier({
       responseBody: validatedResponse as unknown as Record<string, unknown>,
     };
   }
+}
 
+/** Bound awaiting even when a custom transport ignores its abort signal. */
+function waitForAttempt<T>(promise: Promise<T>, signal: AbortSignal, onLateResult?: (value: T) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let aborted = false;
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      aborted = true;
+      cleanup();
+      reject(signal.reason);
+    };
+    // Attach both handlers even after cancellation: late errors are consumed
+    // and a late HTTP response is disposed, never accepted by another attempt.
+    promise.then(
+      (value) => {
+        cleanup();
+        if (aborted) onLateResult?.(value);
+        else resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+function discardResponseBody(response: Response): void {
+  try {
+    void response.body?.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup is observational, including custom fetch/body implementations.
+  }
 }
 
 export function normalizeClassifierNon200RetryCount(value: number | undefined): number {
   const retryCount =
-    typeof value === 'number' && Number.isFinite(value)
-      ? value
-      : DEFAULT_CLASSIFIER_RETRY_ON_NON_200_REPEAT_TIMES;
+    typeof value === 'number' && Number.isFinite(value) ? value : DEFAULT_CLASSIFIER_RETRY_ON_NON_200_REPEAT_TIMES;
   return Math.max(1, Math.floor(retryCount));
 }
 
@@ -415,12 +471,22 @@ function requireProbabilityMap(
 function structurallyEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((item, index) => structurallyEqual(item, right[index]));
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => structurallyEqual(item, right[index]))
+    );
   }
   if (!isRecord(left) || !isRecord(right)) return false;
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);
-  return leftKeys.length === rightKeys.length && leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && structurallyEqual(left[key], right[key]));
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.prototype.hasOwnProperty.call(right, key) && structurallyEqual(left[key], right[key]),
+    )
+  );
 }
 
 export function validateApiCompatibleClassifierResponse(

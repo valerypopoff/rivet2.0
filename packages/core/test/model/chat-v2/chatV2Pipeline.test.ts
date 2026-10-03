@@ -700,8 +700,10 @@ void describe('runChatV2Pipeline', () => {
         retryOnNon200RepeatTimes: 1,
         retryOnNon200CooldownMs: 1_000,
         context: createObservedContext(events, abortController.signal),
+        onBeforeProviderRetry: () => {
+          abortController.abort();
+        },
         executeStream: async () => {
-          queueMicrotask(() => abortController.abort());
           return {
             fullStream: mockStream([]),
             requestStatus: 503,
@@ -736,7 +738,6 @@ void describe('runChatV2Pipeline', () => {
 
     const abortEvents: ChatV2CallFinishedEvent[] = [];
     const abortController = new AbortController();
-    abortController.abort();
     await assert.rejects(
       runChatV2Pipeline({
         provider: 'openai',
@@ -745,6 +746,7 @@ void describe('runChatV2Pipeline', () => {
         prompt: { type: 'string', value: 'Hello' },
         context: createObservedContext(abortEvents, abortController.signal),
         executeStream: async () => {
+          abortController.abort();
           throw new DOMException('Aborted', 'AbortError');
         },
       }),
@@ -1052,7 +1054,7 @@ void describe('runChatV2Pipeline', () => {
     assert.equal(attempt, 2);
   });
 
-  void it('does not start a zero-cooldown retry after cancellation', async () => {
+  void it('does not start a provider call or zero-cooldown retry when already cancelled', async () => {
     let attempt = 0;
     const abortController = new AbortController();
     const executeStream: ChatV2StreamExecutor = async () => {
@@ -1087,7 +1089,7 @@ void describe('runChatV2Pipeline', () => {
       },
     );
 
-    assert.equal(attempt, 1);
+    assert.equal(attempt, 0);
   });
 
   void it('fails after retrying Vercel status failures', async () => {
@@ -1305,7 +1307,7 @@ void describe('runChatV2Pipeline', () => {
     );
   });
 
-  void it('fails a non-200 provider response instead of returning legacy diagnostic outputs', async () => {
+  void it('accepts valid 2XX responses and reports successful attempts even with non-200 retries', async () => {
     const executeStream: ChatV2StreamExecutor = async () => ({
       fullStream: mockStream([
         { type: 'text-start', id: 'text_1' },
@@ -1315,20 +1317,22 @@ void describe('runChatV2Pipeline', () => {
       requestStatus: 202,
     });
 
-    await assert.rejects(
-      () =>
-        runChatV2Pipeline({
-          provider: 'custom',
-          model: createMockModel(),
-          modelId: 'custom-model',
-          prompt: { type: 'string', value: 'Hello' },
-          context: {
-            signal: new AbortController().signal,
-          },
-          executeStream,
-        }),
-      /202 HTTP error/,
-    );
+    for (const retryOnNon200 of [false, true]) {
+      const events: ChatV2CallFinishedEvent[] = [];
+      const result = await runChatV2Pipeline({
+        provider: 'custom',
+        model: createMockModel(),
+        modelId: 'custom-model',
+        prompt: { type: 'string', value: 'Hello' },
+        context: createObservedContext(events),
+        retryOnNon200,
+        retryOnNon200RepeatTimes: 1,
+        executeStream,
+      });
+      assert.equal(result.response, 'Accepted');
+      assert.equal(events.length, retryOnNon200 ? 2 : 1);
+      assert.ok(events.every((event) => event.outcome === 'success'));
+    }
   });
 
   void it('defaults successful Vercel provider calls to request status 200 when no raw status is exposed', async () => {

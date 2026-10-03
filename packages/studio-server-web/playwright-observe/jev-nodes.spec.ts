@@ -2,6 +2,8 @@ import { expect, test, type FrameLocator, type Locator, type Page } from '@playw
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
+test.use({ actionTimeout: 15_000 });
+
 const projectName = 'Hosted Classifier node migration';
 const projectPath = `/workflows/${projectName}.rivet-project`;
 
@@ -57,19 +59,37 @@ async function openFixture(page: Page): Promise<FrameLocator> {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path === '/api/config' && request.method() === 'GET') {
-      await route.fulfill({ json: {
-        executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/internal',
-        remoteDebuggerDefaultWs: 'ws://127.0.0.1:8081/ws/latest-debugger',
-        publishedWorkflowsBasePath: '/workflows', latestWorkflowsBasePath: '/workflows-latest',
-        publishedAppsBasePath: '/apps', latestAppsBasePath: '/apps-latest', webAppsAuthMode: 'ui-gate',
-      } });
+      await route.fulfill({
+        json: {
+          executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/internal',
+          remoteDebuggerDefaultWs: 'ws://127.0.0.1:8081/ws/latest-debugger',
+          publishedWorkflowsBasePath: '/workflows',
+          latestWorkflowsBasePath: '/workflows-latest',
+          publishedAppsBasePath: '/apps',
+          latestAppsBasePath: '/apps-latest',
+          webAppsAuthMode: 'ui-gate',
+        },
+      });
     } else if (path === '/api/workflows/evaluation-runs/library' && request.method() === 'GET') {
-      await route.fulfill({ json: {
-        revision: 0, resourceVersions: { suites: {}, datasets: {} },
-        library: { version: 1, data: { version: 1, suites: [], baselines: [] }, datasets: [], migratedLegacyProjectIds: [] },
-      } });
+      await route.fulfill({
+        json: {
+          revision: 0,
+          resourceVersions: { suites: {}, datasets: {} },
+          library: {
+            version: 1,
+            data: { version: 1, suites: [], baselines: [] },
+            datasets: [],
+            migratedLegacyProjectIds: [],
+          },
+        },
+      });
     } else if (path === '/api/workflows/tree' && request.method() === 'GET') {
-      const tree: WorkflowTreeResponse = { root: '/workflows', sync: { epoch: 'jev', revision: 0 }, folders: [], projects: [project] };
+      const tree: WorkflowTreeResponse = {
+        root: '/workflows',
+        sync: { epoch: 'jev', revision: 0 },
+        folders: [],
+        projects: [project],
+      };
       await route.fulfill({ json: tree });
     } else if (path === '/api/projects/load' && request.method() === 'POST') {
       await route.fulfill({ json: { contents: fixture, datasetsContents: null, revisionId: null } });
@@ -141,7 +161,9 @@ test('Choice selection persists and keeps both criteria columns usable', async (
   await choice.locator('button.edit-button').click({ force: true });
 
   await selectQuestionType(editor, 'Score');
-  await expect(classifierSection(editor, 'Criteria').getByRole('combobox', { name: 'Criteria type', exact: true })).toBeVisible();
+  await expect(
+    classifierSection(editor, 'Criteria').getByRole('combobox', { name: 'Criteria type', exact: true }),
+  ).toBeVisible();
   await expect(editor.getByRole('combobox', { name: 'Criterion 1 type', exact: true })).toHaveCount(0);
 
   await selectQuestionType(editor, 'Choice');
@@ -224,8 +246,8 @@ test('Classifier cards share the LLM Chat body layout', async ({ page }) => {
   await expect(choice.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
 
   await expect(evaluate.locator('.node-body-markdown')).toHaveCount(0);
-  await expect(evaluate.locator('.llm-node-body-section')).toHaveCount(1);
-  await expect(evaluate.locator('.llm-node-body-label')).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluate.locator('.llm-node-body-section')).toHaveCount(2);
+  await expect(evaluate.locator('.llm-node-body-label')).toHaveText(['Provider:', 'Model:', 'Throw on non-2XX:']);
   await expect(evaluate.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
 });
 
@@ -317,7 +339,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(0);
   await expect(evaluate).not.toContainText('Batch: one request');
   const evaluateBodyFields = evaluate.locator('.llm-node-body-label');
-  await expect(evaluateBodyFields).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluateBodyFields).toHaveText(['Provider:', 'Model:', 'Throw on non-2XX:']);
   await expect(evaluateBodyFields.first()).toHaveCSS('opacity', '0.6');
   await expect(evaluate).toContainText('Provider: Jev');
   await expect(evaluate).toContainText('Model: jev-latest');
@@ -332,25 +354,34 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
+  const outputsHeading = editor.getByText('Outputs', { exact: true });
+  if (
+    (await outputsHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false'
+  ) {
+    await outputsHeading.click();
+  }
   await expect(editor.getByText('Output usage details', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output request body', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output response body', { exact: true })).toBeVisible();
-  await editor.locator('input#outputUsage').check();
+  await editor.getByText('Output usage details', { exact: true }).click();
   await expect(editor.locator('input#outputUsage')).toBeChecked();
-  await editor.locator('input#outputRequestBody').check();
+  await editor.getByText('Output request body', { exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Classifier request body$/ })).toHaveCount(1);
-  await editor.locator('input#outputResponseBody').check();
+  await editor.getByText('Output response body', { exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Classifier response body$/ })).toHaveCount(1);
   await expect(editor.getByText('Error behavior', { exact: true })).toBeVisible();
+  const errorHeading = editor.getByText('Error behavior', { exact: true });
+  if ((await errorHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false') {
+    await errorHeading.click();
+  }
   await expect(editor.getByText('Retry on non-200', { exact: true })).toBeVisible();
-  await editor.locator('input#retryOnNon200').check();
+  await editor.getByText('Retry on non-200', { exact: true }).click();
   await expect(editor.getByText('Repeat times', { exact: true })).toBeVisible();
   await expect(editor.getByText('Cooldown, ms', { exact: true })).toBeVisible();
   await editor.getByRole('button', { name: 'Input port', exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(1);
   await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
   await page.keyboard.press('Escape');
-
 });
 
 test('Classifier nodes are available from the built-in Classifier add-node group', async ({ page }) => {
