@@ -538,6 +538,31 @@ workflowsRouter.get(
   }),
 );
 
+// A separate metadata-only browse path: children are execution context, not
+// input-search matches. Pagination bounds responses even for large families.
+workflowsRouter.get(
+  '/recordings/:recordingId/sub-runs',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { page, pageSize } = recordingsRunsQuerySchema.pick({ page: true, pageSize: true }).parse(req.query);
+    const recordingId = z.string().min(1).max(256).parse(req.params.recordingId);
+    res.json(
+      await listWorkflowRecordingRunsPageWithBackend(
+        recordingId,
+        page,
+        pageSize,
+        'all',
+        null,
+        0,
+        undefined,
+        undefined,
+        false,
+        'children',
+      ),
+    );
+  }),
+);
+
 workflowsRouter.get(
   '/recordings/:recordingId/recording',
   asyncHandler(async (req, res) => {

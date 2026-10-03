@@ -486,9 +486,13 @@ export async function listWorkflowRecordingRunsPage(
   signal?: AbortSignal,
   inputAfter?: string,
   includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   await ensureWorkflowRecordingStorage(root);
-  const scopeCounts = workflowId && includeSubgraphRuns ? await getWorkflowRecordingScopeCounts(workflowId) : undefined;
+  const scopeCounts =
+    (workflowId && includeSubgraphRuns) || runScope === 'roots'
+      ? await getWorkflowRecordingScopeCounts(workflowId, runScope)
+      : undefined;
 
   const normalizedPage = Math.max(1, Math.floor(page));
   const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
@@ -525,12 +529,13 @@ export async function listWorkflowRecordingRunsPage(
     ? statusFilter === 'failed'
       ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
       : scopeCounts.totalRuns
-    : await countWorkflowRecordingRuns(workflowId, statusFilter);
+    : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const rows = await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
     page: normalizedPage,
     pageSize: normalizedPageSize,
     statusFilter,
     includeSubgraphRuns,
+    runScope,
   });
 
   return {
@@ -588,6 +593,7 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
       listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
         statusFilter,
         includeSubgraphRuns,
+        runScope: 'roots',
         offset: after ? 0 : offset,
         after: parseWorkflowRecordingInputAfter(after, {
           workflowId,

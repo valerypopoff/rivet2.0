@@ -9,32 +9,33 @@ function endpoint(path = ''): string {
 async function reportPersistenceFailure(correlationId: string): Promise<void> {
   await fetch(endpoint('/outcome'), {
     method: 'POST',
+    signal: AbortSignal.timeout(10_000),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ correlationId, availability: 'persistence-failed' }),
   }).catch(() => undefined);
 }
 
 /**
- * Saves only the locally executed recordings that Core marked as unhealthy
- * LLM-profile attempts. The API owns validation, retention, and the durable
- * correlation to the profile-health evidence.
+ * Saves recorded local editor executions, whether or not they contain LLM
+ * health evidence. The API owns validation, retention, and any durable
+ * correlation to profile-health evidence.
  */
 export function createHostedLocalExecutionRecordingPersistence(): LocalExecutionRecordingPersistenceProvider {
   let capability: Promise<boolean> | undefined;
 
   return {
     getCapability() {
-      capability ??= fetch(endpoint('/capability'), { cache: 'no-store' })
+      capability ??= fetch(endpoint('/capability'), { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
         .then(async (response) => {
           if (response.status === 404) return false;
           if (!response.ok) {
-            // The dev stack can be briefly unavailable while its API restarts.
-            // Keep a definitive compatibility downgrade for 404, but retry a
-            // transient server failure on the next editor run.
-            if (response.status >= 500) capability = undefined;
+            // Only 404 is a definitive compatibility downgrade. Authentication,
+            // throttling and service failures may recover on the next run.
+            capability = undefined;
             return false;
           }
           const body = (await response.json().catch(() => ({}))) as { supported?: unknown };
+          if (body.supported !== true) capability = undefined;
           return body.supported === true;
         })
         .catch(() => {
@@ -51,6 +52,7 @@ export function createHostedLocalExecutionRecordingPersistence(): LocalExecution
     async persist(input) {
       const response = await fetch(endpoint(), {
         method: 'POST',
+        signal: AbortSignal.timeout(60_000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       });

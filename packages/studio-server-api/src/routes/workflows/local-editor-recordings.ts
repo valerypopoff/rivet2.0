@@ -29,11 +29,17 @@ const recordingJsonBody = createJsonBodyParser(() => MAX_LOCAL_EDITOR_RECORDING_
 
 localEditorRecordingsRouter.get('/capability', (_req, res) => {
   // Route presence is the compatibility contract. Recording configuration is
-  // reported only after a health-correlated local run actually completes.
+  // reported only after a recorded local run actually completes.
   res.json({ supported: true });
 });
 
 const persistenceAvailabilitySchema = z.enum(['disabled', 'persistence-failed']);
+// A list-row summary is derived metadata. Bound it without discarding a valid
+// replay, which retains the full diagnostic under the existing upload limit.
+const errorSummarySchema = z
+  .string()
+  .transform((message) => message.slice(0, 16_384))
+  .optional();
 const executionIdentitySchema = z
   .object({
     correlationId: z.string().min(1).max(200),
@@ -51,7 +57,7 @@ const localEditorRecordingSchema = z
     recordingSerialized: z.string().min(1),
     status: z.enum(['succeeded', 'failed', 'suspicious']),
     durationMs: z.number().finite().nonnegative(),
-    errorMessage: z.string().max(16_384).optional(),
+    errorMessage: errorSummarySchema,
     executionIdentity: executionIdentitySchema,
   })
   .strict()
@@ -82,7 +88,7 @@ const subgraphEditorRecordingSchema = z
     correlationId: z.string().min(16).max(96).optional(),
     status: z.enum(['succeeded', 'failed']),
     durationMs: z.number().finite().nonnegative(),
-    errorMessage: z.string().max(16_384).optional(),
+    errorMessage: errorSummarySchema,
   })
   .strict()
   .superRefine((input, context) => {

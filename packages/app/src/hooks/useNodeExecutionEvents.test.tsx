@@ -7,8 +7,11 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { getDefaultStore } from 'jotai';
 import { ProvidersProvider, type DataRefStore } from '../providers/ProvidersContext.js';
-import { lastRunDataByNodeState } from '../state/dataFlow.js';
-import { useExecutionDataFlow } from './useExecutionDataFlow.js';
+import { lastRunDataByNodeState, selectedProcessPageNodesState } from '../state/dataFlow.js';
+import { useExecutionDataFlow, type ExecutionDataFlowApi } from './useExecutionDataFlow.js';
+import { graphNavigationStackState } from '../state/graphBuilder.js';
+import { userInputModalQuestionsState } from '../state/userInput.js';
+import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { useNodeExecutionEvents, type NodeExecutionEventsApi } from './useNodeExecutionEvents.js';
 
 test('active node events retain stable split refs and terminal evidence after more than 512 unrelated terminal invocations', async () => {
@@ -116,7 +119,7 @@ test('active node events retain stable split refs and terminal evidence after mo
   }
 });
 
-test('node history keeps a deferred Watch event\'s occurrence timing instead of its later delivery timing', async () => {
+test("node history keeps a deferred Watch event's occurrence timing instead of its later delivery timing", async () => {
   const dom = new JSDOM('<div id="root"></div>');
   const restoreGlobals = installDomGlobals(dom);
   const root = createRoot(dom.window.document.getElementById('root')!);
@@ -179,6 +182,53 @@ test('node history keeps a deferred Watch event\'s occurrence timing instead of 
     await act(async () => {
       store.set(lastRunDataByNodeState, previousLastRunData);
       root.unmount();
+    });
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
+test('a live child prompt remains answerable without resetting caller output history', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const store = getDefaultStore();
+  const previousNavigation = store.get(graphNavigationStackState);
+  const previousPages = store.get(selectedProcessPageNodesState);
+  const previousQuestions = store.get(userInputModalQuestionsState);
+  const graphId = 'shared-graph' as GraphId;
+  const nodeId = 'shared-node' as NodeId;
+  const processId = 'child-prompt' as ProcessId;
+  let dataFlow: ExecutionDataFlowApi | undefined;
+  const Harness = () => {
+    dataFlow = useExecutionDataFlow();
+    return null;
+  };
+  try {
+    await act(async () => {
+      store.set(graphNavigationStackState, { stack: [createRootGraphViewContext(graphId)], index: 0 });
+      store.set(selectedProcessPageNodesState, { [nodeId]: 2 });
+      store.set(userInputModalQuestionsState, {});
+      root.render(React.createElement(ProvidersProvider, { providers: {} }, React.createElement(Harness)));
+    });
+    await act(async () => {
+      dataFlow!.onUserInput({
+        node: { id: nodeId },
+        processId,
+        inputStrings: ['Child?'],
+        execution: { graphId, projectScope: 'called-project' },
+      } as never);
+    });
+    assert.equal(store.get(selectedProcessPageNodesState)[nodeId], 2);
+    assert.equal(store.get(userInputModalQuestionsState)[nodeId]?.[0]?.questions[0], 'Child?');
+    await act(async () => dataFlow!.onCalledProjectNodeTerminal({ node: { id: nodeId }, processId } as never));
+    assert.equal(store.get(userInputModalQuestionsState)[nodeId], undefined);
+  } finally {
+    await act(async () => {
+      root.unmount();
+      store.set(graphNavigationStackState, previousNavigation);
+      store.set(selectedProcessPageNodesState, previousPages);
+      store.set(userInputModalQuestionsState, previousQuestions);
     });
     restoreGlobals();
     dom.window.close();

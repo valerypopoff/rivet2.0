@@ -6,6 +6,15 @@ import {
   type GraphViewKey,
 } from '../domain/graphEditing/navigationActions.js';
 
+/** Live called-project evidence belongs to its own recording, not the caller's
+ * canvas. Standalone replay uses that recording's project as the workspace.
+ */
+export function isLiveCalledProjectExecutionEvent(data: unknown): boolean {
+  if (data == null || typeof data !== 'object') return false;
+  const event = data as { execution?: GraphExecutionMetadata; replayRecordedAt?: number };
+  return event.execution?.projectScope != null && !Number.isFinite(event.replayRecordedAt);
+}
+
 export function buildGraphViewContextFromExecution(options: {
   execution?: GraphExecutionMetadata;
   graphIdFallback?: GraphId;

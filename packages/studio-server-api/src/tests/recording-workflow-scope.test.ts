@@ -93,3 +93,51 @@ test('managed recording scope respects parameter positions in direct, related an
   assert.match(related, /workflow_id = \$3/);
   assert.doesNotMatch(related, /\$1/);
 });
+
+for (const storage of ['filesystem', 'sqlite', 'managed'] as const) {
+  test(`${storage} root search excludes children and child discovery is primary-owned and unfiltered`, () => {
+    const db = new DatabaseSync(':memory:');
+    const table =
+      storage === 'filesystem' ? 'recording_runs' : storage === 'sqlite' ? 'recordings' : 'workflow_recordings';
+    try {
+      db.exec(
+        `CREATE TABLE ${table} (id TEXT, recording_id TEXT, workflow_id TEXT, execution_surface TEXT, correlation_id TEXT, metadata_json TEXT)`,
+      );
+      for (const [id, workflow, surface, key] of [
+        ['root', 'a', 'editor_local', 'key'],
+        ['child', 'b', 'subgraph_project', 'key'],
+        ['nested', 'c', 'subgraph_project', 'key'],
+        ['other', 'b', 'workflow_endpoint', 'other'],
+        ['unlinked', 'a', 'subgraph_project', ''],
+      ])
+        db.prepare(`INSERT INTO ${table} VALUES (?, ?, ?, ?, ?, ?)`).run(
+          id!,
+          id!,
+          workflow!,
+          surface!,
+          key!,
+          JSON.stringify({ executionIdentity: { surface, correlationId: key } }),
+        );
+      const ids = (id: string, mode: 'roots' | 'children') =>
+        db
+          .prepare(
+            `SELECT id FROM ${table} WHERE ${recordingWorkflowScopeClause(id, true, storage, 1, mode).replaceAll('$1::text', '?1').replaceAll('$1', '?1')} ORDER BY id`,
+          )
+          .all(...(id || storage === 'managed' ? [id] : []))
+          .map((row) => row.id);
+      assert.deepEqual(ids('a', 'roots'), ['root']);
+      assert.deepEqual(ids('', 'roots'), ['other', 'root']);
+      assert.deepEqual(ids('root', 'children'), ['child', 'nested']);
+      assert.deepEqual(ids('child', 'children'), []);
+      assert.deepEqual(ids('missing', 'children'), []);
+      db.prepare(
+        `INSERT INTO ${table} SELECT 'duplicate', 'duplicate', workflow_id, execution_surface, correlation_id, metadata_json FROM ${table} WHERE id = 'root'`,
+      ).run();
+      assert.deepEqual(ids('root', 'children'), [], 'ambiguous keys must not invent a parent');
+      db.prepare(`DELETE FROM ${table} WHERE id IN ('root', 'duplicate')`).run();
+      assert.deepEqual(ids('root', 'children'), []);
+    } finally {
+      db.close();
+    }
+  });
+}

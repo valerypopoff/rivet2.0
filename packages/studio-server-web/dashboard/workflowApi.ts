@@ -245,6 +245,18 @@ export async function fetchWorkflowRecordingRuns(
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
 }
 
+export async function fetchRecordingSubRuns(
+  recordingId: string,
+  page: number,
+  signal: AbortSignal,
+): Promise<WorkflowRecordingRunsPageResponse> {
+  const response = await fetch(
+    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?page=${page}&pageSize=100`,
+    { cache: 'no-store', signal },
+  );
+  return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
+}
+
 export async function fetchWorkflowRunStatisticsCatalog(
   surface: WorkflowRunStatisticsSurface,
   options: { signal?: AbortSignal } = {},

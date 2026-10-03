@@ -79,6 +79,9 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     inputSearchStatus,
     inputSearchProgress,
     visibleRuns,
+    childLoadStates,
+    childLoadErrors,
+    handleLoadSubRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
     setPage,
@@ -92,6 +95,41 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleStopInputSearch,
     handleDeleteRecording,
   } = useRunRecordingsController(isOpen, resetToken);
+
+  const hierarchyScope = JSON.stringify([
+    resetToken,
+    selectedWorkflowId,
+    page,
+    runsPerPage,
+    statusFilter,
+    appliedInputFilter,
+  ]);
+  const [familyExpansion, setFamilyExpansion] = useState(() => ({ scope: hierarchyScope, keys: new Set<string>() }));
+  const expandedFamilyKeys = useMemo(
+    () => (familyExpansion.scope === hierarchyScope ? familyExpansion.keys : new Set<string>()),
+    [familyExpansion, hierarchyScope],
+  );
+  useEffect(() => {
+    setFamilyExpansion((current) =>
+      current.scope === hierarchyScope ? current : { scope: hierarchyScope, keys: new Set<string>() },
+    );
+  }, [hierarchyScope]);
+  const handleToggleFamily = useCallback(
+    (key: string) => {
+      void handleLoadSubRuns(key);
+      setFamilyExpansion((current) => {
+        const keys = new Set(current.scope === hierarchyScope ? current.keys : []);
+        const retrying = visibleRuns.some(
+          (run) =>
+            `correlation:${run.executionIdentity?.correlationId}` === key && childLoadStates?.[run.id] === 'failed',
+        );
+        if (keys.has(key) && !retrying) keys.delete(key);
+        else keys.add(key);
+        return { scope: hierarchyScope, keys };
+      });
+    },
+    [hierarchyScope, handleLoadSubRuns, visibleRuns, childLoadStates],
+  );
 
   useEffect(() => {
     onFoundCountChange(filteredRunsCount);
@@ -208,6 +246,11 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                   {openingError ?? error}
                 </div>
               ) : null}
+              {Object.entries(childLoadErrors).map(([recordingId, message]) => (
+                <div key={recordingId} className="project-settings-error run-recordings-error" role="alert">
+                  {message}
+                </div>
+              ))}
 
               {workflowsLoading ? <div className="run-recordings-empty-state">Loading recordings...</div> : null}
 
@@ -224,6 +267,9 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
 
                   {selectedWorkflow || !selectedWorkflowId ? (
                     <RecordingRunsTable
+                      expandedFamilyKeys={expandedFamilyKeys}
+                      onToggleFamily={handleToggleFamily}
+                      childLoadStates={childLoadStates}
                       selectedWorkflow={selectedWorkflow}
                       selectedWorkflowEndpoint={selectedWorkflowEndpoint}
                       selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}

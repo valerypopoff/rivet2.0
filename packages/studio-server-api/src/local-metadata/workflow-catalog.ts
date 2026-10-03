@@ -772,15 +772,15 @@ export class LocalWorkflowCatalog {
     return row.count;
   }
 
-  recordingScopeCounts(workflowId: string) {
+  recordingScopeCounts(workflowId: string, runScope: 'all' | 'roots' | 'children' = 'all') {
     return this.#database()
       .prepare(
         `SELECT COUNT(*) AS totalRuns,
       COALESCE(SUM(json_extract(metadata_json, '$.status') = 'failed'), 0) AS failedRuns,
       COALESCE(SUM(json_extract(metadata_json, '$.status') = 'suspicious'), 0) AS suspiciousRuns
-      FROM recordings WHERE ${recordingWorkflowScopeClause(workflowId, true, 'sqlite')}`,
+      FROM recordings WHERE ${recordingWorkflowScopeClause(workflowId, true, 'sqlite', 1, runScope)}`,
       )
-      .get(workflowId) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
+      .get(...(workflowId ? [workflowId] : [])) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
   }
 
   listRecordingMetadata(
@@ -788,6 +788,7 @@ export class LocalWorkflowCatalog {
       recordingId?: string;
       workflowId?: string;
       includeSubgraphRuns?: boolean;
+      runScope?: 'all' | 'roots' | 'children';
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -802,16 +803,17 @@ export class LocalWorkflowCatalog {
       conditions.push('recording_id = ?');
       values.push(options.recordingId);
     }
-    if (options.workflowId) {
+    if (options.workflowId || options.runScope === 'roots') {
       conditions.push(
         recordingWorkflowScopeClause(
-          options.workflowId,
+          options.workflowId ?? '',
           options.includeSubgraphRuns ?? false,
           'sqlite',
           values.length + 1,
+          options.runScope,
         ),
       );
-      values.push(options.workflowId);
+      if (options.workflowId) values.push(options.workflowId);
     }
     if (options.failedOnly) conditions.push("json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')");
     const created = "json_extract(metadata_json, '$.createdAt')";

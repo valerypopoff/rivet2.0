@@ -87,7 +87,7 @@ import { pluginsState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
-import { shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
+import { recordingStatusAfterAbort, shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 import {
   applyProcessEventToProjectExecutionSnapshots,
@@ -535,7 +535,6 @@ export function useLocalExecutor() {
       const localRecordingCorrelationId = localRecordingProvider
         ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
         : undefined;
-      let hasUnhealthyLLMProfileHealthEvidence = false;
       const localRecordingStartedAt = shouldRecordExecution ? performance.now() : undefined;
 
       const recorder = shouldRecordExecution ? new ExecutionRecorder() : undefined;
@@ -585,43 +584,33 @@ export function useLocalExecutor() {
         recorder.record(processor);
       }
 
-      processor.on('llmProfileAttempt', (event) => {
-        if (event.stage === 'health-update' && event.outcome === 'success' && event.healthOutcome === 'unhealthy') {
-          hasUnhealthyLLMProfileHealthEvidence = true;
-        }
-      });
       processor.on('error', (event) => {
         localRecordingStatus = 'failed';
         localRecordingErrorMessage = event.error instanceof Error ? event.error.message : event.error;
       });
       processor.on('abort', (event) => {
-        if (event.successful || localRecordingStatus !== 'succeeded') return;
-        localRecordingStatus = 'suspicious';
+        const nextStatus = recordingStatusAfterAbort(localRecordingStatus, event.successful);
+        if (nextStatus === localRecordingStatus) return;
+        localRecordingStatus = nextStatus;
         localRecordingErrorMessage ??= event.error instanceof Error ? event.error.message : event.error;
       });
       if (recorder) {
         finalizeCapturedRecording = async () => {
-          const recordingSerialized = recorder.serialize();
-          setLastRecordingForProject(runProjectId, recordingSerialized);
-          if (
-            !hasUnhealthyLLMProfileHealthEvidence ||
-            !localRecordingProvider ||
-            !localRecordingCorrelationId ||
-            !localRecordingProjectPath
-          ) {
-            return;
-          }
-
+          const durationMs = Math.max(0, performance.now() - localRecordingStartedAt!);
           try {
+            const recordingSerialized = recorder.serialize();
+            setLastRecordingForProject(runProjectId, recordingSerialized);
+            if (!localRecordingProvider || !localRecordingCorrelationId || !localRecordingProjectPath) return;
+            const projectContents = serializeProject(tempProject) as string;
             const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
             await localRecordingProvider.persist({
               projectId: runProjectId,
               projectPath: localRecordingProjectPath,
-              projectContents: serializeProject(tempProject) as string,
+              projectContents,
               datasetsContents,
               recordingSerialized,
               status: localRecordingStatus,
-              durationMs: Math.max(0, performance.now() - localRecordingStartedAt!),
+              durationMs,
               errorMessage: localRecordingErrorMessage,
               executionIdentity: {
                 correlationId: localRecordingCorrelationId,
@@ -629,14 +618,16 @@ export function useLocalExecutor() {
               },
             });
           } catch (error) {
-            await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
-              logRuntimeDebug('Local LLM-profile recording could not report a failed local artifact.', {
-                error: outcomeError,
-                graphId: graphToRun,
-                projectId: runProjectId,
+            if (localRecordingProvider && localRecordingCorrelationId) {
+              await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
+                logRuntimeDebug('Local editor recording could not report a failed local artifact.', {
+                  error: outcomeError,
+                  graphId: graphToRun,
+                  projectId: runProjectId,
+                });
               });
-            });
-            logRuntimeDebug('Local LLM-profile recording was not retained by the hosted server.', {
+            }
+            logRuntimeDebug('Local editor recording was not retained by the hosted server.', {
               error,
               graphId: graphToRun,
               projectId: runProjectId,
@@ -674,9 +665,8 @@ export function useLocalExecutor() {
             projectPath: loadedProject.path ?? undefined,
             projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
             subgraphProjectLoader,
-            onSubgraphProjectRun: shouldRecordExecution && localRecordingProvider
-              ? persistSubgraphProjectRun
-              : undefined,
+            onSubgraphProjectRun:
+              shouldRecordExecution && localRecordingProvider ? persistSubgraphProjectRun : undefined,
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
             llmProfileHealthStore,
             ...(localRecordingCorrelationId == null

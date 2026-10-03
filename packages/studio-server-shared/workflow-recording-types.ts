@@ -103,9 +103,9 @@ export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCount
 }
 
 export type WorkflowRecordingRunsPageResponse = {
-  /** Empty for the all-workflow scope; each run retains its actual workflowId. */
+  /** Empty for Any; sub-runs pages identify the primary recording. Each run retains its actual workflowId. */
   workflowId: string;
-  /** Counts for the project-plus-child browse scope, before status/input filtering. */
+  /** Counts before predicates; input searches count only root candidates, never child context rows. */
   scopeCounts?: WorkflowRecordingCounts;
   page: number;
   pageSize: number;

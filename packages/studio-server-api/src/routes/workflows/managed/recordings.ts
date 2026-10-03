@@ -590,6 +590,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       signal?: AbortSignal,
       inputAfter?: string,
       includeSubgraphRuns = false,
+      runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
       const normalizedPage = Math.max(1, Math.floor(page));
@@ -597,9 +598,9 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       const offset = (normalizedPage - 1) * normalizedPageSize;
       // Empty workflow ID represents the all-workflow scope, never a stored ID.
       // Keep its bound parameter so cursor/limit placeholders use the same positions in both scopes.
-      const workflowClause = recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed');
+      const workflowClause = recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed', 1, runScope);
       const scopeCounts =
-        workflowId && includeSubgraphRuns
+        (workflowId && includeSubgraphRuns) || runScope === 'roots'
           ? (await deps.queryOne<{
               totalRuns: number;
               failedRuns: number;

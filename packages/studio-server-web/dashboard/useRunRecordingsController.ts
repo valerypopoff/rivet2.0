@@ -6,6 +6,7 @@ import {
 import {
   deleteWorkflowRecording as deleteWorkflowRecordingRequest,
   fetchWorkflowRecordingRuns,
+  fetchRecordingSubRuns,
   fetchWorkflowRecordingWorkflows,
 } from './workflowApi';
 import type {
@@ -23,6 +24,15 @@ type InputSearchProgress = {
   analyzedRuns: number;
   availableRuns: number;
 };
+
+function countsAfterDeletingRun<T extends WorkflowRecordingCounts>(counts: T, run: WorkflowRecordingRunSummary): T {
+  return {
+    ...counts,
+    totalRuns: Math.max(0, counts.totalRuns - 1),
+    failedRuns: Math.max(0, counts.failedRuns - Number(run.status === 'failed')),
+    suspiciousRuns: Math.max(0, counts.suspiciousRuns - Number(run.status === 'suspicious')),
+  };
+}
 
 function getAvailableInputSearchRuns(
   response: WorkflowRecordingWorkflowListResponse | null,
@@ -82,12 +92,15 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const [inputFilterValue, setInputFilterValue] = useState('');
   const [appliedInputFilter, setAppliedInputFilter] = useState<WorkflowRecordingInputFilter | null>(null);
   const [inputFilterRuns, setInputFilterRuns] = useState<WorkflowRecordingRunSummary[]>([]);
+  const [subRuns, setSubRuns] = useState<WorkflowRecordingRunSummary[]>([]);
+  const [childLoadStates, setChildLoadStates] = useState<Record<string, 'loading' | 'complete' | 'failed'>>({});
+  const [childLoadErrors, setChildLoadErrors] = useState<Record<string, string>>({});
+  const childRequestsRef = useRef(new Map<string, AbortController>());
   const [inputSearchStatus, setInputSearchStatus] = useState<InputSearchStatus>('idle');
   const [inputSearchProgress, setInputSearchProgress] = useState<InputSearchProgress | null>(null);
   const [inputFilterError, setInputFilterError] = useState<string | null>(null);
   const [deletingRecordingId, setDeletingRecordingId] = useState<string | null>(null);
   const inputSearchAbortControllerRef = useRef<AbortController | null>(null);
-  const inputSearchSeenIdsRef = useRef(new Set<string>());
   const workflowsRef = useRef<WorkflowRecordingWorkflowListResponse | null>(null);
   const runsRequestVersionRef = useRef(0);
   const deletionRequestRef = useRef<object | null>(null);
@@ -133,7 +146,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     setInputFilterValue('');
     setAppliedInputFilter(null);
     setInputFilterRuns([]);
-    inputSearchSeenIdsRef.current.clear();
     setInputSearchStatus('idle');
     setInputSearchProgress(null);
     setInputFilterError(null);
@@ -201,6 +213,12 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
   useEffect(() => {
     const requestVersion = ++runsRequestVersionRef.current;
+    for (const request of childRequestsRef.current.values()) request.abort();
+    childRequestsRef.current.clear();
+    setSubRuns([]);
+    setChildLoadStates({});
+    setChildLoadErrors({});
+    setRelatedCounts(null);
     deletionRequestRef.current = null;
     setDeletingRecordingId(null);
     if (!workflowsReady) {
@@ -217,7 +235,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
     if (appliedInputFilter) {
       const seenIds = new Set<string>();
-      inputSearchSeenIdsRef.current = seenIds;
       setInputFilterRuns([]);
       setInputSearchStatus('searching');
       setInputSearchProgress({
@@ -324,6 +341,8 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
     return () => {
       cancelled = true;
+      for (const request of childRequestsRef.current.values()) request.abort();
+      childRequestsRef.current.clear();
       if (runsRequestVersionRef.current === requestVersion) runsRequestVersionRef.current++;
       abortController.abort();
       if (inputSearchAbortControllerRef.current === abortController) {
@@ -352,11 +371,88 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const badRunsCount = scopeCounts
     ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
     : getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
-  const visibleRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
+  const visibleRuns = appliedInputFilter ? [...inputFilterRuns, ...subRuns] : runsPage?.runs ?? [];
   const filteredRunsCount = appliedInputFilter
     ? inputFilterRuns.length
     : runsPage?.totalRuns ?? (statusFilter === 'failed' ? badRunsCount : overallRunsCount);
   const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil(filteredRunsCount / runsPerPage));
+
+  const handleLoadSubRuns = useCallback(
+    async (key: string) => {
+      if (!appliedInputFilter || !key.startsWith('correlation:')) return;
+      const root = inputFilterRuns.find((run) => `correlation:${run.executionIdentity?.correlationId}` === key);
+      if (!root || childLoadStates[root.id] === 'complete' || childRequestsRef.current.has(root.id)) return;
+      const controller = new AbortController();
+      const version = runsRequestVersionRef.current;
+      childRequestsRef.current.set(root.id, controller);
+      const isCurrent = () => !controller.signal.aborted && version === runsRequestVersionRef.current;
+      setChildLoadStates((states) => ({ ...states, [root.id]: 'loading' }));
+      setChildLoadErrors((errors) => {
+        const next = { ...errors };
+        delete next[root.id];
+        return next;
+      });
+      try {
+        // Fetch metadata in bounded pages, not input artifacts or all history.
+        // Publish complete families only; failed attempts can safely retry.
+        const children = new Map<string, WorkflowRecordingRunSummary>();
+        let expectedCount: number | undefined;
+        for (let childPage = 1; ; childPage++) {
+          const response = await fetchRecordingSubRuns(root.id, childPage, controller.signal);
+          if (!isCurrent()) return;
+          if (
+            response.workflowId !== root.id ||
+            response.page !== childPage ||
+            !Number.isSafeInteger(response.totalRuns) ||
+            response.totalRuns < 0
+          ) {
+            throw new Error('Sub-run pagination returned the wrong recording or page.');
+          }
+          expectedCount ??= response.totalRuns;
+          if (response.totalRuns !== expectedCount) {
+            throw new Error('Sub-runs changed while loading. Retry to refresh the family.');
+          }
+          const previousCount = children.size;
+          if (
+            response.runs.some(
+              (run) =>
+                run.executionIdentity?.surface !== 'subgraph_project' ||
+                run.executionIdentity.correlationId !== root.executionIdentity?.correlationId,
+            )
+          ) {
+            throw new Error('Sub-run pagination returned an unrelated recording.');
+          }
+          for (const run of response.runs) children.set(run.id, run);
+          if (
+            children.size > expectedCount ||
+            (response.hasMore && (children.size === previousCount || children.size >= expectedCount))
+          ) {
+            throw new Error('Sub-run pagination did not advance consistently.');
+          }
+          if (!response.hasMore) {
+            if (children.size !== expectedCount) {
+              throw new Error('Sub-run pagination was incomplete. Retry to refresh the family.');
+            }
+            break;
+          }
+        }
+        if (!isCurrent()) return;
+        setSubRuns((current) => [...new Map([...current, ...children.values()].map((run) => [run.id, run])).values()]);
+        setChildLoadStates((states) => ({ ...states, [root.id]: 'complete' }));
+      } catch (err) {
+        if (isCurrent()) {
+          setChildLoadStates((states) => ({ ...states, [root.id]: 'failed' }));
+          setChildLoadErrors((errors) => ({
+            ...errors,
+            [root.id]: `Could not load sub-runs: ${err instanceof Error ? err.message : String(err)}`,
+          }));
+        }
+      } finally {
+        if (childRequestsRef.current.get(root.id) === controller) childRequestsRef.current.delete(root.id);
+      }
+    },
+    [appliedInputFilter, inputFilterRuns, childLoadStates],
+  );
 
   useEffect(() => {
     // Loading clears runsPage. Do not clamp against a possibly stale catalog
@@ -380,7 +476,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       operator: inputFilterOperator,
       value: inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists' ? '' : inputFilterValue,
     });
-    inputSearchSeenIdsRef.current.clear();
     setInputFilterRuns([]);
     setInputSearchStatus('searching');
     setInputSearchProgress(null);
@@ -392,7 +487,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     abortInputSearch();
     setInputFilterError(null);
     setAppliedInputFilter(null);
-    inputSearchSeenIdsRef.current.clear();
     setInputFilterPath('$');
     setInputFilterOperator('==');
     setInputFilterValue('');
@@ -409,7 +503,6 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       if (!visible) {
         abortInputSearch();
         setAppliedInputFilter(null);
-        inputSearchSeenIdsRef.current.clear();
         setInputFilterRuns([]);
         setInputSearchStatus('idle');
         setInputSearchProgress(null);
@@ -443,6 +536,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       const currentInputFilter = appliedInputFilter;
       const deletingRun = visibleRuns.find((run) => run.id === recordingId);
       const changesRelatedScope =
+        !currentInputFilter &&
         Boolean(currentWorkflowId && deletingRun?.executionIdentity?.correlationId) &&
         deletingRun?.executionIdentity?.surface !== 'subgraph_project';
       const requestVersion = runsRequestVersionRef.current;
@@ -464,17 +558,64 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         if (!isCurrent()) return;
         // The mutation already committed, even if refreshing metadata later fails.
         setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
-        setRunsPage((current) =>
-          current ? { ...current, runs: current.runs.filter((run) => run.id !== recordingId) } : current,
+        setChildLoadErrors((errors) => {
+          const next = { ...errors };
+          delete next[recordingId];
+          return next;
+        });
+        for (const request of childRequestsRef.current.values()) request.abort();
+        childRequestsRef.current.clear();
+        setChildLoadStates((states) =>
+          Object.fromEntries(Object.entries(states).map(([id, state]) => [id, state === 'loading' ? 'failed' : state])),
         );
-        if (currentInputFilter && changesRelatedScope) {
+        setSubRuns((currentRuns) =>
+          currentRuns.filter(
+            (run) =>
+              run.id !== recordingId &&
+              (deletingRun?.executionIdentity?.surface === 'subgraph_project' ||
+                run.executionIdentity?.correlationId !== deletingRun?.executionIdentity?.correlationId),
+          ),
+        );
+        if (deletingRun) {
+          setWorkflowsResponse((current) =>
+            current
+              ? {
+                  ...current,
+                  totals: current.totals ? countsAfterDeletingRun(current.totals, deletingRun) : undefined,
+                  workflows: current.workflows.map((workflow) =>
+                    workflow.workflowId === deletingRun.workflowId
+                      ? countsAfterDeletingRun(workflow, deletingRun)
+                      : workflow,
+                  ),
+                }
+              : current,
+          );
+          setRelatedCounts((current) =>
+            current?.workflowId === currentWorkflowId &&
+            (!currentInputFilter || deletingRun.executionIdentity?.surface !== 'subgraph_project')
+              ? { ...current, counts: countsAfterDeletingRun(current.counts, deletingRun) }
+              : null,
+          );
+        }
+        setRunsPage((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            runs: current.runs.filter((run) => run.id !== recordingId),
+            totalRuns: deletingRun && !currentInputFilter ? Math.max(0, current.totalRuns - 1) : current.totalRuns,
+            scopeCounts:
+              deletingRun &&
+              current.scopeCounts &&
+              (!currentInputFilter || deletingRun.executionIdentity?.surface !== 'subgraph_project')
+                ? countsAfterDeletingRun(current.scopeCounts, deletingRun)
+                : current.scopeCounts,
+          };
+        });
+        if (changesRelatedScope) {
           // Removing a root anchor can remove other, still-retained children
-          // from this scope. Cached matches must not survive that scope change.
-          setInputFilterRuns([]);
+          // from this scope, even if the following catalog refresh fails.
           setRunsPage(null);
           setRelatedCounts(null);
-          setInputSearchProgress(null);
-          setInputSearchStatus('stopped');
         }
 
         const nextWorkflowsResponse = await loadWorkflowRecordingWorkflows();
@@ -490,46 +631,8 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         }
 
         if (currentInputFilter) {
-          if (changesRelatedScope) {
-            // A fresh filter identity delegates rescan/cancellation to the
-            // existing search effect instead of introducing another scanner.
-            setAppliedInputFilter({ ...currentInputFilter });
-            return;
-          }
-          const refreshedCounts = currentWorkflowId
-            ? (
-                await loadWorkflowRecordingRunsPage(currentWorkflowId, {
-                  page: 1,
-                  pageSize: 1,
-                  status: 'all',
-                })
-              ).scopeCounts
-            : undefined;
-          if (!isCurrent()) return;
-          if (refreshedCounts) {
-            setRelatedCounts({ workflowId: currentWorkflowId, counts: refreshedCounts });
-            // The current search page takes precedence over cached scope counts.
-            // Refresh both so it cannot mask a confirmed deletion's new totals.
-            setRunsPage((current) =>
-              current?.workflowId === currentWorkflowId ? { ...current, scopeCounts: refreshedCounts } : current,
-            );
-          }
-          setInputSearchProgress((currentProgress) => {
-            if (!currentProgress) {
-              return currentProgress;
-            }
-
-            const availableRuns = refreshedCounts
-              ? currentStatusFilter === 'failed'
-                ? refreshedCounts.failedRuns + refreshedCounts.suspiciousRuns
-                : refreshedCounts.totalRuns
-              : getAvailableInputSearchRuns(nextWorkflowsResponse, currentWorkflowId, currentStatusFilter);
-            return {
-              availableRuns,
-              analyzedRuns: Math.min(currentProgress.analyzedRuns, availableRuns),
-            };
-          });
-          setRunsPage(null);
+          if (deletingRun?.executionIdentity?.surface === 'subgraph_project') return;
+          setAppliedInputFilter({ ...currentInputFilter });
           return;
         }
 
@@ -602,6 +705,9 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     inputSearchStatus,
     inputSearchProgress,
     visibleRuns,
+    childLoadStates: appliedInputFilter ? childLoadStates : undefined,
+    childLoadErrors: appliedInputFilter ? childLoadErrors : {},
+    handleLoadSubRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
     setPage,

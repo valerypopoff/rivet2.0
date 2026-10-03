@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
+import { getExpectedProxyAuthToken } from '../auth.js';
 import type { ChartNode, GraphId, NodeConnection, PortId, ProcessEvents } from '@valerypopoff/rivet2-node';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
@@ -119,7 +120,10 @@ for (const isSplitSequential of [false, true]) {
         }
         const finish = saved.events.find((event) => event.type === 'nodeFinish' && event.data.nodeId === caller.id);
         assert.ok(finish?.type === 'nodeFinish');
-        assert.equal(finish.data.outputs['unused' as PortId]?.type, 'control-flow-excluded[]');
+        // Split aggregation intentionally keeps a wholly excluded port as
+        // the scalar exclusion sentinel: exclusion is not an array value type.
+        assert.equal(finish.data.outputs['unused' as PortId]?.type, 'control-flow-excluded');
+        assert.equal(finish.data.outputs['unused' as PortId]?.value, undefined);
         const replay = rivetNode.createProcessor(replayProject, { graph: main.metadata!.id });
         const replayStarts: ProcessEvents['graphStart'][] = [];
         replay.processor.on('graphStart', (event) => {
@@ -144,7 +148,7 @@ for (const isSplitSequential of [false, true]) {
   });
 }
 
-test('a published cross-project Subgraph records searchable passed inputs under the called project', async () => {
+test('input search matches only roots and unfolds cross-project Subgraphs without filtering their inputs', async () => {
   const called = await workflowMutations.createWorkflowProjectItem('', 'CalledTarget');
   const calledProject = await rivetNode.loadProjectFromFile(called.absolutePath);
   const calledGraphId = calledProject.metadata.mainGraphId!;
@@ -254,15 +258,48 @@ test('a published cross-project Subgraph records searchable passed inputs under 
     assert.equal(filtered.status, 200);
     assert.deepEqual(
       (await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id),
-      [targetRuns.runs[0]!.id],
+      [],
     );
     query.set('includeSubgraphRuns', 'true');
     const callerFiltered = await fetch(`${callerUrl}?${query}`);
     assert.equal(callerFiltered.status, 200);
     assert.deepEqual(
       (await readJson<{ runs: Array<{ id: string }> }>(callerFiltered)).runs.map((run) => run.id),
-      [targetRuns.runs[0]!.id],
+      [],
     );
+    query.set('inputPath', '$.requestId');
+    const roots = await readJson<{ runs: Array<{ id: string }>; scopeCounts: { totalRuns: number } }>(
+      await fetch(`${callerUrl}?${query}`),
+    );
+    assert.deepEqual(
+      roots.runs.map((run) => run.id),
+      [callerRuns.runs[0]!.id],
+    );
+    assert.equal(roots.scopeCounts.totalRuns, 1);
+    const anyRoots = await readJson<{ runs: Array<{ id: string }> }>(
+      await fetch(`${apiBaseUrl}/recordings/runs?${query}`),
+    );
+    assert.deepEqual(
+      anyRoots.runs.map((run) => run.id),
+      [callerRuns.runs[0]!.id],
+    );
+    await withEnvOverride('RIVET_KEY', 'root-child-browse-test-key', async () => {
+      const headers = { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+      const childUrl = `${apiBaseUrl}/recordings/${callerRuns.runs[0]!.id}/sub-runs`;
+      assert.equal((await fetch(childUrl)).status, 403);
+      const children = await readJson<{ runs: Array<{ id: string }>; totalRuns: number }>(
+        await fetch(`${childUrl}?inputPath=$.missing&status=failed`, { headers }),
+      );
+      assert.deepEqual(
+        children.runs.map((run) => run.id),
+        [targetRuns.runs[0]!.id],
+      );
+      assert.equal(children.totalRuns, 1);
+      const childAsParent = await readJson<{ runs: Array<{ id: string }> }>(
+        await fetch(`${apiBaseUrl}/recordings/${targetRuns.runs[0]!.id}/sub-runs`, { headers }),
+      );
+      assert.deepEqual(childAsParent.runs, []);
+    });
   });
 });
 
@@ -1333,7 +1370,59 @@ test('local editor replay persistence resolves a nested relative path when the t
   });
 });
 
-test('a hosted editor Subgraph run is recorded under the called project', async () => {
+test('editor parent and Subgraph uploads retain replay evidence with oversized diagnostic summaries', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'LongErrorReplay');
+  const project = await rivetNode.loadProjectFromFile(created.absolutePath);
+  const errorMessage = 'Provider diagnostic: ' + 'x'.repeat(20_000);
+  const recordingSerialized = JSON.stringify({
+    version: 1,
+    recording: { recordingId: 'long-error-replay', events: [], startTs: 1, finishTs: 2 },
+    assets: {},
+    strings: { diagnostic: errorMessage },
+  });
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    for (const child of [false, true]) {
+      const url = `${apiBaseUrl}/local-editor-recordings${child ? '/subgraph-run' : ''}`;
+      const body = {
+        projectId: project.metadata.id,
+        projectContents: rivetNode.serializeProject(project),
+        recordingSerialized,
+        status: 'failed',
+        durationMs: 12,
+        errorMessage,
+        ...(child
+          ? { graphId: project.metadata.mainGraphId, correlationId: 'rvt-long-error-replay-12345' }
+          : { projectPath: created.absolutePath, executionIdentity: { correlationId: 'rvt-long-error-replay-12345' } }),
+      };
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 201);
+      const { recordingId } = await readJson<{ recordingId: string }>(response);
+      const runs = await readJson<{ runs: Array<{ id: string; status: string; errorMessage?: string }> }>(
+        await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs`),
+      );
+      const saved = runs.runs.find((run) => run.id === recordingId)!;
+      assert.equal(saved.status, 'failed');
+      assert.equal(saved.errorMessage, errorMessage.slice(0, 16_384));
+      const replay = await fetch(`${apiBaseUrl}/recordings/${recordingId}/recording`);
+      assert.equal(replay.status, 200);
+      assert.equal(JSON.parse(await replay.text()).strings.diagnostic, errorMessage);
+      const invalid = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, errorMessage: { message: 'not a string' } }),
+      });
+      assert.equal(invalid.status, 400);
+    }
+  });
+});
+
+test('hosted editor parent and Subgraph runs share discoverable recordings without LLM health evidence', async () => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'CallerReplay');
+  const callerProject = await rivetNode.loadProjectFromFile(caller.absolutePath);
   const created = await workflowMutations.createWorkflowProjectItem('', 'CalledReplay');
   const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
   const projectContents = rivetNode.serializeProject(project, attachedData);
@@ -1422,7 +1511,40 @@ test('a hosted editor Subgraph run is recorded under the called project', async 
     assert.equal(filtered.status, 200);
     assert.deepEqual(
       (await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id),
-      [withDataset],
+      [],
     );
+    const parentResponse = await fetch(`${apiBaseUrl}/local-editor-recordings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: callerProject.metadata.id,
+        projectPath: caller.absolutePath,
+        projectContents: rivetNode.serializeProject(callerProject),
+        recordingSerialized: JSON.stringify({
+          version: 1,
+          recording: { recordingId: 'caller-editor-replay', events: [], startTs: 1, finishTs: 2 },
+          assets: {},
+          strings: {},
+        }),
+        status: 'succeeded',
+        durationMs: 9,
+        executionIdentity: {
+          correlationId: 'rvt-called-project-related-12345',
+          graphId: callerProject.metadata.mainGraphId,
+        },
+      }),
+    });
+    assert.equal(parentResponse.status, 201);
+    const parentId = (await readJson<{ recordingId: string }>(parentResponse)).recordingId;
+    const callerRunsUrl = `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(callerProject.metadata.id)}/runs`;
+    const parentOnly = await readJson<{ runs: Array<{ id: string }> }>(await fetch(callerRunsUrl));
+    assert.deepEqual(
+      parentOnly.runs.map((run) => run.id),
+      [parentId],
+    );
+    const related = await readJson<{ runs: Array<{ id: string }> }>(
+      await fetch(`${callerRunsUrl}?includeSubgraphRuns=true`),
+    );
+    assert.deepEqual(related.runs.map((run) => run.id).sort(), [parentId, withoutDataset, withDataset].sort());
   });
 });

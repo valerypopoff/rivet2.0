@@ -32,6 +32,7 @@ import { projectState } from '../state/savedGraphs';
 import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
 import { shouldFollowLatestNodeProcess } from '../state/selectors/executionSelectors.js';
 import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
+import { isLiveCalledProjectExecutionEvent } from '../utils/executionIdentity.js';
 
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
@@ -39,6 +40,7 @@ export type ExecutionDataFlowApi = {
   onEvaluationStart: () => void;
   onStreamingOutputWatchSummary: (data: ProcessEvents['streamingOutputWatchSummary']) => void;
   onUserInput: (data: ProcessEvents['userInput']) => void;
+  onCalledProjectNodeTerminal: (data: Pick<ProcessEvents['nodeFinish'], 'node' | 'processId'>) => void;
   preserveNodeRunDataForNextStart: (nodeIds: NodeId[]) => void;
   setDataForNode: (
     nodeId: NodeId,
@@ -229,7 +231,8 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     );
   };
 
-  const onUserInput = ({ node, processId, inputStrings, execution, isReplay }: ProcessEvents['userInput']) => {
+  const onUserInput = (data: ProcessEvents['userInput']) => {
+    const { node, processId, inputStrings, execution, isReplay } = data;
     // RecordingPlayer re-emits historical prompts for observability. Their
     // recorded answers are already part of the replay, so they must never
     // create an interactive modal even if a future caller bypasses the normal
@@ -252,7 +255,14 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
       };
     });
 
-    setSelectedNodePageLatest(node.id, execution);
+    if (!isLiveCalledProjectExecutionEvent(data)) setSelectedNodePageLatest(node.id, execution);
+  };
+
+  const onCalledProjectNodeTerminal = ({
+    node,
+    processId,
+  }: Pick<ProcessEvents['nodeFinish'], 'node' | 'processId'>) => {
+    setUserInputQuestions((questions) => removeUserInputQuestionsForProcess(questions, node.id, processId));
   };
 
   const onEvaluationStart = () => {
@@ -270,6 +280,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     onEvaluationStart,
     onStreamingOutputWatchSummary,
     onUserInput,
+    onCalledProjectNodeTerminal,
     preserveNodeRunDataForNextStart,
     setDataForNode,
     setSelectedNodePageLatest,
@@ -358,10 +369,7 @@ function copyOptionalNodeRunField<T extends keyof NodeRunDataWithRefs>(
 
 export function isTerminalNodeRunStatus(status: NodeRunDataWithRefs['status']): boolean {
   return (
-    status?.type === 'ok' ||
-    status?.type === 'error' ||
-    status?.type === 'notRan' ||
-    status?.type === 'interrupted'
+    status?.type === 'ok' || status?.type === 'error' || status?.type === 'notRan' || status?.type === 'interrupted'
   );
 }
 

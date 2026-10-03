@@ -519,6 +519,7 @@ export async function listWorkflowRecordingRunRowsByWorkflowId(
     pageSize: number;
     statusFilter: WorkflowRecordingFilterStatus;
     includeSubgraphRuns?: boolean;
+    runScope?: 'all' | 'roots' | 'children';
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   return listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
@@ -526,6 +527,7 @@ export async function listWorkflowRecordingRunRowsByWorkflowId(
     limit: options.pageSize,
     offset: (options.page - 1) * options.pageSize,
     includeSubgraphRuns: options.includeSubgraphRuns,
+    runScope: options.runScope,
   });
 }
 
@@ -541,6 +543,7 @@ export async function listWorkflowRecordingRunRowsForWorkflowWindow(
     statusFilter: WorkflowRecordingFilterStatus;
     after?: { createdAt: string; recordingId: string };
     includeSubgraphRuns?: boolean;
+    runScope?: 'all' | 'roots' | 'children';
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
@@ -567,7 +570,12 @@ function buildRecordingWindowQuery(
   workflowId: string,
   options: Parameters<typeof listWorkflowRecordingRunRowsForWorkflowWindow>[1],
 ) {
-  const whereClause = buildRunFilterClause(workflowId, options.statusFilter, options.includeSubgraphRuns);
+  const whereClause = buildRunFilterClause(
+    workflowId,
+    options.statusFilter,
+    options.includeSubgraphRuns,
+    options.runScope,
+  );
   const afterClause = options.after ? 'AND (created_at, id) < (?, ?)' : '';
   const parameters: Array<string | number> = workflowId ? [workflowId] : [];
   if (options.after) {
@@ -590,9 +598,10 @@ export async function countWorkflowRecordingRuns(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = 'all',
 ): Promise<number> {
   const db = await getDatabase();
-  const whereClause = buildRunFilterClause(workflowId, statusFilter, includeSubgraphRuns);
+  const whereClause = buildRunFilterClause(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const row = db
     .prepare(`SELECT COUNT(id) AS count FROM recording_runs ${whereClause}`)
     .get<{ count: number | bigint }>(...(workflowId ? [workflowId] : []));
@@ -600,16 +609,19 @@ export async function countWorkflowRecordingRuns(
   return toNumber(row?.count ?? 0);
 }
 
-export async function getWorkflowRecordingScopeCounts(workflowId: string) {
+export async function getWorkflowRecordingScopeCounts(
+  workflowId: string,
+  runScope: 'all' | 'roots' | 'children' = 'all',
+) {
   const db = await getDatabase();
   const row = db
     .prepare(
       `SELECT COUNT(*) AS totalRuns,
     COALESCE(SUM(status = 'failed'), 0) AS failedRuns,
     COALESCE(SUM(status = 'suspicious'), 0) AS suspiciousRuns
-    FROM recording_runs WHERE ${recordingWorkflowScopeClause(workflowId, true, 'filesystem')}`,
+    FROM recording_runs WHERE ${recordingWorkflowScopeClause(workflowId, true, 'filesystem', 1, runScope)}`,
     )
-    .get<{ totalRuns: number; failedRuns: number; suspiciousRuns: number }>(workflowId)!;
+    .get<{ totalRuns: number; failedRuns: number; suspiciousRuns: number }>(...(workflowId ? [workflowId] : []))!;
   return {
     totalRuns: toNumber(row.totalRuns),
     failedRuns: toNumber(row.failedRuns),
@@ -892,8 +904,9 @@ function buildRunFilterClause(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = 'all',
 ): string {
-  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem')}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
+  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
 }
 
 function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {

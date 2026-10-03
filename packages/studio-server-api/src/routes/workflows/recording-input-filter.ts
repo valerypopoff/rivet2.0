@@ -506,9 +506,12 @@ export function parseWorkflowRecordingInputAfter(
 }
 
 function getInputFilterFingerprint(filter: WorkflowRecordingInputFilter): string {
-  return createHash('sha256')
-    .update(JSON.stringify([filter.path, filter.operator, filter.value]))
-    .digest('base64url');
+  return (
+    createHash('sha256')
+      // Reject continuations issued by the old child-inclusive scanner.
+      .update(JSON.stringify(['root-runs', filter.path, filter.operator, filter.value]))
+      .digest('base64url')
+  );
 }
 
 export function extractWorkflowInputFromSerializedRecording(

@@ -415,6 +415,7 @@ export class ManagedWorkflowBackend {
     signal?: AbortSignal,
     inputAfter?: string,
     includeSubgraphRuns = false,
+    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
   ): Promise<WorkflowRecordingRunsPageResponse> {
     return this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
@@ -426,6 +427,7 @@ export class ManagedWorkflowBackend {
       signal,
       inputAfter,
       includeSubgraphRuns,
+      runScope,
     );
   }
 

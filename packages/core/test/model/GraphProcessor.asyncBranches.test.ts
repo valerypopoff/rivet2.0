@@ -25,6 +25,7 @@ import {
   type Project,
   type ProjectId,
   type SubGraphNode,
+  type SubgraphProjectRun,
   getSubgraphProjectKey,
 } from '../../src/index.js';
 import { ManagedAsyncBranches } from '../../src/model/ManagedAsyncBranches.js';
@@ -269,12 +270,16 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const take = makeCatchStreamingChunksNode();
     const consumer = makeTestNode('once-consumer');
     const output = makeGraphOutputNode();
-    const graph = makeGraph('one-streaming-value', [source, emit, take, consumer, output], [
-      connect(source.id, emit.id, 'value'),
-      connect(emit.id, take.id, 'stream', 'value'),
-      connect(take.id, consumer.id, 'input', 'value'),
-      connect(consumer.id, output.id, 'value'),
-    ]);
+    const graph = makeGraph(
+      'one-streaming-value',
+      [source, emit, take, consumer, output],
+      [
+        connect(source.id, emit.id, 'value'),
+        connect(emit.id, take.id, 'stream', 'value'),
+        connect(take.id, consumer.id, 'input', 'value'),
+        connect(consumer.id, output.id, 'value'),
+      ],
+    );
     AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'ready' } }));
     const finished: string[] = [];
     const processor = createProcessor(graph);
@@ -290,11 +295,15 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const take = makeCatchStreamingChunksNode('take-two', 2);
     const consumer = makeTestNode('two-chunk-consumer');
     const output = makeGraphOutputNode();
-    const graph = makeGraph('take-two-chunks', [source, take, consumer, output], [
-      connect(source.id, take.id, 'stream'),
-      connect(take.id, consumer.id, 'input', 'value'),
-      connect(consumer.id, output.id, 'value'),
-    ]);
+    const graph = makeGraph(
+      'take-two-chunks',
+      [source, take, consumer, output],
+      [
+        connect(source.id, take.id, 'stream'),
+        connect(take.id, consumer.id, 'input', 'value'),
+        connect(consumer.id, output.id, 'value'),
+      ],
+    );
     const releaseSource = deferred();
     const consumed = deferred();
     AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
@@ -324,10 +333,11 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const source = makeTestNode('short-source');
     const take = makeCatchStreamingChunksNode('take-three', 3);
     const output = makeGraphOutputNode();
-    const graph = makeGraph('short-stream', [source, take, output], [
-      connect(source.id, take.id, 'stream'),
-      connect(take.id, output.id, 'value', 'value'),
-    ]);
+    const graph = makeGraph(
+      'short-stream',
+      [source, take, output],
+      [connect(source.id, take.id, 'stream'), connect(take.id, output.id, 'value', 'value')],
+    );
     AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
       context.onPartialOutputs?.({ output: { type: 'string', value: 'A' } });
       return { output: { type: 'string', value: 'A' } };
@@ -340,10 +350,11 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const source = makeTestNode('failing-catch-source');
     const take = makeCatchStreamingChunksNode('take-before-failure', 2);
     const consumer = makeTestNode('catch-failure-consumer');
-    const graph = makeGraph('failing-catch', [source, take, consumer], [
-      connect(source.id, take.id, 'stream'),
-      connect(take.id, consumer.id, 'input', 'value'),
-    ]);
+    const graph = makeGraph(
+      'failing-catch',
+      [source, take, consumer],
+      [connect(source.id, take.id, 'stream'), connect(take.id, consumer.id, 'input', 'value')],
+    );
     AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
       context.onPartialOutputs?.({ output: { type: 'string', value: 'one' } });
       throw new Error('producer failed before a second chunk');
@@ -361,13 +372,17 @@ void describe('GraphProcessor scheduler boundaries', () => {
       const emit = makeStreamValueNode(`early-child-emit-${crossProject}`);
       const childOutput = makeGraphOutputNode('response');
       const slow = makeTestNode(`slow-child-work-${crossProject}`);
-      const child = makeGraph(`early-child-${crossProject}`, [source, emit, childOutput, slow], [
-        connect(source.id, emit.id, 'value'),
-        connect(emit.id, childOutput.id, 'value', 'value'),
-      ]);
+      const child = makeGraph(
+        `early-child-${crossProject}`,
+        [source, emit, childOutput, slow],
+        [connect(source.id, emit.id, 'value'), connect(emit.id, childOutput.id, 'value', 'value')],
+      );
       const subgraph = makeSubgraphNode(`early-caller-${crossProject}`, child.metadata!.id);
       const targetProject = crossProject
-        ? { ...makeProject(child), metadata: { ...makeProject(child).metadata, id: 'early-called-project' as ProjectId } }
+        ? {
+            ...makeProject(child),
+            metadata: { ...makeProject(child).metadata, id: 'early-called-project' as ProjectId },
+          }
         : undefined;
       if (targetProject) {
         subgraph.data = {
@@ -380,11 +395,15 @@ void describe('GraphProcessor scheduler boundaries', () => {
       const take = makeCatchStreamingChunksNode(`early-take-${crossProject}`);
       const consumer = makeTestNode(`early-consumer-${crossProject}`);
       const output = makeGraphOutputNode('result');
-      const root = makeGraph(`early-root-${crossProject}`, [subgraph, take, consumer, output], [
-        connect(subgraph.id, take.id, 'stream', 'response'),
-        connect(take.id, consumer.id, 'input', 'value'),
-        connect(consumer.id, output.id, 'value'),
-      ]);
+      const root = makeGraph(
+        `early-root-${crossProject}`,
+        [subgraph, take, consumer, output],
+        [
+          connect(subgraph.id, take.id, 'stream', 'response'),
+          connect(take.id, consumer.id, 'input', 'value'),
+          connect(consumer.id, output.id, 'value'),
+        ],
+      );
       const slowStarted = deferred();
       const releaseSlow = deferred();
       const consumed = deferred();
@@ -400,12 +419,20 @@ void describe('GraphProcessor scheduler boundaries', () => {
         return { output: inputs['input' as PortId]! };
       });
       let runSettled = false;
-      const run = createProcessor(root, targetProject ? [] : [child]).processGraph({
-        ...testProcessContext(),
-        ...(targetProject
-          ? { subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) } }
-          : {}),
-      }).finally(() => { runSettled = true; });
+      const run = createProcessor(root, targetProject ? [] : [child])
+        .processGraph({
+          ...testProcessContext(),
+          ...(targetProject
+            ? {
+                subgraphProjectLoader: {
+                  loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }),
+                },
+              }
+            : {}),
+        })
+        .finally(() => {
+          runSettled = true;
+        });
       try {
         await withTimeout(Promise.all([slowStarted.promise, consumed.promise]), 'early child value');
         assert.equal(runSettled, false);
@@ -579,7 +606,9 @@ void describe('GraphProcessor scheduler boundaries', () => {
     );
     const releaseSource = deferred();
     const sawPartial = deferred();
-    AsyncTestNodeImpl.handlers.set(callerInput.id, () => ({ output: { type: 'object', value: { requestId: 'called-123' } } }));
+    AsyncTestNodeImpl.handlers.set(callerInput.id, () => ({
+      output: { type: 'object', value: { requestId: 'called-123' } },
+    }));
     AsyncTestNodeImpl.handlers.set(source.id, async (_inputs, context) => {
       context.onPartialOutputs?.({ output: { type: 'string', value: 'partial' } });
       await releaseSource.promise;
@@ -600,18 +629,22 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const persistenceStarted = deferred();
     const releasePersistence = deferred();
     let runSettled = false;
-    const run = processor.processGraph({
-      ...testProcessContext(),
-      llmProfileHealthExecutionCorrelationId: 'rvt-cross-project-test-12345',
-      subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) },
-      subgraphRecordingOptions: { includePartialOutputs: true },
-      onSubgraphProjectRun: async (captured) => {
-        childRecorder = captured.recorder;
-        childCorrelationId = captured.correlationId;
-        persistenceStarted.resolve();
-        await releasePersistence.promise;
-      },
-    }).finally(() => { runSettled = true; });
+    const run = processor
+      .processGraph({
+        ...testProcessContext(),
+        llmProfileHealthExecutionCorrelationId: 'rvt-cross-project-test-12345',
+        subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject, projectContents: 'snapshot' }) },
+        subgraphRecordingOptions: { includePartialOutputs: true },
+        onSubgraphProjectRun: async (captured) => {
+          childRecorder = captured.recorder;
+          childCorrelationId = captured.correlationId;
+          persistenceStarted.resolve();
+          await releasePersistence.promise;
+        },
+      })
+      .finally(() => {
+        runSettled = true;
+      });
     await withTimeout(sawPartial.promise, 'cross-project streaming output');
     await withTimeout(persistenceStarted.promise, 'called-project recording upload');
     assert.equal(runSettled, false, 'the caller cannot finish before its child recording upload');
@@ -646,6 +679,94 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const replayedChild = await withTimeout(childReplay.replayRecording(childRecorder), 'called-project replay');
     assert.equal(replayedChild.renamedResponse?.value, 'final');
   });
+
+  void it('records a called-project failure even when its error message is empty', async () => {
+    const child = makeGraph('empty-error-child', [], []);
+    const targetProject = makeProject(child);
+    targetProject.metadata.id = 'empty-error-project' as ProjectId;
+    const call = makeSubgraphNode('empty-error-call', child.metadata!.id);
+    call.data.targetProjectId = targetProject.metadata.id;
+    call.data.useErrorOutput = true;
+    const failure = new Error('');
+    const emitter = new Emittery<ProcessEvents>();
+    const subprocess = {
+      on: emitter.on.bind(emitter),
+      off: emitter.off.bind(emitter),
+      onAny: emitter.onAny.bind(emitter),
+      processGraph: async () => {
+        throw failure;
+      },
+    } as unknown as GraphProcessor;
+    const runs: SubgraphProjectRun[] = [];
+    const outputs = await new SubGraphNodeImpl(call).process({}, {
+      ...testProcessContext(),
+      project: makeProject(makeGraph('empty-error-root', [call], [])),
+      referencedProjects: {
+        [getSubgraphProjectKey({ projectId: targetProject.metadata.id, version: 'latest' })]: targetProject,
+      },
+      subgraphTarget: { project: targetProject },
+      createSubProcessor: () => subprocess,
+      activeOutputPortIds: new Set(),
+      onSubgraphProjectRun: (run) => {
+        runs.push(run);
+      },
+    } as InternalProcessContext);
+    assert.equal(outputs['error' as PortId]?.value, '');
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]!.status, 'failed');
+    assert.equal(runs[0]!.errorMessage, '');
+    assert.ok(runs[0]!.recorder.events.some((event) => event.type === 'error'));
+    assert.equal(
+      runs[0]!.recorder.events.some((event) => event.type === 'done'),
+      false,
+    );
+  });
+
+  for (const outcome of ['success', 'failure', 'successful-abort', 'failed-abort'] as const) {
+    void it(`retains the called project's own ${outcome} outcome when the caller catches failures`, async () => {
+      const source = makeTestNode('recording-outcome-source');
+      const child = makeGraph('recording-outcome-child', [source], []);
+      const targetProject = makeProject(child);
+      targetProject.metadata.id = 'recording-outcome-project' as ProjectId;
+      const call = makeSubgraphNode('recording-outcome-call', child.metadata!.id);
+      call.data.targetProjectId = targetProject.metadata.id;
+      call.data.useErrorOutput = true;
+      const root = makeGraph('recording-outcome-root', [call], []);
+      AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+        if (outcome === 'failure') throw new Error('called-project failure');
+        if (outcome.endsWith('abort')) {
+          context.abortGraph(outcome === 'successful-abort' ? undefined : new Error('called-project abort'));
+        }
+        return {};
+      });
+      const runs: SubgraphProjectRun[] = [];
+      const parentRecorder = new ExecutionRecorder();
+      const processor = createProcessor(root);
+      parentRecorder.record(processor);
+      await withTimeout(
+        processor.processGraph({
+          ...testProcessContext(),
+          subgraphProjectLoader: { loadTarget: async () => ({ project: targetProject }) },
+          onSubgraphProjectRun: (run) => {
+            runs.push(run);
+          },
+        }),
+        'called-project outcome',
+      );
+      assert.equal(runs.length, 1);
+      const expected = outcome === 'failure' || outcome === 'failed-abort' ? 'failed' : 'succeeded';
+      assert.equal(runs[0]!.status, expected);
+      assert.ok(runs[0]!.recorder.events.some((event) => event.type === (expected === 'failed' ? 'error' : 'done')));
+      assert.ok(
+        parentRecorder.events.some((event) => event.type === 'done'),
+        'handled child failure does not fail its caller',
+      );
+      assert.equal(
+        parentRecorder.events.some((event) => event.type === 'error'),
+        false,
+      );
+    });
+  }
 
   void it('keeps nested cross-project Subgraphs on one resolved target snapshot per root run', async () => {
     const source = makeTestNode('nested-project-source');

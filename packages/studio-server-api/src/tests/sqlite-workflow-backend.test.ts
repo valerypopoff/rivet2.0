@@ -1045,11 +1045,6 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
       true,
     );
     const matches = new Set(batch.runs.map((run) => run.id));
-    assert.ok(batch.nextInputAfter);
-    await assert.rejects(
-      backend.listWorkflowRecordingRunsPage(workflowId, 1, 1, 'all', filter, 0, undefined, batch.nextInputAfter),
-      /does not match/,
-    );
     while (batch.hasMore) {
       batch = await backend.listWorkflowRecordingRunsPage(
         workflowId,
@@ -1064,7 +1059,38 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
       );
       batch.runs.forEach((run) => matches.add(run.id));
     }
-    assert.deepEqual(matches, allIds);
+    assert.deepEqual(matches, new Set([rootId]));
+    assert.equal(batch.scopeCounts?.totalRuns, 1);
+    const children = await backend.listWorkflowRecordingRunsPage(
+      rootId,
+      1,
+      1,
+      'all',
+      null,
+      0,
+      undefined,
+      undefined,
+      false,
+      'children',
+    );
+    assert.equal(children.totalRuns, 2);
+    const nextChildren = await backend.listWorkflowRecordingRunsPage(
+      rootId,
+      2,
+      1,
+      'all',
+      null,
+      0,
+      undefined,
+      undefined,
+      false,
+      'children',
+    );
+    assert.deepEqual(
+      new Set([...children.runs, ...nextChildren.runs].map((run) => run.id)),
+      new Set([childId, nestedId]),
+    );
+    assert.equal((await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all', filter)).scopeCounts?.totalRuns, 1);
     await backend.deleteWorkflowRecording(childId);
     assert.equal(
       (await backend.listWorkflowRecordingRunsPage(workflowId, 1, 20, 'all', null, 0, undefined, undefined, true))

@@ -1076,8 +1076,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     signal?: AbortSignal,
     inputAfter?: string,
     includeSubgraphRuns = false,
+    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
   ): Promise<WorkflowRecordingRunsPageResponse> {
-    if (workflowId && !this.#catalog.findProjectPathById(workflowId)) throw createHttpError(404, 'Project not found');
+    if (workflowId && runScope !== 'children' && !this.#catalog.findProjectPathById(workflowId))
+      throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),
       size = Math.min(100, Math.max(1, Math.floor(pageSize)));
     if (
@@ -1086,12 +1088,16 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       !['all', 'failed'].includes(statusFilter)
     )
       throw badRequest('Invalid recording page');
-    const scopeCounts = workflowId && includeSubgraphRuns ? this.#catalog.recordingScopeCounts(workflowId) : undefined;
+    const scopeCounts =
+      (workflowId && includeSubgraphRuns) || runScope !== 'all'
+        ? this.#catalog.recordingScopeCounts(workflowId, runScope)
+        : undefined;
     const scope = inputFilter ? { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns } : null;
     const load = async (after: string | undefined, offset: number, limit: number) =>
       this.#catalog.listRecordingMetadata({
         workflowId,
         includeSubgraphRuns,
+        runScope,
         failedOnly: statusFilter === 'failed',
         limit,
         offset,

@@ -28,6 +28,7 @@ import {
 } from '../utils/frozenNodeOutputs.js';
 import type { ExecutorSessionTarget } from './executorSessionTarget.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
+import { isLiveCalledProjectExecutionEvent } from '../utils/executionIdentity.js';
 
 const dataRefs: DataRefReader = {
   get: getGlobalDataRef,
@@ -232,7 +233,7 @@ function assertRunFromPreloadsRespectStreamingWatchBoundaries(
   throw new Error(
     `Cannot run from here because it would preload "${unsafeNode.title}" from the repeated branch of ` +
       `Watch Streaming Output "${watchNode.title}". ` +
-      'Run from Watch Streaming Output to reuse the producer\'s saved final value, or run from the producer to stream again.',
+      "Run from Watch Streaming Output to reuse the producer's saved final value, or run from the producer to stream again.",
   );
 }
 
@@ -451,6 +452,7 @@ export function createProcessEventDispatcher(currentExecution: {
   onResume: () => void;
   onStart: (event: ProcessEvents['start']) => void;
   onUserInput: (event: ProcessEvents['userInput']) => void;
+  onCalledProjectNodeTerminal: (event: Pick<ProcessEvents['nodeFinish'], 'node' | 'processId'>) => void;
   onRunActivityEvent: <K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]) => void;
 }) {
   const dispatchRunActivityEvent = <K extends keyof ProcessEventMessageMap>(
@@ -466,6 +468,17 @@ export function createProcessEventDispatcher(currentExecution: {
     // Run Activity is an observer. Its reducer must never suppress the
     // editor's existing execution-state update if the projection fails.
     dispatchRunActivityEvent(message, data);
+    // Keep child evidence in Run Activity, but never project another saved
+    // project's IDs into the caller's graph history or node buffers. Live
+    // user-input requests still need their interaction in the caller window.
+    if (message !== 'userInput' && isLiveCalledProjectExecutionEvent(data)) {
+      if (message === 'nodeFinish' || message === 'nodeError' || message === 'nodeExcluded') {
+        return dispatchGraphExecutionEvent(message, () =>
+          currentExecution.onCalledProjectNodeTerminal(data as ProcessEvents['nodeFinish']),
+        );
+      }
+      return true;
+    }
     return dispatchGraphExecutionEvent(message, dispatchPrimary);
   };
 
@@ -526,6 +539,7 @@ export function createProcessEventDispatcher(currentExecution: {
       ),
     // Logical round history is presentation state, never Run Activity.
     llmChatOutputSnapshot: (data: unknown) =>
+      isLiveCalledProjectExecutionEvent(data) ||
       dispatchGraphExecutionEvent('llmChatOutputSnapshot', () =>
         currentExecution.onLlmChatOutputSnapshot(data as ProcessEvents['llmChatOutputSnapshot']),
       ),

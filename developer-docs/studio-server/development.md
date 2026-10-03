@@ -1,5 +1,82 @@
 # Development
 
+## Collapsible recording families
+
+`recording-run-hierarchy.ts` groups the current recording results by exact
+`executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
+children start folded and expand into individually virtualized, indented rows.
+Do not group by project/graph name or infer immediate nesting from the root key.
+Missing or ambiguous primaries get an explicit context group, never a synthetic
+recording. Ordinary pagination and status filtering operate on individual
+recordings; their expand count says `in current results`. **Filter by input**
+searches only primary/root recordings (non-`subgraph_project` rows, including legacy
+rows without surface metadata). It never promotes a child-only match into a root.
+Expanding a matching root fetches all linked child metadata through the authenticated
+`GET /api/workflows/recordings/:recordingId/sub-runs` path, in pages of at most 100.
+These children bypass both input and status predicates and do not inflate match
+counts or search progress. Loading/failed disclosure controls provide feedback and
+retry; complete families are published only after all pages load. View replacement
+aborts pending child reads and discards late replies. An absent or ambiguous primary
+key cannot manufacture ancestry. Changing workflow/page/filter resets expansion;
+appending root matches preserves expanded correlation keys.
+
+Each page must identify the requested primary/page, contain only linked Subgraph
+rows, make unique-ID progress and retain a consistent total. Final unique-ID count
+must equal that total; repeated, incomplete or changing pages fail without publishing
+a partial family and can be retried. This is a consistency check, not a database
+snapshot: recordings can change after loading. Child-load errors are primary-owned
+and independent of root-search errors; retrying one cannot erase another failure.
+The observer covers repeated pages, concurrent count changes, incomplete pages,
+unrelated rows and a stopped root search followed by child retry.
+
+`RunRecordingsModal.tsx` retains expansion while hidden for replay, but
+explicit close resets it. Folding never invokes replay loading, and deletion remains per recording.
+
+Virtual offsets are index-based, but measured heights are recording-row-owned.
+`refreshRecordingRowMeasurements` compares rows by identity before pruning their
+height cache: a moved, offscreen primary that gains a disclosure control must not
+retain its old height. Unchanged moved rows keep their measurements.
+
+Called-project recording status follows execution failure, not the truthiness of
+an error message. Core retains the actual Error until finalizing a child; an empty
+message still produces `failed` metadata and an error terminal in its replay.
+The caller may handle that failure through the Subgraph error output and still
+finish successfully. Successful Abort Graph remains successful; unsuccessful abort
+rejects the child and records failure. These are covered in
+`GraphProcessor.asyncBranches.test.ts`, together with nested correlation and
+upload-before-caller-completion checks.
+The headless `local-editor-recordings.spec.ts` also checks actual Browser
+cross-project failures and error aborts: the child upload must contain a failed
+replay while a caller using the error output uploads a successful parent with
+the same correlation. Uploads are intercepted; no working project is modified.
+
+The local-editor recording API bounds parent and child error summaries to
+16,384 characters instead of rejecting an otherwise valid replay for a longer
+diagnostic. This affects list metadata only: replay content remains unchanged,
+non-string summaries are rejected, and the total upload-size limit still applies.
+The `oversized diagnostic` HTTP regression checks both upload routes, stored
+failure status, bounded summaries and preservation of the full replay diagnostic.
+Pruned split-run replay tests assert Core's canonical scalar
+`control-flow-excluded` sentinel for a wholly unused output port. Exclusion is not
+an array value type, even when the successful sibling outputs are aggregated.
+
+Live cross-project execution events carry `execution.projectScope`. The shared
+Browser/Node dispatcher and inactive-project snapshot reducer retain them in
+Run Activity but do not project their graph/node IDs into the caller's canvas,
+output buffers or LLM round history. This matters when duplicated projects reuse
+IDs. Interactive child prompts remain answerable; child node terminals remove
+only the matching prompt without writing caller node data or resetting the
+caller's selected output-history page. Standalone child
+replay remains visible through Core's finite `replayRecordedAt` provenance.
+`executionIdentity`, `remoteExecutorHelpers`, and `projectExecutionSnapshotEvents`
+tests cover the active/inactive projection boundary and replay compatibility.
+
+Run `yarn workspace @valerypopoff/rivet-studio-server-web test` for hierarchy
+invariants (duplicates, ambiguous/absent roots, exact keys, incremental search,
+large families), and `yarn studio-server:ui:observe run-recordings-modal.spec.ts`
+in headless mode for keyboard expand/collapse, indentation, child replay, filters,
+page-split families and deletion/failed-refresh regression coverage.
+
 ## Recording duration display
 
 `RecordingRunsTable.tsx` formats recording durations to two decimal places in
@@ -23,26 +100,38 @@ shows the replay-owning project path and the existing related run key. Any remai
 the deduplicated all-recordings scope.
 
 Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
-metadata-only scope to counts, status filters, offset pages, and bounded input
-search windows. `scopeCounts` supplies unfiltered counts for the selected expanded
-scope; input-search progress uses its status-scoped total, and deleting a filtered
-child refreshes those counts in both the current search page and the scope cache,
-so an older page cannot mask the new total or bad-run count.
+metadata-only scope to ordinary counts, status filters and offset pages. Bounded
+input search uses the common root-only predicate and root-only `scopeCounts`, for
+both Any and an individual workflow. Child discovery queries only metadata tied
+to a retained primary ID, never child input artifacts. Deleting a discovered child
+removes it without changing root matches/progress; deleting a matched root retires
+its discovered children and rescans roots after a successful catalog refresh.
+Search deduplication is owned by
+the individual search effect's local Set, not a second mutable ref shared across
+replacement searches.
 Keyset continuations are bound to the include-child flag and reject non-boolean
 flag payloads, preventing a malformed or direct-only
-continuation from silently selecting an expanded scope.
+continuation from silently selecting an expanded scope. The fingerprint includes
+the root-only search policy so pre-change child-inclusive cursors fail explicitly.
 The backend option defaults to false to preserve migration verification and
 existing direct-project consumers. Statistics and retention ownership are unchanged.
 After a confirmed delete, the current view removes that row immediately. A later
 catalog/scope refresh failure reports that deletion succeeded but refresh failed;
 it must not restore the deleted row or imply the mutation can safely be repeated.
+The same acknowledgement subtracts that row from known page/scope counts, its
+owning project's catalog counts and Any totals, including its failed/suspicious
+status. Counts never go below zero; successful refresh replaces these local
+adjustments with server counts. Failed DELETE requests do not adjust counts.
+Cached counts for a different workflow are invalidated rather than guessed.
 Deleting a non-Subgraph root with a shared correlation key can also remove its
-retained children from the caller browse scope. An active input search clears
-those cached matches and restarts through the existing guarded search effect
-after the catalog refresh succeeds.
-Deleting a child, or a row in Any, does not rescan unrelated retained history.
-Roots without a correlation key cannot anchor related children and also avoid a
-rescan. Workflow-selector counts explicitly say `in this project`: they describe
+retained children from the caller browse scope. Both ordinary pages and filtered
+matches retire that obsolete scope immediately, even if the following catalog
+refresh fails. An active input search restarts through the existing guarded search
+effect after the catalog refresh succeeds.
+Deleting a discovered child does not rescan roots. A filtered root deletion
+restarts the guarded root scanner, including in Any; ordinary Any deletion reloads
+only its current page. Roots without a correlation key cannot anchor related
+children. Workflow-selector counts explicitly say `in this project`: they describe
 recording ownership, whereas selecting a workflow expands the table to related
 children. Any's count remains the unique all-recordings total.
 
@@ -61,7 +150,7 @@ post-delete refresh failures and request races. Set `PLAYWRIGHT_HEADLESS=1` and
 For a focused HTTP execution check, run:
 
 ```sh
-yarn workspace @valerypopoff/rivet-studio-server-api test:files --test-name-pattern="published cross-project Subgraph" src/tests/workflow-recordings-http.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api test:files --test-name-pattern="input search matches only roots" src/tests/workflow-recordings-http.test.ts
 ```
 
 The managed service test mocks query execution; `recording-workflow-scope.test.ts`
@@ -1354,7 +1443,11 @@ Recording playback state is project-scoped in upstream Rivet. The hosted editor 
 
 Keep Studio Server recording cleanup on the stable shared `loadedRecordingState` export and perform the project ownership comparison in the hosted application. Do not import an internal convenience atom such as `clearLoadedRecordingForProjectState` merely because it exists in the same monorepo: use the public host seam so Rivet editor refactors and Studio Server changes remain independently reviewable in one commit.
 
-Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extractor searches both event types, so a `prompt` input is found with `$.prompt.requestId` while an `input` port uses the root path `$.requestId`. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep this covered through both a real child processor recording and the called-project HTTP listing filter.
+Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extraction helper understands both formats for artifact tools and tests: a `prompt` input resolves at `$.prompt.requestId`, while an `input` port uses the root path `$.requestId`. This does not make child recordings input-search candidates: the modal filters roots only and unfolds their children without input predicates. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep extraction covered with a real child processor recording, and browse ownership covered through the root-search and sub-run HTTP regressions.
+
+The local recording setting also persists the parent editor run in both Browser and internal Node modes, including successful graphs with no LLM-profile events. Do not gate parent uploads on health evidence: that strands child recordings outside the initiating workflow's related-run scope. Preserve the parent/child correlation, disabled-recording behavior, and terminal socket capture checks. `local-editor-recordings.spec.ts` checks real Browser cross-project execution and the real internal Node executor while intercepting recording uploads so fixtures cannot mutate working data.
+
+Recording finalization snapshots project/replay text and elapsed execution time before asynchronous dataset export; serialization errors also take the unavailable-evidence path rather than being silently swallowed. Browser and internal Node share abort-status policy: a successful Abort Graph remains succeeded, an unsuccessful abort marks an otherwise successful run suspicious, and cleanup never demotes an existing failure. Node parent status follows root terminal events, not a child's `graphError`: a Subgraph Error output can handle that child failure and complete the parent successfully. The recording bridge bounds capability/outcome requests to 10 seconds and uploads to 60 seconds. Cache only a confirmed capability or a definitive 404; authentication, throttling, malformed responses and timeouts retry on the next run. Do not automatically retry recording uploads, because a timed-out request may already have committed a recording. The browser regression covers successful early termination, handled child errors, and rejected uploads in both executors, including unchanged successful execution state after a persistence failure.
 
 ## Source of truth
 
