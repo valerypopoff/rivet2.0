@@ -1,5 +1,29 @@
 # Architecture
 
+## Development frontend modes
+
+Ordinary dev uses Vite HMR. The optional `studio-server:dev:tunnel` launcher uses
+the same stack and data with a supervised Vite build watcher and independent
+HTTP/SSE server (`packages/studio-server-web/dev/`). Builds are published as
+immutable, content-deduplicated generations. An HTML base precedes all asset
+references, and the iframe carries the dashboard's generation ID. A failed build
+cannot replace current HTML or remove old lazy chunks. The bounded cache fails
+publication rather than deleting generations still usable by open tabs.
+
+Refresh permission belongs to the editor's live Jotai store and committed browser
+recovery, not just the dashboard's active-project dirty dot. A development-only
+handshake checks all tabs, active work and checkpoint durability, briefly blocks
+input, and is checked synchronously by the same-origin dashboard before reload.
+Node drags, wire connections and focused inline inputs also block refresh before
+the input lock is applied; they need not have committed a dirty edit yet.
+The development status stream retains nginx UI authorization. No production
+launcher, data authority, API/executor watcher or Kubernetes behavior changes.
+See [Development](development.md#tunnel-friendly-development).
+`studio-server:verify:tunnel:integration` owns a separate disposable code fixture
+for source rebuild/failure/repair and browser measurements. It neither migrates
+data nor restarts the operator's API/executor stack. Actual tunnel forwarding and
+live backend execution remain separate acceptance checks.
+
 ## Trusted-client access
 
 Authentication bypass uses verified client IPs/networks, never hostnames. The API

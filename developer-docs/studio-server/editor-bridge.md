@@ -9,7 +9,32 @@ They communicate through `window.postMessage`.
 
 ## Contract
 
-All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both sides import from the same file so the contract cannot drift.
+Tunnel development has a separate, development-only refresh handshake:
+`prepare-development-refresh` / `cancel-development-refresh` carry a request ID;
+the iframe responds with `development-refresh-prepared` and `ready`. Both sides
+validate origin and window identity. The parent's final synchronous check calls
+the iframe's request-scoped `__rivetDevelopmentRefreshReady` function, closing
+the asynchronous message/navigation gap. This protocol is not available in
+production builds and does not expose workspace atoms. Input locks expire even
+if the parent disappears. Build generation/session changes cancel old requests.
+The parent also retains its expiry until navigation unloads the old document;
+cancelled or blocked navigation must release its shield and keyboard lock.
+The editor tracks queued bridge commands as activity, not merely commands that
+have started. Refresh never relies solely on the active-project dirty event.
+
+Production message types live in `packages/studio-server-shared/editor-bridge.ts`.
+The development-only refresh protocol is owned by `DevelopmentUpdates.tsx` and
+`useDevelopmentRefreshBridge.ts`, with browser tests exercising both sides.
+It rejects active canvas gestures and focused inline inputs before setting inert,
+then rechecks live activity and checkpoint revisions before navigation.
+
+The dependency-free HTML shell owns bootstrap failure UI. It can notify the
+dashboard with `editor-initialization-failed` even when the entry module cannot
+load; `entry.tsx` delegates nested-import failures to the same surface. The
+dashboard validates origin and iframe identity before revealing Retry. Retry
+reloads only the failed document, never clears recovery records, and never runs
+an automatic reload loop. Resource errors arriving after editor readiness do not
+replace the working workspace.
 
 ### Dashboard-to-editor commands
 

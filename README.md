@@ -72,6 +72,8 @@ The root `dev` script starts the Rivet app workspace and opens the Vite/Tauri de
 
 Studio Server uses the same root Yarn installation but keeps its commands
 explicitly namespaced: use `yarn studio-server:dev` for server development,
+or `yarn studio-server:dev:tunnel` for watched frontend bundles through a VS Code
+tunnel (slower rebuilds, safe full-page refresh instead of HMR),
 `yarn studio-server:prod` for published production images, or
 `yarn studio-server:prod:custom` to build production images from this checkout.
 There is no bare `prod` command.

@@ -1,5 +1,185 @@
 # Development
 
+## Tunnel-friendly development
+
+Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a
+VS Code tunnel. Forward the same proxy port as ordinary dev (for example 8081),
+not the private API or frontend service ports. `yarn studio-server:dev` switches
+back to Vite hot reload. Both commands use the same Compose project and data
+mounts; this is a frontend mode, not a staging deployment or storage upgrade.
+Save browser edits before deliberately switching modes.
+The launcher gracefully reloads nginx after frontend readiness; Compose must not
+restart the proxy merely because `web` was recreated. This preserves existing
+executor WebSockets while refreshing nginx's upstream address resolution. Direct
+Compose-only web recreation requires that same reload afterward.
+
+Tunnel mode automatically watches the frontend and bundles it using the existing
+hosted Vite aliases/plugins. API and executor development watchers are unchanged.
+Expect a slower first start and rebuild than HMR: a successful rebuild causes a
+full-page refresh, not component hot replacement. There are no thousands of Vite
+source-module requests or Vite HMR connections in the browser. Source maps remain
+available for debugging; this mode is development-only, not a public production
+server. Keep normal tunnel sign-in and Rivet UI authentication enabled.
+
+This frontend's full build is resource-intensive. Local verification measured
+roughly 80–90 seconds per native build, 127–155 seconds per Linux container build,
+and about 5.3 GiB aggregate Node resident memory during a Linux/Node 20 build (not guaranteed
+maximums). Allocate sufficient Docker RAM
+alongside the backend; do not assume a 4 GiB production VM can run this development
+builder. Each compiler child exits after publication, releasing its heap.
+Tunnel mode allows a 15-minute startup health grace (live mode retains 3 minutes);
+a successful check becomes ready immediately. Each compilation also has a
+15-minute deadline so a hung plugin cannot indefinitely block later source edits.
+
+The build process and HTTP server are separate. A successful build is copied to
+an immutable generation before it becomes current. HTML pins scripts, CSS,
+Monaco/deserialize workers and lazy imports to that generation, and the dashboard
+pins its iframe to the same generation. Failed builds retain the previous bundle.
+Status travels over authenticated, unbuffered `/__rivet_dev/events` SSE. Connection
+loss reconnects without reloading or discarding the workspace.
+Initial connection failure is visible even before the first status arrives.
+
+The development notice shows building/failure/update status. Automatic refresh
+requires all project tabs to be clean with known baselines, no active saves,
+loads, bridge commands, graph/Evaluation runs or editor modal work, and a freshly
+committed, reloadable browser checkpoint. The iframe is briefly input-locked;
+the parent rechecks permission synchronously immediately before navigation.
+Canvas drags, connection gestures and focused inline inputs block refresh before
+the input lock can blur them; an uncommitted gesture need not be dirty yet.
+Visible dashboard forms, alert dialogs and busy rename rows also block refresh,
+even after their input loses focus; retained hidden forms do not block it.
+If unsafe, it stays on the current bundle and offers **Refresh when safe**.
+Save work, finish runs, and close open settings/inline forms before using it.
+This button never forces a discard. An absent or old editor bridge fails closed.
+Ordinary browser reload is still the user's explicit action, with existing unload
+protection. An initial nested module-import failure now presents a retry action
+instead of an endless editor spinner, in both frontend modes.
+The dependency-free HTML shell also catches entry-module resource errors before
+any editor JavaScript executes. Entry's nested-import handler uses that same
+failure surface. It does not reset recovery or create automatic reload loops;
+late resource/runtime errors cannot replace an already-ready editor.
+
+Source changes are debounced and builds are serialized in fresh compiler children,
+not incremental Rollup builds: hosted plugins dispose build resolver state, and
+output directories must not be cleared while another build is being published.
+Parent IPC disconnection stops orphan watchers/compilers before a replacement
+can write the shared working directory. The HTTP supervisor also tracks the
+compiler PID and terminates it on watcher failure: synchronous compilation can
+delay the compiler's own disconnect handler.
+Compilation starts only after the supervisor acknowledges that ownership.
+Retired watcher callbacks and compiler deadlines cannot affect a replacement.
+The web container uses Docker's init process to reap exited orphan subprocesses.
+Edits observed during a build are coalesced into the next build; superseded
+results do not become the current frontend generation.
+Vite's watch-only polling server covers frontend/shared/Core/App sources, Vite
+config, source-alias helpers, App's imported `graphs/` templates, workspace package/TypeScript config and lockfile changes, and public assets (including
+additions and deletions) for Docker Desktop bind compatibility. Lockfile/dependency
+changes still require rerunning the launcher to reconcile installed dependencies.
+Changes to the launcher or `dev/*.mjs` server implementation require a web restart.
+The watch-only Vite server has HMR disabled; it opens no unused HMR socket.
+
+The named `tunnel_cache` volume stores deduplicated hardlinked generations, capped
+at 2 GiB of unique objects and 128 generations. Old generations are deliberately
+not deleted while an old tab could still request a lazy chunk. At the limit,
+publication fails visibly while the existing bundle keeps serving.
+Failed-publication objects without any retained-generation hardlink are reclaimed
+when the next compiler initializes the cache; retained generations are never
+pruned. Objects from a partial publication must not permanently consume the
+available budget.
+To reset the retained-generation cache,
+close old browser tabs, stop the dev stack, and remove **only** that Compose
+project's `tunnel_cache` volume, then restart. Never use `docker compose down -v`
+for this: it would also remove local application/database volumes. A fresh web
+process waits for its first successful build rather than treating another
+checkout's cached HTML as current.
+
+Verification:
+
+```powershell
+yarn studio-server:verify:tunnel
+
+# Longer Linux/Docker gate (installed dev dependency volume required):
+yarn studio-server:verify:tunnel:integration
+yarn workspace @valerypopoff/rivet-app exec tsc -p tsconfig.hosted-development.json --noEmit
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:8081' # configured tunnel-mode proxy
+yarn studio-server:ui:observe tunnel-development.spec.ts
+```
+
+The browser spec requires tunnel mode, mocks API fixture data, and covers nested
+import failure, initial SSE failure/reconnect, build feedback, safe clean refresh,
+generation pinning, pending dashboard forms/rename rows, an active canvas drag,
+an inactive dirty tab and aborted recovery transactions. The native server tests cover cache limits, failed publication,
+old chunks, SSE, path validation, deduplication, retired watcher callbacks and
+compiler deadlines. Launcher contracts parse Compose YAML rather than relying
+on indentation or field order. Also run the existing node
+editor/Save regressions against the bundled frontend. Local checks do not certify
+an authenticated external tunnel: test the actual forwarded URL separately,
+including tunnel sign-in, SSE reconnect and frontend/backend edits.
+Refresh tests wait for the real checkpoint handshake: editor mount readiness
+does not imply that startup recovery effects have finished settling.
+The ordinary-Vite bootstrap retry assertion reacquires the iframe across
+dependency-optimizer reloads, retrying only destroyed/detached document contexts;
+other evaluation failures still fail the test.
+
+The integration gate creates UUID-labelled disposable code/cache volumes, copies
+only frontend build inputs (not `.env`, project roots or desktop build trees),
+and mounts the existing dev dependency volume read-only. It does not bring the
+normal Compose stack up/down. It compares live/tunnel Compose service objects:
+only web configuration may differ, and data mounts must be identical. Tunnel
+startup retains the existing Google browser-override typecheck.
+
+Real TSX, CSS and Core edits must reach published assets. A syntax error must
+retain the last successful generation; repair must publish a new one. An API-only
+source edit must not schedule a frontend build. The gate measures cold fixture
+readiness and separate warm rebuilds, sampled aggregate Node RSS and unique cache
+bytes, then runs the safety browser suite. A second browser pass measures the
+same cold dashboard/editor case against ordinary Vite mode. These measurements
+exclude dependency installation and do not qualify a production VM's capacity.
+Reports live under `artifacts/rivet-tunnel-<uuid>/`; browser metrics also live in
+`artifacts/tunnel-browser-measurements/`. The gate removes only its labelled
+container and volumes on completion/failure, retaining diagnostic artifacts.
+Cleanup attempts every owned resource even when one is locked, and preserves the
+original test failure instead of replacing it with a secondary cleanup error.
+A successful test run with failed cleanup remains a failed verification; PASS is
+printed only after cleanup succeeds.
+
+The browser suite additionally proves that clean-but-pending saves and active
+workflows block refresh, save failures retain dirty edits, and an acknowledged
+retry permits a checkpointed refresh restoring the active tab. It never forces
+project saves or interrupts execution to apply a frontend update.
+Refresh permission is bound to the exact recovery provider that committed the
+checkpoint. Provider replacement during or after preparation invalidates that
+permission, even if the retired provider still reports healthy recovery.
+Connection loss during preparation cancels the request and releases input locks.
+The refresh expiry remains active while navigation begins. If a browser blocks
+navigation or a user cancels a `beforeunload` prompt, the dashboard shield,
+keyboard lock and iframe permission expire instead of trapping the old page.
+The bundled browser suite covers cancelled navigation and subsequent editing.
+Asset compression honors an explicit `gzip;q=0`, and response pipelines retire
+both file and gzip streams when a tunnel client disconnects.
+
+October 3 isolated Linux/Node 20 checks measured approximately 133–152 seconds
+for cold readiness and 125–142 seconds for CSS/TSX/Core rebuilds. Unique cached
+payloads grew from about 162 MiB to 249 MiB across four generations. The same
+mocked dashboard/editor startup made 37 bundled requests (zero source modules),
+versus roughly 670–1000 requests in ordinary Vite mode (520–830 source modules);
+local browser startup was about 1.2–1.8 seconds in either mode. These are
+checkout-specific observations, not tunnel latency or capacity guarantees.
+Vite dependency-optimizer warmth affects the counts: the baseline is a fresh
+browser document, not an untouched Vite server's first request. Repair latency
+also includes superseded builds, so it is not a clean rebuild baseline. See the
+retained per-run measurements and browser reports rather than treating these
+figures or a historical test count as a performance SLA.
+
+Final external acceptance remains manual: launch `studio-server:dev:tunnel`,
+forward the configured proxy port, sign in through the actual VS Code tunnel,
+and open/edit a project. Check a harmless frontend edit, failed build/repair,
+dirty-tab deferral, SSE reconnection and your intended backend change through a
+controlled workflow. Keep tunnel/UI authentication enabled. The isolated gate's
+API-only edit checks watcher separation, not a live API/executor execution path.
+
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
 See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)

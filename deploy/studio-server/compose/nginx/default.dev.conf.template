@@ -144,6 +144,20 @@ server {
         proxy_send_timeout 86400s;
     }
 
+    # Bundle watcher status is development-only and uses the same UI gate.
+    location = /__rivet_dev/events {
+        auth_request /__rivet_ui_auth_check;
+        proxy_pass $web_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $rivet_request_host;
+        proxy_set_header X-Forwarded-Host $rivet_forwarded_host;
+        proxy_set_header X-Forwarded-Proto $rivet_forwarded_proto;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+    }
+
     location /api/ {
         auth_request /__rivet_ui_auth_check;
 

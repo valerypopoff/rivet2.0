@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "composite": false },
+  "include": [
+    "src",
+    "../studio-server-web/dashboard/DevelopmentUpdates.tsx",
+    "../studio-server-web/dashboard/useDevelopmentRefreshBridge.ts"
+  ],
+  "exclude": ["**/dist", "**/node_modules"],
+  "references": [{ "path": "../core" }, { "path": "../evaluations" }]
+}

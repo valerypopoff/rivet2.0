@@ -39,10 +39,9 @@ services:
     depends_on:
       web:
         condition: service_healthy
-        # Compose restarts the proxy when it recreates this upstream. The dev
-        # launcher also reloads nginx after each normal bring-up so ordinary
-        # service restarts cannot retain an old bridge-network address.
-        restart: true
+        # Frontend mode changes must not restart nginx and disconnect executor
+        # sockets. The dev launcher gracefully reloads nginx after readiness to
+        # resolve this upstream's new bridge address without retiring sessions.
       api:
         condition: service_healthy
         restart: true
@@ -51,6 +50,7 @@ services:
   web:
     labels: *dev-stack-labels
     image: node:20-alpine
+    init: true
     working_dir: /workspace/packages/studio-server-web
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
@@ -68,6 +68,8 @@ services:
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
       - HOSTED_VITE_CACHE_DIR=/home/rivet/.cache/vite
+      - RIVET_DEV_FRONTEND_MODE=${RIVET_DEV_FRONTEND_MODE:-live}
+      - RIVET_DEV_BUNDLE_ROOT=/home/rivet/.cache/tunnel
       - VITE_RIVET_DEBUG_LOGS=${VITE_RIVET_DEBUG_LOGS:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
@@ -84,6 +86,7 @@ services:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
       - vite_cache:/home/rivet/.cache/vite
+      - tunnel_cache:/home/rivet/.cache/tunnel
       - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
     command: >
       sh -lc "
@@ -95,7 +98,12 @@ services:
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&
         yarn build:hosted-web-deps &&
-        yarn workspace @valerypopoff/rivet-studio-server-web run dev --host 0.0.0.0 --strictPort
+        if [ $$RIVET_DEV_FRONTEND_MODE = tunnel ]; then
+          yarn workspace @valerypopoff/rivet-studio-server-web run check:google-hosted-override &&
+          yarn workspace @valerypopoff/rivet-studio-server-web exec node dev/tunnel.mjs;
+        else
+          yarn workspace @valerypopoff/rivet-studio-server-web run dev --host 0.0.0.0 --strictPort;
+        fi
       "
     healthcheck:
       test:
@@ -105,7 +113,7 @@ services:
           '-e',
           "require('node:http').get('http://127.0.0.1:5174/', (res) => process.exit(res.statusCode && res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
         ]
-      start_period: 180s
+      start_period: ${RIVET_DEV_WEB_START_PERIOD:-180s}
       interval: 10s
       timeout: 5s
       retries: 12
@@ -290,6 +298,8 @@ volumes:
   yarn_cache:
     driver: local
   vite_cache:
+    driver: local
+  tunnel_cache:
     driver: local
   rivet_data:
     driver: local

@@ -22,6 +22,7 @@ import { useEditorCommandBridge } from './useEditorCommandBridge';
 import { useOpenWorkflowProject } from './useOpenWorkflowProject';
 import { usePreviewProjectLifecycle } from './usePreviewProjectLifecycle';
 import { useWorkflowRecordingBridge } from './useWorkflowRecordingBridge';
+import { useDevelopmentRefreshBridge } from './useDevelopmentRefreshBridge';
 
 type EditorMessageBridgeProps = {
   savedProjectSignal: SavedProjectSignal | null;
@@ -33,6 +34,7 @@ export type SavedProjectSignal = {
 };
 
 export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProjectSignal, workspaceHost }) => {
+  useDevelopmentRefreshBridge();
   const openProject = useOpenWorkflowProject(workspaceHost);
   const executorSessionRuntime = useExecutorSessionRuntime();
   const projects = useAtomValue(projectsState);
@@ -92,6 +94,7 @@ export const EditorMessageBridge: FC<EditorMessageBridgeProps> = ({ savedProject
   }, [preview.promotePreviewProjectById, savedProjectSignal]);
 
   useEffect(() => {
+    window.__rivetEditorBootstrapState = 'ready';
     postMessageToDashboard({ type: 'editor-ready', editorInstanceId: hostedEditorInstanceId });
   }, []);
 

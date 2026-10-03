@@ -370,17 +370,12 @@ test('dev backend exposes the host machine to both Node execution processes', ()
   );
 });
 
-test('dev Compose recreates Nginx when its upstream container is recreated', () => {
+test('frontend mode changes refresh Nginx resolution without restarting executor sockets', () => {
   const proxy = composeServiceBlock(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), 'proxy');
-
-  for (const service of ['web', 'api']) {
-    assert.match(
-      proxy,
-      new RegExp(
-        `\\n      ${service}:\\s*\\r?\\n        condition: [^\\r\\n]+\\r?\\n(?:        #[^\\r\\n]*\\r?\\n)*        restart: true`,
-      ),
-    );
-  }
+  const frontendDependency = proxy.split('\n      web:')[1]!.split('\n      api:')[0]!;
+  assert.doesNotMatch(frontendDependency, /restart: true/);
+  assert.match(proxy, /api:\s*\r?\n\s*condition: service_healthy\s*\r?\n\s*restart: true/);
+  assert.match(readRepoFile('deploy/studio-server/scripts/dev-docker.mjs'), /exec -T proxy nginx -s reload/);
 });
 
 test('compose fallback artifact mounts stay isolated under app data', () => {

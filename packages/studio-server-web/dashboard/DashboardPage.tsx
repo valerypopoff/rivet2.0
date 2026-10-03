@@ -36,6 +36,8 @@ import {
   RIVET_WEB_APPS_BASE_PATH,
 } from '../../studio-server-shared/hosted-env';
 import './DashboardPage.css';
+import { DevelopmentUpdates } from './DevelopmentUpdates';
+import { getDevelopmentGeneration } from './developmentRefreshGuard';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
@@ -700,6 +702,7 @@ export const DashboardPage: FC = () => {
         />
       ) : null}
       <main className="dashboard-main">
+        <DevelopmentUpdates iframeRef={iframeRef} editorReady={editorReady} />
         {showEditorLoading ? (
           <div className="dashboard-app-loading">
             <div className="dashboard-editor-loading-spinner" aria-hidden="true" />
@@ -715,8 +718,15 @@ export const DashboardPage: FC = () => {
         ) : null}
         <iframe
           ref={iframeRef}
-          src="/?editor"
-          onLoad={resetEditorReconciliation}
+          src={getDevelopmentGeneration() ? `/?editor&devBuild=${getDevelopmentGeneration()}` : '/?editor'}
+          onLoad={() => {
+            // Bootstrap messages may precede load; retain this document's result.
+            const state = iframeRef.current?.contentWindow?.__rivetEditorBootstrapState;
+            if (state === 'failed') {
+              setEditorReady(false);
+              setEditorInitializationFailed(true);
+            } else if (state !== 'ready') resetEditorReconciliation();
+          }}
           className={`dashboard-editor-frame ${openProjectCount === 0 && !editorInitializationFailed ? 'dashboard-editor-frame-hidden' : ''}${sidebarResizing ? ' dashboard-editor-frame-resizing' : ''}`}
         />
       </main>
