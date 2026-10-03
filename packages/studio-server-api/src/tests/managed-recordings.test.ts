@@ -250,6 +250,106 @@ test('managed Any scope applies status, pagination and input continuations witho
   assert.equal(nextMatch.runs[0]!.id, 'old-a');
 });
 
+test('managed caller scope wires related counts, status filters and matching input continuations', async () => {
+  const root = {
+    ...createRecordingRow('root', 'caller', '2026-08-04T12:00:00.000Z'),
+    execution_surface: 'workflow_endpoint' as const,
+    correlation_id: 'rvt-managed-caller-12345',
+  };
+  const child = {
+    ...createRecordingRow('child', 'Subgraph: Child', '2026-08-04T12:00:01.000Z', 10, 'workflow-b'),
+    execution_surface: 'subgraph_project' as const,
+    correlation_id: root.correlation_id,
+    status: 'failed' as const,
+  };
+  const rows = [child, root];
+  const available = (sql: string, parameters: unknown[]) => {
+    assert.equal(parameters[0], 'workflow-a');
+    assert.match(sql, /execution_surface = 'subgraph_project'/);
+    assert.match(sql, /root\.workflow_id = \$1/);
+    assert.match(sql, /COALESCE\(root\.execution_surface, ''\) <> 'subgraph_project'/);
+    return sql.includes("AND status IN ('failed', 'suspicious')") ? [child] : rows;
+  };
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {},
+    db: {
+      queryOne: async (_pool: unknown, sql: string, parameters: unknown[]) => {
+        assert.equal(available(sql, parameters).length, 2);
+        assert.match(sql, /AS "totalRuns"/);
+        return { totalRuns: 2, failedRuns: 1, suspiciousRuns: 0 };
+      },
+      queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
+        const matching = available(sql, parameters);
+        const after = parameters.length === 5;
+        const offset = after
+          ? matching.findIndex((row) => row.recording_id === parameters[2]) + 1
+          : Number(parameters[2]);
+        return matching.slice(offset, offset + Number(parameters[after ? 3 : 1]));
+      },
+    },
+    blobStore: {
+      getText: async () =>
+        JSON.stringify({
+          strings: {},
+          recording: { events: [{ type: 'start', data: { inputs: { input: { value: { matched: true } } } } }] },
+        }),
+    },
+    mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: unknown) => String(value) },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const page = await service.listWorkflowRecordingRunsPage(
+    'workflow-a',
+    1,
+    1,
+    'all',
+    null,
+    0,
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(page.totalRuns, 2);
+  assert.equal(page.runs[0]!.workflowId, 'workflow-b');
+  assert.equal(page.runs[0]!.sourceProjectRelativePath, child.source_project_relative_path);
+  assert.equal(
+    (await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'failed', null, 0, undefined, undefined, true))
+      .totalRuns,
+    1,
+  );
+  const filter = { path: '$.matched', operator: '==' as const, value: 'true' };
+  const first = await service.listWorkflowRecordingRunsPage(
+    'workflow-a',
+    1,
+    1,
+    'all',
+    filter,
+    0,
+    undefined,
+    undefined,
+    true,
+  );
+  assert.ok(first.nextInputAfter);
+  await assert.rejects(
+    service.listWorkflowRecordingRunsPage('workflow-a', 1, 1, 'all', filter, 0, undefined, first.nextInputAfter),
+    /does not match/,
+  );
+  const next = await service.listWorkflowRecordingRunsPage(
+    'workflow-a',
+    1,
+    1,
+    'all',
+    filter,
+    0,
+    undefined,
+    first.nextInputAfter,
+    true,
+  );
+  assert.equal(next.runs[0]?.id, 'root');
+  assert.equal(next.hasMore, false);
+});
+
 test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {
   const rows = Array.from({ length: 25 }, (_, index) =>
     createRecordingRow(

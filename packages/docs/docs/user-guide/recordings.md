@@ -14,6 +14,18 @@ Open **Run recordings** and leave the workflow selector on **Any** to browse all
 
 When a Subgraph runs a graph in another Studio Server project, its run also appears under the called project. Search the called project's run using the values actually passed to that graph: for a Graph Input named `prompt`, use a path such as `$.prompt.requestId`; for a Graph Input named `input`, its value is the search root, so use `$.requestId`. Hosted editor child runs require **Record local graph executions** to be enabled; server endpoint runs follow the server's recording setting.
 
+Selecting the caller workflow also includes related called-project Subgraph
+recordings, including nested calls. Each row shows the project it replays, the
+called graph and a shared **Related run key**. Status and input filters apply to
+each recording's own result and passed inputs; counts include these child runs.
+**Any** still lists every recording once. Older recordings without a related run
+key, or children whose root recording has been deleted, can only be found under
+**Any** or their called project.
+Counts in the workflow dropdown say **in this project** because they count that
+project's own recordings; the selected table can contain additional related child
+recordings. Deleting a parent does not delete its child recordings. Without that
+parent's run key anchor, find those children through **Any** or their called project.
+
 Search shows an initial match promptly, then collects larger batches automatically. The ordinary runs-per-page setting does not limit the total search results. Repeated searches can reuse recently extracted inputs, but large histories may exceed the server's memory cache and still require reading recording files again.
 
 **Search complete** means the scan finished. **Search stopped** means the results may be incomplete, including when an unreadable or malformed recording caused an error. Check the displayed error before treating an empty result as proof that no matching run exists.

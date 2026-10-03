@@ -482,6 +482,8 @@ async function installRunRecordingRoutes(
   options: {
     includeResponseInspectorRun?: boolean;
     subgraphRun?: boolean;
+    relatedSubgraphRuns?: boolean;
+    latestFlowDurationMs?: number | null;
     latestFlowRunCount?: number;
     cursorDelayMs?: number;
     deletionGate?: Promise<void>;
@@ -546,10 +548,28 @@ async function installRunRecordingRoutes(
       correlationId: 'rvt-related-example-12345',
     };
   }
+  if (options.relatedSubgraphRuns) {
+    const root = runsByWorkflow.get('workflow-a')![0]!;
+    root.executionIdentity = { surface: 'workflow_endpoint', correlationId: 'rvt-root-caller-12345' };
+    const child = runsByWorkflow.get('workflow-b')![0]!;
+    child.executionIdentity = {
+      surface: 'subgraph_project',
+      correlationId: 'rvt-root-caller-12345',
+      graphName: 'Extract facts',
+    };
+    child.endpointNameAtExecution = 'Subgraph: Extract facts';
+    child.sourceProjectRelativePath = 'Latest Flow.rivet-project';
+    child.status = 'failed';
+    child.input = { score: 99 };
+  }
   const recordingFetches: string[] = [];
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
   const latestRuns = runsByWorkflow.get('workflow-b');
+  if (latestRuns?.[0] && 'latestFlowDurationMs' in options) {
+    // Deliberately allow malformed legacy API timing data in these fixtures.
+    latestRuns[0].durationMs = options.latestFlowDurationMs as number;
+  }
   if (latestRuns && options.latestFlowRunCount != null) {
     latestRuns.splice(options.latestFlowRunCount);
     for (let index = latestRuns.length; index < options.latestFlowRunCount; index += 1) {
@@ -626,11 +646,23 @@ async function installRunRecordingRoutes(
       const inputCursor = Number(url.searchParams.get('inputCursor') ?? '0');
       const inputAfter = url.searchParams.get('inputAfter');
       const hasInputFilter = url.searchParams.has('inputPath');
-      const sourceRuns = workflowId
-        ? runsByWorkflow.get(workflowId) ?? []
-        : [...runsByWorkflow.values()]
-            .flat()
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      const allRuns = [...runsByWorkflow.values()].flat();
+      const rootKeys = new Set(
+        allRuns
+          .filter((run) => run.workflowId === workflowId && run.executionIdentity?.surface !== 'subgraph_project')
+          .map((run) => run.executionIdentity?.correlationId)
+          .filter(Boolean),
+      );
+      const sourceRuns = allRuns
+        .filter(
+          (run) =>
+            !workflowId ||
+            run.workflowId === workflowId ||
+            (url.searchParams.get('includeSubgraphRuns') === 'true' &&
+              run.executionIdentity?.surface === 'subgraph_project' &&
+              rootKeys.has(run.executionIdentity.correlationId)),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
       const filteredRuns =
         status === 'failed'
           ? sourceRuns.filter((run) => run.status === 'failed' || run.status === 'suspicious')
@@ -656,6 +688,15 @@ async function installRunRecordingRoutes(
         contentType: 'application/json',
         body: JSON.stringify({
           workflowId,
+          ...(workflowId && options.relatedSubgraphRuns
+            ? {
+                scopeCounts: {
+                  totalRuns: sourceRuns.length,
+                  failedRuns: sourceRuns.filter((run) => run.status === 'failed').length,
+                  suspiciousRuns: sourceRuns.filter((run) => run.status === 'suspicious').length,
+                },
+              }
+            : {}),
           page: pageNumber,
           pageSize,
           totalRuns: hasInputFilter ? pageRuns.length : filteredRuns.length,
@@ -768,10 +809,10 @@ async function openLatestFlowRecordings(page: Page, expectedLatestFlowRecordingC
     page
       .locator('.run-recordings-select__option', { hasText: 'Published Flow' })
       .locator('.run-recordings-select-option-count'),
-  ).toHaveText('2 recordings');
+  ).toHaveText('2 recordings in this project');
   const latestFlowOption = page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' });
   await expect(latestFlowOption.locator('.run-recordings-select-option-count')).toHaveText(
-    `${expectedLatestFlowRecordingCount} recording${expectedLatestFlowRecordingCount === 1 ? '' : 's'}`,
+    `${expectedLatestFlowRecordingCount} recording${expectedLatestFlowRecordingCount === 1 ? '' : 's'} in this project`,
   );
   await latestFlowOption.click();
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText('Latest Flow');
@@ -808,6 +849,27 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  for (const [durationMs, expected] of [
+    [2.8421670000243466, '2.84 ms'],
+    [0, '0.00 ms'],
+    [12345.678, '12.35 s'],
+    [59999, '1m 0.00s'],
+    [59995, '1m 0.00s'],
+    [95432.1, '1m 35.43s'],
+    [119999, '2m 0.00s'],
+    [null, 'Unavailable'],
+    [undefined, 'Unavailable'],
+    [-1, 'Unavailable'],
+    [Number.NaN, 'Unavailable'],
+    [Number.POSITIVE_INFINITY, 'Unavailable'],
+  ] as const) {
+    test(`rounds recording duration ${durationMs} to ${expected}`, async ({ page }) => {
+      await installRunRecordingRoutes(page, { latestFlowDurationMs: durationMs });
+      const modal = await openLatestFlowRecordings(page);
+      await expect(modal.locator('.run-recordings-run-duration').first()).toHaveText(expected);
+    });
+  }
+
   test('a fresh session defaults to Any after closing a workflow-specific view', async ({ page }) => {
     await installRunRecordingRoutes(page);
     const modal = await openLatestFlowRecordings(page);
@@ -1208,8 +1270,100 @@ test.describe('Run recordings modal', () => {
     await selectPublishedFlow(page, modal);
     const run = modal.locator('.run-recordings-run').first();
     await expect(run).toContainText('Subgraph · Local editor');
-    await expect(run.locator('.run-recordings-run-endpoint').first()).toContainText('Called graph: Extract facts');
+    await expect(run.locator('.run-recordings-run-endpoint').filter({ hasText: 'Called graph:' })).toContainText(
+      'Called graph: Extract facts',
+    );
     await expect(run).toContainText('Related run key: rvt-related-example-12345');
+  });
+
+  test('caller recordings include linked cross-project children with counts, input filtering and deletion', async ({
+    page,
+  }) => {
+    const { runFetches } = await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('3 Runs');
+    await expect(modal.getByRole('button', { name: 'Bad only (2)', exact: true })).toBeVisible();
+    const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
+    await expect(child).toHaveCount(1);
+    await expect(child).toContainText('Project: Latest Flow.rivet-project');
+    await expect(child).toContainText('Subgraph · Latest');
+    await expect(child).toContainText('Related run key: rvt-root-caller-12345');
+    expect(runFetches.some((url) => url.includes('workflow-a/runs') && url.includes('includeSubgraphRuns=true'))).toBe(
+      true,
+    );
+    await modal.getByRole('button', { name: 'Bad only (2)', exact: true }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
+    await expect(child).toBeVisible();
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByRole('combobox', { name: 'Input JSON path' }).fill('$.score');
+    await modal.getByLabel('Value', { exact: true }).fill('99');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+    await expect(child).toBeVisible();
+    await child.hover();
+    await child.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('2 Runs');
+    await expect(modal.getByRole('button', { name: 'Bad only (1)', exact: true })).toBeVisible();
+    await expect(child).toHaveCount(0);
+    await modal.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+  });
+
+  test('deleting a root refreshes filtered caller membership without deleting its child recording', async ({
+    page,
+  }) => {
+    await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByRole('combobox', { name: 'Input JSON path' }).fill('$');
+    await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
+    await page
+      .locator('.run-recordings-select__option')
+      .filter({ hasText: /^exists$/ })
+      .click();
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+      'Search complete, 3 matches found',
+    );
+    const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
+    await expect(child).toHaveCount(1);
+    const root = modal
+      .locator('.run-recordings-run')
+      .filter({ hasText: 'Endpoint at execution: published-flow' })
+      .filter({ hasText: 'Related run key: rvt-root-caller-12345' });
+    await root.hover();
+    await root.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
+    await expect(modal.locator('.run-recordings-runs-title')).toHaveText('1 Run');
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+    await expect(child).toHaveCount(0);
+    await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option').filter({ hasText: /^Any/ }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+      'Search complete, 13 matches found',
+    );
+    await expect(child).toHaveCount(1);
+  });
+
+  test('a confirmed child deletion remains visible as successful when refreshing its scope fails', async ({ page }) => {
+    await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByRole('combobox', { name: 'Input JSON path' }).fill('$.score');
+    await modal.getByLabel('Value', { exact: true }).fill('99');
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
+    await page.route('**/api/workflows/recordings/workflows/workflow-a/runs?*', (route) =>
+      route.fulfill({ status: 503, json: { error: 'Scope refresh unavailable' } }),
+    );
+    await deleteFirstRun(page, modal);
+    await expect(modal.locator('.run-recordings-run')).toHaveCount(0);
+    await expect(modal).toContainText('Recording deleted, but refreshing the list failed: Scope refresh unavailable');
+    await expect(modal.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
   });
 
   test('deletions are serialized within a view and an older deletion cannot clear a newer one', async ({ page }) => {
@@ -1480,9 +1634,13 @@ test.describe('Run recordings modal', () => {
     await expect(runFilter).toHaveClass(/segmented-control/);
     await expect(runFilter.getByRole('button').first()).toHaveCSS('height', '28px');
     await expect(runFilter.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
-    await expect(modal.locator('.run-recordings-run').first().locator('.run-recordings-run-endpoint')).toHaveText(
-      'Endpoint at execution: latest-flow',
-    );
+    await expect(
+      modal
+        .locator('.run-recordings-run')
+        .first()
+        .locator('.run-recordings-run-endpoint')
+        .filter({ hasText: 'Endpoint at execution:' }),
+    ).toHaveText('Endpoint at execution: latest-flow');
 
     await modal.getByRole('button', { name: /Bad only/ }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(3);
@@ -1499,10 +1657,9 @@ test.describe('Run recordings modal', () => {
     await modal.getByLabel('Value').fill('bar');
     await modal.getByRole('button', { name: 'Apply' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
-    await expect(modal.locator('.run-recordings-run-endpoint')).toHaveText([
-      'Endpoint at execution: latest-flow',
-      'Endpoint at execution: latest-flow',
-    ]);
+    await expect(
+      modal.locator('.run-recordings-run-endpoint').filter({ hasText: 'Endpoint at execution:' }),
+    ).toHaveText(['Endpoint at execution: latest-flow', 'Endpoint at execution: latest-flow']);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete');
     const filteredRunsRequest = new URL(runFetches.at(-1)!);
     expect(filteredRunsRequest.searchParams.get('inputPath')).toBe('$.foo');
@@ -1686,7 +1843,7 @@ test.describe('Run recordings modal', () => {
     const modal = await openLatestFlowRecordings(page, 13);
 
     const inspectorRun = modal.locator('.run-recordings-run').filter({
-      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35s' }),
+      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35.00s' }),
     });
     await expect
       .poll(async () => {
@@ -1790,7 +1947,7 @@ test.describe('Run recordings modal', () => {
     await installRunRecordingRoutes(page, { includeResponseInspectorRun: true });
     const modal = await openLatestFlowRecordings(page, 13);
     const inspectorRun = modal.locator('.run-recordings-run').filter({
-      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35s' }),
+      has: page.locator('.run-recordings-run-duration', { hasText: '1m 35.00s' }),
     });
     await expect
       .poll(async () => {

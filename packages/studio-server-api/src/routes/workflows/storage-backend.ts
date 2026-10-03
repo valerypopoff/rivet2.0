@@ -820,6 +820,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   inputCursor = 0,
   signal?: AbortSignal,
   inputAfter?: string,
+  includeSubgraphRuns = false,
 ): Promise<WorkflowRecordingRunsPageResponse> {
   return delegateWithWorkflowsRoot(
     async (backend) =>
@@ -832,6 +833,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
         inputCursor,
         signal,
         inputAfter,
+        includeSubgraphRuns,
       ),
     async (root) =>
       listWorkflowRecordingRunsPage(
@@ -844,6 +846,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
         inputCursor,
         signal,
         inputAfter,
+        includeSubgraphRuns,
       ),
   );
 }

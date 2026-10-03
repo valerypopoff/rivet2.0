@@ -1047,6 +1047,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return {
       id: row.recordingId,
       workflowId: row.workflowId,
+      sourceProjectName: row.sourceProjectName,
+      sourceProjectRelativePath: row.sourceProjectRelativePath,
       createdAt: row.createdAt,
       runKind: row.runKind,
       status: row.status,
@@ -1073,6 +1075,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     inputCursor = 0,
     signal?: AbortSignal,
     inputAfter?: string,
+    includeSubgraphRuns = false,
   ): Promise<WorkflowRecordingRunsPageResponse> {
     if (workflowId && !this.#catalog.findProjectPathById(workflowId)) throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),
@@ -1083,10 +1086,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       !['all', 'failed'].includes(statusFilter)
     )
       throw badRequest('Invalid recording page');
-    const scope = inputFilter ? { workflowId, statusFilter, filter: inputFilter } : null;
+    const scopeCounts = workflowId && includeSubgraphRuns ? this.#catalog.recordingScopeCounts(workflowId) : undefined;
+    const scope = inputFilter ? { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns } : null;
     const load = async (after: string | undefined, offset: number, limit: number) =>
       this.#catalog.listRecordingMetadata({
         workflowId,
+        includeSubgraphRuns,
         failedOnly: statusFilter === 'failed',
         limit,
         offset,
@@ -1117,9 +1122,16 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         )
       : null;
     const rows = filtered?.rows ?? (await load(undefined, (normalizedPage - 1) * size, size));
-    const count = filtered?.totalRuns ?? this.#catalog.countRecordings(workflowId, statusFilter === 'failed');
+    const count =
+      filtered?.totalRuns ??
+      (scopeCounts
+        ? statusFilter === 'failed'
+          ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+          : scopeCounts.totalRuns
+        : this.#catalog.countRecordings(workflowId, statusFilter === 'failed'));
     return {
       workflowId,
+      scopeCounts,
       page: normalizedPage,
       pageSize: size,
       totalRuns: count,

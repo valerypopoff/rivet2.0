@@ -1,5 +1,73 @@
 # Development
 
+## Recording duration display
+
+`RecordingRunsTable.tsx` formats recording durations to two decimal places in
+milliseconds or seconds (including the seconds component of minute durations).
+Rounded integer centiseconds carry values at minute boundaries correctly, without
+converting a formatted string back to a number. Invalid, missing, negative or
+non-finite timings display `Unavailable` rather than crashing the modal or
+presenting a misleading zero.
+This is presentation-only: stored `durationMs`, replay timings and statistics
+retain their original precision. The recordings-modal observer covers fractional
+milliseconds, seconds and minute-boundary rounding.
+
+## Called-project recordings in the caller browse scope
+
+The recordings modal requests `includeSubgraphRuns=true` for an individual
+workflow. Its scope includes direct recordings plus `subgraph_project` recordings
+sharing a nonempty correlation ID with a retained, non-Subgraph recording owned by
+that workflow. This includes nested called projects, but does not treat an inbound
+child recording as an anchor that pulls in the caller's other children. Each row
+shows the replay-owning project path and the existing related run key. Any remains
+the deduplicated all-recordings scope.
+
+Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
+metadata-only scope to counts, status filters, offset pages, and bounded input
+search windows. `scopeCounts` supplies unfiltered counts for the selected expanded
+scope; input-search progress uses its status-scoped total, and deleting a filtered
+child refreshes those counts in both the current search page and the scope cache,
+so an older page cannot mask the new total or bad-run count.
+Keyset continuations are bound to the include-child flag and reject non-boolean
+flag payloads, preventing a malformed or direct-only
+continuation from silently selecting an expanded scope.
+The backend option defaults to false to preserve migration verification and
+existing direct-project consumers. Statistics and retention ownership are unchanged.
+After a confirmed delete, the current view removes that row immediately. A later
+catalog/scope refresh failure reports that deletion succeeded but refresh failed;
+it must not restore the deleted row or imply the mutation can safely be repeated.
+Deleting a non-Subgraph root with a shared correlation key can also remove its
+retained children from the caller browse scope. An active input search clears
+those cached matches and restarts through the existing guarded search effect
+after the catalog refresh succeeds.
+Deleting a child, or a row in Any, does not rescan unrelated retained history.
+Roots without a correlation key cannot anchor related children and also avoid a
+rescan. Workflow-selector counts explicitly say `in this project`: they describe
+recording ownership, whereas selecting a workflow expands the table to related
+children. Any's count remains the unique all-recordings total.
+
+Historical recordings without correlation metadata cannot be linked reliably.
+If their root recording has been deleted, child replays remain available under
+Any or their own project, but are no longer discoverable through that root's
+project scope. Listing never infers relationships from names, timestamps or paths.
+
+Regression coverage: `recording-workflow-scope.test.ts`,
+`workflow-recordings-http.test.ts`, `sqlite-workflow-backend.test.ts`, and
+`managed-recordings.test.ts`. Run the complete headless modal observer with
+`yarn studio-server:ui:observe run-recordings-modal.spec.ts` for durations,
+expanded scopes, bad/input filtering, source labels, parent/child deletion,
+post-delete refresh failures and request races. Set `PLAYWRIGHT_HEADLESS=1` and
+`PLAYWRIGHT_SLOW_MO=0`; set `PLAYWRIGHT_BASE_URL` when not using the default URL.
+For a focused HTTP execution check, run:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files --test-name-pattern="published cross-project Subgraph" src/tests/workflow-recordings-http.test.ts
+```
+
+The managed service test mocks query execution; `recording-workflow-scope.test.ts`
+executes the equivalent predicate in SQLite. These are not live PostgreSQL
+integration tests.
+
 ## Recording input-path history
 
 Run recordings remembers trimmed input JSON paths when Apply accepts the filter.

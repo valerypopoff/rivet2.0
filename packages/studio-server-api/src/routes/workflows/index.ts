@@ -279,6 +279,10 @@ const recordingsRunsQuerySchema = z.object({
   inputValue: z.string().optional(),
   inputCursor: z.coerce.number().int().min(0).optional().default(0),
   inputAfter: z.string().min(1).max(512).optional(),
+  includeSubgraphRuns: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
 
 const reconciliationFindingQuerySchema = z
@@ -501,6 +505,7 @@ workflowsRouter.get(
           workflowId: String(req.params.workflowId ?? ''),
           statusFilter: parsedQuery.status,
           filter: inputFilter,
+          includeSubgraphRuns: parsedQuery.includeSubgraphRuns,
         });
       }
     } catch (error) {
@@ -518,6 +523,7 @@ workflowsRouter.get(
         parsedQuery.inputCursor,
         requestAbort.signal,
         parsedQuery.inputAfter,
+        parsedQuery.includeSubgraphRuns,
       );
       if (!requestAbort.signal.aborted && !res.destroyed) {
         res.json(runsPage);

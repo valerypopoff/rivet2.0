@@ -414,6 +414,7 @@ export class ManagedWorkflowBackend {
     inputCursor = 0,
     signal?: AbortSignal,
     inputAfter?: string,
+    includeSubgraphRuns = false,
   ): Promise<WorkflowRecordingRunsPageResponse> {
     return this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
@@ -424,6 +425,7 @@ export class ManagedWorkflowBackend {
       inputCursor,
       signal,
       inputAfter,
+      includeSubgraphRuns,
     );
   }
 

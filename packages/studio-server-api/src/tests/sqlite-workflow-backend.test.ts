@@ -950,6 +950,131 @@ test('SQLite cross-project loads choose the requested version by stable identity
   });
 });
 
+test('SQLite caller browse scope includes cross-project descendants with accurate paging and input search', async () => {
+  await fixture(async (backend) => {
+    const caller = await createExecutable(backend, 'Caller');
+    const child = await createExecutable(backend, 'Child');
+    const nested = await createExecutable(backend, 'Nested');
+    const persist = async (
+      item: WorkflowProjectItem,
+      surface: 'workflow_endpoint' | 'subgraph_project',
+      correlationId: string,
+      status: 'succeeded' | 'failed' | 'suspicious',
+    ) => {
+      const [project, attached] = loadProjectAndAttachedDataFromString(
+        (await backend.loadHostedProject(item.absolutePath)).contents,
+      );
+      return (await backend.persistWorkflowExecutionRecording({
+        sourceProject: project,
+        sourceProjectPath: item.absolutePath,
+        executedProject: project,
+        executedAttachedData: attached,
+        executedDatasets: [],
+        endpointName: surface === 'subgraph_project' ? 'Subgraph: Main' : 'caller',
+        runKind: 'published',
+        status,
+        durationMs: 1,
+        executionIdentity: { surface, correlationId, graphId: 'main' },
+        recordingSerialized: JSON.stringify({
+          strings: {},
+          recording: {
+            events: [{ type: 'start', data: { inputs: { input: { type: 'any', value: { matched: true } } } } }],
+          },
+        }),
+      }))!;
+    };
+    const rootId = await persist(caller, 'workflow_endpoint', 'rvt-caller-scope-12345', 'succeeded');
+    const childId = await persist(child, 'subgraph_project', 'rvt-caller-scope-12345', 'failed');
+    const nestedId = await persist(nested, 'subgraph_project', 'rvt-caller-scope-12345', 'suspicious');
+    await persist(nested, 'subgraph_project', 'rvt-unrelated-scope-12345', 'failed');
+    const workflowId = caller.projectMetadataId!;
+    const related = await backend.listWorkflowRecordingRunsPage(
+      workflowId,
+      1,
+      1,
+      'all',
+      null,
+      0,
+      undefined,
+      undefined,
+      true,
+    );
+    assert.equal(related.totalRuns, 3);
+    assert.deepEqual({ ...related.scopeCounts }, { totalRuns: 3, failedRuns: 1, suspiciousRuns: 1 });
+    const allIds = new Set(related.runs.map((run) => run.id));
+    for (const page of [2, 3]) {
+      const response = await backend.listWorkflowRecordingRunsPage(
+        workflowId,
+        page,
+        1,
+        'all',
+        null,
+        0,
+        undefined,
+        undefined,
+        true,
+      );
+      response.runs.forEach((run) => allIds.add(run.id));
+    }
+    assert.deepEqual(allIds, new Set([rootId, childId, nestedId]));
+    const bad = await backend.listWorkflowRecordingRunsPage(
+      workflowId,
+      1,
+      20,
+      'failed',
+      null,
+      0,
+      undefined,
+      undefined,
+      true,
+    );
+    assert.equal(bad.totalRuns, 2);
+    assert.deepEqual(new Set(bad.runs.map((run) => run.id)), new Set([childId, nestedId]));
+    assert.equal(bad.runs.find((run) => run.id === childId)?.sourceProjectRelativePath, child.relativePath);
+    assert.equal((await backend.listWorkflowRecordingRunsPage(workflowId, 1, 20)).totalRuns, 1);
+    const filter = { path: '$.matched', operator: '==' as const, value: 'true' };
+    let batch = await backend.listWorkflowRecordingRunsPage(
+      workflowId,
+      1,
+      1,
+      'all',
+      filter,
+      0,
+      undefined,
+      undefined,
+      true,
+    );
+    const matches = new Set(batch.runs.map((run) => run.id));
+    assert.ok(batch.nextInputAfter);
+    await assert.rejects(
+      backend.listWorkflowRecordingRunsPage(workflowId, 1, 1, 'all', filter, 0, undefined, batch.nextInputAfter),
+      /does not match/,
+    );
+    while (batch.hasMore) {
+      batch = await backend.listWorkflowRecordingRunsPage(
+        workflowId,
+        1,
+        1,
+        'all',
+        filter,
+        0,
+        undefined,
+        batch.nextInputAfter,
+        true,
+      );
+      batch.runs.forEach((run) => matches.add(run.id));
+    }
+    assert.deepEqual(matches, allIds);
+    await backend.deleteWorkflowRecording(childId);
+    assert.equal(
+      (await backend.listWorkflowRecordingRunsPage(workflowId, 1, 20, 'all', null, 0, undefined, undefined, true))
+        .totalRuns,
+      2,
+    );
+    assert.equal((await backend.listWorkflowRecordingRunsPage('', 1, 20)).totalRuns, 3);
+  });
+});
+
 test('SQLite recordings persist before callbacks, support bounded input search, replay, statistics and deletion', async () => {
   await fixture(async (backend) => {
     const item = await createExecutable(backend),

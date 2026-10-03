@@ -43,6 +43,7 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
             {context === 'menu' ? (
               <div className="run-recordings-select-option-count">
                 {formatRecordingCount(option.recordingCount)}
+                {option.value ? ' in this project' : ''}
               </div>
             ) : null}
           </div>

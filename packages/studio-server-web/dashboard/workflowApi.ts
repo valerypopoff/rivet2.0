@@ -214,6 +214,7 @@ export async function fetchWorkflowRecordingRuns(
     inputFilter?: WorkflowRecordingInputFilter | null;
     inputCursor?: number;
     inputAfter?: string;
+    includeSubgraphRuns?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
@@ -222,6 +223,7 @@ export async function fetchWorkflowRecordingRuns(
     pageSize: String(options.pageSize),
     status: options.status,
   });
+  if (workflowId && options.includeSubgraphRuns) query.set('includeSubgraphRuns', 'true');
   if (options.inputFilter) {
     query.set('inputPath', options.inputFilter.path);
     query.set('inputOperator', options.inputFilter.operator);

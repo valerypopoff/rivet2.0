@@ -40,8 +40,7 @@ export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [
   'exists',
   'not_exists',
 ] as const;
-export type WorkflowRecordingInputFilterOperator =
-  typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS[number];
+export type WorkflowRecordingInputFilterOperator = (typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS)[number];
 
 export type WorkflowRecordingInputFilter = {
   path: string;
@@ -54,6 +53,8 @@ export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
 export type WorkflowRecordingRunSummary = {
   id: string;
   workflowId: string;
+  sourceProjectName?: string;
+  sourceProjectRelativePath?: string;
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
@@ -104,6 +105,8 @@ export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCount
 export type WorkflowRecordingRunsPageResponse = {
   /** Empty for the all-workflow scope; each run retains its actual workflowId. */
   workflowId: string;
+  /** Counts for the project-plus-child browse scope, before status/input filtering. */
+  scopeCounts?: WorkflowRecordingCounts;
   page: number;
   pageSize: number;
   totalRuns: number;
@@ -204,7 +207,7 @@ export type WorkflowRunStatisticsQuery = {
   /**
    * Controls only the chart grouping. Omitting it preserves the adaptive
    * grouping used by clients created before this field existed.
-  */
+   */
   aggregation?: WorkflowRunStatisticsAggregation;
 };
 

@@ -45,17 +45,21 @@ const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
 const RECORDING_ROW_GAP = 8;
 
 function formatDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return 'Unavailable';
+  }
   if (durationMs < 1000) {
-    return `${durationMs} ms`;
+    return `${durationMs.toFixed(2)} ms`;
   }
 
-  const seconds = durationMs / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  // Split rounded centiseconds so minute boundaries never display 60.00s.
+  const centiseconds = Math.round(durationMs / 10);
+  if (centiseconds < 6000) {
+    return `${(centiseconds / 100).toFixed(2)} s`;
   }
 
-  const minutes = Math.floor(seconds / 60);
-  const remainderSeconds = Math.round(seconds % 60);
+  const minutes = Math.floor(centiseconds / 6000);
+  const remainderSeconds = ((centiseconds % 6000) / 100).toFixed(2);
   return `${minutes}m ${remainderSeconds}s`;
 }
 
@@ -134,6 +138,12 @@ function RecordingRow({
             <span className={`run-recordings-badge ${recording.status}`}>{RUN_STATUS_LABELS[recording.status]}</span>
             <span className="run-recordings-run-duration">{formatDuration(recording.durationMs)}</span>
           </div>
+        </div>
+        <div className="run-recordings-run-endpoint">
+          Project:{' '}
+          <span className="run-recordings-run-endpoint-value">
+            {recording.sourceProjectRelativePath || recording.sourceProjectName || recording.workflowId}
+          </span>
         </div>
         <div className="run-recordings-run-endpoint">
           {isSubgraphRun ? 'Called graph' : 'Endpoint at execution'}:{' '}
@@ -481,6 +491,10 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               <div className="run-recordings-field-value run-recordings-field-code">
                 {selectedWorkflow.project.relativePath}
               </div>
+            </div>
+            <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
+              <div className="run-recordings-field-label">Recording scope</div>
+              <div className="run-recordings-field-value">This project and related called-project Subgraph runs</div>
             </div>
           </div>
         </div>

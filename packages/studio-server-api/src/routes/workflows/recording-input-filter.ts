@@ -434,11 +434,19 @@ type WorkflowRecordingInputAfterPayload = {
   createdAt: string;
   recordingId: string;
   legacyCursor?: number;
+  includeSubgraphRuns?: boolean;
+};
+
+type RecordingInputSearchScope = {
+  workflowId: string;
+  statusFilter: string;
+  filter: WorkflowRecordingInputFilter;
+  includeSubgraphRuns?: boolean;
 };
 
 export function createWorkflowRecordingInputAfter(
   cursor: WorkflowRecordingInputAfterCursor,
-  scope: { workflowId: string; statusFilter: string; filter: WorkflowRecordingInputFilter },
+  scope: RecordingInputSearchScope,
 ): string {
   const payload: WorkflowRecordingInputAfterPayload = {
     version: 2,
@@ -448,13 +456,14 @@ export function createWorkflowRecordingInputAfter(
     createdAt: cursor.createdAt,
     recordingId: cursor.recordingId,
     legacyCursor: cursor.legacyCursor,
+    ...(scope.workflowId && scope.includeSubgraphRuns ? { includeSubgraphRuns: true } : {}),
   };
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
 export function parseWorkflowRecordingInputAfter(
   value: string | undefined,
-  scope: { workflowId: string; statusFilter: string; filter: WorkflowRecordingInputFilter },
+  scope: RecordingInputSearchScope,
 ): WorkflowRecordingInputAfterCursor | undefined {
   if (!value) return undefined;
   let payload: unknown;
@@ -471,6 +480,10 @@ export function parseWorkflowRecordingInputAfter(
       (payload as Partial<WorkflowRecordingInputAfterPayload>).version !== 2) ||
     (payload as Partial<WorkflowRecordingInputAfterPayload>).workflowId !== scope.workflowId ||
     (payload as Partial<WorkflowRecordingInputAfterPayload>).statusFilter !== scope.statusFilter ||
+    ((payload as Partial<WorkflowRecordingInputAfterPayload>).includeSubgraphRuns !== undefined &&
+      typeof (payload as Partial<WorkflowRecordingInputAfterPayload>).includeSubgraphRuns !== 'boolean') ||
+    ((payload as Partial<WorkflowRecordingInputAfterPayload>).includeSubgraphRuns === true) !==
+      Boolean(scope.workflowId && scope.includeSubgraphRuns) ||
     (payload as Partial<WorkflowRecordingInputAfterPayload>).filterFingerprint !==
       getInputFilterFingerprint(scope.filter) ||
     typeof (payload as Partial<WorkflowRecordingInputAfterPayload>).createdAt !== 'string' ||

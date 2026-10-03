@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { sumWorkflowRecordingCounts } from '../../studio-server-shared/workflow-recording-types';
+import {
+  sumWorkflowRecordingCounts,
+  type WorkflowRecordingCounts,
+} from '../../studio-server-shared/workflow-recording-types';
 import {
   deleteWorkflowRecording as deleteWorkflowRecordingRequest,
   fetchWorkflowRecordingRuns,
@@ -46,7 +49,16 @@ function getNextInputSearchProgress(
   return {
     // Catalog counts are an estimate, not a frozen search snapshot. Use the
     // scanner's cumulative count once it reaches the end of its keyset.
-    availableRuns: response.hasMore ? Math.max(currentProgress.availableRuns, analyzedRuns) : analyzedRuns,
+    availableRuns: response.hasMore
+      ? Math.max(
+          response.scopeCounts
+            ? response.statusFilter === 'failed'
+              ? response.scopeCounts.failedRuns + response.scopeCounts.suspiciousRuns
+              : response.scopeCounts.totalRuns
+            : currentProgress.availableRuns,
+          analyzedRuns,
+        )
+      : analyzedRuns,
     analyzedRuns,
   };
 }
@@ -58,6 +70,9 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const [error, setError] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
   const [runsPage, setRunsPage] = useState<WorkflowRecordingRunsPageResponse | null>(null);
+  const [relatedCounts, setRelatedCounts] = useState<{ workflowId: string; counts: WorkflowRecordingCounts } | null>(
+    null,
+  );
   const [runsPerPage, setRunsPerPage] = useState<number>(20);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<WorkflowRecordingFilterStatus>('all');
@@ -93,7 +108,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         inputAfter?: string;
         signal?: AbortSignal;
       },
-    ) => fetchWorkflowRecordingRuns(workflowId, options),
+    ) => fetchWorkflowRecordingRuns(workflowId, { ...options, includeSubgraphRuns: true }),
     [],
   );
   const abortInputSearch = useCallback(() => {
@@ -107,6 +122,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     deletionRequestRef.current = null;
     setSelectedWorkflowId('');
     setRunsPage(null);
+    setRelatedCounts(null);
     setError(null);
     setPage(1);
     setRunsPerPage(20);
@@ -325,8 +341,17 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   ]);
 
   const allWorkflowsRunsCount = getAvailableInputSearchRuns(workflowsResponse, '', 'all');
-  const overallRunsCount = getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'all');
-  const badRunsCount = getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
+  const scopeCounts =
+    (runsPage?.workflowId === selectedWorkflowId ? runsPage.scopeCounts : undefined) ??
+    (relatedCounts?.workflowId === selectedWorkflowId ? relatedCounts.counts : undefined);
+  useEffect(() => {
+    if (runsPage?.scopeCounts) setRelatedCounts({ workflowId: runsPage.workflowId, counts: runsPage.scopeCounts });
+  }, [runsPage]);
+  const overallRunsCount =
+    scopeCounts?.totalRuns ?? getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'all');
+  const badRunsCount = scopeCounts
+    ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+    : getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
   const visibleRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
   const filteredRunsCount = appliedInputFilter
     ? inputFilterRuns.length
@@ -416,11 +441,16 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       const currentPageSize = runsPerPage;
       const currentStatusFilter = statusFilter;
       const currentInputFilter = appliedInputFilter;
+      const deletingRun = visibleRuns.find((run) => run.id === recordingId);
+      const changesRelatedScope =
+        Boolean(currentWorkflowId && deletingRun?.executionIdentity?.correlationId) &&
+        deletingRun?.executionIdentity?.surface !== 'subgraph_project';
       const requestVersion = runsRequestVersionRef.current;
       const deletionRequest = {};
       deletionRequestRef.current = deletionRequest;
       const isCurrent = () =>
         runsRequestVersionRef.current === requestVersion && deletionRequestRef.current === deletionRequest;
+      let deleted = false;
 
       try {
         abortInputSearch();
@@ -430,7 +460,22 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         setError(null);
 
         await deleteWorkflowRecordingRequest(recordingId);
+        deleted = true;
         if (!isCurrent()) return;
+        // The mutation already committed, even if refreshing metadata later fails.
+        setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
+        setRunsPage((current) =>
+          current ? { ...current, runs: current.runs.filter((run) => run.id !== recordingId) } : current,
+        );
+        if (currentInputFilter && changesRelatedScope) {
+          // Removing a root anchor can remove other, still-retained children
+          // from this scope. Cached matches must not survive that scope change.
+          setInputFilterRuns([]);
+          setRunsPage(null);
+          setRelatedCounts(null);
+          setInputSearchProgress(null);
+          setInputSearchStatus('stopped');
+        }
 
         const nextWorkflowsResponse = await loadWorkflowRecordingWorkflows();
         if (!isCurrent()) return;
@@ -445,17 +490,40 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         }
 
         if (currentInputFilter) {
-          setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
+          if (changesRelatedScope) {
+            // A fresh filter identity delegates rescan/cancellation to the
+            // existing search effect instead of introducing another scanner.
+            setAppliedInputFilter({ ...currentInputFilter });
+            return;
+          }
+          const refreshedCounts = currentWorkflowId
+            ? (
+                await loadWorkflowRecordingRunsPage(currentWorkflowId, {
+                  page: 1,
+                  pageSize: 1,
+                  status: 'all',
+                })
+              ).scopeCounts
+            : undefined;
+          if (!isCurrent()) return;
+          if (refreshedCounts) {
+            setRelatedCounts({ workflowId: currentWorkflowId, counts: refreshedCounts });
+            // The current search page takes precedence over cached scope counts.
+            // Refresh both so it cannot mask a confirmed deletion's new totals.
+            setRunsPage((current) =>
+              current?.workflowId === currentWorkflowId ? { ...current, scopeCounts: refreshedCounts } : current,
+            );
+          }
           setInputSearchProgress((currentProgress) => {
             if (!currentProgress) {
               return currentProgress;
             }
 
-            const availableRuns = getAvailableInputSearchRuns(
-              nextWorkflowsResponse,
-              currentWorkflowId,
-              currentStatusFilter,
-            );
+            const availableRuns = refreshedCounts
+              ? currentStatusFilter === 'failed'
+                ? refreshedCounts.failedRuns + refreshedCounts.suspiciousRuns
+                : refreshedCounts.totalRuns
+              : getAvailableInputSearchRuns(nextWorkflowsResponse, currentWorkflowId, currentStatusFilter);
             return {
               availableRuns,
               analyzedRuns: Math.min(currentProgress.analyzedRuns, availableRuns),
@@ -483,7 +551,10 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
         setRunsPage(nextRunsPage);
       } catch (err) {
-        if (isCurrent()) setError(err instanceof Error ? err.message : String(err));
+        if (isCurrent()) {
+          const message = err instanceof Error ? err.message : String(err);
+          setError(deleted ? `Recording deleted, but refreshing the list failed: ${message}` : message);
+        }
       } finally {
         if (isCurrent()) {
           setRunsLoading(false);
@@ -501,6 +572,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       statusFilter,
       appliedInputFilter,
       inputSearchStatus,
+      visibleRuns,
       abortInputSearch,
     ],
   );

@@ -154,12 +154,14 @@ test('a published cross-project Subgraph records searchable passed inputs under 
   const response = rivetNode.graphOutputNode.impl.create();
   response.data = { id: 'response', dataType: 'any' };
   calledGraph.nodes = [prompt, response];
-  calledGraph.connections = [{
-    outputNodeId: prompt.id,
-    outputId: 'data' as PortId,
-    inputNodeId: response.id,
-    inputId: 'value' as PortId,
-  }];
+  calledGraph.connections = [
+    {
+      outputNodeId: prompt.id,
+      outputId: 'data' as PortId,
+      inputNodeId: response.id,
+      inputId: 'value' as PortId,
+    },
+  ];
   const calledContents = rivetNode.serializeProject(calledProject);
   assert.ok(typeof calledContents === 'string');
   await fs.writeFile(called.absolutePath, calledContents, 'utf8');
@@ -213,6 +215,33 @@ test('a published cross-project Subgraph records searchable passed inputs under 
       1,
     );
     assert.equal(callerRuns.runs[0]?.executionIdentity?.surface, 'workflow_endpoint');
+    assert.equal(
+      targetRuns.runs[0]?.executionIdentity?.correlationId,
+      callerRuns.runs[0]?.executionIdentity?.correlationId,
+    );
+    assert.ok(callerRuns.runs[0]?.executionIdentity?.correlationId);
+    const callerUrl = `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(callerProject.metadata.id)}/runs`;
+    const relatedResponse = await fetch(`${callerUrl}?includeSubgraphRuns=true&pageSize=1`);
+    assert.equal(relatedResponse.status, 200);
+    const related = await readJson<{
+      totalRuns: number;
+      scopeCounts: { totalRuns: number };
+      runs: Array<{ id: string; workflowId: string; sourceProjectRelativePath: string }>;
+    }>(relatedResponse);
+    assert.equal(related.totalRuns, 2);
+    assert.equal(related.scopeCounts.totalRuns, 2);
+    const next = await readJson<{ runs: Array<{ id: string; workflowId: string; sourceProjectRelativePath: string }> }>(
+      await fetch(`${callerUrl}?includeSubgraphRuns=true&pageSize=1&page=2`),
+    );
+    const relatedRows = [...related.runs, ...next.runs];
+    assert.deepEqual(
+      new Set(relatedRows.map((row) => row.id)),
+      new Set([callerRuns.runs[0]!.id, targetRuns.runs[0]!.id]),
+    );
+    assert.equal(
+      relatedRows.find((row) => row.workflowId === calledProject.metadata.id)?.sourceProjectRelativePath,
+      called.relativePath,
+    );
 
     const query = new URLSearchParams({
       inputPath: '$.prompt.requestId',
@@ -223,7 +252,17 @@ test('a published cross-project Subgraph records searchable passed inputs under 
       `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(calledProject.metadata.id)}/runs?${query}`,
     );
     assert.equal(filtered.status, 200);
-    assert.deepEqual((await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id), [targetRuns.runs[0]!.id]);
+    assert.deepEqual(
+      (await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id),
+      [targetRuns.runs[0]!.id],
+    );
+    query.set('includeSubgraphRuns', 'true');
+    const callerFiltered = await fetch(`${callerUrl}?${query}`);
+    assert.equal(callerFiltered.status, 200);
+    assert.deepEqual(
+      (await readJson<{ runs: Array<{ id: string }> }>(callerFiltered)).runs.map((run) => run.id),
+      [targetRuns.runs[0]!.id],
+    );
   });
 });
 
@@ -1323,13 +1362,18 @@ test('a hosted editor Subgraph run is recorded under the called project', async 
               version: 1,
               recording: {
                 recordingId: `called-subgraph-replay-${datasetMode}`,
-                events: [{
-                  type: 'graphStart',
-                  data: { graphId: project.metadata.mainGraphId, inputs: {
-                    prompt: { type: 'object', value: { requestId: datasetMode } },
-                  } },
-                  ts: 1,
-                }],
+                events: [
+                  {
+                    type: 'graphStart',
+                    data: {
+                      graphId: project.metadata.mainGraphId,
+                      inputs: {
+                        prompt: { type: 'object', value: { requestId: datasetMode } },
+                      },
+                    },
+                    ts: 1,
+                  },
+                ],
                 startTs: 1,
                 finishTs: 2,
               },
@@ -1376,6 +1420,9 @@ test('a hosted editor Subgraph run is recorded under the called project', async 
       `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs?${query}`,
     );
     assert.equal(filtered.status, 200);
-    assert.deepEqual((await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id), [withDataset]);
+    assert.deepEqual(
+      (await readJson<{ runs: Array<{ id: string }> }>(filtered)).runs.map((run) => run.id),
+      [withDataset],
+    );
   });
 });

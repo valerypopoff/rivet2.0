@@ -3,6 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
+import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
@@ -771,10 +772,22 @@ export class LocalWorkflowCatalog {
     return row.count;
   }
 
+  recordingScopeCounts(workflowId: string) {
+    return this.#database()
+      .prepare(
+        `SELECT COUNT(*) AS totalRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'failed'), 0) AS failedRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'suspicious'), 0) AS suspiciousRuns
+      FROM recordings WHERE ${recordingWorkflowScopeClause(workflowId, true, 'sqlite')}`,
+      )
+      .get(workflowId) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
+  }
+
   listRecordingMetadata(
     options: {
       recordingId?: string;
       workflowId?: string;
+      includeSubgraphRuns?: boolean;
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -790,7 +803,14 @@ export class LocalWorkflowCatalog {
       values.push(options.recordingId);
     }
     if (options.workflowId) {
-      conditions.push('workflow_id = ?');
+      conditions.push(
+        recordingWorkflowScopeClause(
+          options.workflowId,
+          options.includeSubgraphRuns ?? false,
+          'sqlite',
+          values.length + 1,
+        ),
+      );
       values.push(options.workflowId);
     }
     if (options.failedOnly) conditions.push("json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')");
