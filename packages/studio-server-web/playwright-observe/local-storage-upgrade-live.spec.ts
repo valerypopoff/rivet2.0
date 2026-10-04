@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { serializeDatasets, deserializeProject, serializeProject } from '@valerypopoff/rivet2-core';
 import {
@@ -43,28 +44,55 @@ test('production images support real UI conversion, online/offline rollback and 
   };
   const copy = async () => {
     const panel = await open();
-    await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
-    await expect(panel.getByText('Capacity preflight passed.', { exact: false })).toBeVisible();
-    await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
-    await expect(panel.getByText('Source is quiet.', { exact: false })).toBeVisible({ timeout: 60_000 });
+    await panel.getByRole('button', { name: 'Pause writes and create verified backup', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Download verified backup', exact: true })).toBeEnabled({
+      timeout: 90_000,
+    });
     const unauthorized = await request.get('/api/app-settings/local-upgrade');
     if (unauthorized.status() === 200) expect(await unauthorized.text()).toContain('Enter Access Key');
     else expect(unauthorized.status()).toBeGreaterThanOrEqual(400);
+    // Download through the actual authenticated attachment route, and verify
+    // its bytes against the server's durable archive evidence. Downloads stay
+    // in Playwright's temporary storage, never in uploaded trace artifacts.
+    const download = async (name: string) => {
+      const pending = page.waitForEvent('download');
+      await panel.getByRole('button', { name, exact: true }).click();
+      const file = await pending;
+      expect(await file.failure()).toBeNull();
+      const stream = await file.createReadStream();
+      expect(stream).not.toBeNull();
+      const hash = createHash('sha256');
+      let bytes = 0;
+      for await (const chunk of stream!) {
+        hash.update(chunk);
+        bytes += chunk.length;
+      }
+      return { hash: hash.digest('hex'), bytes };
+    };
+    const archive = await download('Download verified backup');
+    const key = await download('Download encryption key separately');
+    const fixture = await loadLocalUpgradeRehearsal(manifest!);
+    const expectedKey = fixture.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY;
+    expect(key.hash).toBe(createHash('sha256').update(expectedKey).digest('hex'));
+    expect(key.bytes).toBe(Buffer.byteLength(expectedKey));
+    const status = await (await page.request.get('/api/app-settings/local-upgrade')).json();
+    expect(archive.hash).toBe(status.backup.archiveHash);
+    expect(archive.bytes).toBe(status.backup.bytes);
     const frozen = await control('restore-backup');
-    await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
-    await panel.getByLabel('Backup reference', { exact: true }).fill('isolated-restored-fixture');
-    await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(frozen!);
-    await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+    expect(status.backup.sourceFingerprint).toBe(frozen);
+    await panel.getByLabel('I saved the verified backup download securely outside this VM.').check();
     await panel.getByLabel('I backed up the local settings encryption key separately.').check();
     await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
     await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeEnabled({ timeout: 90_000 });
     await panel.getByRole('button', { name: 'Activate SQLite while paused' }).click();
-    await control('restart');
+    await expect(panel.getByText('SQLite runtime validation passed.', { exact: false })).toBeVisible({
+      timeout: 120_000,
+    });
     return open();
   };
   const validate = async () => {
     const panel = await open();
-    await panel.getByRole('button', { name: 'Validate selected runtime' }).click();
+    await expect(panel.getByText('runtime validation passed.', { exact: false })).toBeVisible({ timeout: 120_000 });
     const acknowledgement = panel.getByLabel(
       'I reviewed the selected backend and its write-resumption recovery boundary.',
     );
@@ -73,18 +101,43 @@ test('production images support real UI conversion, online/offline rollback and 
     await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeEnabled();
     return panel;
   };
-  const resume = async () => {
+  const resume = async (backend: 'legacy' | 'sqlite') => {
     const panel = await validate();
     await panel.getByRole('button', { name: 'Resume writes', exact: true }).click();
-    await control('restart');
+    await expect
+      .poll(
+        async () => {
+          try {
+            const response = await page.request.get('/api/app-settings/local-upgrade');
+            if (!response.ok()) return false;
+            const status = await response.json();
+            return (
+              status.available &&
+              status.runtimeReady &&
+              !status.restartRequired &&
+              !status.operation &&
+              !status.maintenance &&
+              status.runningBackend === backend &&
+              status.transition?.backend === backend &&
+              status.transition?.paused === false &&
+              status.transition?.phase === (backend === 'sqlite' ? 'sqlite-live' : 'legacy-resumed')
+            );
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 120_000 },
+      )
+      .toBe(true);
   };
 
   // Real UI -> API online rollback while both processes remain paused.
   let panel = await copy();
-  await panel.getByRole('button', { name: 'Validate selected runtime' }).click();
   await panel.getByRole('button', { name: 'Return to legacy while paused' }).click();
-  await control('restart');
-  await resume();
+  await expect(panel.getByText('Legacy runtime validation passed.', { exact: false })).toBeVisible({
+    timeout: 120_000,
+  });
+  await resume('legacy');
   await evidence('online-recovery');
 
   // Corrupt selected settings: packaged startup must fail and packaged CLI
@@ -92,12 +145,12 @@ test('production images support real UI conversion, online/offline rollback and 
   await copy();
   await control('corrupt-candidate');
   await control('offline-return');
-  await resume();
+  await resume('legacy');
   await evidence('offline-recovery');
 
   // Final conversion serves only the SQLite authority, including after writes.
   await copy();
-  await resume();
+  await resume('sqlite');
   panel = await open();
   await expect(panel.getByText('Running backend: sqlite.', { exact: false })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);

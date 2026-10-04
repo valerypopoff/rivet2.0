@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mock } from 'node:test';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -20,6 +21,7 @@ import {
   inspectLocalUpgradeSource,
   pauseLocalUpgradeSource,
   startLocalUpgradeCopy,
+  startLocalUpgradeBrowserBackup,
   transitionLocalUpgrade,
 } from '../../local-metadata/operator-service.js';
 import {
@@ -584,6 +586,165 @@ try {
       await listener.close();
     }
     assert.equal((await getLocalUpgradeStatus()).copyConfigurationReady, true);
+  } else if (command === 'backup-status-race') {
+    await pauseLocalUpgradeSource();
+    const backupPath = path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'browser-backup.json');
+    const latch = () => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release: () => release() };
+    };
+    const publicationReached = latch(),
+      publicationHeld = latch();
+    const readReached = latch(),
+      readHeld = latch();
+    const rename = fs.rename;
+    const readFile = fs.readFile;
+    const heldPublication = mock.method(fs, 'rename', async (...args: Parameters<typeof rename>) => {
+      if (String(args[1]) === backupPath && JSON.parse(await readFile(args[0], 'utf8')).phase === 'ready') {
+        publicationReached.release();
+        await publicationHeld.promise;
+      }
+      return rename(...args);
+    });
+    let heldRead: ReturnType<typeof mock.method> | undefined;
+    let pendingStatus: ReturnType<typeof getLocalUpgradeStatus> | undefined;
+    try {
+      await startLocalUpgradeBrowserBackup(state.revision);
+      await publicationReached.promise;
+      let delayOnce = true;
+      heldRead = mock.method(fs, 'readFile', async (...args: Parameters<typeof readFile>) => {
+        const bytes = await readFile(...args);
+        if (delayOnce && String(args[0]) === backupPath) {
+          delayOnce = false;
+          readReached.release();
+          await readHeld.promise;
+        }
+        return bytes;
+      });
+      pendingStatus = getLocalUpgradeStatus();
+      await readReached.promise;
+      publicationHeld.release();
+      const deadline = Date.now() + 10_000;
+      let finished;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        finished = await getLocalUpgradeStatus();
+      } while (finished.operation && Date.now() < deadline);
+      assert.equal(finished.operation, null);
+      assert.equal(finished.backup?.phase, 'ready');
+      readHeld.release();
+      const snapshot = await pendingStatus;
+      assert.equal(snapshot.backup?.phase, 'ready', 'Completed backup must not be classified as interrupted.');
+      assert.equal(snapshot.backupStatusUnreadable, false);
+      assert.equal(snapshot.backup?.id, finished.backup.id);
+      heldRead.mock.restore();
+      let reads = 0;
+      heldRead = mock.method(fs, 'readFile', async (...args: Parameters<typeof readFile>) => {
+        const bytes = await readFile(...args);
+        if (String(args[0]) === backupPath) {
+          reads++;
+          // Each preflight attempt changes activity while this read is held,
+          // without replacing the completed archive or changing authority.
+          await assert.rejects(startLocalUpgradeBrowserBackup(state.revision + 1), /Reload status/);
+        }
+        return bytes;
+      });
+      const unstable = await getLocalUpgradeStatus();
+      assert.equal(reads, 2, 'Backup evidence retries must remain bounded.');
+      assert.equal(unstable.backup, null);
+      assert.equal(unstable.backupStatusUnreadable, true);
+      assert.equal(unstable.transition?.revision, state.revision);
+      heldRead.mock.restore();
+      heldRead = undefined;
+      const recovered = await getLocalUpgradeStatus();
+      assert.equal(recovered.backupStatusUnreadable, false);
+      assert.equal(recovered.backup?.id, finished.backup.id);
+      assert.equal(recovered.backup?.phase, 'ready');
+    } finally {
+      publicationHeld.release();
+      readHeld.release();
+      await pendingStatus?.catch(() => undefined);
+      heldRead?.mock.restore();
+      heldPublication.mock.restore();
+    }
+  } else if (command === 'copy-status-race') {
+    await pauseLocalUpgradeSource();
+    const fingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
+    let releaseCopy!: () => void;
+    let copyArrived!: () => void;
+    const copyHeld = new Promise<void>((resolve) => {
+      releaseCopy = resolve;
+    });
+    const copyReached = new Promise<void>((resolve) => {
+      copyArrived = resolve;
+    });
+    await startLocalUpgradeCopy(
+      {
+        revision: state.revision,
+        backupReference: 'fixture-restored-copy',
+        backupSourceFingerprint: fingerprint,
+        backupRestored: true,
+        encryptionKeyBackedUp: true,
+      },
+      {
+        checkpoint: async (point) => {
+          if (point !== 'copy:preflight') return;
+          copyArrived();
+          await copyHeld;
+          throw Object.assign(new Error('fixture copy failure'), { code: 'ENOSPC' });
+        },
+      },
+    );
+    await copyReached;
+    let releaseRead!: () => void;
+    let readArrived!: () => void;
+    const readHeld = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readReached = new Promise<void>((resolve) => {
+      readArrived = resolve;
+    });
+    const lstat = fs.lstat;
+    let delayOnce = true;
+    const delayed = mock.method(fs, 'lstat', async (...args: Parameters<typeof lstat>) => {
+      if (
+        delayOnce &&
+        String(args[0]) === path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'browser-backup.json')
+      ) {
+        delayOnce = false;
+        readArrived();
+        await readHeld;
+      }
+      return lstat(...args);
+    });
+    let pendingStatus: ReturnType<typeof getLocalUpgradeStatus> | undefined;
+    try {
+      pendingStatus = getLocalUpgradeStatus();
+      await readReached;
+      releaseCopy();
+      const deadline = Date.now() + 10_000;
+      let finished;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        finished = await getLocalUpgradeStatus();
+      } while (finished.operation && Date.now() < deadline);
+      assert.equal(finished.job?.phase, 'failed');
+      assert.equal(finished.operation, null);
+      releaseRead();
+      const snapshot = await pendingStatus;
+      assert.equal(snapshot.operation, 'copy');
+      assert.equal(snapshot.job?.phase, 'copying');
+      assert.equal((await getLocalUpgradeStatus()).job?.phase, 'failed');
+    } finally {
+      releaseCopy();
+      releaseRead();
+      // Close the held status' control handles even when an assertion fails.
+      await pendingStatus?.catch(() => undefined);
+      delayed.mock.restore();
+    }
   } else if (
     command === 'copy' ||
     command === 'copy-fault' ||

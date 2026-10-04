@@ -54,6 +54,21 @@ import {
 let activeOperation: LocalUpgradeOperation | null = null;
 let runningJob: Promise<void> | null = null;
 let runningBackup: Promise<void> | null = null;
+// Detect start/finish (including a complete operation between two awaits),
+// not merely whether the same worker happens to be present at both ends.
+let backupActivityRevision = 0;
+
+async function browserBackupStatusSnapshot(control: string) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const revision = backupActivityRevision;
+    const backup = await readBrowserBackup(control);
+    if (revision === backupActivityRevision)
+      return { backup, running: runningBackup !== null || activeOperation === 'backup' };
+  }
+  // Do not turn repeatedly changing optional evidence into a false crash or
+  // a copy certificate. The existing unreadable-status path retries on poll.
+  throw new Error('Backup status changed during read.');
+}
 /** Read-only operator onboarding, available before the upgrade flag and
  * control journal are provisioned. Never return paths or secret material. */
 export function getLocalUpgradeSetupStatus() {
@@ -208,10 +223,19 @@ export async function getLocalUpgradeStatus() {
     const state = journal.read(),
       selection = getLocalMetadataServingSelection(),
       job = store.latestJob();
+    // Keep volatile worker state with the synchronous durable snapshot. A
+    // worker may finish while optional backup/drain IO is pending; combining
+    // its later absence with this older copying row falsely reports a crash.
+    const copyRunning = runningJob !== null;
+    const operation = activeOperation ?? (copyRunning ? 'copy' : runningBackup ? 'backup' : null);
+    const maintenance = readVmMigrationMaintenance();
     let backup: BrowserBackup | null = null;
+    let backupRunning = false;
     let backupStatusUnreadable = false;
     try {
-      backup = await readBrowserBackup(localMetadataControlRoot());
+      const snapshot = await browserBackupStatusSnapshot(localMetadataControlRoot());
+      backup = snapshot.backup;
+      backupRunning = snapshot.running;
     } catch {
       // Optional archive evidence must fail closed for copying, but must not
       // hide the authoritative transition or prevent legacy recovery.
@@ -221,12 +245,12 @@ export async function getLocalUpgradeStatus() {
       available: true,
       uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
       runtimeReady,
-      operation: activeOperation ?? (runningJob ? 'copy' : runningBackup ? 'backup' : null),
-      backup: backup?.phase === 'creating' && !runningBackup ? { ...backup, phase: 'interrupted' as const } : backup,
+      operation,
+      backup: backup?.phase === 'creating' && !backupRunning ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
       copyConfigurationReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
       runningBackend: selection ? 'sqlite' : 'legacy',
-      maintenance: readVmMigrationMaintenance(),
+      maintenance,
       transition: {
         revision: state.revision,
         phase: state.phase,
@@ -243,14 +267,14 @@ export async function getLocalUpgradeStatus() {
               phase: 'verified',
               message: 'Candidate certification is durable. Use the selected transition state below.',
             }
-          : job?.phase === 'copying' && !runningJob
+          : job?.phase === 'copying' && !copyRunning
             ? {
                 ...job,
                 phase: 'interrupted',
                 message: 'Copy was interrupted. Source remains selected and paused; retry the same generation.',
               }
             : job,
-      drain: isVmMigrationMaintenanceActive() ? await localStorageDrainSnapshot() : null,
+      drain: maintenance ? await localStorageDrainSnapshot() : null,
       restartRequired:
         (state.backend === 'sqlite' ? selection?.generationId !== state.generation?.id : selection !== null) ||
         (['sqlite-live', 'legacy-resumed', 'legacy'].includes(state.phase) &&
@@ -539,6 +563,7 @@ export async function localUpgradeBackupFingerprint(): Promise<string> {
 }
 export async function startLocalUpgradeBrowserBackup(revision: number): Promise<void> {
   return exclusive('backup', async () => {
+    backupActivityRevision++;
     await assertDrained();
     if (getLocalMetadataServingSelection())
       throw new Error('Browser backup is only available before SQLite activation.');
@@ -573,6 +598,7 @@ export async function startLocalUpgradeBrowserBackup(revision: number): Promise<
       }
     })().finally(() => {
       runningBackup = null;
+      backupActivityRevision++;
     });
   });
 }

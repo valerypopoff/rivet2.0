@@ -12,6 +12,7 @@ import {
   assertRehearsalEnvironment,
   pinRehearsalImages,
   REHEARSAL_PHASES,
+  REHEARSAL_TOOLS,
   assertRehearsalPhases,
   readRehearsalPhases,
 } from './local-upgrade-rehearsal-safety.mjs';
@@ -21,6 +22,29 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const cli = '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/';
 const prefix = 'rivet-local-upgrade-rehearsal-';
 const requiredPhases = REHEARSAL_PHASES;
+
+export async function stageLocalUpgradeRehearsalTools(directory) {
+  await assertRealPath(directory, true);
+  for (const file of REHEARSAL_TOOLS) {
+    const source = path.join(root, 'deploy/studio-server', file);
+    const destination = path.join(directory, 'fixture-tools', file);
+    await assertRealPath(source);
+    // Validate each parent BEFORE creating its child. Recursive mkdir can
+    // create directories through an existing symlink before a later check.
+    let parent = directory;
+    for (const name of ['fixture-tools', ...file.split('/').slice(0, -1)]) {
+      await assertRealPath(parent, true);
+      parent = path.join(parent, name);
+      try {
+        await fs.mkdir(parent);
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+      }
+      await assertRealPath(parent, true);
+    }
+    await fs.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
+  }
+}
 
 export async function recordLocalUpgradeRehearsalPhase(file, phase) {
   assert.ok(requiredPhases.includes(phase), 'Unknown rehearsal evidence phase.');
@@ -111,8 +135,7 @@ export async function loadLocalUpgradeRehearsal(file) {
   assert.ok(Number.isInteger(config.port) && config.port > 0 && config.port < 65536);
   assert.equal(config.registryScript, path.join(path.dirname(resolved), 'fixture-registry.mjs'));
   await assertRealPath(config.registryScript);
-  for (const name of ['local-upgrade-backup.mjs', 'local-upgrade-snapshot-plan.mjs'])
-    await assertRealPath(path.join(path.dirname(resolved), name));
+  for (const name of REHEARSAL_TOOLS) await assertRealPath(path.join(path.dirname(resolved), 'fixture-tools', name));
   return config;
 }
 function rawCompose(config, args, allowFailure = false) {
@@ -189,7 +212,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       '--input-type=module',
       '-e',
       `
-      const {createLocalUpgradeBackup,restoreLocalUpgradeBackup}=await import('/fixture-tools/local-upgrade-backup.mjs');
+      const {createLocalUpgradeBackup,restoreLocalUpgradeBackup}=await import('/fixture-tools/scripts/local-upgrade-backup.mjs');
       const roots={workflows:'/workflows',recordings:'/workflow-recordings',appData:'/data/rivet-app',runtimeLibraries:'/data/runtime-libraries',control:'/data/local-metadata'};
       const result=await createLocalUpgradeBackup({roots,destination:'/restored/sqlite-backup',sqlite:true,assertFrozen:async()=>{}});
       await restoreLocalUpgradeBackup({backup:result.destination,receipt:result.receipt,destination:'/restored/sqlite-restored'});
@@ -240,7 +263,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       '-e',
       `
       const fs=await import('node:fs/promises');
-      const {scanBackupRoot,inspectSqliteServingBackup}=await import('/fixture-tools/local-upgrade-backup.mjs');
+      const {scanBackupRoot,inspectSqliteServingBackup}=await import('/fixture-tools/scripts/local-upgrade-backup.mjs');
       const roots=${JSON.stringify(domains)};
       for(const [domain,target] of Object.entries(roots)){
         if((await fs.readdir(target)).length)throw Error('Restore destination is not empty');
@@ -609,9 +632,9 @@ async function main() {
     { type: 'volume', source: 'fixture_recordings', target: '/workflow-recordings' },
     { type: 'volume', source: 'fixture_libraries', target: '/data/runtime-libraries' },
     { type: 'volume', source: 'fixture_backup', target: '/restored' },
-    ...['local-upgrade-backup.mjs', 'local-upgrade-snapshot-plan.mjs'].map((name) => ({
+    ...REHEARSAL_TOOLS.map((name) => ({
       type: 'bind',
-      source: path.join(directory, name),
+      source: path.join(directory, 'fixture-tools', name),
       target: '/fixture-tools/' + name,
       read_only: true,
     })),
@@ -664,8 +687,7 @@ async function main() {
     path.join(root, 'deploy/studio-server/scripts/local-upgrade-fixture-registry.mjs'),
     config.registryScript,
   );
-  for (const name of ['local-upgrade-backup.mjs', 'local-upgrade-snapshot-plan.mjs'])
-    await fs.copyFile(path.join(root, 'deploy/studio-server/scripts', name), path.join(directory, name));
+  await stageLocalUpgradeRehearsalTools(directory);
   await fs.writeFile(file, JSON.stringify(config), { mode: 0o600 });
   let cleanupAllowed = false;
   let successfulReport;
