@@ -2,6 +2,15 @@
 
 ## Browser backup follow-up
 
+The normal supervised Compose wizard now also owns initial preparation and necessary
+backend restarts. The primary flow groups inspection/pause/backup, off-VM downloads
+and exact copy, paused activation/automatic validation, and explicit final resumption.
+Manual fingerprint entry remains an advanced alternative. Tests must cover private
+setup, retained key/binding, lost-volume refusal, graceful restart timer cleanup,
+API/executor readiness, stale/unauthorized restart requests and browser reconnect.
+This does not turn offline disaster recovery, independent actual-data rehearsal or
+post-resumption restore qualification into automatic browser operations.
+
 The paused legacy wizard now creates/downloads an archive and verifies its actual isolated scratch restore in the API. Archive evidence is bound to the current pause/revision/source and rehashed before copy; completed off-VM download and separate key protection still require explicit operator confirmation. Authenticated read-only project/tree/history downloads remain available during maintenance without writing stats caches. Unit, authenticated process/API and Playwright coverage belong to this follow-up; they do not replace native-host, independent actual-data recovery or release qualification below. See [archive ownership and format](./local-metadata-backup-rehearsal.md#browser-backup-before-activation).
 
 Follow-up verified locally on 2026-10-04: Windows/Linux archive and barrier regressions, archive and authenticated backup/copy flow under production UID/GID 10001:10001, interrupted/stale/corrupt evidence refusal, headless operator browser checks, API typecheck, test-style/shard/repository contracts and the live dependency audit. Read-only scratch cleanup and separate per-phase test deadlines are covered. This is local evidence, not a passing GitHub candidate-image run or approval to convert production data.

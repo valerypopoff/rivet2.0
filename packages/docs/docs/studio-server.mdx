@@ -24,7 +24,7 @@ cp deploy/studio-server/.env.example .env
 
 Edit `.env` before starting. Set `RIVET_ARTIFACTS_HOST_PATH` to a writable host folder that you will keep between upgrades. Set `RIVET_PORT` if port 8080 is unavailable. Configure the UI authentication mode and `RIVET_KEY` for access to the server; do not expose an unprotected editor to the public internet. The example intentionally contains only these starting settings. Internal service ports and image names are supplied by Docker Compose; storage and endpoint policies are configured in the editor's App Settings.
 
-In **App Settings → Storage**, **Local folders** keeps project data in the mounted folders. To use managed storage, select **Object storage + PostgreSQL**; only then does the **Metadata database** choice appear. Changing storage mode does not migrate existing data. Use the migration workflow below before switching an existing server.
+In **App Settings → Storage**, **Local folders** keeps project data on the VM. **Object storage + PostgreSQL** is disabled for local installations: complete the files-to-SQLite upgrade first. Switching storage is not a data transfer. A later SQLite-to-S3/PostgreSQL migration still requires a separate verified migration path, which is not available yet. Existing managed installations can continue configuring their database and object storage, but cannot switch blindly to Local folders either; fresh managed deployments use deployment configuration.
 
 ```bash
 yarn studio-server:prod
@@ -61,7 +61,21 @@ For an existing VM, wait for the staging commit's **Build Images** workflow to s
 
 The operator-only **App Settings → Local storage upgrade** workflow keeps project, snapshot and recording payloads as local artifact files while moving their authoritative metadata and App Settings to SQLite. It is a separate operation from S3/PostgreSQL migration; changing the Storage selector does not perform it.
 
-Once **Pause writes and drain** reports a quiet source, click **Create verified backup**. Rivet creates a backup of the four original data folders, restores that archive into separate scratch storage and checks it automatically. When ready, use **Download verified backup** and **Download encryption key separately**. Wait for both browser downloads to finish, save them in separate protected locations outside the VM, and confirm this in the wizard before **Copy and verify**. The verified reference and fingerprint are filled for you. The archive contains private settings and may contain credentials; do not share it publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked.
+On the updated single-host Compose stack, the normal migration can be completed from the UI:
+
+For signed-in administrators using local storage, the migration suggestion returns
+on every page reload until migration is complete. **Postpone** only dismisses it for
+the current page. Once started, it offers continuation/recovery instead. After
+SQLite is live and the final restart is complete, it stops appearing. Managed
+S3/PostgreSQL deployments never receive this local migration suggestion.
+
+1. If offered, choose **Prepare server for migration**. Rivet securely generates and retains its encryption key, prepares persistent control storage and restarts both backend processes. You do not enter secrets or run console commands.
+2. Choose **Pause writes and create verified backup**. Rivet checks capacity, stops new changes, waits for active work and creates a backup of the four original data folders. It restores the actual archive into separate scratch storage and checks it. If active work is still draining, wait and choose **Create verified backup** when the source is quiet.
+3. Use **Download verified backup** and **Download encryption key separately**. Wait for both downloads to finish, save them in separate protected locations outside the VM, confirm both checks, then **Copy and verify**. You do not need to type a fingerprint; manual backup evidence is an advanced alternative.
+4. Choose **Activate SQLite while paused**. Rivet restarts both backend processes, reconnects and validates automatically. Writes remain paused. If validation fails, retry it or choose **Return to legacy while paused**.
+5. Review successful validation, acknowledge that resuming closes one-click rollback, and **Resume writes**. Rivet performs the final restart automatically. Completion shows SQLite live with no pending restart.
+
+The archive contains private settings and may contain credentials; do not share it publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage or replaces an existing encryption key.
 
 The browser backup is for the original legacy data before SQLite activation. A same-server test restore cannot prove recovery after VM/disk loss, so keep the independent restored-copy rehearsal below. After SQLite resumes writes, use the coordinated full backup procedure that also includes local-metadata control storage; the pre-upgrade download does not contain subsequent SQLite changes.
 

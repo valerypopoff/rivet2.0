@@ -100,6 +100,7 @@ export type DeploymentStorageSettingsForm = {
   objectStoragePrefix: string;
   objectStorageForcePathStyle: boolean;
   deploymentManaged: boolean;
+  storageModeChangeBlockedReason: string | null;
   storageAccessKeyId: string;
   storageAccessKey: string;
   storageAccessKeyConfigured: boolean;
@@ -186,6 +187,12 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
     objectStoragePrefix: settings.objectStoragePrefix ?? 'workflows/',
     objectStorageForcePathStyle: settings.objectStorageForcePathStyle ?? false,
     deploymentManaged: settings.deploymentManaged ?? false,
+    storageModeChangeBlockedReason:
+      settings.storageModeChangeBlockedReason !== undefined
+        ? settings.storageModeChangeBlockedReason
+        : settings.storageMode === 'filesystem'
+          ? 'Complete the local files-to-SQLite migration before switching to S3 + PostgreSQL.'
+          : 'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration.',
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKey: '',
     storageAccessKeyConfigured: settings.storageAccessKeyConfigured,

@@ -197,6 +197,8 @@ export interface DeploymentStorageSettings {
   objectStoragePrefix: string;
   objectStorageForcePathStyle: boolean;
   deploymentManaged: boolean;
+  /** Read-only activation policy; never accepted from a settings draft. */
+  storageModeChangeBlockedReason?: string | null;
   storageAccessKeyId: string;
   storageAccessKeyConfigured: boolean;
   updatedAt: string | null;

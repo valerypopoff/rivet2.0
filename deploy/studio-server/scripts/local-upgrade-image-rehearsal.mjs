@@ -255,7 +255,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
         const actual=await scanBackupRoot(target,domain);
         if(JSON.stringify(entries)!==JSON.stringify(actual))throw Error('Restored volume readback differs');
       }
-      await inspectSqliteServingBackup(roots.control);
+      await inspectSqliteServingBackup(roots.control, roots.appData);
       const {execFileSync}=await import('node:child_process');
       execFileSync('chown',['-R','10001:10001',...Object.values(roots)]);
     `,

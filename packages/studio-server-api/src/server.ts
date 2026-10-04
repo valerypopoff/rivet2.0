@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { createServer } from 'node:http';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
@@ -150,8 +151,7 @@ async function closeHttpServer(deadline: number): Promise<boolean> {
     });
     server.closeIdleConnections?.();
   });
-  const remainingMs = Math.max(0, deadline - Date.now());
-  await Promise.race([closedPromise, wait(remainingMs)]);
+  await settleBeforeDeadline(closedPromise, deadline);
   return closed;
 }
 
@@ -220,7 +220,10 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
-    await Promise.race([startupPromise.catch(() => undefined), wait(Math.max(0, deadline - Date.now()))]);
+    await settleBeforeDeadline(
+      startupPromise.catch(() => undefined),
+      deadline,
+    );
   }
 
   const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([

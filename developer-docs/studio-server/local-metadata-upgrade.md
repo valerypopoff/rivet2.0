@@ -29,9 +29,9 @@ The generation certificate binds all four configured source mounts during SQLite
 
 The editor loading overlay covers only the editor pane. Sidebar Settings and its upgrade/recovery controls remain reachable if maintenance prevents editor initialization, including after a full reload; no forced browser click or temporary write bypass is needed. Backend authentication and maintenance still reject ordinary writes.
 
-Before upgrade opt-in, the dashboard calls a separate read-only setup endpoint guarded by the same strong key/OAuth operator session as migration actions, but not by the upgrade flag. It returns only booleans for local-VM eligibility, flag/root/key readiness, whether SQLite is selected and whether it is already live; it never returns paths or secret values. On an eligible legacy VM with missing setup, a prerequisite modal names the three deployment environment variables, the persistent control volume and offline one-time provisioning order. It explicitly distinguishes deployment secrets from the Rivet Settings Environment variables tab, warns not to start the normal backend with an unprovisioned control root, and offers only Postpone until setup is complete. Its configuration flags do not prove that a control volume is fresh or that a key matches an earlier generation: the modal explicitly forbids replacing an existing key or re-provisioning an existing upgrade. If SQLite is already selected but still paused and the operator disables upgrade controls, the modal gives recovery instructions instead of fresh-provisioning instructions. Kubernetes/managed deployments, unauthorized users and already-live SQLite (even with upgrade controls disabled later) get no setup modal. The default disabled upgrade remains safe: this modal does not provision, copy or pause anything.
+Before upgrade opt-in, the dashboard calls a separate read-only setup endpoint guarded by the same strong key/OAuth operator session as migration actions, but not by the upgrade flag. It returns readiness and UI-capability booleans, never paths or secret values. The updated Compose supervisor offers UI preparation on a fresh reserved control volume: the reminder opens the wizard and explains generated-key preparation, automatic restarts and explicit final resumption. The reminder itself does not provision or pause anything. Custom launchers without that capability retain the prerequisite instructions for deployment variables and offline one-time provisioning; those variables are not Rivet Settings Environment variables. Existing keys and journals must never be replaced or re-provisioned. Paused SQLite with disabled controls gets recovery guidance rather than fresh setup instructions. Kubernetes/managed deployments, unauthorized users and already-live SQLite get no setup reminder.
 
-After setup, each fresh dashboard load shows a signed-in operator a local-storage-upgrade reminder when the enabled upgrade status confirms a stable legacy runtime (`legacy` or `legacy-resumed`, no maintenance or pending restart), even if an old copy job remains in the audit ledger. Postpone dismisses it only for that page load; it is not a durable refusal. Review upgrade steps opens Settings directly on the existing Local storage upgrade tab, without pausing writes or starting a copy. Once durable state shows a paused source, copy job, verified candidate or selected runtime awaiting finalization, a continuation modal returns on every page reload and opens that same tab. It explains when return to legacy remains possible and when SQLite write resumption has closed one-click rollback. The prompt is cleared while another Settings/modal dialog is open and status is reread when that dialog closes, so a same-page pause or completion cannot reveal a stale legacy offer or recovery instruction. While visible, it rechecks status every ten seconds so another operator's completion or lost authorization removes stale guidance. Temporary setup/status connection or server failures hide stale guidance and retry after three seconds; authorization failures do not retry. A completed `sqlite-live` runtime (SQLite running, no maintenance or pending restart) does not show the reminder. The recovery buttons are absent after `sqlite-live`; the backend also refuses rollback then. Dismissing either reminder lasts only for the current page load. This UI does not replace control-volume provisioning, a restored backup, encryption-key recovery or the explicit activation/resumption gates below.
+After setup, each fresh dashboard load shows a signed-in operator a local-storage-upgrade reminder when the enabled upgrade status confirms a stable legacy runtime (`legacy` or `legacy-resumed`, no maintenance or pending restart), even if an old copy job remains in the audit ledger. Postpone dismisses it only for that page load; it is not a durable refusal. Review upgrade steps opens Settings directly on the existing Local storage upgrade tab, without pausing writes or starting a copy. Once durable state shows a paused source, copy job, verified candidate or selected runtime awaiting finalization, a continuation modal returns on every page reload and opens that same tab. It explains when return to legacy remains possible and when SQLite write resumption has closed one-click rollback. The prompt is cleared while another Settings/modal dialog is open and status is reread when that dialog closes, so a same-page pause or completion cannot reveal a stale legacy offer or recovery instruction. While visible, it rechecks status every ten seconds so another operator's completion or lost authorization removes stale guidance. Temporary setup/status connection or server failures hide stale guidance and retry after three seconds; authorization failures do not retry. A completed `sqlite-live` runtime (SQLite running, no maintenance or pending restart) does not show the reminder. The recovery buttons are absent after `sqlite-live`; the backend also refuses rollback then. Dismissing either reminder lasts only for the current page load. UI automation preserves the backup, encryption-key recovery and explicit activation/resumption gates below; it does not replace independent disaster-recovery qualification.
 
 The upgrade panel uses the shared Settings button, text-field and checkbox controls. Inspection/maintenance, backup certification/copy, activation/validation, write resumption and recovery/report actions have separate titled sections. Each action occupies its own row; backup fields and attestations are grouped in a dedicated form, and long fingerprints/paths wrap without widening the modal. This is presentation only: the existing operator authorization, maintenance, verification and resumption gates remain unchanged. Mocked Playwright checks cover the action layout, field accessibility and safety states without running a conversion on the developer's real data.
 
@@ -57,6 +57,45 @@ The job persists its current stage and a fixed failure category (`disk-full`, `p
 Unhandled storage-operator API failures, including inspection failures before a copy job exists, also use only a fixed failure code and request correlation ID in logs. Their HTTP 5xx response is fixed text, never an exposed parser/driver error or its arbitrary error code. A malformed generated recording metadata fixture verifies that private source text does not enter either output. Authentication and request-validation errors retain their normal HTTP status behavior.
 
 ## Deployment preparation
+
+### UI-owned preparation (normal single-host Compose path)
+
+The current production/staging and dev Compose definitions reserve the existing
+`rivet_local_metadata` volume through `RIVET_LOCAL_METADATA_UI_ROOT=/data/local-metadata`.
+This alone neither provisions nor selects SQLite. On a fresh, authenticated
+installation, **Prepare server for migration** performs the one-time setup from
+the UI. The supervisor stops both serving children, creates `ui-managed` with a
+private generated key, invokes the existing offline provisioning command, publishes
+its ready configuration durably and relaunches both children. It does not edit
+`.env`, accept a key from the browser, use the Docker socket, or migrate data.
+
+`ui-managed/ui-configuration.json` is private mode 0600 and stores the original
+key and preparation phase. An independent `local-metadata-ui-control.json` binding
+in App Data contains only the control path and key hash. Losing/replacing the
+control volume therefore fails closed instead of silently serving stale legacy
+files. Keep both persistent roots in post-upgrade backups; download the key
+separately. A failed owned preparation can retry using its same key; unknown,
+manual, corrupt, overlapping or symlinked control storage is never reset or
+re-provisioned automatically. A missing key/configuration/binding still requires
+protected backup recovery if it prevents startup.
+
+The API forwards signed operator setup/restart requests to the supervisor's
+loopback control routes using a random per-boot capability. It is never sent to
+the browser or executor. Restarts require a current durable transition revision,
+an actual restart requirement and a drained maintenance source. The supervisor
+releases its owner lease only after both children exit, rereads selection and
+rotates the capability. A failed shutdown cannot restart into a new authority.
+The ordinary health routes remain separate; no nginx route exposes supervisor
+control. Deployment dotenv loading preserves supervisor-owned selection values.
+
+### Advanced/manual deployment preparation
+
+Existing explicit control-root/key deployments retain their original configuration
+and are never adopted into a different UI-owned root. The manual preparation below
+also remains the fallback for unsupported/custom launchers. UI setup requires the
+updated Compose definition and supervisor; it cannot repair missing VM mounts or
+a backend that cannot start. Offline disaster recovery is deliberately separate
+from the normal browser migration.
 
 First rehearse on an isolated restored copy of the **actual VM data**, using the same image/filesystem. Keep the clone away from public routing, live queues and unrestricted production integrations. Automated fixtures do not replace this rehearsal.
 
@@ -104,6 +143,32 @@ Use `local-metadata-control.js --capacity` before copying to inspect payload, di
 Keep the key/control root across every restart. After upgrading, disabling only the operator UI flag is safe; removing the control root or key is not.
 
 ## Operator procedure
+
+On the updated supervised Compose stack, the normal browser workflow has four stages:
+
+1. **Prepare / pause and back up.** If needed, choose **Prepare server for migration**
+   and wait for automatic reconnection. Then **Pause writes and create verified backup**
+   performs capacity inspection, freezes/drains the source and starts backup creation
+   when drained. If active work is still draining, wait and choose **Create verified backup**.
+2. **Download and copy.** Download the verified archive and separate encryption key,
+   wait for completion, preserve them securely outside the VM and confirm both checks.
+   Choose **Copy and verify**. Reference/fingerprint entry is hidden under Advanced;
+   it is not required for browser-created backups.
+3. **Activate and validate.** Choose **Activate SQLite while paused**. The UI requests
+   a coordinated backend restart, reconnects and validates only when both API and
+   executor are ready. A reload can continue the same durable phase. Validation is
+   attempted once per displayed generation/revision; failure requires explicit retry
+   or recovery, not an automatic retry loop. **Restart backend** handles an interrupted
+   browser sequence that left a restart pending.
+4. **Confirm and resume.** Review successful validation, acknowledge the irreversible
+   boundary and choose **Resume writes**. The UI restarts both processes again. Completion
+   requires `sqlite-live`, the matching running backend and no pending restart/maintenance.
+
+Return to legacy, unchanged-legacy cancellation and durable-resumption completion
+also request their necessary restart from the UI. No step silently resumes writes,
+automatically checks a download attestation, or removes retained source files.
+The individual controls below remain available under source/advanced details and
+for custom launchers without UI restart capability.
 
 1. Inspect source: roots, counts, portability warnings and capacity.
 2. Pause writes and drain. Persistent maintenance rejects new saves, settings changes, executions and WebSocket actions. Notification-only workflow-tree and Evaluation-library SSE streams close after the durable marker; they must not keep the operator's own browser in the HTTP drain forever. A stream whose asynchronous setup finishes later refuses to open. Accepted saves/executions are not aborted: wait for HTTP/editor/action runs, recording queues, catalog writes, connection tests and library jobs. Prohibit host-side edits too.
@@ -187,6 +252,12 @@ The bounded-copy regression first bundles the current converter, serving verifie
 The durable job records phase/recovery evidence, not a per-byte percentage. Transient install logs/caches are not permanent business records. Local artifact GC and post-resumption reverse export are not implemented.
 
 The legacy VM-to-managed wizard is blocked when a local control root is enabled: it must not export stale retained files after this cutover. A later managed migration requires a selected-SQLite source adapter. Do not run both transition workflows concurrently.
+
+The Storage tab and its API refuse local-to-managed activation before files-to-SQLite migration. The public settings response carries one read-only `storageModeChangeBlockedReason` for changing away from the current backend. The UI disables the other backend and explains the prerequisite; the active choice and its configuration remain editable. Managed-to-local switches are also refused: selecting an empty local backend is not a reverse transfer and must not trap an installation behind a blocked return switch. Sending a forged or obsolete draft cannot bypass the server guard. SQLite completion does not unlock a blind backend toggle: a separate verified selected-SQLite-to-managed transfer is still required and is not implemented yet. Already-managed installations can update their existing credentials/configuration; fresh managed deployment bootstrap is unchanged. Local mode never inherits an exemption merely because managed credentials were previously saved.
+
+Setup `liveSqlite` uses the durable write-admission check (sqlite-live phase, matching boot revision/generation and no maintenance), not just the presence of a selected SQLite generation. A final resumption awaiting restart therefore retains continuation guidance. Reminder dismissal is document-local: every reload reevaluates eligibility. Managed/replicated deployments and completed local SQLite remain quiet.
+
+Reminder setup/status reads share a ten-second deadline including response bodies; a timeout hides stale guidance and retries after three seconds rather than silently losing the page-load reminder. Selected SQLite always takes precedence over a stale preparation capability in the setup API, reminder and upgrade panel: it may need recovery, never fresh key/root provisioning.
 
 Verification includes local backend/settings/artifact/snapshot, transition and offline recovery suites. `local-upgrade-runtime.test.ts` rehearses operator copy, process restarts, selected serving and corrupt-candidate/key-free rollback on disposable fixtures. It injects disk-full and permission errors, kills copying at durable stages and certification boundaries, and kills activation/resumption after commit. Recovery checks exact retry, retained legacy hashes, maintenance, rollback closure and restart fences. On Linux it also starts the real supervised API and executor, checks generation agreement and verifies the paused HTTP barrier. Playwright `local-storage-upgrade.spec.ts` checks backup gates, capacity refusal, safe failure reports, restart, validation/resumption and unauthorized sessions.
 

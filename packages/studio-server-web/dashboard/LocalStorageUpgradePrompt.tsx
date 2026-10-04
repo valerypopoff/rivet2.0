@@ -20,6 +20,7 @@ type SetupStatus = {
   encryptionKeyReady: boolean;
   sqliteSelected: boolean;
   liveSqlite: boolean;
+  uiPreparationAvailable?: boolean;
 };
 
 type Prompt =
@@ -81,9 +82,12 @@ export const LocalStorageUpgradePrompt: FC<{
     const readStatus = async () => {
       if (controller.signal.aborted || dismissedForThisPage) return;
       try {
+        // Bound the whole read (including response bodies). A stalled status
+        // endpoint must not strand this page's reminder indefinitely.
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]);
         const setupResponse = await fetch(`${RIVET_API_BASE_URL}/app-settings/local-upgrade/setup`, {
           cache: 'no-store',
-          signal: controller.signal,
+          signal,
         });
         if (!setupResponse.ok) {
           if (!controller.signal.aborted) setPrompt(null);
@@ -104,7 +108,7 @@ export const LocalStorageUpgradePrompt: FC<{
         }
         const response = await fetch(`${RIVET_API_BASE_URL}/app-settings/local-upgrade`, {
           cache: 'no-store',
-          signal: controller.signal,
+          signal,
         });
         // This endpoint is operator-only. Disabled deployments and ordinary
         // users must not receive a prompt or any upgrade information.
@@ -152,7 +156,25 @@ export const LocalStorageUpgradePrompt: FC<{
         >
           <ModalBody>
             <div className="local-storage-upgrade-prompt">
-              {prompt.kind === 'setup' && prompt.setup.sqliteSelected ? (
+              {prompt.kind === 'setup' && prompt.setup.uiPreparationAvailable && !prompt.setup.sqliteSelected ? (
+                <>
+                  <h2>Prepare the local storage upgrade</h2>
+                  <p>
+                    The guided upgrade can prepare this server for you: create private persistent control storage,
+                    generate its encryption key and restart the backend. No console commands or Environment variables
+                    entries are needed.
+                  </p>
+                  <p>
+                    Then pause writes, create and download the verified backup and its separate key, copy and verify,
+                    and activate SQLite. Restarts and paused validation are automatic. You make the final decision to
+                    resume writes.
+                  </p>
+                  <p>
+                    You can postpone, or return to legacy before resuming SQLite writes. Keep the downloaded backup and
+                    key securely outside this VM.
+                  </p>
+                </>
+              ) : prompt.kind === 'setup' && prompt.setup.sqliteSelected ? (
                 <>
                   <h2>Restore paused SQLite upgrade controls</h2>
                   <p>
@@ -242,7 +264,7 @@ export const LocalStorageUpgradePrompt: FC<{
                 </>
               )}
               <div className="local-storage-upgrade-prompt-actions">
-                {prompt.kind !== 'setup' && (
+                {(prompt.kind !== 'setup' || (prompt.setup.uiPreparationAvailable && !prompt.setup.sqliteSelected)) && (
                   <Button
                     appearance="primary"
                     onClick={() => {
@@ -250,7 +272,9 @@ export const LocalStorageUpgradePrompt: FC<{
                       onStart();
                     }}
                   >
-                    {prompt.kind === 'offer' ? 'Review upgrade steps' : 'Continue upgrade or recovery'}
+                    {prompt.kind === 'offer' || prompt.kind === 'setup'
+                      ? 'Review upgrade steps'
+                      : 'Continue upgrade or recovery'}
                   </Button>
                 )}
                 <Button appearance="default" onClick={dismiss}>

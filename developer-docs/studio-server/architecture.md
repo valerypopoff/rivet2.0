@@ -50,6 +50,20 @@ uses the control API rather than trusting clients merely because they share its 
 
 ## Runtime shape
 
+The normal single-host local migration is browser-operated, including first-time
+private key/control preparation and coordinated API/executor restarts. The combined
+supervisor owns the private `local-upgrade-ui.mjs` configuration and per-boot loopback
+control capability; the operator API owns authorization, revision/drain checks and
+durable transitions. A separate App Data path/key-hash binding prevents an absent
+control volume from becoming a legacy fallback. UI convenience never bypasses
+offline owner leasing, archive verification, paused runtime validation or explicit
+irreversible write resumption. Custom/manual deployments and unstartable/corrupt
+installations retain the documented protected recovery path.
+
+Shutdown deadline races cancel their timers when work completes, so an idle API
+can exit cleanly before the supervisor's forced-shutdown deadline. Migration status
+includes combined runtime readiness; automatic validation never races executor startup.
+
 The local files-to-SQLite upgrade is opt-in for the supervised single-host
 deployment. Its durable generation selects workflow/recording metadata, encrypted
 App Settings, runtime-library authority and operational SQLite snapshots together.
@@ -362,6 +376,12 @@ Cross-project Subgraph replay persistence is part of the child node's completion
 
 ## Storage model
 
+Changing away from an installation's existing backend requires a separate verified
+migration, in either direction. One read-only `storageModeChangeBlockedReason`
+drives the inactive selector's disabled state; API writes independently compare
+the requested mode with authoritative settings before accepting configuration.
+Keeping or updating the current backend does not require a mode change.
+
 | Area                             | Purpose                                                                                                 | Local direct-process default                                             | Docker default                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
 | `RIVET_WORKSPACE_ROOT`           | Allowed workspace root for general hosted file operations                                               | repo root                                                                | `/workspace`                                |
@@ -372,7 +392,7 @@ Cross-project Subgraph replay persistence is part of the child node's completion
 
 In Docker-based modes:
 
-- `Settings` -> `Storage` is the operator-facing source for storage/database choices after it is saved. Single-host deployments write `settings/deployment-storage.json` under `RIVET_APP_DATA_ROOT`. Kubernetes stores the typed domain in encrypted PostgreSQL without startup settings files. Changing storage mode, database credentials, or object-storage credentials requires restarting/recreating the affected processes so singleton backends and runtime-library sync state are rebuilt consistently.
+- `Settings` -> `Storage` configures the existing backend; it cannot migrate data. Local-to-S3/PostgreSQL activation is rejected by the API before a write and disabled in the UI with a read-only policy reason. Files-to-SQLite completion is a prerequisite, not permission to bypass the still-unimplemented selected-SQLite-to-managed transfer. Existing managed deployments remain configurable. Single-host legacy installations write `settings/deployment-storage.json` under `RIVET_APP_DATA_ROOT`; selected SQLite uses its settings domain. Kubernetes stores the typed domain in encrypted PostgreSQL without startup settings files. Credential/configuration changes require restarting/recreating the affected processes so singleton backends and runtime-library sync state are rebuilt consistently.
 - `RIVET_ARTIFACTS_HOST_PATH` is the normal shared host root for filesystem-backed artifacts; the launcher derives `workflows/`, `workflow-recordings/`, and `runtime-libraries/` from it unless the per-path envs are set explicitly.
 - that derivation is launcher-owned. Direct raw Compose runs do not expand `RIVET_ARTIFACTS_HOST_PATH` into the per-path host mounts, so manual Compose diagnostics must either go through the dev/prod npm launcher scripts or provide explicit absolute `RIVET_WORKFLOWS_HOST_PATH`, `RIVET_WORKFLOW_RECORDINGS_HOST_PATH`, and `RIVET_RUNTIME_LIBS_HOST_PATH` values. If those values are omitted, Compose uses isolated repo-local `.data/*` directories instead of the external artifact root.
 - `RIVET_WORKFLOWS_HOST_PATH` backs `/workflows`, so in `filesystem` mode it stores live projects and published snapshots.
@@ -450,7 +470,7 @@ Interpretation rules:
 
 ### Storage and runtime libraries
 
-- Configure storage/database through `Settings` -> `Storage`. The `Local folders`/`Object storage + PostgreSQL` choice selects the filesystem or managed workflow backend. The metadata database controls appear only with `Object storage + PostgreSQL`; a saved database choice remains inactive while `Local folders` is selected, then reappears if managed storage is reselected. Both choices belong to one typed deployment-storage domain. Single-host mode persists that domain in private `settings/deployment-storage.json`; Kubernetes persists it as an encrypted PostgreSQL row. The managed choice uses object storage for workflow files, recordings, published snapshots, and runtime-library artifacts, and `Local Docker Postgres`/`Managed Postgres` selects its metadata database. The public settings API returns only `...Configured` booleans for secrets. Switching the choice does not migrate existing data.
+- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch pending a separate verified transfer adapter. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
 - `Local Docker Postgres` is a local rehearsal option for managed metadata only. It uses the optional Compose Postgres default connection, but object storage remains controlled by the separate project artifact storage fields. Make sure the managed-services Compose profile is running before restarting into object-storage mode.
 - Storage mode, database mode, managed PostgreSQL credentials, and object-storage credentials are read from the active settings repository, not `.env`. If the file-backed domain is absent, Docker/API runtime defaults to `Local folders` and `Local Docker Postgres`. Kubernetes's migration Job seeds the PostgreSQL row from Helm/Vault bootstrap values only when the row is absent. Serving APIs load that row directly, and the co-located executor receives its startup configuration through the authenticated loopback API; Kubernetes does not project compatibility settings files into pod-local app data.
 - Managed workflow object location is stored as explicit bucket, endpoint, region, prefix, and path-style fields alongside the compatibility `storageUrl` in the version-1 deployment-storage payload. Legacy rows lacking those fields resolve with the original URL parser and `workflows/` prefix. Runtime libraries keep their independent `runtime-libraries/` prefix. Active managed storage cannot change object location or addressing through App Settings without an operator migration and restart; replicated Kubernetes topology rejects all Storage-tab writes because existing API/executor clients are startup-scoped and a mixed-pod configuration would split writes. Helm bootstrap values seed only an absent PostgreSQL row, never overwrite an existing location.

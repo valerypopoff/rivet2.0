@@ -402,11 +402,35 @@ See also: [Local metadata storage upgrade](./local-metadata-upgrade.md)
 
 ## Local metadata conversion verification
 
-The single-host local upgrade is disabled by default; deploy/provision the
-persistent control volume before enabling the operator UI. The owning runbook
-explains backup certification, paused activation, whole-backend restarts and
-key-free offline rollback. Never enable it on the production VM as a substitute
-for rehearsing a separately restored copy of that VM's data.
+Reminder and storage-activation policy regressions run headlessly with
+`yarn studio-server:ui:observe local-storage-upgrade-prompt.spec.ts`: postpone/reload,
+in-progress reload, completed SQLite, managed exclusions, final restart, stalled
+setup/status reads and stale preparation capabilities. Both inactive backend buttons
+are blocked until a separate verified migration exists. API `app-settings.test.ts`
+verifies that forged local-to-managed and managed-to-local drafts cannot modify
+settings. `workflow-storage-config.test.ts` covers managed credential/location
+updates and retained credentials from older filesystem detours. Managed fixtures
+use `seedDeploymentStorageSettings` to model an already-provisioned disposable
+installation, not a prohibited live Storage-tab switch. The real runtime rehearsal
+also checks setup completion before and after the final coordinated restart.
+
+The single-host local upgrade remains opt-in. Updated Compose mounts the reserved
+control volume and advertises supervisor-owned UI preparation; the signed operator
+can prepare its private key/journals, migrate and request necessary backend restarts
+entirely from the normal wizard. Individual fingerprint and inspection controls are
+advanced alternatives. Manual/custom launchers retain explicit environment/provisioning
+requirements. The owning runbook explains backup certification, paused activation,
+coordinated restarts and key-free offline rollback. A browser migration is not a
+substitute for rehearsing a separately restored copy of production data.
+
+The production-cutover command includes `local-upgrade-ui.test.mjs` and supervisor
+private-control/restart tests. The runtime suite's `UI prepares` case uses real API
+and executor processes, the offline provisioner, browser-backup attachments and
+every normal migration transition on owned fixtures. `shutdown-deadline.test.ts`
+checks timer release; a successful shutdown must not keep Node alive until an unused
+grace timeout. Automatic validation waits for combined readiness, not merely an API
+status response. Headless UI coverage checks the consolidated flow, reconnect,
+readiness delay and explicit final acknowledgement.
 
 Run `local-browser-backup.test.ts` for archive/restore, capacity, drift, path
 and permission/link preservation; run it on Linux as well as Windows.
@@ -677,7 +701,7 @@ compatibility aliases.
 | `yarn studio-server:ui:observe`                                                                                                                                                                                                 | Runs the headed slow-motion Playwright flow against the current hosted app                                                                                                                                               | Watch the browser click through a real scenario                                                                     |
 | `yarn studio-server:ui:observe:debug`                                                                                                                                                                                           | Runs the same flow with Playwright Inspector enabled                                                                                                                                                                     | Step through or pause browser actions                                                                               |
 | `yarn studio-server:ui:observe:report`                                                                                                                                                                                          | Opens the last Playwright HTML report                                                                                                                                                                                    | Review traces, screenshots, and videos after a run                                                                  |
-| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs headless hosted-editor regressions against a fresh Vite host, including output paging, sidebar, streaming, workspace recovery and node-editor ownership/lifecycles                                                   | Reproduce the current hosted-editor CI browser gate locally after installing Chromium                               |
+| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs headless hosted-editor regressions against a fresh Vite host, including output paging, sidebar, streaming, workspace recovery and node-editor ownership/lifecycles                                                  | Reproduce the current hosted-editor CI browser gate locally after installing Chromium                               |
 
 `yarn studio-server:clean` is intentionally Docker-volume-safe but Docker-host-wide. It first prints the selected Docker context/endpoint, a concise Docker disk summary, and counted stopped-container, custom-network, and image inventories (showing at most 20 rows from each inventory). Docker evaluates the latter two inventories for unused resources only at prune time. Run `yarn studio-server:clean -- --dry-run` to stop there. An interactive terminal must then type `PRUNE`; automation must pass `--confirm-host-prune`. The command rejects remote or unknown endpoints before Docker preflight unless the caller also supplies both `--allow-remote-docker-host` and `--confirm-host-prune`. When it resolves the currently selected context, it pins that context on every later Docker invocation so a concurrent `docker context use` cannot retarget the cleanup. This prevents an inherited Docker context or `DOCKER_HOST` from silently cleaning another machine.
 
@@ -1330,7 +1354,7 @@ Current behavior:
 - App Settings -> `Web apps` -> `Auth`, `OAuth`, and `Server UI access` edit one web-app-auth domain. `Key`, `OAuth`, and `No gate` retain their existing behavior. The file backend uses owner-only `settings/web-app-auth.json`; Kubernetes stores the payload encrypted in PostgreSQL. Legacy web-app/OAuth env values are ignored. OAuth state and session cookies remain bound to the saved revision, so provider, credential, scope, allowlist, or session-policy changes fail closed and may require visitors to sign in again.
 - App Settings -> `Workflow endpoints` -> `Access control` writes workflow endpoint bearer-token policy to `settings/workflow-endpoint-auth.json`. It defaults to requiring `Authorization: Bearer <RIVET_KEY>`, and the legacy `RIVET_REQUIRE_WORKFLOW_KEY` env var is ignored so workflow endpoint auth has one operator-owned source of truth.
 - App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` edit one public-route settings domain. In file mode it is `settings/public-routes.json`, with the old `settings/web-app-routes.json` as a read-only import fallback. Kubernetes stores it in PostgreSQL. Slugs are unique single top-level path segments and cannot collide with reserved routes.
-- App Settings -> `Storage` writes workflow/runtime-library storage choices through the active settings repository. `Local folders` uses launcher-mounted host paths and hides the inactive metadata database controls; `Object storage + PostgreSQL` shows the S3-compatible storage and local Docker or managed PostgreSQL controls. Toggling back to local folders retains the saved database choice but does not use it, and switching storage mode does not migrate data. Secrets are never returned to the browser. Storage/database env values are ignored by Docker API/executor runtime. Restart Docker or roll out Kubernetes after changes so workflow and runtime-library singleton backends use the new configuration.
+- App Settings -> `Storage` configures the existing workflow/runtime-library backend through the active settings repository. `Local folders` uses launcher-mounted artifacts and hides inactive database controls; existing `Object storage + PostgreSQL` deployments show S3-compatible storage and database controls. The managed button is disabled for local installations and the API rejects activation before a settings write. Files-to-SQLite completion is required first, and a later SQLite-to-managed transfer still needs a separate verified adapter. Saving managed credentials or taking a filesystem-mode detour does not bypass this policy. Secrets are never returned to the browser. Storage/database env values are ignored by Docker API/executor runtime. Restart Docker or roll out Kubernetes after credential/configuration changes so singleton backends use the new configuration.
 - Managed workflow schema changes live in ordered immutable migrations under `packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts`. Migration 1 is the workflow baseline; migration 2 adds encrypted `app_settings`; migration 3 adds the fenced maintenance lease and deletion outbox; migration 4 adds reconciliation state and integrity findings. Never edit a released migration or checksum. The Helm pre-install/pre-upgrade Job validates deployment storage in memory and runs schema migration before enabling the PostgreSQL settings backend. Each absent row independently uses a matching regular, valid legacy JSON file or falls back to the candidate bootstrap/default; never switch the entire app-data root to a partial legacy tree. The missing deployment-storage row is seeded from validated Helm/Vault values, while an existing row remains authoritative. Serving API pods remain verify-only. Add each future change as N+1 with complete manifest, backward-compatibility declaration, and concurrency/upgrade coverage.
 - Web-app action graph context strips browser/session headers such as `cookie`, `authorization`, proxy auth, and verified client-address hints. Keep public web-app actions on that narrower context contract; workflow endpoint routes may still expose request headers because they are API-style execution surfaces with their own bearer/trusted-client contract.
 - Web-app actions carry a browser-owned `storage` snapshot for Rivet Stored Value nodes. Both the HTTP compatibility route and the WebSocket gateway must return the per-run `storagePatch`; do not persist or reuse that snapshot server-side unless a deliberate trusted host store is introduced.
@@ -1664,7 +1688,7 @@ Regression coverage:
   buffer on blur/confirmation. Keep global node controls non-shrinking in the
   scrolling panel so tall Code editors cannot overlap the variant selector. Run it with
   `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
-  node-editor-ownership.spec.ts` against a candidate app URL. The CI browser
+node-editor-ownership.spec.ts` against a candidate app URL. The CI browser
   configuration includes it. Also run `project-tree-activation.spec.ts` and the
   affected recovery/save suites. Use a fixed build/preview for final browser
   checks so HMR cannot split the editor's session context during a test.
@@ -1681,8 +1705,8 @@ Regression coverage:
   selection and exact Save are the positive control. Guard every referenced-
   project write, including menu refresh, before calling the node-change handler.
   Run `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
-  node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts
-  project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts`.
+node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts
+project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts`.
   Both node-editor suites are included in the CI browser configuration.
   The lifecycle suite also records input-to-next-frame p95/high-water and exact
   saved text on a 350-node synthetic graph, attaching `typing-frame-latency.json`

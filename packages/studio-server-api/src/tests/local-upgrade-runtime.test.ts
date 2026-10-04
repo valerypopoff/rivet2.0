@@ -112,6 +112,12 @@ test('authenticated browser backup and project export work while paused and cert
   });
 });
 
+test('UI prepares, backs up, copies, restarts, validates and resumes a real supervised backend without console intervention', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('ui-workflow');
+  });
+});
+
 test('operator copy, restart, validation, resume and ordinary serving select SQLite without changing retained files', async () => {
   await fixture(async (source, control, command) => {
     const fingerprint = await fingerprintVmMigrationSource(source);

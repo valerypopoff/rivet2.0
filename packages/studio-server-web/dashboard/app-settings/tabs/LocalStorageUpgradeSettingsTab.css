@@ -15,6 +15,23 @@
   min-width: 0;
 }
 
+.local-storage-upgrade-panel [hidden] {
+  display: none !important;
+}
+
+.local-upgrade-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+  min-width: 0;
+}
+
+.local-storage-upgrade-panel summary {
+  cursor: pointer;
+  color: var(--grey-lightest);
+}
+
 .local-storage-upgrade-panel .local-upgrade-action {
   align-self: flex-start;
   align-items: center;

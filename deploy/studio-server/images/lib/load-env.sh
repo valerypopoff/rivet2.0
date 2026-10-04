@@ -22,9 +22,32 @@ load_optional_dotenv() {
 load_optional_dotenv_preserving_deployment_storage() {
   if [ "${RIVET_DEPLOYMENT_TOPOLOGY:-}" != "replicated" ]; then
     deployment_topology="${RIVET_DEPLOYMENT_TOPOLOGY:-}"
+    # The combined supervisor owns this selection and private capability. A
+    # stale dotenv cannot override an already selected UI-managed generation.
+    preserve_local_selection="${RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE:-${RIVET_LOCAL_METADATA_SUPERVISED:-}}"
+    local_control_root="${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}"
+    local_encryption_key="${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}"
+    local_upgrade_enabled="${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-}"
+    local_supervised="${RIVET_LOCAL_METADATA_SUPERVISED:-}"
+    local_boot_generation="${RIVET_LOCAL_METADATA_BOOT_GENERATION:-}"
+    local_boot_revision="${RIVET_LOCAL_METADATA_BOOT_REVISION:-}"
+    local_supervisor_token="${RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN:-}"
+    local_prepare_available="${RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE:-}"
+    local_restart_available="${RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE:-}"
     load_optional_dotenv "$@"
     if [ "$deployment_topology" = "single-host" ]; then
       export RIVET_DEPLOYMENT_TOPOLOGY=single-host
+      if [ "$preserve_local_selection" = "1" ]; then
+        export RIVET_LOCAL_METADATA_CONTROL_ROOT="$local_control_root"
+        export RIVET_LOCAL_METADATA_ENCRYPTION_KEY="$local_encryption_key"
+        export RIVET_LOCAL_METADATA_UPGRADE_ENABLED="$local_upgrade_enabled"
+        export RIVET_LOCAL_METADATA_SUPERVISED="$local_supervised"
+        export RIVET_LOCAL_METADATA_BOOT_GENERATION="$local_boot_generation"
+        export RIVET_LOCAL_METADATA_BOOT_REVISION="$local_boot_revision"
+        export RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN="$local_supervisor_token"
+        export RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE="$local_prepare_available"
+        export RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE="$local_restart_available"
+      fi
       set_bounded_scratch_env
     fi
     return

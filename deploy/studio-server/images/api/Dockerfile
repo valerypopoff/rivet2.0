@@ -72,6 +72,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/lib/bootstrap-deployment-st
 COPY --chown=10001:10001 deploy/studio-server/images/api/entrypoint.sh /opt/rivet/api-entrypoint.sh
 COPY --chown=10001:10001 deploy/studio-server/images/executor/entrypoint.sh /opt/rivet/executor-entrypoint.sh
 COPY --chown=10001:10001 deploy/studio-server/images/api/backend-supervisor.mjs /opt/rivet/backend-supervisor.mjs
+COPY --chown=10001:10001 deploy/studio-server/images/api/local-upgrade-ui.mjs /opt/rivet/local-upgrade-ui.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-metadata-owner-lease.mjs /opt/rivet/local-metadata-owner-lease.mjs
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh /opt/rivet/executor-entrypoint.sh

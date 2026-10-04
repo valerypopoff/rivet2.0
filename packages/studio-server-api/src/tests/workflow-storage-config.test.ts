@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 import { withScopedEnv } from './helpers/runtime-library-harness.js';
 import { repoRoot } from './helpers/repo-contract-helpers.js';
 
@@ -94,7 +95,7 @@ async function withDeploymentStorageSettings(
   process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 
   try {
-    await deploymentStorageSettings.writeDeploymentStorageSettings(settings);
+    await seedDeploymentStorageSettings(settings);
     await run();
   } finally {
     if (previousAppDataRoot == null) {
@@ -447,7 +448,7 @@ test('Kubernetes bootstrap rejects local storage modes before writing settings',
   }
 });
 
-test('established object storage cannot change location, even across a filesystem-mode detour', async () => {
+test('established object storage cannot change location or take an unverified filesystem detour', async () => {
   await withDeploymentStorageSettings(
     {
       storageMode: 'managed',
@@ -476,7 +477,16 @@ test('established object storage cannot change location, even across a filesyste
         /operator migration/,
       );
       assert.equal(storageConfig.getManagedWorkflowStorageConfig().objectStorageBucket, 'original');
-      await deploymentStorageSettings.writeDeploymentStorageSettings({ storageMode: 'filesystem' });
+      await assert.rejects(
+        deploymentStorageSettings.writeDeploymentStorageSettings({ storageMode: 'filesystem' }),
+        /separate verified operator migration/,
+      );
+      assert.deepEqual(await deploymentStorageSettings.readDeploymentStorageSettings(), current);
+      // An older installation might already have taken the formerly allowed
+      // detour. Retained managed credentials still cannot authorize activation.
+      await seedDeploymentStorageSettings({
+        ...deploymentStorageSettings.readDeploymentStorageRuntimeSettingsSync(), storageMode: 'filesystem',
+      });
       await assert.rejects(
         deploymentStorageSettings.writeDeploymentStorageSettings({
           storageMode: 'managed',
@@ -486,10 +496,13 @@ test('established object storage cannot change location, even across a filesyste
           objectStoragePrefix: current.objectStoragePrefix,
           objectStorageForcePathStyle: current.objectStorageForcePathStyle,
         }),
-        /operator migration/,
+        /files-to-SQLite/,
       );
-      await deploymentStorageSettings.writeDeploymentStorageSettings({ storageMode: 'managed' });
-      assert.equal(storageConfig.getManagedWorkflowStorageConfig().objectStorageBucket, 'original');
+      await assert.rejects(
+        deploymentStorageSettings.writeDeploymentStorageSettings({ storageMode: 'managed' }),
+        /files-to-SQLite/,
+      );
+      assert.equal(storageConfig.getWorkflowStorageBackendMode(), 'filesystem');
     },
   );
 });

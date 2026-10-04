@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
-import { writeDeploymentStorageSettings } from '../deployment-storage-settings.js';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 import {
   assertApiRuntimeProfileStartupPreconditions,
   createApiApp,
@@ -75,7 +75,7 @@ async function withApiEnv(
 }
 
 async function writeManagedDeploymentStorageSettings(): Promise<void> {
-  await writeDeploymentStorageSettings({
+  await seedDeploymentStorageSettings({
     storageMode: 'managed',
     databaseMode: 'managed',
     databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',

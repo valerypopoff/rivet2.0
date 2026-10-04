@@ -7,6 +7,8 @@ import {
 import {
   getLocalUpgradeStatus,
   getLocalUpgradeSetupStatus,
+  prepareLocalUpgradeFromUi,
+  restartLocalUpgradeFromUi,
   getLocalUpgradeReport,
   inspectLocalUpgradeSource,
   localUpgradeBackupFingerprint,
@@ -143,7 +145,26 @@ appSettingsRouter.get(
     res.set('Cache-Control', 'no-store').json(getLocalUpgradeSetupStatus());
   }),
 );
+appSettingsRouter.post(
+  '/local-upgrade/prepare',
+  requireLocalUpgradeSetupOperatorAuth,
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    z.object({}).strict().parse(req.body);
+    await prepareLocalUpgradeFromUi();
+    res.set('Cache-Control', 'no-store').status(202).json({ restarting: true });
+  }),
+);
 appSettingsRouter.use('/local-upgrade', requireLocalUpgradeOperatorAuth);
+appSettingsRouter.post(
+  '/local-upgrade/restart',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const { revision } = z.object({ revision: z.number().int().positive() }).strict().parse(req.body);
+    await restartLocalUpgradeFromUi(revision);
+    res.set('Cache-Control', 'no-store').status(202).json({ restarting: true });
+  }),
+);
 appSettingsRouter.get(
   '/local-upgrade',
   asyncHandler(async (_req, res) => {

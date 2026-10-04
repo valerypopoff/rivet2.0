@@ -172,13 +172,13 @@ so this is not a blanket disk-write prohibition for arbitrary workflow code.
 
 Useful variants:
 
-| Command                           | Behavior                                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `yarn studio-server:prod`         | Pull and run the published images                                                                                  |
+| Command                           | Behavior                                                                                                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `yarn studio-server:prod`         | Pull and run the published images                                                                                                                                           |
 | `yarn studio-server:staging`      | On a clean staging checkout with an existing API container, verify matching staging images and all existing data mounts, then run digest-pinned images in the same VM stack |
-| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                     |
-| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                              |
-| `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources |
+| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                                                                              |
+| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                                                                                       |
+| `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources                                                          |
 
 `yarn studio-server:clean` is a recovery tool for the whole selected Docker host, not only this Compose project. Start with:
 
@@ -212,6 +212,8 @@ before recreating anything. It uses the same data volumes and does not migrate
 storage or change `.env`. See the [staging VM procedure](../../developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
 
 ## Development
+
+For existing file-backed single-host installations, the updated Compose stack offers **Settings → Local storage upgrade** as a browser-guided migration: prepare the server if prompted, pause and create a verified backup, download the archive and encryption key separately, copy/verify, activate and validate while paused, then explicitly resume writes. The supervisor performs the necessary API/executor restarts; web/proxy are not restarted. Preserve the reserved `rivet_local_metadata` volume and the App Data installation binding. A lost/corrupt volume or a custom unsupported launcher still requires administrator recovery; the UI must never initialize a replacement over an existing migration. See the [local upgrade runbook](../../developer-docs/studio-server/local-metadata-upgrade.md).
 
 The Docker development stack is the default production-shaped loop:
 

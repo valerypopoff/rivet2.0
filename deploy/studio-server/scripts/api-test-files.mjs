@@ -98,6 +98,7 @@ export const defaultApiTestFiles = [
   'src/tests/runtime-library-local-cache.test.ts',
   'src/tests/runtime-library-stream.test.ts',
   'src/tests/settings-repository.test.ts',
+  'src/tests/shutdown-deadline.test.ts',
   'src/tests/sqlite-settings-store.test.ts',
   'src/tests/sqlite-workflow-backend.test.ts',
   'src/tests/trusted-clients.test.ts',

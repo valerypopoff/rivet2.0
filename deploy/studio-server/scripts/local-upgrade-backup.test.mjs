@@ -408,7 +408,7 @@ async function sqliteFixture(options) {
       appData: '/data/rivet-app',
       runtimeLibraries: '/data/runtime-libraries',
     },
-    encryptionKeyId: 'a'.repeat(64),
+    encryptionKeyId: options.uiEncryptionKeyId || 'a'.repeat(64),
   };
   const journal = new DatabaseSync(path.join(control, 'transition.sqlite'));
   journal.exec(
@@ -493,6 +493,54 @@ test('selected backup restores post-resumption metadata, artifacts and control a
     await assert.rejects(inspectRestoredRehearsal({ restored, receipt: copied.receipt, memoryMiB: 1024, cpus: 1 }));
   });
 });
+test('UI-owned selected backup preserves the complete volume and binding, not just nested databases', async () => {
+  await fixture(async (options) => {
+    const key = 'b'.repeat(64);
+    const selected = await sqliteFixture({
+      ...options,
+      uiEncryptionKeyId: createHash('sha256').update(JSON.stringify(key)).digest('hex'),
+    });
+    const volume = path.join(options.root, 'ui-control-volume');
+    await fs.mkdir(volume);
+    await fs.rename(selected.roots.control, path.join(volume, 'ui-managed'));
+    const configuration = JSON.stringify({ version: 1, phase: 'ready', key });
+    await fs.writeFile(path.join(volume, 'ui-managed', 'ui-configuration.json'), configuration, { mode: 0o600 });
+    const binding = path.join(selected.roots.appData, 'local-metadata-ui-control.json');
+    await fs.writeFile(
+      binding,
+      JSON.stringify({
+        version: 1,
+        root: '/data/local-metadata/ui-managed',
+        keyId: createHash('sha256').update(key).digest('hex'),
+      }),
+    );
+    selected.roots.control = volume;
+    if (process.platform !== 'win32') {
+      const cache = path.join(volume, 'ui-managed', 'generations', 'selected-generation', 'runtime-cache');
+      await fs.mkdir(cache);
+      await fs.writeFile(path.join(cache, 'content'), 'fixture runtime cache');
+      await fs.symlink('content', path.join(cache, 'link'));
+    }
+    const copied = await createLocalUpgradeBackup(selected);
+    await verifyLocalUpgradeBackup(options.destination, copied.receipt);
+    const restored = path.join(options.root, 'ui-selected-restore');
+    await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
+    assert.equal(
+      await fs.readFile(path.join(restored, 'control', 'ui-managed', 'ui-configuration.json'), 'utf8'),
+      configuration,
+    );
+    assert.equal(
+      await fs.readFile(path.join(restored, 'appData', 'local-metadata-ui-control.json'), 'utf8'),
+      await fs.readFile(binding, 'utf8'),
+    );
+    await fs.unlink(binding);
+    await assert.rejects(
+      createLocalUpgradeBackup({ ...selected, destination: path.join(options.root, 'missing-binding') }),
+      /binding/,
+    );
+  });
+});
+
 test('selected backup refuses missing control, pre-resumption selection, corrupt references and wrong certificate', async () => {
   for (const mutation of ['phase', 'artifact', 'certificate'])
     await fixture(async (options) => {
@@ -750,7 +798,10 @@ test('owned backend cleanup removes the inspected container ID instead of its re
   }, owner);
   await tracker.start(['image']);
   assert.deepEqual(await tracker.cleanup(true), { failed: false, retained: [] });
-  assert.deepEqual(calls.find((args) => args[0] === 'rm'), ['rm', id]);
+  assert.deepEqual(
+    calls.find((args) => args[0] === 'rm'),
+    ['rm', id],
+  );
 });
 test('legacy rehearsal resumption is refenced before restart and cannot accept a new source fingerprint', async () => {
   const events = [];

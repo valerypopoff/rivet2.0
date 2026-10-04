@@ -15,6 +15,7 @@ import { getLocalMetadataServingSelection } from '../../local-metadata/serving-s
 import { initializeLocalRuntimeLibraryAuthority } from '../../local-metadata/runtime-library-authority.js';
 import {
   getLocalUpgradeStatus,
+  getLocalUpgradeSetupStatus,
   getLocalUpgradeReport,
   inspectLocalUpgradeSource,
   pauseLocalUpgradeSource,
@@ -58,7 +59,11 @@ const faultHooks = {
     });
   },
 };
-if (command === 'supervised') {
+if (command === 'ui-workflow') {
+  await import('./local-upgrade-ui-runtime.js');
+  console.log('rehearsal:ui-workflow:ok');
+  process.exit(0);
+} else if (command === 'supervised') {
   // Actual container-runtime processes, not a stub health responder. All
   // authoritative paths and executor app-data belong to this temporary fixture.
   const repo = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -129,7 +134,10 @@ if (command === 'supervised') {
     assert.equal(
       (
         await fetch(`http://127.0.0.1:${apiPort}/api/workflows/tree`, {
-          headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() },
+          headers: {
+            'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+            cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+          },
         })
       ).status,
       200,
@@ -678,6 +686,7 @@ try {
         assert.ok(state.validationEvidenceHash);
         await transitionLocalUpgrade('resume', state.revision);
         assert.throws(assertLocalMetadataWritesAllowed, /restart/);
+        assert.equal(getLocalUpgradeSetupStatus().liveSqlite, false);
         assert.throws(
           () => assertLocalMetadataExecutorAdmission({ ...process.env, RIVET_RUNTIME_PROCESS_ROLE: 'executor' }),
           /restart/,
@@ -691,6 +700,24 @@ try {
     } else if (command === 'live') {
       assert.equal(getAppSettingsBackendKind(), 'sqlite');
       assertLocalMetadataWritesAllowed();
+      assert.equal(getLocalUpgradeSetupStatus().liveSqlite, true);
+      const previousPreparationCapability = process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE;
+      try {
+        process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = '1';
+        assert.equal(getLocalUpgradeSetupStatus().uiPreparationAvailable, false);
+      } finally {
+        if (previousPreparationCapability === undefined) delete process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE;
+        else process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = previousPreparationCapability;
+      }
+      const { readDeploymentStorageSettings, writeDeploymentStorageSettings } =
+        await import('../../deployment-storage-settings.js');
+      const storageBefore = await readDeploymentStorageSettings();
+      assert.match(storageBefore.storageModeChangeBlockedReason!, /separate verified managed migration/);
+      await assert.rejects(
+        writeDeploymentStorageSettings({ storageMode: 'managed', storageModeChangeBlockedReason: null }),
+        /separate verified managed migration/,
+      );
+      assert.deepEqual(await readDeploymentStorageSettings(), storageBefore);
       assertLocalMetadataExecutorAdmission({ ...process.env, RIVET_RUNTIME_PROCESS_ROLE: 'executor' });
       const original = await loadHostedProject(path.join(localMetadataSourceRoots().workflows, 'story.rivet-project'));
       const [project, attached] = loadProjectAndAttachedDataFromString(original.contents);

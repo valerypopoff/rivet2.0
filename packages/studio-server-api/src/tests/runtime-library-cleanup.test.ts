@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 import type { Pool } from 'pg';
 import { withArgv, withScopedEnv } from './helpers/runtime-library-harness.js';
 
@@ -83,7 +84,7 @@ async function withDeploymentStorageSettings(
       ...overrides,
       RIVET_APP_DATA_ROOT: appDataRoot,
     }, async () => {
-      await deploymentStorageSettings.writeDeploymentStorageSettings(settings);
+      await seedDeploymentStorageSettings(settings);
       await run();
     });
   } finally {

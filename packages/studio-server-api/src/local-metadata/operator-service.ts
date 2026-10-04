@@ -16,6 +16,7 @@ import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-man
 import { createVerifiedLocalSqliteSnapshot, inspectLocalSqliteSnapshot } from './sqlite-snapshot.js';
 import { stageLocalMetadataCandidate } from './stage-local-metadata-candidate.js';
 import { getLocalMetadataServingSelection, localMetadataGenerationPaths } from './serving-selection.js';
+import { assertLocalMetadataWritesAllowed } from './write-admission.js';
 import { materializeLocalRuntimeLibraries } from './runtime-library-authority.js';
 import { LocalWorkflowCatalog } from './workflow-catalog.js';
 import {
@@ -57,6 +58,17 @@ let runningBackup: Promise<void> | null = null;
  * control journal are provisioned. Never return paths or secret material. */
 export function getLocalUpgradeSetupStatus() {
   const sqliteSelected = getAppSettingsBackendKind() === 'sqlite';
+  let liveSqlite = false;
+  if (sqliteSelected) {
+    try {
+      // Completion requires the current durable sqlite-live revision, not
+      // merely a selected generation and a removed maintenance marker.
+      assertLocalMetadataWritesAllowed();
+      liveSqlite = true;
+    } catch {
+      // Stale or damaged control state must retain recovery guidance.
+    }
+  }
   return {
     eligible:
       process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
@@ -67,8 +79,58 @@ export function getLocalUpgradeSetupStatus() {
     controlRootConfigured: path.isAbsolute(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim() || ''),
     encryptionKeyReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
     sqliteSelected,
-    liveSqlite: sqliteSelected && !isVmMigrationMaintenanceActive(),
+    liveSqlite,
+    uiPreparationAvailable: !sqliteSelected && process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE === '1',
+    uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
   };
+}
+async function requestSupervisor(action: 'prepare' | 'restart'): Promise<void> {
+  const port = Number(process.env.RIVET_BACKEND_HEALTH_PORT);
+  const token = process.env.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN;
+  if (!token || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw createHttpError(409, 'This deployment does not support UI-controlled backend preparation or restart.');
+  const response = await fetch(`http://127.0.0.1:${port}/local-upgrade/${action}`, {
+    method: 'POST',
+    headers: { 'X-Rivet-Supervisor-Token': token },
+    signal: AbortSignal.timeout(3000),
+  });
+  await response.body?.cancel();
+  if (response.status !== 202)
+    throw createHttpError(409, 'The backend could not accept this operation. Reload status.');
+}
+export async function prepareLocalUpgradeFromUi(): Promise<void> {
+  const setup = getLocalUpgradeSetupStatus();
+  if (
+    !setup.eligible ||
+    !setup.uiPreparationAvailable ||
+    setup.sqliteSelected ||
+    activeOperation ||
+    runningJob ||
+    runningBackup
+  )
+    throw createHttpError(
+      409,
+      'UI preparation is unavailable or another operation is running. Existing upgrades must not be reset.',
+    );
+  activeOperation = 'prepare';
+  try {
+    await requestSupervisor('prepare');
+  } finally {
+    activeOperation = null;
+  }
+}
+export async function restartLocalUpgradeFromUi(revision: number): Promise<void> {
+  return exclusive('restart', async () => {
+    const status = await getLocalUpgradeStatus();
+    if (
+      !status.available ||
+      status.transition?.revision !== revision ||
+      !status.restartRequired ||
+      (status.maintenance && !status.drain?.ready)
+    )
+      throw createHttpError(409, 'A drained, current storage transition requiring restart is needed. Reload status.');
+    await requestSupervisor('restart');
+  });
 }
 function assertAvailable(): void {
   if (
@@ -129,6 +191,19 @@ export async function getLocalUpgradeStatus() {
       drain: null,
       restartRequired: false,
     };
+  let runtimeReady = false;
+  if (process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1') {
+    const port = Number(process.env.RIVET_BACKEND_HEALTH_PORT);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(1500) });
+        runtimeReady = response.ok;
+        await response.body?.cancel();
+      } catch {
+        /* A restarting or unready executor cannot authorize auto-validation. */
+      }
+    }
+  }
   return withLocalMetadataControl(async (journal, store) => {
     const state = journal.read(),
       selection = getLocalMetadataServingSelection(),
@@ -144,6 +219,8 @@ export async function getLocalUpgradeStatus() {
     }
     return {
       available: true,
+      uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
+      runtimeReady,
       operation: activeOperation ?? (runningJob ? 'copy' : runningBackup ? 'backup' : null),
       backup: backup?.phase === 'creating' && !runningBackup ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
