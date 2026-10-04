@@ -408,6 +408,24 @@ explains backup certification, paused activation, whole-backend restarts and
 key-free offline rollback. Never enable it on the production VM as a substitute
 for rehearsing a separately restored copy of that VM's data.
 
+Run `local-browser-backup.test.ts` for archive/restore, capacity, drift, path
+and permission/link preservation; run it on Linux as well as Windows.
+The Linux archive suite must also run as UID/GID 10001:10001 to exercise
+read-only scratch cleanup; root can mask permission failures. The runtime
+suite's `authenticated browser backup` case checks signed authentication,
+separate key/archive attachments, cross-origin denial, forged/stale receipts,
+archive tampering, interrupted jobs and unreadable optional backup status,
+paused live/history exports, read-only tree browsing and verified copy.
+Backup creation and copy verification each receive a fresh polling deadline;
+preceding attachment checks must not consume the copy phase's CI budget. Browser
+`local-storage-upgrade.spec.ts` covers background progress across reload,
+native attachment navigation without replacing the workspace, explicit
+download attestations, stale/failed receipt gates and available legacy recovery
+despite unreadable backup evidence. These use owned fixtures or mocked operator
+APIs, never convert real development data.
+
+The marker-only `vm-migration-maintenance.test.ts` fixture clears inherited local control-root configuration while running, so containerized tests cannot consult the serving installation's transition journal; it restores the environment afterward. Full local-selection admission is covered separately by the isolated runtime fixtures.
+
 Run the API `local-upgrade-runtime.test.ts` with the artifact/catalog/settings,
 candidate/snapshot/transition/recovery suites. It exercises durable copy,
 independent process startups, selected serving, restart fences and corrupt

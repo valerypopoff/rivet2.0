@@ -96,7 +96,17 @@ export function getVmMigrationActiveRequestCount(): number {
 
 /** Installed before all data routes, including public GET execution routes. */
 export const vmMigrationRequestBarrier: RequestHandler = (req, res, next) => {
+  // These POSTs only export existing bytes. Do not exempt all GETs: public
+  // workflow GET routes execute graphs and must remain fenced.
+  const projectDownload =
+    (req.method === 'POST' &&
+      ['/api/workflows/projects/download', '/api/workflows/projects/published-versions/download'].includes(req.path)) ||
+    (req.method === 'GET' && req.path === '/api/workflows/projects/published-versions');
   if (
+    projectDownload ||
+    // Permit choosing an export after reload. Before the freeze, tree reads
+    // may warm stats caches and must still participate in the write drain.
+    (req.method === 'GET' && req.path === '/api/workflows/tree' && isVmMigrationMaintenanceActive()) ||
     req.path.startsWith('/api/app-settings/vm-migration') ||
     req.path.startsWith('/api/app-settings/local-upgrade') ||
     req.path === '/internal/executor-runtime-config' ||

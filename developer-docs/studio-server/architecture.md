@@ -60,6 +60,14 @@ startup remains legacy; Kubernetes remains PostgreSQL/S3. See
 [Local metadata storage upgrade](local-metadata-upgrade.md) for provisioning,
 backup certification, restart/recovery and the required real-data rehearsal.
 
+Before activation, the paused operator UI can create/download a four-root
+backup and verify its actual archive in isolated scratch. A background job,
+private control-volume archive and pause/revision/source-bound receipt own
+this flow; download completion/off-VM storage and separate key preservation
+remain explicit operator attestations. Exact read-only tree/project/history
+exports stay available during maintenance without warming filesystem caches.
+All mutation and execution paths remain fenced.
+
 ### Runtime environment overrides
 
 The wrapper owns UI-managed runtime variables through the versioned App Settings

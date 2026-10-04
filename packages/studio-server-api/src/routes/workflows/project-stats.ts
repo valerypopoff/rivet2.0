@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { assertLocalMetadataWritesAllowed } from '../../local-metadata/write-admission.js';
+import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 
 import type { WorkflowProjectStats } from './types.js';
@@ -106,9 +108,18 @@ function normalizeStatsCache(value: unknown): WorkflowProjectStatsCache | null {
     !Number.isFinite(raw.fileMtimeMs) ||
     typeof raw.fileCtimeMs !== 'number' ||
     !Number.isFinite(raw.fileCtimeMs) ||
-    !(raw.datasetFileSize === null || (typeof raw.datasetFileSize === 'number' && Number.isFinite(raw.datasetFileSize))) ||
-    !(raw.datasetFileMtimeMs === null || (typeof raw.datasetFileMtimeMs === 'number' && Number.isFinite(raw.datasetFileMtimeMs))) ||
-    !(raw.datasetFileCtimeMs === null || (typeof raw.datasetFileCtimeMs === 'number' && Number.isFinite(raw.datasetFileCtimeMs))) ||
+    !(
+      raw.datasetFileSize === null ||
+      (typeof raw.datasetFileSize === 'number' && Number.isFinite(raw.datasetFileSize))
+    ) ||
+    !(
+      raw.datasetFileMtimeMs === null ||
+      (typeof raw.datasetFileMtimeMs === 'number' && Number.isFinite(raw.datasetFileMtimeMs))
+    ) ||
+    !(
+      raw.datasetFileCtimeMs === null ||
+      (typeof raw.datasetFileCtimeMs === 'number' && Number.isFinite(raw.datasetFileCtimeMs))
+    ) ||
     !(raw.projectMetadataId === null || typeof raw.projectMetadataId === 'string') ||
     typeof raw.revisionId !== 'string' ||
     !/^fs-sha256:[a-f0-9]{64}$/.test(raw.revisionId) ||
@@ -176,8 +187,8 @@ async function writeWorkflowProjectIndexCache(
   datasetFileStats?: FileStats | null,
 ): Promise<void> {
   try {
-    const resolvedFileStats = fileStats ?? await fs.stat(filePath);
-    const resolvedDatasetFileStats = datasetFileStats ?? await getDatasetFileStats(filePath);
+    const resolvedFileStats = fileStats ?? (await fs.stat(filePath));
+    const resolvedDatasetFileStats = datasetFileStats ?? (await getDatasetFileStats(filePath));
     const cache: WorkflowProjectStatsCache = {
       schemaVersion: WORKFLOW_PROJECT_STATS_CACHE_SCHEMA_VERSION,
       fileSize: resolvedFileStats.size,
@@ -191,9 +202,12 @@ async function writeWorkflowProjectIndexCache(
       revisionId: indexData.revisionId,
     };
 
+    // Tree browsing and validation during migration must not populate a cache
+    // inside the frozen source. Cache persistence is optional, never authority.
+    if (isVmMigrationMaintenanceActive()) return;
+    assertLocalMetadataWritesAllowed();
     await fs.writeFile(getWorkflowProjectStatsPath(filePath), `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
-  } catch {
-  }
+  } catch {}
 }
 
 async function readWorkflowProjectIndexCache(
@@ -219,8 +233,7 @@ async function readWorkflowProjectIndexCache(
         ...(cache.projectMetadataId ? { projectMetadataId: cache.projectMetadataId } : {}),
       };
     }
-  } catch {
-  }
+  } catch {}
 
   return null;
 }

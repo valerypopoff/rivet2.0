@@ -19,12 +19,18 @@ import {
 async function withAppData(run: (root: string) => Promise<void>): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-vm-migration-'));
   const previous = process.env.RIVET_APP_DATA_ROOT;
+  const previousControl = process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT;
   process.env.RIVET_APP_DATA_ROOT = root;
+  // This fixture owns a legacy marker, not the dev container's live transition
+  // journal. Never consult real deployment state from a temporary marker test.
+  delete process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT;
   try {
     await run(root);
   } finally {
     if (previous === undefined) delete process.env.RIVET_APP_DATA_ROOT;
     else process.env.RIVET_APP_DATA_ROOT = previous;
+    if (previousControl === undefined) delete process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT;
+    else process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = previousControl;
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -67,6 +73,19 @@ test('VM maintenance persists across reads, blocks data routes, and permits only
     assert.ok(readVmMigrationMaintenance()?.enteredAt);
     assert.equal(check('/api/workflows/save').response.code, 503);
     assert.equal(check('/workflows/test', 'GET').response.code, 503);
+    for (const download of [
+      '/api/workflows/projects/download',
+      '/api/workflows/projects/published-versions/download',
+    ]) {
+      assert.equal(check(download).nextCalled, true);
+      assert.equal(check(`${download}/anything`).response.code, 503);
+      assert.equal(check(download, 'PUT').response.code, 503);
+    }
+    assert.equal(check('/api/workflows/projects/published-versions', 'GET').nextCalled, true);
+    assert.equal(check('/api/workflows/tree', 'GET').nextCalled, true);
+    assert.equal(check('/api/workflows/tree').response.code, 503);
+    assert.equal(check('/api/workflows/projects/published-versions').response.code, 503);
+    assert.equal(getVmMigrationActiveRequestCount(), 1, 'Downloads do not delay the write drain.');
     assert.equal(check('/api/app-settings/vm-migration', 'GET').nextCalled, true);
     assert.equal(check('/api/app-settings/deployment-storage', 'GET').nextCalled, true);
     assert.equal(check('/ui-auth/check', 'GET').nextCalled, true);

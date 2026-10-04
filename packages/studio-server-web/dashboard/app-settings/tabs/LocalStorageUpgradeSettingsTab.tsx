@@ -8,6 +8,16 @@ import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
 type Status = {
+  backupStatusUnreadable?: boolean;
+  backup?: {
+    id: string;
+    revision: number;
+    pausedAt: string;
+    phase: 'creating' | 'ready' | 'failed' | 'interrupted';
+    sourceFingerprint: string;
+    archiveHash: string | null;
+    bytes: number;
+  } | null;
   available: boolean;
   operation?: LocalUpgradeOperation | null;
   copyConfigurationReady?: boolean;
@@ -60,6 +70,7 @@ const actionProgress = {
   inspect: 'Inspecting source data and checking capacity…',
   pause: 'Pausing new writes and waiting for active work to drain…',
   fingerprint: 'Reading the frozen source fingerprint…',
+  backup: 'Creating the backup archive and checking an isolated restore. Writes remain paused…',
   copy: 'Copy and verification are in progress. Original data remains unchanged.',
   activate: 'Checking the certified candidate and selecting SQLite for paused validation…',
   'return-to-legacy': 'Checking the retained source and selecting the legacy backend…',
@@ -70,7 +81,7 @@ const actionProgress = {
   report: 'Preparing the verification report download…',
 } as const satisfies Record<LocalUpgradeOperation | 'finish-resume' | 'report', string>;
 type UpgradeAction = keyof typeof actionProgress;
-type UpgradeTransitionAction = Exclude<LocalUpgradeOperation, 'inspect' | 'pause' | 'fingerprint' | 'copy'>;
+type UpgradeTransitionAction = Exclude<LocalUpgradeOperation, 'inspect' | 'pause' | 'fingerprint' | 'copy' | 'backup'>;
 
 function UpgradeActionButton({
   action,
@@ -139,6 +150,8 @@ export function LocalStorageUpgradeSettingsTab() {
   const [backupRestoredFor, setBackupRestoredFor] = useState<string | null>(null);
   const [keyBackedUpFor, setKeyBackedUpFor] = useState<string | null>(null);
   const [resumeAcknowledgement, setResumeAcknowledgement] = useState<string | null>(null);
+  const adoptedBackup = useRef<string | null>(null);
+  const [downloadStarted, setDownloadStarted] = useState(false);
   const mounted = useRef(false);
   const requestSequence = useRef(0);
   const refresh = async () => {
@@ -226,6 +239,41 @@ export function LocalStorageUpgradeSettingsTab() {
   const validating = transition?.phase === 'sqlite-validation' || transition?.phase === 'legacy-validation';
   const restartRequired = !!status?.restartRequired || (!!transition && status?.runningBackend !== transition.backend);
   const selectedRuntimeReady = status?.available && !!transition && !restartRequired;
+  const automatedBackup =
+    status?.backup?.phase === 'ready' &&
+    initial &&
+    quiet &&
+    !restartRequired &&
+    status.backup.revision === transition?.revision &&
+    status.backup.pausedAt === status.maintenance?.enteredAt
+      ? status.backup
+      : null;
+  useEffect(() => {
+    if (!automatedBackup || adoptedBackup.current === automatedBackup.id) return;
+    adoptedBackup.current = automatedBackup.id;
+    setFrozenSource({ pausedAt: automatedBackup.pausedAt, fingerprint: automatedBackup.sourceFingerprint });
+    setBackupReference(`browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`);
+    setBackupFingerprint(automatedBackup.sourceFingerprint);
+    setBackupRestoredFor(null);
+    setKeyBackedUpFor(null);
+    setDownloadStarted(false);
+  }, [automatedBackup?.id]);
+  const usesAutomatedBackup =
+    !!automatedBackup && backupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
+  const downloadBackup = (key = false) => {
+    if (!automatedBackup) return;
+    const anchor = document.createElement('a');
+    anchor.href = `${base}/backup/${key ? 'key' : 'download'}?id=${encodeURIComponent(automatedBackup.id)}`;
+    // Only the server's successful attachment response should download. A
+    // forced download attribute would disguise a JSON auth/integrity error as
+    // a backup. Keep error navigation away from the editor's unsaved workspace.
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setDownloadStarted(true);
+  };
   const sourceFingerprint =
     frozenSource?.pausedAt === status?.maintenance?.enteredAt ? frozenSource?.fingerprint ?? '' : '';
   const backupToken =
@@ -272,6 +320,7 @@ export function LocalStorageUpgradeSettingsTab() {
     backupRestored &&
     keyBackedUp &&
     !!backupReference.trim() &&
+    (!backupReference.trim().startsWith('browser-backup:') || usesAutomatedBackup) &&
     /^[a-f0-9]{64}$/.test(backupFingerprint) &&
     backupFingerprint === sourceFingerprint;
   return (
@@ -400,10 +449,68 @@ export function LocalStorageUpgradeSettingsTab() {
         <h4 className="app-settings-section-title">2. Back up and copy</h4>
         {quiet && initial && (
           <fieldset disabled={disabled} className="local-upgrade-backup-form">
-            <legend className="app-settings-field-label">Certify a restored backup</legend>
+            <legend className="app-settings-field-label">Create and download a verified backup</legend>
             <p className="app-settings-field-help">
-              Back up all four roots while paused, restore them elsewhere, and use the offline fingerprint command on
-              that restored copy. Save the encryption key separately. Never paste the key here.
+              Create a backup of all four roots while paused. The server restores the archive into a separate scratch
+              directory and checks that it matches the frozen source. Download and save it outside this VM before
+              copying. The archive contains private settings and credentials: store it securely. Download the encryption
+              key separately and keep it protected, apart from the archive. Never paste the key here.
+            </p>
+            <UpgradeActionButton
+              action="backup"
+              loading={activeAction === 'backup'}
+              disabled={disabled || restartRequired}
+              onClick={() =>
+                void act(async () => {
+                  await request('/backup', { revision: transition?.revision });
+                }, 'backup')
+              }
+            >
+              {status?.backup ? 'Create a new verified backup' : 'Create verified backup'}
+            </UpgradeActionButton>
+            {status?.backupStatusUnreadable && (
+              <p role="alert" className="project-settings-error">
+                The previous backup status could not be read. It cannot certify copying. Create a new verified backup or
+                supply independently restored backup evidence; legacy recovery remains available.
+              </p>
+            )}
+            {['failed', 'interrupted'].includes(status?.backup?.phase ?? '') && (
+              <p role="alert" className="project-settings-error">
+                Backup creation or restore verification did not finish. No backup has been certified. Check available
+                disk space and source integrity, then create a new backup; writes remain paused.
+              </p>
+            )}
+            {automatedBackup && (
+              <>
+                <p role="status" className="app-settings-field-help">
+                  Backup archive restored and verified on this server ({Math.ceil(automatedBackup.bytes / 1048576)}{' '}
+                  MiB). This is not yet confirmation of an off-VM backup.
+                </p>
+                <LoadingButton
+                  className="local-upgrade-action button-size-l"
+                  isDisabled={disabled}
+                  onClick={() => downloadBackup()}
+                >
+                  Download verified backup
+                </LoadingButton>
+                <LoadingButton
+                  className="local-upgrade-action button-size-l"
+                  isDisabled={disabled || status?.copyConfigurationReady === false}
+                  onClick={() => downloadBackup(true)}
+                >
+                  Download encryption key separately
+                </LoadingButton>
+                {downloadStarted && (
+                  <p role="status" className="app-settings-field-help">
+                    Check your browser downloads. Only confirm below after the files have finished downloading and are
+                    stored securely outside the VM.
+                  </p>
+                )}
+              </>
+            )}
+            <p className="app-settings-field-help">
+              The evidence below is filled automatically for a verified browser backup. If you already restored a backup
+              elsewhere, you can instead enter its reference and independently computed fingerprint.
             </p>
             <UpgradeActionButton
               action="fingerprint"
@@ -459,7 +566,11 @@ export function LocalStorageUpgradeSettingsTab() {
                 checked={backupRestored}
                 disabled={disabled || backupToken === null}
                 onChange={(checked) => setBackupRestoredFor(checked ? backupToken : null)}
-                label="I restored a separate backup of all four source roots."
+                label={
+                  usesAutomatedBackup
+                    ? 'I saved the verified backup download securely outside this VM.'
+                    : 'I restored a separate backup of all four source roots.'
+                }
               />
               <BooleanSetting
                 checked={keyBackedUp}

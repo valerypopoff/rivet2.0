@@ -3,6 +3,7 @@ export type LocalUpgradeOperation =
   | 'inspect'
   | 'pause'
   | 'fingerprint'
+  | 'backup'
   | 'copy'
   | 'activate'
   | 'validate'

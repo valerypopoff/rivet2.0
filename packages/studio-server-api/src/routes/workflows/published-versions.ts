@@ -2,6 +2,7 @@ import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { getWorkflowsRoot } from '../../security.js';
 import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import type {
@@ -528,7 +529,7 @@ export async function createPublishedWorkflowVersionMetadataChange(options: {
 }
 
 export async function listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {
-  const root = await ensureWorkflowsRoot();
+  const root = getWorkflowsRoot();
   const projectPath = requireProjectPath(
     resolveWorkflowRelativePath(root, relativePath, {
       allowProjectFile: true,
@@ -663,7 +664,7 @@ async function readWorkflowPublishedVersionSnapshot(
     throw createHttpError(400, 'Missing versionId');
   }
 
-  const root = await ensureWorkflowsRoot();
+  const root = getWorkflowsRoot();
   const projectPath = requireProjectPath(
     resolveWorkflowRelativePath(root, relativePath, {
       allowProjectFile: true,

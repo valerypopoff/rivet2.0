@@ -40,6 +40,7 @@ export const defaultApiTestFiles = [
   'src/tests/latest-workflow-remote-debugger.test.ts',
   'src/tests/llm-profile-health.test.ts',
   'src/tests/local-bounded-copy.test.ts',
+  'src/tests/local-browser-backup.test.ts',
   'src/tests/local-copy-capacity.test.ts',
   'src/tests/local-metadata-candidate.test.ts',
   'src/tests/local-metadata-recovery.test.ts',

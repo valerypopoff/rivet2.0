@@ -106,6 +106,12 @@ async function fixture(
   }
 }
 
+test('authenticated browser backup and project export work while paused and certify an actual restored archive', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('browser-backup');
+  });
+});
+
 test('operator copy, restart, validation, resume and ordinary serving select SQLite without changing retained files', async () => {
   await fixture(async (source, control, command) => {
     const fingerprint = await fingerprintVmMigrationSource(source);
