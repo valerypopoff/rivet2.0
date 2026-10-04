@@ -414,6 +414,16 @@ use `seedDeploymentStorageSettings` to model an already-provisioned disposable
 installation, not a prohibited live Storage-tab switch. The real runtime rehearsal
 also checks setup completion before and after the final coordinated restart.
 
+The `operator setup status` runtime case asserts the complete public setup response
+both before opt-in and with a provisioned manual root, including explicit
+`uiPreparationAvailable` and `uiRestartAvailable` booleans. It checks each capability
+independently while keeping paths, keys and the supervisor token out of the response;
+unsigned sessions remain forbidden. Direct fixture processes clear inherited UI
+supervisor capabilities, endpoint and reserved root; only the real supervised cases
+advertise them. Include this case when changing the setup API, not only the copy/live
+rehearsal: an obsolete exact-response fixture can fail Linux CI even when migration
+itself passes.
+
 The single-host local upgrade remains opt-in. Updated Compose mounts the reserved
 control volume and advertises supervisor-owned UI preparation; the signed operator
 can prepare its private key/journals, migrate and request necessary backend restarts

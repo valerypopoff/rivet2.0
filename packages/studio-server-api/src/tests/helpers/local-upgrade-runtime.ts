@@ -170,6 +170,9 @@ try {
       root: process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT,
       key: process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY,
       topology: process.env.RIVET_DEPLOYMENT_TOPOLOGY,
+      prepare: process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE,
+      restart: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE,
+      token: process.env.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN,
     };
     const setupUrl = `${listener.baseUrl}/api/app-settings/local-upgrade/setup`;
     const headers = {
@@ -180,6 +183,9 @@ try {
       process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = '0';
       process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = '';
       process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = '';
+      process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = '0';
+      process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = '0';
+      process.env.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN = 'private-setup-fixture-capability';
       const response = await fetch(setupUrl, { headers });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), {
@@ -189,7 +195,31 @@ try {
         encryptionKeyReady: false,
         sqliteSelected: false,
         liveSqlite: false,
+        uiPreparationAvailable: false,
+        uiRestartAvailable: false,
       });
+      // Keep an exact public contract: paths, encryption keys and the private
+      // supervisor token must never become part of this onboarding response.
+      for (const [prepare, restart] of [
+        ['1', '0'],
+        ['0', '1'],
+        ['1', '1'],
+      ]) {
+        process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = prepare;
+        process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = restart;
+        const capable = await fetch(setupUrl, { headers });
+        assert.equal(capable.status, 200);
+        assert.deepEqual(await capable.json(), {
+          eligible: true,
+          upgradeEnabled: false,
+          controlRootConfigured: false,
+          encryptionKeyReady: false,
+          sqliteSelected: false,
+          liveSqlite: false,
+          uiPreparationAvailable: prepare === '1',
+          uiRestartAvailable: restart === '1',
+        });
+      }
       assert.equal(
         (await fetch(setupUrl, { headers: { 'x-rivet-proxy-auth': headers['x-rivet-proxy-auth'] } })).status,
         403,
@@ -199,6 +229,8 @@ try {
       process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = '1';
       process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = original.root;
       process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = original.key;
+      process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = '0';
+      process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = '0';
       const ready = await fetch(setupUrl, { headers });
       assert.equal(ready.status, 200);
       assert.deepEqual(await ready.json(), {
@@ -208,6 +240,8 @@ try {
         encryptionKeyReady: true,
         sqliteSelected: false,
         liveSqlite: false,
+        uiPreparationAvailable: false,
+        uiRestartAvailable: false,
       });
       process.env.RIVET_DEPLOYMENT_TOPOLOGY = 'replicated';
       assert.equal(((await (await fetch(setupUrl, { headers })).json()) as { eligible: boolean }).eligible, false);
@@ -217,6 +251,9 @@ try {
         ['RIVET_LOCAL_METADATA_CONTROL_ROOT', original.root],
         ['RIVET_LOCAL_METADATA_ENCRYPTION_KEY', original.key],
         ['RIVET_DEPLOYMENT_TOPOLOGY', original.topology],
+        ['RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE', original.prepare],
+        ['RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE', original.restart],
+        ['RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN', original.token],
       ] as const) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
@@ -709,8 +746,9 @@ try {
         if (previousPreparationCapability === undefined) delete process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE;
         else process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = previousPreparationCapability;
       }
-      const { readDeploymentStorageSettings, writeDeploymentStorageSettings } =
-        await import('../../deployment-storage-settings.js');
+      const { readDeploymentStorageSettings, writeDeploymentStorageSettings } = await import(
+        '../../deployment-storage-settings.js'
+      );
       const storageBefore = await readDeploymentStorageSettings();
       assert.match(storageBefore.storageModeChangeBlockedReason!, /separate verified managed migration/);
       await assert.rejects(
