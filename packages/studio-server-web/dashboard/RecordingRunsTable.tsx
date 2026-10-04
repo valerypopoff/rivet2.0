@@ -172,7 +172,7 @@ function RecordingRow({
             {isSubgraphRun ? endpointNameAtExecution.replace(/^Subgraph:\s*/, '') : endpointNameAtExecution}
           </span>
         </div>
-        {recording.executionIdentity?.correlationId && (
+        {isSubgraphRun && recording.executionIdentity?.correlationId && (
           <div className="run-recordings-run-endpoint">
             Related run key:{' '}
             <span className="run-recordings-run-endpoint-value">{recording.executionIdentity.correlationId}</span>
@@ -580,10 +580,6 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
               <div className="run-recordings-field-value run-recordings-field-code">
                 {selectedWorkflow.project.relativePath}
               </div>
-            </div>
-            <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
-              <div className="run-recordings-field-label">Recording scope</div>
-              <div className="run-recordings-field-value">This project and related called-project Subgraph runs</div>
             </div>
           </div>
         </div>

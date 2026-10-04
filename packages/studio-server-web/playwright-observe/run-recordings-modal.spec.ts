@@ -1329,6 +1329,9 @@ test.describe('Run recordings modal', () => {
     await selectPublishedFlow(page, modal);
     const root = modal.locator('[data-recording-id="recording-a-1"]');
     const child = modal.locator('[data-recording-id="recording-b-1"]');
+    await expect(root).not.toContainText('Related run key:');
+    await expect(modal).not.toContainText('Recording scope');
+    await expect(modal).not.toContainText('This project and related called-project Subgraph runs');
     const toggle = root.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true });
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(child).toHaveCount(0);
@@ -1340,6 +1343,7 @@ test.describe('Run recordings modal', () => {
     );
     await expect(child).toHaveClass(/run-recordings-sub-run/);
     await expect(child.locator('.run-recordings-run-title')).toContainText('Sub-run ·');
+    await expect(child).toContainText('Related run key: rvt-root-caller-12345');
     const rootBox = await root.boundingBox();
     const childBox = await child.boundingBox();
     expect(childBox!.x).toBeGreaterThan(rootBox!.x + 20);
@@ -1646,10 +1650,7 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
     await expect(child).toHaveCount(1);
-    const root = modal
-      .locator('.run-recordings-run')
-      .filter({ hasText: 'Endpoint at execution: published-flow' })
-      .filter({ hasText: 'Related run key: rvt-root-caller-12345' });
+    const root = modal.locator('[data-recording-id="recording-a-1"]');
     await root.hover();
     await root.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
@@ -1679,10 +1680,7 @@ test.describe('Run recordings modal', () => {
     await page.route('**/api/workflows/recordings/workflows', (route) =>
       route.fulfill({ status: 503, json: { error: 'Catalog refresh unavailable' } }),
     );
-    const root = modal
-      .locator('.run-recordings-run')
-      .filter({ hasText: 'Endpoint at execution: published-flow' })
-      .filter({ hasText: 'Related run key: rvt-root-caller-12345' });
+    const root = modal.locator('[data-recording-id="recording-a-1"]');
     await root.hover();
     await root.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(modal).toContainText('Recording deleted, but refreshing the list failed: Catalog refresh unavailable');

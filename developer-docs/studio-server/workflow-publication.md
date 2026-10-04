@@ -1053,6 +1053,7 @@ New recording rows snapshot an execution identity before they are persisted: end
 
 Current browser behavior:
 
+- root cards omit the related run key, while called-project Subgraph cards retain it for debugging; correlation metadata still drives grouping. The selected-workflow summary shows endpoint and project path without a recording-scope explanation.
 - collapses called-project recordings under their primary run using the exact root correlation key. Expanding shows indented `Sub-run` cards with independent replay/delete actions; folding does not open a replay. Ordinary browse groups cover the current page and status-filtered results, with counts explicitly labeled `in current results`. Input searches instead unfold all linked children of a matched root through a separate metadata-only request; those children do not affect root match counts or progress. If the primary is absent from ordinary results, an explicit collapsible context group preserves child discoverability instead of inventing a primary. Multiple roots sharing a key are ambiguous and are not arbitrarily chosen as parents. All descendants stay at one level because this metadata does not encode immediate nesting. Counts refer to recordings, not visible groups.
 - lists currently published workflows and workflows that still have recording history from earlier publication
 - sorts workflows by most recent run
