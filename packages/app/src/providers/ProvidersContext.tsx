@@ -47,7 +47,15 @@ export type DataRefReader = Pick<DataRefStore, 'get'>;
 
 export type AppDatasetProvider = DatasetProvider & {
   loadDatasets?(projectId: ProjectId): Promise<void>;
-  importDatasetsForProject?(projectId: ProjectId, datasets: CombinedDataset[]): Promise<void>;
+  importDatasetsForProject?(
+    projectId: ProjectId,
+    datasets: CombinedDataset[],
+    options?: {
+      isCurrent?: () => boolean;
+      signal?: AbortSignal;
+      activate?: boolean;
+    },
+  ): Promise<void>;
 };
 
 export type EnvironmentProvider = {
@@ -139,9 +147,9 @@ export type LLMProfileHealthAdminProvider = {
 };
 
 /**
- * Optional host persistence for a local editor run that produced shared LLM
- * health evidence. Desktop mode intentionally omits it; hosted mode uses it
- * to turn the existing in-memory recorder into a durable replay link.
+ * Optional host persistence for recorded local editor runs. Desktop mode
+ * intentionally omits it; hosted mode turns the in-memory recorder into a
+ * durable replay, also resolving any LLM health evidence for that run.
  */
 export type LocalExecutionRecordingPersistenceProvider = {
   getCapability(): Promise<boolean>;

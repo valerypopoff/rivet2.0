@@ -16,6 +16,61 @@ const exampleInput = {
   },
 };
 
+for (const [label, firstResponse] of [
+  ['authentication failure', () => new Response(null, { status: 401 })],
+  ['throttling', () => new Response(null, { status: 429 })],
+  ['invalid JSON', () => new Response('invalid JSON', { headers: { 'Content-Type': 'application/json' } })],
+  ['missing capability', () => Response.json({})],
+] as const) {
+  test(`hosted local recording bridge retries capability after ${label}`, async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => (++calls === 1 ? firstResponse() : Response.json({ supported: true }));
+    try {
+      const provider = createHostedLocalExecutionRecordingPersistence();
+      assert.equal(await provider.getCapability(), false);
+      assert.equal(await provider.getCapability(), true);
+      assert.equal(calls, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+
+test('local recording requests have bounded lifetimes and a timed-out capability can retry', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  const timeouts: number[] = [];
+  let calls = 0;
+  // Exercise actual signal rejection without spending ten seconds in a unit test.
+  AbortSignal.timeout = (milliseconds) => {
+    timeouts.push(milliseconds);
+    return originalTimeout(5);
+  };
+  const keepAlive = setTimeout(() => undefined, 1_000);
+  globalThis.fetch = async (_input, init) => {
+    assert.ok(init?.signal);
+    if (++calls === 1) {
+      return new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+      });
+    }
+    return Response.json({ supported: true, availability: 'available', recordingId: 'recording-1' });
+  };
+  try {
+    const provider = createHostedLocalExecutionRecordingPersistence();
+    assert.equal(await provider.getCapability(), false);
+    assert.equal(await provider.getCapability(), true);
+    await provider.persist(exampleInput);
+    await provider.markUnavailable(exampleInput.executionIdentity.correlationId);
+    assert.deepEqual(timeouts, [10_000, 10_000, 60_000, 10_000]);
+  } finally {
+    clearTimeout(keepAlive);
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+  }
+});
+
 test('hosted local recording bridge downgrades cleanly when an older API lacks capability', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(null, { status: 404 });
@@ -61,7 +116,7 @@ test('hosted local recording bridge retries capability after a transient server 
   }
 });
 
-test('hosted local recording bridge persists a qualifying replay through the authenticated API route', async () => {
+test('hosted local recording bridge persists an ordinary successful replay through the authenticated API route', async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   globalThis.fetch = async (input, init) => {
@@ -72,10 +127,11 @@ test('hosted local recording bridge persists a qualifying replay through the aut
   try {
     const provider = createHostedLocalExecutionRecordingPersistence();
     assert.equal(await provider.getCapability(), true);
-    await provider.persist(exampleInput);
+    const successfulRun = { ...exampleInput, status: 'succeeded' as const };
+    await provider.persist(successfulRun);
     assert.equal(requests[1]?.url.endsWith('/workflows/local-editor-recordings'), true);
     assert.equal(requests[1]?.init?.method, 'POST');
-    assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), exampleInput);
+    assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), successfulRun);
   } finally {
     globalThis.fetch = originalFetch;
   }

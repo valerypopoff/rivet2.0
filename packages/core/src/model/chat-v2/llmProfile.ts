@@ -14,6 +14,7 @@ import { createRivetLLMProfileHealthIdentity } from './llmProfileHealthStore.js'
 import type { NodeId } from '../NodeBase.js';
 import type { ProjectId } from '../Project.js';
 import { normalizeChatV2CredentialNamesByProvider } from './chatV2CredentialNames.js';
+import { normalizeTemperature } from './temperature.js';
 
 export {
   applyLLMProfileToNodeData,
@@ -58,6 +59,8 @@ export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
   const configuration = normalizeConfiguration({
     ...defaults,
     ...value.configuration,
+    // Defaults seed new nodes, not missing values in an existing profile.
+    temperature: normalizeTemperature(value.configuration.temperature, 'LLM Profile temperature'),
     provider,
     model: model.trim(),
   } as LLMChatV2NodeData);
@@ -252,7 +255,11 @@ function normalizeCredential(value: unknown): ChatV2CredentialResult {
   };
 }
 
-function normalizeSourceIdentity(value: unknown): { projectId?: ProjectId; profileNodeId?: NodeId; profileName?: string } {
+function normalizeSourceIdentity(value: unknown): {
+  projectId?: ProjectId;
+  profileNodeId?: NodeId;
+  profileName?: string;
+} {
   if (!isRecord(value)) {
     return {};
   }

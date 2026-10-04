@@ -1,12 +1,8 @@
-import { useSetAtom } from 'jotai';
-import { projectsState } from '../state/savedGraphs.js';
 import { createBlankProjectWithDefaultGraph } from '../utils/blankProject';
-import { addOpenedProject } from '../utils/openedProjects.js';
-import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
+import { useWorkspaceHostOpenProject } from './workspaceHost/useWorkspaceHostOpenProject.js';
 
 export function useNewProject() {
-  const setProjects = useSetAtom(projectsState);
-  const workspaceTransitions = useWorkspaceTransitions();
+  const { openProjectSnapshot } = useWorkspaceHostOpenProject();
 
   return async ({
     title,
@@ -18,21 +14,10 @@ export function useNewProject() {
     const { data: _data, ...project } = createBlankProjectWithDefaultGraph({ title, description });
     const initialGraph = project.metadata.mainGraphId ? project.graphs[project.metadata.mainGraphId] : undefined;
 
-    const loaded = await workspaceTransitions.loadProject({
+    return openProjectSnapshot({
       project,
       graphToLoad: initialGraph,
-      markClean: true,
+      path: null,
     });
-
-    if (loaded) {
-      setProjects((prev) =>
-        addOpenedProject(prev, project, {
-          fsPath: null,
-          openedGraph: initialGraph?.metadata?.id,
-        }),
-      );
-    }
-
-    return loaded;
   };
 }

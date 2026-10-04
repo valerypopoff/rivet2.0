@@ -1,23 +1,12 @@
 import { useEffect, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { graphState } from '../state/graph';
-import {
-  loadedProjectState,
-  projectDataState,
-  projectState,
-  projectsState,
-  projectUnsavedChangesState,
-  savedProjectContentDigestsState,
-} from '../state/savedGraphs';
+import { loadedProjectState, projectDataState, projectState, projectsState } from '../state/savedGraphs';
 import { selectedExecutorState } from '../state/settings.js';
 import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../utils/openedProjects.js';
 import { useExecutorSessionState } from './useExecutorSession.js';
 import { projectExecutorModesEqual, resolveCurrentProjectExecutorMode } from '../utils/projectExecutorMode.js';
-import {
-  markProjectClean,
-  markProjectDirtyFlag,
-  resolveProjectContentDirtyState,
-} from '../utils/projectUnsavedChanges.js';
+import { useSyncProjectDirtyState } from './useSyncProjectDirtyState.js';
 
 export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enabled?: boolean } = {}) {
   const setProjects = useSetAtom(projectsState);
@@ -39,9 +28,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
         : null,
     [executorTargetType, executorTargetUrl],
   );
-  const savedProjectContentDigests = useAtomValue(savedProjectContentDigestsState);
-  const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
-  const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
+  useSyncProjectDirtyState(enabled);
   const currentExecutorMode = useMemo(
     () =>
       resolveCurrentProjectExecutorMode({
@@ -103,35 +90,5 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
     enabled,
     loadedProject.path,
     setProjects,
-  ]);
-
-  useEffect(() => {
-    if (!enabled || !currentProject.metadata.id || !currentGraph) {
-      return;
-    }
-
-    const dirtyState = resolveProjectContentDirtyState(savedProjectContentDigests, {
-      project: currentProject,
-      graph: currentGraph,
-    });
-    if (!dirtyState.hasSavedDigest) {
-      setSavedProjectContentDigests((previousDigests) => markProjectClean(previousDigests, dirtyState.snapshot));
-
-      setProjectUnsavedChanges((previousFlags) => {
-        return markProjectDirtyFlag(previousFlags, currentProject.metadata.id, false);
-      });
-      return;
-    }
-
-    setProjectUnsavedChanges((previousFlags) => {
-      return markProjectDirtyFlag(previousFlags, currentProject.metadata.id, dirtyState.isDirty);
-    });
-  }, [
-    currentGraph,
-    currentProject,
-    enabled,
-    savedProjectContentDigests,
-    setSavedProjectContentDigests,
-    setProjectUnsavedChanges,
   ]);
 }

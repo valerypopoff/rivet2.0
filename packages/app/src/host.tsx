@@ -22,6 +22,7 @@ export type RivetAppHostProps = {
   loadingFallback?: ReactNode;
   onActiveProjectChanged?: (event: RivetAppHostActiveProjectChangedEvent) => void;
   onOpenError?: (event: RivetAppHostOpenErrorEvent) => void;
+  onInitializationError?: (error: unknown) => void;
   onOpenProjectCountChanged?: (event: RivetAppHostOpenProjectCountChangedEvent) => void;
   onProjectSaved?: (event: RivetAppHostProjectSavedEvent) => void;
   onWorkspaceHostDisposed?: (workspaceHost: RivetWorkspaceHost) => void;
@@ -42,6 +43,7 @@ export function RivetAppHost({
   loadingFallback,
   onActiveProjectChanged,
   onOpenError,
+  onInitializationError,
   onOpenProjectCountChanged,
   onProjectSaved,
   onWorkspaceHostDisposed,
@@ -64,10 +66,11 @@ export function RivetAppHost({
     () => ({
       onActiveProjectChanged,
       onOpenError,
+      onInitializationError,
       onOpenProjectCountChanged,
       onProjectSaved,
     }),
-    [onActiveProjectChanged, onOpenError, onOpenProjectCountChanged, onProjectSaved],
+    [onActiveProjectChanged, onOpenError, onInitializationError, onOpenProjectCountChanged, onProjectSaved],
   );
 
   return (

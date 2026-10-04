@@ -42,6 +42,11 @@ const [{ handleOpenRecordingCommand, handleOpenPublishedPreviewCommand }, { hand
     import('../dashboard/editorProjectLifecycleCommands'),
   ]).finally(() => hooks.deregister());
 
+test('initialization failure can reach the dashboard before the normal editor bridge mounts', () => {
+  assert.equal(isEditorToDashboardEvent({ type: 'editor-initialization-failed' }), true);
+  assert.equal(isEditorToDashboardEvent({ type: 'unrecognized-initialization-event' }), false);
+});
+
 function createRecordingHarness(
   t: TestContext,
   initialPath: string,
@@ -243,7 +248,10 @@ test('open project bridge command accepts optional title and preview flags', () 
 });
 
 test('Subgraph navigation carries stable project and graph IDs through validated bridge messages', () => {
-  assert.equal(isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 'project-1', graphId: 'graph-1' }), true);
+  assert.equal(
+    isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 'project-1', graphId: 'graph-1' }),
+    true,
+  );
   assert.equal(isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 1, graphId: 'graph-1' }), false);
   assert.equal(
     isDashboardToEditorCommand({

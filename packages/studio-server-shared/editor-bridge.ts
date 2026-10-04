@@ -86,6 +86,7 @@ export type WorkflowProjectBindingReconciliationResult = {
 
 export type EditorToDashboardEvent =
   | { type: 'editor-ready'; editorInstanceId: string }
+  | { type: 'editor-initialization-failed' }
   | { type: 'open-subgraph-target'; projectId: string; graphId: string }
   | { type: 'workflow-project-reconciliation-captured'; context: HostedProjectReconciliationContext; requestId: string }
   | { type: 'workflow-project-conflicts'; snapshot: HostedProjectConflictSnapshot }
@@ -271,6 +272,8 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
   }
 
   switch (value.type) {
+    case 'editor-initialization-failed':
+      return true;
     case 'editor-ready':
       return typeof value.editorInstanceId === 'string';
     case 'open-subgraph-target':

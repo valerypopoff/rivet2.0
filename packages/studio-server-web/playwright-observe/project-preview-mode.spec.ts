@@ -1,5 +1,5 @@
 import { expect, type Locator, test } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
 function createPreviewProjectFile(projectName: string): string {
@@ -60,6 +60,7 @@ async function expectProjectTabPreview(tab: Locator, expectedPreview: boolean): 
 }
 
 test('single-click project opens as a replaceable editor preview tab', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
   const firstProject = createPreviewProject('codex-preview-first');
   const secondProject = createPreviewProject('codex-preview-second');
   const thirdProject = createPreviewProject('codex-preview-third');
@@ -124,7 +125,9 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await waitForDashboardReady(page);
 
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
-  const editorTabs = frame.locator('.projects-container .project');
+  // Loaded tabs can briefly coexist with their finishing opening placeholder.
+  // Assertions about project content/identity must exclude those placeholders.
+  const editorTabs = frame.locator('.projects-container .project:not(.opening)');
   const firstEditorTab = editorTabs.filter({ hasText: firstProject.name });
   const firstOpeningEditorTab = frame.locator('.projects-container .project.opening', { hasText: firstProject.name });
   const secondEditorTab = editorTabs.filter({ hasText: secondProject.name });
@@ -149,10 +152,9 @@ test('single-click project opens as a replaceable editor preview tab', async ({ 
   await expect(page.locator('.active-project-save-button')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
 
-  await page.locator('.workflow-library-panel .body').evaluate((element) => {
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-  });
-  await expect(page.locator('.active-project-placeholder')).toContainText('Select a project');
+  await page.locator('.workflow-library-panel .body').click({ position: { x: 2, y: 2 } });
+  await expect(page.locator('.active-project-section')).toContainText(firstProject.name);
+  await expect(firstRow).toHaveClass(/\bactive\b/);
   await expect(page.locator('.active-project-save-button')).toHaveCount(0);
   await expect(firstEditorTab).toBeVisible();
   await expect(editorTabs).toHaveCount(1);

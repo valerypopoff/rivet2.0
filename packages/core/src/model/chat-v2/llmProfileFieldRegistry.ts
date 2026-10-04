@@ -20,7 +20,7 @@ export type LLMProfileFieldSpec = {
 export const llmProfileFieldSpecs = [
   { key: 'model', inputId: 'model', valueKind: 'string' },
   { key: 'useModelInput', valueKind: 'boolean', resolvedInputToggle: true },
-  { key: 'temperature', inputId: 'temperature', valueKind: 'required-number' },
+  { key: 'temperature', inputId: 'temperature', valueKind: 'optional-number' },
   { key: 'useTemperatureInput', valueKind: 'boolean', resolvedInputToggle: true },
   { key: 'topP', inputId: 'topP', valueKind: 'optional-number' },
   { key: 'useTopPInput', valueKind: 'boolean', resolvedInputToggle: true },

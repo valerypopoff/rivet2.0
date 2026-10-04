@@ -1,4 +1,5 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import { beginDevelopmentCommand } from './developmentActivity';
 import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
 
@@ -119,14 +120,14 @@ export function useEditorCommandBridge({
       },
       getCurrentProject: () => currentProjectRef.current,
       getSelectedExecutor: () => selectedExecutorRef.current,
-      loadProjectData: async (path) => {
+      loadProjectData: async (path, options) => {
         const provider = ioProvider as {
-          loadProjectDataNoPrompt?: (path: string) => ReturnType<typeof ioProvider.loadProjectData>;
+          loadProjectDataNoPrompt?: EditorCommandBridgeContext['loadProjectData'];
         };
         if (typeof provider.loadProjectDataNoPrompt !== 'function') {
           throw new Error('The active IO provider does not support reloading projects by path.');
         }
-        return provider.loadProjectDataNoPrompt(path);
+        return provider.loadProjectDataNoPrompt(path, options);
       },
       getLoadedProject: () => loadedProjectRef.current,
       getOpenProject: () => openProjectRef.current,
@@ -168,7 +169,11 @@ export function useEditorCommandBridge({
     };
 
     const enqueueSerializedCommand = (command: SerializedEditorCommand): void => {
-      const queued = serializedCommandQueueRef.current.catch(() => undefined).then(() => runSerializedCommand(command));
+      const finish = beginDevelopmentCommand();
+      const queued = serializedCommandQueueRef.current
+        .catch(() => undefined)
+        .then(() => runSerializedCommand(command))
+        .finally(finish);
       serializedCommandQueueRef.current = queued.catch((error) => {
         console.error('Failed to process hosted editor command:', error);
       });
@@ -200,9 +205,15 @@ export function useEditorCommandBridge({
         case 'trigger-editor-duplicate-shortcut':
           replayEditorDuplicateShortcut(event.data.modifier);
           break;
-        case 'delete-workflow-project':
-          await handleDeleteWorkflowProjectCommand(context, event.data);
+        case 'delete-workflow-project': {
+          const finish = beginDevelopmentCommand();
+          try {
+            await handleDeleteWorkflowProjectCommand(context, event.data);
+          } finally {
+            finish();
+          }
           break;
+        }
         case 'open-project':
         case 'open-recording':
         case 'open-published-version-preview':

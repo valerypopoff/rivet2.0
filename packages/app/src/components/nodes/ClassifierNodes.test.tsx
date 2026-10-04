@@ -35,7 +35,7 @@ test('Classifier Evaluate uses the exact LLM card fields and sections', () => {
   const html = renderEvaluateBody({ retryOnNon200: true, retryOnNon200RepeatTimes: 2, retryOnNon200CooldownMs: 25 });
 
   assert.equal((html.match(/class="llm-node-body-section"/g) ?? []).length, 2);
-  assert.equal((html.match(/class="llm-node-body-field"/g) ?? []).length, 5);
+  assert.equal((html.match(/class="llm-node-body-field"/g) ?? []).length, 6);
   assert.match(html, /Provider:<\/span> Jev/);
   assert.match(html, /Model:<\/span> jev-latest/);
   assert.match(html, /Retry on non-200:<\/span> Enabled/);

@@ -7,14 +7,11 @@ import {
   serializeGraph,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
-import {
-  deserializeLegacyEvaluationProjectData,
-  type EvaluationProjectFileData,
-  type IOProvider,
-} from './IOProvider.js';
+import { deserializeLegacyEvaluationProjectData, type IOProvider } from './IOProvider.js';
 import { openBrowserFile } from './browserFileInput.js';
 
 export class LegacyBrowserIOProvider implements IOProvider {
+  readonly projectSaveConfirmation = 'download-only' as const;
   async saveGraphData(graphData: NodeGraph): Promise<void> {
     const serializedData = serializeGraph(graphData);
     const blob = new Blob([serializedData as string], { type: 'application/json' });
@@ -45,18 +42,20 @@ export class LegacyBrowserIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
+    callback: Parameters<IOProvider['loadProjectData']>[0],
+    options?: Parameters<IOProvider['loadProjectData']>[1],
   ): Promise<void> {
     const file = await openBrowserFile({ accept: '.rivet-project' });
     if (!file) return;
 
     const text = await file.text();
+    options?.signal?.throwIfAborted();
 
     const [project, attachedData] = deserializeProject(text);
 
     const evaluationData = deserializeLegacyEvaluationProjectData(attachedData?.evaluations);
 
-    callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: file.name });
+    await callback({ project, evaluation: { evaluationData, evaluationDatasets: [] }, path: file.name });
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void> {

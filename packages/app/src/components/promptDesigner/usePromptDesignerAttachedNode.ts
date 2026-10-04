@@ -1,19 +1,15 @@
 import { useEffect } from 'react';
 import { atom, useAtom, useAtomValue } from 'jotai';
 import { promptDesignerAttachedChatNodeState, promptDesignerConfigurationState } from '../../state/promptDesigner.js';
-import { nodesByIdState } from '../../state/graph.js';
+import { graphState, nodesByIdState } from '../../state/graph.js';
+import { projectState } from '../../state/savedGraphs.js';
 import { lastRunDataByNodeState } from '../../state/dataFlow.js';
-import {
-  type LLMChatV2Node,
-  type Inputs,
-  type NodeId,
-  getChatNodeMessages,
-} from '@valerypopoff/rivet2-core';
+import { type LLMChatV2Node, type Inputs, getChatNodeMessages } from '@valerypopoff/rivet2-core';
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { tryRestoreStoredPortMap } from '../../utils/executionDataReaders.js';
 import { handleError } from '../../utils/errorHandling.js';
 
-const lastPromptDesignerAttachedNodeState = atom<NodeId | undefined>(undefined);
+const lastPromptDesignerAttachedNodeState = atom<string | undefined>(undefined);
 
 export const usePromptDesignerAttachedNode = ({
   setMessages,
@@ -22,6 +18,8 @@ export const usePromptDesignerAttachedNode = ({
 }) => {
   const attachedNodeId = useAtomValue(promptDesignerAttachedChatNodeState);
   const nodesById = useAtomValue(nodesByIdState);
+  const projectId = useAtomValue(projectState).metadata.id;
+  const graphId = useAtomValue(graphState).metadata?.id;
   const nodeOutput = useAtomValue(lastRunDataByNodeState);
   const [config, setConfig] = useAtom(promptDesignerConfigurationState);
   const [lastPromptDesignerAttachedNode, setLastPromptDesignerAttachedNode] = useAtom(
@@ -31,14 +29,19 @@ export const usePromptDesignerAttachedNode = ({
 
   const candidate = attachedNodeId?.nodeId ? nodesById[attachedNodeId.nodeId] : undefined;
   const attachedNode = candidate?.type === 'llmChatV2' ? (candidate as LLMChatV2Node) : undefined;
+  const attachmentKey = attachedNode
+    ? JSON.stringify([projectId, graphId, attachedNode.id, attachedNodeId?.processId])
+    : undefined;
 
   useEffect(() => {
-    if (!attachedNode || lastPromptDesignerAttachedNode === attachedNode.id) {
+    if (!attachedNode || lastPromptDesignerAttachedNode === attachmentKey) {
       return;
     }
 
     const { data } = attachedNode;
     setConfig({ data: { ...data, configurationMode: 'inline', useToolCalling: false, autoContinueToolCalls: false } });
+    // A missing or unreadable run must not retain another attachment's prompts.
+    setMessages({ messages: [] });
 
     const nodeDataForAttachedNode = attachedNodeId ? nodeOutput[attachedNodeId.nodeId] : undefined;
     const nodeDataForAttachedNodeProcess = attachedNodeId
@@ -56,10 +59,11 @@ export const usePromptDesignerAttachedNode = ({
       }
     }
 
-    setLastPromptDesignerAttachedNode(attachedNode.id);
+    setLastPromptDesignerAttachedNode(attachmentKey);
   }, [
     attachedNode,
     attachedNodeId,
+    attachmentKey,
     dataRefs,
     lastPromptDesignerAttachedNode,
     nodeOutput,
@@ -71,6 +75,7 @@ export const usePromptDesignerAttachedNode = ({
   return {
     attachedNode,
     attachedNodeId,
+    attachmentKey,
     config,
     setConfig,
   };

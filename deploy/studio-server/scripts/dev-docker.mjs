@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { loadDevEnv } from './lib/dev-env.mjs';
+import { loadDevEnv, developmentFrontendEnv } from './lib/dev-env.mjs';
 import {
   assertValidPort,
   composeProjectInputFingerprint,
@@ -120,6 +120,8 @@ async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSecond
 async function main() {
   const action = process.argv[2] == null ? 'dev' : process.argv[2];
   const { mergedEnv, envPath, hasEnvFile, fileEnv } = loadDevEnv(rootDir);
+  const frontendMode = process.argv[3] ?? 'live';
+  Object.assign(mergedEnv, developmentFrontendEnv(frontendMode));
   dropAmbientNodeOptionsForDocker(mergedEnv, fileEnv);
 
   envFileLabel = path.basename(envPath);
@@ -152,6 +154,14 @@ async function main() {
     label: 'dev-docker',
   });
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
+  if (action === 'dev')
+    console.log(
+      `[dev-docker] Frontend: ${frontendMode === 'tunnel' ? 'watched bundles with safe full refresh' : 'Vite hot reload'}. Local URL: http://localhost:${proxyPort}/; API/executor watching is unchanged.`,
+    );
+  if (action === 'dev' && frontendMode === 'tunnel')
+    console.log(
+      '[dev-docker] Building the initial frontend; readiness waits for a complete bundle. Build progress/errors: yarn studio-server:dev:docker:logs (web service).',
+    );
   const staleDependencyServices = [];
 
   const commandsByAction = {

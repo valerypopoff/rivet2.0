@@ -219,11 +219,43 @@ The Docker development stack is the default production-shaped loop:
 yarn studio-server:dev
 ```
 
+For development from another computer through a VS Code tunnel, use:
+
+```bash
+yarn studio-server:dev:tunnel
+```
+
+Forward the same proxy port shown by the launcher (for example, 8081), then open
+the authenticated tunnel URL. Do not forward the private API or frontend ports.
+Keep tunnel sign-in and Rivet's UI access controls enabled.
+
+This mode bundles frontend edits automatically and keeps the normal backend
+watchers. The first launch waits for a complete bundle; subsequent full rebuilds
+currently take roughly two minutes and need substantial Docker memory (measured
+around 5.3 GiB for the builder alone). It is not intended to build on a small
+production VM. Successful updates refresh a clean, idle workspace. With unsaved
+edits or active work, the app offers **Refresh when safe** instead; save changes
+and finish runs before using it. A failed build keeps the last working frontend
+available; inspect `yarn studio-server:dev:docker:logs` for details.
+
+Run `yarn studio-server:dev` to return to Vite hot reload. These commands are
+alternative modes of the same stack and use the same data mounts. Save browser
+edits before deliberately switching modes. Neither command migrates storage.
+See [tunnel development](../../developer-docs/studio-server/development.md#tunnel-friendly-development)
+for cache limits, troubleshooting and verification commands.
+
+If a loading failure shows **Retry loading**, first check your connection and
+tunnel sign-in, and wait for any build to finish. Retry reloads the failed page
+or editor iframe; it does not reset saved projects or browser recovery data.
+
 Development runs API and executor source watchers in one backend container,
 matching the production Compose container layout while retaining hot reload.
-When Compose recreates that backend or the editor web service, it also restarts
-Nginx so Docker service-name resolution cannot leave the browser connected to
-a retired container IP.
+When Compose recreates the backend, it also restarts Nginx. Frontend mode changes
+do not restart Nginx or disconnect executor sessions: the dev launcher gracefully
+reloads its configuration after frontend readiness, refreshing Docker service-name
+resolution without retiring existing connections. If you recreate only `web`
+using Compose directly, run `docker compose ... exec -T proxy nginx -s reload`
+after it becomes ready, or use the normal dev launcher to do this safely.
 
 Useful commands:
 

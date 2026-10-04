@@ -1,5 +1,400 @@
 # Development
 
+## Collapsible recording families
+
+`recording-run-hierarchy.ts` groups the current recording results by exact
+`executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
+children start folded and expand into individually virtualized, indented rows.
+Do not group by project/graph name or infer immediate nesting from the root key.
+Missing or ambiguous primaries get an explicit context group, never a synthetic
+recording. Ordinary pagination and status filtering operate on individual
+recordings; their expand count says `in current results`. **Filter by input**
+searches only primary/root recordings (non-`subgraph_project` rows, including legacy
+rows without surface metadata). It never promotes a child-only match into a root.
+Expanding a matching root fetches all linked child metadata through the authenticated
+`GET /api/workflows/recordings/:recordingId/sub-runs` path, in pages of at most 100.
+These children bypass both input and status predicates and do not inflate match
+counts or search progress. Loading/failed disclosure controls provide feedback and
+retry; complete families are published only after all pages load. View replacement
+aborts pending child reads and discards late replies. An absent or ambiguous primary
+key cannot manufacture ancestry. Changing workflow/page/filter resets expansion;
+appending root matches preserves expanded correlation keys.
+
+Each page must identify the requested primary/page, contain only linked Subgraph
+rows, make unique-ID progress and retain a consistent total. Final unique-ID count
+must equal that total; repeated, incomplete or changing pages fail without publishing
+a partial family and can be retried. This is a consistency check, not a database
+snapshot: recordings can change after loading. Child-load errors are primary-owned
+and independent of root-search errors; retrying one cannot erase another failure.
+The observer covers repeated pages, concurrent count changes, incomplete pages,
+unrelated rows and a stopped root search followed by child retry.
+
+`RunRecordingsModal.tsx` retains expansion while hidden for replay, but
+explicit close resets it. Folding never invokes replay loading, and deletion remains per recording.
+
+Virtual offsets are index-based, but measured heights are recording-row-owned.
+`refreshRecordingRowMeasurements` compares rows by identity before pruning their
+height cache: a moved, offscreen primary that gains a disclosure control must not
+retain its old height. Unchanged moved rows keep their measurements.
+
+Called-project recording status follows execution failure, not the truthiness of
+an error message. Core retains the actual Error until finalizing a child; an empty
+message still produces `failed` metadata and an error terminal in its replay.
+The caller may handle that failure through the Subgraph error output and still
+finish successfully. Successful Abort Graph remains successful; unsuccessful abort
+rejects the child and records failure. These are covered in
+`GraphProcessor.asyncBranches.test.ts`, together with nested correlation and
+upload-before-caller-completion checks.
+The headless `local-editor-recordings.spec.ts` also checks actual Browser
+cross-project failures and error aborts: the child upload must contain a failed
+replay while a caller using the error output uploads a successful parent with
+the same correlation. Uploads are intercepted; no working project is modified.
+
+The local-editor recording API bounds parent and child error summaries to
+16,384 characters instead of rejecting an otherwise valid replay for a longer
+diagnostic. This affects list metadata only: replay content remains unchanged,
+non-string summaries are rejected, and the total upload-size limit still applies.
+The `oversized diagnostic` HTTP regression checks both upload routes, stored
+failure status, bounded summaries and preservation of the full replay diagnostic.
+Pruned split-run replay tests assert Core's canonical scalar
+`control-flow-excluded` sentinel for a wholly unused output port. Exclusion is not
+an array value type, even when the successful sibling outputs are aggregated.
+
+Live cross-project execution events carry `execution.projectScope`. The shared
+Browser/Node dispatcher and inactive-project snapshot reducer retain them in
+Run Activity but do not project their graph/node IDs into the caller's canvas,
+output buffers or LLM round history. This matters when duplicated projects reuse
+IDs. Interactive child prompts remain answerable; child node terminals remove
+only the matching prompt without writing caller node data or resetting the
+caller's selected output-history page. Standalone child
+replay remains visible through Core's finite `replayRecordedAt` provenance.
+`executionIdentity`, `remoteExecutorHelpers`, and `projectExecutionSnapshotEvents`
+tests cover the active/inactive projection boundary and replay compatibility.
+
+Run `yarn workspace @valerypopoff/rivet-studio-server-web test` for hierarchy
+invariants (duplicates, ambiguous/absent roots, exact keys, incremental search,
+large families), and `yarn studio-server:ui:observe run-recordings-modal.spec.ts`
+in headless mode for keyboard expand/collapse, indentation, child replay, filters,
+page-split families and deletion/failed-refresh regression coverage.
+
+## Recording duration display
+
+`RecordingRunsTable.tsx` formats recording durations to two decimal places in
+milliseconds or seconds (including the seconds component of minute durations).
+Rounded integer centiseconds carry values at minute boundaries correctly, without
+converting a formatted string back to a number. Invalid, missing, negative or
+non-finite timings display `Unavailable` rather than crashing the modal or
+presenting a misleading zero.
+This is presentation-only: stored `durationMs`, replay timings and statistics
+retain their original precision. The recordings-modal observer covers fractional
+milliseconds, seconds and minute-boundary rounding.
+
+## Called-project recordings in the caller browse scope
+
+The recordings modal requests `includeSubgraphRuns=true` for an individual
+workflow. Its scope includes direct recordings plus `subgraph_project` recordings
+sharing a nonempty correlation ID with a retained, non-Subgraph recording owned by
+that workflow. This includes nested called projects, but does not treat an inbound
+child recording as an anchor that pulls in the caller's other children. Each row
+shows the replay-owning project path; only Subgraph rows show the related run key. Any remains
+the deduplicated all-recordings scope.
+
+Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
+metadata-only scope to ordinary counts, status filters and offset pages. Bounded
+input search uses the common root-only predicate and root-only `scopeCounts`, for
+both Any and an individual workflow. Child discovery queries only metadata tied
+to a retained primary ID, never child input artifacts. Deleting a discovered child
+removes it without changing root matches/progress; deleting a matched root retires
+its discovered children and rescans roots after a successful catalog refresh.
+Search deduplication is owned by
+the individual search effect's local Set, not a second mutable ref shared across
+replacement searches.
+Keyset continuations are bound to the include-child flag and reject non-boolean
+flag payloads, preventing a malformed or direct-only
+continuation from silently selecting an expanded scope. The fingerprint includes
+the root-only search policy so pre-change child-inclusive cursors fail explicitly.
+The backend option defaults to false to preserve migration verification and
+existing direct-project consumers. Statistics and retention ownership are unchanged.
+After a confirmed delete, the current view removes that row immediately. A later
+catalog/scope refresh failure reports that deletion succeeded but refresh failed;
+it must not restore the deleted row or imply the mutation can safely be repeated.
+The same acknowledgement subtracts that row from known page/scope counts, its
+owning project's catalog counts and Any totals, including its failed/suspicious
+status. Counts never go below zero; successful refresh replaces these local
+adjustments with server counts. Failed DELETE requests do not adjust counts.
+Cached counts for a different workflow are invalidated rather than guessed.
+Deleting a non-Subgraph root with a shared correlation key can also remove its
+retained children from the caller browse scope. Both ordinary pages and filtered
+matches retire that obsolete scope immediately, even if the following catalog
+refresh fails. An active input search restarts through the existing guarded search
+effect after the catalog refresh succeeds.
+Deleting a discovered child does not rescan roots. A filtered root deletion
+restarts the guarded root scanner, including in Any; ordinary Any deletion reloads
+only its current page. Roots without a correlation key cannot anchor related
+children. Workflow-selector counts explicitly say `in this project`: they describe
+recording ownership, whereas selecting a workflow expands the table to related
+children. Any's count remains the unique all-recordings total.
+
+Historical recordings without correlation metadata cannot be linked reliably.
+If their root recording has been deleted, child replays remain available under
+Any or their own project, but are no longer discoverable through that root's
+project scope. Listing never infers relationships from names, timestamps or paths.
+
+Regression coverage: `recording-workflow-scope.test.ts`,
+`workflow-recordings-http.test.ts`, `sqlite-workflow-backend.test.ts`, and
+`managed-recordings.test.ts`. Run the complete headless modal observer with
+`yarn studio-server:ui:observe run-recordings-modal.spec.ts` for durations,
+expanded scopes, bad/input filtering, source labels, parent/child deletion,
+post-delete refresh failures and request races. Set `PLAYWRIGHT_HEADLESS=1` and
+`PLAYWRIGHT_SLOW_MO=0`; set `PLAYWRIGHT_BASE_URL` when not using the default URL.
+For a focused HTTP execution check, run:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files --test-name-pattern="input search matches only roots" src/tests/workflow-recordings-http.test.ts
+```
+
+The managed service test mocks query execution; `recording-workflow-scope.test.ts`
+executes the equivalent predicate in SQLite. These are not live PostgreSQL
+integration tests.
+
+## Recording input-path history
+
+Run recordings remembers trimmed input JSON paths when Apply accepts the filter.
+The history is browser-local (`rivet.run-recordings.input-path-history.v1` in
+localStorage), shared across workflow scopes and browser tabs on the same origin,
+and retained across modal close and page reload. Only paths are remembered, not
+filter values or recording payloads; history is not stored in server settings.
+Exact, case-sensitive paths are deduplicated and ordered most recently
+used first. Focusing or clicking the path field opens the saved-path dropdown;
+Arrow Down enters it, Tab navigates its selection/delete buttons, and Escape
+returns to the field without closing the recording modal. Selecting a path edits
+only the draft; deleting one affects only history, not the draft or active search.
+Paths rejected by Apply's client-side validation are not remembered. Unavailable
+browser storage falls back to in-memory history without preventing searches or
+showing recovery warnings.
+Uncommitted history changes remain authoritative in memory after a failed write,
+so refocusing cannot forget a new path or resurrect a deleted one from stale
+storage. The helper retains this fallback for the browser document, including
+modal close/reopen. Pending per-path add/delete actions are retried against the
+latest readable list, rather than overwriting it with an old whole-list snapshot.
+This preserves unrelated additions and deletions made in another browser tab.
+Shared history is still a best-effort browser preference, not transactional
+multi-writer project storage. The dropdown itself can take focus so clicking its
+padding or scrolling a long list does not dismiss it.
+It cannot preserve failed writes across a page reload while storage is unavailable.
+Cleared storage is treated as an empty history, not as an inaccessible backend.
+
+The Web workspace test `recording-input-path-history.test.ts` covers normalization
+and unavailable storage, including pending-edit rebasing. Run
+`yarn studio-server:ui:observe run-recordings-modal.spec.ts --grep "input path"`
+headlessly for deduplication, workflow switching, selection, deletion, keyboard
+behavior, long-list scrolling, shared-origin tabs and reload persistence.
+
+## HTTP Call settings regression
+
+HTTP Call keeps retry, fail-on-status and catch controls in the final shared
+collapsible **Error behavior** group. Its nested retry toggle still owns Repeat
+times and Cooldown; Binary Output remains outside the group. This is layout-only:
+serialized keys, output ports and runtime handling are unchanged. The Core
+`HttpCallNode.editors.test.ts` checks the hierarchy, and the headless observer
+`http-call-failure-headers.spec.ts` checks folding, retained values after retry is
+disabled/re-enabled, independent fail/catch controls, control/body wiring and
+terminal retry-response evidence. Core also checks that constructing the grouped
+editors does not mutate authored data or change the node's port definitions.
+
+Run all `test/model/nodes/HttpCallNode.*.test.ts` files in the Core workspace,
+then `yarn studio-server:ui:observe http-call-failure-headers.spec.ts` with
+`PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0` against the current frontend.
+
+## Tunnel-friendly development
+
+Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a
+VS Code tunnel. Forward the same proxy port as ordinary dev (for example 8081),
+not the private API or frontend service ports. `yarn studio-server:dev` switches
+back to Vite hot reload. Both commands use the same Compose project and data
+mounts; this is a frontend mode, not a staging deployment or storage upgrade.
+Save browser edits before deliberately switching modes.
+The launcher gracefully reloads nginx after frontend readiness; Compose must not
+restart the proxy merely because `web` was recreated. This preserves existing
+executor WebSockets while refreshing nginx's upstream address resolution. Direct
+Compose-only web recreation requires that same reload afterward.
+
+Tunnel mode automatically watches the frontend and bundles it using the existing
+hosted Vite aliases/plugins. API and executor development watchers are unchanged.
+Expect a slower first start and rebuild than HMR: a successful rebuild causes a
+full-page refresh, not component hot replacement. There are no thousands of Vite
+source-module requests or Vite HMR connections in the browser. Source maps remain
+available for debugging; this mode is development-only, not a public production
+server. Keep normal tunnel sign-in and Rivet UI authentication enabled.
+
+This frontend's full build is resource-intensive. Local verification measured
+roughly 80–90 seconds per native build, 127–155 seconds per Linux container build,
+and about 5.3 GiB aggregate Node resident memory during a Linux/Node 20 build (not guaranteed
+maximums). Allocate sufficient Docker RAM
+alongside the backend; do not assume a 4 GiB production VM can run this development
+builder. Each compiler child exits after publication, releasing its heap.
+Tunnel mode allows a 15-minute startup health grace (live mode retains 3 minutes);
+a successful check becomes ready immediately. Each compilation also has a
+15-minute deadline so a hung plugin cannot indefinitely block later source edits.
+
+The build process and HTTP server are separate. A successful build is copied to
+an immutable generation before it becomes current. HTML pins scripts, CSS,
+Monaco/deserialize workers and lazy imports to that generation, and the dashboard
+pins its iframe to the same generation. Failed builds retain the previous bundle.
+Status travels over authenticated, unbuffered `/__rivet_dev/events` SSE. Connection
+loss reconnects without reloading or discarding the workspace.
+Initial connection failure is visible even before the first status arrives.
+
+The development notice shows building/failure/update status. Automatic refresh
+requires all project tabs to be clean with known baselines, no active saves,
+loads, bridge commands, graph/Evaluation runs or editor modal work, and a freshly
+committed, reloadable browser checkpoint. The iframe is briefly input-locked;
+the parent rechecks permission synchronously immediately before navigation.
+Canvas drags, connection gestures and focused inline inputs block refresh before
+the input lock can blur them; an uncommitted gesture need not be dirty yet.
+Visible dashboard forms, alert dialogs and busy rename rows also block refresh,
+even after their input loses focus; retained hidden forms do not block it.
+If unsafe, it stays on the current bundle and offers **Refresh when safe**.
+Save work, finish runs, and close open settings/inline forms before using it.
+This button never forces a discard. An absent or old editor bridge fails closed.
+Ordinary browser reload is still the user's explicit action, with existing unload
+protection. An initial nested module-import failure now presents a retry action
+instead of an endless editor spinner, in both frontend modes.
+The dependency-free HTML shell also catches entry-module resource errors before
+any editor JavaScript executes. Entry's nested-import handler uses that same
+failure surface. It does not reset recovery or create automatic reload loops;
+late resource/runtime errors cannot replace an already-ready editor.
+
+Source changes are debounced and builds are serialized in fresh compiler children,
+not incremental Rollup builds: hosted plugins dispose build resolver state, and
+output directories must not be cleared while another build is being published.
+Parent IPC disconnection stops orphan watchers/compilers before a replacement
+can write the shared working directory. The HTTP supervisor also tracks the
+compiler PID and terminates it on watcher failure: synchronous compilation can
+delay the compiler's own disconnect handler.
+Compilation starts only after the supervisor acknowledges that ownership.
+Retired watcher callbacks and compiler deadlines cannot affect a replacement.
+The web container uses Docker's init process to reap exited orphan subprocesses.
+Edits observed during a build are coalesced into the next build; superseded
+results do not become the current frontend generation.
+Vite's watch-only polling server covers frontend/shared/Core/App sources, Vite
+config, source-alias helpers, App's imported `graphs/` templates, workspace package/TypeScript config and lockfile changes, and public assets (including
+additions and deletions) for Docker Desktop bind compatibility. Lockfile/dependency
+changes still require rerunning the launcher to reconcile installed dependencies.
+Changes to the launcher or `dev/*.mjs` server implementation require a web restart.
+The watch-only Vite server has HMR disabled; it opens no unused HMR socket.
+
+The named `tunnel_cache` volume stores deduplicated hardlinked generations, capped
+at 2 GiB of unique objects and 128 generations. Old generations are deliberately
+not deleted while an old tab could still request a lazy chunk. At the limit,
+publication fails visibly while the existing bundle keeps serving.
+Failed-publication objects without any retained-generation hardlink are reclaimed
+when the next compiler initializes the cache; retained generations are never
+pruned. Objects from a partial publication must not permanently consume the
+available budget.
+To reset the retained-generation cache,
+close old browser tabs, stop the dev stack, and remove **only** that Compose
+project's `tunnel_cache` volume, then restart. Never use `docker compose down -v`
+for this: it would also remove local application/database volumes. A fresh web
+process waits for its first successful build rather than treating another
+checkout's cached HTML as current.
+
+Verification:
+
+```powershell
+yarn studio-server:verify:tunnel
+
+# Longer Linux/Docker gate (installed dev dependency volume required):
+yarn studio-server:verify:tunnel:integration
+yarn workspace @valerypopoff/rivet-app exec tsc -p tsconfig.hosted-development.json --noEmit
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:8081' # configured tunnel-mode proxy
+yarn studio-server:ui:observe tunnel-development.spec.ts
+```
+
+The bundle-refresh cases require tunnel mode; the bootstrap failure/retry cases
+also run against ordinary Vite. The spec mocks API fixture data and covers nested
+import failure, entry-resource failure before editor modules load, Retry and late
+resource/runtime errors that must not replace a working editor, initial SSE
+failure/reconnect, build feedback, safe clean refresh,
+generation pinning, pending dashboard forms/rename rows, an active canvas drag,
+an inactive dirty tab and aborted recovery transactions. The native server tests cover cache limits, failed publication,
+old chunks, SSE, path validation, deduplication, retired watcher callbacks and
+compiler deadlines. Generated bundle reads in server tests inspect only test-owned
+artifacts, never production source. Bootstrap behavior is checked in the real browser,
+not by extracting and executing inline HTML source in a mock VM. Pure launcher
+tests exercise `developmentFrontendEnv`; the static repository gate
+(`yarn studio-server:verify:repo-structure`) owns the parsed Compose YAML, package
+command and authenticated/unbuffered SSE proxy contracts. Also run the existing node
+editor/Save regressions against the bundled frontend. Local checks do not certify
+an authenticated external tunnel: test the actual forwarded URL separately,
+including tunnel sign-in, SSE reconnect and frontend/backend edits.
+The fixture signs in through the existing UI gate with the runner's `RIVET_KEY`
+when required; a login screen must not be misreported as a module-load timeout.
+Refresh tests wait for the real checkpoint handshake: editor mount readiness
+does not imply that startup recovery effects have finished settling.
+The ordinary-Vite bootstrap retry assertion reacquires the iframe across
+dependency-optimizer reloads, retrying only destroyed/detached document contexts;
+other evaluation failures still fail the test.
+
+The integration gate creates UUID-labelled disposable code/cache volumes, copies
+only frontend build inputs (not `.env`, project roots or desktop build trees),
+and mounts the existing dev dependency volume read-only. It does not bring the
+normal Compose stack up/down. It compares live/tunnel Compose service objects:
+only web configuration may differ, and data mounts must be identical. Tunnel
+startup retains the existing Google browser-override typecheck.
+
+Real TSX, CSS and Core edits must reach published assets. A syntax error must
+retain the last successful generation; repair must publish a new one. An API-only
+source edit must not schedule a frontend build. The gate measures cold fixture
+readiness and separate warm rebuilds, sampled aggregate Node RSS and unique cache
+bytes, then runs the safety browser suite. A second browser pass measures the
+same cold dashboard/editor case against ordinary Vite mode. These measurements
+exclude dependency installation and do not qualify a production VM's capacity.
+Reports live under `artifacts/rivet-tunnel-<uuid>/`; browser metrics also live in
+`artifacts/tunnel-browser-measurements/`. The gate removes only its labelled
+container and volumes on completion/failure, retaining diagnostic artifacts.
+Cleanup attempts every owned resource even when one is locked, and preserves the
+original test failure instead of replacing it with a secondary cleanup error.
+A successful test run with failed cleanup remains a failed verification; PASS is
+printed only after cleanup succeeds.
+
+The browser suite additionally proves that clean-but-pending saves and active
+workflows block refresh, save failures retain dirty edits, and an acknowledged
+retry permits a checkpointed refresh restoring the active tab. It never forces
+project saves or interrupts execution to apply a frontend update.
+Refresh permission is bound to the exact recovery provider that committed the
+checkpoint. Provider replacement during or after preparation invalidates that
+permission, even if the retired provider still reports healthy recovery.
+Connection loss during preparation cancels the request and releases input locks.
+The refresh expiry remains active while navigation begins. If a browser blocks
+navigation or a user cancels a `beforeunload` prompt, the dashboard shield,
+keyboard lock and iframe permission expire instead of trapping the old page.
+The bundled browser suite covers cancelled navigation and subsequent editing.
+Asset compression honors an explicit `gzip;q=0`, and response pipelines retire
+both file and gzip streams when a tunnel client disconnects.
+
+October 3 isolated Linux/Node 20 checks measured approximately 133–152 seconds
+for cold readiness and 125–142 seconds for CSS/TSX/Core rebuilds. Unique cached
+payloads grew from about 162 MiB to 249 MiB across four generations. The same
+mocked dashboard/editor startup made 37 bundled requests (zero source modules),
+versus roughly 670–1000 requests in ordinary Vite mode (520–830 source modules);
+local browser startup was about 1.2–1.8 seconds in either mode. These are
+checkout-specific observations, not tunnel latency or capacity guarantees.
+Vite dependency-optimizer warmth affects the counts: the baseline is a fresh
+browser document, not an untouched Vite server's first request. Repair latency
+also includes superseded builds, so it is not a clean rebuild baseline. See the
+retained per-run measurements and browser reports rather than treating these
+figures or a historical test count as a performance SLA.
+
+Final external acceptance remains manual: launch `studio-server:dev:tunnel`,
+forward the configured proxy port, sign in through the actual VS Code tunnel,
+and open/edit a project. Check a harmless frontend edit, failed build/repair,
+dirty-tab deferral, SSE reconnection and your intended backend change through a
+controlled workflow. Keep tunnel/UI authentication enabled. The isolated gate's
+API-only edit checks watcher separation, not a live API/executor execution path.
+
 See also: [Mistakes and Misconceptions](./mistakes-and-misconceptions.md)
 See also: [Repo structure](./repo-structure.md)
 See also: [Wrapper ManagedCodeRunner Speed Plan](./wrapper-managed-code-runner-speed-plan.md)
@@ -60,11 +455,105 @@ unlocks only after a fresh status response. Do not apply this short deadline to
 inventory, fingerprint, copy or validation actions. A rejected action's error
 must remain visible when status polling succeeds again.
 
+## Model-node failure controls
+
+LLM Chat and Classifier Evaluate share the node-owned error boundary documented
+in [editor-bridge.md](./editor-bridge.md#model-node-error-behavior). The default
+still throws failures. Explicit Catch all failures returns scalar Run failed /
+Run error ports and excludes ordinary answer outputs. Disabling status throwing
+handles only typed non-2XX failures. Keep explicit graph cancellation uncaught,
+preserve retry and profile-fallback ordering, and do not cache caught failures or publish them
+through the display-only terminal nodeError channel.
+
+Focused verification:
+
+```sh
+yarn workspace @valerypopoff/rivet2-core exec tsx --test --test-concurrency=4 test/model/nodes/RunFailureNodes.test.ts test/model/nodes/LLMChatV2Node.test.ts test/model/chat-v2/*.test.ts test/model/classifier/*.test.ts test/model/nodes/HttpCallNode.*.test.ts test/model/SplitRunProcessor.test.ts test/model/GraphProcessor*.test.ts
+PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe model-error-behavior.spec.ts jev-nodes.spec.ts --grep 'Error behavior switches|Classifier cards|legacy Jev'
+```
+
+The browser regression signs in through `authenticateIfNeeded` when the local UI
+gate is enabled; `RIVET_KEY` must be available to the runner. It checks both Error
+behavior toggles, dynamic ports, body summaries, exact saved fields and reload,
+plus the adjacent Classifier card and legacy-Jev editor regressions. Expand
+collapsed settings sections and click
+visible switch labels rather than the hidden checkbox underneath their styled
+track. Core tests cover the switch matrix, configuration/response failures,
+causal errors, retry recovery, valid 2XX
+responses, cancellation, profile fallback, diagnostics and editor cache hits.
+They also cover null-prototype/cyclic thrown values, throwing accessors,
+provider AbortErrors versus actual caller cancellation, Classifier local timeouts,
+tool-continuation and cache failures, and Classifier rejected-body cleanup on final
+failures, automatic retries, cleanup errors and indefinitely pending cleanup promises.
+Real GraphProcessor split-run cases mix caught failures with successes in either
+order and verify aligned failure flags, errors and normal-output array types.
+Cancellation races also exercise a provider returning success after abort: no
+successful model activity or cache entry may be published. Classifier deadline
+tests cover late headers, late JSON reads, indefinitely pending transports and
+disposing late responses; stream interruption must exclude partial LLM answers.
+Keep response-read causes and HTTP statuses intact even if body cleanup fails.
+The formatter regression creates real foreign-realm errors, including a nested
+cause, rather than testing only same-realm objects with an AbortError name.
+
 ## HTTP body lifecycle verification
 
 Media admission must match the JSON parser (`application/json` and `application/*+json`, not arbitrary `+json` suffixes). Check already-disconnected requests before installing stream listeners: authorization can await storage while the client disconnects, so relying only on future abort events strands parser capacity until timeout.
 
 HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in the API package. Test open uploads, not just complete buffers: overflow must return 413 before EOF, and cancellation must detach readers and close decoders before releasing permits. `body-reader.ts` owns bounded receipt; Express parses only the resulting finite stream. Never replace that boundary with a live Express parser, whose error path can drain an upload until EOF.
+
+## Project workspace lifecycle regressions
+
+Tree selection checks must use an overflowing folder list, not only a tiny tree. The `tree selection survives` browser case verifies that distant folder expansion stays in view, keyboard Enter/Space and Ctrl-click expand/collapse preserve the selected card, and reopening its own ancestor reveals the selected project again without reloading it. This catches scroll jumps from an overly broad expansion-map dependency as well as click-away deselection.
+
+Keep opening and dirty-state behavior under the shared app owners (`useActivateOpenedProject`, `useWorkspaceHostOpenProject`, `useSyncProjectDirtyState`). Host wrappers may adapt IO, titles, Evaluation caching and executor policies, but must not duplicate activation or certify a recovered snapshot as clean.
+
+Run the app hook/transition tests (`useLoadProject.test.tsx`, `useWorkspaceHostSave.test.tsx`, `projectActivationCoordinator.test.ts`, `staticDataCacheCoordinator.test.ts`, `projectEditorState.test.ts`, `workspaceTransitions.test.ts`, `projectUnsavedChanges.test.ts`) and the hosted web unit suite. Race tests must cover fresh opens versus tab activation, delayed path loads versus a newer selection, placeholder cancellation, edits/renames during hydration, and external rename followed by Undo. Include save failure and save-completion-after-switch cases; a successful older save must not clear newer edits. Also check scratch recovery without baselines, closing replacement tabs during IO, static-data edits during cache clearing and stale node callbacks after a tab switch. Cache failures must not poison later operations or mix independent workspaces.
+
+Storage regressions also run `workspaceRecovery.test.ts`, `hybridStorage.test.ts`, `indexedDB.test.ts`, and `BrowserDatasetProvider.test.ts`: cover transaction abort after request success, quota/serialization failure with successful retry, atomic dataset replacement rollback, late dataset loads, inactive imports, project-scoped exports during tab switches, checkpoint forks on reload/duplicate, corrupt/missing records, and a recovery choice racing an older write. Hosted `deserialize-worker.test.ts` covers worker cancellation, timeout and subsequent usability; `editor-project-refresh.test.ts` covers deferred inactive refresh and a tab closed during preparation. A successful real project save must stay successful even when browser recovery fails.
+
+The shared hook tests also exercise file-picker reopens of edited tabs and picker results arriving after a newer selection. The picker itself has no artificial deadline; cancellation guards apply to parsing/import after selection. Keep `browserFileInput.test.ts` in the verification set when changing asynchronous picker callbacks or native/browser IO signatures.
+
+Required browser checks include `project-tree-activation.spec.ts`, `project-preview-mode.spec.ts`, `dashboard-save-button.spec.ts` and focused `workflow-tree-sync.spec.ts` cases. The activation test uses mocked workflow IO: it checks active/inactive edits, dirty indicators across page reload, saved-baseline reset only after persistence, resource-target restoration, delayed recovery cancellation, and reused-path identity rejection. Its static audio fixture verifies payload recovery despite a deliberately stale cache, then checks that a save retains the right project's payload. Inspect browser reports in `artifacts/playwright/`; no Kubernetes rehearsal is needed for these workspace UI changes.
+
+The activation spec additionally uses two same-origin pages to verify isolated unsaved recovery and injects a checkpoint quota error to verify visible failure only while edits remain unsaved, truthful Save completion, and automatic retry. Its tree-selection case clicks actual padding on both sides of a nested project row, toggles unrelated folders and the selected project's ancestor, and clicks blank tree space: the selected card must remain and no extra project load may occur. Clicking another project must replace both row selection and the card. Run this focused check with `yarn studio-server:ui:observe test project-tree-activation.spec.ts --grep "tree selection survives"`. `indexedDB.test.ts` additionally closes the actual cached database without emitting a termination event and checks automatic reconnection, preserved records, and later writes; an aborted transaction must still reject. Mocked editor tests must call `mockHostedEditorBootstrap` so they do not depend on an ambient API's authentication or Evaluation library. Run the observe runner with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`. When browser downloads are unavailable, `PLAYWRIGHT_EXECUTABLE_PATH` can select an already installed Chromium; the runner then skips its automatic install (the explicit `:install` command still installs). This is a local testing override, not a release qualification shortcut.
+
+Its missing-checkpoint case must verify the dashboard actually reveals the iframe, Retry loading retries hydration without writing defaults, the recovery dialog opens/closes, and explicit Start empty can reach a normal ready handshake. Unrelated bootstrap failures (for example, the shared Evaluation service) must offer Retry loading without proposing destructive workspace replacement. Seeing a failure only in console/network is insufficient: controls must remain usable before the normal editor bridge exists.
+
+Also cover close/move during the deferred import itself, not just during file reads. Restoring a valid snapshot must preserve cached datasets and accepted revisions while recovering a missing saved baseline; a verified native snapshot must not require another disk read on every tab switch. `hosted-project-revision-tracker.test.ts` and `editor-project-refresh.test.ts` verify cancelled reload rollback, concurrent path moves, pruned tabs, and save exclusion during reload. A cancelled refresh emits no false load-error notification.
+
+The activation browser spec opens the same project in two windows, saves in one, reloads the other's unsaved snapshot, and checks that its save still uses the original expected revision and preserves dirty state on a 409. It also saves successfully while browser recovery fails, reloads the previous checkpoint, and proves that the recovered tab still uses its earlier expected revision. Wait for the committed checkpoint itself before testing reload, not only the rendered status. Revision authority belongs inside the atomic workspace checkpoint, not a separate session/localStorage cache. Missing revision context must block in-place save until the existing Reload/Keep mine review completes; do not adopt legacy independent caches. Unit coverage restores a checkpoint's own authority after explicit selection, protects initial IO binds through loading-placeholder updates, and keeps provisional load/reload revisions out of durable recovery until registration/replacement succeeds. Identical background observations must not dirty recovery or produce unnecessary unload warnings.
+
+Project v4 includes an optional `data` string record for static file/image payloads, separate from plugin `attachedData`. Saves must pass the captured payload to the IO provider before any await; do not clear the static-data dirty flag after persisting graph metadata alone. Run `test/utils/serialization.test.ts` in core for round-trip and malformed-payload coverage, and the app save test for edits arriving during persistence. Older v4 files without this field remain valid.
+
+The active `projectDataState` is persisted with the workspace's `project` group. Mount it in `RivetAppLoader` before legacy cache recovery, so a clear/hydrate failure cannot make the next reload restore another tab's residual cache. `useLoadStaticData` imports the old cache only when no authoritative payload exists, overlays concurrent edits, and rejects results after any newer activation, including same-project reload. Nonempty legacy cache imports remain dirty until a real save; recovery alone cannot certify that their payload reached the project file. Deferred Monaco cleanup must recheck that the project is still closed both before and after importing the cleanup module; an immediate reopen may be using those models again.
+
+## Node settings ownership regressions
+
+The canonical [editor-session and Monaco contract](../MONACO-EDITOR-SURFACES.md#node-settings-ownership)
+covers cloned project/graph/node IDs, irreversible callback lifetimes, synchronous
+canonical edits and warm-buffer limits. [Workspace state](../EDITOR-WORKSPACE-STATE.md)
+owns activation, dirty baselines and isolated browser recovery; these guarantees
+apply to desktop/custom providers too, not just Studio Server.
+
+Run the focused `NodeEditorSessionContext.test.tsx`, `nodeEditorSession.test.ts`,
+`codeEditorModelCache.test.ts` and `nodeLibrary.test.ts` owner suites, then the App
+typecheck and affected App/web suites. The root `yarn test:app` includes component
+TSX tests; direct workspace `test` alone does not.
+
+For the browser gate, use a fresh production build/preview rather than HMR,
+set `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0` and `PLAYWRIGHT_BASE_URL` to
+that preview, then run:
+
+```sh
+yarn studio-server:ui:observe node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts
+```
+
+Inspect `artifacts/playwright/` for the current run. Tests must retain autofocus
+and check both visible text and saved/recovered node data, including immediate
+switch/Save/close, Undo/Redo while focused, authoritative reload, read-only variants
+and AI completion after switching or cancellation. These browser fixtures mock
+hosted IO and do not certify a production backend or native file dialog. No
+database migration or Kubernetes rehearsal is needed for these editor changes.
 
 ## Setup commands
 
@@ -146,7 +635,7 @@ compatibility aliases.
 | `yarn studio-server:dev:local:web`                                                                                                                                                                                              | Starts only the Vite web app locally                                                                                                                                                                                     | Frontend work                                                                                                       |
 | `yarn studio-server:dev:local:executor`                                                                                                                                                                                         | Starts only the executor locally                                                                                                                                                                                         | Executor debugging                                                                                                  |
 | `yarn studio-server:prod`                                                                                                                                                                                                       | Pulls the prebuilt Rivet 2 images, force-recreates the production-style Docker stack, and waits for health                                                                                                               | Normal VM deployment/update path                                                                                    |
-| `yarn studio-server:staging`                                                                                                                                                                                                    | Checks the staging checkout, image revisions, and existing data mounts before running digest-pinned staging images in the same VM stack                                                                               | Rehearse a verified staging build against the existing VM data                                                     |
+| `yarn studio-server:staging`                                                                                                                                                                                                    | Checks the staging checkout, image revisions, and existing data mounts before running digest-pinned staging images in the same VM stack                                                                                  | Rehearse a verified staging build against the existing VM data                                                      |
 | `yarn studio-server:prod:restart`                                                                                                                                                                                               | Force-recreates the production-style Docker stack from already-local images without pulling or building                                                                                                                  | Pick up `.env` changes without changing the running image version                                                   |
 | `yarn studio-server:prod:custom`                                                                                                                                                                                                | Builds and force-recreates the production-style Docker stack from the current monorepo commit                                                                                                                            | Test unpublished Rivet and Studio Server changes together                                                           |
 | `yarn studio-server:test`                                                                                                                                                                                                       | Verifies the migration ledger, cleanup safety contract, builds Studio Server dependencies/workspaces, runs API and pure web tests, and executes host-compatibility, test-style, repo-structure, and Kubernetes contracts | Required one-command pre-push gate for Studio Server changes                                                        |
@@ -170,7 +659,7 @@ compatibility aliases.
 | `yarn studio-server:ui:observe`                                                                                                                                                                                                 | Runs the headed slow-motion Playwright flow against the current hosted app                                                                                                                                               | Watch the browser click through a real scenario                                                                     |
 | `yarn studio-server:ui:observe:debug`                                                                                                                                                                                           | Runs the same flow with Playwright Inspector enabled                                                                                                                                                                     | Step through or pause browser actions                                                                               |
 | `yarn studio-server:ui:observe:report`                                                                                                                                                                                          | Opens the last Playwright HTML report                                                                                                                                                                                    | Review traces, screenshots, and videos after a run                                                                  |
-| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs the narrow headless hosted-editor regression set against a fresh Vite host                                                                                                                                          | Reproduce the CI output-paging and sidebar interaction gate locally after installing Chromium                       |
+| `yarn studio-server:ui:ci`                                                                                                                                                                                                      | Runs headless hosted-editor regressions against a fresh Vite host, including output paging, sidebar, streaming, workspace recovery and node-editor ownership/lifecycles                                                   | Reproduce the current hosted-editor CI browser gate locally after installing Chromium                               |
 
 `yarn studio-server:clean` is intentionally Docker-volume-safe but Docker-host-wide. It first prints the selected Docker context/endpoint, a concise Docker disk summary, and counted stopped-container, custom-network, and image inventories (showing at most 20 rows from each inventory). Docker evaluates the latter two inventories for unused resources only at prune time. Run `yarn studio-server:clean -- --dry-run` to stop there. An interactive terminal must then type `PRUNE`; automation must pass `--confirm-host-prune`. The command rejects remote or unknown endpoints before Docker preflight unless the caller also supplies both `--allow-remote-docker-host` and `--confirm-host-prune`. When it resolves the currently selected context, it pins that context on every later Docker invocation so a concurrent `docker context use` cannot retarget the cleanup. This prevents an inherited Docker context or `DOCKER_HOST` from silently cleaning another machine.
 
@@ -432,6 +921,8 @@ For the operator-facing chart contract and handoff checklist, see:
 
 ## Observable Playwright flow
 
+Routine browser recovery is deliberately invisible, including while a checkpoint is pending or after it commits. `WorkspaceRecoveryStatus.test.tsx` covers silent automatic retry, warnings only for persistently unprotected unsaved work, dismissal after actual project Save, memory-only storage without disabled controls, and unload protection while no panel is rendered; its scoped Node import adapter unwraps Atlaskit's CommonJS button export without changing the production component. `workspaceRecoveryRetry.test.ts` uses deterministic timers to check current-snapshot retries, bounded backoff, pointer-only repair, non-overlapping attempts, unmount/retirement cancellation, and nonretryable corrupt authorities. Its native timer receiver regression guards against browser-only `Illegal invocation`: injectable timer defaults must wrap native functions, never call copied `setTimeout`/`clearTimeout` methods on a plain scheduler object. `useInitializeWorkspace.test.tsx` checks transient bootstrap retries and the explicit Retry loading path; neither may flush defaults over an unreadable selected checkpoint. The project activation browser suite waits for matching node positions in the persisted checkpoint rather than a success notification, verifies silent transient writes and session-object reacquisition, and checks that real project Save removes a recovery warning without a misleading error toast. The recovery chooser is tested from blocked bootstrap only, preserving the original records and frozen independent-window selection. Never automatically select an unrelated or older checkpoint to make an error disappear, and never delete unsaved recovery records to relieve quota. Keep genuine unsaved-work warnings actionable; hiding routine status must not disable background writes or unload safeguards.
+
 The focused evaluation accounting check is `yarn studio-server:ui:observe evaluation-metrics.spec.ts`. It runs the shared profile/tool fixture through Browser execution and the real Node executor, checks unavailable-cost presentation, and reloads both runs to verify durable evidence. See [execution event accounting](../EVALUATIONS.md#execution-event-accounting) for the fixture contract and API/CLI lifecycle coverage.
 
 `graph-port-rename.spec.ts` uses mocked hosted-project load/save endpoints to rename Graph Input and Graph Output IDs through the editor. It parses every saved project to verify collision ownership, input defaults and port order, output fan-out and bend metadata, unrelated connections, and recursive callers. It also verifies exact persisted graph restoration through Undo and Redo. The companion App characterization tests cover non-UI boundaries that are impractical to author in the browser fixture: absent current graphs, exact/disabled boundary IDs, frozen inputs, same-graph multiple callers, collision ordering, and merged recursive output restoration.
@@ -448,6 +939,35 @@ Current behavior:
 - unless `PLAYWRIGHT_BASE_URL` is already set, the runner targets `http://127.0.0.1:${RIVET_PORT}` from your env file, defaulting to `8080`
 - the main hosted-editor observable spec uses mocked workflow/project API responses to open a two-node project, then visibly exercises the hosted editor focus, copy, cut, and paste path without mutating workflow storage
 - trace, video, screenshots, and the HTML report are written under `artifacts/playwright/`
+- `llm-temperature.spec.ts` uses two projects with cloned graph/node IDs and
+  mocked workflow storage to cover incomplete exponent input, sequential typing
+  with trailing zeroes, decimal/zero precision, clearing optional
+  Temperature, immediate saves and tab switching, required-field invalid drafts,
+  Undo/Redo, settings close/reopen and committed unsaved recovery after reload.
+  Legacy saved variants load as empty read-only Temperature without making the
+  project dirty; returning to current settings retains the current value.
+  It also verifies rounded unit conversion and parent-clamped values after blur,
+  including rejection that leaves the stored value unchanged, and Prompt Designer's
+  actual preview requests against an owned loopback-only mock provider, cloned
+  attachment identities and restarting/closing a delayed preview.
+  Run headlessly with `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0`, and
+  `yarn studio-server:ui:observe llm-temperature.spec.ts` against the current
+  checkout. Core's `test/model/chat-v2/temperature.test.ts` covers profile
+  normalization, historical repair, input validation, serialization and both
+  SDK transports including actual mocked provider wire bodies. Legacy YAML
+  tests inject `null` and `.nan` after serialization and verify repair on load
+  for main node data, saved variants and node-library source variants. A full
+  Profile → JSON recovery → Chat pipeline check also proves an unset value is
+  omitted from requests instead of resurrecting Chat's creation default. App's
+  `src/components/editors/numberEditorValue.test.ts` covers optional/required
+  blanks, fractional precision, integer unit conversion and overflow. These
+  checks are supplemented by
+  `src/components/promptDesigner/usePromptDesignerRunActions.test.tsx`, which
+  holds settings lookups and transport responses past restart, attachment
+  change and unmount (including A → B → A and a transport ignoring abort).
+  Only the current request may update the result or clear its progress state.
+  All these tests use no real provider credentials or production project writes. The
+  Temperature browser scenarios are also included in the CI browser gate.
 - `watch-conditional-remote.spec.ts` runs a real Node processor and debugger
   WebSocket against the hosted editor with a controlled local LLM stream. It
   covers a conditional producing Subgraph feeding two calls to the same Watch
@@ -932,7 +1452,11 @@ Recording playback state is project-scoped in upstream Rivet. The hosted editor 
 
 Keep Studio Server recording cleanup on the stable shared `loadedRecordingState` export and perform the project ownership comparison in the hosted application. Do not import an internal convenience atom such as `clearLoadedRecordingForProjectState` merely because it exists in the same monorepo: use the public host seam so Rivet editor refactors and Studio Server changes remain independently reviewable in one commit.
 
-Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extractor searches both event types, so a `prompt` input is found with `$.prompt.requestId` while an `input` port uses the root path `$.requestId`. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep this covered through both a real child processor recording and the called-project HTTP listing filter.
+Cross-project Subgraph runs are attributed to the called project. Unlike a root recording, a child recorder begins with `graphStart` rather than `start`; `graphStart.inputs` contains the values mapped from caller ports to the target graph's Graph Input names. The shared extraction helper understands both formats for artifact tools and tests: a `prompt` input resolves at `$.prompt.requestId`, while an `input` port uses the root path `$.requestId`. This does not make child recordings input-search candidates: the modal filters roots only and unfolds their children without input predicates. Hosted editor child recordings depend on **Record local graph executions**; server endpoint child recordings depend on the server recording setting. Keep extraction covered with a real child processor recording, and browse ownership covered through the root-search and sub-run HTTP regressions.
+
+The local recording setting also persists the parent editor run in both Browser and internal Node modes, including successful graphs with no LLM-profile events. Do not gate parent uploads on health evidence: that strands child recordings outside the initiating workflow's related-run scope. Preserve the parent/child correlation, disabled-recording behavior, and terminal socket capture checks. `local-editor-recordings.spec.ts` checks real Browser cross-project execution and the real internal Node executor while intercepting recording uploads so fixtures cannot mutate working data.
+
+Recording finalization snapshots project/replay text and elapsed execution time before asynchronous dataset export; serialization errors also take the unavailable-evidence path rather than being silently swallowed. Browser and internal Node share abort-status policy: a successful Abort Graph remains succeeded, an unsuccessful abort marks an otherwise successful run suspicious, and cleanup never demotes an existing failure. Node parent status follows root terminal events, not a child's `graphError`: a Subgraph Error output can handle that child failure and complete the parent successfully. The recording bridge bounds capability/outcome requests to 10 seconds and uploads to 60 seconds. Cache only a confirmed capability or a definitive 404; authentication, throttling, malformed responses and timeouts retry on the next run. Do not automatically retry recording uploads, because a timed-out request may already have committed a recording. The browser regression covers successful early termination, handled child errors, and rejected uploads in both executors, including unchanged successful execution state after a persistence failure.
 
 ## Source of truth
 
@@ -1016,6 +1540,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - keep full in-memory project content in `openedProjectSnapshotsState`
   - prefer `RivetWorkspaceHost.openProjectSnapshot`, `replaceCurrent`, `closeProject`, `moveProjectPaths`, and `updateProjectMetadata` for the actual workspace transition or externally persisted title/path reconciliation
   - closing a tab must retain its `projectEditorStateByProjectIdState` navigation/viewport entry, finish tab/snapshot/context cleanup, and then await one grouped `project` storage flush; this keeps close -> immediate page reload -> reopen from losing the latest canvas position without durably resurrecting stale open-tab metadata, including when an inactive tab still has a pending debounced snapshot
+  - close fallbacks read current tab metadata from the atom store. Compare the activation revision around a fallback load: if another selection superseded it, wait for that pending selection and finish only the requested tab's cleanup without trying additional replacements or clearing the new selection's execution state. If the closing tab remains active (reselected, or a newer selection failed), cancel the close and leave its live edits intact. A genuine IO failure still tries the next recoverable tab. Queued activation also rereads the requested tab's metadata before IO, so a move while queued cannot restore a stale save path; these cases are covered in `useLoadProject.test.tsx`
   - the last loaded project and graph remain cached after the final tab closes, but viewport snapshots and reload checkpoints require an open graph tab; reopening uses the retained editor entry instead of snapshotting an empty workspace's default canvas
   - wrapper atom reads are acceptable for hosted path lookup, duplicate-project-id checks, and stale-empty-tab cleanup, but do not reimplement tab close fallback, path rewrite transitions, or live project metadata patching in wrapper code when the workspace host exposes them
   - normalize persisted opened-project metadata by dropping missing entries, orphan metadata, duplicate project ids, and legacy full-project payloads before the tab strip reads it; when damaged duplicate entries share an id, prefer the entry that still has a file path
@@ -1025,9 +1550,22 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - after the tab strip remounts, do not let the previous pathless `projectState` re-add itself; the sync hook may register the current project only when its project id is already present in the visible opened-project id list or the current project is still file-backed by `loadedProject.path`
   - prune pathless opened-project metadata when there is neither an active current project nor an `openedProjectSnapshotsState` entry that can activate that tab
   - project loading must read the latest atom store at call time, and direct workflow opens should pass their freshly loaded snapshot into the workspace host instead of depending on a just-written atom value to be visible immediately
+  - change the loaded path, tab registry and Evaluation owner synchronously with the target project; derived static-data hydration must not block or own activation. Otherwise the editor can temporarily pair the new project with the previous tab's path, and hydration completion can overwrite a path move that arrived during its await. The hook regression suite gates hydration to verify both the intermediate path and move preservation
+  - for an already-open workflow, use `RivetWorkspaceHost.activateProject(projectId, { preferredGraphId })`: ordinary tree single/double clicks must not reload content, mark it clean, reset its viewport/resource target, or clear replay state. The active tab is a no-op unless an explicit graph target changes; inactive activation uses the same load path as editor-tab selection and preserves the saved baseline. Reserve `openProjectSnapshot`/`replaceCurrent` for newly loaded content and explicit `reloadFromDisk`. Preview promotion must update only tab UI state, never dirty flags
+  - `project-tree-activation.spec.ts` uses mocked tree/load/save IO to check active double-click, A -> B -> A activation, dirty dots, unchanged node positions, no redundant server loads, save completion, and same-tab Node library preservation. It is included in `studio-server:ui:ci`; each tree activation waits for the editor's public `project-opened` acknowledgement, not just already-present CSS classes. Run it alongside `project-preview-mode.spec.ts` and `dashboard-save-button.spec.ts` when changing this boundary; never use production workflows as writable regression fixtures
+  - recovery coverage also exercises same-origin windows, an opener-created duplicate inheriting session storage, independent reloads, quota errors, an IndexedDB transaction aborted after its `put` succeeds, malformed project content, and saved-server/recovery-revision mismatches. The duplicate must get its own writer and must ignore independent legacy navigation fragments. Use one browser context for window-collision checks; separate contexts cannot prove isolation
+  - `workspaceRecovery.test.ts` and `hybridStorage.test.ts` cover exact read-back acknowledgement, interrupted legacy imports with retained originals, malformed authorities, unavailable session storage, edits during flush, retry and backend reconfiguration. Injected storage test doubles must actually implement read-after-write; a no-op `setItem` is intentionally not a successful recovery. `deserialize-worker.test.ts` covers worker cancellation/replacement and the configurable hosted overall deadline, including expiration before deferred dataset import
+  - Hydration guards are checked before replacing a group and after every asynchronous startup boundary. Storage regression tests delay an old backend read past replacement, cancel a failing read, and verify corrupt primitive records do not erase the current authority. The browser suite also forces only the session reload-reference write to fail: Retry must stay enabled without another edit, the unload warning must remain truthful, and a successful retry/reload must restore the unsaved workspace
+  - Recovery regression tests also cover retryable checkpoint/reference reads, a late read failing after a new checkpoint commits, overlapping recovery choices, provider replacement during selection, frozen selection of active writers, and memory-only fallback. Durable test providers must explicitly model persistence across document recreation instead of assuming `MemoryAsyncStorage` survives reload. The browser suite disables IndexedDB to verify the memory-only warning, unload protection and truthful server-save result; blocked session-reference reads and session-storage access must expose recovery controls without mounting a clean empty editor. Checkpoint keys use the existing cryptographic Nano ID generator rather than requiring the browser's optional `crypto.randomUUID` helper; the browser regression disables that helper and verifies bootstrap, edits and reload. Finish edits before browser verification or use a fixed production preview: changing React provider modules mid-run can split context identities through Vite hot reload and invalidate the test
+  - `useInitializeWorkspace.test.tsx` tests the actual bootstrap hook without mounting the whole editor. It covers callback-only host rerenders (no rehydration), current error delivery, backend replacement, unmount during IO, and synchronous/asynchronous notification failures. Changes to error callbacks must not restart storage initialization or overwrite live edits with an older checkpoint
+  - The default dataset adapter still requires IndexedDB; memory-only recovery is not a promise that every editor subsystem works without browser storage. Missing IndexedDB must reject opening with an actionable enable-storage/retry message, leave the prior project selected, and allow retry when storage becomes available. For a failed first open, assert the dashboard's error notice: the empty editor iframe may be hidden. The browser memory-only test verifies that rejection, restores dataset storage, and then checks that the already-selected volatile recovery adapter still cannot claim reload protection even after a successful server save
+  - no synchronous navigation-only session checkpoint may override recovered content. Persist project-scoped view state with the complete workspace envelope, checkpoint on hidden visibility while the page remains alive, and treat unload-time asynchronous writes as best effort. Native/custom IO providers retain optional signal/deferred-commit interfaces; a non-abortable provider's late result must be rejected by the activation guard
+  - custom download-only IO providers may declare `projectSaveConfirmation: 'download-only'`. Returning a download filename must not clear the dirty baseline or emit `onProjectSaved`; the browser cannot certify the actual downloaded file. Ordinary providers keep the successful-storage-write contract. The public save hook regression suite covers both paths
+  - `TauriIOProvider.test.ts` runs the real native API adapter through an in-memory IPC stub (no OS dialogs or production files), covering deferred/guarded dataset import, cancelled reads and rejected native writes. Combined with custom-provider activation tests, this protects interface compatibility; it is not an interactive packaged-desktop smoke test
   - if direct workflow activation fails, rely on the workspace host's boolean result and avoid posting `project-opened` to the dashboard
+  - `useLoadProject` in both app and hosted mode uses the store-scoped `runLatestProjectActivation` coordinator: preparation is cancellable and deadline-bound, never a lock that blocks a newer selection. Serialize only derived cache operations per provider; do not acknowledge superseded selections or bypass the coordinator for an active editor-tab click. After IO, recheck tab/path and immutable project identity, reread its current snapshot, and preserve deliberately absent static data. `useLoadProject.test.tsx` covers delayed cancellation, close/move races, picker reopens, reused paths, latest snapshots and live-graph preservation; `projectActivationCoordinator.test.ts` covers nonblocking supersession, deadlines and failed-operation recovery. The tree activation browser test also exercises slow tab recovery after reload, identity rejection and successful retry
   - when fixing tab close/switch behavior, update the wrapper overrides rather than storing full project objects back into `projectsState.openedProjects`
-  - if `useSyncCurrentStateIntoOpenedProjects` is overridden for hosted tab cleanup, carry forward upstream's dirty-digest sync as well: `buildCurrentProjectContentSnapshot`, `savedProjectContentDigestsState`, and `projectUnsavedChangesState` are what make the editor tab unsaved-changes dot appear after edits
+  - if `useSyncCurrentStateIntoOpenedProjects` is overridden for hosted tab cleanup, call the shared `useSyncProjectDirtyState` observer; do not duplicate its saved-baseline logic in the wrapper. It must preserve dirty recovered tabs when their saved baseline is absent
   - carry forward upstream's per-project executor metadata in hosted opened-project overrides: the active tab must write `OpenedProjectInfo.executorMode`, and `useLoadProject` must pass `projectInfo.executorMode` back into `workspaceTransitions.loadProject(...)` so Browser, Node, and Remote Debugger choices are restored when switching tabs
 - wrapper module overrides should stay scoped to upstream app importers
   - `packages/studio-server-web/vite.config.ts` resolves override files only when the importer is under `packages/app/src`
@@ -1055,6 +1593,86 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
 
 ## Safe verification workflow
 
+For node-settings changes, preserve project/graph/node/field ownership rather
+than using a node ID as global identity. Workspace replacement paths must
+advance `nodeEditorSessionRevisionState` before replacing content; authoritative
+file reloads also advance `nodeEditorContentRevisionState` for the project.
+Do not put ordinary node edits in either generation counter. New asynchronous
+node-editor controls should use `NodeEditorSessionContext` and check the session
+after awaits, before mutations, notifications or markers. Retired work cannot
+become current again when the user returns to the same tab. Code/string/metadata
+field commits are synchronous; debounce expensive derived work, not canonical data.
+Generic non-node string controls may still explicitly request debouncing.
+`NodeChanged` accepts an optional third comparison baseline. Field helpers that
+patch a live node must pass that live baseline, so an immediate edit back to a
+rendered value is not mistaken for an unchanged stale field.
+
+Regression coverage:
+
+- `NodeEditorSessionContext.test.tsx` exercises real Jotai/React ownership,
+  StrictMode cleanup, batched A → B → A, replacement/deletion/read-only guards,
+  variants/library sources and consecutive edits/commands without a render.
+  A round trip or close/reopen must create a fresh writable lifetime without
+  reviving retained callbacks; StrictMode must not retire a still-mounted owner.
+  A real Subgraph editor holds its version request across renewal: fresh controls
+  release loading, the retired request cannot publish reference/node changes,
+  and a fresh version selection still succeeds.
+- `nodeLibrary.test.ts` checks atomic library commits, consecutive source edits,
+  preservation of live graph overlays and project metadata, and rejection of
+  retired/read-only owners. It also checks failure before commit and ensures
+  stale graph snapshots cannot resurrect explicitly deleted wires. Use
+  `updateNodeLibraryState` for library mutations;
+  do not reconstruct a project from a component render snapshot. Source edits
+  must target a prefab ID, and canvas patches must merge against their rendered
+  baseline instead of overwriting a newer source wholesale.
+- `nodeEditorSession.test.ts` checks irrevocable retirement, sibling patches and
+  cancellation that clears optional metadata explicitly. The partial edit-node
+  command treats an omitted field as "keep", so clearing must pass `undefined`.
+- `codeEditorModelCache.test.ts` checks scoped models, source acknowledgement,
+  partial drafts and attached-model eviction protection.
+- `node-editor-ownership.spec.ts` uses isolated mocked API fixtures with cloned
+  graph/node IDs for Object, current/legacy Code and Prompt nodes, both focused
+  and unfocused. It checks the visible settings, underlying node bodies, dirty
+  indicators, immediate Save bytes, read-only variants and same-project activation.
+  Object/Code library fixtures also exercise multiple sources, graph/library
+  sources sharing IDs, cloned-project tab switching and exact saved source data.
+  It includes immediate title/description commits and Escape-to-cancel metadata,
+  with no false dirty flag when restoring a previously absent description.
+  It also checks incomplete JSON-object drafts and formatting-equivalent source
+  acknowledgements, including restored validation errors. Prompt coverage delays
+  dictionary loading and overlaps spellchecks to prove a cancelled check cannot
+  clear the newest markers; editing then clears both markers and status.
+  Metadata uses canonical controlled values: do not recommit an internal form
+  buffer on blur/confirmation. Keep global node controls non-shrinking in the
+  scrolling panel so tall Code editors cannot overlap the variant selector. Run it with
+  `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
+  node-editor-ownership.spec.ts` against a candidate app URL. The CI browser
+  configuration includes it. Also run `project-tree-activation.spec.ts` and the
+  affected recovery/save suites. Use a fixed build/preview for final browser
+  checks so HMR cannot split the editor's session context during a test.
+- `node-editor-lifecycle.spec.ts` adds held-save/newer-keystroke races, sibling
+  toggles, immediate panel close, exact checkpoint/reload recovery, reused IDs
+  across graphs, focused Monaco Undo/Redo, and an explicit same-ID disk reload.
+  Its synthetic AI provider intentionally ignores abort. It checks late results
+  after switching/deleting/editing, successful current-owner output, and cancel
+  followed by retry while the old request is still pending. No provider egress
+  or real credentials are used. The warm-cache eviction case reopens canonical
+  node data after visiting more than twelve fields.
+  A held Subgraph preview crosses a project switch, then recreates the control
+  to verify that shared reference state was not contaminated; a normal version
+  selection and exact Save are the positive control. Guard every referenced-
+  project write, including menu refresh, before calling the node-change handler.
+  Run `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe
+  node-editor-ownership.spec.ts node-editor-lifecycle.spec.ts
+  project-tree-activation.spec.ts project-preview-mode.spec.ts dashboard-save-button.spec.ts`.
+  Both node-editor suites are included in the CI browser configuration.
+  The lifecycle suite also records input-to-next-frame p95/high-water and exact
+  saved text on a 350-node synthetic graph, attaching `typing-frame-latency.json`
+  to the Playwright report. These timings are measurements, not a brittle shared-CI
+  performance threshold or a promise about production graphs/hardware. Inspect
+  them when changing synchronous commits; never delay canonical text to optimize
+  expensive derived validation/port analysis.
+
 For Studio Server API changes:
 
 1. `yarn workspace @valerypopoff/rivet-studio-server-api run test`
@@ -1067,22 +1685,25 @@ Current repo-local baseline:
 - `.github/workflows/studio-server-verify.yml` is both the direct `develop` verifier and the reusable same-commit image verifier. It builds once, verifies the compiled Core, Node, Evaluations, and App Executor export surface, uploads compiled dependencies, and runs four isolated API shards plus web tests, host compatibility, repository contracts, and Kubernetes/deployment contracts in parallel. Every artifact consumer verifies that same export surface immediately after restore, so a misplaced or incomplete archive fails at the handoff rather than later as unrelated module-load test failures. The artifact paths share `packages/` as their common ancestor, so every dependent job restores them beneath `packages/`; extracting to the repository root would relocate workspace exports and cause false `ERR_MODULE_NOT_FOUND` failures. The one stable-named producer uses `overwrite: true` because Actions artifacts are immutable: retrying only a failing consumer still downloads the original artifact, while retrying the producer replaces it cleanly. The API manifest discovers test files recursively, so a newly nested API test fails validation until it is assigned to exactly one shard. The final `verify` job preserves the existing status identity. A lightweight changed-path classifier may skip heavy jobs on unrelated commits without omitting the final status check. Stale branch and pull-request verification is canceled; tag, schedule, and manual release verification is not.
 - Job timing summaries are the current performance evidence. Both the generic Build and the Studio Server verification aggregators report their complete critical paths, while substantive jobs report their own wall time. Treat the former five-minute image note as historical; compare current Build, verification, candidate smoke, and optional Kind timings independently.
 - For image-release predecessor failures, follow [One-time release-lineage cutover](./kubernetes.md#one-time-release-lineage-cutover). Run `node --test deploy/studio-server/scripts/studio-server-release-manifest.test.mjs` and `yarn node scripts/checks/check-ci-workflows.mjs` after changing recovery. Recovery fixtures must prove that the real manifest CLI accepts the staged path, and registry failures must not masquerade as an empty image set. These checks do not require registry writes or a Kubernetes rehearsal.
-- If the full API suite fails with `ERR_MODULE_NOT_FOUND`, run `yarn install --immutable` and confirm the importing workspace declares the package directly before treating it as an application regression.
+- If the full API suite fails with `ERR_MODULE_NOT_FOUND`, distinguish missing dependencies from missing compiled workspace exports. For missing packages, run `yarn install --immutable` and confirm the importing workspace declares the package directly. For missing `packages/{core,node,evaluations}/dist` exports or the executor bundle, run `yarn studio-server:build:dependencies`, then `yarn check:compiled-workspace-exports` before rerunning. Source-level tests can pass without these artifacts, while API subprocess tests require them. Do not run local API suites concurrently with workspace builds (including the Core rebuild inside `yarn test:style`): cleaning `dist` during a test can produce false module-load failures. CI uses isolated jobs and restores/verifies the artifacts before each consumer starts; do not rebuild silently or weaken checks to hide a broken artifact handoff.
 - The test-suite cleanup plan previously lived in the root `tests-refactor.md` working document; after final prune, keep the lasting outcomes in `docs/refactor-history.md` and keep the public verification commands stable for future cleanup.
 - API workflow tests should reuse the shared helpers under `packages/studio-server-api/src/tests/helpers/` before adding local harness code. Workflow HTTP harnesses, JSON response handling, recording waiters, filesystem execution cache invalidation probes, temp workflow roots, root-level published-project fixtures, and the filesystem workflow suite bootstrap/cleanup live there.
 - Filesystem hosted-save changes must exercise `filesystem-project-transactions.test.ts`. Its injected checkpoints cover each durable stage before and after the committed marker, complete project/dataset rollback or roll-forward, first saves, dataset addition/replacement/removal, validation, Unicode paths, corrupt evidence, and read/write exclusion. `workflow-filesystem-tree.test.ts` separately proves that rejected saves do not advance the tree token and that a committed save removes a stale dataset before emitting exactly one invalidation. Concurrent-create coverage must assert the storage invariant—exactly one complete project/dataset pair commits and the other request conflicts—without assuming that JavaScript call order determines which request reaches the filesystem write coordinator first. The storage capability probe runs before the API listens; a probe or recovery failure is an expected startup/readiness failure, not a warning to ignore.
 - The canonical default API file list lives in `deploy/studio-server/scripts/api-test-files.mjs`. `yarn workspace @valerypopoff/rivet-studio-server-api run test` executes that complete manifest serially. CI uses `run-api-tests.mjs --shard-index N --shard-count 4` to divide the same sorted list across isolated runners while preserving `--test-concurrency=1` inside each shard. To run only specific files, use `yarn workspace @valerypopoff/rivet-studio-server-api run test:files -- src/tests/example.test.ts`.
+- The API runner invokes the checked-in Yarn release through the current Node executable, without a shell or global/Corepack shim. Its CLI rejects unknown/repeated options, missing or non-integer values and invalid shard coordinates, including in `--check` mode. Discovery covers nested `.test`/`.spec` files with `.ts`, `.mts`, `.cts` and `.tsx` suffixes: newly added tests must enter the manifest rather than silently escaping CI. `node --test scripts/ci/api-test-shards.test.mjs` verifies exact-once shard coverage, discovery, CLI validation and a real shard invocation with a deliberately broken global Yarn on PATH.
+- Use root `yarn test:app` for the complete local App suite: Node/tsx default discovery omits `.tsx`, so the runner follows the discovered TypeScript suite with explicit React-test batches of at most 32 files to stay within Windows command-line limits. CI shards already enumerate every supported suffix explicitly. `scripts/ci/app-test-shards.test.mjs` checks both command plans; calling the App workspace's bare `test` script alone does not exercise React hook/component regressions.
 - Persistence concurrency tests must keep real-time leases long enough to survive normal runner scheduling and SQLite commits. Test short lease expiry in the clock-controlled health-state tests instead; a short wall-clock lease makes a two-call concurrency assertion nondeterministic without exercising a different production invariant.
 - The old mixed `workflow-services.test.ts` suite has been split by behavior domain. Put new filesystem tree/import/export coverage in `workflow-filesystem-tree.test.ts`, publication-state, endpoint-reservation, and published project-reference coverage in `workflow-publication-filesystem.test.ts`, published-version-history coverage in `workflow-published-history-filesystem.test.ts`, endpoint execution/cache coverage in `workflow-execution-filesystem.test.ts`, and recording route coverage in `workflow-recordings-http.test.ts`. Project move coverage must use `moveWorkflowItemWithBackend(...)`, the same cache-invalidating boundary used by the production route.
 - The old mixed `managed-backend-sql.test.ts` suite has been split. Put managed schema, folder-move SQL, and execution lookup query contracts in `managed-workflow-schema.test.ts`; put managed publication history, restore, star persistence, and save-target behavior in `managed-publication-history.test.ts`. Schema tests should import the exported SQL string, not read `schema.ts` as source text, so escaping regressions are tested against what the app actually sends to Postgres.
 - The old broad `phase4-static-contract.test.ts` suite has been split. Put proxy, Docker image, CI image, and production launcher contracts in `proxy-image-contract.test.ts`; hosted editor wrapper/upstream seam guardrails in `hosted-editor-seams.test.ts`; and Helm/chart topology assertions in `kubernetes-contract.test.ts`.
 - Keep `hosted-editor-seams.test.ts` focused on wrapper ownership. Recording activation, executor preservation, and tab-path cleanup are exercised by the web recording/command behavior tests. Save-shortcut classification and evaluation suppression are exercised by `editor-bridge-focus.test.ts` and `editor-bridge-contract.test.ts`; app hotkey tests cover editor repeat suppression, and `evaluation-save-shortcut.spec.ts` verifies dashboard and iframe ownership in the browser. The separate dashboard save listener retains a narrow source guard for repeat suppression and its required `shortcut` argument until hook-level coverage replaces it. That source is intentional: Evaluations uses it to suppress project saves.
+- The hosted seam guard follows wrapper-owned integration points rather than obsolete implementation locations: dependency-light `entry.tsx` awaits `bootstrapApp.tsx`, which loads hosted CSS and React; `useOpenWorkflowProject` activates existing tabs through `RivetWorkspaceHost` instead of reading snapshots itself; the hosted `useLoadProject` adapter delegates to App's `useActivateOpenedProject`; and hosted tab synchronization delegates dirty-state observation to App's `useSyncProjectDirtyState`. It must not read the shared App hooks' implementation files or expand the upstream-source allowlist. App's `useLoadProject.test.tsx` owns behavioral coverage for cancellation, snapshot activation, saved baselines and conservative dirty state. Run the focused hosted seam test plus `yarn workspace @valerypopoff/rivet-app run test:files -- src/hooks/useLoadProject.test.tsx` after ownership refactors, then API shard 3/4 (`--shard-index 2 --shard-count 4`) before handoff. Root `yarn test:style` also executes the actual Studio Server style-policy CLI through `scripts/ci/studio-server-test-style.test.mjs`; use `yarn studio-server:verify:test-style` for the focused check and the independent Studio Server CI gate. Architectural guards supplement, rather than replace, behavioral editor and browser regressions.
 - `yarn workspace @valerypopoff/rivet-studio-server-api run test` intentionally does not run Helm. Use `yarn studio-server:verify:kubernetes` for Kubernetes launcher tests, Helm-rendered chart contracts, and production overlay lint/template checks. The API suite runs with `--test-concurrency=1` because many API tests intentionally set process-wide `RIVET_*` roots before importing route modules; keep that serialization unless the affected tests are refactored to avoid global env mutation.
 - Wrapper regressions built from upstream Rivet fixtures must derive fixture project and graph IDs from the parsed fixture instead of copying generated IDs into the test. For filesystem project-reference moves, cover a reused former hint path as well as the moved target: the wrapper must verify a hinted project's immutable ID before accepting it, then resolve the moved project by ID. When a fixture needs `Project.references`, set that field on the parsed project and serialize it with Rivet; do not rely on a version-specific YAML placeholder such as `references: []`.
 - Keep full-screen node-output paging compact and in the header's top-left pager group. LLM Chat round history keeps its full truthful label there (for example, `Round 2 · Requested tools`) instead of becoming a second full-width control row. An ordinary multi-round LLM invocation uses its selected historical round directly; only nodes configured with `Run per item` use the split-output renderer. The `latest` terminal output and the newest retained round that led into a failure both show its process-level error, while the retained round keeps its own snapshot content. Never repeat that error or its red output surface on earlier historical rounds; the node can retain its overall failed execution status while the selected earlier snapshot is presented neutrally.
 - A selected errored nested run owns the same red output surface even when its parent node remains in a different aggregate state—this includes Delegate Tool Call pages. For every inline multi-run node, the shared pager owns the sole thin neutral divider below its row; the selected body must not add a second, status-colored top border.
 - Disabled-node dependency warnings are editor-only diagnostics. Derive them from effective nodes and definition-valid current-graph connections, following Core's first-valid-wire-per-input rule and its exported `canConsumeControlFlowExcludedInput` policy. A disabled node remains connected at runtime and produces control-flow exclusion rather than a missing wire; show the existing header warning on each enabled node that Core will therefore mark Not Ran. Do this for connected optional fallback ports too: a Graph Input's Default Value can fall back only when unconnected, not when its source is excluded. Do not alter graph execution, persistence, or automatic wiring.
-- `yarn studio-server:verify:test-style` owns the test-suite style guardrails: root `yarn studio-server:test` must keep composing the non-browser repo-local gate after the standard `pretest` dependency bootstrap, the canonical API manifest and `packages/studio-server-web` test command must each list every assigned test exactly once in sorted order, `verify:web-pure` must list every pure web test exactly once, `kubernetes-*.test.ts` API files must stay behind `verify:kubernetes`, runnable test/spec files must stay in their expected top-level suite folders, retired or merged-away suites must not come back, `.only` tests are blocked, and wrapper tests/helpers must not assert upstream `packages/app/src` implementation paths beyond the approved host entry/style seam. Run this guard immediately after adding a pure web test; the web package's explicit test list is not automatically sorted.
+- `yarn studio-server:verify:test-style` owns the test-suite style guardrails: root `yarn studio-server:test` must keep composing the non-browser repo-local gate, the canonical API manifest and `packages/studio-server-web` test command must each list every assigned test exactly once in sorted order, `verify:web-pure` must list every pure web test exactly once, retired or merged-away suites must not come back, `.only` tests are blocked, and wrapper tests/helpers must not assert upstream `packages/app/src` implementation paths beyond the approved `host.css` seam. The API runner and policy share recursive discovery of `.test`/`.spec` files with `.ts`, `.mts`, `.cts` and `.tsx` suffixes; all are scanned, and any API test whose basename starts with `kubernetes-` belongs to `verify:kubernetes`, including nested tests. Pure web `.test.ts` files and observable Playwright `.spec.ts` files remain top-level because their suite commands enumerate them explicitly. The API workspace must not add a separate `pretest` bootstrap. Run this guard immediately after adding a pure web test; the web package's explicit test list is not automatically sorted. `node --test scripts/ci/studio-server-test-style.test.mjs scripts/ci/api-test-shards.test.mjs` covers supported paths, upstream-source boundary rejection, the real policy CLI, discovery and shard invocation. Run root `test:style` before, not concurrently with, App/API runtime suites: its Graph Builder asset check rebuilds Core and temporarily replaces `dist`.
 - Observable Playwright specs validate whichever app is currently running at `PLAYWRIGHT_BASE_URL`; that target can be an older rebuilt container or a published image. Do not read local `package.json` metadata from Playwright specs to assert deployed UI text. If version display is the behavior under test, assert that the live modal renders a version-shaped value, or explicitly run the spec against a freshly rebuilt local target.
 - Tests that intentionally exercise negative paths should capture and assert expected `console.error` or `console.warn` output. A passing `yarn studio-server:test` should not print scary stack traces for failures that the test deliberately caused.
 - Final-prune cleanup should not reintroduce a broad suite just to keep a helper alive. If a helper has no call sites after a split, delete the helper and let `yarn workspace @valerypopoff/rivet-studio-server-api run build` plus `yarn studio-server:verify:test-style` prove the manifest and type boundaries.

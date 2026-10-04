@@ -279,6 +279,10 @@ const recordingsRunsQuerySchema = z.object({
   inputValue: z.string().optional(),
   inputCursor: z.coerce.number().int().min(0).optional().default(0),
   inputAfter: z.string().min(1).max(512).optional(),
+  includeSubgraphRuns: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
 
 const reconciliationFindingQuerySchema = z
@@ -482,7 +486,7 @@ workflowsRouter.post(
 );
 
 workflowsRouter.get(
-  '/recordings/workflows/:workflowId/runs',
+  ['/recordings/runs', '/recordings/workflows/:workflowId/runs'],
   asyncHandler(async (req, res) => {
     const parsedQuery = recordingsRunsQuerySchema.parse(req.query);
     const requestAbort = createRequestAbortSignal(req, res);
@@ -501,6 +505,7 @@ workflowsRouter.get(
           workflowId: String(req.params.workflowId ?? ''),
           statusFilter: parsedQuery.status,
           filter: inputFilter,
+          includeSubgraphRuns: parsedQuery.includeSubgraphRuns,
         });
       }
     } catch (error) {
@@ -518,6 +523,7 @@ workflowsRouter.get(
         parsedQuery.inputCursor,
         requestAbort.signal,
         parsedQuery.inputAfter,
+        parsedQuery.includeSubgraphRuns,
       );
       if (!requestAbort.signal.aborted && !res.destroyed) {
         res.json(runsPage);
@@ -529,6 +535,31 @@ workflowsRouter.get(
     } finally {
       requestAbort.cleanup();
     }
+  }),
+);
+
+// A separate metadata-only browse path: children are execution context, not
+// input-search matches. Pagination bounds responses even for large families.
+workflowsRouter.get(
+  '/recordings/:recordingId/sub-runs',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { page, pageSize } = recordingsRunsQuerySchema.pick({ page: true, pageSize: true }).parse(req.query);
+    const recordingId = z.string().min(1).max(256).parse(req.params.recordingId);
+    res.json(
+      await listWorkflowRecordingRunsPageWithBackend(
+        recordingId,
+        page,
+        pageSize,
+        'all',
+        null,
+        0,
+        undefined,
+        undefined,
+        false,
+        'children',
+      ),
+    );
   }),
 );
 

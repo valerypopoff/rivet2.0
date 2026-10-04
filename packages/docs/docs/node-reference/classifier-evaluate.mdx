@@ -10,12 +10,14 @@ Evaluates one shared state against a batch of independent typed questions in exa
 
 ## Settings
 
+**Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
+
 - **Provider**: selects the classifier protocol implementation. The first built-in provider is **Jev**.
 - **Model**: defaults to `jev-latest` for Jev. New nodes resolve the selected provider's default model unless you enter an explicit model, so switching Provider does not retain Jev's default accidentally. Pin a version when downstream thresholds were calibrated against it.
 - **API key source**: use an API Key input port or a configured provider key. Jev defaults to the `typesafeApiKey` programmatic setting and `TYPESAFE_API_KEY` environment variable. The Rivet app also provides Settings → Classifier → Jev API Key.
 - **Overall timeout**: defaults to 30 seconds and includes retries and backoff.
 - **Outputs**: enable **Output usage details** to add calculated cost to Usage. For Jev, Rivet uses the fixed rate of **$0.042 / MTok input** and **free output tokens**. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
-- **Error behavior**: **Retry on non-200** retries non-authentication, non-validation HTTP responses. **Repeat times** is the number of retries after the initial request; **Cooldown, ms** is the fixed wait between them. Both fields use the same defaults and layout as LLM Chat.
+- **Error behavior**: controls HTTP-status failures, catching other node failures, and retries. See the behavior below. **Repeat times** and **Cooldown, ms** use the same defaults and layout as LLM Chat.
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
 
@@ -34,8 +36,19 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 - **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled, Jev also includes `totalCost` in USD, calculated from its fixed $0.042 / MTok input rate; output tokens contribute $0.
 - **Classifier request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
 - **Classifier response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
+- **Run failed** (`boolean`) and **Run error** (`string`): available when **Fail on non-2XX status code** is disabled or **Catch all failures** is enabled. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
 
-For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a fractional `score`, `legend`, `probabilities`, and `confidence`; Noul answers contain a zero-to-one `noul` probability.
+For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a numeric `score` (which can be fractional), `legend`, `probabilities`, and `confidence`; Noul answers contain a numeric `noul` probability. These values come from the provider; Rivet does not enforce their numerical ranges.
+
+Rivet checks the response structure, required field types, and question/option/level mapping, then passes the provider's numbers through unchanged. It does not check probability sums, numerical ranges, or derived numerical relationships, and does not round or normalize answers. Malformed responses still fail. This policy applies to every API-compatible classifier provider, not only Jev.
+
+Calculated `totalCost` is added only when Usage contains safe, non-negative integer token counts. Otherwise the provider's Usage is still returned unchanged, without calculated cost.
+
+## Error behavior
+
+- **Fail on non-2XX status code** is enabled by default. Disable it to route a failed provider HTTP status to Run failed and Run error instead of throwing. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.
+- **Catch all failures** is off by default. Enable it to route node failures, including invalid inputs, missing credentials, transport errors, request timeouts and malformed responses, to the failure outputs. Explicit graph cancellation remains cancellation, not a caught node failure.
+- **Retry on non-200** retries non-authentication, non-validation HTTP failures. **Repeat times** is the number of retries after the initial request; **Cooldown, ms** is the fixed wait between them. Despite the setting's name, a valid response with any successful 2XX status is accepted. Malformed 2XX responses are not retried.
 
 ## Execution requirements
 

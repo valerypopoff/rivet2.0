@@ -11,7 +11,7 @@ import { nodeDefinition } from '../NodeDefinition.js';
 import { type Inputs, type Outputs } from '../GraphProcessor.js';
 import { type EditorDefinition, type InternalProcessContext } from '../../index.js';
 import { coerceType, dedent, getInputOrData } from '../../utils/index.js';
-import { getError } from '../../utils/errors.js';
+import { getError, isAbortError, formatCaughtRunError as formatCaughtRequestFailureError } from '../../utils/errors.js';
 
 const REQUEST_FAILED_OUTPUT_ID = 'requestFailed' as PortId;
 const REQUEST_ERROR_OUTPUT_ID = 'requestError' as PortId;
@@ -32,54 +32,8 @@ type ExcludedOutput = {
   value: undefined;
 };
 
-function isAbortError(error: unknown, signal: AbortSignal): boolean {
-  return signal.aborted || getError(error).name === 'AbortError';
-}
-
 function buildNon2xxStatusCodeError(statusCode: number): Error {
   return new Error(`HTTP call returned non-2XX status code: ${statusCode}`);
-}
-
-function stringifyNonErrorValue(value: unknown): string {
-  if (value == null) {
-    return String(value);
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (typeof value !== 'object') {
-    return String(value);
-  }
-
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch (_error) {
-    return String(value);
-  }
-}
-
-function formatCaughtRequestFailureError(error: unknown, seen = new Set<unknown>()): string {
-  if (error && typeof error === 'object') {
-    if (seen.has(error)) {
-      return '[Circular error reference]';
-    }
-    seen.add(error);
-  }
-
-  if (error instanceof Error) {
-    const errorText = error.stack?.trim() || `${error.name}: ${error.message}`.trim();
-    const cause = (error as Error & { cause?: unknown }).cause;
-
-    if (cause == null) {
-      return errorText;
-    }
-
-    return `${errorText}\n\nCaused by: ${formatCaughtRequestFailureError(cause, seen)}`;
-  }
-
-  return stringifyNonErrorValue(error);
 }
 
 function createHttpCallRequestAttempts(): HttpCallRequestAttempts {
@@ -543,51 +497,57 @@ export class HttpCallNodeImpl extends NodeImpl<HttpCallNode> {
         enableFolding: true,
       },
       {
-        type: 'group',
-        label: 'Retry on non-200',
-        toggleDataKey: 'retryOnNon200',
-        editors: [
-          {
-            type: 'number',
-            label: 'Repeat times',
-            dataKey: 'retryOnNon200RepeatTimes',
-            defaultValue: DEFAULT_RETRY_ON_NON_200_REPEAT_TIMES,
-            min: 1,
-            step: 1,
-            layout: 'inline',
-            helperMessage: 'Times to repeat after the initial request',
-          },
-          {
-            type: 'number',
-            label: 'Cooldown, ms',
-            dataKey: 'retryOnNon200CooldownMs',
-            defaultValue: DEFAULT_RETRY_ON_NON_200_COOLDOWN_MS,
-            min: 0,
-            step: 1,
-            layout: 'inline',
-            helperMessage: 'Milliseconds to wait between repeats',
-          },
-        ],
-      },
-      {
         type: 'toggle',
         label: 'Binary Output',
         dataKey: 'isBinaryOutput',
         helperMessage: 'Toggle on if the response is expected to be binary data',
       },
       {
-        type: 'toggle',
-        label: 'Fail on non-2XX status code',
-        dataKey: 'errorOnNon200',
-        helperMessage: (data) =>
-          data.retryOnNon200
-            ? 'With Retry on non-200 enabled, only the final response after all retries is checked.'
-            : undefined,
-      },
-      {
-        type: 'toggle',
-        label: 'Catch all request failures',
-        dataKey: 'catchRequestFailed',
+        type: 'group',
+        label: 'Error behavior',
+        editors: [
+          {
+            type: 'group',
+            label: 'Retry on non-200',
+            toggleDataKey: 'retryOnNon200',
+            editors: [
+              {
+                type: 'number',
+                label: 'Repeat times',
+                dataKey: 'retryOnNon200RepeatTimes',
+                defaultValue: DEFAULT_RETRY_ON_NON_200_REPEAT_TIMES,
+                min: 1,
+                step: 1,
+                layout: 'inline',
+                helperMessage: 'Times to repeat after the initial request',
+              },
+              {
+                type: 'number',
+                label: 'Cooldown, ms',
+                dataKey: 'retryOnNon200CooldownMs',
+                defaultValue: DEFAULT_RETRY_ON_NON_200_COOLDOWN_MS,
+                min: 0,
+                step: 1,
+                layout: 'inline',
+                helperMessage: 'Milliseconds to wait between repeats',
+              },
+            ],
+          },
+          {
+            type: 'toggle',
+            label: 'Fail on non-2XX status code',
+            dataKey: 'errorOnNon200',
+            helperMessage: (data) =>
+              data.retryOnNon200
+                ? 'With Retry on non-200 enabled, only the final response after all retries is checked.'
+                : undefined,
+          },
+          {
+            type: 'toggle',
+            label: 'Catch all request failures',
+            dataKey: 'catchRequestFailed',
+          },
+        ],
       },
     ];
   }

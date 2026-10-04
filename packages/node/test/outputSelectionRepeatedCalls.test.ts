@@ -68,11 +68,14 @@ void describe('output pruning with repeated headless child calls', { timeout: 20
                   [4, 5, 6],
                 ],
               );
-              for (const event of callerFinishes) {
-                assert.equal(
-                  event.data.outputs.unused?.type,
-                  skipUnusedOutputs ? 'control-flow-excluded[]' : 'string[]',
-                );
+              for (const [iteration, event] of callerFinishes.entries()) {
+                assert.equal(event.data.outputs.unused?.type, skipUnusedOutputs ? 'control-flow-excluded' : 'string[]');
+                if (skipUnusedOutputs) assert.equal(event.data.outputs.unused?.value, undefined);
+                else
+                  assert.deepEqual(
+                    event.data.outputs.unused?.value,
+                    [1, 2, 3].map((seed) => `Unused ${seed + iteration}`),
+                  );
               }
 
               const replay = createProcessor(project, { graph: fixture.graphId });

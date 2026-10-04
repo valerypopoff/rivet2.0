@@ -63,6 +63,31 @@ async function runSplitOriginScenario(options: {
 }
 
 describe('SplitRunProcessor', () => {
+  it('keeps entirely excluded output ports excluded rather than inventing an excluded array type', async () => {
+    let results: Outputs | undefined;
+    await processSplitRunNode(createSplitNode(), 'process' as any, {
+      getInputValues: () => ({ prompts: { type: 'string[]', value: ['first', 'second'] } }),
+      getInputConnections: () => [],
+      getInputDefinitions: () => [{ id: 'prompts' as PortId, title: 'Prompts', dataType: 'string[]' }],
+      isExcludedDueToControlFlow: () => false,
+      processNodeWithInputData: async () =>
+        ({ response: { type: 'control-flow-excluded', value: undefined } }) as Outputs,
+      splitRunConcurrency: 2,
+      accumulateCost: () => {},
+      setNodeResults: (_id, outputs) => {
+        results = outputs;
+      },
+      markNodeVisited: () => {},
+      nodeErrored: async (_node, error) => {
+        throw error;
+      },
+      isAborted: () => false,
+      getAbortError: () => new Error('aborted'),
+      emit: async () => {},
+    });
+    assert.deepEqual(results?.['response' as PortId], { type: 'control-flow-excluded', value: undefined });
+  });
+
   it('keeps preserve-array inputs intact while splitting ordinary array inputs', async () => {
     const received: Inputs[] = [];
     const inputs: Inputs = {

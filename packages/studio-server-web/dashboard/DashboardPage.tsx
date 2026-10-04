@@ -36,6 +36,8 @@ import {
   RIVET_WEB_APPS_BASE_PATH,
 } from '../../studio-server-shared/hosted-env';
 import './DashboardPage.css';
+import { DevelopmentUpdates } from './DevelopmentUpdates';
+import { getDevelopmentGeneration } from './developmentRefreshGuard';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
@@ -109,6 +111,7 @@ export const DashboardPage: FC = () => {
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
   const [editorReady, setEditorReady] = useState(false);
+  const [editorInitializationFailed, setEditorInitializationFailed] = useState(false);
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
   const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
@@ -503,6 +506,7 @@ export const DashboardPage: FC = () => {
     conflictSnapshotRef.current = null;
     setConflictSnapshot(null);
     setEditorReady(false);
+    setEditorInitializationFailed(false);
   }, []);
 
   useEffect(
@@ -583,6 +587,7 @@ export const DashboardPage: FC = () => {
       });
     },
     onEditorReady: (editorInstanceId) => {
+      setEditorInitializationFailed(false);
       if (editorInstanceRef.current !== editorInstanceId) {
         resetEditorReconciliation();
         editorInstanceRef.current = editorInstanceId;
@@ -590,6 +595,7 @@ export const DashboardPage: FC = () => {
       }
       setEditorReady(true);
     },
+    onEditorInitializationFailed: () => setEditorInitializationFailed(true),
     onReconciliationCaptured: (context, requestId) => {
       captureResolversRef.current.get(requestId)?.(context);
       captureResolversRef.current.delete(requestId);
@@ -645,7 +651,7 @@ export const DashboardPage: FC = () => {
     },
   });
 
-  const showEditorLoading = !editorReady;
+  const showEditorLoading = !editorReady && !editorInitializationFailed;
   const visibleSidebarWidth = sidebarCollapsed ? WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH : sidebarWidth;
   const activeProjectHasUnsavedChanges =
     activeWorkflowProjectPath !== '' && projectUnsavedChangesByPath[activeWorkflowProjectPath] === true;
@@ -696,13 +702,14 @@ export const DashboardPage: FC = () => {
         />
       ) : null}
       <main className="dashboard-main">
+        <DevelopmentUpdates iframeRef={iframeRef} editorReady={editorReady} />
         {showEditorLoading ? (
           <div className="dashboard-app-loading">
             <div className="dashboard-editor-loading-spinner" aria-hidden="true" />
             <div className="dashboard-editor-loading-message">Loading...</div>
           </div>
         ) : null}
-        {openProjectCount === 0 ? (
+        {openProjectCount === 0 && !editorInitializationFailed ? (
           <div className="dashboard-empty-state">
             <div className="dashboard-empty-state-message">
               Open or create a Rivet project in the left pane to start editing.
@@ -711,9 +718,16 @@ export const DashboardPage: FC = () => {
         ) : null}
         <iframe
           ref={iframeRef}
-          src="/?editor"
-          onLoad={resetEditorReconciliation}
-          className={`dashboard-editor-frame ${openProjectCount === 0 ? 'dashboard-editor-frame-hidden' : ''}${sidebarResizing ? ' dashboard-editor-frame-resizing' : ''}`}
+          src={getDevelopmentGeneration() ? `/?editor&devBuild=${getDevelopmentGeneration()}` : '/?editor'}
+          onLoad={() => {
+            // Bootstrap messages may precede load; retain this document's result.
+            const state = iframeRef.current?.contentWindow?.__rivetEditorBootstrapState;
+            if (state === 'failed') {
+              setEditorReady(false);
+              setEditorInitializationFailed(true);
+            } else if (state !== 'ready') resetEditorReconciliation();
+          }}
+          className={`dashboard-editor-frame ${openProjectCount === 0 && !editorInitializationFailed ? 'dashboard-editor-frame-hidden' : ''}${sidebarResizing ? ' dashboard-editor-frame-resizing' : ''}`}
         />
       </main>
       <ToastContainer

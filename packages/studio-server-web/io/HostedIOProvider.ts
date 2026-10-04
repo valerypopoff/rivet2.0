@@ -16,6 +16,8 @@ import {
   deserializeLegacyEvaluationProjectData,
   type EvaluationProjectFileData,
   type IOProvider,
+  type LoadedProjectData,
+  type ProjectLoadOptions,
 } from '../../app/src/io/IOProvider.js';
 import type { EvaluationStore } from '@valerypopoff/rivet2-evaluations';
 import { getDefaultStore } from 'jotai';
@@ -54,7 +56,11 @@ function isAbortError(error: unknown): boolean {
 }
 
 type HostedDatasetProvider = AppDatasetProvider & {
-  importDatasetsForProject: NonNullable<AppDatasetProvider['importDatasetsForProject']>;
+  importDatasetsForProject: (
+    projectId: ProjectId,
+    datasets: ReturnType<typeof deserializeDatasets>,
+    options?: { isCurrent?: () => boolean; signal?: AbortSignal; activate?: boolean },
+  ) => Promise<void>;
 };
 
 export function clearHostedProjectRevisionPath(path: string | null | undefined): void {
@@ -70,14 +76,17 @@ export function remapHostedProjectRevisionPaths(
   remapTrackedHostedProjectRevisionPaths(moves);
 }
 
-async function apiListProjects(): Promise<string[]> {
-  const resp = await fetch(`${API}/projects/list`);
+async function apiListProjects(signal?: AbortSignal): Promise<string[]> {
+  const resp = await fetch(`${API}/projects/list`, { signal });
   if (!resp.ok) throw new Error(`Failed to list projects: ${resp.statusText}`);
   const data = await resp.json();
   return data.files;
 }
 
-async function apiLoadProject(path: string): Promise<{
+async function apiLoadProject(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{
   contents: string;
   datasetsContents: string | null;
   revisionId: string | null;
@@ -86,6 +95,7 @@ async function apiLoadProject(path: string): Promise<{
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
+    signal,
   });
 
   if (!response.ok) {
@@ -258,8 +268,9 @@ async function pickSingleFile(options: { accept?: string } = {}): Promise<File |
 async function deserializeHostedProjectPayload(
   contents: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
-  const { project, serializedEvaluationData } = await deserializeHostedProjectPayloadAsync(contents, path);
+  const { project, serializedEvaluationData } = await deserializeHostedProjectPayloadAsync(contents, path, { signal });
 
   return {
     project,
@@ -273,10 +284,18 @@ async function deserializeHostedProjectPayload(
 export class HostedIOProvider implements IOProvider {
   readonly #datasetProvider: HostedDatasetProvider;
   readonly #evaluationStore: EvaluationStore;
+  readonly #loadTimeoutMs: number;
 
-  constructor(datasetProvider: HostedDatasetProvider, evaluationStore: EvaluationStore) {
+  constructor(
+    datasetProvider: HostedDatasetProvider,
+    evaluationStore: EvaluationStore,
+    options: { loadTimeoutMs?: number } = {},
+  ) {
     this.#datasetProvider = datasetProvider;
     this.#evaluationStore = evaluationStore;
+    this.#loadTimeoutMs = options.loadTimeoutMs ?? 60_000;
+    if (!Number.isSafeInteger(this.#loadTimeoutMs) || this.#loadTimeoutMs <= 0)
+      throw new Error('Hosted project loadTimeoutMs must be a positive integer.');
   }
 
   async #flushEvaluationLibrary(): Promise<void> {
@@ -392,79 +411,152 @@ export class HostedIOProvider implements IOProvider {
   }
 
   async loadProjectData(
-    callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void,
+    callback: (data: LoadedProjectData & { path: string }) => void | Promise<void>,
+    options: ProjectLoadOptions = {},
   ): Promise<void> {
     // Try to list known server projects first so users can pick from an index when possible.
     // This stays separate from the manual path prompt because fresh installs still need a
     // direct-entry fallback even when listing fails or returns no saved projects.
+    let files: string[];
     try {
-      const files = await apiListProjects();
-      if (files.length > 0) {
-        const selection = prompt(
-          `Available projects on server:\n${files.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nEnter number or full path:`,
-        );
+      files = await apiListProjects(options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      files = [];
+    }
+    options.signal?.throwIfAborted();
+    if (files.length > 0) {
+      const selection = prompt(
+        `Available projects on server:\n${files.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nEnter number or full path:`,
+      );
 
-        if (!selection) return;
+      if (!selection) return;
 
-        let path: string;
-        const num = parseInt(selection, 10);
-        if (!isNaN(num) && num >= 1 && num <= files.length) {
-          path = files[num - 1]!;
-        } else {
-          path = selection;
-        }
-
-        const projectData = await this.loadProjectDataNoPrompt(path);
-        callback({ ...projectData, path });
-        return;
+      let path: string;
+      const num = parseInt(selection, 10);
+      if (!isNaN(num) && num >= 1 && num <= files.length) {
+        path = files[num - 1]!;
+      } else {
+        path = selection;
       }
-    } catch {
-      // Fall through to manual path entry if project listing is unavailable.
+
+      const projectData = await this.loadProjectDataNoPrompt(path, options);
+      await callback({ ...projectData, path });
+      return;
     }
 
     // Preserve the explicit manual-path prompt for empty servers and listing failures.
     const path = prompt('Enter server path to .rivet-project file:');
     if (!path) return;
 
-    const projectData = await this.loadProjectDataNoPrompt(path);
-    callback({ ...projectData, path });
+    const projectData = await this.loadProjectDataNoPrompt(path, options);
+    await callback({ ...projectData, path });
   }
 
-  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
+  async loadProjectDataNoPrompt(path: string, options: ProjectLoadOptions = {}): Promise<LoadedProjectData> {
+    const deadline = Date.now() + this.#loadTimeoutMs;
+    const controller = new AbortController();
+    const abort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const timer = setTimeout(
+      () => controller.abort(new Error('Project loading timed out. Please retry.')),
+      this.#loadTimeoutMs,
+    );
+    try {
+      controller.signal.throwIfAborted();
+      const result = await this.prepareProject(path, { ...options, signal: controller.signal });
+      controller.signal.throwIfAborted();
+      if (result.commit) {
+        const commit = result.commit;
+        result.commit = async (isCurrent) => {
+          // One overall budget includes preparation and the deferred import.
+          // Waiting to commit must not grant a second full timeout window.
+          options.signal?.addEventListener('abort', abort, { once: true });
+          if (options.signal?.aborted) abort();
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) controller.abort(new Error('Project loading timed out. Please retry.'));
+          const commitTimer = setTimeout(
+            () => controller.abort(new Error('Project loading timed out. Please retry.')),
+            Math.max(0, remaining),
+          );
+          try {
+            controller.signal.throwIfAborted();
+            return await commit(isCurrent);
+          } finally {
+            clearTimeout(commitTimer);
+            options.signal?.removeEventListener('abort', abort);
+          }
+        };
+      }
+      return result;
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  private async prepareProject(path: string, options: ProjectLoadOptions): Promise<LoadedProjectData> {
+    const complete = async (
+      project: Project,
+      evaluation: EvaluationProjectFileData,
+      datasets: ReturnType<typeof deserializeDatasets>,
+      revision?: string | null,
+    ): Promise<LoadedProjectData> => {
+      const commit = async (isCurrent: () => boolean): Promise<boolean> => {
+        if (!isCurrent() || options.signal?.aborted) return false;
+        await this.#datasetProvider.importDatasetsForProject(project.metadata.id, datasets, {
+          isCurrent,
+          signal: options.signal,
+          activate: options.activateDatasets !== false,
+        });
+        if (!isCurrent() || options.signal?.aborted) return false;
+        if (revision !== undefined)
+          bindHostedProjectRevision(project.metadata.id, path, revision, { awaitingActivation: true });
+        return true;
+      };
+      if (options.deferCommit) return { project, evaluation, commit };
+      if (!(await commit(() => !options.signal?.aborted)))
+        throw new DOMException('Project load cancelled', 'AbortError');
+      return { project, evaluation };
+    };
     const previewReference = getWorkflowPublishedVersionPreviewFromVirtualProjectPath(path);
     if (previewReference) {
       const preview = await fetchWorkflowPublishedVersionPreview(
         previewReference.relativePath,
         previewReference.versionId,
+        { signal: options.signal },
       );
-      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(preview.contents, path);
+      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(
+        preview.contents,
+        path,
+        options.signal,
+      );
       const previewProject = createPublishedVersionPreviewProject(projectData, previewReference);
+      let datasets: ReturnType<typeof deserializeDatasets> = [];
 
       if (preview.datasetsContents) {
-        const datasets = deserializeDatasets(preview.datasetsContents);
+        datasets = deserializeDatasets(preview.datasetsContents);
         const evaluationDatasets =
           (
             JSON.parse(preview.datasetsContents) as {
               evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
             }
           ).evaluationDatasets ?? [];
-        await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, datasets);
         evaluation.evaluationDatasets = evaluationDatasets.map((dataset) => ({
           ...dataset,
           projectId: previewProject.metadata.id,
         }));
-      } else {
-        await this.#datasetProvider.importDatasetsForProject(previewProject.metadata.id, []);
       }
 
-      return { project: previewProject, evaluation };
+      return complete(previewProject, evaluation, datasets);
     }
 
     const recordingId = getWorkflowRecordingIdFromVirtualProjectPath(path);
     if (recordingId) {
       const [data, replayDatasetResult] = await Promise.all([
-        fetchWorkflowRecordingArtifactText(recordingId, 'replay-project'),
-        fetchWorkflowRecordingArtifactText(recordingId, 'replay-dataset')
+        fetchWorkflowRecordingArtifactText(recordingId, 'replay-project', { signal: options.signal }),
+        fetchWorkflowRecordingArtifactText(recordingId, 'replay-dataset', { signal: options.signal })
           .then((datasetsText) => ({ datasetsText }))
           .catch((error) => {
             const status =
@@ -482,43 +574,38 @@ export class HostedIOProvider implements IOProvider {
             throw error;
           }),
       ]);
-      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path);
+      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path, options.signal);
+      let datasets: ReturnType<typeof deserializeDatasets> = [];
 
       if (replayDatasetResult.datasetsText) {
-        const datasets = deserializeDatasets(replayDatasetResult.datasetsText);
+        datasets = deserializeDatasets(replayDatasetResult.datasetsText);
         evaluation.evaluationDatasets =
           (
             JSON.parse(replayDatasetResult.datasetsText) as {
               evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
             }
           ).evaluationDatasets ?? [];
-        await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
-      } else {
-        await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
       }
 
-      return { project: projectData, evaluation };
+      return complete(projectData, evaluation, datasets);
     }
 
-    const loaded = await apiLoadProject(path);
+    const loaded = await apiLoadProject(path, options.signal);
     const data = loaded.contents;
-    const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path);
-    bindHostedProjectRevision(projectData.metadata.id, path, loaded.revisionId ?? null);
+    const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path, options.signal);
+    let datasets: ReturnType<typeof deserializeDatasets> = [];
 
     if (loaded.datasetsContents) {
-      const datasets = deserializeDatasets(loaded.datasetsContents);
+      datasets = deserializeDatasets(loaded.datasetsContents);
       evaluation.evaluationDatasets =
         (
           JSON.parse(loaded.datasetsContents) as {
             evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
           }
         ).evaluationDatasets ?? [];
-      await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, datasets);
-    } else {
-      await this.#datasetProvider.importDatasetsForProject(projectData.metadata.id, []);
     }
 
-    return { project: projectData, evaluation };
+    return complete(projectData, evaluation, datasets, loaded.revisionId ?? null);
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void): Promise<void> {

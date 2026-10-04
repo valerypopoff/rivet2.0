@@ -1,22 +1,13 @@
-import { useSetAtom } from 'jotai';
-import {
-  type GraphId,
-  type NodeGraph,
-  deserializeProject,
-  type ProjectId,
-} from '@valerypopoff/rivet2-core';
+import { type GraphId, type NodeGraph, deserializeProject, type ProjectId } from '@valerypopoff/rivet2-core';
 import { duplicateGraph } from '../utils/duplicateGraph';
 import { produce } from 'immer';
 import { nanoid } from 'nanoid';
-import { addOpenedProject } from '../utils/openedProjects.js';
-import { projectsState } from '../state/savedGraphs.js';
 import { chooseProjectGraph } from '../utils/workspaceTransitions.js';
-import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
+import { useWorkspaceHostOpenProject } from './workspaceHost/useWorkspaceHostOpenProject.js';
 import { remapTemplateProjectGraphIds } from '../utils/templateProjectGraphIds.js';
 
 export function useNewProjectFromTemplate() {
-  const setProjects = useSetAtom(projectsState);
-  const workspaceTransitions = useWorkspaceTransitions();
+  const { openProjectSnapshot } = useWorkspaceHostOpenProject();
 
   return async (template: unknown) => {
     let [project] = deserializeProject(template);
@@ -56,22 +47,11 @@ export function useNewProjectFromTemplate() {
       fallbackToSortedProjectGraph: true,
     });
 
-    const loaded = await workspaceTransitions.loadProject({
+    return openProjectSnapshot({
       project: projectWithoutData,
       data,
       graphToLoad,
-      markClean: true,
+      path: null,
     });
-
-    if (loaded) {
-      setProjects((prev) =>
-        addOpenedProject(prev, projectWithNewId, {
-          fsPath: null,
-          openedGraph: graphToLoad.metadata?.id,
-        }),
-      );
-    }
-
-    return loaded;
   };
 }

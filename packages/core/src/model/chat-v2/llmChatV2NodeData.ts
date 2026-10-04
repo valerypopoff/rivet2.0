@@ -74,6 +74,8 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   autoContinueToolCalls?: boolean;
   maxToolRounds?: number;
   retryOnNon200?: boolean;
+  errorOnNon200?: boolean;
+  catchRequestFailed?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   outputLLMAttempts?: boolean;
@@ -165,6 +167,8 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     autoContinueToolCalls: false,
     maxToolRounds: 3,
     retryOnNon200: false,
+    errorOnNon200: true,
+    catchRequestFailed: false,
     retryOnNon200RepeatTimes: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES,
     retryOnNon200CooldownMs: DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
     outputLLMAttempts: false,

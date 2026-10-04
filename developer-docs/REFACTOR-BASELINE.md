@@ -111,10 +111,26 @@ contract only. Pair it with the owning API/storage suite for durability claims.
 8. For native changes, also verify Tauri file dialogs, sidecar startup, clipboard,
    platform shortcuts and window behavior on the affected OS. Hosted Chromium
    cannot certify these native behaviors.
+9. Duplicate a project so graph/node IDs collide, open both tabs and edit Object,
+   Code and Prompt settings with normal autofocus. Switch immediately after typing,
+   Save and close/reopen the panel. Each owner retains its own text, dirty baseline
+   and Undo history. Delayed AI/definition/Subgraph work from a retired session must
+   not affect another owner or a later A → B → A lifetime. Check focused Undo/Redo,
+   explicit same-ID reload and read-only variants. Use `node-editor-ownership` and
+   `node-editor-lifecycle`; the canonical contract is [Monaco](./MONACO-EDITOR-SURFACES.md).
+10. Use two pages in the **same browser context** and duplicate/reload one tab.
+    Independent unsaved snapshots must survive without overwriting one another.
+    Force checkpoint quota/transaction failure, verify silent automatic retry and
+    a warning only while unsaved work remains at risk; a successful server Save
+    still succeeds. A missing/corrupt selected checkpoint blocks bootstrap with
+    usable recovery choices, never a silent empty workspace. `project-tree-activation`
+    covers these seams; mocked IO does not qualify production storage durability.
 
 Existing observer specs include `workflow-tree-sync`, `renamed-open-project-cache`,
 `project-inline-rename`, `evaluation-save-shortcut`, `subgraph-output-pruning`,
-`subgraph-node-executor-pruning`, `subgraph-prompt-cancellation`, `rivet-web-app`
+`subgraph-node-executor-pruning`, `subgraph-prompt-cancellation`, `rivet-web-app`,
+`project-tree-activation`, `project-preview-mode`, `dashboard-save-button`,
+`node-editor-ownership`, `node-editor-lifecycle`
 and `proxy-routing` under
 [playwright-observe](../packages/studio-server-web/playwright-observe).
 They are starting points, not a claim that every step above is automated.

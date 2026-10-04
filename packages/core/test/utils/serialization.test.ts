@@ -407,6 +407,34 @@ describe('serialization compatibility', () => {
     assert.equal(node.splitRunConcurrency, undefined);
   });
 
+  it('round-trips static file/image payloads without confusing them with plugin attachments', () => {
+    const project = {
+      ...baseProject,
+      data: Object.fromEntries([
+        ['image', 'aW1hZ2U='],
+        ['empty', ''],
+        ['__proto__', 'own-data-key'],
+      ]),
+    } as Project;
+    const [restored, attached] = deserializeProject(serializeProject(project, { plugin: 'attachment' }));
+    assert.deepEqual(restored.data, project.data);
+    assert.deepEqual(attached, { plugin: 'attachment' });
+    assert.equal(deserializeProject(serializeProject(baseProject))[0].data, undefined);
+    assert.deepEqual(deserializeProject(serializeProject({ ...baseProject, data: {} }))[0].data, {});
+  });
+
+  it('rejects malformed static-data records on both serialization and deserialization', () => {
+    for (const data of [null, ['payload'], { payload: 42 }, { payload: { nested: 'value' } }]) {
+      assert.throws(() => serializeProject({ ...baseProject, data } as Project), /static-data strings/);
+      const envelope = prepareSerializedInput(serializeProject(baseProject)).deserializerInput as {
+        version: number;
+        data: Record<string, unknown>;
+      };
+      envelope.data.data = data;
+      assert.throws(() => projectV4Deserializer(envelope), /static-data strings/);
+    }
+  });
+
   it('round-trips project through V4 serialize/deserialize', () => {
     const projectWithConnections: Project = {
       metadata: {

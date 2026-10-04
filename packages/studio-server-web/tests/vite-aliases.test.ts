@@ -163,5 +163,7 @@ test('hosted opened-project overrides preserve upstream project executor mode co
     /projectExecutorModesEqual\(existingProject\?\.executorMode,\s*currentExecutorMode\)/,
   );
   assert.match(syncOpenedProjectsOverride, /useSyncCurrentStateIntoOpenedProjects\(\{ enabled = true \}/);
-  assert.match(loadProjectOverride, /normalizeHostedProjectExecutorMode\(projectInfo\.executorMode\)/);
+  assert.match(loadProjectOverride, /useActivateOpenedProject/);
+  assert.match(loadProjectOverride, /normalizeExecutorMode:\s*normalizeHostedProjectExecutorMode/);
+  assert.match(syncOpenedProjectsOverride, /useSyncProjectDirtyState/);
 });

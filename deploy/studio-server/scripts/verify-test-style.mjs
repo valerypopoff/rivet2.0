@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defaultApiTestFiles, kubernetesApiTestFiles } from './api-test-files.mjs';
+import { listApiTestFiles } from './run-api-tests.mjs';
 
 const rootDir = process.cwd();
 const launcherName = 'verify:test-style';
@@ -89,11 +91,11 @@ function assertOnlyTopLevelSpecFiles(relativeDir, specFiles, label) {
   );
 }
 
-function extractTestPaths(command) {
+export function extractTestPaths(command) {
   return command
     .split(/\s+/)
     .map((token) => token.replace(/^['"]|['"]$/g, ''))
-    .filter((token) => token.endsWith('.test.ts'))
+    .filter((token) => /\.(?:test|spec)\.(?:[cm]?ts|tsx)$/.test(token))
     .map((token) => token.replaceAll('\\', '/'));
 }
 
@@ -151,7 +153,7 @@ function assertApiFocusedTestCommand(command) {
   );
   assert.doesNotMatch(
     command,
-    /\.test\.ts\b/,
+    /\.(?:test|spec)\.(?:[cm]?ts|tsx)\b/,
     'packages/studio-server-api test:files should not list files; callers pass the focused files after `--`.',
   );
 }
@@ -210,9 +212,9 @@ function assertNoFocusedTests(testFiles) {
   }
 }
 
-function assertNoUpstreamAppSourceContracts(testFiles) {
+export function assertNoUpstreamAppSourceContracts(testFiles, readSource = readFile) {
   for (const testFile of testFiles) {
-    const contents = readFile(testFile);
+    const contents = readSource(testFile);
     const normalizedContents = normalizeSourceForPathScan(contents);
 
     for (const match of normalizedContents.matchAll(/packages\/app\/src[A-Za-z0-9._/-]*/g)) {
@@ -272,12 +274,10 @@ function main() {
     'Root package.json should expose studio-server:verify:kubernetes.',
   );
 
-  const apiTestFiles = listTopLevelFiles('packages/studio-server-api/src/tests', (name) => name.endsWith('.test.ts'));
-  const apiTestFilesFromApiPackageRoot = apiTestFiles.map((filePath) =>
-    filePath.replace(/^packages\/studio-server-api\//, ''),
-  );
+  const apiTestFilesFromApiPackageRoot = listApiTestFiles(path.join(rootDir, 'packages/studio-server-api/src/tests'));
+  const apiTestFiles = apiTestFilesFromApiPackageRoot.map((filePath) => `packages/studio-server-api/${filePath}`);
   const detectedKubernetesApiTests = apiTestFilesFromApiPackageRoot.filter((filePath) =>
-    filePath.startsWith('src/tests/kubernetes-'),
+    path.posix.basename(filePath).startsWith('kubernetes-'),
   );
   const detectedDefaultApiTestFiles = apiTestFilesFromApiPackageRoot.filter(
     (filePath) => !kubernetesApiTestFiles.includes(filePath),
@@ -290,7 +290,6 @@ function main() {
     name.endsWith('.spec.ts'),
   );
 
-  assertOnlyTopLevelTestFiles('packages/studio-server-api/src/tests', apiTestFiles, 'API tests');
   assertOnlyTopLevelTestFiles('packages/studio-server-web/tests', webPureTestFiles, 'pure web tests');
   assertOnlyTopLevelSpecFiles('packages/studio-server-web/playwright-observe', playwrightSpecFiles, 'Playwright specs');
 
@@ -321,7 +320,7 @@ function main() {
   assert.deepEqual(
     sortValues(detectedKubernetesApiTests),
     sortValues(kubernetesApiTestFiles),
-    'Every kubernetes-*.test.ts API file should be owned by verify:kubernetes.',
+    'Every kubernetes-* API test should be owned by verify:kubernetes, including nested tests.',
   );
   assert.deepEqual(
     apiCommandFiles,
@@ -349,10 +348,12 @@ function main() {
 
   const nodeTestFiles = [...apiTestFiles, ...webPureTestFiles];
   const allTestFiles = [
-    ...nodeTestFiles,
-    ...playwrightSpecFiles,
-    ...listFilesRecursive('packages/studio-server-api/src/tests/helpers', (name) => name.endsWith('.ts')),
-    ...listFilesRecursive('packages/studio-server-web/playwright-observe/helpers', (name) => name.endsWith('.ts')),
+    ...new Set([
+      ...nodeTestFiles,
+      ...playwrightSpecFiles,
+      ...listFilesRecursive('packages/studio-server-api/src/tests/helpers', (name) => /\.(?:[cm]?ts|tsx)$/.test(name)),
+      ...listFilesRecursive('packages/studio-server-web/playwright-observe/helpers', (name) => name.endsWith('.ts')),
+    ]),
   ];
 
   assertNodeTestFileStyle(nodeTestFiles);
@@ -364,11 +365,13 @@ function main() {
   console.log(`[${launcherName}] Test style guardrails passed.`);
 }
 
-try {
-  main();
-} catch (error) {
-  if (error instanceof Error && error.message.startsWith(`[${launcherName}]`)) {
-    throw error;
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith(`[${launcherName}]`)) {
+      throw error;
+    }
+    fail(error instanceof Error ? error.message : String(error));
   }
-  fail(error instanceof Error ? error.message : String(error));
 }

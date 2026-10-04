@@ -6,11 +6,12 @@ import {
   type NodeId,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import { atom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { connectionsState, graphMetadataState, nodesState } from '../state/graph';
 import { useStableCallback } from '../hooks/useStableCallback';
 import { projectState, referencedProjectsState } from '../state/savedGraphs';
 import { editingNodeState } from '../state/graphBuilder';
+import { projectScopedAtom } from '../state/projectScopedAtom.js';
 import {
   clearRecoverableNodeConnectionsForGraph,
   recoverableNodeConnectionsStatePerGraph,
@@ -43,10 +44,13 @@ export type GraphCommandState = {
   referencedProjects: Record<ProjectId, Project>;
 };
 
-export const commandHistoryStackStatePerGraph = atom<Record<GraphId, CommandData<any, any>[]>>({});
-export const redoStackStatePerGraph = atom<Record<GraphId, CommandData<any, any>[]>>({});
+export const commandHistoryStackStatePerGraph = projectScopedAtom<Record<GraphId, CommandData<any, any>[]>>({});
+export const redoStackStatePerGraph = projectScopedAtom<Record<GraphId, CommandData<any, any>[]>>({});
 
-export function clearHistoryEntriesForGraph<T>(entries: Record<GraphId, T[]>, graphId: GraphId | undefined): Record<GraphId, T[]> {
+export function clearHistoryEntriesForGraph<T>(
+  entries: Record<GraphId, T[]>,
+  graphId: GraphId | undefined,
+): Record<GraphId, T[]> {
   if (!graphId) {
     return entries;
   }
@@ -60,17 +64,17 @@ export function clearHistoryEntriesForGraph<T>(entries: Record<GraphId, T[]>, gr
   return nextEntries;
 }
 
-function useGraphCommandState(): GraphCommandState {
-  const graphId = useAtomValue(graphMetadataState)?.id;
-  const nodes = useAtomValue(nodesState);
-  const connections = useAtomValue(connectionsState);
-  const project = useAtomValue(projectState);
-  const commandHistoryStacks = useAtomValue(commandHistoryStackStatePerGraph);
+export function readGraphCommandState(store: ReturnType<typeof useStore>): GraphCommandState {
+  const graphId = store.get(graphMetadataState)?.id;
+  const nodes = store.get(nodesState);
+  const connections = store.get(connectionsState);
+  const project = store.get(projectState);
+  const commandHistoryStacks = store.get(commandHistoryStackStatePerGraph);
   const commandHistoryStack = graphId ? commandHistoryStacks[graphId] ?? [] : [];
-  const recoverableNodeConnectionsPerGraph = useAtomValue(recoverableNodeConnectionsStatePerGraph);
+  const recoverableNodeConnectionsPerGraph = store.get(recoverableNodeConnectionsStatePerGraph);
   const recoverableNodeConnections = graphId ? recoverableNodeConnectionsPerGraph[graphId] ?? {} : {};
-  const editingNodeId = useAtomValue(editingNodeState);
-  const referencedProjects = useAtomValue(referencedProjectsState);
+  const editingNodeId = store.get(editingNodeState);
+  const referencedProjects = store.get(referencedProjectsState);
 
   return {
     nodes,
@@ -84,14 +88,22 @@ function useGraphCommandState(): GraphCommandState {
   };
 }
 
+function useGraphCommandState() {
+  const store = useStore();
+  return () => readGraphCommandState(store);
+}
+
 export function useCommand<T, U>(command: Command<T, U>) {
-  const graphId = useAtomValue(graphMetadataState)?.id;
   const setCommandHistoryStacks = useSetAtom(commandHistoryStackStatePerGraph);
   const setRedoStacks = useSetAtom(redoStackStatePerGraph);
 
-  const currentState = useGraphCommandState();
+  const readCurrentState = useGraphCommandState();
 
   return useStableCallback((data: T) => {
+    // Multiple editor changes can occur before a React render. Each command
+    // must build on the previous committed graph, never the render snapshot.
+    const currentState = readCurrentState();
+    const graphId = currentState.graphId;
     const appliedData = command.apply(data, undefined, currentState);
 
     setCommandHistoryStacks((stacks) => {
@@ -156,13 +168,13 @@ export function useClearCurrentGraphHistory() {
 }
 
 export function useUndo() {
-  const graphId = useAtomValue(graphMetadataState)?.id;
   const setCommandHistoryStacks = useSetAtom(commandHistoryStackStatePerGraph);
   const setRedoStacks = useSetAtom(redoStackStatePerGraph);
 
-  const currentState = useGraphCommandState();
+  const readCurrentState = useGraphCommandState();
 
   return () => {
+    const graphId = readCurrentState().graphId;
     setCommandHistoryStacks((stacks) => {
       if (!graphId) {
         return stacks;
@@ -176,7 +188,7 @@ export function useUndo() {
         return stacks;
       }
 
-      lastCommand.command.undo(lastCommand.data, lastCommand.appliedData, currentState);
+      lastCommand.command.undo(lastCommand.data, lastCommand.appliedData, readCurrentState());
 
       setRedoStacks((redoStacks) => {
         const redoStack = redoStacks[graphId] ?? [];
@@ -196,13 +208,13 @@ export function useUndo() {
 }
 
 export function useRedo() {
-  const graphId = useAtomValue(graphMetadataState)?.id;
   const setCommandHistoryStacks = useSetAtom(commandHistoryStackStatePerGraph);
   const setRedoStacks = useSetAtom(redoStackStatePerGraph);
 
-  const currentState = useGraphCommandState();
+  const readCurrentState = useGraphCommandState();
 
   return () => {
+    const graphId = readCurrentState().graphId;
     setRedoStacks((stacks) => {
       if (!graphId) {
         return stacks;
@@ -215,7 +227,7 @@ export function useRedo() {
         return stacks;
       }
 
-      lastCommand.command.apply(lastCommand.data, lastCommand.appliedData, currentState);
+      lastCommand.command.apply(lastCommand.data, lastCommand.appliedData, readCurrentState());
 
       setCommandHistoryStacks((commandHistoryStacks) => {
         const commandHistoryStack = commandHistoryStacks[graphId] ?? [];

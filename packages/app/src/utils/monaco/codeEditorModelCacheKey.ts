@@ -5,6 +5,8 @@ export type CodeEditorModelCacheKeyParts = {
   editorKey?: string | null;
   language?: string | null;
   interpolationSyntax?: string | null;
+  scope?: string;
+  contentRevision?: number;
 };
 
 function encodeCodeEditorModelCachePart(value: string | null | undefined): string {
@@ -23,5 +25,7 @@ export function buildCodeEditorModelCacheKey(parts: CodeEditorModelCacheKeyParts
     `editor:${encodeCodeEditorModelCachePart(parts.editorKey)}`,
     `language:${encodeCodeEditorModelCachePart(parts.language)}`,
     `interpolation:${encodeCodeEditorModelCachePart(parts.interpolationSyntax)}`,
+    ...(parts.scope ? [`scope:${encodeCodeEditorModelCachePart(parts.scope)}`] : []),
+    ...(parts.contentRevision ? [`revision:${parts.contentRevision}`] : []),
   ].join('|');
 }

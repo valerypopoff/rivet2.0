@@ -97,12 +97,12 @@ async function main() {
 
     case 'debug':
       env.PWDEBUG = '1';
-      await runPlaywright(['install', 'chromium'], env);
+      if (!env.PLAYWRIGHT_EXECUTABLE_PATH) await runPlaywright(['install', 'chromium'], env);
       await runPlaywright(['test', '-c', playwrightConfigPath, ...passthroughArgs], env);
       break;
 
     case 'test':
-      await runPlaywright(['install', 'chromium'], env);
+      if (!env.PLAYWRIGHT_EXECUTABLE_PATH) await runPlaywright(['install', 'chromium'], env);
       await runPlaywright(['test', '-c', playwrightConfigPath, ...passthroughArgs], env);
       break;
   }

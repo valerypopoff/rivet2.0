@@ -1,8 +1,8 @@
 import { arrayMove } from '@dnd-kit/sortable';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
-import { useAtom, useAtomValue } from 'jotai';
-import { type CSSProperties, type FC, useMemo } from 'react';
+import { useAtom, useAtomValue, useStore } from 'jotai';
+import { type CSSProperties, type FC, useMemo, useSyncExternalStore } from 'react';
 
 import { useLoadProject } from '../hooks/useLoadProject';
 import { useRivetWorkspaceHost } from '../hooks/useRivetWorkspaceHost.js';
@@ -15,7 +15,7 @@ import {
   type OpeningProjectTabId,
 } from '../state/openingProjectTabs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
-import { openedProjectsSortedIdsState, openedProjectsState, projectState } from '../state/savedGraphs';
+import { openedProjectsSortedIdsState, openedProjectsState } from '../state/savedGraphs';
 import { leftSidebarLiveWidthState, overlayOpenState } from '../state/ui.js';
 import { buildProjectTabListItems } from '../utils/openingProjectTabs.js';
 import { isMacOSPlatform, isWindowsPlatform } from '../utils/platform/os.js';
@@ -26,6 +26,11 @@ import { ProjectFileMenu } from './projectSelector/ProjectFileMenu.js';
 import { resolveProjectSelectorPlatformPolicy } from './projectSelector/projectSelectorModel.js';
 import { projectSelectorStyles } from './projectSelector/projectSelectorStyles.js';
 import { ProjectTabRow } from './projectSelector/ProjectTabRow.js';
+import {
+  supersedeProjectActivation,
+  getProjectActivationStatus,
+  subscribeProjectActivation,
+} from '../utils/projectActivationCoordinator.js';
 import { useProjectCloseConfirmation } from './projectSelector/useProjectCloseConfirmation.js';
 import { WindowsWindowControls, WindowsWindowDragRegion } from './projectSelector/WindowsWindowControls.js';
 
@@ -33,6 +38,12 @@ export const ProjectSelector: FC<{
   mode?: 'project' | 'workspace';
 }> = ({ mode = 'project' }) => {
   const projectMode = mode === 'project';
+  const store = useStore();
+  const activation = useSyncExternalStore(
+    (listener) => subscribeProjectActivation(store, listener),
+    () => getProjectActivationStatus(store),
+    () => getProjectActivationStatus(store),
+  );
   const openedProjects = useAtomValue(openedProjectsState);
   const [openedProjectsSortedIds, setOpenedProjectsSortedIds] = useAtom(openedProjectsSortedIdsState);
   const openingProjectTabs = useAtomValue(openingProjectTabsState);
@@ -41,7 +52,6 @@ export const ProjectSelector: FC<{
   const [openOverlay, setOpenOverlay] = useAtom(overlayOpenState);
   const sidebarOpen = useAtomValue(sidebarOpenState);
   const leftSidebarWidth = useAtomValue(leftSidebarLiveWidthState);
-  const currentProject = useAtomValue(projectState);
   const hostUiConfig = useRivetAppHostUiConfig();
   const { cancelOpeningProjectTab } = useRivetWorkspaceHost();
   const { closeConfirmModal, requestCloseProject } = useProjectCloseConfirmation();
@@ -93,11 +103,8 @@ export const ProjectSelector: FC<{
   const handleSelectProject = (projectId: ProjectId) => {
     setSelectedOpeningProjectTabId(undefined);
 
-    if (projectId === currentProject.metadata.id) {
-      setOpenOverlay(undefined);
-      return;
-    }
-
+    // Even selecting the active tab is an activation intent: it cancels a
+    // pending restore of another tab without replacing this tab's live content.
     const projectInfo = openedProjects[projectId];
     if (projectInfo) {
       void loadProject(projectInfo).then((loaded) => {
@@ -109,6 +116,7 @@ export const ProjectSelector: FC<{
   };
 
   const handleSelectOpeningProjectTab = (openingTabId: OpeningProjectTabId) => {
+    supersedeProjectActivation(store);
     setSelectedOpeningProjectTabId(openingTabId);
     setOpenOverlay(undefined);
   };
@@ -142,6 +150,23 @@ export const ProjectSelector: FC<{
       />
       {showWindowsWindowControls && <WindowsWindowControls />}
       {closeConfirmModal}
+      {projectMode && (activation.pending || activation.error) && (
+        <span
+          role={activation.error ? 'alert' : 'status'}
+          style={{
+            position: 'absolute',
+            right: 8,
+            top: '100%',
+            zIndex: 3,
+            padding: '4px 8px',
+            fontSize: 12,
+            background: 'var(--grey-dark)',
+            borderRadius: 4,
+          }}
+        >
+          {activation.error ?? 'Opening project…'}
+        </span>
+      )}
     </div>
   );
 };

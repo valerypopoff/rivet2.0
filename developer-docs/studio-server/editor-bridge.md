@@ -9,13 +9,45 @@ They communicate through `window.postMessage`.
 
 ## Contract
 
-All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both sides import from the same file so the contract cannot drift.
+Tunnel development has a separate, development-only refresh handshake:
+`prepare-development-refresh` / `cancel-development-refresh` carry a request ID;
+the iframe responds with `development-refresh-prepared` and `ready`. Both sides
+validate origin and window identity. The parent's final synchronous check calls
+the iframe's request-scoped `__rivetDevelopmentRefreshReady` function, closing
+the asynchronous message/navigation gap. This protocol is not available in
+production builds and does not expose workspace atoms. Input locks expire even
+if the parent disappears. Build generation/session changes cancel old requests.
+The parent also retains its expiry until navigation unloads the old document;
+cancelled or blocked navigation must release its shield and keyboard lock.
+The editor tracks queued bridge commands as activity, not merely commands that
+have started. Refresh never relies solely on the active-project dirty event.
+
+Production message types live in `packages/studio-server-shared/editor-bridge.ts`.
+The development-only refresh protocol is owned by `DevelopmentUpdates.tsx` and
+`useDevelopmentRefreshBridge.ts`, with browser tests exercising both sides.
+It rejects active canvas gestures and focused inline inputs before setting inert,
+then rechecks live activity and checkpoint revisions before navigation.
+
+The dependency-free HTML shell owns bootstrap failure UI. It can notify the
+dashboard with `editor-initialization-failed` even when the entry module cannot
+load; `entry.tsx` delegates nested-import failures to the same surface. The
+dashboard validates origin and iframe identity before revealing Retry. Retry
+reloads only the failed document, never clears recovery records, and never runs
+an automatic reload loop. Resource errors arriving after editor readiness do not
+replace the working workspace.
+
+`entry.tsx` must remain independent of React and CSS imports. It awaits the
+explicit `bootstrapApp()` promise from `bootstrapApp.tsx`; that module owns
+hosted CSS loading and dashboard/editor React initialization. Keep the seam
+checks on both wrapper-owned modules so moving initialization cannot bypass the
+failure surface. Wrapper contract tests must not read private App implementations;
+shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ### Dashboard-to-editor commands
 
 | Type                                      | Payload                                                                                    | When sent                                                                                                            |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `open-project`                            | `path`, `replaceCurrent`, optional `title`, optional `preview`, optional `reloadFromDisk`  | User opens or creates a workflow project                                                                             |
+| `open-project`                            | `path`, `replaceCurrent`, optional `title`, `preview`, `reloadFromDisk`, `preferredGraphId`, `expectedProjectId`, `requestId` | User opens/activates a workflow or navigates to an external Subgraph target |
 | `open-recording`                          | `recordingId`, `replaceCurrent`, optional `requestId`                                      | User opens a stored workflow run from the recordings browser                                                         |
 | `open-published-version-preview`          | `relativePath`, `versionId`, `replaceCurrent`                                              | User previews a stored published workflow version from Project Settings                                              |
 | `compare-open-project-with`               | `path`, optional `referencePath`, optional `labels.referenceLabel` / `labels.currentLabel` | User starts Rivet compare mode from another project row or from the open project's current published version         |
@@ -23,17 +55,19 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `save-project`                            | optional `source: "shortcut"`                                                              | User saves from the dashboard surface or presses the save shortcut outside the iframe                                |
 | `trigger-editor-duplicate-shortcut`       | `modifier`                                                                                 | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
 | `trigger-editor-find-shortcut`            | `modifier`                                                                                 | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find                                |
-| `delete-workflow-project`                 | `path`, `projectId`                                                                        | User deletes a workflow project from the dashboard                                                                   |
-| `workflow-paths-moved`                    | `moves[]`                                                                                  | A project or folder rename/move changed one or more workflow project references                                      |
+| `delete-workflow-project`                 | `path`, optional `projectId` | User deletes a workflow project from the dashboard |
+| `workflow-paths-moved`                    | `moves[]`, optional `requestId` | A project or folder rename/move changed workflow project references |
 | `capture-workflow-project-reconciliation` | `requestId`                                                                                | Capture editor revision ownership before fetching the remote workflow tree                                           |
 | `reconcile-workflow-project-bindings`     | authoritative `bindings[]`, captured `context`, optional `requestId`                     | Apply only bindings whose editor instance and project generation remain current                                     |
-| `resolve-workflow-project-content-change` | `changeId`, `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`)    | Resolve only the conflict identity the user actually chose                                                          |
+| `resolve-workflow-project-content-change` | `changeId`, `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`), optional `requestId` | Resolve only the conflict identity the user actually chose |
 
 ### Editor-to-dashboard events
 
 | Type                                       | Payload                                                                        | When sent                                                                          |
 | ------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
 | `editor-ready`                             | `editorInstanceId`                                                            | Editor iframe mounted; the dashboard fences previous iframe messages              |
+| `editor-initialization-failed`            | none | Bootstrap is blocked; dashboard reveals the iframe's retry/recovery controls instead of waiting forever for ready |
+| `open-subgraph-target`                    | `projectId`, `graphId` | Navigate through the dashboard's current workflow binding to a graph in another project |
 | `workflow-project-reconciliation-captured` | `context`, `requestId`                                                        | The editor supplied a pre-fetch observation context                                |
 | `workflow-project-conflicts`              | `snapshot`                                                                    | Authoritative pending-conflict state for this editor instance                      |
 | `project-opened`                           | `path`, optional `requestId`                                                   | A project or replay opened successfully                                            |
@@ -42,12 +76,127 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 | `active-project-unsaved-changes-changed`   | `path`, `hasUnsavedChanges`                                                    | Rivet dirty-state atoms changed for the active editor project                      |
 | `open-project-count-changed`               | `count`                                                                        | Number of open editor tabs changed                                                 |
 | `project-compare-failed`                   | `path`, `error`                                                                | A project-tree compare reference could not be loaded or deserialized               |
-| `project-saved`                            | `path`                                                                         | Current project saved successfully                                                 |
+| `project-saved`                            | `path`, optional `hasNewerUnsavedChanges` | Captured project write succeeded; newer edits may still require Save |
 | `workflow-paths-moved-applied`             | optional request id                                                            | The iframe finished applying a local move or rename                                |
 | `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                |
 | `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                  |
 
+## Model-node error behavior
+
+LLM Chat and Classifier Evaluate expose `Fail on non-2XX status code` and
+`Catch all failures` in their Error behavior group. The node-owned fields are
+`errorOnNon200` (default true, including older nodes without this field) and
+`catchRequestFailed` (default false). They are not LLM Profile fields.
+Retries and profile fallback run first; catching does not bypass either policy.
+
+When Catch all failures is enabled, or HTTP-status throwing is disabled, the
+canvas exposes scalar `Run failed` (`runFailed`, boolean) and `Run error`
+(`runError`, string) outputs. Success returns false and excludes Run error.
+A handled failure returns true and the complete error/cause chain, excluding
+normal response, answers, usage and tool-call outputs. Disabled status throwing
+handles only typed non-2XX errors; malformed responses, credentials and other
+errors still throw unless Catch all failures is enabled. A provider's rejected
+response is not a usable generated answer, unlike an HTTP Call's raw body.
+LLM opt-in request/response/attempt diagnostics remain available on handled
+failures. Explicit graph cancellation escapes both controls, and caught errors
+do not publish a terminal `nodeError` checkpoint or enter the editor response cache.
+
+Catch all failures wraps the entire awaited node implementation: input and
+credential validation, provider configuration, transport and provider timeouts,
+response decoding/validation, LLM tool continuation, result projection and cache
+processing. Only an aborted caller signal proves graph cancellation; a provider
+`AbortError` while that signal is live is a catchable node failure. Observational
+callbacks remain isolated rather than turning successful execution into failure.
+The control cannot catch upstream-node errors, scheduler/setup failures before
+the node runs, or process/browser termination. A scheduler-excluded node did not
+run and does not emit a caught failure.
+
+Caller cancellation is checked before preparation and after asynchronous work;
+late successful LLM replies cannot publish successful activity or enter the cache.
+Classifier's overall deadline covers both headers and JSON receipt, including
+injected transports that ignore abort signals. Waiting settles on cancellation;
+late replies are discarded and late rejections consumed. Response-read errors
+retain their underlying cause instead of reporting only an invalid-JSON summary.
+
+HTTP and model nodes share error-text handling, so unusual thrown values cannot
+make error formatting fail. Classifier releases rejected response bodies on both
+retries and terminal failures, including when failures are caught and the graph continues.
+Foreign-realm errors retain their stack/message and causal chain; they must not
+be reduced to an empty JSON object merely because `instanceof Error` is false.
+Cleanup is best-effort and cannot block the final failure or the next retry.
+Synchronous cleanup errors cannot mask the original HTTP status either.
+
+The body displays `Throw on non-2XX` and `Catch all failures` when enabled.
+Valid 2XX provider results remain successful even when the status is not 200;
+the separately named Retry on non-200 policy retains its existing repeat rule.
+Split runs aggregate Run failed as boolean arrays. Mixed success/failure ports
+infer their array type from a non-excluded item in either order, preserving
+undefined slots at excluded indices; entirely excluded ports remain excluded.
+
+## LLM numeric settings
+
+LLM Chat and LLM Profile share optional Temperature semantics: blank means use
+the provider default. The node body omits an unset Temperature and SDK request
+construction omits the argument; explicit zero and finite decimals are preserved.
+The creation default remains `0.5`, but profile normalization must not reintroduce
+that default into a saved/recovered profile with a missing Temperature. Historical
+`null` and `NaN` values are treated as unset at the node-specific deserialization,
+profile and execution boundaries, including JSON recovery that bypasses project
+deserialization. Compatibility reads do not automatically rewrite server files.
+Normal Save/export repairs untouched legacy recovery data and saved variants
+without mutating the live editor snapshot or its dirty baseline.
+Compatibility project/graph reads also normalize saved variant payloads and
+node-library source variants, before those values can be selected in the editor.
+Malformed supplied inputs fail before making a provider request; absent inputs
+retain the configured-value fallback when input mode is enabled.
+
+The shared numeric editor commits optional blanks as `undefined`, keeps invalid
+required-field drafts out of node data, and synchronizes external changes such as
+Undo/Redo. Ordinary numbers retain fractional precision. Explicit display-unit
+conversion (for example seconds to integer milliseconds via `storageMultiplier`)
+continues to round the converted storage value. Temporary drafts belong to the
+existing project/graph/node/field editor owner, not a shared cross-tab buffer.
+Browser `badInput` is distinguished from a deliberate blank, so incomplete
+numbers such as `1e` never clear an optional setting. Typing acknowledgements
+preserve the local spelling (including trailing zeroes); authoritative external
+changes still synchronize the draft.
+The editor observes native input events: React change events can suppress an
+incomplete number when the exposed value remains empty.
+Blurring an invalid optional draft restores its authoritative value, including
+an unset blank, rather than leaving an error on an otherwise valid setting.
+All numeric fields synchronize to the actual stored value on blur, including
+rounded unit conversions and parent-clamped/rejected edits that leave the stored
+value unchanged. Typing retains its spelling until then; blur does not write
+another edit. Prompt Designer reuses this numeric editor rather than maintaining a
+second interpretation of blank Temperature; its settings remain an ephemeral
+preview configuration, not edits to the attached graph node.
+Preview attachment identity includes project, graph, node and run, so copied node
+IDs cannot carry preview drafts or prompts into another project's attachment.
+Preview requests are also scoped to that attachment and current request: retired
+callbacks cannot publish partial/final responses, errors or completion state.
+
 ## Message flow
+
+The bridge's dashboard command lane is ordered; it is not the shared App's
+activation coordinator. Direct editor-tab selections can supersede pending
+preparation independently. Normal opening of an already-open project activates
+its existing snapshot, including unsaved content and saved baseline; double-click
+promotion is not a reload. `reloadFromDisk` is the explicit replacement path.
+`expectedProjectId` rejects a reused path now owned by another project, and
+`preferredGraphId` selects the requested graph instead of restoring an unrelated
+resource. See [workspace activation](../EDITOR-WORKSPACE-STATE.md#project-activation-and-content-replacement).
+
+The hosted `useLoadProject` override is only an Evaluation-cache/executor-policy
+adapter around App's `useActivateOpenedProject`. Snapshot selection, saved
+baselines and cancellation stay in that shared activation owner. Hosted tab
+synchronization likewise calls App's `useSyncProjectDirtyState` rather than
+duplicating digest comparison or marking restored content clean.
+
+Hosted preparation uses abortable fetch/worker deserialization with one overall
+deadline (including deferred import). Dataset import and accepted revision binding
+are deferred until the selection/tab is still current, then rechecked before
+workspace publication. Inactive refresh never takes over the active dataset owner.
+Recovery checkpoint failure after a completed open is separate from open failure.
 
 1. The dashboard renders the iframe. The editor emits `editor-ready` with its runtime `editorInstanceId` once mounted. Missing or malformed IDs are rejected; a replacement iframe invalidates the previous instance's outstanding reconciliation requests and conflict snapshots.
 2. Commands sent before `editor-ready` are validated, structured-cloned, buffered by `useEditorCommandQueue`, and flushed once the editor is ready. The clone snapshots queued commands against later mutation. `postMessageToEditor` repeats the same preparation so direct sends and queued flushes share the outbound guard.
@@ -57,8 +206,8 @@ All message types live in `packages/studio-server-shared/editor-bridge.ts`. Both
 6. In `filesystem` mode that reference is a real server filesystem path. In `managed` mode it is a virtual managed path under `/managed/workflows/...`, even though the shared bridge type still uses the legacy field name `path`.
 7. Hosted editor project tabs show only the project title because `HostedEditorApp` sets `RivetAppHostUiConfig.projectTabs.showFileNames` to `false`. The shared tab presentation model applies that policy to loaded and opening tabs; other hosts retain the bracketed backing filename by default. Keep this as an explicit host contract rather than a build-time source transform. Active and inactive tab boxes must retain identical horizontal layout geometry—including gap and padding—so switching tabs cannot redistribute widths across the flex-shrinking tab strip. Inactive tabs deliberately retain the strip's 5px lower inset, matching Menu; the selected tab alone meets the lower edge and owns the non-layout decoration: its two outward bottom-corner shoulders and suppression of the dividers on both adjacent edges. Its matching 5px bottom padding keeps the tab label and controls on the same vertical baseline while the tab background grows to the lower edge. A project transition updates `projectState`, `graphState`, and `loadedProjectState` separately, so the hosted opened-project synchronizer must accept a loaded path only when no other open tab owns it and must accept an opened graph only when the active project contains it. Reuse `resolveSyncedOpenedProjectFsPathOptions`; otherwise a transition frame can assign the previous tab's path-derived title to the new project id, briefly duplicate a tab label, and make every flex-shrunk tab resize.
 8. `open-recording` first fetches the serialized recorder payload for the selected `recordingId`, extracts the preferred start graph, and asks the editor to open the virtual path `recording://<recordingId>/replay.rivet-project`. When the dashboard supplies a `requestId`, the editor returns it in the terminal `project-opened` or `project-open-failed` event. The selected recording row is the visible loading status until that acknowledgement arrives, while competing recording actions stay locked; the dashboard never downloads or deserializes the replay itself.
-9. When that virtual path loads, `HostedIOProvider` fetches the replay project and optional replay dataset from the API and imports the dataset snapshot into browser replay state.
-10. `open-published-version-preview` asks the editor to open the virtual path `published-version-preview://<encodedRelativePath>/<encodedVersionId>/preview.rivet-project`. When that path loads, `HostedIOProvider` fetches the stored project snapshot and optional dataset snapshot from the published-version preview API, rewrites the project id to a fresh `published-version-preview:*` id, and imports datasets under that detached id. The dashboard closes Project Settings before opening the preview so the visible editor tab is not still coupled to the source workflow's publish controls.
+9. When that virtual path loads, `HostedIOProvider` prepares the replay project and optional replay dataset from the API. The guarded provider commit imports the dataset only while that replay selection is current.
+10. `open-published-version-preview` asks the editor to open the virtual path `published-version-preview://<encodedRelativePath>/<encodedVersionId>/preview.rivet-project`. `HostedIOProvider` prepares the stored project and optional dataset, rewrites the project id to a fresh `published-version-preview:*` id, and imports datasets under that detached id only through the guarded commit. The dashboard closes Project Settings before opening the preview so the visible editor tab is not still coupled to the source workflow's publish controls.
 11. Published-version previews are read-only and detached from the source workflow. Both prompt and no-prompt saves throw for preview projects, the dashboard has no active workflow project for the virtual path, and preview tabs cannot publish back into the workflow tree.
 12. `refresh-open-project-from-disk` handles published-version restore and an explicit remote-content **Reload** choice. If that project is active, the bridge reloads it from storage with `replaceCurrent` and `reloadFromDisk`. If it is open in a hidden tab, `RivetWorkspaceHost.replaceProjectSnapshot()` installs the validated project, data, evaluation session, title, path, graph fallback, and clean baseline without changing focus. The prior hidden-tab snapshot and its cached evaluation session remain intact until replacement succeeds, so a failed fetch or snapshot replacement is a true no-op for that tab.
 13. The bridge caches the loaded recorder by virtual replay path and restores or clears `loadedRecordingState` when the active tab path changes. Playback state carries both the replay project's ID and its exact loaded virtual path, and all recording-mode UI reads that shared current-tab selector. This keeps the yellow replay frame, playback controls, and disabled executor switcher on the one replay tab even if another tab has a reused legacy project ID or a stale transition is settling. Activating a replay, replacing a tab, or handling a failed replay restore updates both playback selection and its transient start state atomically; replacement and restore cleanup use the virtual path, never project ID alone. A replay tab receives its own local executor mode from the current Browser/Node selection without mutating the user's live selected executor; it shows `Not used during recording playback` until unload. If a replay tab is restored after an iframe/page reload, the bridge derives the recording ID from the virtual path, refetches the serialized recorder, and restores playback only for that same tab instead of treating it as a normal runnable project.
@@ -94,6 +243,7 @@ Save can be initiated from either context:
 - an in-place save also carries the last explicitly accepted content revision. A remote tree revision creates a persistent Reload/Keep mine decision before any save is sent, even if the local tab is clean. Keep mine changes only that precondition for the next explicit save; Reload replaces the selected tab with the saved version. Filesystem and managed API paths independently reject an old revision with a conflict, so a lost remote event or a later remote save cannot silently overwrite content
 - the filesystem backend serializes saves by resolved target path, including simultaneous creates, so two project IDs cannot both pass an absent-target check and overwrite one another
 - repeated Ctrl/Cmd+S requests for one project share the in-flight persistence operation. If edits occur after its captured snapshot, Rivet leaves them dirty and does not enqueue an implicit second write
+- a successful backend Save remains successful if the later browser checkpoint fails. Recovery retries silently and warns only for unsaved work at risk; it must not suppress `project-saved` or claim the server lost an already-saved project. Download-only providers cannot confirm a durable Save. See [browser recovery](../EDITOR-WORKSPACE-STATE.md#browser-recovery).
 
 That lets the hosted shell behave like a single app even though the editor lives in an iframe.
 
@@ -139,7 +289,7 @@ Those execution websocket responsibilities are separate from the dashboard/edito
 
 LLM Profile suspension state also does not travel over `window.postMessage`. `hostedRivetProviders` supplies an HTTP-backed `llmProfileHealthStore` for Browser-mode graph runs. It intentionally does not inject `llmProfileHealthAdmin` into the embedded editor: the wrapper-owned Project Settings modal owns the **LLM profile suspension** tab and calls the authenticated `/api/workflows/llm-profile-health` API directly. Browser runs still share the same reliability history with published endpoints, web-app actions, and other server replicas.
 
-For hosted Browser- and internal-Node-mode local graph runs, the same provider exposes an optional local-recording bridge. It is active only when the user enables **Record local graph executions** and the API advertises `GET /api/workflows/local-editor-recordings/capability`. Browser mode gives the generated correlation directly to Core. Internal Node mode includes it in the remote-run frame and attaches an `ExecutionRecorder` to the matching browser WebSocket request before sending that frame; this preserves the normal Node executor while the browser retains replay data locally until it is needed. When Core emits an unhealthy terminal LLM health update, the browser uploads its recorder/project/dataset snapshot; healthy local runs do not upload a replay. A remote executor socket that closes before a terminal frame, or a local snapshot/upload that cannot be retained, reports the correlation as unavailable rather than silently retaining a non-playable link. `POST /api/workflows/local-editor-recordings` is inside the normal authenticated `/api` boundary, resolves the current saved project by stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, before verifying its identity. It never reads a raw requested filesystem path, so a stale open-tab path after a rename or move cannot drop replay evidence; it caps the combined UTF-8 payload at 24 MiB, and persists the artifact through the normal Run recordings store as `editor` evidence. The profile-health record retains only its opaque correlation and eventual recording ID. If capability is absent during a mixed-version rollout, hosted editor runs omit the correlation and retain the explicit `not recorded` explanation rather than a stale pending row. Desktop and external-debugger Node sessions are intentionally out of scope.
+For hosted Browser- and internal-Node-mode local graph runs, the same provider exposes an optional local-recording bridge. It is active only when the user enables **Record local graph executions** and the API advertises `GET /api/workflows/local-editor-recordings/capability`. Browser mode gives the generated correlation directly to Core. Internal Node mode includes it in the remote-run frame and attaches an `ExecutionRecorder` to the matching browser WebSocket request before sending that frame. Every captured live run uploads its recorder/project/dataset snapshot after completion, including successful runs without LLM nodes. Replay playback does not create a second recording. Parent and cross-project child recordings share the same correlation; neither persistence path depends on an unhealthy LLM-profile update. A remote executor socket that closes before a terminal frame, or a local snapshot/upload that cannot be retained, reports the correlation as unavailable for any pending health evidence. `POST /api/workflows/local-editor-recordings` is inside the normal authenticated `/api` boundary, resolves the current saved project by stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, before verifying its identity. It never reads a raw requested filesystem path, so a stale open-tab path after a rename or move cannot drop replay evidence; it caps the combined UTF-8 payload at 24 MiB, and persists the artifact through the normal Run recordings store as an `editor` run. Server recording configuration and retention still apply. The profile-health record retains only its opaque correlation and eventual recording ID. If capability is absent during a mixed-version rollout, hosted editor runs omit the correlation and retain the explicit `not recorded` explanation rather than a stale pending row. Desktop and external-debugger Node sessions are intentionally out of scope.
 Node-mode editor runs reach the same state through `packages/studio-server-executor/src/executor.mts`. That wrapper entrypoint starts upstream `executorHost.mts` with `createProcessorOptions`, injecting an HTTP-backed `llmProfileHealthStore` and forwarding the validated replay correlation without forking the executor protocol. Compose points it at `http://api:80/api/workflows/llm-profile-health`; the Kubernetes backend sidecar uses the backend pod's loopback API. Both authenticate with the proxy token derived from `RIVET_KEY`.
 
 The reliability API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. The outer Project Settings modal loads the list only while its **LLM profile suspension** tab is open, refreshes every five seconds, and can list and clear only the active project's entries. Active suspensions use the red operational treatment; profiles awaiting their one recovery attempt and those with a recovery attempt in progress use yellow. This keeps retained recovery state visible without presenting it as an active block. Even a single-profile clear carries that project id, and the HTTP surface exposes no unscoped list or clear operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
@@ -188,7 +338,7 @@ New writes use the EvaluationRun version-2 envelope, separating execution state,
 - `packages/studio-server-web/overrides/state/savedGraphs.ts` - hosted preservation of editor-owned `projectContext__"<projectId>"` storage across tab close/reopen
 - `packages/studio-server-web/dashboard/useOpenWorkflowProject.ts` - hosted path loading, duplicate-id checks, and open/replace-current or opening-tab completion calls through the captured `RivetWorkspaceHost`
 - `packages/app/src/hooks/workspaceHost/useWorkspaceHostReplaceProjectSnapshot.ts` - explicit active/inactive tab snapshot replacement for reloads
-- `packages/studio-server-web/io/HostedDatasetProvider.ts` - hosted dataset import wrapper that prunes stale per-project IndexedDB dataset rows before importing the current project payload
+- `packages/studio-server-web/io/HostedDatasetProvider.ts` - abortable, guarded replacement of project datasets in one transaction, with separate explicit deletion cleanup
 - `packages/studio-server-web/io/HostedIOProvider.ts` - API-backed project loading/saving plus replay and published-version preview loading
 - `packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts` - hosted clipboard hotkey override that reads the latest node state synchronously
 - `packages/studio-server-web/overrides/hooks/useContextMenu.ts` - hosted context-menu override that clears stale focused menu inputs

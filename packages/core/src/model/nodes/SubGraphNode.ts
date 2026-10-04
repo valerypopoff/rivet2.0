@@ -348,7 +348,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         : undefined;
     const finishChildRecording = childRecorder?.record(subGraphProcessor);
     const startedAt = Date.now();
-    let runError: string | undefined;
+    let runError: Error | undefined;
 
     try {
       const graphOutputs = await subGraphProcessor.processGraph(
@@ -409,8 +409,8 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
 
       return outputs;
     } catch (err) {
-      runError = getError(err).message;
-      finishChildRecording?.({ type: 'error', error: getError(err) });
+      runError = getError(err);
+      finishChildRecording?.({ type: 'error', error: runError });
       if (!this.data.useErrorOutput) {
         throw err;
       }
@@ -419,7 +419,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
 
       outputs['error' as PortId] = {
         type: 'string',
-        value: getError(err).message,
+        value: runError.message,
       };
 
       return outputs;
@@ -436,7 +436,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
             recorder: childRecorder,
             status: runError ? 'failed' : 'succeeded',
             durationMs: Math.max(0, Date.now() - startedAt),
-            ...(runError ? { errorMessage: runError } : {}),
+            ...(runError ? { errorMessage: runError.message } : {}),
             correlationId: context.llmProfileHealthExecutionCorrelationId,
           });
         } catch (error) {

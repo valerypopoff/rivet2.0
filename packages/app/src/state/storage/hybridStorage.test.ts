@@ -5,9 +5,161 @@ import {
   configureHybridStorageBackend,
   createHybridStorage,
   flushHybridStorageGroup,
+  initializeWorkspaceRecovery,
 } from './hybridStorage';
+import { MemoryAsyncStorage } from './indexedDB.js';
+import { initializeHybridStorage, memoryStorage } from './migrations.js';
 
 describe('createHybridStorage', () => {
+  it('a replaced backend cannot hydrate over its replacement after a delayed startup read', async () => {
+    const key = 'grouped-stale-hydration';
+    const before = new Set(allInitializeStoreFns);
+    createHybridStorage(key);
+    const initialize = [...allInitializeStoreFns].find((fn) => !before.has(fn))!;
+    let release!: (value: string) => void;
+    const first = new MemoryAsyncStorage();
+    first.getItem = () =>
+      new Promise<string>((resolve) => {
+        release = resolve;
+      });
+    const second = new MemoryAsyncStorage();
+    await second.setItem(key, '{"selected":"second"}');
+    const previous = configureHybridStorageBackend(first);
+    try {
+      const pending = initialize();
+      configureHybridStorageBackend(second);
+      await initialize();
+      release('{"selected":"first"}');
+      await pending;
+      assert.deepEqual(memoryStorage.get(key), { selected: 'second' });
+    } finally {
+      configureHybridStorageBackend(previous);
+      memoryStorage.delete(key);
+    }
+  });
+
+  it('cancelled hydration ignores a late error and does not erase the currently selected group', async () => {
+    const key = 'cancelled-hydration';
+    const backend = new MemoryAsyncStorage();
+    let fail!: (error: Error) => void;
+    backend.getItem = () =>
+      new Promise<string>((_resolve, reject) => {
+        fail = reject;
+      });
+    memoryStorage.set(key, { selected: 'current' });
+    let current = true;
+    try {
+      const pending = initializeHybridStorage(key, backend, () => current);
+      assert.deepEqual(memoryStorage.get(key), { selected: 'current' });
+      current = false;
+      fail(new Error('obsolete storage read failed'));
+      await pending;
+      assert.deepEqual(memoryStorage.get(key), { selected: 'current' });
+    } finally {
+      memoryStorage.delete(key);
+    }
+  });
+
+  it('malformed stored groups fail closed without discarding the previous in-memory authority', async () => {
+    const key = 'invalid-hydration';
+    const backend = new MemoryAsyncStorage();
+    memoryStorage.set(key, { retained: true });
+    try {
+      for (const invalid of ['', 'null', 'false', '0', '[]']) {
+        await backend.setItem(key, invalid);
+        await assert.rejects(initializeHybridStorage(key, backend));
+        assert.deepEqual(memoryStorage.get(key), { retained: true });
+        assert.equal(await backend.getItem(key), invalid);
+      }
+    } finally {
+      memoryStorage.delete(key);
+    }
+  });
+
+  it('queued recovery captures the backend and workspace before reconfiguration', async () => {
+    const oldMemory = new Map(memoryStorage);
+    const first = new MemoryAsyncStorage();
+    const second = new MemoryAsyncStorage();
+    const write = first.setItem.bind(first);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    first.setItem = async (key, value) => {
+      await gate;
+      await write(key, value);
+    };
+    memoryStorage.clear();
+    const previous = configureHybridStorageBackend(first);
+    try {
+      const { storage } = createHybridStorage('project');
+      storage.setItem('marker', 'first');
+      const pendingFirst = flushHybridStorageGroup('project');
+      storage.setItem('marker', 'second');
+      const pendingSecond = flushHybridStorageGroup('project');
+      configureHybridStorageBackend(second);
+      storage.setItem('marker', 'replacement');
+      await flushHybridStorageGroup('project');
+      release();
+      await Promise.all([pendingFirst, pendingSecond]);
+      const oldKey = (await first.listKeys('workspace-recovery/'))[0]!;
+      const newKey = (await second.listKeys('workspace-recovery/'))[0]!;
+      assert.equal(JSON.parse((await first.getItem(oldKey))!).groups.project.marker, 'second');
+      assert.equal(JSON.parse((await second.getItem(newKey))!).groups.project.marker, 'replacement');
+    } finally {
+      release();
+      configureHybridStorageBackend(previous);
+      memoryStorage.clear();
+      for (const [key, value] of oldMemory) memoryStorage.set(key, value);
+    }
+  });
+  it('legacy import verifies a complete envelope and keeps original groups when interrupted', async () => {
+    const oldMemory = new Map(memoryStorage);
+    const backend = new MemoryAsyncStorage();
+    const project = { projectState: { metadata: { id: 'a', title: 'A' }, graphs: {} } };
+    const graph = { graphState: { nodes: [], connections: [] } };
+    await backend.setItem('project', JSON.stringify(project));
+    await backend.setItem('graph', JSON.stringify(graph));
+    memoryStorage.clear();
+    const previous = configureHybridStorageBackend(backend);
+    try {
+      // Import all groups first; no partial checkpoint has been published.
+      const recovery = (await import('./hybridStorage.js')).getWorkspaceRecoveryStorage();
+      await initializeHybridStorage('project', recovery);
+      await initializeHybridStorage('graph', recovery);
+      const read = backend.getItem.bind(backend);
+      backend.getItem = async (key) => (key.startsWith('workspace-recovery/') ? null : read(key));
+      await assert.rejects(initializeWorkspaceRecovery(), /read-back verification failed/);
+      assert.equal(await backend.getItem('project'), JSON.stringify(project));
+      assert.equal(await backend.getItem('graph'), JSON.stringify(graph));
+      backend.getItem = read;
+      await initializeWorkspaceRecovery();
+      const checkpoint = JSON.parse((await backend.getItem(recovery.key))!);
+      assert.deepEqual(checkpoint.groups, { project, graph });
+    } finally {
+      configureHybridStorageBackend(previous);
+      memoryStorage.clear();
+      for (const [key, value] of oldMemory) memoryStorage.set(key, value);
+    }
+  });
+  it('explicit flush rejects backend errors and the next flush retries the latest snapshot', async () => {
+    let fail = true;
+    const writes: string[] = [];
+    const { storage } = createHybridStorage('failed-flush', {
+      getItem: async () => null,
+      setItem: async (_key, value) => {
+        if (fail) throw new Error('quota exceeded');
+        writes.push(value);
+      },
+      removeItem: async () => {},
+    });
+    storage.setItem('value', 1);
+    await assert.rejects(flushHybridStorageGroup('failed-flush'), /quota exceeded/);
+    storage.setItem('value', 2);
+    fail = false;
+    await flushHybridStorageGroup('failed-flush');
+    assert.deepEqual(writes, ['{"value":2}']);
+  });
   it('buffers values in memory for grouped keys', () => {
     const writes: Array<{ key: string; value: string }> = [];
     const { storage } = createHybridStorage('grouped', {

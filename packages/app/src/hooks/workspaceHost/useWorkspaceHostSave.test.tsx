@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import {
+  deserializeProject,
+  serializeProject,
+  type DataId,
+  type GraphId,
+  type Project,
+  type ProjectId,
+} from '@valerypopoff/rivet2-core';
 import type { IOProvider } from '../../io/IOProvider.js';
 import React from 'react';
 import { JSDOM } from 'jsdom';
@@ -39,6 +46,42 @@ type MountedSaveHost = {
   saveCurrentProject: RivetWorkspaceHost['saveCurrentProject'];
   unmount(): Promise<void>;
 };
+
+test('download-only saves retain dirty baselines and emit no durable save acknowledgement', async () => {
+  let downloads = 0;
+  let savedEvents = 0;
+  const fixture = await mountSaveHost(
+    {
+      ...createSaveableIOProvider({
+        saveProjectData: async () => {
+          downloads++;
+          return 'export.rivet-project';
+        },
+      }),
+      projectSaveConfirmation: 'download-only',
+    },
+    () => {
+      savedEvents++;
+    },
+    { loaded: false, path: null },
+  );
+  const store = getDefaultStore();
+  const id = store.get(projectState).metadata.id;
+  const baseline = store.get(savedProjectContentDigestsState)[id];
+  try {
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await fixture.saveCurrentProject();
+    });
+    assert.equal(saved, false);
+    assert.equal(downloads, 1);
+    assert.equal(savedEvents, 0);
+    assert.equal(store.get(projectUnsavedChangesState)[id], true);
+    assert.equal(store.get(savedProjectContentDigestsState)[id], baseline);
+  } finally {
+    await fixture.unmount();
+  }
+});
 
 test('public workspace save shares one persistence operation, marks the project clean, and emits once', async () => {
   let persistenceCount = 0;
@@ -316,6 +359,49 @@ test('public workspace save returns false when Save As is cancelled', async () =
   }
 });
 
+test('save captures static data before awaits and keeps later data edits dirty', async () => {
+  let serialized: string | undefined;
+  let finish!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const saving = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const fixture = await mountSaveHost(
+    createSaveableIOProvider({
+      async saveProjectDataNoPrompt(project) {
+        started();
+        await gate;
+        serialized = serializeProject(project) as string;
+      },
+    }),
+  );
+  const store = getDefaultStore();
+  const projectId = store.get(projectState).metadata.id;
+  const id = 'saved-payload' as DataId;
+  try {
+    let save!: Promise<boolean>;
+    await act(async () => {
+      store.set(projectDataState, { [id]: 'original payload' });
+      save = fixture.saveCurrentProject();
+      await saving;
+    });
+    await act(async () => {
+      store.set(projectDataState, { [id]: 'newer payload' });
+      finish();
+      assert.equal(await save, true);
+    });
+    assert.deepEqual(deserializeProject(serialized)[0].data, { [id]: 'original payload' });
+    assert.deepEqual(store.get(projectDataState), { [id]: 'newer payload' });
+    assert.equal(store.get(projectDataUnsavedChangesState)[projectId], true);
+  } finally {
+    finish();
+    await fixture.unmount();
+  }
+});
+
 test('public workspace save remains successful when the host save observer throws', async () => {
   let persistenceCount = 0;
   let savedEventCount = 0;
@@ -414,6 +500,37 @@ test('public workspace save returns false when there is no active saveable proje
     assert.equal(await fixture.saveCurrentProject(), false);
     assert.equal(persistenceCount, 0);
   } finally {
+    await fixture.unmount();
+  }
+});
+
+test('a successful project save remains successful when its browser recovery write fails', async () => {
+  let saves = 0;
+  const fixture = await mountSaveHost(
+    createSaveableIOProvider({
+      async saveProjectDataNoPrompt() {
+        saves++;
+      },
+    }),
+  );
+  const previous = configureHybridStorageBackend({
+    getItem: async () => null,
+    setItem: async (key) => {
+      if (key.startsWith('workspace-recovery/')) throw new Error('quota exceeded');
+    },
+    removeItem: async () => {},
+  });
+  try {
+    let result = false;
+    await act(async () => {
+      result = await fixture.saveCurrentProject();
+    });
+    assert.equal(result, true);
+    assert.equal(saves, 1);
+    const store = getDefaultStore();
+    assert.equal(store.get(projectUnsavedChangesState)[store.get(projectState).metadata.id], false);
+  } finally {
+    configureHybridStorageBackend(previous);
     await fixture.unmount();
   }
 });

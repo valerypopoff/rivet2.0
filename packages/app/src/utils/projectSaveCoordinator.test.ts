@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import { runDeduplicatedProjectSave } from './projectSaveCoordinator.js';
+import { hasPendingProjectSaves, runDeduplicatedProjectSave } from './projectSaveCoordinator.js';
 
 test('shares one in-flight save promise for the same project', async () => {
   const workspace = {};
@@ -16,6 +16,7 @@ test('shares one in-flight save promise for the same project', async () => {
     persistenceCount += 1;
     return pendingSave;
   });
+  assert.equal(hasPendingProjectSaves(workspace), true);
   const second = runDeduplicatedProjectSave(workspace, projectId, () => {
     persistenceCount += 1;
     return Promise.resolve(false);
@@ -28,6 +29,7 @@ test('shares one in-flight save promise for the same project', async () => {
   assert.deepEqual(await Promise.all([first, second]), [true, true]);
 
   await Promise.resolve();
+  assert.equal(hasPendingProjectSaves(workspace), false);
   const third = runDeduplicatedProjectSave(workspace, projectId, async () => {
     persistenceCount += 1;
     return true;

@@ -131,7 +131,6 @@ export function useWorkflowLibraryController(options: {
     activePath,
     activeProject,
     cancelPendingPreviewOpen,
-    clearSelection,
     isActiveProjectOpen,
     openedWorkflowProject,
     openedWorkflowProjectRef,
@@ -257,22 +256,6 @@ export function useWorkflowLibraryController(options: {
     handleRootDrop,
     movePending,
   } = dragAndDrop;
-
-  const handlePanelBodyClick = useCallback(
-    (event: MouseEvent<HTMLDivElement>) => {
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (!target) {
-        return;
-      }
-
-      if (target.closest('.project-row') || target.closest('.active-project-section')) {
-        return;
-      }
-
-      clearSelection();
-    },
-    [clearSelection],
-  );
 
   const closeProjectContextMenu = useCallback(() => {
     setProjectContextMenuState(null);
@@ -727,7 +710,6 @@ export function useWorkflowLibraryController(options: {
     handleRootDragOver,
     handleRootDragLeave,
     handleRootDrop,
-    handlePanelBodyClick,
     handleUploadProjectFromFolder,
     handleCreateFolderFromContextMenu,
     handleCreateProjectFromContextMenu,

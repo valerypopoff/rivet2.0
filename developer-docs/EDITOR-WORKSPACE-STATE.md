@@ -35,16 +35,16 @@ transition.
 Persist graph coordinates only when leaving a graph. Never serialize Node library
 or UI-graph viewport coordinates into the previously active graph.
 
-`projectEditorStateByProjectIdState` is the canonical persisted editor state: it
-keys navigation and canvas positions by immutable project ID, then graph ID. During a
-non-bfcache `pagehide`, only the active project entry receives a one-shot tab-session checkpoint
-so an immediate hosted-page reload cannot lose a pending asynchronous storage write.
-The checkpoint is merged during the replacement editor's storage hydration and is
-never project content. `lastCanvasPositionByGraphState` remains a read-only
+`projectEditorStateByProjectIdState` keys navigation and canvas positions by
+immutable project ID, then graph ID. It is captured with project/graph content in
+the coherent browser checkpoint described below, not in an independent synchronous
+`sessionStorage` record. `lastCanvasPositionByGraphState` remains a read-only
 compatibility fallback for pre-existing browser state; new editor synchronization
-must not write or repopulate it. The app shell owns the checkpoint listener so it
-also protects the most recent graph viewport while Node library or a UI graph is open;
-those resource canvases must instead reuse the already persisted graph snapshot.
+must not write or repopulate it. The app shell snapshots the active graph viewport;
+Node library and UI-graph canvases reuse the persisted graph snapshot instead of
+overwriting it. Hidden visibility requests a flush while the document is alive.
+Non-bfcache `pagehide` also requests a flush, but asynchronous work at that point
+cannot guarantee completion after the document closes.
 Closing a project tab is not project deletion: the project-scoped editor entry must
 survive so reopening the same project restores its graph and viewport. The workspace
 host snapshots the active tab, performs all tab/snapshot/context cleanup, and only
@@ -57,6 +57,39 @@ but they no longer own a live viewport. Every snapshot write therefore requires 
 open tab and a graph workspace. Background synchronization, pagehide checkpointing,
 and project transitions must ignore closed projects so an empty-workspace startup
 cannot overwrite the retained viewport with the runtime canvas default.
+
+### Project activation and content replacement
+
+[`useActivateOpenedProject.ts`](../packages/app/src/hooks/useActivateOpenedProject.ts)
+owns activation of an existing tab. Selecting an already-active project does not
+reload bytes or reset its saved digest. Selecting another open tab prefers its
+validated in-memory snapshot and retains unsaved edits, payloads and baseline.
+An explicit graph selection may change its workspace target; it is not a project
+reload. During opening, a clean content baseline comes from a successful initial
+load or explicit authoritative replacement, not ordinary tab activation. Save
+separately records the baseline for the snapshot actually written.
+
+[`projectActivationCoordinator.ts`](../packages/app/src/utils/projectActivationCoordinator.ts)
+supersedes the previous selection and aborts its preparation. Preparation does not
+hold a serial activation lock: a stalled read cannot block a newer editor-tab
+selection. A request generation and the tab's current identity/path are checked
+before publishing prepared state. The coordinator defaults to a 60-second deadline;
+native file-picker interaction is instead untimed, but its result is still fenced
+against newer selections. Providers that cannot abort must not commit late results.
+The hosted bridge has an additional command-ordering layer; see
+[Editor Bridge](./studio-server/editor-bridge.md#message-flow).
+
+Provider dataset imports and revision acceptance use optional deferred, guarded
+commit hooks; fetching/deserializing alone must not change the live owner. The
+workspace transition publishes project, graph, payload authority, path, tab and
+baseline synchronously before derived cache hydration. Cache failure does not undo
+a successful open. Close fallback shares the activation owner and skips failed
+candidates without activating a closed or renamed tab.
+
+Graph command history, Redo and recoverable-wire pools are project-scoped even
+when cloned projects reuse graph IDs. Ordinary activation preserves them; an
+authoritative reload clears the replaced project's history and advances its node
+editor content generation. See [editor sessions](./MONACO-EDITOR-SURFACES.md#node-settings-ownership).
 
 ## Project Strip
 
@@ -130,9 +163,68 @@ revision acknowledgement and stale-path conflicts, and the
 [refactor UI scenarios](./REFACTOR-BASELINE.md#ui-acceptance-scenarios) for two-window
 and inactive-tab checks.
 
+## Browser recovery
+
+[`workspaceRecovery.ts`](../packages/app/src/state/storage/workspaceRecovery.ts)
+wraps the default or injected `AsyncStorageBackend`. The `project`, `graph` and
+`graphBuilder` groups are captured together into one version-1 envelope under
+`workspace-recovery/v1/<document>/<writer>`. This includes active content, inactive
+tab snapshots, payloads, saved baselines and editor navigation from the same
+capture. General preferences, project-context values and the shared Evaluation
+library retain their separate storage owners; recovery is not a server backup.
+
+Each browser document has its own writer key. `sessionStorage` stores only the
+latest committed checkpoint reference. Reload reads that checkpoint into a new
+writer namespace; a duplicated tab may inherit the reference but cannot overwrite
+the original tab's recovery. A checkpoint is published only after the backend
+write and read-back verification succeed. IndexedDB writes await transaction
+completion, not merely a successful `put` request. An older completion cannot
+acknowledge newer pending edits. Reconfiguration captures the backend of queued
+work and prevents retired owners from publishing a new recovery selection.
+
+Legacy records are validated, imported into one envelope, committed and read back
+before the editor mounts; originals are retained. A selected missing, malformed or
+inaccessible checkpoint is never silently replaced by clean defaults or unrelated
+legacy fragments. Interrupted imports remain retryable. Retained checkpoints are
+available through the chooser when bootstrap is blocked; explicitly starting empty
+also preserves the old evidence.
+
+[`hybridStorage.ts`](../packages/app/src/state/storage/hybridStorage.ts) propagates
+explicit flush failures and keeps subsequent writes retryable. Background errors
+are handled without repeated recovery toasts. Browser recovery and project Save
+have distinct acknowledgements: a confirmed provider write can succeed while a
+later checkpoint fails, and unsaved edits can be checkpointed without being saved
+to their project. Download-only browser providers cannot confirm a durable file
+write and do not mark a project clean merely because a download was initiated.
+
+[`WorkspaceRecoveryStatus.tsx`](../packages/app/src/components/WorkspaceRecoveryStatus.tsx)
+renders nothing for healthy or pending checkpoints. Live failures retry the latest
+in-memory state automatically (250 ms, 1 s, 2.5 s, then 30 s), with earlier retries
+on focus, online or visible events. After three unsuccessful retries, an actionable
+warning appears only while unsaved work is at risk; memory-only storage shows Save
+instructions rather than disabled controls. Bootstrap retries transient IO twice,
+then offers Retry loading or retained-workspace selection; invalid authority needs
+an explicit choice. The unload warning applies only to unsaved work without
+confirmed reload recovery. Neither `pagehide` nor successful initiation of a write
+is proof of durability.
+
+The default `BrowserStaticDataStore` is a derived document-local memory cache.
+Legacy `rivet_static_data` is read only during compatibility bootstrap, never
+cleared or rewritten. New payload authority lives in the checkpoint and project
+file. Cache hydration is revision-fenced and must not overwrite newer edits;
+injected provider interfaces remain supported.
+
 ## Tests
 
 Prefer pure transition/presentation tests for target restoration, tab labels,
 capabilities, and leave policy. Source parsing is not an acceptable substitute for
-workspace behavior. Browser coverage is reserved for actual portal/focus/drag
-behavior that cannot be expressed through the domain owners.
+workspace behavior. Storage, activation, save and editor-session owners have
+deterministic unit/component tests. Use real-browser tests for IndexedDB
+transactions, two pages sharing one origin, reload, focus and iframe event delivery;
+separate browser contexts cannot prove same-origin recovery isolation.
+
+`project-tree-activation.spec.ts`, `project-preview-mode.spec.ts` and
+`dashboard-save-button.spec.ts` cover hosted activation, recovery and save seams.
+The node-editor ownership/lifecycle specs cover cloned IDs and immediate edits.
+See [Development](./studio-server/development.md#node-settings-ownership-regressions)
+for focused commands and evidence limits.

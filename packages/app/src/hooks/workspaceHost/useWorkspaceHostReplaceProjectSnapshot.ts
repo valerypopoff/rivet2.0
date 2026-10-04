@@ -1,4 +1,4 @@
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import type { GraphId, ProjectId } from '@valerypopoff/rivet2-core';
 
 import { openedProjectSnapshotsState, projectState, projectsState } from '../../state/savedGraphs.js';
@@ -15,13 +15,14 @@ import type { RivetProjectSnapshotInput } from './types.js';
 export function useWorkspaceHostReplaceProjectSnapshot(
   replaceCurrent: (snapshot: RivetProjectSnapshotInput) => Promise<boolean>,
 ) {
-  const projects = useAtomValue(projectsState);
-  const currentProject = useAtomValue(projectState);
+  const store = useStore();
   const setProjects = useSetAtom(projectsState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const { markProjectClean } = useWorkspaceHostCleanBaseline();
 
   return useStableCallback(async (projectId: ProjectId, snapshot: RivetProjectSnapshotInput): Promise<boolean> => {
+    const projects = store.get(projectsState);
+    const currentProject = store.get(projectState);
     const normalized = normalizeProjectSnapshot(snapshot);
     if (normalized.project.metadata.id !== projectId || !projects.openedProjects[projectId]) {
       return false;
@@ -33,18 +34,16 @@ export function useWorkspaceHostReplaceProjectSnapshot(
 
     const existingOpenedProject = projects.openedProjects[projectId];
     const requestedGraph = snapshot.openedGraph ?? snapshot.graphToLoad?.metadata?.id;
-    const fallbackGraph = (
+    const fallbackGraph =
       normalized.project.metadata.mainGraphId && normalized.project.graphs[normalized.project.metadata.mainGraphId]
         ? normalized.project.metadata.mainGraphId
-        : Object.keys(normalized.project.graphs)[0] as GraphId | undefined
-    );
-    const nextOpenedGraph = (
+        : (Object.keys(normalized.project.graphs)[0] as GraphId | undefined);
+    const nextOpenedGraph =
       requestedGraph && normalized.project.graphs[requestedGraph]
         ? requestedGraph
         : existingOpenedProject.openedGraph && normalized.project.graphs[existingOpenedProject.openedGraph]
           ? existingOpenedProject.openedGraph
-          : fallbackGraph
-    );
+          : fallbackGraph;
     setOpenedProjectSnapshots((previousSnapshots) => ({
       ...previousSnapshots,
       [projectId]: {
@@ -70,13 +69,11 @@ export function useWorkspaceHostReplaceProjectSnapshot(
     });
     await markProjectClean(projectId, { project: normalized.project, data: normalized.data });
 
-    try {
-      await flushHybridStorageGroup('project');
-    } catch (error) {
+    void flushHybridStorageGroup('project').catch((error) => {
       // The replacement is already valid in memory. Keep the refreshed tab
       // usable and let normal storage diagnostics surface a later failure.
       console.error('Failed to persist refreshed inactive project snapshot:', error);
-    }
+    });
     return true;
   });
 }

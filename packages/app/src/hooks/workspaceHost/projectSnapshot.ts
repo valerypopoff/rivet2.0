@@ -17,7 +17,7 @@ export function normalizeProjectSnapshot(snapshot: RivetProjectSnapshotInput): N
 
   return {
     project: normalizeClassifierProjectForAppState(uiGraphNormalizedProject),
-    data: snapshot.data ?? attachedData,
+    data: 'data' in snapshot ? snapshot.data : attachedData,
     graphToLoad: snapshot.graphToLoad && normalizeClassifierGraphForAppState(snapshot.graphToLoad),
   };
 }

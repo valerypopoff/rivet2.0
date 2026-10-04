@@ -98,6 +98,7 @@ import {
   type RemoteResponseTraceState,
 } from './remoteResponseTrace.js';
 import { withRemoteEvaluationAccounting } from './remoteEvaluationEventCollection.js';
+import { recordingStatusAfterAbort } from '../utils/recordingCapturePolicy.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
@@ -106,7 +107,6 @@ type RemoteLocalExecutionRecordingCapture = {
   correlationId: string;
   errorMessage?: string;
   graphId: GraphId;
-  hasUnhealthyLLMProfileHealthEvidence: boolean;
   isTerminal: boolean;
   project: Project;
   projectId: ProjectId;
@@ -136,15 +136,9 @@ function captureRemoteLocalExecutionTerminal(
 ): void {
   if (!capture) return;
 
-  if (message === 'llmProfileAttempt') {
-    const event = data as ProcessEventMessageMap['llmProfileAttempt'];
-    if (event.stage === 'health-update' && event.outcome === 'success' && event.healthOutcome === 'unhealthy') {
-      capture.hasUnhealthyLLMProfileHealthEvidence = true;
-    }
-    return;
-  }
-
-  if (message === 'graphError' || message === 'error') {
+  // Child graphError events are diagnostics, not the root outcome. A Subgraph
+  // may catch them through its Error output and let the parent finish normally.
+  if (message === 'error') {
     capture.status = 'failed';
     capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
   }
@@ -154,7 +148,10 @@ function captureRemoteLocalExecutionTerminal(
     // request routing attached until a root done/error message carries the
     // late node checkpoints and errors from that cleanup.
     capture.abortRequested = true;
-    capture.status = 'suspicious';
+    capture.status = recordingStatusAfterAbort(
+      capture.status,
+      (data as { successful?: unknown } | undefined)?.successful === true,
+    );
     capture.errorMessage ??= getRemoteExecutionErrorMessage(data);
     return;
   }
@@ -254,11 +251,9 @@ export function useRemoteExecutor() {
     if (!capture) return;
     localRecordingCapturesByRequestIdRef.current.delete(requestId);
 
-    if (!capture.hasUnhealthyLLMProfileHealthEvidence) return;
-
     if (!capture.isTerminal || capture.recorder.events.length === 0) {
       await capture.provider.markUnavailable(capture.correlationId).catch((error) => {
-        logRuntimeDebug('Remote LLM-profile replay could not capture a terminal recording.', {
+        logRuntimeDebug('Remote editor run could not capture a terminal recording.', {
           error,
           graphId: capture.graphId,
           projectId: capture.projectId,
@@ -269,13 +264,15 @@ export function useRemoteExecutor() {
 
     try {
       const durationMs = Math.max(0, performance.now() - capture.startedAt);
+      const projectContents = serializeProject(capture.project) as string;
+      const recordingSerialized = capture.recorder.serialize();
       const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(capture.projectId));
       await capture.provider.persist({
         projectId: capture.projectId,
         projectPath: capture.projectPath,
-        projectContents: serializeProject(capture.project) as string,
+        projectContents,
         datasetsContents,
-        recordingSerialized: capture.recorder.serialize(),
+        recordingSerialized,
         status: capture.status,
         durationMs,
         errorMessage: capture.errorMessage,
@@ -286,13 +283,13 @@ export function useRemoteExecutor() {
       });
     } catch (error) {
       await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
-        logRuntimeDebug('Remote LLM-profile replay could not report a failed local recording.', {
+        logRuntimeDebug('Remote editor run could not report a failed local recording.', {
           error: outcomeError,
           graphId: capture.graphId,
           projectId: capture.projectId,
         });
       });
-      logRuntimeDebug('Remote LLM-profile replay was not retained by the hosted server.', {
+      logRuntimeDebug('Remote editor recording was not retained by the hosted server.', {
         error,
         graphId: capture.graphId,
         projectId: capture.projectId,
@@ -711,7 +708,6 @@ export function useRemoteExecutor() {
           abortRequested: false,
           correlationId: remoteLocalRecordingCorrelationId,
           graphId: graphToRun,
-          hasUnhealthyLLMProfileHealthEvidence: false,
           isTerminal: false,
           project: remoteLocalRecordingProject,
           projectId: project.metadata.id,
@@ -730,7 +726,7 @@ export function useRemoteExecutor() {
         );
         if (!recorderPromise) {
           void capture.provider.markUnavailable(capture.correlationId).catch((error) => {
-            logRuntimeDebug('Remote LLM-profile replay could not attach to the executor socket.', {
+            logRuntimeDebug('Remote editor recording could not attach to the executor socket.', {
               error,
               graphId: graphToRun,
               projectId: project.metadata.id,
@@ -746,13 +742,13 @@ export function useRemoteExecutor() {
           async (error) => {
             localRecordingCapturesByRequestIdRef.current.delete(requestId);
             await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
-              logRuntimeDebug('Remote LLM-profile replay could not report its unavailable recording.', {
+              logRuntimeDebug('Remote editor run could not report its unavailable recording.', {
                 error: outcomeError,
                 graphId: graphToRun,
                 projectId: project.metadata.id,
               });
             });
-            logRuntimeDebug('Remote LLM-profile replay socket capture failed.', {
+            logRuntimeDebug('Remote editor recording socket capture failed.', {
               error,
               graphId: graphToRun,
               projectId: project.metadata.id,

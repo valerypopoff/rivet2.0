@@ -98,7 +98,7 @@ function getOptionalNumberBodyField(
     return { label, value: '(Using Input)' };
   }
 
-  return value === undefined ? undefined : { label, value: `${value}` };
+  return value == null || !Number.isFinite(value) ? undefined : { label, value: `${value}` };
 }
 
 function getOptionalStringBodyField(label: string, value: unknown, usesInput: boolean): LLMChatV2BodyField | undefined {
@@ -258,16 +258,18 @@ function getBehaviorBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
 }
 
 function getErrorBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
-  if (!data.retryOnNon200) {
-    return [];
-  }
-
   const repeatTimes = data.retryOnNon200RepeatTimes ?? DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_REPEAT_TIMES;
   const cooldownMs = data.retryOnNon200CooldownMs ?? DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS;
   return [
-    { label: 'Retry on non-200', value: 'Enabled' },
-    { label: 'Repeat times', value: `${repeatTimes}` },
-    { label: 'Cooldown, ms', value: `${cooldownMs}` },
+    ...(data.errorOnNon200 !== false ? [{ label: 'Throw on non-2XX', value: 'Enabled' }] : []),
+    ...(data.catchRequestFailed ? [{ label: 'Catch all failures', value: 'Enabled' }] : []),
+    ...(data.retryOnNon200
+      ? [
+          { label: 'Retry on non-200', value: 'Enabled' },
+          { label: 'Repeat times', value: `${repeatTimes}` },
+          { label: 'Cooldown, ms', value: `${cooldownMs}` },
+        ]
+      : []),
   ];
 }
 
@@ -330,7 +332,7 @@ function getParameterBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
 
   return [
     ...(reasoningEffort ? [{ label: 'Reasoning effort', value: reasoningEffort }] : []),
-    { label: 'Temperature', value: data.useTemperatureInput ? '(Using Input)' : `${data.temperature}` },
+    getOptionalNumberBodyField('Temperature', data.temperature, data.useTemperatureInput),
     { label: 'Max output tokens', value: data.useMaxTokensInput ? '(Using Input)' : `${data.maxTokens}` },
     getOptionalNumberBodyField('Top P', data.topP, data.useTopPInput),
     getOptionalNumberBodyField('Top K', data.topK, data.useTopKInput),

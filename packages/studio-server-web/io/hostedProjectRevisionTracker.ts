@@ -2,6 +2,7 @@ import type {
   HostedProjectConflictSnapshot,
   HostedProjectReconciliationContext,
 } from '../../studio-server-shared/editor-bridge';
+import { createHybridStorage } from '../../app/src/state/storage.js';
 
 type HostedProjectRevisionEntry = {
   projectId: string;
@@ -18,7 +19,8 @@ export type HostedProjectRemoteChange = {
   revisionId: string;
 };
 
-const BROWSER_STORAGE_KEY = 'rivet.hosted-project-revisions.v1';
+const RECOVERY_STORAGE_KEY = 'hostedProjectRevisions';
+const { storage: recoveryStorage } = createHybridStorage('project');
 const MAX_ENTRIES = 200;
 const entriesByProjectId = new Map<string, HostedProjectRevisionEntry>();
 let initialized = false;
@@ -31,6 +33,7 @@ let recheckSequence = 0;
 const runtimeByProjectId = new Map<string, { generation: number; lastObservation: number; changeId: string | null }>();
 const savesByProjectId = new Map<string, number>();
 const reloadsByProjectId = new Map<string, { entry: HostedProjectRevisionState | null; changeId: string | null }>();
+const awaitingTabRegistration = new Set<string>();
 const listeners = new Set<() => void>();
 
 function runtime(projectId: string) {
@@ -64,6 +67,7 @@ export function subscribeHostedProjectRevisions(listener: () => void): () => voi
 }
 
 export function beginHostedProjectSave(projectId: string): () => void {
+  if (reloadsByProjectId.has(projectId)) throw new Error('Wait for this project to finish reloading before saving.');
   savesByProjectId.set(projectId, (savesByProjectId.get(projectId) ?? 0) + 1);
   notifyRevisionChanged(projectId, false);
   let finished = false;
@@ -78,7 +82,7 @@ export function beginHostedProjectSave(projectId: string): () => void {
 }
 
 /** Candidate IO binds are provisional until the editor accepts the replacement. */
-export function beginHostedProjectReload(projectId: string): () => void {
+export function beginHostedProjectReload(projectId: string): (accepted?: boolean) => void {
   if (savesByProjectId.has(projectId) || reloadsByProjectId.has(projectId)) {
     throw new Error('Wait for the current project save or reload to finish.');
   }
@@ -87,9 +91,20 @@ export function beginHostedProjectReload(projectId: string): () => void {
     changeId: runtime(projectId).changeId,
   });
   notifyRevisionChanged(projectId, false);
-  return () => {
-    if (!reloadsByProjectId.delete(projectId)) return;
-    notifyRevisionChanged(projectId, true);
+  return (accepted = true) => {
+    const reload = reloadsByProjectId.get(projectId);
+    if (!reload) return;
+    reloadsByProjectId.delete(projectId);
+    const current = getEntry(projectId);
+    if (!accepted && current) {
+      // Candidate IO may have bound a revision before the editor rejected it.
+      // Restore content authority, but keep a concurrent move's current path.
+      // A pruned/closed tab must never be resurrected by rollback.
+      if (reload.entry) entriesByProjectId.set(projectId, { ...reload.entry, path: current.path });
+      else entriesByProjectId.delete(projectId);
+    }
+    persistEntries();
+    notifyRevisionChanged(projectId, true, !accepted && Boolean(reload.entry?.pendingRevisionId));
   };
 }
 
@@ -166,32 +181,14 @@ function normalizePath(path: string): string {
   return path.replace(/\\/g, '/');
 }
 
-function getBrowserStorage(): Storage | null {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    return window.localStorage;
-  } catch {
-    // Some embedded browser contexts prohibit persistent local storage. Keep
-    // same-tab reconnect protection when session storage remains available.
-    try {
-      return window.sessionStorage;
-    } catch {
-      return null;
-    }
-  }
-}
-
 function loadEntries(): void {
   if (initialized) return;
   initialized = true;
-  const storage = getBrowserStorage();
-  if (!storage) return;
-
   try {
-    const raw = storage.getItem(BROWSER_STORAGE_KEY);
-    if (!raw) return;
-    const parsed: unknown = JSON.parse(raw);
+    // Authority must travel in the same atomic checkpoint as its workspace,
+    // not in a separately writable session/localStorage cache. Legacy caches
+    // remain untouched; recovered tabs without authority require review.
+    const parsed: unknown = recoveryStorage.getItem(RECOVERY_STORAGE_KEY, []);
     if (!Array.isArray(parsed)) return;
     for (const value of parsed.slice(-MAX_ENTRIES)) {
       if (
@@ -214,20 +211,38 @@ function loadEntries(): void {
       entriesByProjectId.set(entry.projectId, { ...entry, path: normalizePath(entry.path) });
     }
   } catch {
-    // Session storage is a reconnect aid only. A malformed or unavailable
-    // entry must never interfere with loading or saving an editable project.
+    // Keep loading usable. Missing revision authority requires explicit review
+    // before an in-place save; it must never silently adopt the remote version.
   }
 }
 
 function persistEntries(): void {
-  const storage = getBrowserStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(BROWSER_STORAGE_KEY, JSON.stringify([...entriesByProjectId.values()].slice(-MAX_ENTRIES)));
-  } catch {
-    // Browser privacy/storage failures only remove reconnect detection. The
-    // in-memory compare-and-swap state remains valid for this session.
-  }
+  const next = [...entriesByProjectId.values()]
+    .filter((entry) => !awaitingTabRegistration.has(entry.projectId))
+    // An unfinished reload cannot certify its candidate disk revision in a
+    // checkpoint that still contains the old editor snapshot.
+    .map((entry) => (reloadsByProjectId.has(entry.projectId) ? reloadsByProjectId.get(entry.projectId)!.entry : entry))
+    .filter((entry) => entry !== null)
+    .slice(-MAX_ENTRIES)
+    .map((entry) => ({ ...entry }));
+  const previous: unknown = recoveryStorage.getItem(RECOVERY_STORAGE_KEY, []);
+  if (
+    Array.isArray(previous) &&
+    previous.length === next.length &&
+    next.every((entry, index) => {
+      const saved = previous[index];
+      return (
+        saved?.projectId === entry.projectId &&
+        saved.path === entry.path &&
+        saved.acceptedRevisionId === entry.acceptedRevisionId &&
+        saved.pendingRevisionId === entry.pendingRevisionId
+      );
+    })
+  )
+    return;
+  // Identical background observations must not create pending recovery writes
+  // or unload warnings for an otherwise unchanged workspace.
+  recoveryStorage.setItem(RECOVERY_STORAGE_KEY, next);
 }
 
 function getEntry(projectId: string): HostedProjectRevisionEntry | undefined {
@@ -235,8 +250,14 @@ function getEntry(projectId: string): HostedProjectRevisionEntry | undefined {
   return entriesByProjectId.get(projectId);
 }
 
-export function bindHostedProjectRevision(projectId: string, path: string, revisionId: string | null): void {
+export function bindHostedProjectRevision(
+  projectId: string,
+  path: string,
+  revisionId: string | null,
+  options: { awaitingActivation?: boolean } = {},
+): void {
   loadEntries();
+  if (options.awaitingActivation && !reloadsByProjectId.has(projectId)) awaitingTabRegistration.add(projectId);
   entriesByProjectId.set(projectId, {
     projectId,
     path: normalizePath(path),
@@ -265,24 +286,12 @@ export function getHostedProjectPendingRevision(projectId: string): string | nul
 
 /**
  * Loading a candidate replacement snapshot updates its revision through the
- * normal IO provider. Callers that can still reject that replacement retain
- * this state and restore it on failure, so a failed reload cannot authorize a
- * later overwrite of the remote version.
+ * normal IO provider. The reload lifecycle retains this state until its
+ * settlement accepts or rejects the replacement.
  */
 export function getHostedProjectRevisionState(projectId: string): HostedProjectRevisionState | null {
   const entry = getEntry(projectId);
   return entry ? { ...entry } : null;
-}
-
-export function restoreHostedProjectRevisionState(projectId: string, state: HostedProjectRevisionState | null): void {
-  loadEntries();
-  if (state) {
-    entriesByProjectId.set(projectId, { ...state, path: normalizePath(state.path) });
-  } else {
-    entriesByProjectId.delete(projectId);
-  }
-  persistEntries();
-  notifyRevisionChanged(projectId, true, Boolean(state?.pendingRevisionId));
 }
 
 /**
@@ -298,8 +307,18 @@ export function observeHostedProjectRevision(options: {
 
   const current = getEntry(options.projectId);
   if (!current) {
-    bindHostedProjectRevision(options.projectId, options.path, options.revisionId);
-    return null;
+    // A tree observation is not evidence that a recovered snapshot loaded
+    // this revision. Missing document-local authority requires an explicit
+    // Reload/Keep mine decision, including after upgrading the cache format.
+    entriesByProjectId.set(options.projectId, {
+      projectId: options.projectId,
+      path: normalizePath(options.path),
+      acceptedRevisionId: null,
+      pendingRevisionId: options.revisionId,
+    });
+    persistEntries();
+    notifyRevisionChanged(options.projectId, true, true);
+    return { projectId: options.projectId, path: normalizePath(options.path), revisionId: options.revisionId };
   }
 
   const pathChanged = current.path !== normalizePath(options.path);
@@ -344,6 +363,7 @@ export function clearHostedProjectRevisionPath(path: string | null | undefined):
   for (const [projectId, entry] of entriesByProjectId.entries()) {
     if (entry.path !== normalizedPath) continue;
     entriesByProjectId.delete(projectId);
+    awaitingTabRegistration.delete(projectId);
     notifyRevisionChanged(projectId, true);
     changed = true;
   }
@@ -373,14 +393,23 @@ export function pruneHostedProjectRevisions(openProjectIds: Iterable<string>): v
   loadEntries();
   const openIds = new Set(openProjectIds);
   let changed = false;
+  // Initial IO binds precede actual tab registration. Loading placeholders or
+  // an unrelated tab update must not discard that candidate's revision. It is
+  // eligible for recovery only after the workspace confirms the real tab.
+  for (const projectId of openIds) changed = awaitingTabRegistration.delete(projectId) || changed;
   for (const projectId of entriesByProjectId.keys()) {
-    if (openIds.has(projectId)) continue;
+    if (openIds.has(projectId) || awaitingTabRegistration.has(projectId)) continue;
     entriesByProjectId.delete(projectId);
     notifyRevisionChanged(projectId, true);
     changed = true;
   }
   for (const projectId of runtimeByProjectId.keys()) {
-    if (!openIds.has(projectId) && !savesByProjectId.has(projectId) && !reloadsByProjectId.has(projectId)) {
+    if (
+      !openIds.has(projectId) &&
+      !awaitingTabRegistration.has(projectId) &&
+      !savesByProjectId.has(projectId) &&
+      !reloadsByProjectId.has(projectId)
+    ) {
       runtimeByProjectId.delete(projectId);
     }
   }
@@ -398,6 +427,10 @@ export class HostedProjectRemoteChangePendingError extends Error {
 
 export function assertHostedProjectRevisionCanSave(projectId: string): void {
   if (reloadsByProjectId.has(projectId)) throw new Error('Wait for this project to finish reloading before saving.');
+  if (!getEntry(projectId))
+    throw new Error(
+      'The saved revision for this recovered tab is unknown. Wait for the update notification, then choose Reload or Keep mine before saving.',
+    );
   if (getHostedProjectPendingRevision(projectId)) {
     throw new HostedProjectRemoteChangePendingError(projectId);
   }

@@ -20,14 +20,24 @@ Hosted shells receive `RivetWorkspaceHost` through `onWorkspaceHostReady` or
 `RivetWorkspaceHostBridge`. `workspaceHost.saveCurrentProject()` is the supported
 imperative Save command for wrapper-owned buttons and shortcuts originating outside
 the editor iframe. It runs Rivet's normal workspace save transition: the live graph
-is merged into the project, project persistence and the existing static-data
-bookkeeping complete, the clean digest and both dirty flags are updated, normal
+is merged into the captured project/payload snapshot, the IO provider's project
+write completes, the saved digest and dirty flags are reconciled, normal
 notifications and error handling run, and `RivetAppHost.onProjectSaved` is emitted
 after persistence. It resolves `true` only for that completed save and `false` when
-there is no active project, Save As is cancelled, or persistence fails. Concurrent
+there is no active project, Save As is cancelled, or the required persistence fails.
+Download-only providers return `false` and retain dirty state because initiating a
+download does not confirm a file write. Concurrent
 requests for the same project within one mounted workspace share one in-flight
 persistence operation. Wrappers must not import `useSaveProject`,
 `useWorkspaceTransitions`, or dirty-state atoms.
+
+Browser recovery is a separate acknowledgement. After a successful project write,
+checkpointing is requested without delaying or converting Save into a failure.
+Explicit recovery flushes still reject on backend/transaction/read-back failure;
+the recovery owner retries automatically and warns only when unsaved work remains
+at risk. Legacy Evaluation migration must complete before overwriting its source
+project/sidecar; that prerequisite is not optional recovery bookkeeping. See
+[Browser recovery](./EDITOR-WORKSPACE-STATE.md#browser-recovery).
 
 A hosted save captures one project ID, path, and snapshot before persistence. Users
 may switch tabs while it runs: the Core completion records the saved path on that
@@ -64,6 +74,32 @@ This is a choice between saved versions, not a merge or live-collaboration featu
 `onProjectSaved` is an observer, not part of persistence ownership. A synchronous
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.
+
+### Preparing and activating projects
+
+Selecting an open project activates its existing workspace rather than reopening
+its saved file. It does not reset unsaved content or the saved baseline. Explicit
+reload/replacement is a different operation, with identity/path checks and a new
+clean generation. Hosts must use `RivetWorkspaceHost` rather than implementing a
+second activation or dirty-state owner.
+
+`IOProvider` accepts optional `ProjectLoadOptions` (`signal`, `deferCommit`,
+`activateDatasets`) and may return a `LoadedProjectData.commit(isCurrent)` hook.
+Prepared bytes are not permission to publish revision bindings or imported data.
+The caller checks selection/tab ownership, invokes deferred provider work with
+the same guard, rechecks, then installs the workspace. Inactive refresh uses
+`activateDatasets: false` so it cannot replace the active dataset owner. Existing
+providers without these optional hooks remain compatible, but their late results
+must still be discarded by the caller.
+
+Hosted fetch and worker deserialization honor cancellation and bounded deadlines;
+late worker replies are ignored, and an unusable worker is recreated. Editor-tab
+activation prepares outside a serial lock and can supersede old reads. The hosted
+dashboard bridge retains its ordered command lane; native file-picker interaction
+has no artificial timeout. Derived static-data cache hydration is not workspace
+authority and cannot block a later activation. See
+[activation ownership](./EDITOR-WORKSPACE-STATE.md#project-activation-and-content-replacement)
+and [Editor Bridge](./studio-server/editor-bridge.md#message-flow).
 
 Editor-focused Save shortcuts are owned declaratively by Rivet:
 

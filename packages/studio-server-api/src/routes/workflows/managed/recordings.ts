@@ -17,6 +17,7 @@ import type {
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
+import { recordingWorkflowScopeClause } from '../recording-workflow-scope.js';
 import {
   getLLMProfileHealthHeldRecordingIds,
   normalizeStoredLLMProfileHealthEntry,
@@ -256,6 +257,7 @@ async function filterManagedRecordingRowsByInput(
   inputAfter: string | undefined,
   pageSize: number,
   signal?: AbortSignal,
+  includeSubgraphRuns = false,
 ) {
   return filterRecordingInputWindows(
     inputFilter,
@@ -287,7 +289,7 @@ async function filterManagedRecordingRowsByInput(
             recordingId: row.recording_id,
             legacyCursor: nextInputCursor,
           },
-          { workflowId, statusFilter, filter: inputFilter },
+          { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns },
         ),
       signal,
     },
@@ -587,26 +589,57 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       inputCursor = 0,
       signal?: AbortSignal,
       inputAfter?: string,
+      includeSubgraphRuns = false,
+      runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
       const normalizedPage = Math.max(1, Math.floor(page));
       const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
       const offset = (normalizedPage - 1) * normalizedPageSize;
+      // Empty workflow ID represents the all-workflow scope, never a stored ID.
+      // Keep its bound parameter so cursor/limit placeholders use the same positions in both scopes.
+      const workflowClause = recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed', 1, runScope);
+      const scopeCounts =
+        (workflowId && includeSubgraphRuns) || runScope === 'roots'
+          ? (await deps.queryOne<{
+              totalRuns: number;
+              failedRuns: number;
+              suspiciousRuns: number;
+            }>(
+              deps.pool,
+              `SELECT COUNT(*)::int AS "totalRuns",
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
+        COUNT(*) FILTER (WHERE status = 'suspicious')::int AS "suspiciousRuns"
+        FROM workflow_recordings WHERE ${workflowClause}`,
+              [workflowId],
+            )) ?? undefined
+          : undefined;
       const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
       const inputAfterCursor = inputFilter
-        ? parseWorkflowRecordingInputAfter(inputAfter, { workflowId, statusFilter, filter: inputFilter })
+        ? parseWorkflowRecordingInputAfter(inputAfter, {
+            workflowId,
+            statusFilter,
+            filter: inputFilter,
+            includeSubgraphRuns,
+          })
         : undefined;
 
-      const countRow = inputFilter
-        ? null
-        : await deps.queryOne<{ total_runs: number }>(
-            deps.pool,
-            `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE workflow_id = $1 ${filterClause}`,
-            [workflowId],
-          );
+      const countRow =
+        inputFilter || scopeCounts
+          ? null
+          : await deps.queryOne<{ total_runs: number }>(
+              deps.pool,
+              `SELECT COUNT(*)::int AS total_runs FROM workflow_recordings WHERE ${workflowClause} ${filterClause}`,
+              [workflowId],
+            );
       const loadWindow = async (after: string | undefined, legacyOffset: number, queryLimit: number) => {
         const boundary = inputFilter
-          ? parseWorkflowRecordingInputAfter(after, { workflowId, statusFilter, filter: inputFilter })
+          ? parseWorkflowRecordingInputAfter(after, {
+              workflowId,
+              statusFilter,
+              filter: inputFilter,
+              includeSubgraphRuns,
+            })
           : undefined;
         // An opaque keyset continuation already identifies the exact row after
         // which to continue. Never combine it with a numeric offset: doing so
@@ -625,7 +658,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
                  TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                    AS recording_cursor_created_at
           FROM workflow_recordings
-          WHERE workflow_id = $1 ${filterClause} ${inputAfterClause}
+          WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
           ORDER BY created_at DESC, recording_id DESC
           LIMIT ${limitParameter} OFFSET ${offsetParameter}
         `,
@@ -644,13 +677,21 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             inputAfter,
             normalizedPageSize,
             signal,
+            includeSubgraphRuns,
           )
         : null;
       const pageRows = filteredPage?.rows ?? (await loadWindow(undefined, offset, normalizedPageSize));
+      const totalRuns = scopeCounts
+        ? statusFilter === 'failed'
+          ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+          : scopeCounts.totalRuns
+        : countRow?.total_runs ?? 0;
 
       const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
         id: row.recording_id,
         workflowId: row.workflow_id,
+        sourceProjectName: row.source_project_name,
+        sourceProjectRelativePath: row.source_project_relative_path,
         createdAt: deps.toIsoString(row.created_at) ?? new Date().toISOString(),
         runKind: row.run_kind,
         status: row.status,
@@ -669,11 +710,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
 
       return {
         workflowId,
+        scopeCounts,
         page: normalizedPage,
         pageSize: normalizedPageSize,
-        totalRuns: filteredPage?.totalRuns ?? countRow?.total_runs ?? 0,
+        totalRuns: filteredPage?.totalRuns ?? totalRuns,
         totalRunsExact: filteredPage?.totalRunsExact ?? true,
-        hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < (countRow?.total_runs ?? 0),
+        hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < totalRuns,
         nextInputCursor: filteredPage?.nextInputCursor,
         inputSearchAnalyzedRuns: filteredPage?.analyzedRuns,
         nextInputAfter: filteredPage?.nextInputAfter,

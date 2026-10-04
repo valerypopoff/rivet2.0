@@ -1,11 +1,5 @@
 import { max, range } from 'lodash-es';
-import {
-  type DataValue,
-  type ArrayDataValue,
-  type AnyDataValue,
-  isArrayDataValue,
-  arrayizeDataValue,
-} from './DataValue.js';
+import { type DataValue, isArrayDataValue, arrayizeDataValue } from './DataValue.js';
 import { type ChartNode, type NodeConnection, type NodeInputDefinition, type PortId } from './NodeBase.js';
 import type { ProcessId } from './ProcessContext.js';
 import type { Inputs, Outputs } from './GraphProcessor.js';
@@ -217,7 +211,13 @@ async function runSequential(
       );
 
       deps.accumulateCost(output);
-      results.push({ type: 'output', index: i, output, resultOrigin, durationMs: deps.finishNodeTiming?.(splitTimingStart) });
+      results.push({
+        type: 'output',
+        index: i,
+        output,
+        resultOrigin,
+        durationMs: deps.finishNodeTiming?.(splitTimingStart),
+      });
     } catch (error) {
       results.push({
         type: 'error',
@@ -353,13 +353,29 @@ function splitInputsAtIndex(
 }
 
 function aggregateOutputs(results: SplitOutputResult[]): Outputs {
-  return results.reduce((acc, result) => {
-    for (const [portId, value] of entries(result.output!)) {
-      acc[portId as PortId] ??= { type: (value?.type + '[]') as DataValue['type'], value: [] } as DataValue;
-      (acc[portId as PortId] as ArrayDataValue<AnyDataValue>).value.push(value?.value);
+  const ports = new Map<PortId, { type?: DataValue['type']; values: unknown[] }>();
+  results.forEach((result, index) => {
+    for (const [portId, value] of entries(result.output)) {
+      const id = portId as PortId;
+      const aggregate: { type?: DataValue['type']; values: unknown[] } = ports.get(id) ?? { values: [] };
+      // Exclusion is not a value type. Infer from a real item regardless of
+      // whether the first split item succeeded or returned a caught failure.
+      if (value?.type !== 'control-flow-excluded') aggregate.type ??= value?.type;
+      aggregate.values[index] = value?.value;
+      ports.set(id, aggregate);
     }
-    return acc;
-  }, {} as Outputs);
+  });
+  return fromEntries(
+    [...ports].map(([id, aggregate]) => [
+      id,
+      aggregate.type == null
+        ? { type: 'control-flow-excluded', value: undefined }
+        : {
+            type: `${aggregate.type}[]`,
+            value: Array.from({ length: results.length }, (_, index) => aggregate.values[index]),
+          },
+    ]),
+  ) as Outputs;
 }
 
 function isSplitOutputResult(result: SplitResult): result is SplitOutputResult {

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
+import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
@@ -765,16 +766,29 @@ export class LocalWorkflowCatalog {
   countRecordings(workflowId: string, failedOnly = false): number {
     const row = this.#database()
       .prepare(
-        `SELECT COUNT(*) AS count FROM recordings WHERE workflow_id = ? ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
+        `SELECT COUNT(*) AS count FROM recordings WHERE ${workflowId ? 'workflow_id = ?' : '1 = 1'} ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
       )
-      .get(workflowId) as { count: number };
+      .get(...(workflowId ? [workflowId] : [])) as { count: number };
     return row.count;
+  }
+
+  recordingScopeCounts(workflowId: string, runScope: 'all' | 'roots' | 'children' = 'all') {
+    return this.#database()
+      .prepare(
+        `SELECT COUNT(*) AS totalRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'failed'), 0) AS failedRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'suspicious'), 0) AS suspiciousRuns
+      FROM recordings WHERE ${recordingWorkflowScopeClause(workflowId, true, 'sqlite', 1, runScope)}`,
+      )
+      .get(...(workflowId ? [workflowId] : [])) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
   }
 
   listRecordingMetadata(
     options: {
       recordingId?: string;
       workflowId?: string;
+      includeSubgraphRuns?: boolean;
+      runScope?: 'all' | 'roots' | 'children';
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -789,9 +803,17 @@ export class LocalWorkflowCatalog {
       conditions.push('recording_id = ?');
       values.push(options.recordingId);
     }
-    if (options.workflowId) {
-      conditions.push('workflow_id = ?');
-      values.push(options.workflowId);
+    if (options.workflowId || options.runScope === 'roots') {
+      conditions.push(
+        recordingWorkflowScopeClause(
+          options.workflowId ?? '',
+          options.includeSubgraphRuns ?? false,
+          'sqlite',
+          values.length + 1,
+          options.runScope,
+        ),
+      );
+      if (options.workflowId) values.push(options.workflowId);
     }
     if (options.failedOnly) conditions.push("json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')");
     const created = "json_extract(metadata_json, '$.createdAt')";

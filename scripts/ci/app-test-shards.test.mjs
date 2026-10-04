@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { listAppTestFiles, selectAppTestShard } from './run-app-tests.mjs';
+import { createAppTestCommands, listAppTestFiles, selectAppTestShard } from './run-app-tests.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
@@ -44,6 +44,25 @@ test('App shard selection rejects invalid coordinates', () => {
   assert.throws(() => selectAppTestShard(['src/a.test.ts'], -1, 4), /shardIndex/);
   assert.throws(() => selectAppTestShard(['src/a.test.ts'], 4, 4), /shardIndex/);
   assert.throws(() => selectAppTestShard(['src/a.test.ts'], 0, 0), /shardCount/);
+});
+
+test('full local App runs include React tests exactly once in bounded explicit batches', () => {
+  const reactFiles = Array.from({ length: 70 }, (_value, index) => `src/component-${index}.test.tsx`);
+  const commands = createAppTestCommands(['src/example.test.ts', ...reactFiles]);
+  assert.deepEqual(commands[0], ['workspace', '@valerypopoff/rivet-app', 'run', 'test']);
+  assert.deepEqual(
+    commands.slice(1).map((command) => command.slice(5)),
+    [reactFiles.slice(0, 32), reactFiles.slice(32, 64), reactFiles.slice(64)],
+  );
+  assert.deepEqual(createAppTestCommands(['src/example.test.ts']), [commands[0]]);
+});
+
+test('explicit App shards retain React coverage without a second discovery pass', () => {
+  const files = ['src/a.test.ts', 'src/b.test.tsx', 'src/c.test.ts'];
+  assert.deepEqual(createAppTestCommands(files, 1, 2), [
+    ['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--', 'src/b.test.tsx'],
+  ]);
+  assert.throws(() => createAppTestCommands([], 0, 1), /empty/);
 });
 
 test('App test preload provides browser asset modules to Node component tests', () => {

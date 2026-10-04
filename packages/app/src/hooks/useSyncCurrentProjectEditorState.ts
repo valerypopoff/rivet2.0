@@ -1,10 +1,6 @@
 import { useEffect } from 'react';
 import { useAtomValue, useStore } from 'jotai';
-import {
-  checkpointProjectEditorStateForReload,
-  projectEditorHydratedState,
-  projectEditorStateByProjectIdState,
-} from '../state/projectEditor.js';
+import { projectEditorHydratedState, projectEditorStateByProjectIdState } from '../state/projectEditor.js';
 import { projectsState, projectState } from '../state/savedGraphs.js';
 import { flushHybridStorageGroup } from '../state/storage.js';
 import { projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
@@ -16,13 +12,8 @@ import { useStableCallback } from './useStableCallback.js';
 export function useSyncCurrentProjectEditorState() {
   const hydrated = useAtomValue(projectEditorHydratedState);
   const store = useStore();
-  const {
-    canvasPosition,
-    currentGraph,
-    currentProject,
-    graphNavigationStack,
-    persistCurrentProjectEditorSnapshot,
-  } = useCurrentProjectEditorSnapshot();
+  const { canvasPosition, currentGraph, currentProject, graphNavigationStack, persistCurrentProjectEditorSnapshot } =
+    useCurrentProjectEditorSnapshot();
 
   const checkpointCurrentProjectEditorState = useStableCallback((event: PageTransitionEvent) => {
     // A document restored from bfcache keeps its live Jotai store. Leaving a
@@ -44,7 +35,8 @@ export function useSyncCurrentProjectEditorState() {
       return;
     }
 
-    checkpointProjectEditorStateForReload(activeProject.metadata.id, snapshot);
+    // Navigation lives in the same atomic checkpoint as project/graph data.
+    // A separate synchronous session record could resurrect an unrelated view.
     void flushHybridStorageGroup('project').catch((error) => {
       handleError(error, 'Failed to persist the current project view before leaving the page', {
         toastError: false,
@@ -68,10 +60,16 @@ export function useSyncCurrentProjectEditorState() {
   ]);
 
   useEffect(() => {
+    const checkpointHidden = () => {
+      if (document.visibilityState === 'hidden')
+        checkpointCurrentProjectEditorState({ persisted: false } as PageTransitionEvent);
+    };
     window.addEventListener('pagehide', checkpointCurrentProjectEditorState);
+    document.addEventListener('visibilitychange', checkpointHidden);
 
     return () => {
       window.removeEventListener('pagehide', checkpointCurrentProjectEditorState);
+      document.removeEventListener('visibilitychange', checkpointHidden);
     };
   }, [checkpointCurrentProjectEditorState]);
 }

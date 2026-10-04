@@ -5,6 +5,7 @@ import Button from '@atlaskit/button';
 import Select from '@atlaskit/select';
 import type { SetStateAction } from 'jotai';
 import type { PromptDesignerConfigurationState } from '../../state/promptDesigner.js';
+import { NumberEditor } from '../editors/NumberEditor.js';
 
 const providerOptions = [
   { label: 'OpenAI', value: 'openai' },
@@ -23,7 +24,8 @@ export const PromptDesignerConfigPanel: FC<{
   config: PromptDesignerConfigurationState;
   setConfig: (update: SetStateAction<PromptDesignerConfigurationState>) => void;
   onRun: () => void;
-}> = ({ config, setConfig, onRun }) => {
+  inProgress?: boolean;
+}> = ({ config, setConfig, onRun, inProgress = false }) => {
   const provider = providerOptions.find((option) => option.value === config.data.provider) ?? providerOptions[0];
   return (
     <div className="panel">
@@ -35,10 +37,12 @@ export const PromptDesignerConfigPanel: FC<{
                 {...fieldProps}
                 options={providerOptions as unknown as { label: string; value: string }[]}
                 value={provider}
-                onChange={(value) => setConfig((state) => ({
-                  ...state,
-                  data: { ...state.data, provider: value!.value as typeof state.data.provider },
-                }))}
+                onChange={(value) =>
+                  setConfig((state) => ({
+                    ...state,
+                    data: { ...state.data, provider: value!.value as typeof state.data.provider },
+                  }))
+                }
               />
             )}
           </Field>
@@ -47,53 +51,56 @@ export const PromptDesignerConfigPanel: FC<{
               <TextField
                 {...fieldProps}
                 value={config.data.model}
-                onChange={(event) => setConfig((state) => ({ ...state, data: { ...state.data, model: event.currentTarget.value } }))}
-              />
-            )}
-          </Field>
-          <Field name="temperature" label="Temperature">
-            {({ fieldProps }) => (
-              <TextField
-                {...fieldProps}
-                type="number"
-                value={String(config.data.temperature)}
-                min={0}
-                step={0.1}
                 onChange={(event) => {
-                  const value = event.currentTarget.valueAsNumber;
-                  if (Number.isFinite(value)) setConfig((state) => ({ ...state, data: { ...state.data, temperature: value } }));
+                  const model = event.currentTarget.value;
+                  setConfig((state) => ({ ...state, data: { ...state.data, model } }));
                 }}
               />
             )}
           </Field>
-          <Field name="max-tokens" label="Max output tokens">
-            {({ fieldProps }) => (
-              <TextField
-                {...fieldProps}
-                type="number"
-                value={String(config.data.maxTokens)}
-                min={1}
-                onChange={(event) => {
-                  const value = event.currentTarget.valueAsNumber;
-                  if (Number.isFinite(value)) setConfig((state) => ({ ...state, data: { ...state.data, maxTokens: Math.max(1, value) } }));
-                }}
-              />
-            )}
-          </Field>
+          <NumberEditor
+            name="temperature"
+            label="Temperature"
+            value={config.data.temperature}
+            min={0}
+            step={0.1}
+            allowEmpty
+            isDisabled={false}
+            isReadonly={false}
+            onChange={(temperature) => setConfig((state) => ({ ...state, data: { ...state.data, temperature } }))}
+          />
+          <NumberEditor
+            name="max-tokens"
+            label="Max output tokens"
+            value={config.data.maxTokens}
+            min={1}
+            isDisabled={false}
+            isReadonly={false}
+            onChange={(value) => {
+              if (value !== undefined)
+                setConfig((state) => ({ ...state, data: { ...state.data, maxTokens: Math.max(1, value) } }));
+            }}
+          />
           {config.data.provider === 'custom' && (
             <Field name="custom-base-url" label="Custom provider base URL">
               {({ fieldProps }) => (
                 <TextField
                   {...fieldProps}
                   value={config.data.customProviderBaseURL}
-                  onChange={(event) => setConfig((state) => ({ ...state, data: { ...state.data, customProviderBaseURL: event.currentTarget.value } }))}
+                  onChange={(event) => {
+                    const customProviderBaseURL = event.currentTarget.value;
+                    setConfig((state) => ({ ...state, data: { ...state.data, customProviderBaseURL } }));
+                  }}
                 />
               )}
             </Field>
           )}
         </div>
-        <div className="controls-buttons">
-          <Button appearance="primary" onClick={onRun}>Run preview</Button>
+        <div className="controls-buttons prompt-preview-run-controls">
+          <Button appearance="primary" onClick={onRun} aria-busy={inProgress}>
+            {inProgress ? 'Restart preview' : 'Run preview'}
+          </Button>
+          {inProgress && <span role="status">Preview running…</span>}
         </div>
       </div>
     </div>

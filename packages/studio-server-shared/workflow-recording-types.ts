@@ -40,8 +40,7 @@ export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [
   'exists',
   'not_exists',
 ] as const;
-export type WorkflowRecordingInputFilterOperator =
-  typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS[number];
+export type WorkflowRecordingInputFilterOperator = (typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS)[number];
 
 export type WorkflowRecordingInputFilter = {
   path: string;
@@ -54,6 +53,8 @@ export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
 export type WorkflowRecordingRunSummary = {
   id: string;
   workflowId: string;
+  sourceProjectName?: string;
+  sourceProjectRelativePath?: string;
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
@@ -81,10 +82,31 @@ export type WorkflowRecordingWorkflowSummary = {
 
 export type WorkflowRecordingWorkflowListResponse = {
   workflows: WorkflowRecordingWorkflowSummary[];
+  /** Includes retained recordings even when their source project is no longer in the catalog. */
+  totals?: WorkflowRecordingCounts;
 };
 
+export type WorkflowRecordingCounts = Pick<
+  WorkflowRecordingWorkflowSummary,
+  'totalRuns' | 'failedRuns' | 'suspiciousRuns'
+>;
+
+export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCounts[]): WorkflowRecordingCounts {
+  return rows.reduce(
+    (counts, row) => ({
+      totalRuns: counts.totalRuns + row.totalRuns,
+      failedRuns: counts.failedRuns + row.failedRuns,
+      suspiciousRuns: counts.suspiciousRuns + row.suspiciousRuns,
+    }),
+    { totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
+  );
+}
+
 export type WorkflowRecordingRunsPageResponse = {
+  /** Empty for Any; sub-runs pages identify the primary recording. Each run retains its actual workflowId. */
   workflowId: string;
+  /** Counts before predicates; input searches count only root candidates, never child context rows. */
+  scopeCounts?: WorkflowRecordingCounts;
   page: number;
   pageSize: number;
   totalRuns: number;
@@ -185,7 +207,7 @@ export type WorkflowRunStatisticsQuery = {
   /**
    * Controls only the chart grouping. Omitting it preserves the adaptive
    * grouping used by clients created before this field existed.
-  */
+   */
   aggregation?: WorkflowRunStatisticsAggregation;
 };
 

@@ -7,9 +7,9 @@ import {
   getCodeEditorViewState,
   getOrCreateCodeEditorModel,
   saveCodeEditorViewState,
+  acknowledgeCodeEditorModelSource,
 } from './codeEditorModelCache.js';
 import { buildCodeEditorModelCacheKey } from './codeEditorModelCacheKey.js';
-
 
 class FakeTextModel {
   disposed = false;
@@ -209,4 +209,74 @@ test('model cache evicts matching editor view state', () => {
   }
 
   assert.equal(getCodeEditorViewState(firstKey), undefined);
+});
+
+test('variant, library, and reload generations never share editable models', () => {
+  const owner = { projectId: 'p', graphId: 'g', nodeId: 'n', editorKey: 'code' };
+  const keys = [
+    buildCodeEditorModelCacheKey({ ...owner, scope: 'graph/current' }),
+    buildCodeEditorModelCacheKey({ ...owner, scope: 'graph/variant' }),
+    buildCodeEditorModelCacheKey({ ...owner, scope: 'library/current' }),
+    buildCodeEditorModelCacheKey({ ...owner, scope: 'graph/current', contentRevision: 1 }),
+  ];
+  assert.equal(new Set(keys).size, keys.length);
+});
+
+test('source acknowledgements preserve incomplete drafts but recognize later Undo to original', () => {
+  const first = getOrCreateCodeEditorModel({
+    cacheKey: 'key',
+    text: 'original',
+    createModel: () => createFakeModel('original'),
+  });
+  first.model.setValue('saved');
+  acknowledgeCodeEditorModelSource('key', 'saved');
+  first.model.setValue('incomplete draft');
+  const warm = getOrCreateCodeEditorModel({
+    cacheKey: 'key',
+    text: 'saved',
+    createModel: () => createFakeModel('unused'),
+  });
+  assert.equal(warm.model.getValue(), 'incomplete draft');
+  const restored = getOrCreateCodeEditorModel({
+    cacheKey: 'key',
+    text: 'original',
+    createModel: () => createFakeModel('unused'),
+  });
+  assert.equal(restored.model.getValue(), 'original');
+});
+
+test('cache pressure never disposes attached models and release restores the bound', () => {
+  const attached = Array.from({ length: 13 }, (_, index) =>
+    getOrCreateCodeEditorModel({
+      cacheKey: `active-${index}`,
+      text: String(index),
+      retain: true,
+      createModel: () => createFakeModel(String(index)),
+    }),
+  );
+  assert.equal(getCachedCodeEditorModelCount(), 13);
+  assert.equal(
+    attached.some(({ model }) => (model as unknown as FakeTextModel).disposed),
+    false,
+  );
+  attached[0]!.release();
+  attached[0]!.release();
+  assert.equal(getCachedCodeEditorModelCount(), 12);
+  assert.equal((attached[0]!.model as unknown as FakeTextModel).disposed, true);
+  assert.equal((attached[1]!.model as unknown as FakeTextModel).disposed, false);
+});
+
+test('project cleanup defers attached-model disposal until its final release', () => {
+  const key = buildCodeEditorModelCacheKey({ projectId: 'p', graphId: 'g', nodeId: 'n', editorKey: 'code' })!;
+  const lease = getOrCreateCodeEditorModel({
+    cacheKey: key,
+    text: 'original',
+    retain: true,
+    createModel: () => createFakeModel('original'),
+  });
+  clearCodeEditorModelCacheForProject('p');
+  assert.equal((lease.model as unknown as FakeTextModel).disposed, false);
+  lease.release();
+  assert.equal((lease.model as unknown as FakeTextModel).disposed, true);
+  assert.equal(getCachedCodeEditorModelCount(), 0);
 });

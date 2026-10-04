@@ -315,9 +315,10 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
       {
         type: 'number',
         label: 'Temperature',
-        helperMessage: 'Provider-dependent; some reasoning models may ignore this setting.',
+        helperMessage: 'Leave blank to use the provider default. Some reasoning models may ignore this setting.',
         dataKey: 'temperature',
         useInputToggleDataKey: 'useTemperatureInput',
+        allowEmpty: true,
         min: 0,
         max: 2,
         step: 0.1,
@@ -644,6 +645,21 @@ function getProviderAdvancedEditors(): LLMChatV2EditorDefinition {
 
 function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
   return group('Error behavior', [
+    {
+      type: 'toggle',
+      label: 'Fail on non-2XX status code',
+      dataKey: 'errorOnNon200',
+      defaultValue: true,
+      helperMessage:
+        'After retries and profile fallback, throw on a rejected HTTP request. When disabled, return Run failed and Run error; unavailable response outputs are excluded.',
+    },
+    {
+      type: 'toggle',
+      label: 'Catch all failures',
+      dataKey: 'catchRequestFailed',
+      helperMessage:
+        'Return any node execution failure through Run failed and Run error instead of stopping the graph. Explicit graph cancellation is never caught.',
+    },
     {
       type: 'toggle',
       label: 'Retry on non-200',

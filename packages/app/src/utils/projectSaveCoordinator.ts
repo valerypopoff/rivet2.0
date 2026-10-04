@@ -2,6 +2,10 @@ import type { ProjectId } from '@valerypopoff/rivet2-core';
 
 const inFlightProjectSavesByWorkspace = new WeakMap<object, Map<ProjectId, Promise<boolean>>>();
 
+export function hasPendingProjectSaves(workspace: object): boolean {
+  return (inFlightProjectSavesByWorkspace.get(workspace)?.size ?? 0) > 0;
+}
+
 /**
  * Keeps every save entry point on one persistence operation per project.
  * The returned promise is deliberately shared so callers observe the same
