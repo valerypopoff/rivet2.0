@@ -36,6 +36,11 @@ reloads only the failed document, never clears recovery records, and never runs
 an automatic reload loop. Resource errors arriving after editor readiness do not
 replace the working workspace.
 
+`entry.tsx` must remain independent of React and CSS imports. It awaits the
+explicit `bootstrapApp()` promise from `bootstrapApp.tsx`; that module owns
+hosted CSS loading and dashboard/editor React initialization. Keep the seam
+checks on both modules so moving initialization cannot bypass the failure surface.
+
 ### Dashboard-to-editor commands
 
 | Type                                      | Payload                                                                                    | When sent                                                                                                            |
@@ -178,6 +183,12 @@ promotion is not a reload. `reloadFromDisk` is the explicit replacement path.
 `expectedProjectId` rejects a reused path now owned by another project, and
 `preferredGraphId` selects the requested graph instead of restoring an unrelated
 resource. See [workspace activation](../EDITOR-WORKSPACE-STATE.md#project-activation-and-content-replacement).
+
+The hosted `useLoadProject` override is only an Evaluation-cache/executor-policy
+adapter around App's `useActivateOpenedProject`. Snapshot selection, saved
+baselines and cancellation stay in that shared activation owner. Hosted tab
+synchronization likewise calls App's `useSyncProjectDirtyState` rather than
+duplicating digest comparison or marking restored content clean.
 
 Hosted preparation uses abortable fetch/worker deserialization with one overall
 deadline (including deferred import). Dataset import and accepted revision binding

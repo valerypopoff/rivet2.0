@@ -8,24 +8,39 @@ import { defaultApiTestFiles, kubernetesApiTestFiles } from './api-test-files.mj
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
 const apiRoot = path.join(rootDir, 'packages', 'studio-server-api');
+const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 
-function parseIntegerFlag(args, name, fallback) {
-  const index = args.indexOf(name);
-  if (index < 0) {
-    return fallback;
+export function parseApiTestOptions(args) {
+  const options = { shardIndex: 0, shardCount: 1, check: false };
+  const seen = new Set();
+  // Yarn preserves a leading argument separator when forwarding script flags.
+  for (let index = args[0] === '--' ? 1 : 0; index < args.length; index += 1) {
+    const flag = args[index];
+    if (!['--shard-index', '--shard-count', '--check'].includes(flag)) {
+      throw new Error(`Unknown API test option: ${flag}`);
+    }
+    if (seen.has(flag)) throw new Error(`Duplicate API test option: ${flag}`);
+    seen.add(flag);
+    if (flag === '--check') {
+      options.check = true;
+      continue;
+    }
+    const rawValue = args[++index];
+    const value = Number(rawValue);
+    if (!/^-?\d+$/.test(rawValue ?? '') || !Number.isSafeInteger(value)) {
+      throw new Error(`${flag} must be a safe integer.`);
+    }
+    options[flag === '--shard-index' ? 'shardIndex' : 'shardCount'] = value;
   }
-  const value = Number(args[index + 1]);
-  if (!Number.isInteger(value)) {
-    throw new Error(`${name} must be an integer.`);
-  }
-  return value;
+  selectApiTestShard([], options.shardIndex, options.shardCount);
+  return options;
 }
 
 export function selectApiTestShard(files, shardIndex, shardCount) {
-  if (!Number.isInteger(shardCount) || shardCount < 1) {
+  if (!Number.isSafeInteger(shardCount) || shardCount < 1) {
     throw new Error('shardCount must be a positive integer.');
   }
-  if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount) {
+  if (!Number.isSafeInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount) {
     throw new Error(`shardIndex must be between 0 and ${shardCount - 1}.`);
   }
   return files.filter((_file, index) => index % shardCount === shardIndex);
@@ -39,7 +54,7 @@ export function listApiTestFiles(testsDirectory, relativeDirectory = 'src/tests'
       if (entry.isDirectory()) {
         return listApiTestFiles(path.join(testsDirectory, entry.name), relativePath);
       }
-      return entry.isFile() && /\.test\.(?:ts|mts)$/.test(entry.name) ? [relativePath] : [];
+      return entry.isFile() && /\.(?:test|spec)\.(?:[cm]?ts|tsx)$/.test(entry.name) ? [relativePath] : [];
     })
     .sort();
 }
@@ -78,12 +93,12 @@ export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
   console.log(`[api-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedFiles.length} files.`);
   await new Promise((resolve, reject) => {
     const child = spawn(
-      'yarn',
-      ['workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test:files', ...selectedFiles],
+      process.execPath,
+      [yarnPath, 'workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test:files', ...selectedFiles],
       {
         cwd: rootDir,
         env: process.env,
-        shell: process.platform === 'win32',
+        shell: false,
         stdio: 'inherit',
       },
     );
@@ -99,10 +114,8 @@ export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const shardIndex = parseIntegerFlag(args, '--shard-index', 0);
-  const shardCount = parseIntegerFlag(args, '--shard-count', 1);
-  if (args.includes('--check')) {
+  const { shardIndex, shardCount, check } = parseApiTestOptions(process.argv.slice(2));
+  if (check) {
     verifyApiTestManifest();
     console.log(
       `[api-tests] Manifest covers ${defaultApiTestFiles.length} default and ${kubernetesApiTestFiles.length} Kubernetes tests.`,
