@@ -18,6 +18,8 @@ Catalog counters are snapshots, not pagination or search authorities. Clamp an o
 
 ## Scope and invariants
 
+Current input searches select only non-Subgraph root recordings, including legacy rows without execution-surface metadata. Their `scopeCounts`, progress and matches exclude children. Expanding a matching root uses the separate authenticated metadata-only `GET /api/workflows/recordings/:recordingId/sub-runs` route, without input or status predicates. Child pages are checked for identity, ownership, progress and consistent totals before publishing a complete family. See [Development](./development.md#collapsible-recording-families) for the controller and pagination invariants. Ordinary browse/status counts still include retained children; catalog totals must not replace root-search counts.
+
 Optimization changes request scheduling, metadata-query indexes, and transient process-local work. Recording artifacts, compression, retention, input matching, missing-input semantics, newest-first ordering, and precise PostgreSQL cursor timestamps remain unchanged. Cursors advance through consumed candidates, not completed speculative reads. Errors are not silently converted into non-matches.
 
 The shared scanner batches metadata windows, drains ready ordered decisions, guarantees progress after a budget overrun, and yields between windows. Cache handoff grace is bounded and separate from explicit cancellation. Weighted admission limits simultaneous large reads; compiled workers recover without a permanent inline fallback. No persistent index of extracted inputs or sidecar is introduced.

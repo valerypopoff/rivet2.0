@@ -781,7 +781,7 @@ The state records only safe profile identity metadata, bounded failure timestamp
 
 `GET /api/workflows/llm-profile-health?projectId=<id>` is the runtime health snapshot surface. `GET /api/workflows/llm-profile-health/admin?projectId=<id>` is the trusted hosted-editor administration surface: it adds only safe, active-suspension evidence metadata. `POST /api/workflows/llm-profile-health/reset` resets state. All require an exact project id. Reset accepts that project id alone for one atomic project-wide reset, or the project id plus one exact key; unscoped listing and key-only reset are rejected. Runtime `begin`, `finish`, and `renew` identities also require their project id. These routes use the normal wrapper proxy-auth contract and are not public workflow endpoints.
 
-Published endpoints and web-app actions receive one API-created opaque correlation id. If their normal Run recording persists, the queue resolves pending profile-failure evidence to that existing `recordingId` before retention can consider the new bundle; it does not create a second recording or copy a prompt/provider response into health state. Those API-created ids never reach a browser.
+Published endpoints and web-app actions receive one API-created opaque correlation id. If their normal Run recording persists, the queue resolves pending profile-failure evidence to that existing `recordingId` before retention can consider the new bundle; it does not create a second recording or copy a prompt/provider response into health state. The correlation id can appear in authenticated recording metadata and on child cards for debugging; it is not a credential or an authorization boundary.
 
 A hosted editor run is different. When the user enables **Record local graph executions**, the hosted provider confirms support for `GET /api/workflows/local-editor-recordings/capability` and creates a one-run opaque correlation id shared by the parent, cross-project Subgraph runs, and any LLM health evidence. This applies to both Browser-mode execution and Node-mode execution on Studio Server's internal executor. Browser mode gives the id directly to the local processor. Node mode adds it to the private remote-run protocol, starts an exact-request WebSocket recorder before the run is sent, and the Studio Server executor forwards the validated id into its processor options. After each captured live run completes, the browser sends the recorder, execution project snapshot, and optional dataset snapshot to the authenticated `POST /api/workflows/local-editor-recordings` route. This includes successful runs with no LLM nodes; an unhealthy health update is not required. A socket that disconnects before a terminal frame, or a local snapshot/upload that cannot be retained, explicitly resolves any pending health evidence as unavailable instead of leaving it pending.
 
@@ -1031,7 +1031,9 @@ Completed bundle publication is crash-aware. Filesystem metadata becomes visible
 The main recordings routes are:
 
 - `GET /api/workflows/recordings/workflows`
+- `GET /api/workflows/recordings/runs` for the globally ordered Any scope, with the same page/status/input parameters as a workflow query
 - `GET /api/workflows/recordings/workflows/:workflowId/runs?page=1&pageSize=20&status=all|failed&inputPath=$.foo&inputOperator=%3D%3D&inputValue=bar&inputCursor=0`
+- `GET /api/workflows/recordings/:recordingId/sub-runs?page=1&pageSize=100` for unfiltered linked-child metadata anchored to a retained non-Subgraph primary; this route does not load replay artifacts
 - `GET /api/workflows/recordings/:recordingId/recording`
 - `GET /api/workflows/recordings/:recordingId/replay-project`
 - `GET /api/workflows/recordings/:recordingId/replay-dataset`

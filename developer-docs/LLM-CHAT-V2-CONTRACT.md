@@ -122,6 +122,12 @@ their existing opt-in switches and represent transport capture, not a delivery
 receipt. Failed checkpoints are inspection-only: they do not create a completed
 logical-round page, successful graph output, editor-cache entry, or tool call.
 
+## Optional Temperature and node failure policy
+
+`temperature.ts` is the shared empty-value boundary for Inline LLM Chat, LLM Profile and SDK arguments. Undefined, null and historical NaN become unset; finite zero and fractional values remain explicit, while other invalid types/non-finite values fail. Numeric editors allow an empty Temperature and retain fractional steps. The generated SDK request omits unset temperature; raw Extra provider options remain an intentional final override. Serialization/migration and card bodies use the same unset policy, avoiding a JSON-recovered `Temperature: null` display. See `temperature.test.ts` and the `llm-temperature.spec.ts` observer.
+
+`nodeRunFailure.ts` owns the common LLM Chat/Classifier Evaluate catch boundary. Missing legacy `errorOnNon200` keeps throw behavior; `catchRequestFailed` defaults off. Failure ports exist when catching is enabled or fail-on-status is explicitly disabled. On success they emit `runFailed: false` and excluded `runError`. On a caught failure, normal outputs are excluded and `runFailed: true` plus readable `runError` are returned; LLM Chat can preserve enabled request/response bodies, attempts and profile-summary evidence, not partial answers or fabricated Usage. Disabling fail-on-status catches rejected HTTP statuses only; Catch all failures covers execution/configuration/tool failures inside the node. An aborted root signal always propagates cancellation. Retry and profile fallback settle before the final boundary; downstream node failures are outside it. Split runs use ordinary per-item output aggregation. Core coverage lives in `RunFailureNodes.test.ts`, `LLMChatV2Node.test.ts` and `SplitRunProcessor.test.ts`; hosted coverage is `model-error-behavior.spec.ts`.
+
 ## Inline and profile configuration
 
 `LLM Chat` has one runtime pipeline and two configuration sources:
@@ -201,16 +207,17 @@ passes; strings, arrays, primitives, null, and missing values reject the current
 profile. This is a profile-level response-validation failure after a successful
 provider request, not a non-200 transport failure: it never enters **Retry on
 non-200**. An actual fallback chain advances immediately to the next profile.
-Inline and scalar-profile runs throw the detailed validation error when no
-fallback is available.
+Inline and scalar-profile runs propagate the detailed validation error when no
+fallback is available; the outer node failure policy may catch it.
 
 The chain covers construction and execution of the provider/model round. Tool
 handler/delegate execution, connected-continuation scheduling, direct-return
 handler validation, and downstream graph work retain their normal errors; a
 successful model response is not rerun on another profile because a tool handler
-failed. A provider response with a non-200 status is always unsuccessful. A
-terminal provider failure is a real LLM Chat node error; it never becomes an
-excluded output and cannot trigger tool continuation.
+failed. A rejected provider HTTP response is unsuccessful. A terminal provider
+failure throws under the default policy, or becomes explicit Run failed/Run error
+outputs when caught by the node failure policy above. It cannot trigger tool
+continuation or pass a partial answer as a successful response.
 
 `Output LLM attempts` (`outputLLMAttempts`) adds `LLM Attempts`
 (`llmAttempts`, `object[]`) in both Inline and From profile modes. It is one

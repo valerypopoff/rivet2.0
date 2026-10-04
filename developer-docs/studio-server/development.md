@@ -96,7 +96,7 @@ workflow. Its scope includes direct recordings plus `subgraph_project` recording
 sharing a nonempty correlation ID with a retained, non-Subgraph recording owned by
 that workflow. This includes nested called projects, but does not treat an inbound
 child recording as an anchor that pulls in the caller's other children. Each row
-shows the replay-owning project path and the existing related run key. Any remains
+shows the replay-owning project path; only Subgraph rows show the related run key. Any remains
 the deduplicated all-recordings scope.
 
 Filesystem, authoritative SQLite, and managed PostgreSQL apply the same
