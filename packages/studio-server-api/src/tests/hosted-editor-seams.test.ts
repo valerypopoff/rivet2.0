@@ -71,8 +71,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   );
   const savedGraphsOverride = readRepoFile('packages/studio-server-web/overrides/state/savedGraphs.ts');
   const loadProjectOverride = readRepoFile('packages/studio-server-web/overrides/hooks/useLoadProject.ts');
-  const activateOpenedProject = readRepoFile('packages/app/src/hooks/useActivateOpenedProject.ts');
-  const syncProjectDirtyState = readRepoFile('packages/app/src/hooks/useSyncProjectDirtyState.ts');
   const syncOpenedProjectsOverride = readRepoFile(
     'packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
   );
@@ -139,11 +137,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
     loadProjectOverride,
     /openedProjectSnapshotsState|useWorkspaceTransitions|savedProjectContentDigestsState/,
   );
-  assert.match(activateOpenedProject, /openedProjectSnapshotsState/);
-  assert.match(activateOpenedProject, /useWorkspaceTransitions/);
-  assert.match(activateOpenedProject, /runLatestProjectActivation/);
-  assert.match(activateOpenedProject, /savedProjectContentDigestsState/);
-  assert.match(activateOpenedProject, /markProjectClean/);
   assert.match(syncOpenedProjectsOverride, /normalizeHostedOpenedProjects/);
   assert.match(syncOpenedProjectsOverride, /openedProjectSnapshotsState/);
   assert.match(syncOpenedProjectsOverride, /useSyncProjectDirtyState\(enabled\)/);
@@ -151,11 +144,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
     syncOpenedProjectsOverride,
     /savedProjectContentDigestsState|projectUnsavedChangesState|resolveProjectContentDirtyState|markProjectClean|markProjectDirtyFlag/,
   );
-  assert.match(syncProjectDirtyState, /savedProjectContentDigestsState/);
-  assert.match(syncProjectDirtyState, /projectUnsavedChangesState/);
-  assert.match(syncProjectDirtyState, /resolveProjectContentDirtyState/);
-  assert.match(syncProjectDirtyState, /markProjectDirtyFlag/);
-  assert.doesNotMatch(syncProjectDirtyState, /markProjectClean/);
   assert.doesNotMatch(syncOpenedProjectsOverride, /evaluationsState|primeOpenedProjectSession/);
   assert.match(loadProjectOverride, /primeOpenedProjectSession\(info\.projectId/);
   assert.match(loadProjectOverride, /fsPath: info\.fsPath, evaluation/);

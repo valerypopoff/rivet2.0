@@ -39,7 +39,9 @@ replace the working workspace.
 `entry.tsx` must remain independent of React and CSS imports. It awaits the
 explicit `bootstrapApp()` promise from `bootstrapApp.tsx`; that module owns
 hosted CSS loading and dashboard/editor React initialization. Keep the seam
-checks on both modules so moving initialization cannot bypass the failure surface.
+checks on both wrapper-owned modules so moving initialization cannot bypass the
+failure surface. Wrapper contract tests must not read private App implementations;
+shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ### Dashboard-to-editor commands
 
