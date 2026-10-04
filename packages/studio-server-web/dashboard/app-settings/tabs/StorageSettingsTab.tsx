@@ -26,19 +26,29 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
             <ModeGroup label="Storage backend" wide>
               <ModeButton
                 active={form.storageMode === 'filesystem'}
-                disabled={storage.controlsDisabled}
+                disabled={
+                  storage.controlsDisabled ||
+                  (form.storageMode !== 'filesystem' && !!form.storageModeChangeBlockedReason)
+                }
                 onClick={() => update('storageMode', 'filesystem')}
               >
                 Local folders
               </ModeButton>
               <ModeButton
                 active={form.storageMode === 'managed'}
-                disabled={storage.controlsDisabled}
+                disabled={
+                  storage.controlsDisabled || (form.storageMode !== 'managed' && !!form.storageModeChangeBlockedReason)
+                }
                 onClick={() => update('storageMode', 'managed')}
               >
                 Object storage + PostgreSQL
               </ModeButton>
             </ModeGroup>
+            {form.storageModeChangeBlockedReason ? (
+              <span className="app-settings-field-help" role="note">
+                {form.storageModeChangeBlockedReason}
+              </span>
+            ) : null}
             <span className="app-settings-field-help">
               {form.storageMode === 'filesystem'
                 ? 'Saved projects, recordings, published snapshots, and runtime libraries use the mounted local folders.'

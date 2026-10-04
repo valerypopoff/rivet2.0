@@ -1,4 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
+import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getLocalMetadataServingSelection } from '../../local-metadata/serving-selection.js';
@@ -609,14 +610,16 @@ export async function initializeWorkflowStorage(): Promise<void> {
 }
 
 export async function getWorkflowTree() {
-  return delegateWithWorkflowsRoot(
+  return delegate(
     async (backend) => backend.getTree(),
-    async (root) =>
-      withFilesystemWorkflowStorageRead(async () => ({
+    async () => {
+      const root = isVmMigrationMaintenanceActive() ? getWorkflowsRoot() : await ensureWorkflowsRoot();
+      return withFilesystemWorkflowStorageRead(async () => ({
         root,
         folders: await listWorkflowFolders(root),
         projects: await listWorkflowProjects(root),
-      })),
+      }));
+    },
   );
 }
 

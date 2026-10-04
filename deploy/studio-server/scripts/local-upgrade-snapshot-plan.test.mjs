@@ -63,6 +63,14 @@ test('selected backup discovery includes control without exposing environment se
   const report = createLocalUpgradeSnapshotPlan(api, undefined, { sqlite: true });
   assert.equal(Object.keys(report.roots).length, 5);
   assert.ok(!JSON.stringify(report).includes('SECRET'));
+  api.Config.Env = api.Config.Env.map((value) =>
+    value.startsWith('RIVET_LOCAL_METADATA_CONTROL_ROOT=') ? 'RIVET_LOCAL_METADATA_CONTROL_ROOT=' : value,
+  );
+  api.Config.Env.push('RIVET_LOCAL_METADATA_UI_ROOT=/data/local-metadata');
+  assert.deepEqual(createLocalUpgradeSnapshotPlan(api, undefined, { sqlite: true }).roots, report.roots);
+  api.Config.Env.push('RIVET_LOCAL_METADATA_UI_ROOT=/elsewhere');
+  assert.throws(() => createLocalUpgradeSnapshotPlan(api, undefined, { sqlite: true }));
+  api.Config.Env.pop();
   assert.throws(() => createLocalUpgradeSnapshotPlan(api, executor, { sqlite: true }));
   api.Config.Env.push('RIVET_WORKFLOWS_ROOT=/elsewhere');
   assert.throws(() => createLocalUpgradeSnapshotPlan(api, undefined, { sqlite: true }));

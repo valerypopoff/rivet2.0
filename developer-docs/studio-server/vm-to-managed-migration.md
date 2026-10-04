@@ -4,8 +4,11 @@ This is the implementation and safety contract for copying a filesystem-backed
 single-host Rivet Server with legacy file metadata into a separate managed destination. The Settings ->
 Migration tab can test a destination, pause the source, run the importer,
 verify it, and record a separate deployment review. **It does not route traffic to Kubernetes or change the VM's active
-Storage setting.** Simply changing the Storage tab switches the active backend
-and does not copy data.
+Storage setting.** Local-to-managed activation through the Storage tab/API is
+blocked: local files must first migrate to SQLite, and a later selected-SQLite
+transfer needs its own verified adapter (not implemented yet). Existing managed
+installations remain configurable. This legacy importer copies to a separate
+destination; it is not an exemption from the source activation policy.
 
 The migration routes are disabled by default. On the single-host VM, set
 `RIVET_VM_MIGRATION_ENABLED=1` and use `RIVET_SERVER_UI_AUTH_MODE=key` or

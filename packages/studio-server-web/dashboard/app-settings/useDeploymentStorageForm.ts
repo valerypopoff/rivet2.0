@@ -18,6 +18,7 @@ const defaultForm: DeploymentStorageSettingsForm = {
   objectStoragePrefix: 'workflows/',
   objectStorageForcePathStyle: false,
   deploymentManaged: false,
+  storageModeChangeBlockedReason: null,
   storageAccessKeyId: '',
   storageAccessKey: '',
   storageAccessKeyConfigured: false,

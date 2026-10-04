@@ -3,7 +3,9 @@ import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { acquireLocalMetadataOwnerLease, assertLegacyLocalMetadataStartup } from './local-metadata-owner-lease.mjs';
+import { loadUiUpgradeEnvironment, prepareUiUpgrade, uiPreparationAvailable } from './local-upgrade-ui.mjs';
 
 const API_ENTRYPOINT = '/opt/rivet/api-entrypoint.sh';
 const EXECUTOR_ENTRYPOINT = '/opt/rivet/executor-entrypoint.sh';
@@ -57,6 +59,9 @@ export function childEnvironments(env = process.env) {
     executor.RIVET_EXECUTION_ENVIRONMENT_API_URL = `http://127.0.0.1:${apiPort}/api/workflows/execution-environment`;
   }
   delete executor.RIVET_API_PROFILE;
+  delete executor.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN;
+  delete executor.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE;
+  delete executor.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE;
   delete executor.RIVET_RUNNER_SLOT_ID;
   delete executor.RIVET_MANAGED_MAINTENANCE_ENABLED;
   delete executor.RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED;
@@ -75,6 +80,14 @@ export async function startBackendSupervisor({
   shutdownTimeoutMs = Number(env.RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS ?? 130_000),
 } = {}) {
   const config = childEnvironments(env);
+  const uiControl = (env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') === 'single-host';
+  const controlToken = randomBytes(32).toString('hex');
+  const canPrepare = uiControl && uiPreparationAvailable(env);
+  if (uiControl) {
+    config.api.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN = controlToken;
+    config.api.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = canPrepare ? '1' : '0';
+    config.api.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = '1';
+  }
   let localMetadataLease;
   if (env.RIVET_LOCAL_METADATA_CONTROL_ROOT) {
     if ((env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') !== 'single-host')
@@ -128,6 +141,7 @@ export async function startBackendSupervisor({
   let stopping = false;
   let finishing = false;
   let exitCode = 0;
+  let requestedAction = null;
   let shutdownTimer;
   let finish;
   const completed = new Promise((resolve) => {
@@ -159,6 +173,30 @@ export async function startBackendSupervisor({
   }
 
   const health = createServer(async (request, response) => {
+    if (request.url === '/local-upgrade/prepare' || request.url === '/local-upgrade/restart') {
+      const supplied = Buffer.from(String(request.headers['x-rivet-supervisor-token'] || ''));
+      const expected = Buffer.from(controlToken);
+      if (
+        !uiControl ||
+        request.method !== 'POST' ||
+        request.headers.origin ||
+        !['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(request.socket.remoteAddress) ||
+        supplied.length !== expected.length ||
+        !timingSafeEqual(supplied, expected)
+      ) {
+        response.writeHead(403).end();
+        return;
+      }
+      if (stopping || requestedAction || (request.url.endsWith('/prepare') && !canPrepare)) {
+        response.writeHead(409).end();
+        return;
+      }
+      requestedAction = request.url.endsWith('/prepare') ? 'prepare' : 'restart';
+      response.writeHead(202, { 'Cache-Control': 'no-store' }).end();
+      // Let the API forward its acknowledgement before graceful shutdown.
+      setTimeout(() => void stop(), 250).unref();
+      return;
+    }
     if (request.url !== '/livez' && request.url !== '/readyz') {
       response.writeHead(404).end();
       return;
@@ -273,13 +311,64 @@ export async function startBackendSupervisor({
     void stop(1);
   });
 
-  return { completed, stop, healthPort: config.healthPort };
+  return {
+    completed,
+    stop,
+    healthPort: config.healthPort,
+    get requestedAction() {
+      return requestedAction;
+    },
+  };
+}
+
+/** Restart both children in-process, including fresh journal selection and
+ * owner lease. Never require Docker socket access or restart web/proxy. */
+export async function runBackendSupervisor(options = {}) {
+  const originalEnv = options.env || process.env;
+  const signals = options.signalSource || process;
+  let stopped = false;
+  const onSignal = () => {
+    stopped = true;
+  };
+  signals.on('SIGINT', onSignal);
+  signals.on('SIGTERM', onSignal);
+  let uiVolumeLease;
+  try {
+    let env = loadUiUpgradeEnvironment(originalEnv);
+    // Fence concurrent supported backends even before first UI opt-in. Keep
+    // this reserved-volume lease across child restarts and offline setup.
+    if (
+      originalEnv.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
+      originalEnv.RIVET_LOCAL_METADATA_UI_ROOT &&
+      !originalEnv.RIVET_LOCAL_METADATA_CONTROL_ROOT
+    )
+      uiVolumeLease = acquireLocalMetadataOwnerLease(originalEnv.RIVET_LOCAL_METADATA_UI_ROOT);
+    while (!stopped) {
+      const supervisor = await startBackendSupervisor({ ...options, env });
+      const code = await supervisor.completed;
+      if (stopped || code !== 0 || !supervisor.requestedAction) return code;
+      if (supervisor.requestedAction === 'prepare') {
+        env = await prepareUiUpgrade(
+          originalEnv,
+          options.localUpgradeProvisionCommand || [
+            process.execPath,
+            '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/local-metadata-control.js',
+            '--provision',
+          ],
+        );
+      }
+    }
+    return 0;
+  } finally {
+    uiVolumeLease?.release();
+    signals.off('SIGINT', onSignal);
+    signals.off('SIGTERM', onSignal);
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    const supervisor = await startBackendSupervisor();
-    process.exitCode = await supervisor.completed;
+    process.exitCode = await runBackendSupervisor();
   } catch (error) {
     console.error('[backend-supervisor] Configuration failed:', error);
     process.exitCode = 1;

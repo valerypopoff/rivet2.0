@@ -79,7 +79,9 @@ test('completed SQLite stays quiet if the operator later disables upgrade contro
 
 test('a paused SQLite selection with disabled controls offers recovery, never fresh provisioning', async ({ page }) => {
   await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
-    route.fulfill({ json: { ...readySetup, upgradeEnabled: false, sqliteSelected: true } }),
+    route.fulfill({
+      json: { ...readySetup, upgradeEnabled: false, sqliteSelected: true, uiPreparationAvailable: true },
+    }),
   );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
@@ -90,6 +92,14 @@ test('a paused SQLite selection with disabled controls offers recovery, never fr
   await expect(prompt).toContainText('Do not generate a new key, reset the control volume or run provisioning again');
   await expect(prompt).toContainText('RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1');
   await expect(prompt.getByRole('button', { name: 'Review upgrade steps' })).toHaveCount(0);
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({ json: { ...legacyStatus, available: false, runningBackend: 'sqlite' } }),
+  );
+  await prompt.getByRole('button', { name: 'Postpone' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const settings = page.getByTestId('app-settings-modal');
+  await settings.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  await expect(settings.getByRole('button', { name: 'Prepare server for migration', exact: true })).toHaveCount(0);
 });
 
 test('the setup modal hides stale instructions during a temporary status failure and recovers', async ({ page }) => {
@@ -151,6 +161,83 @@ test('selected SQLite and unauthorized sessions do not receive the legacy remind
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
 });
 
+test('SQLite awaiting a final restart keeps the continuation reminder on reload', async ({ page }) => {
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    route.fulfill({ json: { ...readySetup, sqliteSelected: true, liveSqlite: false } }),
+  );
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...legacyStatus,
+        runningBackend: 'sqlite',
+        restartRequired: true,
+        transition: { phase: 'sqlite-live', backend: 'sqlite', canReturnToLegacy: false },
+      },
+    }),
+  );
+  await openDashboard(page);
+  const prompt = page.getByTestId('local-storage-upgrade-prompt');
+  await expect(prompt.getByRole('heading', { name: 'Storage upgrade in progress' })).toBeVisible();
+  await prompt.getByRole('button', { name: 'Dismiss until next reload' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(prompt).toBeVisible();
+});
+
+test('Storage cannot enable managed mode before local migration; existing managed mode stays editable', async ({
+  page,
+}) => {
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    route.fulfill({ json: { ...readySetup, eligible: false } }),
+  );
+  const storage = {
+    storageMode: 'filesystem',
+    artifactsHostPath: '../',
+    databaseMode: 'local-docker',
+    databaseSslMode: 'disable',
+    databaseConnectionStringConfigured: false,
+    storageUrl: '',
+    objectStorageBucket: '',
+    objectStorageEndpoint: '',
+    objectStorageRegion: 'us-east-1',
+    objectStoragePrefix: 'workflows/',
+    objectStorageForcePathStyle: false,
+    deploymentManaged: false,
+    storageAccessKeyId: '',
+    storageAccessKeyConfigured: false,
+    updatedAt: null,
+    source: 'default',
+    storageModeChangeBlockedReason: 'Complete the local files-to-SQLite migration first.',
+  };
+  await page.route('**/api/app-settings/deployment-storage', (route) => route.fulfill({ json: storage }));
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const modal = page.getByTestId('app-settings-modal');
+  await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeDisabled();
+  await expect(modal.getByRole('note')).toContainText('files-to-SQLite');
+  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeEnabled();
+  await page.route('**/api/app-settings/deployment-storage', (route) =>
+    route.fulfill({
+      json: {
+        ...storage,
+        storageMode: 'managed',
+        storageModeChangeBlockedReason:
+          'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration.',
+      },
+    }),
+  );
+  await modal.getByRole('button', { name: 'Close app settings' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeEnabled();
+  await expect(modal.getByRole('note')).toContainText('separate verified operator migration');
+  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeDisabled();
+});
+
 test('closing Settings rereads the selected phase before showing recovery guidance', async ({ page }) => {
   let status: Record<string, unknown> | null = null;
   await page.route('**/api/app-settings/local-upgrade', (route) =>
@@ -181,6 +268,24 @@ test('a temporary status failure retries without waiting for another reload', as
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toBeVisible({ timeout: 10_000 });
   expect(reads).toBeGreaterThanOrEqual(2);
 });
+
+for (const endpoint of ['setup', 'status'] as const) {
+  test(`a stalled ${endpoint} read times out and retries the reminder`, async ({ page }) => {
+    let reads = 0;
+    const url = endpoint === 'setup' ? '**/api/app-settings/local-upgrade/setup' : '**/api/app-settings/local-upgrade';
+    await page.route('**/api/app-settings/local-upgrade', (route) => route.fulfill({ json: legacyStatus }));
+    await page.route(url, (route) => {
+      reads += 1;
+      if (reads === 1) return; // Leave the first intercepted request stalled.
+      return route.fulfill({ json: endpoint === 'setup' ? readySetup : legacyStatus });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await expect(page.getByTestId('local-storage-upgrade-prompt')).toBeVisible({ timeout: 20_000 });
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
+}
 
 test('a completed return to legacy is an offer even when the old copy job remains in history', async ({ page }) => {
   await page.route('**/api/app-settings/local-upgrade', (route) =>

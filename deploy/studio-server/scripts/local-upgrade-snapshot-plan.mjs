@@ -41,11 +41,14 @@ export function createLocalUpgradeSnapshotPlan(api, executor, { sqlite = false }
   }
   if (sqlite) {
     const control = (api.Config.Env || []).filter((value) => value.startsWith('RIVET_LOCAL_METADATA_CONTROL_ROOT='));
-    assert.deepEqual(
-      control,
-      ['RIVET_LOCAL_METADATA_CONTROL_ROOT=/data/local-metadata'],
-      'Unexpected control mount selection.',
-    );
+    const ui = (api.Config.Env || []).filter((value) => value.startsWith('RIVET_LOCAL_METADATA_UI_ROOT='));
+    const manual = control.length === 1 && control[0] === 'RIVET_LOCAL_METADATA_CONTROL_ROOT=/data/local-metadata';
+    const uiOwned =
+      control.length === 1 &&
+      control[0] === 'RIVET_LOCAL_METADATA_CONTROL_ROOT=' &&
+      ui.length === 1 &&
+      ui[0] === 'RIVET_LOCAL_METADATA_UI_ROOT=/data/local-metadata';
+    assert.ok(manual || uiOwned, 'Unexpected control mount selection.');
     // All business authorities must use these exact container paths; certificates
     // bind them, and restoring under different paths is not a supported rollback.
     for (const [key, destination] of Object.entries({

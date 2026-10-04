@@ -16,6 +16,7 @@ import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-man
 import { createVerifiedLocalSqliteSnapshot, inspectLocalSqliteSnapshot } from './sqlite-snapshot.js';
 import { stageLocalMetadataCandidate } from './stage-local-metadata-candidate.js';
 import { getLocalMetadataServingSelection, localMetadataGenerationPaths } from './serving-selection.js';
+import { assertLocalMetadataWritesAllowed } from './write-admission.js';
 import { materializeLocalRuntimeLibraries } from './runtime-library-authority.js';
 import { LocalWorkflowCatalog } from './workflow-catalog.js';
 import {
@@ -41,13 +42,33 @@ import { assertEmptyLocalOperationalDatabase, assertLocalOperationalSchema } fro
 import { localUpgradeFailure, type LocalUpgradeStage, type LocalUpgradeHooks } from './upgrade-diagnostics.js';
 import { createHttpError } from '../utils/httpError.js';
 import type { LocalUpgradeOperation } from '../../../studio-server-shared/local-upgrade-types.js';
+import {
+  browserBackupDirectory,
+  createBrowserBackupArchive,
+  hashBackupArchive,
+  readBrowserBackup,
+  saveBrowserBackup,
+  type BrowserBackup,
+} from './browser-backup.js';
 
 let activeOperation: LocalUpgradeOperation | null = null;
 let runningJob: Promise<void> | null = null;
+let runningBackup: Promise<void> | null = null;
 /** Read-only operator onboarding, available before the upgrade flag and
  * control journal are provisioned. Never return paths or secret material. */
 export function getLocalUpgradeSetupStatus() {
   const sqliteSelected = getAppSettingsBackendKind() === 'sqlite';
+  let liveSqlite = false;
+  if (sqliteSelected) {
+    try {
+      // Completion requires the current durable sqlite-live revision, not
+      // merely a selected generation and a removed maintenance marker.
+      assertLocalMetadataWritesAllowed();
+      liveSqlite = true;
+    } catch {
+      // Stale or damaged control state must retain recovery guidance.
+    }
+  }
   return {
     eligible:
       process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
@@ -58,8 +79,58 @@ export function getLocalUpgradeSetupStatus() {
     controlRootConfigured: path.isAbsolute(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim() || ''),
     encryptionKeyReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
     sqliteSelected,
-    liveSqlite: sqliteSelected && !isVmMigrationMaintenanceActive(),
+    liveSqlite,
+    uiPreparationAvailable: !sqliteSelected && process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE === '1',
+    uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
   };
+}
+async function requestSupervisor(action: 'prepare' | 'restart'): Promise<void> {
+  const port = Number(process.env.RIVET_BACKEND_HEALTH_PORT);
+  const token = process.env.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN;
+  if (!token || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw createHttpError(409, 'This deployment does not support UI-controlled backend preparation or restart.');
+  const response = await fetch(`http://127.0.0.1:${port}/local-upgrade/${action}`, {
+    method: 'POST',
+    headers: { 'X-Rivet-Supervisor-Token': token },
+    signal: AbortSignal.timeout(3000),
+  });
+  await response.body?.cancel();
+  if (response.status !== 202)
+    throw createHttpError(409, 'The backend could not accept this operation. Reload status.');
+}
+export async function prepareLocalUpgradeFromUi(): Promise<void> {
+  const setup = getLocalUpgradeSetupStatus();
+  if (
+    !setup.eligible ||
+    !setup.uiPreparationAvailable ||
+    setup.sqliteSelected ||
+    activeOperation ||
+    runningJob ||
+    runningBackup
+  )
+    throw createHttpError(
+      409,
+      'UI preparation is unavailable or another operation is running. Existing upgrades must not be reset.',
+    );
+  activeOperation = 'prepare';
+  try {
+    await requestSupervisor('prepare');
+  } finally {
+    activeOperation = null;
+  }
+}
+export async function restartLocalUpgradeFromUi(revision: number): Promise<void> {
+  return exclusive('restart', async () => {
+    const status = await getLocalUpgradeStatus();
+    if (
+      !status.available ||
+      status.transition?.revision !== revision ||
+      !status.restartRequired ||
+      (status.maintenance && !status.drain?.ready)
+    )
+      throw createHttpError(409, 'A drained, current storage transition requiring restart is needed. Reload status.');
+    await requestSupervisor('restart');
+  });
 }
 function assertAvailable(): void {
   if (
@@ -77,7 +148,7 @@ function assertAvailable(): void {
 }
 async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Promise<T>): Promise<T> {
   assertAvailable();
-  if (activeOperation || runningJob)
+  if (activeOperation || runningJob || runningBackup)
     throw createHttpError(
       409,
       'A local storage operation is already running. Wait for it to finish and reload status.',
@@ -110,6 +181,8 @@ export async function getLocalUpgradeStatus() {
     return {
       available: false,
       operation: null,
+      backup: null,
+      backupStatusUnreadable: false,
       copyConfigurationReady: false,
       runningBackend: getAppSettingsBackendKind(),
       maintenance: readVmMigrationMaintenance(),
@@ -118,13 +191,39 @@ export async function getLocalUpgradeStatus() {
       drain: null,
       restartRequired: false,
     };
+  let runtimeReady = false;
+  if (process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1') {
+    const port = Number(process.env.RIVET_BACKEND_HEALTH_PORT);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(1500) });
+        runtimeReady = response.ok;
+        await response.body?.cancel();
+      } catch {
+        /* A restarting or unready executor cannot authorize auto-validation. */
+      }
+    }
+  }
   return withLocalMetadataControl(async (journal, store) => {
     const state = journal.read(),
       selection = getLocalMetadataServingSelection(),
       job = store.latestJob();
+    let backup: BrowserBackup | null = null;
+    let backupStatusUnreadable = false;
+    try {
+      backup = await readBrowserBackup(localMetadataControlRoot());
+    } catch {
+      // Optional archive evidence must fail closed for copying, but must not
+      // hide the authoritative transition or prevent legacy recovery.
+      backupStatusUnreadable = true;
+    }
     return {
       available: true,
-      operation: activeOperation ?? (runningJob ? 'copy' : null),
+      uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
+      runtimeReady,
+      operation: activeOperation ?? (runningJob ? 'copy' : runningBackup ? 'backup' : null),
+      backup: backup?.phase === 'creating' && !runningBackup ? { ...backup, phase: 'interrupted' as const } : backup,
+      backupStatusUnreadable,
       copyConfigurationReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
       runningBackend: selection ? 'sqlite' : 'legacy',
       maintenance: readVmMigrationMaintenance(),
@@ -225,6 +324,24 @@ export async function startLocalUpgradeCopy(
     const sourceFingerprint = await fingerprintVmMigrationSource(source);
     if (input.backupSourceFingerprint !== sourceFingerprint)
       throw new Error('The restored backup fingerprint does not match the frozen source.');
+    if (input.backupReference.startsWith('browser-backup:')) {
+      const backup = await readBrowserBackup(localMetadataControlRoot());
+      if (
+        !backup ||
+        backup.phase !== 'ready' ||
+        input.backupReference !== `browser-backup:${backup.id}:${backup.archiveHash}` ||
+        backup.revision !== input.revision ||
+        backup.pausedAt !== readVmMigrationMaintenance()?.enteredAt ||
+        backup.sourceFingerprint !== sourceFingerprint
+      )
+        throw new Error('The browser backup is stale or unverified. Create and download a current backup.');
+      if (
+        (await hashBackupArchive(
+          path.join(browserBackupDirectory(localMetadataControlRoot(), backup.id), 'backup.tar.gz'),
+        )) !== backup.archiveHash
+      )
+        throw new Error('The verified backup archive changed.');
+    }
     const job = await withLocalMetadataControl(async (journal, store) => {
       const state = journal.read();
       if (state.revision !== input.revision || !['legacy', 'legacy-resumed'].includes(state.phase))
@@ -420,6 +537,58 @@ export async function localUpgradeBackupFingerprint(): Promise<string> {
     return fingerprintVmMigrationSource(localMetadataSourceRoots());
   });
 }
+export async function startLocalUpgradeBrowserBackup(revision: number): Promise<void> {
+  return exclusive('backup', async () => {
+    await assertDrained();
+    if (getLocalMetadataServingSelection())
+      throw new Error('Browser backup is only available before SQLite activation.');
+    const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
+    if (
+      state.revision !== revision ||
+      !['legacy', 'legacy-resumed'].includes(state.phase) ||
+      revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION)
+    )
+      throw new Error('Reload status and finish any required restart before backing up.');
+    const control = localMetadataControlRoot(),
+      source = localMetadataSourceRoots();
+    await assertLocalControlPaths(control, source);
+    const backup: BrowserBackup = {
+      id: randomUUID(),
+      revision,
+      pausedAt: readVmMigrationMaintenance()!.enteredAt,
+      phase: 'creating',
+      sourceFingerprint: await fingerprintVmMigrationSource(source),
+      archiveHash: null,
+      bytes: 0,
+      createdAt: new Date().toISOString(),
+    };
+    await saveBrowserBackup(control, backup);
+    runningBackup = (async () => {
+      try {
+        const ready = await createBrowserBackupArchive({ control, source, state: backup, assertFrozen: assertDrained });
+        await saveBrowserBackup(control, ready);
+      } catch {
+        // Backup files/settings contain secrets. Never persist raw error text.
+        await saveBrowserBackup(control, { ...backup, phase: 'failed' }).catch(() => undefined);
+      }
+    })().finally(() => {
+      runningBackup = null;
+    });
+  });
+}
+
+export async function getLocalUpgradeBrowserBackupDownload(id: string) {
+  assertAvailable();
+  const control = localMetadataControlRoot();
+  await assertLocalControlPaths(control, localMetadataSourceRoots());
+  const backup = await readBrowserBackup(control);
+  if (!backup || backup.id !== id || backup.phase !== 'ready')
+    throw createHttpError(409, 'This backup is not ready. Reload status.');
+  const archive = path.join(browserBackupDirectory(control, backup.id), 'backup.tar.gz');
+  if ((await hashBackupArchive(archive)) !== backup.archiveHash)
+    throw createHttpError(409, 'Backup integrity check failed. Create a new backup.');
+  return { archive, backup };
+}
 export async function getLocalUpgradeReport() {
   assertAvailable();
   return withLocalMetadataControl(async (journal, store) => {
@@ -444,8 +613,9 @@ export async function getLocalUpgradeReport() {
       candidateFingerprint: generation.candidateFingerprint,
       reportHash: generation.reportHash,
       backupReference: certificate.backupReference,
-      backupCertification:
-        'Operator attested a separately restored backup and encryption key; not an automated off-VM backup service.',
+      backupCertification: certificate.backupReference.startsWith('browser-backup:')
+        ? 'Server restored and verified the archive; operator attested saving the download outside the VM and protecting the encryption key separately. Not proof of an off-VM restore.'
+        : 'Operator attested a separately restored backup and encryption key; not an automated off-VM backup service.',
       report: certificate.report,
       operational: certificate.operational,
     };

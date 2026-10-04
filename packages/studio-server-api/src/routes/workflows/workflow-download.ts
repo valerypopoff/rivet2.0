@@ -1,16 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getWorkflowsRoot } from '../../security.js';
 
 import type { WorkflowProjectDownloadVersion } from '../../../../studio-server-shared/workflow-types.js';
 import { createHttpError, conflict } from '../../utils/httpError.js';
+import { pathExists, PROJECT_EXTENSION, requireProjectPath, resolveWorkflowRelativePath } from './fs-helpers.js';
 import {
-  ensureWorkflowsRoot,
-  pathExists,
-  PROJECT_EXTENSION,
-  requireProjectPath,
-  resolveWorkflowRelativePath,
-} from './fs-helpers.js';
-import { getWorkflowProjectSettings, readStoredWorkflowProjectSettings, resolvePublishedWorkflowProjectPath } from './publication.js';
+  getWorkflowProjectSettings,
+  readStoredWorkflowProjectSettings,
+  resolvePublishedWorkflowProjectPath,
+} from './publication.js';
 import { getWorkflowDownloadFileName } from './workflow-project-naming.js';
 
 type WorkflowProjectDownloadResult = {
@@ -37,12 +36,14 @@ export async function readWorkflowProjectDownload(
   relativePath: unknown,
   version: WorkflowProjectDownloadVersion,
 ): Promise<WorkflowProjectDownloadResult> {
-  const root = await ensureWorkflowsRoot();
-  const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, {
-    allowProjectFile: true,
-  }));
+  const root = getWorkflowsRoot();
+  const projectPath = requireProjectPath(
+    resolveWorkflowRelativePath(root, relativePath, {
+      allowProjectFile: true,
+    }),
+  );
 
-  if (!await pathExists(projectPath)) {
+  if (!(await pathExists(projectPath))) {
     throw createHttpError(404, 'Project not found');
   }
 

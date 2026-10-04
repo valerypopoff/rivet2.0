@@ -84,6 +84,13 @@ async function fixture(
             RIVET_LOCAL_METADATA_SUPERVISED: '1',
             RIVET_LOCAL_METADATA_CONTROL_ROOT: control,
             RIVET_LOCAL_METADATA_ENCRYPTION_KEY: 'isolated-test-settings-key-32-characters',
+            // Direct fixture processes have no UI supervisor. Never inherit
+            // capabilities or its private endpoint from a serving container.
+            RIVET_LOCAL_METADATA_UI_ROOT: '',
+            RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE: '0',
+            RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE: '0',
+            RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN: '',
+            RIVET_BACKEND_HEALTH_PORT: '',
             RIVET_VM_MIGRATION_EDITOR_CONTROL: '1',
             RIVET_DEPLOYMENT_TOPOLOGY: 'single-host',
             RIVET_WORKFLOW_STORAGE_BACKEND: 'filesystem',
@@ -105,6 +112,18 @@ async function fixture(
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test('authenticated browser backup and project export work while paused and certify an actual restored archive', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('browser-backup');
+  });
+});
+
+test('UI prepares, backs up, copies, restarts, validates and resumes a real supervised backend without console intervention', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('ui-workflow');
+  });
+});
 
 test('operator copy, restart, validation, resume and ordinary serving select SQLite without changing retained files', async () => {
   await fixture(async (source, control, command) => {

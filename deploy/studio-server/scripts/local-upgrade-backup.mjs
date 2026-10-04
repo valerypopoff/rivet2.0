@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createLocalUpgradeSnapshotPlan } from './local-upgrade-snapshot-plan.mjs';
+import { uiUpgradeBackupLayout } from '../images/api/local-upgrade-ui.mjs';
 
 const execute = promisify(execFile);
 const syncDescriptor = promisify(fsync);
@@ -83,11 +84,12 @@ export async function scanBackupRoot(root, domain, destination) {
     const target = destination && path.join(destination, relative);
     const entry = { path: relative.split(path.sep).join('/'), mode: before.mode & 0o1777 };
     if (before.isSymbolicLink()) {
-      const cache = domain === 'control' && /^generations\/[^/]+\/runtime-cache\//.test(entry.path);
+      const cacheParts = /^(?:ui-managed\/)?generations\/[^/]+\/runtime-cache\//.exec(entry.path);
+      const cache = domain === 'control' && !!cacheParts;
       assert.ok(domain === 'runtimeLibraries' || cache, 'Only confined runtime-library symlinks are supported.');
       const link = await fs.readlink(file);
       const resolved = await fs.realpath(file);
-      const linkRoot = cache ? path.join(root, ...entry.path.split('/').slice(0, 3)) : root;
+      const linkRoot = cache ? path.join(root, cacheParts[0].slice(0, -1)) : root;
       assert.ok(!path.isAbsolute(link) && resolved.startsWith(linkRoot + path.sep), 'Escaping package link.');
       entry.type = 'link';
       entry.link = link;
@@ -215,7 +217,7 @@ export async function createLocalUpgradeBackup({
   const sources = domains.map((domain) => path.resolve(roots[domain]));
   await assertDisjointBackupDirectories(sources);
   await assertFrozen();
-  const selection = sqlite ? await inspectSqliteServingBackup(roots.control) : null;
+  const selection = sqlite ? await inspectSqliteServingBackup(roots.control, roots.appData) : null;
   destination = await createFreshBackupDirectory(destination, sources);
   const manifest = {
     version: sqlite ? 2 : 1,
@@ -243,8 +245,15 @@ export async function createLocalUpgradeBackup({
   }
   await assertFrozen();
   if (sqlite) {
-    assert.deepEqual(await inspectSqliteServingBackup(roots.control), selection, 'Selected generation changed.');
-    assert.deepEqual(await inspectSqliteServingBackup(path.join(destination, 'control')), selection);
+    assert.deepEqual(
+      await inspectSqliteServingBackup(roots.control, roots.appData),
+      selection,
+      'Selected generation changed.',
+    );
+    assert.deepEqual(
+      await inspectSqliteServingBackup(path.join(destination, 'control'), path.join(destination, 'appData')),
+      selection,
+    );
   }
   const receipt = digest(manifest);
   const file = path.join(destination, 'backup.json');
@@ -282,7 +291,10 @@ export async function verifyLocalUpgradeBackup(directory, expectedReceipt) {
       'Restored backup differs.',
     );
   if (manifest.version === 2)
-    assert.deepEqual(await inspectSqliteServingBackup(path.join(directory, 'control')), manifest.selection);
+    assert.deepEqual(
+      await inspectSqliteServingBackup(path.join(directory, 'control'), path.join(directory, 'appData')),
+      manifest.selection,
+    );
   return manifest;
 }
 
@@ -296,7 +308,10 @@ export async function restoreLocalUpgradeBackup({ backup, receipt, destination }
   }
   await verifyLocalUpgradeBackup(backup, receipt);
   if (manifest.version === 2)
-    assert.deepEqual(await inspectSqliteServingBackup(path.join(destination, 'control')), manifest.selection);
+    assert.deepEqual(
+      await inspectSqliteServingBackup(path.join(destination, 'control'), path.join(destination, 'appData')),
+      manifest.selection,
+    );
   // A restored copy has its own proof; never grant permission to mount the
   // original production paths or backup as writable rehearsal data.
   await fs.writeFile(
@@ -355,9 +370,13 @@ function assertOperationalBackupSchema(database, schema) {
 
 /** Read-only validation of a stopped selected generation. This does not reset
  * journals, decrypt settings, drop caches or select a backend. */
-export async function inspectSqliteServingBackup(controlRoot) {
+export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
   const { DatabaseSync } = await import('node:sqlite');
   await assertBackupDirectory(controlRoot);
+  // A UI-owned volume includes its private configuration and independent App
+  // Data binding. Never inspect only its nested databases and lose that state.
+  const uiLayout = uiUpgradeBackupLayout(controlRoot, appDataRoot);
+  controlRoot = uiLayout.root;
   const open = async (file) => {
     await assertBackupDirectory(path.dirname(file));
     const stat = await fs.lstat(file);
@@ -402,6 +421,12 @@ export async function inspectSqliteServingBackup(controlRoot) {
         .certificate_json,
     );
     assert.equal(digest(certificate), proof.reportHash, 'Selected certificate differs.');
+    if (uiLayout.encryptionKeyId)
+      assert.equal(
+        certificate.encryptionKeyId,
+        uiLayout.encryptionKeyId,
+        'UI configuration key differs from its certificate.',
+      );
   } finally {
     operators.close();
   }
