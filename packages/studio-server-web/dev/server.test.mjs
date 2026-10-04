@@ -6,6 +6,8 @@ import path from 'node:path';
 import { GenerationStore, bundlePrefix } from './generations.mjs';
 import { createTunnelServer } from './server.mjs';
 
+// test-style: fixture-read: inspect only this test's generated bundle artifacts, never production implementation text.
+
 async function fixture(t, options) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'rivet-tunnel-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));

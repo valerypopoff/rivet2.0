@@ -5,6 +5,17 @@ export const auditRetryDelaysMs = [10_000, 30_000, 60_000];
 
 export const hasPotentialAuditJsonRows = (text) => text.split(/\r?\n/).some((line) => line.trimStart().startsWith('{'));
 
+export function assertAuditProcessCompleted(result) {
+  if (result.error) throw result.error;
+  // Yarn exits 1 for findings; other exits and signals do not certify a complete report.
+  if (result.signal || (result.status !== 0 && result.status !== 1))
+    throw new Error(
+      `Dependency audit did not complete (status ${result.status ?? 'unknown'}, signal ${result.signal ?? 'none'}).`,
+    );
+  if (result.stderr?.trim())
+    throw new Error('Dependency audit produced unexpected stderr; its report cannot be certified.');
+}
+
 export const isTransientAuditFailure = (result) => {
   const output = result.stdout ?? '';
   if (hasPotentialAuditJsonRows(output)) return false;

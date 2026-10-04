@@ -313,16 +313,25 @@ $env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:8081' # configured tunnel-mode prox
 yarn studio-server:ui:observe tunnel-development.spec.ts
 ```
 
-The browser spec requires tunnel mode, mocks API fixture data, and covers nested
-import failure, initial SSE failure/reconnect, build feedback, safe clean refresh,
+The bundle-refresh cases require tunnel mode; the bootstrap failure/retry cases
+also run against ordinary Vite. The spec mocks API fixture data and covers nested
+import failure, entry-resource failure before editor modules load, Retry and late
+resource/runtime errors that must not replace a working editor, initial SSE
+failure/reconnect, build feedback, safe clean refresh,
 generation pinning, pending dashboard forms/rename rows, an active canvas drag,
 an inactive dirty tab and aborted recovery transactions. The native server tests cover cache limits, failed publication,
 old chunks, SSE, path validation, deduplication, retired watcher callbacks and
-compiler deadlines. Launcher contracts parse Compose YAML rather than relying
-on indentation or field order. Also run the existing node
+compiler deadlines. Generated bundle reads in server tests inspect only test-owned
+artifacts, never production source. Bootstrap behavior is checked in the real browser,
+not by extracting and executing inline HTML source in a mock VM. Pure launcher
+tests exercise `developmentFrontendEnv`; the static repository gate
+(`yarn studio-server:verify:repo-structure`) owns the parsed Compose YAML, package
+command and authenticated/unbuffered SSE proxy contracts. Also run the existing node
 editor/Save regressions against the bundled frontend. Local checks do not certify
 an authenticated external tunnel: test the actual forwarded URL separately,
 including tunnel sign-in, SSE reconnect and frontend/backend edits.
+The fixture signs in through the existing UI gate with the runner's `RIVET_KEY`
+when required; a login screen must not be misreported as a module-load timeout.
 Refresh tests wait for the real checkpoint handshake: editor mount readiness
 does not imply that startup recovery effects have finished settling.
 The ordinary-Vite bootstrap retry assertion reacquires the iframe across

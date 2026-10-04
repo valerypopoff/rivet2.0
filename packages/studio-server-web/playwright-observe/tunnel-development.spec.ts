@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { serializeProject, PromptNodeImpl, type Project } from '@valerypopoff/rivet2-core';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 async function prepare(page: import('@playwright/test').Page) {
   await mockHostedEditorBootstrap(page);
@@ -31,6 +31,10 @@ async function prepare(page: import('@playwright/test').Page) {
       },
     });
   });
+  // Authenticate through the existing gate before tests intercept editor modules.
+  // Do not disable authentication or confuse a sign-in page with a bootstrap failure.
+  await page.goto('/');
+  await authenticateIfNeeded(page);
 }
 
 async function waitForCheckpointedEditor(page: import('@playwright/test').Page) {
@@ -125,6 +129,31 @@ test('entry module failure presents Retry before any editor JavaScript loads, th
       }
     })
     .toBe('ready');
+});
+
+test('runtime errors and late module resource failures do not replace a working editor', async ({ page }) => {
+  await prepare(page);
+  await seedProjects(page);
+  await page.goto('/');
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: 'A' }).dblclick();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.node-canvas')).toBeVisible();
+  const frame = page.frames().find((item) => item.url().includes('?editor'))!;
+  await frame.evaluate(() => {
+    window.dispatchEvent(new ErrorEvent('error', { message: 'Unrelated fixture runtime error' }));
+    const script = document.createElement('script');
+    script.type = 'module';
+    document.body.append(script);
+    script.dispatchEvent(new Event('error'));
+    script.remove();
+  });
+  expect(await frame.evaluate(() => window.__rivetEditorBootstrapState)).toBe('ready');
+  await expect(
+    page.frameLocator('iframe.dashboard-editor-frame').getByRole('heading', { name: 'Rivet could not finish loading' }),
+  ).toHaveCount(0);
+  await expect(page.locator('.dashboard-app-loading')).toBeHidden();
+  await expect(editor.locator('.node-canvas')).toBeVisible();
 });
 
 test('connection failure before the first status is visible and reconnect never forces refresh', async ({ page }) => {

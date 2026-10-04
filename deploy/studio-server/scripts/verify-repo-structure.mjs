@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
@@ -150,6 +151,34 @@ assert.equal(rootPackage.scripts?.preinstall, 'node scripts/checks/check-package
 assert.equal(rootPackage.scripts?.['build:all'], 'yarn build');
 assert.equal(rootPackage.scripts?.prod, undefined, 'Do not add an ambiguous root prod command.');
 assert.equal(rootPackage.scripts?.['dev:server'], undefined, 'Studio Server commands must remain namespaced.');
+
+// Declarative launcher/proxy contracts belong in this static repository gate,
+// not unit tests that assert production implementation source text.
+assert.equal(
+  rootPackage.scripts['studio-server:dev:tunnel'],
+  'node deploy/studio-server/scripts/dev-docker.mjs dev tunnel',
+);
+const devServices = parse(readText('deploy/studio-server/compose/docker-compose.dev.yml')).services;
+assert.notEqual(
+  devServices.proxy.depends_on.web.restart,
+  true,
+  'Frontend switches must not disconnect executor sockets',
+);
+assert.ok(devServices.web.environment.includes('RIVET_DEV_FRONTEND_MODE=${RIVET_DEV_FRONTEND_MODE:-live}'));
+assert.ok(devServices.web.volumes.includes('tunnel_cache:/home/rivet/.cache/tunnel'));
+assert.equal(devServices.web.init, true);
+assert.equal(devServices.web.healthcheck.start_period, '${RIVET_DEV_WEB_START_PERIOD:-180s}');
+assert.match(devServices.web.command, /if \[ \$\$RIVET_DEV_FRONTEND_MODE = tunnel \]/);
+assert.match(devServices.web.command, /dev\/tunnel\.mjs/);
+assert.match(devServices.web.command, /check:google-hosted-override &&/);
+assert.match(devServices.web.command, /run dev --host 0\.0\.0\.0 --strictPort/);
+const devProxy = readText('deploy/studio-server/compose/nginx/default.dev.conf.template');
+const buildEvents = devProxy.match(/location = \/__rivet_dev\/events \{([^}]+)\}/)?.[1];
+assert.ok(buildEvents, 'Development build events must have a dedicated proxy location');
+assert.match(buildEvents, /auth_request \/__rivet_ui_auth_check/);
+assert.match(buildEvents, /proxy_buffering off/);
+assert.match(buildEvents, /proxy_set_header Connection ""/);
+assert.doesNotMatch(readText('deploy/studio-server/compose/nginx/default.conf.template'), /__rivet_dev\/events/);
 
 function assertNoNpmWorkspaceDispatch(manifestPath, scripts) {
   for (const [scriptName, script] of Object.entries(scripts ?? {})) {

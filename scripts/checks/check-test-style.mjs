@@ -10,8 +10,8 @@ const focusedTestPattern = /\b(?:context|describe|it|suite|test)\.only\b/;
 const skippedTestPattern = /\b(?:context|describe|it|suite|test)\.skip\b/;
 const sourceReadPattern = /\breadFile(?:Sync)?\s*\(/;
 // A fixture-read exception is intentionally local and reviewable. It is only
-// for black-box serialized projects or published documentation assets; it must
-// never be used to assert production implementation text.
+// for black-box serialized projects, test-owned generated artifacts, or published
+// documentation assets; never use it to assert production implementation text.
 const fixtureReadExceptionPattern = /^\s*\/\/\s*test-style:\s*fixture-read:\s*\S.+$/m;
 
 function getCandidateTestFiles() {

@@ -77,3 +77,8 @@ pages rather than copying another detailed contract into every package guide.
 When changing code structure, update the relevant developer doc in the same
 change so future maintainers can see the current contract instead of reverse
 engineering it from imports.
+
+## Dependency audit follow-up
+
+See [Dependency audit policy and October 2026 triage](DEPENDENCY-AUDIT.md) for the
+two tooling-only temporary exceptions, their expiry and verification requirements.
