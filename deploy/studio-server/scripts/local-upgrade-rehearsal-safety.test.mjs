@@ -6,6 +6,7 @@ import {
   assertRehearsalEnvironment,
   pinRehearsalImages,
   REHEARSAL_PHASES,
+  REHEARSAL_TOOLS,
   assertRehearsalPhases,
   readRehearsalPhases,
 } from './local-upgrade-rehearsal-safety.mjs';
@@ -14,7 +15,58 @@ import { gunzipSync } from 'node:zlib';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run as runRehearsalCommand } from './local-upgrade-image-rehearsal.mjs';
+import { run as runRehearsalCommand, stageLocalUpgradeRehearsalTools } from './local-upgrade-image-rehearsal.mjs';
+import { pathToFileURL } from 'node:url';
+
+test('staged backup tools import successfully with their real deployment dependencies', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-tools-'));
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    await stageLocalUpgradeRehearsalTools(root);
+    const backup = pathToFileURL(path.join(root, 'fixture-tools/scripts/local-upgrade-backup.mjs')).href;
+    const result = await runRehearsalCommand(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const tools=await import(${JSON.stringify(backup)});if(typeof tools.createLocalUpgradeBackup!=='function'||typeof tools.restoreLocalUpgradeBackup!=='function')throw new Error('Missing backup entrypoints');`,
+      ],
+      process.env,
+    );
+    assert.equal(result.code, 0);
+    // Restaging must not silently overwrite evidence from an earlier fixture.
+    await assert.rejects(stageLocalUpgradeRehearsalTools(root), { code: 'EEXIST' });
+    await fs.unlink(path.join(root, 'fixture-tools/images/api/local-upgrade-ui.mjs'));
+    const incomplete = await runRehearsalCommand(
+      process.execPath,
+      ['--input-type=module', '-e', `await import(${JSON.stringify(backup)});`],
+      process.env,
+      true,
+    );
+    assert.notEqual(incomplete.code, 0);
+    assert.match(incomplete.output, /ERR_MODULE_NOT_FOUND/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const linkedParent of ['fixture-tools', 'fixture-tools/images'])
+  test(`tool staging refuses ${linkedParent} symlinks before creating foreign directories`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-links-'));
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    const owned = path.join(root, 'owned');
+    const foreign = path.join(root, 'foreign');
+    const link = path.join(owned, linkedParent);
+    try {
+      await fs.mkdir(foreign);
+      await fs.mkdir(path.dirname(link), { recursive: true });
+      await fs.symlink(foreign, link, process.platform === 'win32' ? 'junction' : 'dir');
+      await assert.rejects(stageLocalUpgradeRehearsalTools(owned), /symlink ancestors/);
+      assert.deepEqual(await fs.readdir(foreign), [], 'No mkdir or copy may traverse the foreign parent.');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
 test('rehearsal command waits for drained pipes and retains only a bounded output tail', async () => {
   const marker = 'generated-final-output-marker';
@@ -133,30 +185,31 @@ test('only the project-owned isolated fixture model is accepted', () => {
   assertOwnedRehearsalCompose(config, model);
 });
 
-test('backup tools are accepted only at their exact read-only fixture bindings', () => {
-  const { config, model } = fixture();
-  const mount = {
-    type: 'bind',
-    source: path.join(path.dirname(config.registryScript), 'local-upgrade-backup.mjs'),
-    target: '/fixture-tools/local-upgrade-backup.mjs',
-    read_only: true,
-  };
-  model.services.api.volumes.push(mount);
-  assertOwnedRehearsalCompose(config, model);
-  for (const change of [
-    { read_only: false },
-    { source: '/prod/local-upgrade-backup.mjs' },
-    { target: '/fixture-tools/unreviewed.mjs' },
-    { target: '/tools/local-upgrade-backup.mjs' },
-  ]) {
+for (const file of REHEARSAL_TOOLS)
+  test(`backup tool ${file} requires its exact read-only fixture binding`, () => {
+    const { config, model } = fixture();
+    const mount = {
+      type: 'bind',
+      source: path.join(path.dirname(config.registryScript), 'fixture-tools', file),
+      target: '/fixture-tools/' + file,
+      read_only: true,
+    };
+    model.services.api.volumes.push(mount);
+    assertOwnedRehearsalCompose(config, model);
+    for (const change of [
+      { read_only: false },
+      { source: '/prod/local-upgrade-backup.mjs' },
+      { target: '/fixture-tools/unreviewed.mjs' },
+      { target: '/tools/local-upgrade-backup.mjs' },
+    ]) {
+      const changed = structuredClone(model);
+      Object.assign(changed.services.api.volumes.at(-1), change);
+      assert.throws(() => assertOwnedRehearsalCompose(config, changed));
+    }
     const changed = structuredClone(model);
-    Object.assign(changed.services.api.volumes.at(-1), change);
+    changed.services.web.volumes.push(mount);
     assert.throws(() => assertOwnedRehearsalCompose(config, changed));
-  }
-  const changed = structuredClone(model);
-  changed.services.web.volumes.push(mount);
-  assert.throws(() => assertOwnedRehearsalCompose(config, changed));
-});
+  });
 
 test('existing prefixed volumes or networks are not reusable disposable resources', () => {
   const { model } = fixture();

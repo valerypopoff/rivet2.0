@@ -182,6 +182,18 @@ test('operator activity remains visible across HTTP clients and competing action
   });
 });
 
+test('status cannot report an interrupted copy when its worker finishes during optional backup IO', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('copy-status-race');
+  });
+});
+
+test('status rereads backup evidence when its worker finishes during a held metadata read', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('backup-status-race');
+  });
+});
+
 test('copy preflight rejects absent or short settings keys without creating a job or changing source authority', async () => {
   await fixture(async (_source, _control, command) => {
     await command('copy-invalid-key');
