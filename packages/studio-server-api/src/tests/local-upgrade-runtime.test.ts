@@ -176,6 +176,12 @@ test('operator inspection refuses oversized sources before parsing project or pu
   });
 });
 
+test('copy capacity refusal is actionable and cannot start a job or modify the frozen source', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('copy-capacity-refusal');
+  });
+});
+
 test('operator activity remains visible across HTTP clients and competing actions fail with a safe conflict', async () => {
   await fixture(async (_source, _control, command) => {
     await command('copy-operation-status');

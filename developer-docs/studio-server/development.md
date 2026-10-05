@@ -470,7 +470,16 @@ operator API and never convert the development stack's data. Use Linux Node 24
 for container-runtime evidence as well as Windows checks. The runtime suite
 includes stage/commit termination, disk-full/permission failures and retry;
 `local-copy-capacity.test.ts` and `local-upgrade-diagnostics.test.ts` cover
-resource refusal and secret-safe failure categories.
+resource refusal and secret-safe failure categories. Copy inspection now returns
+an additive disk estimate: decoded recordings once, separate metadata/library
+and operational snapshot reserves, allocation/path overhead, one transient
+bundle and fixed headroom. The actual converter/extraction fixture samples disk
+allocation; it is not a production-data high-water qualification. HTTP copy
+capacity refusals are actionable 409 `local-copy-capacity` responses before
+any job or generation is created. See the owning
+[upgrade runbook](./local-metadata-upgrade.md) for the formula and limitations.
+The supervised UI runtime fixture passes bootstrap `--import` paths as file
+URLs, so Windows drive-letter paths work as well as Linux deployment paths.
 
 Run `studio-server:verify:local-upgrade-images` with exact API/web/proxy image
 references for the packaged, unmocked browser/conversion/restart/recovery gate.

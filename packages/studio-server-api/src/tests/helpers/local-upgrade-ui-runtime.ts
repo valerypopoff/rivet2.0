@@ -41,7 +41,7 @@ const completed = runBackendSupervisor({
   apiCommand: [
     process.execPath,
     '--import',
-    path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs'),
+    pathToFileURL(path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs')).href,
     '--import',
     'tsx',
     path.join(repo, 'packages/studio-server-api/src/server.ts'),
@@ -49,7 +49,7 @@ const completed = runBackendSupervisor({
   executorCommand: [
     process.execPath,
     '--import',
-    path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs'),
+    pathToFileURL(path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs')).href,
     path.join(repo, 'packages/studio-server-executor/dist/executor-bundle.cjs'),
   ],
   executorCwd: repo,
