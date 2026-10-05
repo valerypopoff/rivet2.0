@@ -16,7 +16,8 @@ afterEach(() => {
 });
 
 void describe('hosted web-app action WebSocket transport', () => {
-  void it('does not reconnect after an authorization-revocation close', async () => {
+  void it('does not reconnect after an authorization-revocation close', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const sockets: TestWebSocket[] = [];
     Object.defineProperty(globalThis, 'WebSocket', {
       configurable: true,
@@ -47,7 +48,10 @@ void describe('hosted web-app action WebSocket transport', () => {
     assert.ok(socket);
     socket.open();
     socket.receiveJson({ capabilities: [], protocolVersion: 1, type: 'server.ready' });
-    assert.equal(socket.sent.some((message) => message.includes('action.start')), true);
+    assert.equal(
+      socket.sent.some((message) => message.includes('action.start')),
+      true,
+    );
 
     socket.close(1008, 'Web app access was revoked');
     await assert.rejects(result, (error: unknown) => {
@@ -57,7 +61,7 @@ void describe('hosted web-app action WebSocket transport', () => {
       return true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 550));
+    t.mock.timers.tick(20_000);
     assert.equal(sockets.length, 1);
   });
 });

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import test from 'node:test';
+
+// test-style: fixture-read: compares owned malformed settings bytes before and after fail-closed repair.
 import express from 'express';
 import { clientMatchesNetworks, normalizeClientNetwork } from '../client-networks.js';
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken, getExpectedUiSessionToken, getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';

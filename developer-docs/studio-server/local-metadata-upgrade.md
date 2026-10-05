@@ -37,6 +37,11 @@ every webpage reload until completion; postponing applies only to that page.
 Paused/incomplete migrations retain continuation and recovery controls. Managed
 deployments do not use this local workflow.
 
+When available, **Local storage upgrade** appears directly after **Storage** in
+Settings and carries an amber warning icon. The icon is decorative so the tab's
+accessible name stays unchanged. Storage's pre-upgrade backend-switch guidance
+names this exact tab; selecting a storage backend still does not perform migration.
+
 | Data                                                                                               | Upgraded local authority                 | Managed counterpart           |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------- |
 | Project/folder catalog, revision pointers, publications/history, routes, web-app identities/access | SQLite catalog                           | PostgreSQL                    |

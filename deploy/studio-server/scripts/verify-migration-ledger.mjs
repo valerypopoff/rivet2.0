@@ -82,10 +82,27 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-web/tests/hosted-fonts.test.ts',
+    {
+      path: 'packages/studio-server-web/playwright-observe/hosted-dashboard-contracts.spec.ts',
+      reason:
+        'Font source-text assertions were replaced by the rendered dashboard/editor contract in the headless CI lane.',
+    },
+  ],
+  [
+    'packages/studio-server-web/tests/modal-theme-contract.test.ts',
+    {
+      path: 'packages/studio-server-web/playwright-observe/hosted-dashboard-contracts.spec.ts',
+      reason:
+        'Modal source-text assertions were replaced by computed-style checks on all seven rendered dashboard dialogs.',
+    },
+  ],
+  [
     'packages/studio-server-api/src/trusted-host-settings.ts',
     {
       path: 'packages/studio-server-api/src/trusted-client-settings.ts',
-      reason: 'Hostname bypass was replaced by verified client IP/network settings; legacy data remains migration information.',
+      reason:
+        'Hostname bypass was replaced by verified client IP/network settings; legacy data remains migration information.',
     },
   ],
   [
@@ -229,12 +246,14 @@ function buildLedger() {
       const destinationEntry = migrationEntries.get(destinationPath);
       if (!destinationEntry) return [];
       const successor = currentDestinationSuccessors.get(destinationPath);
-      return [{
-        path: destinationPath,
-        migrationMode: destinationEntry.mode,
-        migrationBlob: destinationEntry.object,
-        ...(successor == null ? {} : { currentPath: successor.path, currentReason: successor.reason }),
-      }];
+      return [
+        {
+          path: destinationPath,
+          migrationMode: destinationEntry.mode,
+          migrationBlob: destinationEntry.object,
+          ...(successor == null ? {} : { currentPath: successor.path, currentReason: successor.reason }),
+        },
+      ];
     });
 
     if (destinations.length !== destinationPaths.length || destinations.length === 0) {

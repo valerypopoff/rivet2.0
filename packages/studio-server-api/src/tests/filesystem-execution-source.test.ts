@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
 import test from 'node:test';
 import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';

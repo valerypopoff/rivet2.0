@@ -73,21 +73,27 @@ async function expectWrappedLabel(locator: Locator): Promise<void> {
 
 async function expectFirstLineMarkAlignment(mark: Locator, label: Locator, description: string): Promise<void> {
   await expect(mark).toBeVisible();
-  const [markBox, labelMetrics] = await Promise.all([
-    mark.boundingBox(),
-    label.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      return {
-        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
-        top: bounds.top,
-      };
-    }),
-  ]);
-
-  expect(markBox).not.toBeNull();
-  const markCenter = markBox!.y + markBox!.height / 2;
-  const firstLineCenter = labelMetrics.top + labelMetrics.lineHeight / 2;
-  expect(Math.abs(markCenter - firstLineCenter), description).toBeLessThan(labelMetrics.lineHeight / 2);
+  await expect
+    .poll(
+      async () => {
+        const labelElement = await label.elementHandle();
+        try {
+          // Take both boxes in one browser turn. Separate calls can straddle font
+          // loading or folder layout and manufacture a misalignment that never existed.
+          return await mark.evaluate((element, labelElement) => {
+            if (!labelElement) return Infinity;
+            const markBox = element.getBoundingClientRect();
+            const labelBox = labelElement.getBoundingClientRect();
+            const lineHeight = Number.parseFloat(getComputedStyle(labelElement).lineHeight);
+            return Math.abs(markBox.top + markBox.height / 2 - labelBox.top - lineHeight / 2) / lineHeight;
+          }, labelElement);
+        } finally {
+          await labelElement?.dispose();
+        }
+      },
+      { message: description },
+    )
+    .toBeLessThan(0.5);
 }
 
 async function installWrappingFixture(page: Page, tree: WorkflowTreeResponse, projectContents: string): Promise<void> {

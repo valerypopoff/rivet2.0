@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { defaultApiTestFiles } from '../../deploy/studio-server/scripts/api-test-files.mjs';
+import { parseAppTestOptions, selectAppTestShard } from './run-app-tests.mjs';
 import {
   listApiTestFiles,
   parseApiTestOptions,
@@ -54,7 +55,8 @@ test('API manifest discovery includes nested test files and excludes unrelated f
   }
 });
 
-test('API shard selection rejects invalid coordinates', () => {
+test('shared App/API shard selection rejects invalid coordinates', () => {
+  assert.equal(selectAppTestShard, selectApiTestShard);
   assert.throws(() => selectApiTestShard(defaultApiTestFiles, -1, 4), /shardIndex/);
   assert.throws(() => selectApiTestShard(defaultApiTestFiles, 4, 4), /shardIndex/);
   assert.throws(() => selectApiTestShard(defaultApiTestFiles, 0, 0), /shardCount/);
@@ -62,7 +64,8 @@ test('API shard selection rejects invalid coordinates', () => {
   assert.throws(() => selectApiTestShard(defaultApiTestFiles, 0, Number.MAX_SAFE_INTEGER + 1), /shardCount/);
 });
 
-test('API CLI rejects malformed and ambiguous options even in check mode', () => {
+test('App and API CLIs reject malformed and ambiguous options even in check mode', () => {
+  assert.equal(parseAppTestOptions, parseApiTestOptions, 'Both launchers use the tested strict parser.');
   assert.deepEqual(parseApiTestOptions([]), { shardIndex: 0, shardCount: 1, check: false });
   assert.deepEqual(parseApiTestOptions(['--', '--check']), { shardIndex: 0, shardCount: 1, check: true });
   assert.deepEqual(parseApiTestOptions(['--check', '--shard-index', '2', '--shard-count', '4']), {
@@ -85,30 +88,32 @@ test('API CLI rejects malformed and ambiguous options even in check mode', () =>
     assert.throws(() => parseApiTestOptions(args));
 });
 
-test('API CLI supports Yarn script argument forwarding and rejects invalid check coordinates', () => {
+test('App and API CLIs forward Yarn arguments and reject invalid check coordinates', () => {
   const rootDir = fileURLToPath(new URL('../../', import.meta.url));
   const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
-  for (const shardCount of ['4', '0']) {
-    const result = spawnSync(
-      process.execPath,
-      [
-        yarnPath,
-        'workspace',
-        '@valerypopoff/rivet-studio-server-api',
-        'run',
-        'test',
-        '--',
-        '--check',
-        '--shard-count',
-        shardCount,
-      ],
-      { cwd: rootDir, encoding: 'utf8', timeout: 30_000 },
-    );
-    assert.equal(result.error, undefined);
-    assert.equal(result.status, shardCount === '4' ? 0 : 1, result.stdout + result.stderr);
-    if (shardCount === '4') assert.match(result.stdout, /Manifest covers/);
-    else assert.match(result.stderr, /shardCount must be a positive integer/);
-  }
+  for (const [command, success] of [
+    [['workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test'], /Manifest covers/],
+    [['test:app'], /Discovered .* tests/],
+  ])
+    for (const [shardCount, shardIndex, expectedError] of [
+      ['4', '0', null],
+      ['0', '0', /shardCount must be a positive integer/],
+      ['10000', '9999', /shard .* is empty/],
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        [yarnPath, ...command, '--', '--check', '--shard-count', shardCount, '--shard-index', shardIndex],
+        {
+          cwd: rootDir,
+          encoding: 'utf8',
+          timeout: 30_000,
+        },
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, expectedError === null ? 0 : 1, result.stdout + result.stderr);
+      if (expectedError === null) assert.match(result.stdout, success);
+      else assert.match(result.stderr, expectedError);
+    }
 });
 
 test('API runner executes its selected tests with pinned Yarn, not a global shim', () => {
@@ -117,7 +122,7 @@ test('API runner executes its selected tests with pinned Yarn, not a global shim
   try {
     fs.writeFileSync(path.join(shimDir, 'yarn'), '#!/bin/sh\necho GLOBAL_YARN_USED >&2\nexit 91\n', { mode: 0o755 });
     fs.writeFileSync(path.join(shimDir, 'yarn.cmd'), '@echo GLOBAL_YARN_USED 1>&2\r\n@exit /b 91\r\n');
-    const selectedIndex = defaultApiTestFiles.indexOf('src/tests/hosted-editor-seams.test.ts');
+    const selectedIndex = defaultApiTestFiles.indexOf('src/tests/recording-input-filter.test.ts');
     assert.ok(selectedIndex >= 0);
     const env = { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ''}` };
     // This is a standalone CLI invocation, not a nested Node test worker.

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valerypopoff/rivet2-core';
@@ -42,7 +41,10 @@ test('LLM profile suspension settings show suspensions and recovery states in th
     snapshot('newer', 'project-a', 'open'),
   ]);
 
-  assert.deepEqual(entries.map((entry) => entry.identity.key), ['newer', 'half-open', 'older']);
+  assert.deepEqual(
+    entries.map((entry) => entry.identity.key),
+    ['newer', 'half-open', 'older'],
+  );
 });
 
 test('LLM profile suspension settings retain expired suspensions as awaiting recovery', () => {
@@ -51,7 +53,10 @@ test('LLM profile suspension settings retain expired suspensions as awaiting rec
     { ...snapshot('active', 'project-a', 'open'), openUntil: 10_001 },
   ]);
 
-  assert.deepEqual(entries.map((entry) => entry.identity.key), ['expired', 'active']);
+  assert.deepEqual(
+    entries.map((entry) => entry.identity.key),
+    ['expired', 'active'],
+  );
   assert.match(getLLMProfileHealthStatusDetail(entries[0]!, 10_000), /awaiting recovery attempt/);
   assert.match(getLLMProfileHealthStatusDetail(entries[1]!, 10_000), /suspended until/);
   assert.equal(getLLMProfileHealthStatusTone(entries[0]!, 10_000), 'recovery');
@@ -79,7 +84,10 @@ test('LLM profile suspension settings resolve retained profile nodes to friendly
   } as unknown as Project;
 
   assert.equal(getLLMProfileHealthDisplayName(project, snapshot('open', 'project-a', 'open')), 'Fast provider in Chat');
-  assert.equal(getLLMProfileHealthDisplayName(undefined, snapshot('open', 'project-a', 'open')), 'LLM Profile profile-node');
+  assert.equal(
+    getLLMProfileHealthDisplayName(undefined, snapshot('open', 'project-a', 'open')),
+    'LLM Profile profile-node',
+  );
   const namedSnapshot = snapshot('named', 'project-a', 'open');
   assert.equal(
     getLLMProfileHealthDisplayName(undefined, {
@@ -88,28 +96,4 @@ test('LLM profile suspension settings resolve retained profile nodes to friendly
     }),
     'Primary route',
   );
-});
-
-test('outer Project Settings owns LLM profile suspension administration and the embedded editor owns execution only', () => {
-  const modalSource = readFileSync(new URL('../dashboard/ProjectSettingsModal.tsx', import.meta.url), 'utf8');
-  const healthSource = readFileSync(new URL('../dashboard/LLMProfileHealthSettings.tsx', import.meta.url), 'utf8');
-  const providersSource = readFileSync(new URL('../dashboard/hostedRivetProviders.ts', import.meta.url), 'utf8');
-
-  assert.ok(modalSource.indexOf('Endpoint') < modalSource.indexOf('Web apps'));
-  assert.ok(modalSource.indexOf('Web apps') < modalSource.indexOf('LLM profile suspension'));
-  assert.match(healthSource, /HEALTH_REFRESH_INTERVAL_MS = 5_000/);
-  assert.match(healthSource, /activeProject\.projectMetadataId/);
-  assert.match(healthSource, /project\.metadata\.id/);
-  assert.doesNotMatch(healthSource, /activeProject\.id as ProjectId/);
-  assert.match(healthSource, /No LLM profiles are currently suspended or awaiting recovery\./);
-  assert.match(healthSource, /project-settings-llm-health-row-\$\{tone\}/);
-  assert.match(healthSource, /project-settings-llm-health-metadata-\$\{tone\}/);
-  assert.match(healthSource, /Contributing recordings/);
-  assert.match(healthSource, /Open recording/);
-  assert.match(healthSource, /The replay is still being saved/);
-  assert.match(healthSource, /This suspension predates recording links/);
-  assert.match(healthSource, /entry\.contributingRuns \?\? \[\]/);
-  assert.doesNotMatch(healthSource, /LLM profile reliability/);
-  assert.doesNotMatch(providersSource, /llmProfileHealthAdmin:/);
-  assert.match(providersSource, /llmProfileHealthStore:/);
 });

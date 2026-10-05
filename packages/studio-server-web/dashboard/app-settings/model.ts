@@ -191,7 +191,7 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
       settings.storageModeChangeBlockedReason !== undefined
         ? settings.storageModeChangeBlockedReason
         : settings.storageMode === 'filesystem'
-          ? 'Complete the local files-to-SQLite migration before switching to S3 + PostgreSQL.'
+          ? 'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab before switching to S3 + PostgreSQL.'
           : 'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration.',
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKey: '',

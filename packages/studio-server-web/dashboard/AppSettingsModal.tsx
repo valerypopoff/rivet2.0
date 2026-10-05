@@ -44,8 +44,8 @@ const tabs: ReadonlyArray<{ id: AppSettingsTab; label: string }> = [
   { id: 'shell-execution', label: 'Shell execution' },
   { id: 'server-ui-access', label: 'Server UI access' },
   { id: 'storage', label: 'Storage' },
-  { id: 'vm-migration', label: 'Migration' },
   { id: 'local-upgrade', label: 'Local storage upgrade' },
+  { id: 'vm-migration', label: 'Migration' },
   { id: 'deployment-status', label: 'Deployment' },
   { id: 'workflow-endpoints', label: 'Workflow endpoints' },
   { id: 'run-recordings', label: 'Run recordings' },
@@ -420,6 +420,21 @@ function OpenAppSettingsModal({
                         disabled={savingTab}
                         onClick={() => setActiveTab(tab.id)}
                       >
+                        {tab.id === 'local-upgrade' ? (
+                          <svg
+                            className="app-settings-upgrade-warning"
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 3 2 21h20L12 3Z" />
+                            <path d="M12 9v5M12 17h.01" />
+                          </svg>
+                        ) : null}
                         {tab.label}
                       </button>
                     ))}

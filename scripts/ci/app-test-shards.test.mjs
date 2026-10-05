@@ -6,7 +6,14 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createAppTestCommands, listAppTestFiles, selectAppTestShard } from './run-app-tests.mjs';
+import {
+  appTestPrerequisite,
+  createAppTestCommands,
+  listAppTestFiles,
+  listDiscoveredAppTests,
+  runAppTests,
+  selectAppTestShard,
+} from './run-app-tests.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
@@ -40,29 +47,65 @@ test('App test discovery includes supported nested test suffixes and excludes so
   }
 });
 
-test('App shard selection rejects invalid coordinates', () => {
-  assert.throws(() => selectAppTestShard(['src/a.test.ts'], -1, 4), /shardIndex/);
-  assert.throws(() => selectAppTestShard(['src/a.test.ts'], 4, 4), /shardIndex/);
-  assert.throws(() => selectAppTestShard(['src/a.test.ts'], 0, 0), /shardCount/);
-});
-
-test('full local App runs include React tests exactly once in bounded explicit batches', () => {
-  const reactFiles = Array.from({ length: 70 }, (_value, index) => `src/component-${index}.test.tsx`);
-  const commands = createAppTestCommands(['src/example.test.ts', ...reactFiles]);
-  assert.deepEqual(commands[0], ['workspace', '@valerypopoff/rivet-app', 'run', 'test']);
-  assert.deepEqual(
-    commands.slice(1).map((command) => command.slice(5)),
-    [reactFiles.slice(0, 32), reactFiles.slice(32, 64), reactFiles.slice(64)],
+test('full App runs and shards explicitly execute every supported suffix once in bounded batches', () => {
+  const suffixes = ['test.ts', 'spec.ts', 'test.tsx', 'spec.tsx', 'test.mts', 'spec.mts', 'test.cts', 'spec.cts'];
+  const files = Array.from(
+    { length: 140 },
+    (_value, index) => `src/nested/component-${index}.${suffixes[index % suffixes.length]}`,
   );
-  assert.deepEqual(createAppTestCommands(['src/example.test.ts']), [commands[0]]);
+  for (const shardCount of [1, 4]) {
+    const executions = [];
+    for (let shardIndex = 0; shardIndex < shardCount; shardIndex += 1) {
+      const commands = createAppTestCommands(files, shardIndex, shardCount);
+      for (const command of commands) {
+        assert.deepEqual(command.slice(0, 5), ['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--']);
+        assert.ok(command.length > 5 && command.length <= 37, 'Every invocation has 1–32 explicitly selected files.');
+      }
+      const selected = commands.flatMap((command) => command.slice(5));
+      assert.deepEqual(selected, selectAppTestShard(files, shardIndex, shardCount));
+      executions.push(...selected);
+    }
+    assert.deepEqual(executions.sort(), [...files].sort());
+    assert.equal(new Set(executions).size, files.length);
+  }
+  assert.throws(() => createAppTestCommands([], 0, 1), /empty/);
 });
 
-test('explicit App shards retain React coverage without a second discovery pass', () => {
-  const files = ['src/a.test.ts', 'src/b.test.tsx', 'src/c.test.ts'];
-  assert.deepEqual(createAppTestCommands(files, 1, 2), [
-    ['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--', 'src/b.test.tsx'],
-  ]);
-  assert.throws(() => createAppTestCommands([], 0, 1), /empty/);
+test('App prerequisites build locally, validate CI artifacts, and fail closed before testing', async () => {
+  assert.deepEqual(appTestPrerequisite(), ['workspace', '@valerypopoff/rivet2-core', 'run', 'build:esm']);
+  assert.deepEqual(appTestPrerequisite('prebuilt'), ['check:compiled-workspace-exports']);
+  for (const invalid of ['', 'true', 'skip', 'prebuit']) assert.throws(() => appTestPrerequisite(invalid));
+  const invalidMode = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL('./run-app-tests.mjs', import.meta.url)), '--check'],
+    {
+      cwd: rootDir,
+      env: { ...process.env, RIVET_APP_TEST_DEPENDENCIES: 'skip' },
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  );
+  assert.equal(invalidMode.status, 1, invalidMode.stdout + invalidMode.stderr);
+  assert.match(invalidMode.stderr, /must be build or prebuilt/);
+
+  const commands = [];
+  await runAppTests({ shardIndex: 0, shardCount: 4, dependencies: 'prebuilt' }, async (command) => {
+    commands.push(command);
+  });
+  assert.deepEqual(commands[0], ['check:compiled-workspace-exports']);
+  assert.deepEqual(commands.slice(1), createAppTestCommands(listDiscoveredAppTests(), 0, 4));
+  assert.deepEqual(commands[1].slice(0, 5), ['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--']);
+
+  commands.length = 0;
+  const missingArtifact = new Error('Compiled export missing');
+  await assert.rejects(
+    runAppTests({ dependencies: 'prebuilt' }, async (command) => {
+      commands.push(command);
+      throw missingArtifact;
+    }),
+    (error) => error === missingArtifact,
+  );
+  assert.deepEqual(commands, [['check:compiled-workspace-exports']], 'No tests start after artifact validation fails.');
 });
 
 test('App test preload provides browser asset modules to Node component tests', () => {
@@ -86,6 +129,7 @@ test('App test preload provides browser asset modules to Node component tests', 
     const result = spawnSync(process.execPath, ['--import', preloadUrl, entryPath], {
       cwd: rootDir,
       encoding: 'utf8',
+      timeout: 30_000,
     });
 
     assert.equal(result.status, 0, result.stderr);
@@ -130,6 +174,7 @@ test('App test preload provides browser asset modules to Node component tests', 
       {
         cwd: rootDir,
         encoding: 'utf8',
+        timeout: 30_000,
       },
     );
     assert.equal(packageAssetResult.status, 0, packageAssetResult.stderr);

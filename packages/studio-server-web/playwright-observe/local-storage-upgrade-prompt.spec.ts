@@ -106,6 +106,10 @@ test('fresh SQLite has no upgrade tab or reload suggestion; legacy controls reti
   await expect(tab).toHaveCount(0);
   setup = { ...readySetup };
   await expect(tab).toBeVisible({ timeout: 10_000 });
+  const tabNames = await modal.getByRole('tab').allTextContents();
+  expect(tabNames[tabNames.indexOf('Storage') + 1]).toBe('Local storage upgrade');
+  await expect(tab.locator('.app-settings-upgrade-warning')).toBeVisible();
+  await expect(tab.locator('.app-settings-upgrade-warning')).toHaveAttribute('aria-hidden', 'true');
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
   const beforeOutage = reads;
@@ -252,7 +256,8 @@ test('Storage cannot enable managed mode before local migration; existing manage
     storageAccessKeyConfigured: false,
     updatedAt: null,
     source: 'default',
-    storageModeChangeBlockedReason: 'Complete the local files-to-SQLite migration first.',
+    storageModeChangeBlockedReason:
+      'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab first.',
   };
   await page.route('**/api/app-settings/deployment-storage', (route) => route.fulfill({ json: storage }));
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -263,6 +268,7 @@ test('Storage cannot enable managed mode before local migration; existing manage
   await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
   await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeDisabled();
   await expect(modal.getByRole('note')).toContainText('files-to-SQLite');
+  await expect(modal.getByRole('note')).toContainText('in the "Local storage upgrade" tab');
   await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeEnabled();
   await page.route('**/api/app-settings/deployment-storage', (route) =>
     route.fulfill({
