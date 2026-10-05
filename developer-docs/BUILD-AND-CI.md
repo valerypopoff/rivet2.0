@@ -751,7 +751,7 @@ would not have produced a trustworthy release:
 | Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                           |
 | Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                          | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                               |
 | Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                   | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                              |
-| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy` or `A timestamp was expected but was not found.`                      | Either the local DMG helper was temporarily busy or Apple's online secure-timestamp service failed during Developer ID signing. Neither error establishes a source, certificate, entitlement, or architecture defect. | `build-macos-dmg.mjs` retries only those exact failures twice, cleans only the current target's `rw.*.dmg` scratch image, and preserves every other failure. The full Tauri bundle step is retried so a partially signed app is rebuilt rather than repaired in place. |
+| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`, `hdiutil: couldn't eject "disk<N>" - Resource busy`, or `A timestamp was expected but was not found.` | The DMG helper can be busy during creation or unmount, or Apple's online secure-timestamp service can fail. The October 5 Intel failure occurred after successful app notarization and stapling, while detaching the scratch image. | `build-macos-dmg.mjs` retries these specific failures twice. It identifies mounted target-local scratch images through the system inventory, detaches them safely before deletion, and rebuilds through the full Tauri path. All other failures remain visible. |
 
 The resulting Apple Silicon DMG was subsequently installed and its Node
 executor was confirmed working on Apple Silicon hardware. That real-device
@@ -781,10 +781,15 @@ The following invariants are non-negotiable:
 - Keep the smoke graph synchronized with the actual Code-node DataValue
   contract. If that contract intentionally changes, update the graph and the
   assertion together and retain an end-to-end returned-value assertion.
-- Keep the DMG retry narrow and bounded. The retry classifier must continue to
-  require the exact nonzero `hdiutil: create failed - Resource busy` failure.
-  Cleanup must stay confined to `rw.*.dmg` files in the current target's
-  `release/bundle/macos` directory.
+- Keep the DMG retry narrow and bounded: only nonzero image-creation resource-busy,
+  `hdiutil: couldn't eject "disk<N>" - Resource busy`, and missing secure-timestamp
+  failures qualify. Cleanup stays confined to regular `rw.*.dmg` files in the
+  current target's `release/bundle/macos` directory. Inspect `hdiutil info -plist`
+  and match the complete image path before detaching its whole-disk device.
+  Try normal detach first; force detach only that disposable scratch image after
+  exit code 16. Other detach failures, malformed image inventory, or an unknown
+  device stop cleanup and retry. Never delete a still-mounted image or detach by
+  volume name, a device copied from build output, or a broad disk sweep.
 
 Never “fix” this pipeline by doing any of the following:
 
@@ -1322,10 +1327,18 @@ assertion verifies both that type and the returned value.
 
 The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
 because the Tauri v1 DMG helper can occasionally receive
-`hdiutil: create failed - Resource busy` on a hosted macOS runner. Only that
-exact transient failure is retried, after removing target-local `rw.*.dmg`
-scratch images, with 5-second and 15-second delays. Compilation, signing,
-permission, and every other bundling failure remain single-attempt failures.
+`hdiutil: create failed - Resource busy` or fail to eject its temporary image
+with `Resource busy` on a hosted macOS runner. Those errors and Apple's
+`A timestamp was expected but was not found.` signing error receive at most two
+retries with 5-second and 15-second delays. Before retrying, detach any mounted
+target-local `rw.*.dmg` scratch images by their inventory-confirmed device, then
+remove them. The complete Tauri build is retried; notarization and finished-DMG
+verification remain required. Compilation, other signing failures, permissions,
+and all unrecognized bundling failures remain single-attempt failures.
+The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounded
+retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
+They run on every host; actual `hdiutil`/`plutil` execution and finished-package
+verification require the native macOS release jobs.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
