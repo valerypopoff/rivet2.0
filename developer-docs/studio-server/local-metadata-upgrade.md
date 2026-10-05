@@ -362,11 +362,58 @@ Verification includes local backend/settings/artifact/snapshot, transition and o
 
 `yarn studio-server:verify:local-upgrade-images` is the real packaged UI/API rehearsal. Supply all three exact `RIVET_REHEARSAL_API_IMAGE`, `RIVET_REHEARSAL_WEB_IMAGE`, `RIVET_REHEARSAL_PROXY_IMAGE` references, or `IMAGE_NAMESPACE` plus an immutable `SOURCE_TAG`; there is no `latest` fallback. It creates a uniquely named disposable Compose project and Linux volumes, exposes only its gateway on loopback, blocks API/executor egress, provisions independent control storage, and invokes headless `local-storage-upgrade-live.spec.ts` without API mocks. It exercises copy, paused activation, whole-backend restart, online return to legacy, corrupted selected startup/key-free offline recovery, and final SQLite resumption/serving. Only owned disposable volumes are removed. Non-secret results/container diagnostics and browser artifacts are retained under `artifacts/local-upgrade/` and `artifacts/playwright/`; generated fixture credentials are removed. Image CI runs it against the candidate image tag before promotion.
 
+The migration fixture creates a retained empty workflow folder in its owned volume
+**before the first supervisor start**. Starting all four roots empty would instead
+correctly initialize a new SQLite installation; subsequently provisioning a different
+manual control root would violate its retained UI binding. The rehearsal clears
+inherited upgrade/root/key configuration, asserts legacy authority before API
+seeding and after manual provisioning, and checks that the seeded project exists
+as a real source file without a fresh-install UI record. Do not disable automatic
+first-start initialization or weaken the root-binding guard to make this test pass.
+Fresh-install behavior has separate supervisor/UI-preparation regression coverage.
+
+Compose always receives an owned, empty `rehearsal.env`, not the repository's
+`.env`. Caller `RIVET_*`, `OPENAI_*` and `PINECONE_*` configuration is removed from
+its command environment before applying explicit fixture values; Docker/PATH
+configuration is preserved. This prevents local credentials, auth/timeout flags
+and malformed dotenv contents from contaminating the gate. The same empty file
+is used by the browser runner. Never populate it with operator configuration.
+
+On 2026-10-05, the hardened working-tree rehearsal passed all fourteen phases and
+owned cleanup against the exact `a939cd8b252e52f7a339403760b8d90f27710dd5` candidate
+images from failed staging run `37309266681`, despite deliberately conflicting
+synthetic caller root, auth and tmpfs settings and a synthetic provider key. Its receipt is
+`artifacts/local-upgrade/rivet-local-upgrade-rehearsal-3bd8aee8-2e3e-41ae-b7eb-1993b70e862a-7doyFb/result.json`.
+This is local packaged-image evidence, not a successful GitHub rerun, native
+Linux-host orchestration qualification or certification of production data.
+
+Failure receipts include a fixed orchestration `stage` (startup, legacy seeding,
+provisioning or browser rehearsal). If the API has exited, its failed diagnostic
+`exec` is retained in the protected container log but is not printed as the apparent
+cause. Inspect that log for the startup error; browser phases marked `not-run` do
+not imply a browser or conversion failure. The Linux-host restored-copy fixture
+already seeds legacy files before boot and does not use the empty-start sequence.
+The serving recheck and container-log command each have a fifteen-second command
+budget (plus the process runner's force-stop grace), and failures are collected
+independently. A dead/stalled API must not suppress container startup logs. Failed
+diagnostic commands use fixed fallback messages, never raw exception contents.
+The fixture login request also has a thirty-second deadline.
+
 Image CI installs Chromium and its Linux dependencies explicitly before running the browser gate. The gate also invokes the packaged read-only capacity command before starting conversion. The UI regression suite separately keeps the editor permanently unready and checks that Settings recovery controls remain accessible without forced clicks.
 
 The packaged rehearsal builds the host checkout's Core workspace before launching Playwright: its live browser spec imports Core serialization helpers, while a fresh image CI checkout has only installed dependencies and no `packages/core/dist` output. Container startup and fixture seeding alone are not browser-gate success. If Playwright reports zero collected tests, inspect its report's top-level errors before interpreting conversion state.
 The live browser rehearsal follows the same guided entry as an operator: on a legacy backend it opens the upgrade from the page-load reminder, while later phases can open the Settings tab directly. A reminder overlay blocking the Settings button is expected behavior, not a reason to force a click through it.
-After SQLite writes resume, the one-click Return to legacy control is absent (not merely disabled); the live rehearsal checks this rollback boundary before testing new writes.
+After SQLite writes resume, the upgrade tab and page-load reminder are absent. The
+live rehearsal checks the completed setup response and hidden navigation after
+reload, and sends a current-revision rollback request to verify that the server
+refuses it without changing authority, transition or maintenance before testing
+new writes. It must not try to reopen the retired wizard merely to inspect its
+rollback button.
+That HTTP attempt is made without maintenance and therefore checks rejection of
+an unpaused authority change, not the journal's rollback closure on its own.
+`local-metadata-transition.test.ts` separately resumes writes, reopens the durable
+journal and verifies that even a matching fresh proof cannot return to legacy;
+it also checks interrupted resumption keeps that boundary closed.
 
 Rehearsal-only SQLite probes (web-app binding, selected integrity, transition controls and failure diagnostics) open databases read-only and set a five-second SQLite busy timeout. These probes run alongside live API writers: the default zero wait can misreport a brief writer lock as a migration failure. The wait applies to lock contention only; persistent locks, corrupt databases, invalid selected identities and absent bindings still fail the gate. There is no blanket command retry or change to migration deadlines. `node --test deploy/studio-server/scripts/local-upgrade-rehearsal-safety.test.mjs` exercises real competing SQLite connections in separate processes for both journal/catalog locks, persistent-lock refusal and ESM/CommonJS read-only enforcement.
 

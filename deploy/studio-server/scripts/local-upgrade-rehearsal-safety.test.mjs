@@ -22,10 +22,72 @@ import {
   webAppBindingProbeScript,
   waitForRehearsalCondition,
   readRehearsalSourceFingerprint,
+  assertLegacyRehearsalSource,
+  rehearsalComposeInvocation,
+  collectRehearsalDiagnostics,
 } from './local-upgrade-image-rehearsal.mjs';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
+
+test('Compose fixture excludes ambient app settings and provider credentials, and never loads repository dotenv', () => {
+  const config = { project: 'owned', composeFile: path.resolve('owned/compose.json'), env: { RIVET_KEY: 'fixture' } };
+  const ambient = {
+    PATH: 'tools',
+    DOCKER_CONTEXT: 'desktop-linux',
+    RIVET_KEY: 'operator-key',
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: '/operator/root',
+    RIVET_API_TMPFS_SIZE: 'invalid',
+    RIVET_SERVER_UI_AUTH_MODE: 'none',
+    OPENAI_API_KEY: 'operator-secret',
+    PINECONE_API_KEY: 'operator-secret',
+  };
+  const invocation = rehearsalComposeInvocation(config, ['config', '--format', 'json'], ambient);
+  assert.deepEqual(invocation.env, { PATH: 'tools', DOCKER_CONTEXT: 'desktop-linux', RIVET_KEY: 'fixture' });
+  assert.equal(invocation.args[invocation.args.indexOf('--env-file') + 1], path.resolve('owned/rehearsal.env'));
+  assert.deepEqual(invocation.args.slice(-3), ['config', '--format', 'json']);
+  assert.equal(ambient.RIVET_KEY, 'operator-key', 'Caller environment must remain unchanged.');
+  assert.throws(() => rehearsalComposeInvocation({ ...config, env: { DOCKER_HOST: 'foreign' } }, []));
+});
+
+test('diagnostic probe failure still collects logs and neither fallback exposes exception contents', async () => {
+  for (const failProbe of [false, true])
+    for (const failLogs of [false, true]) {
+      const calls = [];
+      const result = await collectRehearsalDiagnostics(
+        async () => {
+          calls.push('probe');
+          if (failProbe) throw new Error('operator-secret');
+          return { code: 0, output: 'safe-probe' };
+        },
+        async () => {
+          calls.push('logs');
+          if (failLogs) throw new Error('operator-secret');
+          return { output: 'container-log' };
+        },
+      );
+      assert.deepEqual(calls, ['probe', 'logs']);
+      assert.equal(result.diagnostic.code, failProbe ? 1 : 0);
+      assert.ok(result.output.includes(failProbe ? 'recheck unavailable' : 'safe-probe'));
+      assert.ok(result.output.includes(failLogs ? 'logs unavailable' : 'container-log'));
+      assert.ok(!result.output.includes('operator-secret'));
+    }
+});
+
+test('migration rehearsal refuses fresh SQLite or a previously copied generation before seeding', () => {
+  assertLegacyRehearsalSource({ available: false, runningBackend: 'file', transition: null });
+  assertLegacyRehearsalSource({ runningBackend: 'legacy', transition: null });
+  assertLegacyRehearsalSource({ runningBackend: 'legacy', transition: { generationId: null } });
+  for (const status of [
+    undefined,
+    {},
+    { runningBackend: 'sqlite' },
+    { available: false, runningBackend: 'sqlite' },
+    { available: true, runningBackend: 'file' },
+    { runningBackend: 'legacy', transition: { generationId: 'already-copied' } },
+  ])
+    assert.throws(() => assertLegacyRehearsalSource(status));
+});
 
 // test-style: fixture-read: Compare only test-generated SQLite database bytes before and after the read-only probe; never read production source text.
 

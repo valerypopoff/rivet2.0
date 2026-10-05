@@ -129,7 +129,7 @@ test('production images support real UI conversion, online/offline rollback and 
   };
 
   // Real UI -> API online rollback while both processes remain paused.
-  let panel = await copy();
+  const panel = await copy();
   await panel.getByRole('button', { name: 'Return to legacy while paused' }).click();
   await expect(panel.getByText('Legacy runtime validation passed.', { exact: false })).toBeVisible({
     timeout: 120_000,
@@ -148,9 +148,30 @@ test('production images support real UI conversion, online/offline rollback and 
   // Final conversion serves only the SQLite authority, including after writes.
   await copy();
   await resume('sqlite');
-  panel = await open();
-  await expect(panel.getByText('Running backend: sqlite.', { exact: false })).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
+  const completed = await (await page.request.get('/api/app-settings/local-upgrade')).json();
+  expect(completed.runningBackend).toBe('sqlite');
+  expect(completed.transition.canReturnToLegacy).toBe(false);
+  const rollback = await page.request.post('/api/app-settings/local-upgrade/action', {
+    data: { action: 'return-to-legacy', revision: completed.transition.revision },
+  });
+  expect(rollback.ok()).toBe(false);
+  const afterRollback = await (await page.request.get('/api/app-settings/local-upgrade')).json();
+  expect(afterRollback.transition).toEqual(completed.transition);
+  expect(afterRollback.runningBackend).toBe('sqlite');
+  expect(afterRollback.maintenance).toBeNull();
+  // Completion retires the wizard rather than leaving a read-only settings tab.
+  await page.goto('/');
+  await waitForDashboardReady(page);
+  const setupResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/api/app-settings/local-upgrade/setup',
+  );
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  expect((await (await setupResponse).json()).liveSqlite).toBe(true);
+  await expect(page.getByTestId('app-settings-modal')).toBeVisible();
+  await expect(
+    page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
   await evidence('conversion');
   // Exercise the actual embedded-editor save bridge before using its API to
   // make deterministic content changes. No mock or direct catalog write.
