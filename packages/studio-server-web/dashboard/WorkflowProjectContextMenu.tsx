@@ -21,6 +21,7 @@ type WorkflowProjectContextMenuProps = {
   onClose: () => void;
   onRename: () => void;
   onDownload: () => void;
+  onDownloadBundle: () => void;
   onDuplicate: () => void;
   canCompare: boolean;
   onCompare: () => void;
@@ -55,6 +56,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onClose,
   onRename,
   onDownload,
+  onDownloadBundle,
   onDuplicate,
   canCompare,
   onCompare,
@@ -72,10 +74,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
     },
     placement: 'bottom-start',
     strategy: 'fixed',
-    middleware: [
-      offset(6),
-      shift({ padding: 8 }),
-    ],
+    middleware: [offset(6), shift({ padding: 8 })],
   });
 
   const dismiss = useDismiss(context);
@@ -103,21 +102,11 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       aria-label={`Actions for ${project.name}`}
       {...getFloatingProps()}
     >
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onRename}
-      >
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename project</span>
       </button>
       {canCompare ? (
-        <button
-          type="button"
-          className="workflow-project-context-menu-item"
-          role="menuitem"
-          onClick={onCompare}
-        >
+        <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCompare}>
           <span>Compare opened project with this one</span>
         </button>
       ) : null}
@@ -132,21 +121,15 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
         </button>
       ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onDownload}
-      >
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownload}>
         <ArrowDownIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Download</span>
       </button>
-      <button
-        type="button"
-        className="workflow-project-context-menu-item"
-        role="menuitem"
-        onClick={onDuplicate}
-      >
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownloadBundle}>
+        <ArrowDownIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>Download with dependencies</span>
+      </button>
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDuplicate}>
         <span className="workflow-project-context-menu-item-icon" aria-hidden="true">
           <CopyIcon label="" size="small" />
         </span>

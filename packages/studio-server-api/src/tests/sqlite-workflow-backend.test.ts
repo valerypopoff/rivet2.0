@@ -12,6 +12,7 @@ import { ImmutableLocalArtifactStore } from '../local-metadata/immutable-artifac
 import { verifySqliteWorkflowServing } from '../local-metadata/verify-serving-candidate.js';
 import type { WorkflowProjectItem } from '../../../studio-server-shared/workflow-types.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
+import { collectProjectBundle, type BundleSnapshot } from '../routes/workflows/project-bundle.js';
 
 async function fixture(
   run: (
@@ -912,6 +913,28 @@ test('SQLite cross-project loads choose the requested version by stable identity
       .loadProject(undefined, { id: item.projectMetadataId!, hintPaths: ['../../wrong.rivet-project'] });
     assert.equal(reference.metadata.id, item.projectMetadataId);
     assert.notEqual(reference.metadata.description, 'latest');
+
+    const snapshot = async (): Promise<BundleSnapshot> =>
+      ({
+        ...(await backend.loadSubgraphTarget({
+          projectId: item.projectMetadataId! as typeof project.metadata.id,
+          version: 'published',
+        })),
+        selectedVersion: 'published',
+      }) as BundleSnapshot;
+    const files = new Map<string, string>();
+    const bundle = await collectProjectBundle({
+      source: { root: snapshot, target: snapshot, reference: snapshot },
+      rootVersion: 'published',
+      signal: new AbortController().signal,
+      writeFile: async (name, content) => {
+        files.set(name, content);
+      },
+      progress() {},
+    });
+    assert.equal(files.get(bundle.manifest.artifacts[0]!.project.path), published.projectContents);
+    assert.notEqual(files.get(bundle.manifest.artifacts[0]!.project.path), latest.projectContents);
+    await bundle.verify();
 
     const target = { projectId: item.projectMetadataId!, version: 'published' } as Parameters<
       typeof backend.loadSubgraphTarget

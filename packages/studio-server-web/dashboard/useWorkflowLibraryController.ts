@@ -274,6 +274,15 @@ export function useWorkflowLibraryController(options: {
     refresh,
     uploadingFolderPath,
   });
+  const [bundleProject, setBundleProject] = useState<WorkflowProjectItem | null>(null);
+  const [bundleOpen, setBundleOpen] = useState(false);
+  const handleDownloadBundle = () => {
+    const project = projectContextMenuState?.project;
+    if (!project) return;
+    closeProjectContextMenu();
+    setBundleProject(project);
+    setBundleOpen(true);
+  };
   const {
     canCompareOpenedProjectToPublishedVersion,
     canCompareWithProject,
@@ -293,7 +302,8 @@ export function useWorkflowLibraryController(options: {
   } = versionActions;
 
   const projectTreeOverlayOpen = Boolean(
-    appSettingsOpen ||
+    bundleOpen ||
+      appSettingsOpen ||
       folderContextMenuState ||
       projectContextMenuState ||
       projectModalProject ||
@@ -651,6 +661,10 @@ export function useWorkflowLibraryController(options: {
   );
 
   return {
+    bundleProject,
+    bundleOpen,
+    handleDownloadBundle,
+    closeBundleModal: () => setBundleOpen(false),
     folders,
     rootProjects,
     folderIds,

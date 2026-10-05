@@ -12,6 +12,7 @@ export default defineConfig({
   testMatch: [
     'fullscreen-output-search-paging.spec.ts',
     'hosted-dashboard-contracts.spec.ts',
+    'project-bundle.spec.ts',
     'sidebar-name-wrapping.spec.ts',
     'streaming-nodes.spec.ts',
     'project-tree-activation.spec.ts',

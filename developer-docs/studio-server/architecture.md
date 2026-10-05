@@ -1,5 +1,17 @@
 # Architecture
 
+## Portable saved-project exports
+
+**Download with dependencies** connects API-owned snapshot collection and streaming
+ZIP jobs to Core-owned manifest validation and the public Node `loadProjectBundle`
+loader. Explicit project/version bindings preserve matching datasets and Subgraph
+wire contracts; local execution never guesses server paths. Legacy aliases obtain
+their artifact-owned datasets through the additive reference-loader hook, not the
+caller's provider. Raw payloads are released after staging and ZIP packaging streams
+the staged files. See
+[Portable project bundles](project-bundles.md) for ownership, limits, lifecycle,
+security, release requirements and regression commands.
+
 ## Development frontend modes
 
 Ordinary dev uses Vite HMR. The optional `studio-server:dev:tunnel` launcher uses

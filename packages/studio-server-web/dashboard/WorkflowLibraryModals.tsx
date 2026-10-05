@@ -6,6 +6,7 @@ import { PublishedItemsModal } from './PublishedItemsModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowPublishedVersionHistoryModal } from './WorkflowPublishedVersionHistoryModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
+import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -69,8 +70,17 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleProject ? (
+        <WorkflowProjectBundleModal
+          key={controller.bundleProject.id}
+          project={controller.bundleProject}
+          isOpen={controller.bundleOpen}
+          onClose={controller.closeBundleModal}
+        />
+      ) : null}
       <LocalStorageUpgradePrompt
         suppressed={
+          controller.bundleOpen ||
           appSettingsOpen ||
           settingsModalOpen ||
           runRecordingsOpen ||

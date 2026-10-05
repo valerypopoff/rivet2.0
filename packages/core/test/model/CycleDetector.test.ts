@@ -4,15 +4,16 @@ import { findStronglyConnectedComponents } from '../../src/model/CycleDetector';
 
 describe('CycleDetector', () => {
   it('finds strongly connected components in a mixed graph', () => {
-    const nodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] as any[];
-    const adjacency = new Map<any, any[]>([
-      [nodes[0], [nodes[1]]],
-      [nodes[1], [nodes[0], nodes[2]]],
-      [nodes[2], []],
-      [nodes[3], [nodes[3]]],
+    const [a, b, c, d] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] as const;
+    const nodes = [a, b, c, d];
+    const adjacency = new Map<(typeof nodes)[number], (typeof nodes)[number][]>([
+      [a, [b]],
+      [b, [a, c]],
+      [c, []],
+      [d, [d]],
     ]);
 
-    const components = findStronglyConnectedComponents(nodes as any, (node) => adjacency.get(node) ?? []).map((component) =>
+    const components = findStronglyConnectedComponents(nodes, (node) => adjacency.get(node) ?? []).map((component) =>
       component.map((node) => node.id).sort(),
     );
 

@@ -15590,6 +15590,16 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@types/yazl", [\
+      ["npm:3.3.1", {\
+        "packageLocation": "./.yarn/cache/@types-yazl-npm-3.3.1-f2535fb0ad-86e3ca32ea.zip/node_modules/@types/yazl/",\
+        "packageDependencies": [\
+          ["@types/node", "npm:20.8.10"],\
+          ["@types/yazl", "npm:3.3.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@typescript-eslint/eslint-plugin", [\
       ["npm:5.62.0", {\
         "packageLocation": "./.yarn/cache/@typescript-eslint-eslint-plugin-npm-5.62.0-c48b9a5492-9cc8319c6f.zip/node_modules/@typescript-eslint/eslint-plugin/",\
@@ -16563,6 +16573,7 @@ const RAW_RUNTIME_STATE =
           ["@types/node", "npm:20.19.43"],\
           ["@types/pg", "npm:8.23.1"],\
           ["@types/ws", "npm:8.18.1"],\
+          ["@types/yazl", "npm:3.3.1"],\
           ["@valerypopoff/rivet-studio-server-api", "workspace:packages/studio-server-api"],\
           ["@valerypopoff/rivet-studio-server-shared", "workspace:packages/studio-server-shared"],\
           ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
@@ -16580,6 +16591,7 @@ const RAW_RUNTIME_STATE =
           ["tsx", "npm:4.23.0"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
           ["ws", "virtual:3fb85cabf578e555681617dde86c6d3e8bb09b034041a2715ad0b7191a8b57cd858a88db356af310ff8b15df244adc8d7c82e129e7e52aecfe0b1e06697972bb#npm:8.21.0"],\
+          ["yazl", "npm:3.3.1"],\
           ["zod", "npm:4.4.3"]\
         ],\
         "linkType": "SOFT"\
@@ -16675,6 +16687,7 @@ const RAW_RUNTIME_STATE =
           ["@valerypopoff/rivet-studio-server-web", "workspace:packages/studio-server-web"],\
           ["@valerypopoff/rivet2-core", "workspace:packages/core"],\
           ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
+          ["@valerypopoff/rivet2-node", "workspace:packages/node"],\
           ["@vitejs/plugin-react", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:4.7.0"],\
           ["acorn", "npm:8.14.0"],\
           ["ahooks", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:3.9.7"],\
@@ -18718,6 +18731,15 @@ const RAW_RUNTIME_STATE =
           ["base64-js", "npm:1.5.1"],\
           ["buffer", "npm:5.7.1"],\
           ["ieee754", "npm:1.2.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["buffer-crc32", [\
+      ["npm:1.0.0", {\
+        "packageLocation": "./.yarn/cache/buffer-crc32-npm-1.0.0-3a0d1f8f40-ef3b7c0762.zip/node_modules/buffer-crc32/",\
+        "packageDependencies": [\
+          ["buffer-crc32", "npm:1.0.0"]\
         ],\
         "linkType": "HARD"\
       }]\
@@ -36726,6 +36748,16 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./.yarn/cache/yargs-parser-npm-22.0.0-47d50889f2-f13c42bad6.zip/node_modules/yargs-parser/",\
         "packageDependencies": [\
           ["yargs-parser", "npm:22.0.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["yazl", [\
+      ["npm:3.3.1", {\
+        "packageLocation": "./.yarn/cache/yazl-npm-3.3.1-2e7f415791-021e6c553e.zip/node_modules/yazl/",\
+        "packageDependencies": [\
+          ["buffer-crc32", "npm:1.0.0"],\
+          ["yazl", "npm:3.3.1"]\
         ],\
         "linkType": "HARD"\
       }]\

@@ -49,6 +49,30 @@ You can press **Ctrl+Shift+S** or **Cmd+Shift+S** (or choose **Save Project As**
 
 In Studio Server, Save writes through the server rather than asking for a local file destination. The tab's dirty dot tracks unsaved project changes. A failed server save leaves the project dirty; edits made while a save is pending remain unsaved after that earlier save completes. Browser recovery is separate from Save and does not publish an endpoint or save a new server version.
 
+## Downloading a Studio Server project for local execution
+
+Right-click a project in the server's project tree and choose **Download with
+dependencies**. If it has unpublished changes, choose **Published** or **Saved
+latest**, then **Prepare bundle**. Progress continues if you close the dialog;
+reopen the same action to download the ready ZIP. After fixing a reported issue,
+use **Retry export** to replace a failed or interrupted export with a fresh attempt.
+Ready exports offer **Prepare another bundle** if you want a different root version.
+Ready bundles are retained for 24 hours. If a browser download is interrupted,
+resume it using the browser's download controls while the export remains available;
+after it expires, prepare a new bundle.
+
+The ZIP includes recursively called projects and their datasets, including distinct
+Published and Saved latest versions of the same dependency. Unsaved editor edits
+are excluded. Extract the whole ZIP and use
+[`loadProjectBundle`](../api-reference/node/loadProjectBundle) to run it with the
+Node package. Simply placing individual project files next to each other does not
+provide the required version mapping.
+
+Configure API credentials, external plugins, services, Code-node npm dependencies
+and local file paths separately. Project/dataset content may contain sensitive
+values; inspect the bundle before sharing it. Ordinary **Download** still downloads
+only one `.rivet-project` file.
+
 ## Opening a Project
 
 To open a project, choose **Open Project** in the top-bar **Menu** dropdown or press **Ctrl+O**/**Cmd+O**. This will open a file dialog where you can choose a project to open. The project will be loaded into Rivet as the current project.

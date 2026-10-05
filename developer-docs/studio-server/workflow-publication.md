@@ -550,6 +550,12 @@ What upload does **not** copy:
 
 ## Project downloading
 
+The separate **Download with dependencies** project-row action prepares a ZIP with
+recursive saved project/version snapshots, matching datasets and a portable manifest.
+It does not alter the ordinary single-file behavior below. See
+[Portable project bundles](project-bundles.md) for the async API, resumable downloads,
+local Node execution, limits and sensitive-data considerations.
+
 Projects can now also be downloaded from the workflow tree's project-row context menu or through:
 
 - `POST /api/workflows/projects/download`

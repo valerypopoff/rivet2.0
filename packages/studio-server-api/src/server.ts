@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { settleBeforeDeadline } from './shutdown-deadline.js';
+import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
@@ -175,6 +176,9 @@ async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void>
     console.error('[latest-debugger] Failed to dispose during shutdown:', error);
   });
 
+  await projectBundleJobs.dispose().catch((error) => {
+    console.error('[project-bundles] Failed to dispose exports during shutdown:', error);
+  });
   await disposeWorkflowStorage().catch((error) => {
     console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
   });
