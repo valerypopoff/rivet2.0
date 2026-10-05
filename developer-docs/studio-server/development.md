@@ -488,6 +488,20 @@ not point at VM/dev mounts. See the owning runbook for image environment names
 and the remaining actual-VM-data rehearsal. `local-metadata-control --capacity`
 provides a read-only resource preflight for that later rehearsal.
 
+Packaged-rehearsal SQLite probes use read-only connections with a bounded
+five-second lock wait, rather than SQLite's default immediate failure beside
+live API writes. Persistent locks and identity/integrity failures still block
+qualification. Run `node --test deploy/studio-server/scripts/local-upgrade-rehearsal-safety.test.mjs`
+for real journal/catalog contention and read-only regressions; this supplements,
+not replaces, the complete packaged browser gate.
+
+The image gate also bounds individual readiness/status reads across Compose
+configuration and execution, rejects success after the polling deadline, and
+does not retry ownership failures. Source-integrity receipts must contain valid
+SHA-256 fingerprints before comparison; web-app policy evidence must identify
+one complete binding rather than silently choosing among duplicates. The same
+safety suite covers stalled/late probes and malformed or ambiguous evidence.
+
 Local conversion and the legacy VM-to-managed importer cannot operate together.
 The latter is blocked while local transition control is enabled, rather than
 silently exporting retained stale files after SQLite cutover.

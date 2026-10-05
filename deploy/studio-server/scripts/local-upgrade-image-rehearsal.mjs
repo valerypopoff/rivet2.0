@@ -16,7 +16,7 @@ import {
   assertRehearsalPhases,
   readRehearsalPhases,
 } from './local-upgrade-rehearsal-safety.mjs';
-import { restoredReadinessProbeScript } from './local-upgrade-restored-rehearsal.mjs';
+import { assertRestoredSourceFingerprint, restoredReadinessProbeScript } from './local-upgrade-restored-rehearsal.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const cli = '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/';
@@ -138,7 +138,7 @@ export async function loadLocalUpgradeRehearsal(file) {
   for (const name of REHEARSAL_TOOLS) await assertRealPath(path.join(path.dirname(resolved), 'fixture-tools', name));
   return config;
 }
-function rawCompose(config, args, allowFailure = false) {
+function rawCompose(config, args, allowFailure = false, timeoutMs = 20 * 60_000) {
   return run(
     'docker',
     [
@@ -153,21 +153,97 @@ function rawCompose(config, args, allowFailure = false) {
     ],
     { ...process.env, ...config.env },
     allowFailure,
+    timeoutMs,
   );
 }
-async function compose(config, args, allowFailure = false) {
-  const rendered = await rawCompose(config, ['config', '--format', 'json']);
+async function compose(config, args, allowFailure = false, timeoutMs = 20 * 60_000) {
+  const deadline = performance.now() + timeoutMs;
+  const rendered = await rawCompose(config, ['config', '--format', 'json'], false, Math.min(15_000, timeoutMs));
   assertOwnedRehearsalCompose(config, JSON.parse(rendered.output));
-  return rawCompose(config, args, allowFailure);
+  const remaining = Math.floor(deadline - performance.now());
+  assert.ok(remaining > 0, 'Isolated Compose safety check exceeded its command deadline.');
+  return rawCompose(config, args, allowFailure, remaining);
 }
-async function waitReady(config) {
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    const result = await compose(config, ['exec', '-T', 'api', 'node', '-e', restoredReadinessProbeScript()], true);
-    if (result.code === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+// Probes must enforce the supplied budget at their IO boundary. Do not race a
+// timer against a still-running command, or accept success after the deadline.
+export async function waitForRehearsalCondition(probe, timeoutMs, failureMessage) {
+  assert.ok(Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 120_000);
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining <= 0) break;
+    const passed = await probe(Math.min(15_000, remaining));
+    if (performance.now() >= deadline) break;
+    if (passed === true) return;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, deadline - performance.now())));
   }
-  throw new Error('Isolated combined backend did not become ready.');
+  throw new Error(failureMessage);
+}
+
+async function waitReady(config) {
+  await waitForRehearsalCondition(
+    async (budget) => {
+      const result = await compose(
+        config,
+        ['exec', '-T', 'api', 'node', '-e', restoredReadinessProbeScript()],
+        true,
+        budget,
+      );
+      return result.code === 0;
+    },
+    120_000,
+    'Isolated combined backend did not become ready.',
+  );
+}
+
+export function readRehearsalSourceFingerprint(output) {
+  const lines = output
+    .trim()
+    .split('\n')
+    .filter((line) => line.startsWith('{'));
+  assert.equal(lines.length, 1, 'Missing or ambiguous fixture fingerprint evidence.');
+  const fingerprint = JSON.parse(lines[0]).sourceFingerprint;
+  assert.match(fingerprint, /^[a-f0-9]{64}$/, 'Invalid fixture source fingerprint.');
+  return fingerprint;
+}
+
+// Read-only probes run beside live API writers. SQLite's default zero wait
+// turns a brief writer lock into a false qualification failure. Use the same
+// bounded wait as storage owners, without retrying integrity or identity errors.
+export function readOnlyRehearsalSqliteScript(body, { module = true, busyTimeoutMs = 5000 } = {}) {
+  assert.ok(Number.isInteger(busyTimeoutMs) && busyTimeoutMs > 0 && busyTimeoutMs <= 5000);
+  return `
+    const {DatabaseSync}=${module ? "await import('node:sqlite')" : "require('node:sqlite')"};
+    function openReadOnly(file) {
+      const db=new DatabaseSync(file,{readOnly:true});
+      try { db.exec('PRAGMA busy_timeout = ${busyTimeoutMs}'); return db; }
+      catch(error) { db.close(); throw error; }
+    }
+    ${body}
+  `;
+}
+
+export function webAppBindingProbeScript(controlRoot = '/data/local-metadata', busyTimeoutMs = 5000) {
+  assert.ok(path.isAbsolute(controlRoot));
+  return readOnlyRehearsalSqliteScript(
+    `
+    const root=${JSON.stringify(controlRoot)};
+    const journal=openReadOnly(root+'/transition.sqlite');
+    let state;
+    try { state=journal.prepare('SELECT phase,generation_id FROM transition_state WHERE singleton=1').get(); }
+    finally { journal.close(); }
+    if(state?.phase!=='sqlite-live'||typeof state.generation_id!=='string'||!/^[a-zA-Z0-9_-]+$/.test(state.generation_id))throw Error('Not selected fixture');
+    const db=openReadOnly(root+'/generations/'+state.generation_id+'/catalog.sqlite');
+    try {
+      const matches=db.prepare('SELECT metadata_json FROM web_apps').all().map(row=>JSON.parse(row.metadata_json)).filter(app=>app?.uiGraphId==='release-gate-web-app');
+      if(matches.length!==1)throw Error('Fixture binding absent or ambiguous');
+      const app=matches[0];
+      if(typeof app.appId!=='string'||!app.appId||typeof app.slug!=='string'||!app.slug||!Array.isArray(app.allowedEmails)||app.allowedEmails.some(email=>typeof email!=='string'))throw Error('Invalid fixture binding');
+      console.log(JSON.stringify({appId:app.appId,slug:app.slug,allowedEmails:app.allowedEmails}));
+    } finally { db.close(); }
+  `,
+    { busyTimeoutMs },
+  );
 }
 
 /** Controls are local test operations on an explicitly created disposable
@@ -182,15 +258,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       'node',
       '--input-type=module',
       '-e',
-      `
-      const {DatabaseSync}=await import('node:sqlite');
-      const journal=new DatabaseSync('/data/local-metadata/transition.sqlite',{readOnly:true});
-      const state=journal.prepare('SELECT phase,generation_id FROM transition_state WHERE singleton=1').get();journal.close();
-      if(state.phase!=='sqlite-live'||!/^[a-zA-Z0-9_-]+$/.test(state.generation_id))throw Error('Not selected fixture');
-      const db=new DatabaseSync('/data/local-metadata/generations/'+state.generation_id+'/catalog.sqlite',{readOnly:true});
-      try{const app=db.prepare('SELECT metadata_json FROM web_apps').all().map(row=>JSON.parse(row.metadata_json)).find(app=>app.uiGraphId==='release-gate-web-app');
-      if(!app)throw Error('Fixture binding absent');console.log(JSON.stringify({appId:app.appId,slug:app.slug,allowedEmails:app.allowedEmails}));}finally{db.close();}
-    `,
+      webAppBindingProbeScript(),
     ]);
     return result.output
       .trim()
@@ -323,20 +391,19 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       'node',
       '--input-type=module',
       '-e',
-      `
-      const {DatabaseSync}=await import('node:sqlite');
+      readOnlyRehearsalSqliteScript(`
       const {ImmutableLocalArtifactStore}=await import('/app/packages/studio-server-api/dist/studio-server-api/src/local-metadata/immutable-artifact-store.js');
-      const db=new DatabaseSync('/data/local-metadata/transition.sqlite',{readOnly:true});
+      const db=openReadOnly('/data/local-metadata/transition.sqlite');
       const state=db.prepare('SELECT phase,generation_id FROM transition_state WHERE singleton=1').get();db.close();
       if(state.phase!=='sqlite-live'||!/^[a-f0-9-]{36}$/.test(state.generation_id))throw Error('Not selected writable fixture');
       const root='/data/local-metadata/generations/'+state.generation_id;
       for(const file of ['catalog.sqlite','settings.sqlite','operational/evaluation-runs.sqlite','operational/llm-profile-health.sqlite']){
-        const current=new DatabaseSync(root+'/'+file,{readOnly:true});
+        const current=openReadOnly(root+'/'+file);
         try{
           if(current.prepare('PRAGMA integrity_check').all().some(row=>row.integrity_check!=='ok')||current.prepare('PRAGMA foreign_key_check').get())throw Error('Selected database integrity failed');
         }finally{current.close();}
       }
-      const catalog=new DatabaseSync(root+'/catalog.sqlite',{readOnly:true});
+      const catalog=openReadOnly(root+'/catalog.sqlite');
       const objects=new ImmutableLocalArtifactStore(root+'/objects');
       async function check(value){
         if(!value||typeof value!=='object')return;
@@ -348,7 +415,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       try{for(const table of ['projects','published_versions','web_apps','recordings','runtime_library_state'])
         for(const row of catalog.prepare('SELECT metadata_json FROM '+table).iterate())await check(JSON.parse(row.metadata_json));
       }finally{catalog.close();}
-    `,
+    `),
     ]);
     return;
   }
@@ -375,13 +442,16 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       'node',
       'api',
       '-e',
-      `
-      const fs=require('node:fs'); const {DatabaseSync}=require('node:sqlite');
-      const db=new DatabaseSync('/data/local-metadata/transition.sqlite',{readOnly:true});
+      readOnlyRehearsalSqliteScript(
+        `
+      const fs=require('node:fs');
+      const db=openReadOnly('/data/local-metadata/transition.sqlite');
       const state=db.prepare('SELECT phase,generation_id FROM transition_state WHERE singleton=1').get();db.close();
       if(state.phase!=='sqlite-live'||!/^[a-f0-9-]{36}$/.test(state.generation_id))throw Error('Not writable selected fixture');
       fs.rmSync('/data/local-metadata/generations/'+state.generation_id+'/runtime-cache',{recursive:true,force:true});
     `,
+        { module: false },
+      ),
     ]);
     await compose(config, ['start', 'api']);
     await waitReady(config);
@@ -436,12 +506,7 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       cli + 'local-metadata-control.js',
       '--fingerprint',
     ]);
-    return JSON.parse(
-      result.output
-        .trim()
-        .split('\n')
-        .find((line) => line.startsWith('{')),
-    ).sourceFingerprint;
+    return readRehearsalSourceFingerprint(result.output);
   }
   if (action === 'corrupt-candidate') {
     await compose(config, ['stop', '-t', '10', 'api']);
@@ -453,33 +518,35 @@ export async function controlLocalUpgradeRehearsal(file, action) {
       'node',
       'api',
       '-e',
-      `
-      const fs=require('node:fs');const {DatabaseSync}=require('node:sqlite');
-      const db=new DatabaseSync('/data/local-metadata/transition.sqlite',{readOnly:true});
+      readOnlyRehearsalSqliteScript(
+        `
+      const fs=require('node:fs');
+      const db=openReadOnly('/data/local-metadata/transition.sqlite');
       const state=db.prepare('SELECT phase,generation_id FROM transition_state WHERE singleton=1').get();db.close();
       if(state.phase!=='sqlite-validation'||!state.generation_id)throw Error('Not paused SQLite');
       fs.writeFileSync('/data/local-metadata/generations/'+state.generation_id+'/settings.sqlite','corrupt-test-candidate');
     `,
+        { module: false },
+      ),
     ]);
     await compose(config, ['start', 'api']);
     // A failed startup, not merely an HTTP 503, must be observable.
-    const deadline = Date.now() + 25_000;
-    while (Date.now() < deadline) {
-      const result = await compose(config, ['ps', '--all', '--format', 'json', 'api']);
-      const parsed = JSON.parse(result.output.trim() || '[]');
-      const containers = Array.isArray(parsed) ? parsed : [parsed];
-      if (
-        containers.some(
+    await waitForRehearsalCondition(
+      async (budget) => {
+        const result = await compose(config, ['ps', '--all', '--format', 'json', 'api'], false, budget);
+        const parsed = JSON.parse(result.output.trim() || '[]');
+        const containers = Array.isArray(parsed) ? parsed : [parsed];
+        return containers.some(
           (container) =>
             container.Service === 'api' &&
             ['exited', 'restarting'].includes(container.State) &&
             Number(container.ExitCode) > 0,
-        )
-      )
-        return;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    throw new Error('Corrupt candidate did not fail selected startup.');
+        );
+      },
+      25_000,
+      'Corrupt candidate did not fail selected startup.',
+    );
+    return;
   }
   if (action === 'offline-return') {
     await compose(config, ['stop', '-t', '10', 'api']);
@@ -543,16 +610,9 @@ export async function controlLocalUpgradeRehearsal(file, action) {
         cli + 'local-metadata-control.js',
         '--fingerprint',
       ]);
-      results.push(
-        JSON.parse(
-          result.output
-            .trim()
-            .split('\n')
-            .find((line) => line.startsWith('{')),
-        ).sourceFingerprint,
-      );
+      results.push(readRehearsalSourceFingerprint(result.output));
     }
-    assert.equal(results[0], results[1]);
+    assertRestoredSourceFingerprint(results[0], results[1]);
     return;
   }
   throw new Error('Unknown isolated rehearsal control.');
@@ -929,10 +989,9 @@ async function main() {
         'node',
         '--input-type=module',
         '-e',
-        `
+        readOnlyRehearsalSqliteScript(`
       const base='/app/packages/studio-server-api/dist/studio-server-api/src/';
-      const {DatabaseSync}=await import('node:sqlite');
-      const db=new DatabaseSync('/data/local-metadata/upgrade.sqlite',{readOnly:true});
+      const db=openReadOnly('/data/local-metadata/upgrade.sqlite');
       const jobs=db.prepare('SELECT job_json FROM jobs').all().map(row=>JSON.parse(row.job_json));db.close();
       const job=jobs.sort((a,b)=>b.startedAt.localeCompare(a.startedAt))[0];
       if(job?.phase==='failed'&&job.stage==='serving-verification'){
@@ -945,7 +1004,7 @@ async function main() {
         }catch(error){
           console.log(/^SQLite serving verification failed: [a-z -]+\\.$/.test(error.message)?error.message:'Fixture serving recheck failed without a safe mismatch field.');
         }
-      }`,
+      }`),
       ],
       true,
     );
