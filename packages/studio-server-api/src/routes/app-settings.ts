@@ -277,7 +277,8 @@ appSettingsRouter.post(
         backupReference: z.string().trim().min(1).max(512),
         backupSourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
         backupRestored: z.literal(true),
-        encryptionKeyBackedUp: z.literal(true),
+        // Accepted for older clients, not required for plaintext local storage.
+        encryptionKeyBackedUp: z.boolean().optional(),
         retryJobId: z.string().optional(),
       })
       .strict()

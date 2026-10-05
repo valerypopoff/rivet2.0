@@ -42,6 +42,7 @@ export const defaultApiTestFiles = [
   'src/tests/local-bounded-copy.test.ts',
   'src/tests/local-browser-backup.test.ts',
   'src/tests/local-copy-capacity.test.ts',
+  'src/tests/local-first-run.test.ts',
   'src/tests/local-metadata-candidate.test.ts',
   'src/tests/local-metadata-recovery.test.ts',
   'src/tests/local-metadata-transition.test.ts',

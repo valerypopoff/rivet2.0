@@ -97,9 +97,10 @@ export function getLocalUpgradeSetupStatus() {
       process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL === '1' &&
       getServerUiAuthMode() !== 'none' &&
       getWorkflowStorageBackendMode() === 'filesystem',
-    upgradeEnabled: process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED === '1',
+    upgradeEnabled: true,
     controlRootConfigured: path.isAbsolute(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim() || ''),
-    encryptionKeyReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
+    // Compatibility with older dashboards; plaintext settings need no key.
+    encryptionKeyReady: true,
     sqliteSelected,
     liveSqlite,
     uiPreparationAvailable: !sqliteSelected && process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE === '1',
@@ -156,7 +157,6 @@ export async function restartLocalUpgradeFromUi(revision: number): Promise<void>
 }
 function assertAvailable(): void {
   if (
-    process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED !== '1' ||
     process.env.RIVET_LOCAL_METADATA_SUPERVISED !== '1' ||
     process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated' ||
     process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL !== '1' ||
@@ -206,6 +206,7 @@ export async function getLocalUpgradeStatus() {
       backup: null,
       backupStatusUnreadable: false,
       copyConfigurationReady: false,
+      settingsEncryptionRequired: false,
       runningBackend: getAppSettingsBackendKind(),
       maintenance: readVmMigrationMaintenance(),
       transition: null,
@@ -255,7 +256,8 @@ export async function getLocalUpgradeStatus() {
       operation,
       backup: backup?.phase === 'creating' && !backupRunning ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
-      copyConfigurationReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
+      copyConfigurationReady: true,
+      settingsEncryptionRequired: false,
       runningBackend: selection ? 'sqlite' : 'legacy',
       maintenance,
       transition: {
@@ -303,7 +305,7 @@ export async function inspectLocalUpgradeSource() {
       inventory: capacity.fits ? await inspectVmMigrationSource() : null,
       capacity,
       backupRequired:
-        'Back up all four source roots and the encryption key; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
+        'Back up all four source roots; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
     };
   });
 }
@@ -319,7 +321,7 @@ export type LocalUpgradeCopyInput = {
   backupReference: string;
   backupSourceFingerprint: string;
   backupRestored: boolean;
-  encryptionKeyBackedUp: boolean;
+  encryptionKeyBackedUp?: boolean;
   retryJobId?: string;
 };
 export async function startLocalUpgradeCopy(
@@ -331,20 +333,9 @@ export async function startLocalUpgradeCopy(
   return exclusive('copy', async () => {
     if (getLocalMetadataServingSelection()) throw new Error('A SQLite generation is already selected.');
     await assertDrained();
-    if (
-      !input.backupRestored ||
-      !input.encryptionKeyBackedUp ||
-      !input.backupReference.trim() ||
-      input.backupReference.length > 512
-    )
-      throw new Error('A restored backup and a separately backed-up encryption key must be certified.');
+    if (!input.backupRestored || !input.backupReference.trim() || input.backupReference.length > 512)
+      throw new Error('A restored backup must be certified.');
     const key = process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '';
-    if (key.length < 32)
-      throw createHttpError(
-        409,
-        'Configure RIVET_LOCAL_METADATA_ENCRYPTION_KEY with at least 32 securely generated characters, recreate the backend and back up the key separately before copying. No copy was started.',
-        { code: 'local-encryption-key-required' },
-      );
     const source = localMetadataSourceRoots();
     await assertLocalControlPaths(localMetadataControlRoot(), source);
     // Only cheap admission checks belong in the HTTP request. Full source
@@ -544,7 +535,6 @@ async function copyGeneration(
       source,
       backupReference: job.backupReference!,
       backupConfirmedAt: job.startedAt,
-      encryptionKeyId: hashLocalUpgradeValue(key),
       report,
       operational,
     };
@@ -665,8 +655,8 @@ export async function getLocalUpgradeReport() {
       reportHash: generation.reportHash,
       backupReference: certificate.backupReference,
       backupCertification: certificate.backupReference.startsWith('browser-backup:')
-        ? 'Server restored and verified the archive; operator attested saving the download outside the VM and protecting the encryption key separately. Not proof of an off-VM restore.'
-        : 'Operator attested a separately restored backup and encryption key; not an automated off-VM backup service.',
+        ? 'Server restored and verified the archive; operator attested saving the download outside the VM. Not proof of an off-VM restore.'
+        : 'Operator attested a separately restored backup; not an automated off-VM backup service.',
       report: certificate.report,
       operational: certificate.operational,
     };

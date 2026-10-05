@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,153 @@ import { fileURLToPath } from 'node:url';
 
 import { childEnvironments, startBackendSupervisor, runBackendSupervisor } from './backend-supervisor.mjs';
 import { acquireLocalMetadataOwnerLease } from './local-metadata-owner-lease.mjs';
+import { devBackendSupervisorOptions } from '../../scripts/dev-backend-supervisor.mjs';
+
+// test-style: fixture-read: reads only writer PID/configuration records generated in owned temporary fixtures.
+
+test('development first start and legacy preparation use the same current-source control command', () => {
+  const options = devBackendSupervisorOptions('/fixture-workspace', { NODE_OPTIONS: '--enable-source-maps' });
+  const control = [
+    process.execPath,
+    '--import',
+    '/fixture-workspace/node_modules/tsx/dist/loader.mjs',
+    '/fixture-workspace/packages/studio-server-api/src/scripts/local-metadata-control.ts',
+  ];
+  assert.deepEqual(options.localStorageInitializeCommand, [...control, '--initialize-empty']);
+  assert.deepEqual(options.localUpgradeProvisionCommand, [...control, '--provision']);
+  assert.equal(options.executorCwd, '/fixture-workspace');
+  assert.equal(
+    options.apiEnvOverrides.NODE_OPTIONS,
+    '--enable-source-maps --import=/fixture-workspace/packages/studio-server-bootstrap/bootstrap.mjs',
+  );
+  assert.deepEqual(options.executorEnvOverrides, {
+    NODE_OPTIONS: '',
+    RIVET_EXECUTOR_CHILD_NODE_OPTIONS: options.apiEnvOverrides.NODE_OPTIONS,
+  });
+});
+
+test('failed automatic first start never launches serving children and releases its owner lease', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rivet-first-start-fence-'));
+  const marker = join(root, 'child-started');
+  const env = {
+    ...process.env,
+    RIVET_DEPLOYMENT_TOPOLOGY: 'single-host',
+    RIVET_WORKFLOW_STORAGE_BACKEND: 'filesystem',
+    RIVET_DEPLOYMENT_STORAGE_MODE: '',
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
+    RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '',
+    RIVET_LOCAL_METADATA_UI_ROOT: join(root, 'control'),
+    RIVET_APP_DATA_ROOT: join(root, 'app-data'),
+    RIVET_WORKFLOWS_ROOT: join(root, 'workflows'),
+    RIVET_WORKFLOW_RECORDINGS_ROOT: join(root, 'recordings'),
+    RIVET_RUNTIME_LIBRARIES_ROOT: join(root, 'libraries'),
+  };
+  try {
+    for (const directory of ['control', 'app-data', 'workflows', 'recordings', 'libraries'])
+      await mkdir(join(root, directory));
+    const childCommand = [
+      process.execPath,
+      '-e',
+      'require("node:fs").writeFileSync(process.argv[1], "started"); process.exit(99)',
+      marker,
+    ];
+    await assert.rejects(
+      runBackendSupervisor({
+        env,
+        signalSource: new EventEmitter(),
+        localStorageInitializeCommand: [process.execPath, '-e', 'process.exit(1)'],
+        apiCommand: childCommand,
+        executorCommand: childCommand,
+      }),
+      /provisioning failed/,
+    );
+    await assert.rejects(access(marker), { code: 'ENOENT' });
+    await writeFile(join(env.RIVET_LOCAL_METADATA_UI_ROOT, 'unexpected-entry'), 'retained');
+    await assert.rejects(
+      runBackendSupervisor({
+        env,
+        signalSource: new EventEmitter(),
+        localStorageInitializeCommand: [process.execPath, '-e', 'process.exit(0)'],
+        apiCommand: childCommand,
+        executorCommand: childCommand,
+      }),
+      /fresh or owned/,
+    );
+    await assert.rejects(access(marker), { code: 'ENOENT' });
+    const lease = acquireLocalMetadataOwnerLease(env.RIVET_LOCAL_METADATA_UI_ROOT);
+    lease.release();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  'shutdown during first start closes the offline writer before releasing ownership',
+  { timeout: 15_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rivet-first-start-stop-'));
+    const env = {
+      ...process.env,
+      RIVET_DEPLOYMENT_TOPOLOGY: 'single-host',
+      RIVET_WORKFLOW_STORAGE_BACKEND: 'filesystem',
+      RIVET_DEPLOYMENT_STORAGE_MODE: '',
+      RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
+      RIVET_LOCAL_METADATA_UI_ROOT: join(root, 'control'),
+      RIVET_APP_DATA_ROOT: join(root, 'app-data'),
+      RIVET_WORKFLOWS_ROOT: join(root, 'workflows'),
+      RIVET_WORKFLOW_RECORDINGS_ROOT: join(root, 'recordings'),
+      RIVET_RUNTIME_LIBRARIES_ROOT: join(root, 'libraries'),
+    };
+    const signals = new EventEmitter();
+    const pidFile = join(root, 'writer-pid');
+    let pending;
+    try {
+      for (const directory of ['control', 'app-data', 'workflows', 'recordings', 'libraries'])
+        await mkdir(join(root, directory));
+      pending = runBackendSupervisor({
+        env,
+        signalSource: signals,
+        shutdownTimeoutMs: 1000,
+        localStorageInitializeCommand: [
+          process.execPath,
+          '-e',
+          `
+        process.on('SIGTERM', () => {});
+        require('node:fs').writeFileSync(process.argv[1], String(process.pid));
+        setTimeout(() => process.exit(0), 5000);
+      `,
+          pidFile,
+        ],
+      });
+      const deadline = Date.now() + 5000;
+      let pid;
+      while (!pid) {
+        try {
+          pid = Number(await readFile(pidFile, 'utf8'));
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+        assert.ok(Date.now() < deadline, 'offline writer did not start');
+        if (!pid) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.throws(() => acquireLocalMetadataOwnerLease(env.RIVET_LOCAL_METADATA_UI_ROOT));
+      signals.emit('SIGTERM');
+      assert.equal(await pending, 0);
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+      const lease = acquireLocalMetadataOwnerLease(env.RIVET_LOCAL_METADATA_UI_ROOT);
+      lease.release();
+      assert.equal(signals.listenerCount('SIGTERM'), 0);
+      const configuration = JSON.parse(
+        await readFile(join(env.RIVET_LOCAL_METADATA_UI_ROOT, 'ui-managed', 'ui-configuration.json'), 'utf8'),
+      );
+      assert.equal(configuration.phase, 'initializing');
+    } finally {
+      signals.emit('SIGTERM');
+      await pending;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   'single-host dotenv cannot replace supervisor-owned selection or private UI capabilities',
@@ -104,6 +251,34 @@ function environment({ apiPort, executorPort, healthPort }) {
   delete env.RIVET_LOCAL_METADATA_CONTROL_ROOT;
   return env;
 }
+
+test(
+  'shutdown in the listener-opening gap cannot strand a newly started child supervisor',
+  { timeout: 10_000 },
+  async () => {
+    const signals = new EventEmitter();
+    let injected = false;
+    signals.on('newListener', (event) => {
+      if (event === 'SIGINT' && signals.listenerCount('SIGINT') === 1) {
+        // Parent is listening, but startBackendSupervisor has not yet registered
+        // its handlers. Reproduce a signal during its asynchronous startup gap.
+        injected = true;
+        signals.emit('SIGTERM');
+      }
+    });
+    const result = await runBackendSupervisor({
+      env: environment(await ports()),
+      signalSource: signals,
+      apiCommand: [process.execPath, '-e', 'setTimeout(() => process.exit(0), 5000)'],
+      executorCommand: [process.execPath, '-e', 'process.exit(99)'],
+      shutdownTimeoutMs: 1000,
+    });
+    assert.equal(injected, true);
+    assert.equal(result, 0);
+    assert.equal(signals.listenerCount('SIGINT'), 0);
+    assert.equal(signals.listenerCount('SIGTERM'), 0);
+  },
+);
 
 async function waitForReady(port) {
   const deadline = Date.now() + 5_000;

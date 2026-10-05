@@ -26,16 +26,20 @@ const executorData = path.join(ownedRoot, 'ui-executor');
 await fs.mkdir(volume);
 await fs.mkdir(executorData);
 const signals = new EventEmitter();
+const environment = { ...process.env };
+for (const name of [
+  'RIVET_LOCAL_METADATA_CONTROL_ROOT',
+  'RIVET_LOCAL_METADATA_ENCRYPTION_KEY',
+  'RIVET_LOCAL_METADATA_UPGRADE_ENABLED',
+])
+  delete environment[name];
 const completed = runBackendSupervisor({
   env: {
-    ...process.env,
+    ...environment,
     RIVET_BACKEND_API_PORT: String(apiPort),
     RIVET_BACKEND_EXECUTOR_PORT: String(executorPort),
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
     RIVET_EXECUTOR_RUNTIME_CONFIG_URL: '',
-    RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
-    RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '',
-    RIVET_LOCAL_METADATA_UPGRADE_ENABLED: '0',
     RIVET_LOCAL_METADATA_UI_ROOT: volume,
   },
   apiCommand: [
@@ -137,8 +141,8 @@ try {
   );
   const backup = status.backup;
   const keyResponse = await request(`/backup/key?id=${backup.id}`);
-  assert.equal(keyResponse.status, 200);
-  assert.match(await keyResponse.text(), /^[a-f0-9]{64}$/);
+  assert.equal(keyResponse.status, 409);
+  assert.equal(status.settingsEncryptionRequired, false);
   const archive = await request(`/backup/download?id=${backup.id}`);
   assert.equal(archive.status, 200);
   await archive.arrayBuffer();
@@ -147,7 +151,6 @@ try {
     backupReference: `browser-backup:${backup.id}:${backup.archiveHash}`,
     backupSourceFingerprint: backup.sourceFingerprint,
     backupRestored: true,
-    encryptionKeyBackedUp: true,
   });
   status = await waitFor(
     () => json(),

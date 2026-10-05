@@ -527,10 +527,22 @@ async function initializeSharedBackend(): Promise<void> {
   }
 
   sharedBackendInitialization ??= (async () => {
+    let convertLegacy = false;
+    if (local) {
+      try {
+        assertLocalMetadataWritesAllowed();
+        convertLegacy = true;
+      } catch {
+        // Paused generations must retain their certified physical contents.
+      }
+    }
     const backend = local
       ? new SqliteAppSettingsBackend({
           databasePath: local.settingsDatabasePath,
           encryptionSecret: process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '',
+          // Never change a certified paused candidate's fingerprint. Legacy
+          // conversion happens after the operator resumes and restarts.
+          convertLegacy,
           requireExisting: true,
           assertWritable: assertLocalMetadataWritesAllowed,
         })

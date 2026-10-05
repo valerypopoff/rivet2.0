@@ -1,5 +1,61 @@
 # Development
 
+## Automatic local first start
+
+Supported Compose startup initializes SQLite metadata/settings/operational stores
+and checksum-addressed file artifacts only when all four source roots are empty.
+Keep first-run classification before serving children initialize defaults. Never
+infer a new installation from an empty project list: settings-only, recordings-only,
+empty-folder and retained-control installations are old installations too.
+`local-upgrade-ui.mjs` owns the durable first-run UUID/phase and supervisor lease
+boundary; `initialize-empty-installation.ts` owns independent empty-source checks,
+default settings seeding, exact candidate/schema verification and live selection.
+An interrupted initializer must retry without exposing legacy serving.
+Check its retained `initializing` phase before preparation eligibility: unexpected
+control-volume entries or conflicting root overrides must block startup, never
+turn it into legacy serving. Validate deployment root/key ownership even for
+unpublished records. Ready publication can reuse a private empty or partial `.next`
+file left by a crash/short write only when it is an exact prefix of the original
+ready record; conflicting contents are rejected. Missing established journals,
+ledgers and independent bindings are not recreated.
+`dev-backend-supervisor.mjs` supplies both offline control commands through the
+workspace's current TypeScript source and TSX loader. Do not let development
+first start fall back to the production image's compiled initializer: that code
+may be stale while API/executor watchers use the checkout.
+
+The supervisor threads cancellation through both offline commands. On shutdown,
+wait for the writer's `close` event before releasing the reserved-volume lease;
+do not reject immediately from an abort event while the writer can still mutate
+SQLite. Use the existing backend shutdown grace for termination escalation, not
+a time limit on normal work. Leave unpublished installation identity intact for
+retry. Also reconcile a stop arriving while the child health listener is opening,
+before its own signal handlers are installed. Regression fixtures exercise both
+windows, including a Linux writer that ignores SIGTERM and requires SIGKILL.
+
+Regression commands:
+
+```powershell
+node --test deploy/studio-server/images/api/local-upgrade-ui.test.mjs deploy/studio-server/images/api/backend-supervisor.test.mjs
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/local-first-run.test.ts src/tests/local-upgrade-runtime.test.ts src/tests/proxy-image-contract.test.ts
+$env:PLAYWRIGHT_HEADLESS='1'
+$env:PLAYWRIGHT_SLOW_MO='0'
+yarn studio-server:ui:observe packages/studio-server-web/playwright-observe/local-storage-upgrade-prompt.spec.ts
+```
+
+The first-run runtime fixture exercises SQLite-backed project/settings writes,
+public-route projection and restart persistence without creating retained
+JSON/project authorities. Supported Compose proxies poll the authenticated
+`/internal/app-settings/proxy-config` endpoint, just as managed proxies do; never
+mirror SQLite settings back into legacy JSON merely to update nginx. Validate
+initial configuration, route/timeout refresh and last-valid configuration retention
+on API failure when changing that wiring. Browser
+coverage verifies hidden upgrade settings for fresh/completed/managed storage,
+legacy reminders on reload and incomplete SQLite recovery access. These checks
+do not replace production-data backup/restore or image release qualification.
+The real UI migration fixture has a five-minute cumulative subprocess limit for
+its several API/executor restarts; each individual status phase remains bounded
+at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
+
 ## Collapsible recording families
 
 `recording-run-hierarchy.ts` groups the current recording results by exact
@@ -426,12 +482,35 @@ itself passes.
 
 The single-host local upgrade remains opt-in. Updated Compose mounts the reserved
 control volume and advertises supervisor-owned UI preparation; the signed operator
-can prepare its private key/journals, migrate and request necessary backend restarts
+can prepare persistent journals, migrate and request necessary backend restarts
 entirely from the normal wizard. Individual fingerprint and inspection controls are
 advanced alternatives. Manual/custom launchers retain explicit environment/provisioning
 requirements. The owning runbook explains backup certification, paused activation,
 coordinated restarts and key-free offline rollback. A browser migration is not a
 substitute for rehearsing a separately restored copy of production data.
+
+New local App Settings are plaintext schema-version-2 JSON rows. The supported Compose
+wizard needs none of `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`,
+`RIVET_LOCAL_METADATA_CONTROL_ROOT` or `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` in user
+dotenv configuration. Old UI bootstrap keys are retained only to decode old databases;
+manual encrypted installations retain their original key until live conversion succeeds.
+Custom-root adoption first needs one updated-launcher boot with that root; it persists
+an independently bound pointer, not a new journal. Protect plaintext volumes/backups
+and do not downgrade to schema-v1-only images. Managed PostgreSQL encryption is unchanged.
+
+`sqlite-settings-store.test.ts` covers plaintext reopen/CAS, missing-key refusal on
+legacy ciphertext, paused read-only preservation, transactional conversion/rollback,
+revision/timestamp preservation and POSIX permissions before schema creation/conversion
+(including an unrestricted umask), conversion write-fence checks, and the standalone
+backup guard against databases actually created by the API. `local-upgrade-ui.test.mjs` covers key-free
+preparation, old bootstrap compatibility, root discovery, lost-binding refusal and
+interrupted manual-pointer publication without replacing its independent binding.
+`local-upgrade-backup.test.mjs` covers version-1 encrypted/plaintext and version-2
+UI-owned backups using real version-1/version-2 settings schemas, plaintext row restoration,
+unsupported/damaged settings refusal and manual pointer/App Data binding preservation.
+The runtime `UI prepares` and `copy verifies plaintext settings`
+cases and the guided Playwright flow omit key attestations. Older-server browser
+fixtures intentionally retain their key controls to exercise compatibility.
 
 The production-cutover command includes `local-upgrade-ui.test.mjs` and supervisor
 private-control/restart tests. The runtime suite's `UI prepares` case uses real API
@@ -831,7 +910,7 @@ Current behavior:
 Operational note:
 
 - `deploy/studio-server/.env.example` is the minimal single-host Docker Compose starting point: host port, durable artifact root, UI access mode, and shared key. The launchers and Compose own internal ports, service defaults, image selection, and role values. Kubernetes rehearsals use their dedicated `.env.kubernetes-local.example` template. Keep optional tuning and overrides in the relevant operator guidance, and keep App Settings values out of the copied environment template.
-- `Settings` -> `Storage` is the operator surface for choosing filesystem versus managed storage and saving managed database/object-storage credentials. Single-host deployments persist `settings/deployment-storage.json`. Kubernetes persists the same typed domain as encrypted PostgreSQL settings; migration seeds a missing row from validated Helm/Vault values in memory, APIs load it directly, and the co-located executor receives an authenticated loopback snapshot. No Kubernetes startup settings projection is written. If no value exists in single-host mode, built-in `Local folders` plus `Local Docker Postgres` defaults seed the first revision. Restart/recreate Docker services or roll out Kubernetes API/executor pods after changing storage settings so singleton backends are rebuilt.
+- `Settings` -> `Storage` is the operator surface for choosing filesystem versus managed storage and saving managed database/object-storage credentials. Fresh/upgraded single-host deployments persist this domain in SQLite; legacy file mode uses `settings/deployment-storage.json`. Kubernetes persists the same typed domain as encrypted PostgreSQL settings; migration seeds a missing row from validated Helm/Vault values in memory, APIs load it directly, and the co-located executor receives an authenticated loopback snapshot. No Kubernetes startup settings projection is written. If no value exists in single-host mode, built-in `Local folders` plus `Local Docker Postgres` defaults seed the first revision. Restart/recreate Docker services or roll out Kubernetes API/executor pods after changing storage settings so singleton backends are rebuilt.
 - Switching `Settings` -> `Storage` does **not** migrate existing data. `Settings` -> `Migration` on a filesystem-backed single-host VM tests the destination, activates a persistent source maintenance barrier, drains admitted work, then runs the copy and separate verify child processes. Its status file contains no credentials; an interrupted job must be retried with freshly entered secrets. The source remains paused after success. The detailed inventory, CLI fallback, and operator-controlled Kubernetes traffic cutover are in [VM to managed migration](vm-to-managed-migration.md). Never enable destination serving pods on a partial copy.
 - Kubernetes requires `appSettings.backend=postgres`. Prefer a dedicated Secret/Vault value for `RIVET_APP_SETTINGS_ENCRYPTION_KEY`; `RIVET_KEY` is a compatibility fallback. Rotation is a three-rollout operation: first deploy the old primary with the new key as the accepted secondary, then deploy the new primary with the old key as secondary, and remove the old key only after every pod runs the new primary. This prevents old rolling-update pods from encountering rows encrypted with a key they do not know.
 - `RIVET_ARTIFACTS_HOST_PATH` remains the launcher bootstrap/default for filesystem-mode host mounts
@@ -863,7 +942,7 @@ Operational note:
 - Changing a launcher dotenv credential does not mutate an already-running process environment. Recreate the relevant Docker services with `yarn studio-server:dev:docker:recreate` for development or `yarn studio-server:prod:restart` for production; a browser reload alone is not enough. Browser-executor aliases additionally require the exact variable name in `RIVET_ENV_ALLOWLIST`, then a container recreate and browser reload, unless the credential is supplied through Rivet Settings or the API-key input port. Protected server-credential names remain denied even when listed; this includes sensitive-name variants and common database credentials such as `PGPASSWORD`, `MONGODB_URI`, and `REDIS_URL`. Use a purpose-specific `*_API_KEY` alias for an intentionally browser-visible provider key instead of reusing a password, secret, token, credential, database, signing, encryption, or object-storage credential name.
 - `Settings` -> `Environment variables` stores runtime overrides through the active App Settings repository. The compact settings table keeps saved values masked by default; an authenticated no-store eye action reveals only one requested value. These values override launcher dotenv values for every new workflow endpoint, web-app, and editor Node-executor run; active runs retain their captured immutable overlay. Kubernetes control and execution APIs read the encrypted PostgreSQL setting, and the co-located editor executor retrieves the current overlay through its authenticated loopback API. The `Browser` checkbox opts one value into Browser-executor lookup; protected secret-like names remain denied. External Remote Debugger processes do not receive wrapper-managed variables.
 - App Settings -> `General` controls trusted-client bypasses. Verified saved client IPs/networks bypass the UI key gate, web-app auth, and workflow endpoint bearer checks. Hostnames and the legacy `RIVET_UI_TOKEN_FREE_HOSTS` env var never authorize access. Forwarding proxy networks are deployment-owned; see [Trusted clients](trusted-clients.md). App Settings -> `Shell execution` controls editor-side allowed-command timeout and captured-output limits, not workflow execution. Proxy settings polling still updates route/timeout configuration, but no longer distributes bypass policy.
-- App Settings -> `Workflow endpoints` controls the published/latest workflow route slugs, the default-on `Authorization: Bearer <RIVET_KEY>` requirement for public workflow endpoint calls, and the nginx HTTP request timeout for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}`. The auth setting is stored at `settings/workflow-endpoint-auth.json`; the timeout is saved in seconds under `settings/runtime-limits.json` and defaults to `180`.
+- App Settings -> `Workflow endpoints` controls the published/latest workflow route slugs, the default-on `Authorization: Bearer <RIVET_KEY>` requirement for public workflow endpoint calls, and the nginx HTTP request timeout for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}`. The auth and timeout values live in the active `workflow-endpoint-auth` and `runtime-limits` domains (SQLite for fresh/upgraded local installations, legacy `settings/workflow-endpoint-auth.json` and `settings/runtime-limits.json` in file mode, or encrypted PostgreSQL in managed mode). The timeout is saved in seconds and defaults to `180`.
 - App Settings -> `Web apps` -> `Button data` controls the largest JSON payload a web-app button may send when running a graph. It is shown in MiB, defaults to `100 MiB`, and is stored as `webAppActionRequestLimitBytes` in the runtime-limits settings domain. Saving updates API-side HTTP parsing immediately. The proxy receives the non-secret limit through its settings source and safely reloads nginx; Kubernetes uses the authenticated internal snapshot while single-host deployments use the file watcher. WebSocket `maxPayload` is captured when an API process starts, so gracefully restart/roll out API pods after active actions complete to apply a changed limit to new sockets. The `1 MiB` to `1 GiB` bound does not override an outer ingress/CDN/body limit.
 - HTTP parsing is route-owned, never application-global: protected control-plane and workflow routes authenticate before decoding, while web-app actions complete their existing route/gate/OAuth/project preflight before decoding. The preflight captures the current action body limit, has a 15-second client deadline, and retains one of its 16 permits until any timed-out storage work settles; do not release that permit merely because the response timed out. The same shared admission controller covers JSON and URL-encoded sign-in forms. The process permits at most four simultaneous body parsers and at most `1 GiB` of body reservations. Unknown-length and compressed requests reserve their full decoded route limit; known identity-encoded requests reserve their declared length. An async handler keeps its parsed-body reservation until its own work settles, even after a client disconnect, while releasing the short-lived parser slot. This admission is separate from graph-run capacity and must remain so. JSON routes reject body-bearing unsupported media types before their handlers run. Do not move a broad JSON or URL-encoded parser above those route boundaries. See `access-and-routing.md` for the complete route inventory, exact limits, error codes, and receive-timeout behavior.
 - App Settings -> `Docker` controls how long the npm Docker launchers wait for Compose services to become healthy. The saved value is in seconds and defaults to `1200` when the settings file or a running container is unavailable. Kubernetes does not use this setting.
@@ -1405,17 +1484,17 @@ Current behavior:
 - `yarn studio-server:prod:restart` skips the pull/build step and force-recreates the stack from the images already present locally. Use it after changing `.env` when you want containers to pick up new env values without updating to newer GHCR images.
 - Project Settings reads route prefixes from runtime `/api/config`, not the prebuilt web bundle. App Settings edits workflow and web-app route domains through one typed settings repository. API dispatch is dynamic, and the proxy regenerates its server-block include, validates it with `nginx -t`, and reloads. Kubernetes proxies poll the authenticated `/internal/app-settings/proxy-config` projection; single-host proxies watch their local files. The modal waits for `/api/config` to report the active paths before showing `Saved.`, so no manual stack restart is required.
 - Server UI access starts from deployment env, then uses the active settings repository for OAuth provider/session details and admin emails. Bootstrap with `RIVET_SERVER_UI_AUTH_MODE=none` or `key`, save OAuth and admin settings, then switch the deployment env to `oauth`. Changing the env mode requires process restart/rollout; changing saved OAuth/admin settings propagates through the repository and invalidates old sessions.
-- App Settings -> `Run recordings` saves recording queue depth, newest-runs-per-endpoint, and age retention through the active repository. Kubernetes stores the domain in encrypted PostgreSQL; the file backend retains `settings/run-recordings.json`. Legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` are ignored. Each settings tab keeps one separated Save/Revert row for all changes in that tab.
-- App Settings -> `Web apps` -> `Auth`, `OAuth`, and `Server UI access` edit one web-app-auth domain. `Key`, `OAuth`, and `No gate` retain their existing behavior. The file backend uses owner-only `settings/web-app-auth.json`; Kubernetes stores the payload encrypted in PostgreSQL. Legacy web-app/OAuth env values are ignored. OAuth state and session cookies remain bound to the saved revision, so provider, credential, scope, allowlist, or session-policy changes fail closed and may require visitors to sign in again.
-- App Settings -> `Workflow endpoints` -> `Access control` writes workflow endpoint bearer-token policy to `settings/workflow-endpoint-auth.json`. It defaults to requiring `Authorization: Bearer <RIVET_KEY>`, and the legacy `RIVET_REQUIRE_WORKFLOW_KEY` env var is ignored so workflow endpoint auth has one operator-owned source of truth.
-- App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` edit one public-route settings domain. In file mode it is `settings/public-routes.json`, with the old `settings/web-app-routes.json` as a read-only import fallback. Kubernetes stores it in PostgreSQL. Slugs are unique single top-level path segments and cannot collide with reserved routes.
+- App Settings -> `Run recordings` saves recording queue depth, newest-runs-per-endpoint, and age retention through the active repository. Fresh/upgraded local mode stores the domain in SQLite; Kubernetes uses encrypted PostgreSQL, and the legacy file backend retains `settings/run-recordings.json`. Legacy `RIVET_RECORDINGS_MAX_PENDING_WRITES`, `RIVET_RECORDINGS_MAX_RUNS_PER_ENDPOINT`, and `RIVET_RECORDINGS_RETENTION_DAYS` are ignored. Each settings tab keeps one separated Save/Revert row for all changes in that tab.
+- App Settings -> `Web apps` -> `Auth`, `OAuth`, and `Server UI access` edit one web-app-auth domain. `Key`, `OAuth`, and `No gate` retain their existing behavior. Fresh/upgraded local mode uses private SQLite; the legacy file backend uses owner-only `settings/web-app-auth.json`, and Kubernetes stores the payload encrypted in PostgreSQL. Legacy web-app/OAuth env values are ignored. OAuth state and session cookies remain bound to the saved revision, so provider, credential, scope, allowlist, or session-policy changes fail closed and may require visitors to sign in again.
+- App Settings -> `Workflow endpoints` -> `Access control` writes workflow endpoint bearer-token policy through the active repository (SQLite for fresh/upgraded local mode, `settings/workflow-endpoint-auth.json` for legacy file mode, or encrypted PostgreSQL for managed mode). It defaults to requiring `Authorization: Bearer <RIVET_KEY>`, and the legacy `RIVET_REQUIRE_WORKFLOW_KEY` env var is ignored so workflow endpoint auth has one operator-owned source of truth.
+- App Settings -> `Workflow endpoints` -> `Routes` and App Settings -> `Web apps` -> `Routes` edit one public-route settings domain. In file mode it is `settings/public-routes.json`, with the old `settings/web-app-routes.json` as a read-only import fallback. Fresh/upgraded local mode stores it in SQLite; Kubernetes uses PostgreSQL. Supported Compose and Kubernetes proxies consume the authenticated API projection rather than a settings-file mirror. Slugs are unique single top-level path segments and cannot collide with reserved routes.
 - App Settings -> `Storage` configures the existing workflow/runtime-library backend through the active settings repository. `Local folders` uses launcher-mounted artifacts and hides inactive database controls; existing `Object storage + PostgreSQL` deployments show S3-compatible storage and database controls. The managed button is disabled for local installations and the API rejects activation before a settings write. Files-to-SQLite completion is required first, and a later SQLite-to-managed transfer still needs a separate verified adapter. Saving managed credentials or taking a filesystem-mode detour does not bypass this policy. Secrets are never returned to the browser. Storage/database env values are ignored by Docker API/executor runtime. Restart Docker or roll out Kubernetes after credential/configuration changes so singleton backends use the new configuration.
 - Managed workflow schema changes live in ordered immutable migrations under `packages/studio-server-api/src/routes/workflows/managed/schema-migrations.ts`. Migration 1 is the workflow baseline; migration 2 adds encrypted `app_settings`; migration 3 adds the fenced maintenance lease and deletion outbox; migration 4 adds reconciliation state and integrity findings. Never edit a released migration or checksum. The Helm pre-install/pre-upgrade Job validates deployment storage in memory and runs schema migration before enabling the PostgreSQL settings backend. Each absent row independently uses a matching regular, valid legacy JSON file or falls back to the candidate bootstrap/default; never switch the entire app-data root to a partial legacy tree. The missing deployment-storage row is seeded from validated Helm/Vault values, while an existing row remains authoritative. Serving API pods remain verify-only. Add each future change as N+1 with complete manifest, backward-compatibility declaration, and concurrency/upgrade coverage.
 - Web-app action graph context strips browser/session headers such as `cookie`, `authorization`, proxy auth, and verified client-address hints. Keep public web-app actions on that narrower context contract; workflow endpoint routes may still expose request headers because they are API-style execution surfaces with their own bearer/trusted-client contract.
 - Web-app actions carry a browser-owned `storage` snapshot for Rivet Stored Value nodes. Both the HTTP compatibility route and the WebSocket gateway must return the per-run `storagePatch`; do not persist or reuse that snapshot server-side unless a deliberate trusted host store is introduced.
-- App Settings -> `Node executor proxy` stores runtime `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and optional executor/debugger websocket overrides through the active repository; `.env` proxy/URL overrides are ignored. In Kubernetes, API processes read PostgreSQL snapshots directly and refresh their dispatcher after saves; the co-located executor waits for an authenticated loopback snapshot before accepting work and polls it for proxy changes. A failed refresh retains its last valid proxy configuration. No Kubernetes proxy-settings compatibility JSON is written. Single-host mode retains owner-only JSON files and polling. Blank websocket overrides keep host-derived defaults, including HTTPS-to-WSS hardening.
-- In file mode, App Settings writes use unique temporary files followed by atomic rename. In PostgreSQL mode, updates use compare-and-swap revisions; a stale explicit revision returns `409` rather than overwriting another administrator. PostgreSQL notification failure after commit is logged without reporting the committed save as failed. Notifications accelerate replica invalidation, while revision polling repairs missed notifications and retries repository refreshes whose revision was not yet acknowledged.
-- Missing file-backed settings or absent PostgreSQL rows normally mean first-run defaults; in replicated Kubernetes mode, a missing deployment-storage row must be seeded by the migration Job before serving pods start. A present malformed file or an unreadable/decryption-failed database row fails loudly instead of falling back to env/defaults. Web-app auth remains fail-closed. Every HTTP request pins one immutable settings snapshot, so a concurrent save cannot mix policy revisions within the request.
+- App Settings -> `Node executor proxy` stores runtime `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and optional executor/debugger websocket overrides through the active repository; `.env` proxy/URL overrides are ignored. In Kubernetes, API processes read PostgreSQL snapshots directly and refresh their dispatcher after saves; the co-located executor waits for an authenticated loopback snapshot before accepting work and polls it for proxy changes. A failed refresh retains its last valid proxy configuration. No Kubernetes proxy-settings compatibility JSON is written. Selected SQLite uses authenticated loopback runtime-config protocol 2 and proxy refreshes without settings-file mirrors; legacy single-host mode retains owner-only JSON files and polling. Blank websocket overrides keep host-derived defaults, including HTTPS-to-WSS hardening.
+- In file mode, App Settings writes use unique temporary files followed by atomic rename. In SQLite and PostgreSQL modes, updates use compare-and-swap revisions; a stale explicit revision returns `409` rather than overwriting another administrator. PostgreSQL notification failure after commit is logged without reporting the committed save as failed. Notifications accelerate replica invalidation, while revision polling repairs missed notifications and retries repository refreshes whose revision was not yet acknowledged.
+- Missing legacy file-backed settings or absent database rows normally mean first-run defaults; in replicated Kubernetes mode, a missing deployment-storage row must be seeded by the migration Job before serving pods start. A present malformed file or an unreadable/decryption-failed database row fails loudly instead of falling back to env/defaults. Web-app auth remains fail-closed. Every HTTP request pins one immutable settings snapshot, so a concurrent save cannot mix policy revisions within the request.
 - `Web apps`, `OAuth`, and `Server UI access` edit the same web-app-auth record. The modal loads that record once per opening and keeps the shared draft while those tabs are switched, so changing tabs cannot overwrite unsaved OAuth or admin-email edits with a second fetch.
 - For local web-app OAuth testing without a real provider, open App Settings -> `Web apps` -> `Auth` and choose `OAuth`, then open App Settings -> `OAuth`, choose `Local dummy`, provide a session signing secret, and optionally set the default dummy email. The Sign in flow then opens `/apps/auth/dummy` unless the active published-app route prefix has changed, accepts a test email, and returns through the same callback/session-cookie path as real OAuth. Dummy OAuth requires deployment opt-in plus a verified development client network; see [Trusted clients](trusted-clients.md). It must not be used in shared or production deployments. OAuth web-app allowlists are fail-closed, so add the dummy email to the app's allowed-email list before testing access.
 - `yarn studio-server:prod:custom` rebuilds all four images and the stack from the current monorepo commit
@@ -2012,7 +2091,7 @@ For the current Helm chart and images:
 4. keep `replicaCount.backend=1`
 5. keep `autoscaling.backend.enabled=false`
 6. keep `workflowStorage.backend=managed` and `runtimeLibraries.backend=managed`
-7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`, `RIVET_PUBLISHED_APPS_BASE_PATH=/apps`, `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`, and `RIVET_LATEST_APPS_BASE_PATH=/apps-latest` unless you intentionally want different first-run route defaults before `settings/public-routes.json` exists
+7. keep `RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`, `RIVET_PUBLISHED_APPS_BASE_PATH=/apps`, `RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`, and `RIVET_LATEST_APPS_BASE_PATH=/apps-latest` unless you intentionally want different first-run route defaults before a saved `public-routes` value exists in the active settings repository
 8. set `env.RIVET_PROXY_RESOLVER` for in-cluster nginx DNS resolution
 9. provide `RIVET_KEY` through `auth.keySecretName` or Vault, even if server UI auth and public workflow bearer checks are disabled
 10. keep the control-plane API on `RIVET_API_PROFILE=control` and the execution Deployment on `RIVET_API_PROFILE=execution`

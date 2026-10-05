@@ -73,7 +73,10 @@ async function fixture(
         process.execPath,
         ['--import', 'tsx', fileURLToPath(new URL('./helpers/local-upgrade-runtime.ts', import.meta.url)), name],
         {
-          timeout: 90_000,
+          // The UI rehearsal performs several real API/executor boots. Each
+          // phase has its own bounded status deadline; the outer process must
+          // allow their cumulative duration rather than kill a healthy restart.
+          timeout: name === 'ui-workflow' ? 300_000 : 90_000,
           maxBuffer: 1024 * 1024,
           env: {
             ...process.env,
@@ -213,9 +216,9 @@ test('status rereads backup evidence when its worker finishes during a held meta
   });
 });
 
-test('copy preflight rejects absent or short settings keys without creating a job or changing source authority', async () => {
+test('copy verifies plaintext settings without an encryption key, enable flag or key attestation', async () => {
   await fixture(async (_source, _control, command) => {
-    await command('copy-invalid-key');
+    await command('copy-without-key');
   });
 });
 

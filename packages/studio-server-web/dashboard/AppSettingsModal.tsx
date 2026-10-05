@@ -29,6 +29,7 @@ import { useTrustedClientsForm } from './app-settings/useTrustedClientsForm';
 import { useWebAppAuthForm } from './app-settings/useWebAppAuthForm';
 import { useWorkflowEndpointAuthForm } from './app-settings/useWorkflowEndpointAuthForm';
 import type { HostedRouteConfig } from './types';
+import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 
 interface AppSettingsModalProps {
   isOpen: boolean;
@@ -78,7 +79,40 @@ function OpenAppSettingsModal({
   routeConfig,
   initialTab = 'general',
 }: Omit<AppSettingsModalProps, 'isOpen'>) {
-  const [activeTab, setActiveTab] = useState<AppSettingsTab>(initialTab);
+  const [requestedTab, setActiveTab] = useState<AppSettingsTab>(initialTab);
+  const [upgradeVisible, setUpgradeVisible] = useState(false);
+  // Unknown status never flashes migration controls for a fresh installation.
+  // Poll while open so a completed migration also retires its settings tab.
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${RIVET_API_BASE_URL}/app-settings/local-upgrade/setup`, {
+          credentials: 'include',
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+        });
+        if (response.status === 401 || response.status === 403) {
+          if (!controller.signal.aborted) setUpgradeVisible(false);
+          return;
+        }
+        if (!response.ok) throw new Error('Upgrade status unavailable.');
+        const setup = await response.json();
+        if (!controller.signal.aborted) setUpgradeVisible(setup.eligible === true && setup.liveSqlite === false);
+      } catch {
+        // A temporary outage/restart must not unmount an in-progress upgrade
+        // or discard its operator acknowledgements. Keep last known eligibility.
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(refresh, 3000);
+      }
+    };
+    void refresh();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, []);
+  const activeTab = requestedTab === 'local-upgrade' && !upgradeVisible ? 'general' : requestedTab;
   const [actionFeedback, setActionFeedback] = useState<TabActionFeedback>(null);
   const [savingTab, setSavingTab] = useState(false);
   const usesRuntimeLimits =
@@ -374,19 +408,21 @@ function OpenAppSettingsModal({
                   aria-label="App settings sections"
                   aria-orientation="vertical"
                 >
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      className={`project-settings-tab app-settings-nav-tab${activeTab === tab.id ? ' active' : ''}`}
-                      role="tab"
-                      aria-selected={activeTab === tab.id}
-                      disabled={savingTab}
-                      onClick={() => setActiveTab(tab.id)}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+                  {tabs
+                    .filter((tab) => tab.id !== 'local-upgrade' || upgradeVisible)
+                    .map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        className={`project-settings-tab app-settings-nav-tab${activeTab === tab.id ? ' active' : ''}`}
+                        role="tab"
+                        aria-selected={activeTab === tab.id}
+                        disabled={savingTab}
+                        onClick={() => setActiveTab(tab.id)}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
                 </div>
               </aside>
               <div

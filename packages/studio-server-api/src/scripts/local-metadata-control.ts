@@ -20,7 +20,9 @@ async function main(): Promise<void> {
   }
   if (
     process.argv.length !== 3 ||
-    !['--provision', '--fingerprint', '--capacity', '--check-workflows'].includes(process.argv[2]!)
+    !['--provision', '--initialize-empty', '--fingerprint', '--capacity', '--check-workflows'].includes(
+      process.argv[2]!,
+    )
   )
     throw new Error('Unsupported local metadata control command.');
   for (const key of [
@@ -63,6 +65,12 @@ async function main(): Promise<void> {
   };
   const lease = acquireLocalMetadataOwnerLease(root);
   try {
+    if (process.argv[2] === '--initialize-empty') {
+      const { initializeEmptyLocalInstallation } = await import('../local-metadata/initialize-empty-installation.js');
+      await initializeEmptyLocalInstallation(root, source);
+      console.log('Empty local installation initialized with SQLite metadata and file artifacts.');
+      return;
+    }
     await provisionLocalMetadataControl(root, source);
     console.log('Local metadata control provisioned with legacy selected. No source data was changed.');
   } finally {
@@ -72,7 +80,7 @@ async function main(): Promise<void> {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]))
   main().catch(() => {
     console.error(
-      'Local metadata control command refused. No source authority was changed; do not reset an established control volume.',
+      'Local metadata control command refused. Preserve source and control volumes; do not reset an established installation.',
     );
     process.exitCode = 1;
   });

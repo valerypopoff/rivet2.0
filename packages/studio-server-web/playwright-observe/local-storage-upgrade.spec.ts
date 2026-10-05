@@ -152,6 +152,7 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
     }
     if (endpoint === '/copy') {
       calls.push('copy');
+      expect(route.request().postDataJSON()).not.toHaveProperty('encryptionKeyBackedUp');
       phase = 'verified';
       revision++;
       return route.fulfill({ status: 202, json: { started: true } });
@@ -198,6 +199,7 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
       json: {
         ...upgradeStatusFixture({ phase, backend, runningBackend, pausedAt, revision, validated, restartRequired }),
         available: prepared,
+        settingsEncryptionRequired: false,
         uiRestartAvailable: true,
         runtimeReady,
         backup,
@@ -216,7 +218,7 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   const prompt = page.getByTestId('local-storage-upgrade-prompt');
-  await expect(prompt.getByText(/No console commands/)).toBeVisible();
+  await expect(prompt.getByText(/No encryption key, console commands or .env entries/)).toBeVisible();
   await prompt.getByRole('button', { name: 'Review upgrade steps' }).click();
   const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
   await panel.getByRole('button', { name: 'Prepare server for migration' }).click();
@@ -227,11 +229,11 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
   await expect(panel.getByLabel('Backup reference', { exact: true })).not.toBeVisible();
   await expect(panel.getByLabel('Restored backup fingerprint', { exact: true })).not.toBeVisible();
   await panel.getByRole('button', { name: 'Download verified backup' }).click();
-  await panel.getByRole('button', { name: 'Download encryption key separately' }).click();
-  await expect.poll(() => downloads).toEqual(['archive', 'key']);
+  await expect(panel.getByRole('button', { name: 'Download encryption key separately' })).toHaveCount(0);
+  await expect.poll(() => downloads).toEqual(['archive']);
   await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
   await panel.getByLabel('I saved the verified backup download securely outside this VM.').check();
-  await panel.getByLabel('I backed up the local settings encryption key separately.').check();
+  await expect(panel.getByLabel('I backed up the local settings encryption key separately.')).toHaveCount(0);
   await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
   await panel.getByRole('button', { name: 'Activate SQLite while paused', exact: true }).click();
   await expect.poll(() => calls.filter((c) => c === 'restart').length).toBe(1);
@@ -1043,6 +1045,56 @@ test('validation and resumption share runtime readiness and restart completion c
   await acknowledgement.check();
   await expect(resume).toBeEnabled();
 });
+
+for (const guided of [true, false]) {
+  test(`Advanced source controls explain their effects in ${guided ? 'guided' : 'manual'} upgrades`, async ({
+    page,
+  }) => {
+    let paused = false;
+    const writes: string[] = [];
+    await page.route('**/api/app-settings/local-upgrade**', (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (route.request().method() === 'POST') {
+        writes.push(pathname);
+        if (pathname.endsWith('/pause')) paused = true;
+        return route.fulfill({ status: 204 });
+      }
+      if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+      return route.fulfill({
+        json: {
+          ...upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T00:00:00Z' : null }),
+          uiRestartAvailable: guided,
+        },
+      });
+    });
+    const panel = await openLocalUpgrade(page);
+    const source = panel.getByRole('region', { name: 'Source inspection and maintenance' });
+    const advanced = source.locator('details');
+    await expect(source.locator('summary')).toHaveText('Advanced');
+    await expect(advanced).toHaveJSProperty('open', !guided);
+    if (guided) {
+      await expect(source.getByRole('button', { name: 'Pause writes and create verified backup' })).toBeEnabled();
+      await source.locator('summary').click();
+      await expect(source.getByText(/Optional individual controls/)).toBeVisible();
+    }
+    expect(writes).toEqual([]);
+    const inspect = advanced.getByRole('button', { name: 'Inspect source', exact: true });
+    const pause = advanced.getByRole('button', { name: 'Pause writes and drain', exact: true });
+    await expect(inspect).toHaveAccessibleDescription(
+      'Checks source folders, inventory, warnings and disk/memory capacity without changing data or pausing writes.',
+    );
+    await expect(pause).toHaveAccessibleDescription(
+      'Blocks new writes and runs, then waits for active work to finish. Does not create a backup.',
+    );
+    await expect(pause).toBeDisabled();
+    await inspect.click();
+    await expect(pause).toBeEnabled();
+    expect(writes).toEqual([]);
+    await pause.click();
+    await expect(pause).toBeDisabled();
+    expect(writes).toEqual(['/api/app-settings/local-upgrade/pause']);
+  });
+}
 
 test('local upgrade actions and backup fields have separate readable rows at desktop and narrow widths', async ({
   page,

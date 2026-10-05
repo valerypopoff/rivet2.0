@@ -33,7 +33,10 @@ export type LocalUpgradeCertificate = {
   source: LocalMetadataSourceRoots;
   backupReference: string;
   backupConfirmedAt: string;
-  encryptionKeyId: string;
+  /** Present only on certificates created by encrypted-storage releases. */
+  encryptionKeyId?: string;
+  /** Empty first-run initialization, not a certificate of a restored backup. */
+  origin?: 'empty-installation';
   report: LocalMetadataCandidateReport;
   operational: Record<string, string | null>;
 };
@@ -79,7 +82,8 @@ const certificateSchema = z
       .refine((value) => Object.values(value).every(path.isAbsolute)),
     backupReference: z.string().min(1).max(512),
     backupConfirmedAt: z.string().datetime(),
-    encryptionKeyId: digest,
+    encryptionKeyId: digest.optional(),
+    origin: z.literal('empty-installation').optional(),
     report: z
       .object({
         reportVersion: z.literal(1),
@@ -210,5 +214,8 @@ export class LocalUpgradeOperatorStore {
     if (value.version !== 1 || value.generationId !== generationId || !value.report || !value.source)
       throw new Error('Invalid local verification certificate.');
     return value;
+  }
+  hasCertificate(generationId: string): boolean {
+    return !!this.#database().prepare('SELECT 1 FROM certificates WHERE generation_id = ?').get(generationId);
   }
 }
