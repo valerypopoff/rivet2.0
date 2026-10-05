@@ -3,7 +3,7 @@ import type { Project, ProjectId } from './Project.js';
 import type { GraphId } from './NodeGraph.js';
 import type { ExecutionRecorder } from '../recording/ExecutionRecorder.js';
 
-/** Studio Server resolves these targets from saved storage, never from an editor tab. */
+/** Hosts resolve targets from saved storage; portable bundles resolve their captured snapshots. Never an editor tab. */
 export type SubgraphProjectVersion = 'latest' | 'published';
 
 export type SubgraphProjectTarget = {

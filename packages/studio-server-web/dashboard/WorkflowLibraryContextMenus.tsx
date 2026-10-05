@@ -58,6 +58,7 @@ export const WorkflowLibraryContextMenus: FC<{
           onClose={closeProjectContextMenu}
           onRename={() => void handleRenameProjectFromContextMenu()}
           onDownload={() => void handleDownloadProject()}
+          onDownloadBundle={controller.handleDownloadBundle}
           onDuplicate={() => void handleDuplicateProject()}
           canCompare={canCompareWithProject(projectContextMenuState.project)}
           onCompare={() => void handleCompareProjectFromContextMenu()}

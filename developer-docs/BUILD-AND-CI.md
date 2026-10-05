@@ -655,7 +655,7 @@ ESM-only packages that cannot be aliased (e.g. `mdast-util-to-markdown`, `@googl
 
 - `build`: `build:esm` then `build:cjs`
 - CJS bundle reuses core's esbuild bundler script (same alias strategy applies)
-- `pretest`: builds `@valerypopoff/rivet2-core` ESM output first, because the node tests import the workspace package through its published-style export surface
+- `pretest`: builds Core and Node in both ESM and CJS formats locally. CI uses `RIVET_NODE_TEST_DEPENDENCIES=prebuilt` to validate the same-commit compiled exports instead of building them again. Unknown modes fail closed.
 
 Wrappers that embed this checkout but consume `@valerypopoff/rivet2-core` and
 `@valerypopoff/rivet2-node` as built packages should not create symlinks inside the
@@ -746,11 +746,11 @@ Keep this section as institutional memory. In September 2026, Apple Silicon
 support failed in several distinct layers. Fixing only the first visible error
 would not have produced a trustworthy release:
 
-| Stage                                           | Observed failure                                                                                               | Root cause                                                                                                                                                                                                            | Durable fix                                                                                                                                                                                                                                                            |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                           |
-| Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                          | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                               |
-| Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                   | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                              |
+| Stage                                           | Observed failure                                                                                                                                | Root cause                                                                                                                                                                                                                          | Durable fix                                                                                                                                                                                                                                                     |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                                                      | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                              | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                    |
+| Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app                                  | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                                        | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                        |
+| Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                                                             | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                                 | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                       |
 | macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`, `hdiutil: couldn't eject "disk<N>" - Resource busy`, or `A timestamp was expected but was not found.` | The DMG helper can be busy during creation or unmount, or Apple's online secure-timestamp service can fail. The October 5 Intel failure occurred after successful app notarization and stapling, while detaching the scratch image. | `build-macos-dmg.mjs` retries these specific failures twice. It identifies mounted target-local scratch images through the system inventory, detaches them safely before deletion, and rebuilds through the full Tauri path. All other failures remain visible. |
 
 The resulting Apple Silicon DMG was subsequently installed and its Node
@@ -1148,6 +1148,10 @@ imports it.
 
 ## `build.yml`
 
+See [GitHub Actions performance](studio-server/ci-performance.md) for the measured
+hosted baseline and the shallow-checkout, test-partition and desktop artifact
+optimizations. These change execution placement, not the required coverage.
+
 ### Trigger conditions
 
 - pushes to `develop` and `main`
@@ -1165,7 +1169,7 @@ work behind it is parallelized.
    to their shared `packages/` ancestor, so `package-tests` restores the artifact
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
-2. `package-tests` fans out Core, Node, Evaluations, App Executor, and CLI, plus
+2. `package-tests` fans out two Core partitions, Node, Evaluations, App Executor, and CLI, plus
    four deterministic App shards, into isolated jobs. The compiled-artifact job
    verifies every declared Core, Node, and Evaluations export is present and
    loadable, and that the executor bundle is present and syntactically valid,
@@ -1174,7 +1178,10 @@ work behind it is parallelized.
    before package tests instead of unrelated `ENOENT` fanout. Each App shard
    selects `RIVET_APP_TEST_DEPENDENCIES=prebuilt`, validating and consuming that
    artifact instead of rebuilding Core. Local App runs retain automatic Core
-   builds. The test matrix retains a six-job
+   builds. Node uses the analogous `RIVET_NODE_TEST_DEPENDENCIES=prebuilt` mode.
+   Core uses native Node test-runner partitions `1/2` and `2/2`, with four file
+   workers per runner; local `yarn test:core` still runs the complete suite.
+   The test matrix retains a six-job
    concurrency cap; every suite always runs, and changed-path selection is
    deliberately not used for the general correctness gate.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
@@ -1199,6 +1206,10 @@ compact duration to `GITHUB_STEP_SUMMARY`. The final `build` aggregator also
 reads the Actions run start time and reports the complete Build critical path.
 Use the per-job durations to distinguish runner work from orchestration or
 runner queueing when evaluating the optimization target.
+The final Build and Studio Server aggregators check out only that standalone
+timing helper. Sparse checkout must not be used in test/build consumer jobs;
+classification separately uses complete Git commit trees, not the working tree,
+to find changed paths.
 
 Desktop push releases share a cancellable per-branch lane, while each manual release has its own lane. A later push therefore cancels only an older push release, never a manual release. The final Pages transaction remains separately serialized across channels.
 
@@ -1212,7 +1223,7 @@ a failed consumer job must be able to download the previous producer artifact.
 Because `upload-artifact@v7` artifacts are immutable, each of these fan-outs
 has exactly one producer and that producer sets `overwrite: true`; a re-run of
 the producer then replaces its own stale artifact instead of failing. The same
-rule applies to the three desktop-release build artifacts. Diagnostic Kubernetes
+rule applies to the shared frontend and three native desktop-release artifacts. Diagnostic Kubernetes
 gate artifacts instead include `github.run_attempt`, preserving evidence from
 each retry rather than replacing it.
 
@@ -1223,6 +1234,12 @@ the repository root. `upload-artifact` preserves paths relative to their common
 ancestor, so restoring at the root would move `packages/core/dist` to
 `core/dist` and make consumers fail module resolution even though the build job
 succeeded. `check-ci-workflows.mjs` guards both fan-outs.
+
+Studio Server deployment contracts fan out into two isolated lanes after that
+build: managed storage/schema checks and gateway/proxy checks. The final `verify`
+job still requires the complete matrix to succeed. Fixtures stay ordered within
+each lane, including the proxy's real DNS-cache expiry and outage/recovery waits;
+the optimization removes serialization between independent hosts, not coverage.
 
 ## `release.yml`
 
@@ -1312,8 +1329,15 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, Windows packaging, both native macOS packages, and
-documentation building start concurrently. The Windows job produces MSI and
+Graph Builder validation, the shared desktop frontend build, and documentation
+building start concurrently. A Linux job typechecks and bundles the desktop
+frontend once, seals every output file with a SHA-256 inventory and the source
+commit, and uploads the same-commit artifact. Windows and both native macOS
+packaging jobs depend on that producer. Their explicit Tauri configuration
+override verifies the complete restored inventory before preparing the native
+sidecars; it does not repeat the frontend build. Missing, changed, extra or
+non-regular files fail closed. Local Tauri builds keep their ordinary frontend
+build hook. The Windows job produces MSI and
 NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
 verifies separate Apple Silicon and Intel DMGs. The verifier requires exactly
 one DMG and one app bundle for each target before mounting it, requires the app
@@ -1361,7 +1385,8 @@ before writing its own metadata, and aborts rather than silently dropping valid
 published metadata.
 
 The platform jobs continue using the pinned Yarn install, `pkg` cache, Rust
-cache, `yarn sync:desktop-version`, and `yarn build:hosted-web-deps`. macOS
+cache, and `yarn sync:desktop-version`. `yarn build:hosted-web-deps` now runs
+once in the shared frontend producer rather than in each native consumer. macOS
 signing requires `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and
 `APPLE_API_PRIVATE_KEY`. Installer-only workflows do not require Tauri updater

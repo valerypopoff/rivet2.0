@@ -135,6 +135,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.53.0",
+    "@valerypopoff/rivet2-node": "workspace:^",
     "concurrently": "^9.1.2",
     "tsx": "^4.23.0"
   }

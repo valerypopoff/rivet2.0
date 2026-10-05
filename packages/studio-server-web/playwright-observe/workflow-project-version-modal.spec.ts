@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 type MockWorkflowProjectItem = {
   id: string;
@@ -50,21 +50,19 @@ async function installVersionChooserRoutes(page: Page, project: MockWorkflowProj
 
 test.describe('Workflow project version chooser', () => {
   test('unpublished_changes uses the saved-version chooser for download and duplicate', async ({ page }) => {
-    test.slow();
-
     const unique = 'codex-version-modal-fixture';
     const project = createVersionChooserFixture(unique);
+    await mockHostedEditorBootstrap(page);
     await installVersionChooserRoutes(page, project);
 
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
 
     const projectRow = page.locator('.project-row', { hasText: unique });
     const chooserModal = page.getByTestId('workflow-project-version-modal');
 
     await projectRow.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Download' }).click();
+    await page.getByRole('menuitem', { name: 'Download', exact: true }).click();
     await expect(chooserModal).toHaveCount(1);
     await expect(chooserModal).toBeVisible();
     await expect(chooserModal.locator('.project-settings-modal-title')).toHaveText('Download');

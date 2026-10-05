@@ -9170,6 +9170,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/yazl@npm:^3.3.0":
+  version: 3.3.1
+  resolution: "@types/yazl@npm:3.3.1"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10/86e3ca32ea38332019bef4836b6be2b1970f7a8f16be1eb8c9d2c3dd26cfc4990af9d5bc56c176f3f8286a5b79458a24ed77db209359638cd1cd947fc0f9485a
+  languageName: node
+  linkType: hard
+
 "@typescript-eslint/eslint-plugin@npm:^5.5.0":
   version: 5.62.0
   resolution: "@typescript-eslint/eslint-plugin@npm:5.62.0"
@@ -9729,6 +9738,7 @@ __metadata:
     "@types/node": "npm:^20.8.7"
     "@types/pg": "npm:^8.15.5"
     "@types/ws": "npm:^8.18.1"
+    "@types/yazl": "npm:^3.3.0"
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
     "@valerypopoff/rivet2-evaluations": "workspace:^"
     "@valerypopoff/rivet2-node": "workspace:^"
@@ -9745,6 +9755,7 @@ __metadata:
     tsx: "npm:^4.6.2"
     typescript: "npm:^5.7.3"
     ws: "npm:^8.19.0"
+    yazl: "npm:^3.3.1"
     zod: "npm:^4.1.11"
   languageName: unknown
   linkType: soft
@@ -9832,6 +9843,7 @@ __metadata:
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
     "@valerypopoff/rivet2-core": "workspace:^"
     "@valerypopoff/rivet2-evaluations": "workspace:^"
+    "@valerypopoff/rivet2-node": "workspace:^"
     "@vitejs/plugin-react": "npm:^4.1.0"
     acorn: "npm:^8.14.0"
     ahooks: "npm:^3.7.8"
@@ -11446,6 +11458,13 @@ __metadata:
   bin:
     browserslist: cli.js
   checksum: 10/9df1d87f915639ebe8f85caf8d58bc0627863dff5e921b6e0394a92f82d279f1b2b324594267d025c80482397150cb4bf5a3ab55fde5d2c1c0f13c064f48b5e9
+  languageName: node
+  linkType: hard
+
+"buffer-crc32@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "buffer-crc32@npm:1.0.0"
+  checksum: 10/ef3b7c07622435085c04300c9a51e850ec34a27b2445f758eef69b859c7827848c2282f3840ca6c1eef3829145a1580ce540cab03ccf4433827a2b95d3b09ca7
   languageName: node
   linkType: hard
 
@@ -25516,6 +25535,15 @@ __metadata:
     y18n: "npm:^5.0.5"
     yargs-parser: "npm:^22.0.0"
   checksum: 10/5af36234871390386b31cac99f00e79fcbc2ead858a61b30a8ca381c5fde5df8af0b407c36b000d3f774bcbe4aec5833f2f1c915f6ddc49ce97b78176b651801
+  languageName: node
+  linkType: hard
+
+"yazl@npm:^3.3.1":
+  version: 3.3.1
+  resolution: "yazl@npm:3.3.1"
+  dependencies:
+    buffer-crc32: "npm:^1.0.0"
+  checksum: 10/021e6c553ea826b90bd20a109ec293f2c2a02ac7c3c361f637e49c4c746b554a0c8e9380b984e12dfee66ca40894836dd8389bec83de2224eafa2eee8cf7be42
   languageName: node
   linkType: hard
 

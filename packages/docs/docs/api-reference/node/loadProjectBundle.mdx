@@ -1,0 +1,79 @@
+# loadProjectBundle
+
+Loads an extracted **Download with dependencies** bundle from Rivet Studio Server
+and resolves its cross-project Subgraphs locally, without contacting that server.
+Use a Node package release that exports this function; older releases cannot load
+this format.
+
+## Example
+
+In Studio Server, save the project, right-click it in the project tree, choose
+**Download with dependencies**, prepare the bundle and download the ZIP. Extract
+the complete ZIP, keeping its directory structure. Create `run.mjs` alongside it:
+
+```javascript
+import { loadProjectBundle } from '@valerypopoff/rivet2-node';
+
+const bundle = await loadProjectBundle('./rivet-bundle.json');
+const runner = bundle.createProcessor({
+  // Omit graph to use the root project's configured Main Graph.
+  inputs: { prompt: 'Hello' }, // Replace with your graph's inputs.
+});
+try {
+  const outputs = await runner.run();
+  console.log(outputs);
+} finally {
+  runner.dispose();
+}
+```
+
+Run `node run.mjs` from the extracted directory. Configure provider credentials and
+environment variables as you would for any local Rivet execution. To select another
+root graph, pass `graph` to `bundle.createProcessor`.
+
+## Contract
+
+```typescript
+loadProjectBundle(
+  manifestPath: string,
+  options?: { maxTotalBytes?: number },
+): Promise<NodeProjectBundle>
+```
+
+The returned object exposes `manifest`, `root` (the root project's metadata), and
+`createProcessor(options?)`, with the
+normal Node processor options except `projectPath`, `datasetProvider`,
+`projectReferenceLoader` and `subgraphProjectLoader`. The bundle owns those four;
+overrides are rejected. Events, inputs, context, settings, debugger and custom
+runtime providers remain available as usual.
+
+The loader checks paths, sizes, checksums, project identities, dependencies and
+Subgraph port compatibility before execution. Move the entire extracted directory
+anywhere; project titles and original server paths are not used to guess filenames.
+Each processor has independent project snapshots and datasets, including legacy
+referenced-graph aliases. An empty child snapshot never inherits the root's datasets.
+Dataset changes during a run remain in memory and do not rewrite the exported files.
+
+Both **Published** and **Saved latest** dependency choices are frozen at export
+time, including latest targets called by a published root. Unsaved editor changes
+are not exported. A missing dependency fails explicitly; the loader never silently
+substitutes another version or calls Studio Server.
+
+Projects may call back into different graphs in each other. Only an actual recursive
+graph-call cycle containing a cross-project call is rejected, not mutual project references.
+
+The default total payload limit is 512 MiB, with 64 MiB per artifact file and 256
+project/version artifacts. Increase `maxTotalBytes` deliberately for larger bundles
+exported with a raised server limit. Files must still match their manifest hashes.
+
+Builtin plugins are resolved by the Node package. Install and register external
+plugins yourself and pass the registry; bundles do not download or install plugins.
+Install Code-node npm dependencies, provide external services and adjust local file
+paths separately. Server settings, credentials and runtime libraries are not copied
+separately, but sensitive values already stored inside a project or dataset are
+included. Only execute bundles you trust: checksums are not a safety sandbox.
+
+## See also
+
+- [createProcessor](./createProcessor)
+- [Subgraphs](../../user-guide/subgraphs)

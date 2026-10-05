@@ -1,5 +1,15 @@
 # Development
 
+See [GitHub Actions performance](ci-performance.md) for measured branch-workflow
+bottlenecks, bounded API/browser concurrency, shared desktop artifacts, and the
+verification boundaries that must remain intact when optimizing CI.
+
+Portable exports have a dedicated [project-bundle contract and verification guide](project-bundles.md).
+That guide covers public ESM/CommonJS loader checks, legacy alias dataset ownership,
+release coordination, and the opt-in bounded packaging capacity probe.
+Changes to dependency collection must be verified through saved storage adapters,
+the public Node loader and the browser download flow, not source-text assertions.
+
 ## Automatic local first start
 
 Supported Compose startup initializes SQLite metadata/settings/operational stores
@@ -881,7 +891,7 @@ It removes only its own fixtures. Also
 run the API proxy-image contract tests and `yarn studio-server:ui:observe proxy-routing.spec.ts`
 with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`; require a fresh report under
 `artifacts/playwright/`, not merely a successful launcher exit.
-The Studio Server deployment-contracts CI job also runs the isolated DNS fixture.
+The Studio Server deployment-contracts gateway CI lane also runs the isolated DNS fixture.
 
 ## Environment loading
 
@@ -1108,7 +1118,7 @@ The repo now includes a headed Playwright workflow for frontend debugging and de
 Current behavior:
 
 - `yarn studio-server:ui:observe` launches Chromium in headed mode with `slowMo`, trace capture, video capture, and HTML reporting enabled
-- `yarn studio-server:ui:ci` is intentionally separate from the interactive observer: it starts a fresh Vite preview of the built hosted frontend bound explicitly to IPv4 `127.0.0.1`, runs the eight spec files enumerated in `packages/studio-server-web/playwright.ci.config.ts` headlessly, and retains trace/video/screenshots only on failure. CI restores the same-commit `studio-server-web/dist` from its build job; locally run `yarn workspace @valerypopoff/rivet-studio-server-web run build` first. These cover output paging, dashboard contracts, sidebar wrapping, streaming nodes, project activation, node-editor ownership/lifecycle, and optional numeric editing. Testing the bundle avoids HMR and thousands of source-module requests per isolated context, which can exhaust local socket buffers. Keep Vite CLI options directly after `run preview`; an extra Yarn `--` separator prevents Vite from receiving the host binding and makes Playwright's IPv4 readiness probe time out. The configured `PLAYWRIGHT_CI_PORT` is also passed to Vite so the readiness probe and server cannot silently diverge. Ordinary developer observation can still target a live Vite host.
+- `yarn studio-server:ui:ci` is intentionally separate from the interactive observer: it starts a fresh Vite preview of the built hosted frontend bound explicitly to IPv4 `127.0.0.1`, runs the explicit spec files enumerated in `packages/studio-server-web/playwright.ci.config.ts` headlessly, and retains trace/video/screenshots only on failure. CI restores the same-commit `studio-server-web/dist` from its build job; locally run `yarn workspace @valerypopoff/rivet-studio-server-web run build` first. These cover output paging, dashboard contracts, portable project-bundle downloads and local execution, sidebar wrapping, streaming nodes, project activation, node-editor ownership/lifecycle, and optional numeric editing. Testing the bundle avoids HMR and thousands of source-module requests per isolated context, which can exhaust local socket buffers. Keep Vite CLI options directly after `run preview`; an extra Yarn `--` separator prevents Vite from receiving the host binding and makes Playwright's IPv4 readiness probe time out. The configured `PLAYWRIGHT_CI_PORT` is also passed to Vite so the readiness probe and server cannot silently diverge. Ordinary developer observation can still target a live Vite host.
 - Browser observations that seed a project in local browser storage must also use `mockHostedEditorBootstrap` for the read-only configuration and evaluation-library requests. This keeps the observation about editor behavior rather than the authentication state of an unrelated API process on the developer's machine. `waitForDashboardReady` waits for both the loading overlay to disappear and the workflow-library shell to become visible: checking only that a possibly absent loading overlay is hidden can race the initial React mount and make later sidebar assertions flaky.
 - the reusable Studio Server verifier runs that same explicit browser set in the `editor-regression` job after the hosted build. It installs Chromium, uploads `artifacts/playwright/` on failure, and the final verifier rejects a skipped or failed applicable browser job
 - the runner loads the same `.env` / `.env.dev` file as the Docker scripts, so UI-gated hosts automatically reuse `RIVET_KEY`

@@ -8,7 +8,21 @@ import {
   getTransientMacDmgBuildFailure,
   isTransientMacDmgBuildFailure,
   runMacDmgBuildWithRetries,
+  macDmgBuildArgs,
 } from './build-macos-dmg.mjs';
+
+test('shared frontend override is explicit and retains target-specific native packaging', () => {
+  for (const target of ['aarch64-apple-darwin', 'x86_64-apple-darwin']) {
+    const ordinary = macDmgBuildArgs(target);
+    assert.deepEqual(ordinary.slice(-4), ['--target', target, '--bundles', 'dmg']);
+    assert.deepEqual(macDmgBuildArgs(target, true), [
+      ...ordinary,
+      '--config',
+      '../../.github/desktop-prebuilt.conf.json',
+    ]);
+  }
+  assert.throws(() => macDmgBuildArgs('unsupported'));
+});
 
 void test('recognizes only known transient macOS bundle failures', () => {
   assert.equal(

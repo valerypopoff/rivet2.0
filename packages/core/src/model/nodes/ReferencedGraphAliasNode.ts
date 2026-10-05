@@ -194,7 +194,11 @@ export class ReferencedGraphAliasNodeImpl extends NodeImpl<ReferencedGraphAliasN
       const startTime = Date.now();
 
       const outputs = await subGraphProcessor.processGraph(
-        context,
+        {
+          ...context,
+          datasetProvider:
+            context.projectReferenceLoader?.getDatasetProvider?.(referencedProject) ?? context.datasetProvider,
+        },
         inputData as Record<string, DataValue>,
         context.contextValues,
         {

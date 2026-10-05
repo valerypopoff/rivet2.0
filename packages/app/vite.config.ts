@@ -166,6 +166,8 @@ export function createRivetViteConfig(options: RivetViteConfigOptions = {}): Use
     },
     build: {
       chunkSizeWarningLimit: 10000,
+      // Compression-size reporting is diagnostic only, not bundle output.
+      reportCompressedSize: analyzeBundle,
       rollupOptions: {
         output: {
           manualChunks: (id) => {

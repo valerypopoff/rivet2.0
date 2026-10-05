@@ -23,6 +23,21 @@ const cli = '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/
 const prefix = 'rivet-local-upgrade-rehearsal-';
 const requiredPhases = REHEARSAL_PHASES;
 
+export function assertLegacyRehearsalSource(status) {
+  // Before provisioning, the status API reports the settings backend (file).
+  // Once configured, it reports the migration authority (legacy).
+  assert.equal(
+    status?.runningBackend,
+    status?.available === false ? 'file' : 'legacy',
+    'Migration rehearsal must start from legacy files, not fresh SQLite.',
+  );
+  assert.equal(
+    status?.transition?.generationId ?? null,
+    null,
+    'Source fixture must not already contain a SQLite generation.',
+  );
+}
+
 export async function stageLocalUpgradeRehearsalTools(directory) {
   await assertRealPath(directory, true);
   for (const file of REHEARSAL_TOOLS) {
@@ -135,26 +150,44 @@ export async function loadLocalUpgradeRehearsal(file) {
   assert.ok(Number.isInteger(config.port) && config.port > 0 && config.port < 65536);
   assert.equal(config.registryScript, path.join(path.dirname(resolved), 'fixture-registry.mjs'));
   await assertRealPath(config.registryScript);
+  await assertRealPath(path.join(path.dirname(resolved), 'rehearsal.env'));
   for (const name of REHEARSAL_TOOLS) await assertRealPath(path.join(path.dirname(resolved), 'fixture-tools', name));
   return config;
 }
-function rawCompose(config, args, allowFailure = false, timeoutMs = 20 * 60_000) {
-  return run(
-    'docker',
-    [
+export function rehearsalComposeInvocation(config, args, ambient = process.env) {
+  assertRehearsalEnvironment(config.env);
+  return {
+    args: [
       'compose',
       '-p',
       config.project,
+      '--env-file',
+      path.join(path.dirname(config.composeFile), 'rehearsal.env'),
       '-f',
       'deploy/studio-server/compose/docker-compose.yml',
       '-f',
       config.composeFile,
       ...args,
     ],
-    { ...process.env, ...config.env },
-    allowFailure,
-    timeoutMs,
-  );
+    // Keep host Docker/PATH configuration, but never import application
+    // settings or provider credentials into the disposable fixture.
+    env: {
+      ...Object.fromEntries(Object.entries(ambient).filter(([key]) => !/^(RIVET_|OPENAI_|PINECONE_)/i.test(key))),
+      ...config.env,
+    },
+  };
+}
+function rawCompose(config, args, allowFailure = false, timeoutMs = 20 * 60_000) {
+  const invocation = rehearsalComposeInvocation(config, args);
+  return run('docker', invocation.args, invocation.env, allowFailure, timeoutMs);
+}
+
+export async function collectRehearsalDiagnostics(probe, logs) {
+  // Diagnostic failures must not hide the original failure or prevent logs.
+  // Fixed fallbacks never publish arbitrary exception contents/credentials.
+  const diagnostic = await probe().catch(() => ({ code: 1, output: 'Fixture serving recheck unavailable.\n' }));
+  const containers = await logs().catch(() => ({ output: 'Fixture container logs unavailable.\n' }));
+  return { diagnostic, output: containers.output + '\n' + diagnostic.output };
 }
 async function compose(config, args, allowFailure = false, timeoutMs = 20 * 60_000) {
   const deadline = performance.now() + timeoutMs;
@@ -657,6 +690,8 @@ async function main() {
   await fs.mkdir(artifactRoot, { recursive: true });
   const directory = await fs.mkdtemp(path.join(artifactRoot, project + '-'));
   const file = path.join(directory, 'manifest.json');
+  // An explicit, owned empty env file disables Compose's repository .env.
+  await fs.writeFile(path.join(directory, 'rehearsal.env'), '', { mode: 0o600, flag: 'wx' });
   const port = await availablePort();
   const env = {
     RIVET_API_IMAGE: images.api.id,
@@ -669,6 +704,10 @@ async function main() {
     // Dummy OAuth is confined to this owned, isolated loopback-published fixture.
     RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
     RIVET_DEVELOPMENT_AUTH_CLIENTS: '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1',
+    // Do not inherit operator configuration from the caller or repository .env.
+    RIVET_LOCAL_METADATA_UPGRADE_ENABLED: '0',
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
+    RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '',
     RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB: '32',
     RIVET_VM_MIGRATION_ENABLED: '0',
     RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: '/workflows',
@@ -732,7 +771,10 @@ async function main() {
         'filesystem-artifacts-init': {
           volumes: volumes.filter((mount) => mount.type === 'volume'),
           command: [
-            'mkdir -p /restored; chown -R 10001:10001 /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /restored',
+            // An empty retained folder is genuine legacy source. It must exist
+            // BEFORE the supervisor starts, otherwise fresh-install setup
+            // selects SQLite before the API can seed our migration fixture.
+            'mkdir -p /restored /workflows/empty; chown -R 10001:10001 /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /restored',
           ],
         },
       },
@@ -748,6 +790,7 @@ async function main() {
   await fs.writeFile(file, JSON.stringify(config), { mode: 0o600 });
   let cleanupAllowed = false;
   let successfulReport;
+  let stage = 'fixture-startup';
   try {
     const existing = await run(
       'docker',
@@ -773,6 +816,7 @@ async function main() {
     await waitReady(config);
     await controlLocalUpgradeRehearsal(file, 'assert-isolation');
     const login = await fetch(config.baseUrl + '/__rivet_auth', {
+      signal: AbortSignal.timeout(30_000),
       method: 'POST',
       redirect: 'manual',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -789,6 +833,8 @@ async function main() {
       assert.ok(response.ok, `${route}: ${response.status}`);
       return response.json();
     };
+    assertLegacyRehearsalSource(await request('/api/app-settings/local-upgrade'));
+    stage = 'legacy-source-seeding';
     const contents = await fs.readFile(
       path.join(root, 'deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project'),
       'utf8',
@@ -798,7 +844,6 @@ async function main() {
       fileName: 'rehearsal.rivet-project',
       contents,
     });
-    await request('/api/workflows/folders', { name: 'empty', parentRelativePath: '' });
     await request(
       '/api/app-settings/environment-variables',
       {
@@ -861,6 +906,19 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     assert.ok(recorded, 'Source fixture must include a persisted recording.');
+    await compose(config, [
+      'exec',
+      '-T',
+      'api',
+      'node',
+      '-e',
+      `const fs=require('node:fs'),assert=require('node:assert/strict');
+       assert.ok(fs.statSync('/workflows/rehearsal.rivet-project').isFile());
+       assert.ok(fs.statSync('/workflows/empty').isDirectory());
+       assert.equal(fs.existsSync('/data/local-metadata/ui-managed/ui-configuration.json'),false,
+         'Migration fixture unexpectedly initialized a fresh SQLite installation');`,
+    ]);
+    stage = 'migration-provisioning';
     await compose(config, ['stop', '-t', '10', 'api']);
     await compose(config, [
       'run',
@@ -913,6 +971,8 @@ async function main() {
     );
     await compose(config, ['up', '-d', '--no-build', '--force-recreate', 'api']);
     await waitReady(config);
+    assertLegacyRehearsalSource(await request('/api/app-settings/local-upgrade'));
+    stage = 'browser-rehearsal';
     console.log(
       '[local-upgrade-rehearsal] Isolated production images ready; exercising the real browser/API/restart/recovery path.',
     );
@@ -962,6 +1022,7 @@ async function main() {
         images,
         checkedAt: new Date().toISOString(),
         failure: 'rehearsal-failed',
+        stage,
         phases: requiredPhases.map((name) => ({
           name,
           status: completed.some((phase) => phase.name === name && phase.status === 'passed') ? 'passed' : 'not-run',
@@ -970,23 +1031,25 @@ async function main() {
       }),
     );
     console.error(
-      '[local-upgrade-rehearsal] Failure; inspect artifacts/playwright and the isolated container diagnostics.',
+      `[local-upgrade-rehearsal] Failure at ${stage}; inspect artifacts/playwright and the isolated container diagnostics.`,
     );
     if (!cleanupAllowed) {
       throw new Error('Fixture safety checks refused startup; no container diagnostics or cleanup were attempted.');
     }
     // Recheck only this generated fixture through the read-only serving owner.
     // Keep the fixed mismatch field, never source data or an exception stack.
-    const diagnostic = await compose(
-      config,
-      [
-        'exec',
-        '-T',
-        'api',
-        'node',
-        '--input-type=module',
-        '-e',
-        readOnlyRehearsalSqliteScript(`
+    const { diagnostic, output } = await collectRehearsalDiagnostics(
+      () =>
+        compose(
+          config,
+          [
+            'exec',
+            '-T',
+            'api',
+            'node',
+            '--input-type=module',
+            '-e',
+            readOnlyRehearsalSqliteScript(`
       const base='/app/packages/studio-server-api/dist/studio-server-api/src/';
       const db=openReadOnly('/data/local-metadata/upgrade.sqlite');
       const jobs=db.prepare('SELECT job_json FROM jobs').all().map(row=>JSON.parse(row.job_json));db.close();
@@ -1002,12 +1065,14 @@ async function main() {
           console.log(/^SQLite serving verification failed: [a-z -]+\\.$/.test(error.message)?error.message:'Fixture serving recheck failed without a safe mismatch field.');
         }
       }`),
-      ],
-      true,
+          ],
+          true,
+          15_000,
+        ),
+      () => compose(config, ['logs', '--no-color', '--tail', '120'], true, 15_000),
     );
-    const logs = await compose(config, ['logs', '--no-color', '--tail', '120'], true);
-    await fs.writeFile(path.join(directory, 'container-fixture.log'), logs.output + '\n' + diagnostic.output);
-    console.error(diagnostic.output.slice(-1000));
+    await fs.writeFile(path.join(directory, 'container-fixture.log'), output);
+    if (diagnostic.code === 0) console.error(diagnostic.output.slice(-1000));
     throw new Error('Isolated local upgrade rehearsal failed. Inspect redacted report and protected test artifacts.');
   } finally {
     try {

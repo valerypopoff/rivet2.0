@@ -12,6 +12,7 @@ export default defineConfig({
   testMatch: [
     'fullscreen-output-search-paging.spec.ts',
     'hosted-dashboard-contracts.spec.ts',
+    'project-bundle.spec.ts',
     'sidebar-name-wrapping.spec.ts',
     'streaming-nodes.spec.ts',
     'project-tree-activation.spec.ts',
@@ -24,7 +25,9 @@ export default defineConfig({
     timeout: 20_000,
   },
   fullyParallel: false,
-  workers: 1,
+  // Files own browser contexts, mocked APIs and temporary artifacts. Preserve
+  // serial scenarios within each file; use two independent files per runner.
+  workers: 2,
   outputDir: '../../artifacts/playwright/ci-test-results',
   reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/ci-report' }]],
   use: {

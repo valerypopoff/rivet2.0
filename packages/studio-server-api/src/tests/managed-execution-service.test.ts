@@ -4,6 +4,7 @@ import type { Pool } from 'pg';
 import { loadProjectAndAttachedDataFromString, serializeProject, type ProjectId } from '@valerypopoff/rivet2-node';
 
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
+import { collectProjectBundle, type BundleSnapshot } from '../routes/workflows/project-bundle.js';
 import {
   ManagedWorkflowExecutionCache,
   type ManagedWorkflowRunKind,
@@ -587,6 +588,28 @@ test('Subgraph target resolution distinguishes managed saved and published revis
   assert.equal(published.project.metadata.title, 'Published target');
   assert.equal(latest.sourceProjectPath, getManagedWorkflowProjectVirtualPath(workflow.relative_path));
   assert.equal(fixture.getWorkflowByIdCount, 2);
+
+  const snapshot = async (): Promise<BundleSnapshot> =>
+    ({
+      ...(await fixture.service.loadSubgraphTarget({
+        projectId: project.metadata.id,
+        version: 'published',
+      })),
+      selectedVersion: 'published',
+    }) as BundleSnapshot;
+  const files = new Map<string, string>();
+  const bundle = await collectProjectBundle({
+    source: { root: snapshot, target: snapshot, reference: snapshot },
+    rootVersion: 'published',
+    signal: new AbortController().signal,
+    writeFile: async (name, content) => {
+      files.set(name, content);
+    },
+    progress() {},
+  });
+  assert.equal(files.get(bundle.manifest.artifacts[0]!.project.path), publishedContents);
+  assert.notEqual(files.get(bundle.manifest.artifacts[0]!.project.path), savedContents);
+  await bundle.verify();
 
   workflow.current_draft_revision_id = 'replacement-revision';
   const nextRun = await fixture.service.loadSubgraphTarget({ projectId: project.metadata.id, version: 'latest' });

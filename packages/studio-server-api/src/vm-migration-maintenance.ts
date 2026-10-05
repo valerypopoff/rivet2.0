@@ -99,6 +99,8 @@ export const vmMigrationRequestBarrier: RequestHandler = (req, res, next) => {
   // These POSTs only export existing bytes. Do not exempt all GETs: public
   // workflow GET routes execute graphs and must remain fenced.
   const projectDownload =
+    (/^\/api\/workflows\/project-bundles(?:\/[a-f0-9-]+(?:\/download)?)?$/.test(req.path) &&
+      ['POST', 'GET', 'DELETE'].includes(req.method)) ||
     (req.method === 'POST' &&
       ['/api/workflows/projects/download', '/api/workflows/projects/published-versions/download'].includes(req.path)) ||
     (req.method === 'GET' && req.path === '/api/workflows/projects/published-versions');

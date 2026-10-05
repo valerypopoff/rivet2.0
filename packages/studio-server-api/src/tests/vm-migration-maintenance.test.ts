@@ -82,6 +82,13 @@ test('VM maintenance persists across reads, blocks data routes, and permits only
       assert.equal(check(download, 'PUT').response.code, 503);
     }
     assert.equal(check('/api/workflows/projects/published-versions', 'GET').nextCalled, true);
+    const bundlePath = '/api/workflows/project-bundles/12345678-1234-1234-1234-123456789abc';
+    assert.equal(check('/api/workflows/project-bundles').nextCalled, true);
+    assert.equal(check(bundlePath, 'GET').nextCalled, true);
+    assert.equal(check(`${bundlePath}/download`, 'GET').nextCalled, true);
+    assert.equal(check(bundlePath, 'DELETE').nextCalled, true);
+    assert.equal(check(`${bundlePath}/execute`, 'GET').response.code, 503);
+    assert.equal(check(bundlePath, 'PUT').response.code, 503);
     assert.equal(check('/api/workflows/tree', 'GET').nextCalled, true);
     assert.equal(check('/api/workflows/tree').response.code, 503);
     assert.equal(check('/api/workflows/projects/published-versions').response.code, 503);

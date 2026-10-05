@@ -2,6 +2,7 @@ export * from '@valerypopoff/rivet2-core';
 
 export * from './native/NodeNativeApi.js';
 export * from './api.js';
+export * from './projectBundle.js';
 export * from './debugger.js';
 export * from './native/NodeDatasetProvider.js';
 export * from './native/DebuggerDatasetProvider.js';

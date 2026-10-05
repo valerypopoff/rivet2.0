@@ -2238,7 +2238,7 @@ export class GraphProcessor {
             let resolved = this.#subgraphTargetCache.get(key);
             if (!resolved) {
               if (!this.#context.subgraphProjectLoader) {
-                throw new Error('Subgraph calls to another project require Rivet Studio Server.');
+                throw new Error('Subgraph calls to another project require a subgraphProjectLoader. Use a project bundle locally or run through Rivet Studio Server.');
               }
               resolved = await this.#context.subgraphProjectLoader.loadTarget(target);
               if (resolved.project.metadata.id !== target.projectId) {

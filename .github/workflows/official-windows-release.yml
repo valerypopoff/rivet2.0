@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '.github/actions/**'
+      - '.github/desktop-prebuilt.conf.json'
       - '.github/scripts/**'
       - '.github/workflows/desktop-release.yml'
       - '.github/workflows/official-windows-release.yml'
@@ -21,6 +22,7 @@ on:
       - 'packages/evaluations/**'
       - 'packages/node/**'
       - 'scripts/build-wrapper-target.mjs'
+      - 'scripts/ci/desktop-web-artifact.mjs'
       - 'scripts/checks/check-graph-builder*'
       - 'scripts/sync-desktop-version.mjs'
       - 'yarn.lock'

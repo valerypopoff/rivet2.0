@@ -41,8 +41,8 @@
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx bench/runtimeSpeed.bench.ts",
     "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",
     "lint": "eslint ./src ./bench",
-    "pretest": "yarn workspace @valerypopoff/rivet2-core run build:esm",
-    "test": "tsx --test test/**/*.test.ts"
+    "pretest": "node scripts/prepare-tests.mjs",
+    "test": "yarn pretest && tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
