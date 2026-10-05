@@ -669,9 +669,6 @@ async function main() {
     // Dummy OAuth is confined to this owned, isolated loopback-published fixture.
     RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
     RIVET_DEVELOPMENT_AUTH_CLIENTS: '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1',
-    RIVET_LOCAL_METADATA_UPGRADE_ENABLED: '0',
-    RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
-    RIVET_LOCAL_METADATA_ENCRYPTION_KEY: randomUUID() + randomUUID(),
     RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB: '32',
     RIVET_VM_MIGRATION_ENABLED: '0',
     RIVET_PUBLISHED_WORKFLOWS_BASE_PATH: '/workflows',

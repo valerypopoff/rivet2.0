@@ -39,7 +39,14 @@ import { createRequire } from 'node:module';
 import { readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
 import { DatabaseSync } from 'node:sqlite';
 import { assertEmptyLocalOperationalDatabase, assertLocalOperationalSchema } from './operational-schema.js';
-import { localUpgradeFailure, type LocalUpgradeStage, type LocalUpgradeHooks } from './upgrade-diagnostics.js';
+import {
+  LocalUpgradeDiagnosticError,
+  localUpgradeFailure,
+  localUpgradeSourceReference,
+  type LocalUpgradeStage,
+  type LocalUpgradeHooks,
+} from './upgrade-diagnostics.js';
+import { listProjectPathsRecursive } from '../routes/workflows/fs-helpers.js';
 import { createHttpError } from '../utils/httpError.js';
 import type { LocalUpgradeOperation } from '../../../studio-server-shared/local-upgrade-types.js';
 import {
@@ -90,9 +97,10 @@ export function getLocalUpgradeSetupStatus() {
       process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL === '1' &&
       getServerUiAuthMode() !== 'none' &&
       getWorkflowStorageBackendMode() === 'filesystem',
-    upgradeEnabled: process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED === '1',
+    upgradeEnabled: true,
     controlRootConfigured: path.isAbsolute(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim() || ''),
-    encryptionKeyReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
+    // Compatibility with older dashboards; plaintext settings need no key.
+    encryptionKeyReady: true,
     sqliteSelected,
     liveSqlite,
     uiPreparationAvailable: !sqliteSelected && process.env.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE === '1',
@@ -149,7 +157,6 @@ export async function restartLocalUpgradeFromUi(revision: number): Promise<void>
 }
 function assertAvailable(): void {
   if (
-    process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED !== '1' ||
     process.env.RIVET_LOCAL_METADATA_SUPERVISED !== '1' ||
     process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated' ||
     process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL !== '1' ||
@@ -199,6 +206,7 @@ export async function getLocalUpgradeStatus() {
       backup: null,
       backupStatusUnreadable: false,
       copyConfigurationReady: false,
+      settingsEncryptionRequired: false,
       runningBackend: getAppSettingsBackendKind(),
       maintenance: readVmMigrationMaintenance(),
       transition: null,
@@ -248,7 +256,8 @@ export async function getLocalUpgradeStatus() {
       operation,
       backup: backup?.phase === 'creating' && !backupRunning ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
-      copyConfigurationReady: (process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '').length >= 32,
+      copyConfigurationReady: true,
+      settingsEncryptionRequired: false,
       runningBackend: selection ? 'sqlite' : 'legacy',
       maintenance,
       transition: {
@@ -296,7 +305,7 @@ export async function inspectLocalUpgradeSource() {
       inventory: capacity.fits ? await inspectVmMigrationSource() : null,
       capacity,
       backupRequired:
-        'Back up all four source roots and the encryption key; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
+        'Back up all four source roots; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
     };
   });
 }
@@ -312,7 +321,7 @@ export type LocalUpgradeCopyInput = {
   backupReference: string;
   backupSourceFingerprint: string;
   backupRestored: boolean;
-  encryptionKeyBackedUp: boolean;
+  encryptionKeyBackedUp?: boolean;
   retryJobId?: string;
 };
 export async function startLocalUpgradeCopy(
@@ -324,35 +333,14 @@ export async function startLocalUpgradeCopy(
   return exclusive('copy', async () => {
     if (getLocalMetadataServingSelection()) throw new Error('A SQLite generation is already selected.');
     await assertDrained();
-    if (
-      !input.backupRestored ||
-      !input.encryptionKeyBackedUp ||
-      !input.backupReference.trim() ||
-      input.backupReference.length > 512
-    )
-      throw new Error('A restored backup and a separately backed-up encryption key must be certified.');
+    if (!input.backupRestored || !input.backupReference.trim() || input.backupReference.length > 512)
+      throw new Error('A restored backup must be certified.');
     const key = process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '';
-    if (key.length < 32)
-      throw createHttpError(
-        409,
-        'Configure RIVET_LOCAL_METADATA_ENCRYPTION_KEY with at least 32 securely generated characters, recreate the backend and back up the key separately before copying. No copy was started.',
-        { code: 'local-encryption-key-required' },
-      );
     const source = localMetadataSourceRoots();
     await assertLocalControlPaths(localMetadataControlRoot(), source);
-    const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
-    if (!capacity.fits)
-      throw createHttpError(
-        409,
-        `Local copy capacity preflight failed (${capacity.reasons.join(', ')}). ` +
-          `Available disk: ${Math.floor(capacity.freeBytes / 1048576)} MiB; ` +
-          `estimated additional disk required: ${Math.ceil(capacity.requiredBytes / 1048576)} MiB. ` +
-          'Reload source inspection for disk, bundle and memory details. No copy was started.',
-        { code: 'local-copy-capacity' },
-      );
-    const sourceFingerprint = await fingerprintVmMigrationSource(source);
-    if (input.backupSourceFingerprint !== sourceFingerprint)
-      throw new Error('The restored backup fingerprint does not match the frozen source.');
+    // Only cheap admission checks belong in the HTTP request. Full source
+    // scans and archive hashing must run after the durable job is accepted.
+    const sourceFingerprint = input.backupSourceFingerprint;
     if (input.backupReference.startsWith('browser-backup:')) {
       const backup = await readBrowserBackup(localMetadataControlRoot());
       if (
@@ -364,12 +352,6 @@ export async function startLocalUpgradeCopy(
         backup.sourceFingerprint !== sourceFingerprint
       )
         throw new Error('The browser backup is stale or unverified. Create and download a current backup.');
-      if (
-        (await hashBackupArchive(
-          path.join(browserBackupDirectory(localMetadataControlRoot(), backup.id), 'backup.tar.gz'),
-        )) !== backup.archiveHash
-      )
-        throw new Error('The verified backup archive changed.');
     }
     const job = await withLocalMetadataControl(async (journal, store) => {
       const state = journal.read();
@@ -411,9 +393,11 @@ export async function startLocalUpgradeCopy(
       store.saveJob(next);
       return next;
     });
-    runningJob = copyGeneration(job, source, key, input.revision, hooks).finally(() => {
-      runningJob = null;
-    });
+    runningJob = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => copyGeneration(job, source, key, input.revision, hooks))
+      .finally(() => {
+        runningJob = null;
+      });
   });
 }
 
@@ -433,6 +417,33 @@ async function copyGeneration(
   };
   try {
     await onStage('preflight');
+    await assertDrained();
+    await onStage('capacity');
+    const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
+    if (!capacity.fits) throw new LocalUpgradeDiagnosticError('capacity-refused');
+    await onStage('source-fingerprint');
+    if ((await fingerprintVmMigrationSource(source)) !== job.sourceFingerprint)
+      throw new LocalUpgradeDiagnosticError('source-fingerprint-mismatch');
+    await onStage('backup-verification');
+    if (job.backupReference?.startsWith('browser-backup:')) {
+      const backup = await readBrowserBackup(localMetadataControlRoot());
+      if (
+        !backup ||
+        backup.phase !== 'ready' ||
+        job.backupReference !== `browser-backup:${backup.id}:${backup.archiveHash}` ||
+        backup.revision !== revision ||
+        backup.pausedAt !== readVmMigrationMaintenance()?.enteredAt ||
+        backup.sourceFingerprint !== job.sourceFingerprint
+      )
+        throw new LocalUpgradeDiagnosticError('backup-evidence-mismatch');
+      if (
+        (await hashBackupArchive(
+          path.join(browserBackupDirectory(localMetadataControlRoot(), backup.id), 'backup.tar.gz'),
+        )) !== backup.archiveHash
+      )
+        throw new LocalUpgradeDiagnosticError('backup-archive-mismatch');
+    }
+    await assertDrained();
     const paths = localMetadataGenerationPaths(localMetadataControlRoot(), job.id);
     await fs.mkdir(paths.root, { recursive: true, mode: 0o700 });
     await fs.mkdir(paths.operationalRoot, { mode: 0o700, recursive: true });
@@ -524,7 +535,6 @@ async function copyGeneration(
       source,
       backupReference: job.backupReference!,
       backupConfirmedAt: job.startedAt,
-      encryptionKeyId: hashLocalUpgradeValue(key),
       report,
       operational,
     };
@@ -645,12 +655,26 @@ export async function getLocalUpgradeReport() {
       reportHash: generation.reportHash,
       backupReference: certificate.backupReference,
       backupCertification: certificate.backupReference.startsWith('browser-backup:')
-        ? 'Server restored and verified the archive; operator attested saving the download outside the VM and protecting the encryption key separately. Not proof of an off-VM restore.'
-        : 'Operator attested a separately restored backup and encryption key; not an automated off-VM backup service.',
+        ? 'Server restored and verified the archive; operator attested saving the download outside the VM. Not proof of an off-VM restore.'
+        : 'Operator attested a separately restored backup; not an automated off-VM backup service.',
       report: certificate.report,
       operational: certificate.operational,
     };
   }, true);
+}
+
+/** Optional read-only name lookup. Paths never enter the durable failure ledger. */
+export async function getLocalUpgradeProjectReference(reference: string) {
+  assertAvailable();
+  if (!/^[a-f0-9]{16}$/.test(reference)) throw createHttpError(400, 'Invalid project reference.');
+  const root = localMetadataSourceRoots().workflows;
+  const paths = [];
+  for (const file of await listProjectPathsRecursive(root)) {
+    const relative = path.relative(root, file).replace(/\\/g, '/');
+    if (localUpgradeSourceReference(relative) === reference) paths.push(relative);
+  }
+  // Preserve ambiguity instead of silently choosing a hash collision.
+  return { reference, paths };
 }
 export async function transitionLocalUpgrade(
   action: 'activate' | 'validate' | 'return-to-legacy' | 'resume' | 'cancel',

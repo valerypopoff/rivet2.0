@@ -24,6 +24,7 @@ import {
 import type { PostgresRivetEvaluationStore } from '../evaluation-runs/managed-store.js';
 import { configureStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
 
+// test-style: fixture-read: loads a serialized Rivet project fixture, not implementation source.
 const projectContents = await fs.readFile(
   fileURLToPath(
     new URL('../../../../deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project', import.meta.url),
@@ -375,7 +376,8 @@ function queryIndex(queries: readonly Query[], fragment: string): number {
   return index;
 }
 
-test('hosted Evaluation metrics never overlap slow aggregate reads across scheduler ticks', async () => {
+test('hosted Evaluation metrics never overlap slow aggregate reads across scheduler ticks', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const pool = new SlowMetricsPool();
   const store = { getCalls: 0 };
   const coordinator = createCoordinator(pool, store, { workerEnabled: true, pollMs: 250 });
@@ -384,8 +386,14 @@ test('hosted Evaluation metrics never overlap slow aggregate reads across schedu
   try {
     coordinator.start();
     await pool.metricsStarted;
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    assert.equal(pool.metricQueryCalls, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    for (let tick = 0; tick < 3; tick += 1) {
+      const previousQueries = pool.queries.length;
+      t.mock.timers.tick(250);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(pool.queries.length > previousQueries, 'Claims must continue while metrics are blocked.');
+      assert.equal(pool.metricQueryCalls, 1, 'Each scheduler tick shares the pending aggregate read.');
+    }
   } finally {
     pool.releaseMetrics();
     await coordinator.stop();

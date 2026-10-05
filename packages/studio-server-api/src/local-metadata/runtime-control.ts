@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAppDataRoot, getWorkflowRecordingsRoot, getWorkflowsRoot } from '../security.js';
@@ -210,8 +211,22 @@ export async function initializeLocalMetadataServing(): Promise<void> {
     await assertLocalGenerationDirectories(
       localMetadataGenerationPaths(localMetadataControlRoot(), state.generation!.id),
     );
-    if (certificate.encryptionKeyId !== hashLocalUpgradeValue(process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || ''))
-      throw new Error('Local settings encryption key is missing or differs from the verified generation.');
+    if (certificate.encryptionKeyId) {
+      const settings = new DatabaseSync(
+        localMetadataGenerationPaths(localMetadataControlRoot(), certificate.generationId).settingsDatabasePath,
+        { readOnly: true },
+      );
+      try {
+        const version = settings.prepare('PRAGMA user_version').get() as { user_version: number };
+        if (
+          version.user_version === 1 &&
+          certificate.encryptionKeyId !== hashLocalUpgradeValue(process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '')
+        )
+          throw new Error('Legacy encrypted settings require the original key for plaintext conversion.');
+      } finally {
+        settings.close();
+      }
+    }
     if (state.phase === 'sqlite-validation') {
       const fresh = await freshLocalGenerationProof(certificate);
       if (

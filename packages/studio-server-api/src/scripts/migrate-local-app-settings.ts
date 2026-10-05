@@ -11,7 +11,7 @@ import { collectSourceAppSettings } from './migrate-app-settings.js';
 export async function migrateLocalAppSettings(options: {
   sourceRoot: string;
   databasePath: string;
-  encryptionKey: string;
+  encryptionKey?: string;
   verifyOnly?: boolean;
 }): Promise<number> {
   const expected = await collectSourceAppSettings(options.sourceRoot);

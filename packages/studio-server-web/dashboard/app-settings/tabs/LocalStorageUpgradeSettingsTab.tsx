@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { LoadingButton } from '@atlaskit/button';
 import TextField from '@atlaskit/textfield';
 import { RIVET_API_BASE_URL } from '../../../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from '../../apiRequest';
-import type { LocalUpgradeOperation } from '../../../../studio-server-shared/local-upgrade-types';
+import {
+  LOCAL_UPGRADE_FAILURE_REASONS,
+  type LocalUpgradeFailureReason,
+  type LocalUpgradeOperation,
+} from '../../../../studio-server-shared/local-upgrade-types';
 import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
 type Status = {
+  settingsEncryptionRequired?: boolean;
   uiRestartAvailable?: boolean;
   runtimeReady?: boolean;
   backupStatusUnreadable?: boolean;
@@ -40,7 +45,7 @@ type Status = {
     phase: string;
     message: string | null;
     stage?: string;
-    failure?: { stage: string; code: string } | null;
+    failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
 };
 type Inventory = {
@@ -69,7 +74,7 @@ type Inventory = {
 };
 const base = `${RIVET_API_BASE_URL}/app-settings/local-upgrade`;
 const actionProgress = {
-  prepare: 'Preparing persistent control storage and its encryption key, then restarting the backend…',
+  prepare: 'Preparing persistent control storage, then restarting the backend…',
   restart: 'Restarting both backend processes. This panel reconnects automatically; writes stay fenced…',
   inspect: 'Inspecting source data and checking capacity…',
   pause: 'Pausing new writes and waiting for active work to drain…',
@@ -95,6 +100,7 @@ function UpgradeActionButton({
   loading,
   disabled,
   primary = false,
+  description,
   onClick,
   children,
 }: {
@@ -102,9 +108,11 @@ function UpgradeActionButton({
   loading: boolean;
   disabled: boolean;
   primary?: boolean;
+  description?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
+  const descriptionId = useId();
   return (
     <>
       <LoadingButton
@@ -112,11 +120,17 @@ function UpgradeActionButton({
         className="local-upgrade-action button-size-l"
         isLoading={loading}
         aria-busy={loading}
+        aria-describedby={description ? descriptionId : undefined}
         isDisabled={disabled}
         onClick={onClick}
       >
         {children}
       </LoadingButton>
+      {description && (
+        <p id={descriptionId} className="app-settings-field-help">
+          {description}
+        </p>
+      )}
       {loading && (
         <p role="status" className="app-settings-field-help">
           {actionProgress[action]}
@@ -154,6 +168,35 @@ export function LocalStorageUpgradeSettingsTab() {
   } | null>(null);
   const setupSnapshot = useRef(setup);
   const [status, setStatus] = useState<Status | null>(null);
+  const [projectDiagnostic, setProjectDiagnostic] = useState<{ token: string; paths: string[] } | null>(null);
+  const diagnosticReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
+  const diagnosticToken = diagnosticReference ? `${status?.job?.id}:${diagnosticReference}` : null;
+  useEffect(() => {
+    if (!diagnosticToken || !diagnosticReference || !/^[a-f0-9]{16}$/.test(diagnosticReference)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
+    void request<{ reference: string; paths: string[] }>(
+      `/project-reference?reference=${diagnosticReference}`,
+      undefined,
+      controller.signal,
+    )
+      .then((result) => {
+        if (
+          !controller.signal.aborted &&
+          result.reference === diagnosticReference &&
+          Array.isArray(result.paths) &&
+          result.paths.every((value) => typeof value === 'string')
+        )
+          setProjectDiagnostic({ token: diagnosticToken, paths: result.paths });
+      })
+      .catch(() => {
+        /* Optional name lookup cannot unlock controls or conceal the durable failure. */
+      });
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [diagnosticToken, diagnosticReference]);
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [pendingAction, setPendingAction] = useState<UpgradeAction | null>(null);
   const [awaitingRestart, setAwaitingRestart] = useState(false);
@@ -283,7 +326,8 @@ export function LocalStorageUpgradeSettingsTab() {
   };
   const transition = status?.transition;
   const guided = status?.uiRestartAvailable === true || setup?.uiRestartAvailable === true;
-  const needsPreparation = setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
+  const needsPreparation =
+    setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
   const resumed = transition?.phase === 'sqlite-live' || transition?.phase === 'legacy-resumed';
   const activeAction =
     pendingAction ?? (status?.operation === 'resume' && resumed ? 'finish-resume' : status?.operation);
@@ -342,7 +386,9 @@ export function LocalStorageUpgradeSettingsTab() {
         ])
       : null;
   const backupRestored = backupToken !== null && backupRestoredFor === backupToken;
-  const keyBackedUp = backupToken !== null && keyBackedUpFor === backupToken;
+  // Older servers still require key attestation; new plaintext servers do not.
+  const settingsEncryptionRequired = status?.settingsEncryptionRequired !== false;
+  const keyBackedUp = !settingsEncryptionRequired || (backupToken !== null && keyBackedUpFor === backupToken);
   const resumeToken =
     validating && transition?.generationId
       ? `${transition.generationId}:${transition.phase}:${transition.revision}:${status?.maintenance?.enteredAt}`
@@ -447,7 +493,7 @@ export function LocalStorageUpgradeSettingsTab() {
           A local storage operation is still running on the server. Other actions stay locked until it finishes.
         </p>
       )}
-      {status?.available && status.copyConfigurationReady === false && (
+      {settingsEncryptionRequired && status?.available && status.copyConfigurationReady === false && (
         <p role="alert" className="app-settings-field-help app-settings-inline-note">
           Copying is blocked: configure RIVET_LOCAL_METADATA_ENCRYPTION_KEY with at least 32 securely generated
           characters, recreate the backend and back up the key separately. If this upgrade already has a candidate,
@@ -459,9 +505,9 @@ export function LocalStorageUpgradeSettingsTab() {
         <section className="app-settings-section" aria-label="Server preparation">
           <h4 className="app-settings-section-title">Prepare this server</h4>
           <p className="app-settings-field-help">
-            The server creates private, persistent control storage and a securely generated encryption key. Both backend
-            processes restart automatically. This does not migrate data or pause writes. You will download the key
-            separately with the backup.
+            The server prepares private, persistent control storage automatically. Both backend processes restart. This
+            does not migrate data or pause writes. Local settings are stored without encryption; no encryption key or
+            .env configuration is needed.
           </p>
           <UpgradeActionButton
             action="prepare"
@@ -513,10 +559,16 @@ export function LocalStorageUpgradeSettingsTab() {
           </UpgradeActionButton>
         )}
         <details open={!guided}>
-          <summary>Source details and individual controls</summary>
+          <summary>Advanced</summary>
           <div className="local-upgrade-details-body">
+            <p className="app-settings-field-help">
+              {guided
+                ? 'Optional individual controls. The main pause-and-backup button performs these steps and starts backup creation for you.'
+                : 'Use these individual controls to inspect and pause the source before creating a backup.'}
+            </p>
             <UpgradeActionButton
               action="inspect"
+              description="Checks source folders, inventory, warnings and disk/memory capacity without changing data or pausing writes."
               loading={activeAction === 'inspect'}
               disabled={disabled || !initial || !!status?.maintenance || restartRequired}
               onClick={() =>
@@ -570,6 +622,7 @@ export function LocalStorageUpgradeSettingsTab() {
             )}
             <UpgradeActionButton
               action="pause"
+              description="Blocks new writes and runs, then waits for active work to finish. Does not create a backup."
               loading={activeAction === 'pause' || (initial && !!status?.maintenance && status.drain?.ready === false)}
               disabled={disabled || !inventory || !initial || !!status?.maintenance || restartRequired}
               onClick={() =>
@@ -607,8 +660,9 @@ export function LocalStorageUpgradeSettingsTab() {
             <p className="app-settings-field-help">
               Create a backup of all four roots while paused. The server restores the archive into a separate scratch
               directory and checks that it matches the frozen source. Download and save it outside this VM before
-              copying. The archive contains private settings and credentials: store it securely. Download the encryption
-              key separately and keep it protected, apart from the archive. Never paste the key here.
+              copying. The archive contains unencrypted private settings and credentials: store it securely.
+              {settingsEncryptionRequired &&
+                ' This older server also requires a separate encryption-key backup. Never paste the key here.'}
             </p>
             <UpgradeActionButton
               action="backup"
@@ -647,13 +701,15 @@ export function LocalStorageUpgradeSettingsTab() {
                 >
                   Download verified backup
                 </LoadingButton>
-                <LoadingButton
-                  className="local-upgrade-action button-size-l"
-                  isDisabled={disabled || status?.copyConfigurationReady === false}
-                  onClick={() => downloadBackup(true)}
-                >
-                  Download encryption key separately
-                </LoadingButton>
+                {settingsEncryptionRequired && (
+                  <LoadingButton
+                    className="local-upgrade-action button-size-l"
+                    isDisabled={disabled || status?.copyConfigurationReady === false}
+                    onClick={() => downloadBackup(true)}
+                  >
+                    Download encryption key separately
+                  </LoadingButton>
+                )}
                 {downloadStarted && (
                   <p role="status" className="app-settings-field-help">
                     Check your browser downloads. Only confirm below after the files have finished downloading and are
@@ -736,12 +792,14 @@ export function LocalStorageUpgradeSettingsTab() {
                     : 'I restored a separate backup of all four source roots.'
                 }
               />
-              <BooleanSetting
-                checked={keyBackedUp}
-                disabled={disabled || backupToken === null}
-                onChange={(checked) => setKeyBackedUpFor(checked ? backupToken : null)}
-                label="I backed up the local settings encryption key separately."
-              />
+              {settingsEncryptionRequired && (
+                <BooleanSetting
+                  checked={keyBackedUp}
+                  disabled={disabled || backupToken === null}
+                  onChange={(checked) => setKeyBackedUpFor(checked ? backupToken : null)}
+                  label="I backed up the local settings encryption key separately."
+                />
+              )}
             </div>
             {backupToken === null && (
               <p className="app-settings-field-help">
@@ -764,7 +822,7 @@ export function LocalStorageUpgradeSettingsTab() {
                 backupReference,
                 backupSourceFingerprint: backupFingerprint,
                 backupRestored,
-                encryptionKeyBackedUp: keyBackedUp,
+                ...(settingsEncryptionRequired ? { encryptionKeyBackedUp: keyBackedUp } : {}),
                 ...(['interrupted', 'failed'].includes(status?.job?.phase ?? '')
                   ? { retryJobId: status!.job!.id }
                   : {}),
@@ -782,6 +840,15 @@ export function LocalStorageUpgradeSettingsTab() {
             {status.job.message}
             {status.job.failure &&
               ` Failure: ${status.job.failure.code} at ${status.job.failure.stage}. Download the diagnostic report; no exception contents or secrets are included.`}
+            {status.job.failure?.reason &&
+              Object.hasOwn(LOCAL_UPGRADE_FAILURE_REASONS, status.job.failure.reason) &&
+              ` ${LOCAL_UPGRADE_FAILURE_REASONS[status.job.failure.reason]}`}
+            {status.job.failure?.sourceReference &&
+              /^[a-f0-9]{16}$/.test(status.job.failure.sourceReference) &&
+              ` Project reference: ${status.job.failure.sourceReference}.`}
+            {projectDiagnostic?.token === diagnosticToken &&
+              projectDiagnostic.paths.length > 0 &&
+              ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
         )}
       </section>

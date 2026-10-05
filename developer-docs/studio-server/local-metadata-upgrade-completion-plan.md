@@ -2,11 +2,30 @@
 
 ## Browser backup follow-up
 
+Fresh supported Compose installations now initialize the same SQLite/file layout
+before serving children start; only existing file-backed installations use the
+wizard. First-run initialization requires four empty roots, an independent UUID
+binding and verified empty schemas. Interrupted initialization retries the same
+generation and never falls back to legacy. Fresh/completed SQLite and managed
+deployments hide the local upgrade tab/reminder; incomplete legacy or paused
+upgrades retain guided controls. This is separate from the production-data and
+exact-image qualification gates below.
+
+Current storage contract: new local App Settings use plaintext SQLite schema version 2.
+The supported Compose wizard automatically selects its persistent control root and
+does not require the enable flag or an encryption key in `.env`. New backup/copy flows
+have one archive download/attestation, not separate key steps. Existing encrypted
+version-1 settings convert atomically only after write resumption; original keys must
+remain available until then (UI-owned keys are retained automatically). Lost keys or
+control bindings must fail closed. Historical encrypted-storage evidence below
+describes the older releases, not a current key requirement. See the updated runbook
+for custom-root adoption and compatibility limitations.
+
 The normal supervised Compose wizard now also owns initial preparation and necessary
 backend restarts. The primary flow groups inspection/pause/backup, off-VM downloads
 and exact copy, paused activation/automatic validation, and explicit final resumption.
 Manual fingerprint entry remains an advanced alternative. Tests must cover private
-setup, retained key/binding, lost-volume refusal, graceful restart timer cleanup,
+setup, retained identity/binding and old-key compatibility, lost-volume refusal, graceful restart timer cleanup,
 API/executor readiness, stale/unauthorized restart requests and browser reconnect.
 This does not turn offline disaster recovery, independent actual-data rehearsal or
 post-resumption restore qualification into automatic browser operations.
@@ -78,7 +97,7 @@ An initial host-source API run was invalidated by running the style guard concur
 
 Finish and qualify the existing supervised single-host files-to-SQLite upgrade. Keep artifact bytes as local files; move only the metadata domains defined in [the ownership contract](./local-metadata-upgrade.md). This does not change the Storage tab to S3/PostgreSQL or redesign Kubernetes.
 
-The conversion service, maintenance fence, encrypted settings backend, selected serving, restart coordination, exact verifier, UI and pre-resumption recovery already exist. Build on those owners rather than creating a second conversion engine.
+The conversion service, maintenance fence, plaintext settings backend with legacy encrypted reads, selected serving, restart coordination, exact verifier, UI and pre-resumption recovery already exist. Build on those owners rather than creating a second conversion engine.
 
 Use two distinct completion levels:
 
@@ -206,7 +225,7 @@ This is operational evidence, not something a repository patch can fabricate. Ac
 Production changes require a separately approved maintenance window.
 
 1. Deploy the qualified image/Compose version with upgrade disabled and confirm legacy serving. Verify source paths, permissions, owner lease, available resources and the preserved recovery image/configuration.
-2. Provision control storage/key securely. Freeze/drain and take a new independently verified production backup. Earlier clone evidence does not certify files changed since that snapshot.
+2. Prepare persistent control storage through the supported wizard. Preserve any original key needed by an older encrypted database. Freeze/drain and take a new independently verified production backup. Earlier clone evidence does not certify files changed since that snapshot.
 3. Copy/verify, activate while paused, restart and validate. If any requirement fails, stay paused and recover to legacy using the tested UI/CLI procedure. Do not resume SQLite writes to investigate a failed validation.
 4. Review comparison results and recovery evidence. Only then acknowledge and resume writes, restart, and run the approved controlled production smoke checks.
 5. Take a coordinated SQLite-generation-plus-artifacts/control backup. Monitor saves, publications, recording completion, library jobs, readiness, disk/RAM and integrity during an agreed observation window. Keep retained legacy sources and the pre-upgrade backup through the agreed recovery period; this plan does not add automatic deletion.

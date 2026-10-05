@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+// test-style: fixture-read: reads only temporary project/dataset bytes to verify atomic crash recovery.
+
 import {
   FilesystemProjectTransactionCleanupPendingError,
   FilesystemProjectTransactionInterruption,

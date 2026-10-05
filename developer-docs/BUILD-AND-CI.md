@@ -153,7 +153,7 @@ Runs the default runtime/package test matrix:
 - `yarn workspace @valerypopoff/rivet2-core run test`
 - `yarn workspace @valerypopoff/rivet2-node run test`
 - `yarn workspace @valerypopoff/rivet2-evaluations run test`
-- `yarn test:app` (Core ESM prerequisite, TypeScript discovery and explicit TSX batches)
+- `yarn test:app` (Core ESM prerequisite, explicit bounded TS/TSX test batches)
 - `yarn workspace @valerypopoff/rivet-app-executor run test`
 - `yarn workspace @valerypopoff/rivet2-cli run test`
 
@@ -272,14 +272,15 @@ fixture changes require the full Kubernetes gate. The Studio Server aggregate
 accepts a skip only after successful classification explicitly returns `false`;
 a failed classifier or missing decision fails verification.
 
-The root App runner builds Core's ESM prerequisite, then lets Node/tsx discover
-TypeScript tests and runs the missed `.tsx` component tests explicitly in batches
-of at most 32 files. Calling the App workspace's `test` directly does not include
-those TSX tests. Keep discovery internal to the runner: expanding the app's full
-test list exceeds the Windows command-line limit before tests can start. CI passes
-`--shard-index <zero-based-index> --shard-count 4` to the root script, which sorts
-both TypeScript and TSX files and launches only the selected subset through a direct
-Node child process. Every test belongs to exactly one deterministic shard. Use
+The root App runner builds Core's ESM prerequisite locally (or validates the
+same-commit artifact in CI), then explicitly executes every discovered TS/TSX
+test in batches of at most 32 files. Calling the App workspace's `test` directly
+relies on runtime-dependent implicit discovery instead. Keep discovery internal
+to the runner: expanding the app's full test list exceeds the Windows command-line
+limit before tests can start. CI passes `--shard-index <zero-based-index>
+--shard-count 4` to the root script, which sorts all supported test suffixes and
+launches only that subset, in the same bounded batches, through direct Node child
+processes. Every test belongs to exactly one deterministic shard. Use
 the App workspace's `test:files` for a small explicit set, not one expanded
 full-suite shell glob. Both App test commands preload
 `packages/app/scripts/register-test-browser-assets.mjs`, which supplies Node-only
@@ -321,6 +322,87 @@ that output pruning is parked: Skip unused outputs has active per-node coverage.
 The Studio Server monorepo import added its existing source-contract tests to this
 same shrinking baseline. They are migration debt, not precedent for new static tests;
 remove each entry when its contract moves behind an observable owner seam.
+
+### CI test ownership and reliability
+
+Keep one behavioral owner for each invariant, with a small number of integration
+checks proving that owners are wired together. The package unit suites own engine,
+editor-state, protocol and persistence behavior; Studio Server API shards own route
+and storage integration; the headless editor lane owns rendered interactions.
+Deployment/image rehearsals and desktop packaging cover different runtime/platform
+boundaries and are not substitutes for, or duplicates of, those unit suites.
+Do not remove security, migration fault injection, rollback, restored-copy or
+same-commit image promotion gates merely to reduce the assertion count.
+
+The October 2026 cleanup replaces font/CSS/TSX source assertions with one isolated
+dashboard browser contract in `hosted-dashboard-contracts.spec.ts`. It renders all
+seven dashboard dialogs, checks their shared theme and editor font registration,
+and exercises the project-health tab using the project's metadata identity.
+The four node-editor ownership scenarios now exercise focused and unfocused
+switches in the same workspace, using distinct edit markers; library ownership,
+invalid drafts and lifecycle races remain separate. This removes repeated app
+startup without losing those boundaries.
+The migration ledger retains the original imported test blobs and records the
+new browser contract as their reviewed current successor. Retiring an imported
+test must not leave a missing destination in repository verification.
+
+The editor CI lane previews the built frontend already restored from its
+same-commit build artifact. It does not launch an HMR source server or rebuild
+the app in each consumer job. Besides checking the shipped bundle, this bounds
+browser module requests and avoids local socket exhaustion from many isolated
+contexts fetching thousands of development modules. For a local CI-equivalent
+run, build the web workspace first; interactive observations can still use Vite
+development mode. No automatic retry hides a failed asset request.
+
+Web-app mounting and reconnect tests use a bounded state waiter for actual DOM
+and protocol state, rather than fixed iteration counts or sleeps for presumed
+completion. Negative reconnect and backoff deadlines use Node's mock
+timers after initial DOM mounting; they advance to both sides of each deadline.
+Sidebar icon/label alignment is sampled atomically in one browser turn and polled
+against the same half-line tolerance; separate geometry calls can straddle font
+loading or folder layout and falsely report a permanent misalignment.
+Always register fixture cleanup before assertions. A bounded state waiter is a
+diagnostic timeout, not a promise that every CI runner completes at a fixed speed.
+
+App and API shard CLIs share `scripts/ci/test-shard-options.mjs`. Unknown/repeated
+flags, non-integer values, invalid coordinates and empty selections fail even with `--check`;
+regressions exercise both actual Yarn command entrypoints, not only the parser.
+The shared coordinate-validation cases run once with assertions that both runners
+use that owner. Exact-once discovery and the existing round-robin assignment remain covered.
+Local full App runs and CI shards use that same explicit file list, including
+TSX and `.spec`/`.mts`/`.cts` tests, in batches of at most 32 files. No implicit
+Node discovery pass can omit a supported suffix or run an unrelated test twice;
+the batch limit also applies to growing CI shards on Windows.
+App shards opt into `RIVET_APP_TEST_DEPENDENCIES=prebuilt` in CI. The runner
+validates compiled exports before testing and never rebuilds Core in that mode;
+a missing or unloadable artifact stops the shard before any tests start. Local
+runs default to `build` and still build Core automatically. Unknown mode values
+fail closed. This avoids four redundant builds without trusting stale local output.
+
+Hosted Vite spellcheck contracts load the real build configuration once and
+execute its dictionary plugins. They import the emitted browser modules and check
+real dictionary contents, deduplication, unrelated-module passthrough and optimizer
+exclusions, instead of matching plugin implementation text. Provider subpaths
+are checked against the effective aliases and existing resolved files.
+The API WebSocket harness now rejects malformed frames through its waiter and
+always removes its own listeners while preserving other subscribers. Its compact
+regressions cover successful completion, parser failures, close/error, empty
+expectations and both sides of the timeout using mock timers, not sleeps.
+Socket teardown preserves waiters and other observers, consumes expected
+handshake-termination errors, and removes its own temporary listeners on close.
+Policy recheck tests advance exact interval/deadline boundaries and prove departed
+subscribers stop while remaining ones continue. Evaluation metrics tests hold a
+read open while advancing three real scheduler cycles, verifying claims keep
+running without overlapping aggregates. Authorization-revocation reconnect tests
+advance beyond the maximum backoff rather than sleeping for a presumed delay.
+Keep source-reading exceptions as a shrinking migration queue. Fixture-only reads
+in storage/crash-recovery tests are explicitly classified and still executed;
+they are not implementation-source contracts or permission to suppress such tests.
+
+After changes to this infrastructure, run `yarn test:style`, the App/API shard
+runner tests, affected package suites, and `yarn studio-server:ui:ci` for browser
+coverage. Run `test:style` before runtime suites because it rebuilds Core. Inspect
+failure artifacts rather than adding retries or increasing sleeps to hide failures.
 
 `check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
 from regaining legacy Chat/Azure endpoint seams. It also keeps the selectable
@@ -669,7 +751,7 @@ would not have produced a trustworthy release:
 | Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                           |
 | Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                          | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                               |
 | Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                   | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                              |
-| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy` or `A timestamp was expected but was not found.`                      | Either the local DMG helper was temporarily busy or Apple's online secure-timestamp service failed during Developer ID signing. Neither error establishes a source, certificate, entitlement, or architecture defect. | `build-macos-dmg.mjs` retries only those exact failures twice, cleans only the current target's `rw.*.dmg` scratch image, and preserves every other failure. The full Tauri bundle step is retried so a partially signed app is rebuilt rather than repaired in place. |
+| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`, `hdiutil: couldn't eject "disk<N>" - Resource busy`, or `A timestamp was expected but was not found.` | The DMG helper can be busy during creation or unmount, or Apple's online secure-timestamp service can fail. The October 5 Intel failure occurred after successful app notarization and stapling, while detaching the scratch image. | `build-macos-dmg.mjs` retries these specific failures twice. It identifies mounted target-local scratch images through the system inventory, detaches them safely before deletion, and rebuilds through the full Tauri path. All other failures remain visible. |
 
 The resulting Apple Silicon DMG was subsequently installed and its Node
 executor was confirmed working on Apple Silicon hardware. That real-device
@@ -699,10 +781,15 @@ The following invariants are non-negotiable:
 - Keep the smoke graph synchronized with the actual Code-node DataValue
   contract. If that contract intentionally changes, update the graph and the
   assertion together and retain an end-to-end returned-value assertion.
-- Keep the DMG retry narrow and bounded. The retry classifier must continue to
-  require the exact nonzero `hdiutil: create failed - Resource busy` failure.
-  Cleanup must stay confined to `rw.*.dmg` files in the current target's
-  `release/bundle/macos` directory.
+- Keep the DMG retry narrow and bounded: only nonzero image-creation resource-busy,
+  `hdiutil: couldn't eject "disk<N>" - Resource busy`, and missing secure-timestamp
+  failures qualify. Cleanup stays confined to regular `rw.*.dmg` files in the
+  current target's `release/bundle/macos` directory. Inspect `hdiutil info -plist`
+  and match the complete image path before detaching its whole-disk device.
+  Try normal detach first; force detach only that disposable scratch image after
+  exit code 16. Other detach failures, malformed image inventory, or an unknown
+  device stop cleanup and retry. Never delete a still-mounted image or detach by
+  volume name, a device copied from build output, or a broad disk sweep.
 
 Never “fix” this pipeline by doing any of the following:
 
@@ -847,12 +934,12 @@ Workflows live under [`.github/workflows/`](../.github/workflows/).
 
 ### Develop, staging and main
 
-| Event | Workflows and scope |
-| --- | --- |
-| Push to `develop` | Repository-wide **Build** plus changed-path **Verify Studio Server** |
-| PR into `staging` | **Verify Studio Server** against the proposed merge; no general Build/desktop/Rust matrix |
+| Event                      | Workflows and scope                                                                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push to `develop`          | Repository-wide **Build** plus changed-path **Verify Studio Server**                                                                                |
+| PR into `staging`          | **Verify Studio Server** against the proposed merge; no general Build/desktop/Rust matrix                                                           |
 | Relevant push to `staging` | **Build Images**, including one reusable Studio Server verifier, four candidate images, Compose smoke and local-upgrade image/Linux-host rehearsals |
-| Push to `main` | Repository-wide **Build**; relevant image changes also run **Build Images** and its applicable release gates |
+| Push to `main`             | Repository-wide **Build**; relevant image changes also run **Build Images** and its applicable release gates                                        |
 
 The PR's displayed source branch can be `develop` while its post-merge image run
 shows `staging`; these are different events and revisions. A staging push does not
@@ -1085,8 +1172,9 @@ work behind it is parallelized.
    before upload; each package-test job repeats that check immediately after
    restore. This turns an incomplete artifact into a clear dependency error
    before package tests instead of unrelated `ENOENT` fanout. Each App shard
-   also rebuilds Core's ESM output before launching because App tests consume
-   Core's published-style ESM export. The test matrix retains a six-job
+   selects `RIVET_APP_TEST_DEPENDENCIES=prebuilt`, validating and consuming that
+   artifact instead of rebuilding Core. Local App runs retain automatic Core
+   builds. The test matrix retains a six-job
    concurrency cap; every suite always runs, and changed-path selection is
    deliberately not used for the general correctness gate.
 3. `package-lint` fans out the same six source-only workspaces immediately; it does not
@@ -1239,10 +1327,18 @@ assertion verifies both that type and the returned value.
 
 The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
 because the Tauri v1 DMG helper can occasionally receive
-`hdiutil: create failed - Resource busy` on a hosted macOS runner. Only that
-exact transient failure is retried, after removing target-local `rw.*.dmg`
-scratch images, with 5-second and 15-second delays. Compilation, signing,
-permission, and every other bundling failure remain single-attempt failures.
+`hdiutil: create failed - Resource busy` or fail to eject its temporary image
+with `Resource busy` on a hosted macOS runner. Those errors and Apple's
+`A timestamp was expected but was not found.` signing error receive at most two
+retries with 5-second and 15-second delays. Before retrying, detach any mounted
+target-local `rw.*.dmg` scratch images by their inventory-confirmed device, then
+remove them. The complete Tauri build is retried; notarization and finished-DMG
+verification remain required. Compilation, other signing failures, permissions,
+and all unrecognized bundling failures remain single-attempt failures.
+The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounded
+retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
+They run on every host; actual `hdiutil`/`plutil` execution and finished-package
+verification require the native macOS release jobs.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 

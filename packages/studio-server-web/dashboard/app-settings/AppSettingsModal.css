@@ -47,6 +47,14 @@
   padding-right: 4px;
 }
 
+.app-settings-upgrade-warning {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--warning-color, #e4b35a);
+}
+
 .app-settings-general-panel,
 .app-settings-storage-panel,
 .app-settings-proxy-panel,

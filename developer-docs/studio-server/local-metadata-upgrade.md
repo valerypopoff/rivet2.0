@@ -2,15 +2,51 @@
 
 ## Ownership and supported deployment
 
-This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. The feature is disabled by default.
+This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. Upgrade availability is automatic for eligible, authenticated deployments; removing or setting the retired `RIVET_LOCAL_METADATA_UPGRADE_ENABLED` variable does not disable it. Availability never authorizes a copy or write resumption by itself.
 
 Remaining delivery and production qualification work is tracked in the [completion plan](./local-metadata-upgrade-completion-plan.md). Its acceptance gates distinguish repository readiness from a completed rehearsal on this VM's actual data.
+
+## Fresh installations versus legacy upgrades
+
+New supported single-host Compose installations automatically initialize the
+SQLite/file layout before the first API and executor start. All four configured
+source roots must be completely empty; any retained entry, including a folder,
+settings, recording, runtime library or maintenance marker, requires the explicit
+legacy workflow below. No encryption key or migration environment entries are
+required. Metadata and App Settings defaults go to SQLite; large immutable
+project/dataset/recording/library payloads go to the generation's file-object root,
+and extracted libraries remain a disposable file cache.
+
+First start has its own durable `initializing` identity. A failed first start can
+retry only that same empty installation; it cannot provision over old data or
+start legacy serving. Publication follows schema/serving verification. Existing
+control volumes and independent App Data bindings are never replaced or reset.
+Preserve these volumes in backups from the very first start.
+
+Stopping the supervised backend during offline first-start initialization or
+UI preparation cancels that writer. The supervisor waits for its exit before
+releasing storage ownership; a writer that ignores graceful termination is
+killed after the configured backend shutdown grace period. Cancellation never
+publishes a ready configuration or starts serving children. The durable
+`initializing`/`preparing` identity remains available for a same-identity retry.
+This is not a deadline on legitimate initialization or migration work.
+
+Fresh or completed SQLite installations do not display **Local storage upgrade**
+in Settings or its suggestion modal. Eligible legacy users see the reminder on
+every webpage reload until completion; postponing applies only to that page.
+Paused/incomplete migrations retain continuation and recovery controls. Managed
+deployments do not use this local workflow.
+
+When available, **Local storage upgrade** appears directly after **Storage** in
+Settings and carries an amber warning icon. The icon is decorative so the tab's
+accessible name stays unchanged. Storage's pre-upgrade backend-switch guidance
+names this exact tab; selecting a storage backend still does not perform migration.
 
 | Data                                                                                               | Upgraded local authority                 | Managed counterpart           |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------- |
 | Project/folder catalog, revision pointers, publications/history, routes, web-app identities/access | SQLite catalog                           | PostgreSQL                    |
 | Recording identity, searchable input, replay references                                            | SQLite catalog                           | PostgreSQL                    |
-| All registered App Settings domains                                                                | Encrypted SQLite settings                | Encrypted PostgreSQL settings |
+| All registered App Settings domains                                                                | Plaintext JSON in SQLite settings        | Encrypted PostgreSQL settings |
 | Runtime-library manifest/activation and archive reference                                          | SQLite catalog                           | PostgreSQL                    |
 | Evaluation library/runs/artifacts and LLM-profile health                                           | Copied operational SQLite databases      | PostgreSQL                    |
 | Project/dataset/revision bytes, recording/replay payloads, package archive                         | Immutable checksum-addressed local files | S3 objects                    |
@@ -29,7 +65,7 @@ The generation certificate binds all four configured source mounts during SQLite
 
 The editor loading overlay covers only the editor pane. Sidebar Settings and its upgrade/recovery controls remain reachable if maintenance prevents editor initialization, including after a full reload; no forced browser click or temporary write bypass is needed. Backend authentication and maintenance still reject ordinary writes.
 
-Before upgrade opt-in, the dashboard calls a separate read-only setup endpoint guarded by the same strong key/OAuth operator session as migration actions, but not by the upgrade flag. It returns readiness and UI-capability booleans, never paths or secret values. The updated Compose supervisor offers UI preparation on a fresh reserved control volume: the reminder opens the wizard and explains generated-key preparation, automatic restarts and explicit final resumption. The reminder itself does not provision or pause anything. Custom launchers without that capability retain the prerequisite instructions for deployment variables and offline one-time provisioning; those variables are not Rivet Settings Environment variables. Existing keys and journals must never be replaced or re-provisioned. Paused SQLite with disabled controls gets recovery guidance rather than fresh setup instructions. Kubernetes/managed deployments, unauthorized users and already-live SQLite get no setup reminder.
+Before migration, the dashboard calls a separate read-only setup endpoint guarded by the same strong key/OAuth operator session as migration actions. It returns readiness and UI-capability booleans, never paths or secret values. The updated Compose supervisor offers UI preparation on a fresh reserved control volume: the reminder explains automatic storage selection, restarts and explicit final resumption. The reminder itself does not provision or pause anything. Custom launchers without that capability require persistent storage and offline one-time provisioning. Existing journals must never be replaced or re-provisioned. Paused SQLite gets recovery guidance rather than fresh setup instructions. Kubernetes/managed deployments, unauthorized users and already-live SQLite get no setup reminder.
 
 After setup, each fresh dashboard load shows a signed-in operator a local-storage-upgrade reminder when the enabled upgrade status confirms a stable legacy runtime (`legacy` or `legacy-resumed`, no maintenance or pending restart), even if an old copy job remains in the audit ledger. Postpone dismisses it only for that page load; it is not a durable refusal. Review upgrade steps opens Settings directly on the existing Local storage upgrade tab, without pausing writes or starting a copy. Once durable state shows a paused source, copy job, verified candidate or selected runtime awaiting finalization, a continuation modal returns on every page reload and opens that same tab. It explains when return to legacy remains possible and when SQLite write resumption has closed one-click rollback. The prompt is cleared while another Settings/modal dialog is open and status is reread when that dialog closes, so a same-page pause or completion cannot reveal a stale legacy offer or recovery instruction. While visible, it rechecks status every ten seconds so another operator's completion or lost authorization removes stale guidance. Temporary setup/status connection or server failures hide stale guidance and retry after three seconds; authorization failures do not retry. A completed `sqlite-live` runtime (SQLite running, no maintenance or pending restart) does not show the reminder. The recovery buttons are absent after `sqlite-live`; the backend also refuses rollback then. Dismissing either reminder lasts only for the current page load. UI automation preserves the backup, encryption-key recovery and explicit activation/resumption gates below; it does not replace independent disaster-recovery qualification.
 
@@ -52,11 +88,13 @@ Authenticated status also reports a fixed, non-secret `operation` name while any
 
 Closing the browser does not cancel copying. Restart leaves an interrupted job and maintenance intact. Explicit retry accepts only the same generation, frozen source and backup reference; existing candidate metadata/bytes must match. Failure never selects a partial candidate. If certification committed but the final job-status write did not, the durable transition takes precedence in status reporting.
 
+Copy admission performs only authorization, maintenance/drain, revision, configuration, retry-identity and backup-metadata checks before durably recording a job and returning HTTP 202. Acceptance is not verification. Capacity traversal, frozen-source hashing and browser archive rehashing run inside that tracked worker, before a candidate is created. Stages `capacity`, `source-fingerprint` and `backup-verification` make preparation observable without keeping one HTTP request open through gigabytes of IO. The submitted fingerprint remains an unverified claim until the fresh source comparison succeeds. The same busy gate covers preparation and conversion; status/reports reconcile a lost response instead of blindly submitting another copy. No resource, backup or exact-copy gate is skipped.
+
 Status captures copy-worker liveness and the operation name together with the synchronous journal/job snapshot, before awaiting optional backup metadata or drain checks. A copy finishing during those reads must not turn an older `copying` row into a false `interrupted` result. That response may still describe the running snapshot; the next poll reports the durable terminal job. The runtime regression deliberately holds backup status IO across a copy failure and checks both snapshots.
 
 Backup status also binds its metadata read to an in-process activity revision, advanced when backup preflight starts and when its worker finishes. A changed revision triggers one reread, including when an entire operation starts and finishes during the read. Only stable metadata plus matching worker/preflight liveness can classify a durable `creating` record as interrupted. Repeated changes yield `backupStatusUnreadable` with no archive evidence; they do not block authoritative transition/recovery status, start another backup, or certify a copy. The next stable poll recovers normally. Deterministic regressions hold a `creating` read across ready publication and exercise the bounded retry/unavailable/recovery boundary.
 
-The job persists its current stage and a fixed failure category (`disk-full`, `permission-denied`, `missing-data`, `io-error`, `invalid-data`, or `verification-failed`). Failed jobs have a downloadable, explicitly unverified report. A new failed copy reports its own job ID, never a previously returned generation's certificate; the download filename follows the returned report identity. Raw exception messages, stacks, paths, SQL and error causes are never persisted: they can contain settings secrets. An internal checkpoint seam is used only by tests; no HTTP or production environment variable can inject a fault.
+The job persists its current stage and a fixed failure category (`disk-full`, `permission-denied`, `missing-data`, `io-error`, `invalid-data`, or `verification-failed`). Additive `reason` fields distinguish capacity refusal, stale source/backup evidence, parsing, missing/duplicate project IDs, invalid settings/history, publication ownership/routes, bundle limits and catalog import failures. Unknown errors remain `unexpected-error`, not a claim that the source is corrupt. Failed jobs have a downloadable, explicitly unverified report. A new failed copy reports its own job ID, never a previously returned generation's certificate; the download filename follows the returned report identity. Raw exception messages, stacks, paths, SQL and error causes are never persisted: they can contain settings secrets. Project failures include only a 16-character SHA-256-derived relative-path reference. The authenticated, no-cache `GET /api/app-settings/local-upgrade/project-reference?reference=…` resolves matching paths read-only for the panel; paths are not added to the ledger/report. Lookup failure leaves the opaque reference visible and cannot unlock migration. Parser reads use the opt-in quiet mode so a caught malformed project does not leak its contents through parser warnings. Older jobs remain readable but their discarded causes cannot be reconstructed retroactively. An internal checkpoint seam is used only by tests; no HTTP or production environment variable can inject a fault.
 
 Unhandled storage-operator API failures, including inspection failures before a copy job exists, also use only a fixed failure code and request correlation ID in logs. Their HTTP 5xx response is fixed text, never an exposed parser/driver error or its arbitrary error code. A malformed generated recording metadata fixture verifies that private source text does not enter either output. Authentication and request-validation errors retain their normal HTTP status behavior.
 
@@ -66,21 +104,21 @@ Unhandled storage-operator API failures, including inspection failures before a 
 
 The current production/staging and dev Compose definitions reserve the existing
 `rivet_local_metadata` volume through `RIVET_LOCAL_METADATA_UI_ROOT=/data/local-metadata`.
-This alone neither provisions nor selects SQLite. On a fresh, authenticated
-installation, **Prepare server for migration** performs the one-time setup from
-the UI. The supervisor stops both serving children, creates `ui-managed` with a
-private generated key, invokes the existing offline provisioning command, publishes
+For a genuinely empty installation the supervisor performs automatic first start
+as described above. On an eligible legacy installation with an unused control
+volume, **Prepare server for migration** performs the one-time setup from the
+authenticated UI. The supervisor stops both serving children, creates `ui-managed` with a
+private installation identity (not an encryption key), invokes the existing offline provisioning command, publishes
 its ready configuration durably and relaunches both children. It does not edit
 `.env`, accept a key from the browser, use the Docker socket, or migrate data.
 
-`ui-managed/ui-configuration.json` is private mode 0600 and stores the original
-key and preparation phase. An independent `local-metadata-ui-control.json` binding
-in App Data contains only the control path and key hash. Losing/replacing the
+`ui-managed/ui-configuration.json` is private mode 0600. New version-2 records store
+an installation UUID and preparation phase. An independent `local-metadata-ui-control.json` binding
+in App Data contains the control path and the same identity. Losing/replacing the
 control volume therefore fails closed instead of silently serving stale legacy
-files. Keep both persistent roots in post-upgrade backups; download the key
-separately. A failed owned preparation can retry using its same key; unknown,
+files. Keep both persistent roots in post-upgrade backups. A failed owned preparation can retry using its same identity; unknown,
 manual, corrupt, overlapping or symlinked control storage is never reset or
-re-provisioned automatically. A missing key/configuration/binding still requires
+re-provisioned automatically. A missing configuration/binding still requires
 protected backup recovery if it prevents startup.
 
 The API forwards signed operator setup/restart requests to the supervisor's
@@ -94,37 +132,36 @@ control. Deployment dotenv loading preserves supervisor-owned selection values.
 
 ### Advanced/manual deployment preparation
 
-Existing explicit control-root/key deployments retain their original configuration
-and are never adopted into a different UI-owned root. The manual preparation below
+Existing manual journals at `/data/local-metadata` are discovered without the root
+variable; they are never replaced by a fresh UI-owned root. After validating a manual
+journal under its owner lease, the supervisor persists its absolute root in private
+`manual-control.json` in the reserved volume. A custom-root installation must boot
+this updated launcher once with its original root before removing the variable.
+An unreadable/missing retained root fails closed. The manual preparation below
 also remains the fallback for unsupported/custom launchers. UI setup requires the
 updated Compose definition and supervisor; it cannot repair missing VM mounts or
 a backend that cannot start. Offline disaster recovery is deliberately separate
 from the normal browser migration.
 
+The manual pointer has an independent private `local-metadata-manual-control.json`
+binding in App Data; losing that pointer/control volume must not select fresh legacy
+storage. The binding is fsynced before publishing the pointer; an interrupted publication
+retries only against that original binding. Once the pointer exists, a missing App Data
+binding blocks startup and is never recreated automatically. Like the UI binding and maintenance marker, it is migration control metadata,
+not part of the frozen business-data fingerprint. Preserve both bindings/volumes.
+
 First rehearse on an isolated restored copy of the **actual VM data**, using the same image/filesystem. Keep the clone away from public routing, live queues and unrestricted production integrations. Automated fixtures do not replace this rehearsal.
 
-Deploy the new image/Compose version with the upgrade disabled and confirm legacy serving. Compose mounts persistent `rivet_local_metadata` at `/data/local-metadata`; the existing ownership initializer grants UID/GID 10001 access. It is not scratch or a container layer. Never use `down -v` during upgrade/recovery.
+Deploy the new image/Compose version and confirm legacy serving before starting the wizard. Compose mounts persistent `rivet_local_metadata` at `/data/local-metadata`; the existing ownership initializer grants UID/GID 10001 access. It is not scratch or a container layer. Never use `down -v` during upgrade/recovery.
 
 Keep the four original source mounts/container paths: `RIVET_WORKFLOWS_ROOT`, `RIVET_WORKFLOW_RECORDINGS_ROOT`, `RIVET_APP_DATA_ROOT`, `RIVET_RUNTIME_LIBRARIES_ROOT`. Control storage must be outside all four. Roots and selected generation directories must have real, non-symlink ancestors.
 
-Provision a securely generated, dedicated encryption key of at least 32 characters. Store it outside SQLite in deployment secrets and back it up separately. Losing/changing it blocks startup, never resets settings. Never paste it into the wizard or shell command line.
-
-The operator status exposes only a `copyConfigurationReady` boolean, never the
-key or its length. An absent/short key disables copying in the UI but does not
-hide legacy recovery controls. Both setup and copy guidance distinguish first-time key generation from restoring the original key for an existing candidate; replacing that key is not a retry. The copy API also rejects it with a fixed 409
-`local-encryption-key-required` response before creating a job or candidate.
-After editing `.env`, recreate the backend with the normal launcher: `docker
-start`/`restart` retains the old container environment. Preserve the new key
-separately and renew the backup attestation after reopening the panel. This
-configuration correction is safe only before a candidate uses the key; it is
-not a supported key-rotation procedure after conversion.
-
-Add to the protected deployment environment:
+No encryption key or enable flag is required for new migrations. Standard Compose
+deployments also need no control-root entry in `.env`. Unsupported/custom launchers
+must still supply a persistent, provisioned control root internally:
 
 ```dotenv
-RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1
 RIVET_LOCAL_METADATA_CONTROL_ROOT=/data/local-metadata
-RIVET_LOCAL_METADATA_ENCRYPTION_KEY=<dedicated secret supplied securely>
 ```
 
 Keep strong UI authentication enabled: key-session or administrator OAuth. Trusted-client/IP bypass alone cannot invoke upgrade actions. The combined supervisor supplies ownership/editor-drain flags; do not fake them in unsupported processes.
@@ -144,7 +181,43 @@ docker compose <your normal Compose arguments> run --rm --no-deps \
 
 Use `local-metadata-control.js --capacity` before copying to inspect payload, disk and memory headroom without writing or provisioning databases. Supply the four absolute source/restored roots and an existing control root outside them, in the supported image and with the real deployment resource limits. Exit code 2 means capacity refusal, not successful certification. This command measures capacity only; it neither freezes data nor replaces exact verification.
 
-Keep the key/control root across every restart. After upgrading, disabling only the operator UI flag is safe; removing the control root or key is not.
+`local-metadata-control.js --check-workflows` is an optional read-only source diagnosis using the same strict, bounded project/publication reader as conversion. Supply the four absolute source-root environment paths; no control database or encryption key is opened. It returns counts on success or the fixed failure reason/reference on failure (exit 2). It does not repair files, certify a backup, inspect recordings/settings/library roots, test SQL import, or approve activation. Run it against a frozen or independently restored source for stable evidence, not to bypass the UI's copy gates.
+
+Published archive validation parses the exact metadata and snapshot text read under per-document budgets; it does not reopen checked files through an unbounded parser. Legacy current snapshots without archive metadata also use the bounded, quiet reader during migration. A referenced missing or foreign snapshot, disappeared metadata, or a legacy history entry without its endpoint fails conversion rather than silently omitting history; ordinary non-migration history behavior is unchanged. Generated-fixture regressions cover checked-byte reuse, oversized archive metadata, and missing/foreign/malformed legacy snapshots.
+
+Migration reuses its checked project, dataset and normalized settings snapshot for publication-status hashing, legacy published-path resolution and history ownership. These helpers do not reopen the live draft or sidecars through ordinary unbounded reads. Direct migration history callers without a prepared snapshot still use bounded, quiet reads; each archive metadata document has an independent document budget, while retained project/history payloads remain subject to the project bundle budget. Strict snapshot existence checks use `lstat`, not the serving `pathExists` helper that intentionally collapses filesystem errors: permission/IO failures must retain their category, never masquerade as missing snapshots. Tests guard against unbounded source rereads and compare published status against the byte-preserved state hash.
+
+The history entry point establishes a bundle budget when called directly and reuses an enclosing project budget during conversion. It must not reset the enclosing counter and allow project-plus-history allocations to exceed the configured bound.
+
+Workflow checks load their parser only for this command; provisioning, fingerprint and capacity commands do not acquire the workflow parser dependency merely to show help or perform resource discovery. Conversion parses the exact UTF-8 text already read under its bundle budget, rather than reading a draft/snapshot again and charging its bytes twice.
+
+### Plaintext storage and compatibility
+
+New local App Settings use schema version 2 (`value_json TEXT`) with private filesystem
+permissions from database creation, before any plaintext write or compatibility conversion,
+and the existing revision/CAS, integrity and notification checks. Credentials
+inside settings are plaintext, as they were in the legacy files. Protect the volume and
+all backups. Managed PostgreSQL encryption is unchanged.
+
+Version-1 encrypted databases remain readable with their original key. Conversion to
+version 2 is one transaction, preserving values, revisions, source hashes and timestamps;
+a failed conversion rolls back. Read-only verification and paused selected generations
+never convert, because their exact candidate proof must remain unchanged. The first
+startup after explicit write resumption converts before admitting settings writes.
+Conversion rechecks the runtime write fence immediately before opening its transaction;
+initial startup eligibility alone does not authorize this write.
+Certificates made by older releases retain their key identity only while the database
+is encrypted; new certificates do not contain one.
+
+Old UI-managed version-1 bootstrap records retain their original key automatically for
+compatibility, including when all three user variables are removed. Manual encrypted
+installations whose only key is in `.env` must retain it until a successful live conversion
+and restart without it. Deleted keys cannot be reconstructed; startup must refuse rather
+than reset settings. Preserve original keys for historical encrypted backups. Once
+converted, new SQLite reads/writes need no key. Do not downgrade to an older image that
+does not understand schema version 2. The legacy key attachment and optional request
+attestation remain compatibility endpoints; the current UI hides them when status says
+`settingsEncryptionRequired: false` and still supports an older backend requiring a key.
 
 ## Operator procedure
 
@@ -154,8 +227,8 @@ On the updated supervised Compose stack, the normal browser workflow has four st
    and wait for automatic reconnection. Then **Pause writes and create verified backup**
    performs capacity inspection, freezes/drains the source and starts backup creation
    when drained. If active work is still draining, wait and choose **Create verified backup**.
-2. **Download and copy.** Download the verified archive and separate encryption key,
-   wait for completion, preserve them securely outside the VM and confirm both checks.
+2. **Download and copy.** Download the verified archive,
+   wait for completion, preserve it securely outside the VM and confirm the download check.
    Choose **Copy and verify**. Reference/fingerprint entry is hidden under Advanced;
    it is not required for browser-created backups.
 3. **Activate and validate.** Choose **Activate SQLite while paused**. The UI requests
@@ -171,20 +244,25 @@ On the updated supervised Compose stack, the normal browser workflow has four st
 Return to legacy, unchanged-legacy cancellation and durable-resumption completion
 also request their necessary restart from the UI. No step silently resumes writes,
 automatically checks a download attestation, or removes retained source files.
-The individual controls below remain available under source/advanced details and
-for custom launchers without UI restart capability.
+The first stage's **Advanced** section contains optional individual controls for
+the guided flow: **Inspect source** checks roots/inventory/warnings and disk/memory
+capacity without changing data or pausing writes; **Pause writes and drain** blocks
+new writes/runs and waits for active work, but does not create a backup. Visible
+button descriptions are also accessible descriptions. Custom launchers without
+guided preparation still use these controls, so Advanced opens by default there;
+it stays collapsed by default in the guided flow. The individual procedure follows.
 
 1. Inspect source: roots, counts, portability warnings and capacity.
 2. Pause writes and drain. Persistent maintenance rejects new saves, settings changes, executions and WebSocket actions. Notification-only workflow-tree and Evaluation-library SSE streams close after the durable marker; they must not keep the operator's own browser in the HTTP drain forever. A stream whose asynchronous setup finishes later refuses to open. Accepted saves/executions are not aborted: wait for HTTP/editor/action runs, recording queues, catalog writes, connection tests and library jobs. Prohibit host-side edits too.
 3. Click **Create verified backup**. The server copies all four frozen roots (including SQLite side files), creates a private archive, restores that actual archive into fresh isolated scratch storage, and compares every file, directory, supported link and ordinary mode plus the migration fingerprint. It verifies the live source again before publishing readiness. This background job survives closing/reloading the browser; a backend restart interrupts it without certifying partial output. New writes and executions stay blocked. Exclude host-side writers too.
-4. Click **Download verified backup**, save the archive securely outside this VM, then **Download encryption key separately** and protect it separately. Check that both browser downloads finished. The UI fills the verified reference/fingerprint; explicitly acknowledge off-VM storage and separate key preservation before copying. A server-side scratch restore is not an independent-host recovery rehearsal. Alternatively, restore a manual backup elsewhere, run `local-metadata-control --fingerprint` on its four **absolute restored root paths**, compare with "Read frozen source fingerprint," enter its non-secret reference/hash and attest the actual restore/key checks. Same-disk copies do not protect against disk failure.
+4. Click **Download verified backup**, wait for it to finish and save it securely outside this VM. The UI fills the verified reference/fingerprint; explicitly acknowledge off-VM storage before copying. New migrations have no key download or key attestation. A server-side scratch restore is not an independent-host recovery rehearsal. Alternatively, restore a manual backup elsewhere, run `local-metadata-control --fingerprint` on its four **absolute restored root paths**, compare with "Read frozen source fingerprint," enter its non-secret reference/hash and attest the actual restore. Same-disk copies do not protect against disk failure.
 5. Copy and verify. No source is deleted or rewritten. Download the redacted report. On failure repair/retry the same generation, or resume unchanged legacy and restart. Capacity and drift checks are repeated server-side.
 6. Activate SQLite while paused. Restart the combined container and reopen the panel. Both processes must load the certified generation and become ready; no workloads run yet.
 7. Validate selected runtime. Repeat exact candidate/source comparison, operational logical hashes, settings/catalog health, tree/library loading and combined readiness. Graph probes with external effects belong in the isolated rehearsal.
 8. On startup/validation failure, Return to legacy while paused (or recover offline below). Restart, validate legacy, then explicitly resume/restart.
 9. Only after successful validation and review, acknowledge the rollback boundary and Resume writes. Restart before admitting work. Confirm ordinary saving/publication/execution, recording search/replay, library changes and restart persistence. Retain original files through a documented recovery window; this feature never deletes them.
 
-Browser backup certification binds the server-verified archive SHA-256, frozen-source fingerprint, pause identity and transition revision; the copy endpoint rechecks the retained archive before accepting that receipt. Persisted ready status requires a nonempty archive size and a SHA-256; creating/failed status cannot carry ready archive evidence. It still relies on the operator for completed off-VM download/storage and separate key preservation. Downloading never checks these attestations automatically. Manual certification remains an operator attestation with an independently restored-source hash. Neither flow proves disaster recovery on another host or starts conversion merely by taking a backup. See the [browser archive format and limits](./local-metadata-backup-rehearsal.md#browser-backup-before-activation).
+Browser backup certification binds the server-verified archive SHA-256, frozen-source fingerprint, pause identity and transition revision; the copy endpoint rechecks the retained archive before accepting that receipt. Persisted ready status requires a nonempty archive size and a SHA-256; creating/failed status cannot carry ready archive evidence. It still relies on the operator for completed off-VM download/storage. Downloading never checks that attestation automatically. Manual certification remains an operator attestation with an independently restored-source hash. Neither flow proves disaster recovery on another host or starts conversion merely by taking a backup. See the [browser archive format and limits](./local-metadata-backup-rehearsal.md#browser-backup-before-activation).
 
 During maintenance, authenticated project-tree browsing, live/published project exports, publication-history listing and individual published-version downloads remain available. Export routes only read existing storage and do not create roots or populate stats caches. The barrier allowlists exact paths and methods: public GET workflow executions, uploads, saves, publication mutations and editor/executor writes remain fenced. Tree reads admitted before the freeze still participate in the drain, since they may warm caches during normal serving.
 
@@ -209,7 +287,7 @@ Recovery verifies ownership, journal/schema/integrity, expected revision/generat
 
 - `LocalMetadataTransitionJournal` uses CAS revisions and strict SQLite identity/schema checks. `LocalUpgradeOperatorStore` holds jobs/bound certificates separately from candidates, without encryption keys.
 - A supervisor-owned SQLite lease excludes competing supported containers/offline recovery. Use a supported persistent local filesystem, not a network share.
-- Selected Settings use existing domain/repository migrations with encrypted CAS rows. Missing domains/databases fail closed, without JSON/default fallback.
+- Selected Settings use existing domain/repository migrations with plaintext revisioned CAS rows. Missing domains/databases fail closed, without legacy JSON/default fallback.
 - SQLite cache-change notifications dispatch after commit without awaiting the writing repository's queued refresh. Awaiting it would deadlock the update against its own operation queue. The writer immediately remembers its committed record; health checks await outstanding notifications and retry failed invalidations without undoing the committed write. A repository-level regression covers serialized updates and concurrent same-domain repository owners.
 - Shutdown keeps the selected App Settings backend installed until its pending notification refreshes have drained and the database has closed. Clearing it earlier would direct those refreshes to retained legacy JSON. Disposal also waits for initialization before removing its subscription. A regression deliberately delays a post-commit listener through shutdown and proves the SQLite value remains authoritative and the old JSON is unchanged.
 - Immutable artifact durability precedes catalog commit: SHA-256 addressing, fsync, no-replace publication, checksum readback, then SQL references. Crashes can leave orphans, not deliberately committed missing payloads.
@@ -252,7 +330,7 @@ The local converter and exact serving verifier consume one project/history or re
 Copy disk inspection exposes additive `diskEstimate` components; their sum is `requiredBytes`, meaning **additional free space on the control filesystem**, not total installation size:
 
 - `recordingArtifactsBytes`: one copy of actual decoded recording/project/dataset artifact bytes. Catalog rows reference these immutable artifacts instead of storing another payload copy in SQLite. Serial publication hard-links the staging file into its hash shard, and exact verification rereads it; neither creates an installation-wide duplicate.
-- `metadataAndLibrariesBytes`: four times the workflow, recording-metadata, settings and library source bytes, retaining conservative headroom for SQLite rows/indexes/journals, encrypted settings and the library archive, extraction tar and package cache.
+- `metadataAndLibrariesBytes`: four times the workflow, recording-metadata, settings and library source bytes, retaining conservative headroom for SQLite rows/indexes/journals, settings and the library archive, extraction tar and package cache.
 - `operationalSnapshotsBytes`: twice the operational SQLite main/WAL/journal bytes for coherent snapshots and working space.
 - `filesystemAllowanceBytes`: four allocation blocks (at least 4 KiB each) per visited entry plus eight times the encoded relative-path bytes, covering small-file allocation and derived metadata/path overhead.
 - `transientArtifactBytes`: one full configured bundle allowance, including serial staging of a duplicate artifact before its temporary link is removed.
@@ -260,9 +338,9 @@ Copy disk inspection exposes additive `diskEstimate` components; their sum is `r
 
 The diagnostic `payloadBytes` retains its aggregate source-plus-expanded-gzip accounting for compatibility; it is no longer multiplied by four for disk admission. Existing sources, browser backups and previous candidates already consume measured disk space. The estimator does not delete them, assume deduplication, subtract their sizes or count a compressed backup as the eventual decoded candidate size. Incomplete traversal, invalid resource measurements and corrupt gzip cannot approve copying. Concurrent disk consumers and filesystem quotas can still cause a durable `disk-full` failure; this estimate is not a reservation or a production-data peak measurement.
 
-A copy capacity refusal returns HTTP 409 with code `local-copy-capacity`, blocking reasons and rounded available/required MiB, rather than a generic storage 500. It occurs before a job or generation is created and preserves maintenance, the source fingerprint and transition revision. Reload source inspection to see the component breakdown; do not bypass the guard or remove retained data to satisfy it blindly.
+A copy capacity refusal now settles the accepted background job as failed at `capacity` with fixed reason `capacity-refused`. No generation is created and maintenance, source bytes and transition revision are preserved. Reload source inspection to see the component breakdown; do not bypass the guard or remove retained data to satisfy it blindly. The panel still understands older servers' synchronous HTTP 409 `local-copy-capacity` response during rolling upgrades.
 
-`local-copy-capacity.test.ts` covers compressed/identity artifacts, metadata/library and small-file allowances, exact disk-admission boundaries, operational WAL/journals and independent memory/bundle refusal. Its generated fixture samples actual candidate allocation at converter checkpoints and after runtime-library extraction, then verifies that read-only revalidation adds no persistent copy. These stage samples do not measure every transient high-water or qualify the operator's VM. `local-upgrade-runtime.test.ts` additionally exercises the authenticated capacity-refusal response and proves that no job, candidate or source mutation occurs.
+`local-copy-capacity.test.ts` covers compressed/identity artifacts, metadata/library and small-file allowances, exact disk-admission boundaries, operational WAL/journals and independent memory/bundle refusal. Its generated fixture samples actual candidate allocation at converter checkpoints and after runtime-library extraction, then verifies that read-only revalidation adds no persistent copy. These stage samples do not measure every transient high-water or qualify the operator's VM. `local-upgrade-runtime.test.ts` holds capacity IO to prove that HTTP 202 and status remain available while preparation runs, competing actions remain blocked, and refusal leaves a durable failed job without a candidate or source mutation. It also checks background fingerprint refusal, backup archive tampering/repair, redacted source diagnostics, authenticated reference lookup and same-job retry, including forced termination during preparation before candidate creation. Mocked Playwright covers preparation progress, actionable failure details and older-server compatibility; these checks do not qualify production data or newly built images.
 
 During the disk-estimator audit, the generated 64 MiB recording fixture stayed below its allowance on Windows and Linux Node 24. The Windows supervised UI fixture and four focused Playwright migration/capacity checks also passed. The broader supervised fixture timed out in Linux Docker Desktop with a Windows-mounted checkout; that run does not certify the complete Linux migration lifecycle. The audit retained its existing timeout. These samples do not replace the packaged-image gate and the actual-VM-data rehearsal.
 

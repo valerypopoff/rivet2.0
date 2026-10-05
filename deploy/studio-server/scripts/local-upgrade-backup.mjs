@@ -368,6 +368,56 @@ function assertOperationalBackupSchema(database, schema) {
   }
 }
 
+export function assertSettingsBackupSchema(database) {
+  assert.equal(database.prepare('PRAGMA application_id').get().application_id, 0x52495654);
+  const version = database.prepare('PRAGMA user_version').get().user_version;
+  assert.ok(version === 1 || version === 2, 'Selected settings schema version is unsupported.');
+  const expected = `CREATE TABLE app_settings (
+    setting_key TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
+    ${
+      version === 1
+        ? `ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL CHECK (length(iv) = 12),
+    auth_tag BLOB NOT NULL CHECK (length(auth_tag) = 16),
+    key_id TEXT NOT NULL,`
+        : 'value_json TEXT NOT NULL,'
+    }
+    source_hash TEXT,
+    updated_at TEXT NOT NULL
+  )`;
+  const objects = database.prepare("SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").all();
+  assert.ok(
+    objects.length === 1 &&
+      objects[0].name === 'app_settings' &&
+      objects[0].sql?.replace(/\s+/g, ' ').trim() === expected.replace(/\s+/g, ' ').trim(),
+    'Selected settings database has an unsupported schema.',
+  );
+  for (const row of database.prepare('SELECT * FROM app_settings').iterate()) {
+    assert.ok(
+      Number.isSafeInteger(row.revision) &&
+        row.revision > 0 &&
+        Number.isSafeInteger(row.schema_version) &&
+        row.schema_version >= 0,
+      'Selected settings database has an invalid revision.',
+    );
+    if (version === 2) {
+      let value;
+      try {
+        value = JSON.parse(row.value_json);
+      } catch {
+        throw new Error('Selected settings JSON is invalid.');
+      }
+      assert.ok(
+        value && typeof value === 'object' && !Array.isArray(value),
+        'Selected settings value must be an object.',
+      );
+    }
+  }
+  return version;
+}
+
 /** Read-only validation of a stopped selected generation. This does not reset
  * journals, decrypt settings, drop caches or select a backend. */
 export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
@@ -421,7 +471,7 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
         .certificate_json,
     );
     assert.equal(digest(certificate), proof.reportHash, 'Selected certificate differs.');
-    if (uiLayout.encryptionKeyId)
+    if (uiLayout.encryptionKeyId && certificate.encryptionKeyId)
       assert.equal(
         certificate.encryptionKeyId,
         uiLayout.encryptionKeyId,
@@ -497,10 +547,8 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
     const file = path.join(generation, relative);
     const db = await open(file);
     try {
-      if (relative === 'settings.sqlite') {
-        assert.equal(db.prepare('PRAGMA application_id').get().application_id, 0x52495654);
-        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
-      } else assertOperationalBackupSchema(db, operationalBackupSchemas[relative]);
+      if (relative === 'settings.sqlite') assertSettingsBackupSchema(db);
+      else assertOperationalBackupSchema(db, operationalBackupSchemas[relative]);
     } finally {
       db.close();
     }
@@ -510,7 +558,7 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
     generationId: state.generation_id,
     revision: state.revision,
     source,
-    encryptionKeyId: certificate.encryptionKeyId,
+    ...(certificate.encryptionKeyId ? { encryptionKeyId: certificate.encryptionKeyId } : {}),
   };
 }
 async function main() {

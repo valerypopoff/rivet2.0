@@ -41,11 +41,9 @@ test('an older eligible VM shows setup instructions before upgrade controls are 
 
   const prompt = page.getByTestId('local-storage-upgrade-prompt');
   await expect(prompt.getByRole('heading', { name: 'Prepare the local storage upgrade' })).toBeVisible();
-  await expect(prompt).toContainText('RIVET_LOCAL_METADATA_ENCRYPTION_KEY');
-  await expect(prompt).toContainText('RIVET_LOCAL_METADATA_CONTROL_ROOT=/data/local-metadata');
-  await expect(prompt).toContainText('RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1');
-  await expect(prompt).toContainText('not entries in Rivet’s Environment variables Settings tab');
-  await expect(prompt).toContainText('restore its original key; never replace it');
+  await expect(prompt).toContainText('new migrations do not require an encryption key or .env entries');
+  await expect(prompt).not.toContainText('RIVET_LOCAL_METADATA_UPGRADE_ENABLED');
+  await expect(prompt).toContainText('must retain their original key until conversion completes');
   await expect(prompt).toContainText('Never reset or re-provision an existing upgrade');
   await expect(prompt.getByRole('button', { name: 'Review upgrade steps' })).toHaveCount(0);
   await prompt.getByRole('button', { name: 'Postpone' }).click();
@@ -65,6 +63,10 @@ test('managed or unsupported deployments do not receive the local setup modal', 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(
+    page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
+  ).toHaveCount(0);
 });
 
 test('completed SQLite stays quiet if the operator later disables upgrade controls', async ({ page }) => {
@@ -73,6 +75,53 @@ test('completed SQLite stays quiet if the operator later disables upgrade contro
   );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(
+    page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
+  ).toHaveCount(0);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForDashboardReady(page);
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
+});
+
+test('fresh SQLite has no upgrade tab or reload suggestion; legacy controls retire on completion', async ({ page }) => {
+  let setup = { ...readySetup, sqliteSelected: true, liveSqlite: true };
+  let reads = 0;
+  let unavailable = false;
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) => {
+    reads += 1;
+    if (unavailable) return route.fulfill({ status: 503, body: '' });
+    return route.fulfill({ json: setup });
+  });
+  await page.route('**/api/app-settings/local-upgrade', (route) => route.fulfill({ json: legacyStatus }));
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const modal = page.getByTestId('app-settings-modal');
+  const tab = modal.getByRole('tab', { name: 'Local storage upgrade', exact: true });
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+  await expect(tab).toHaveCount(0);
+  setup = { ...readySetup };
+  await expect(tab).toBeVisible({ timeout: 10_000 });
+  const tabNames = await modal.getByRole('tab').allTextContents();
+  expect(tabNames[tabNames.indexOf('Storage') + 1]).toBe('Local storage upgrade');
+  await expect(tab.locator('.app-settings-upgrade-warning')).toBeVisible();
+  await expect(tab.locator('.app-settings-upgrade-warning')).toHaveAttribute('aria-hidden', 'true');
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  const beforeOutage = reads;
+  unavailable = true;
+  await expect.poll(() => reads, { timeout: 10_000 }).toBeGreaterThan(beforeOutage);
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  unavailable = false;
+  setup = { ...readySetup, sqliteSelected: true, liveSqlite: true };
+  await expect(tab).toHaveCount(0, { timeout: 10_000 });
+  await expect(modal.getByRole('tab', { name: 'General', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(modal.getByRole('heading', { name: 'Local storage upgrade', exact: true })).toHaveCount(0);
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await waitForDashboardReady(page);
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
 });
@@ -89,8 +138,9 @@ test('a paused SQLite selection with disabled controls offers recovery, never fr
 
   const prompt = page.getByTestId('local-storage-upgrade-prompt');
   await expect(prompt.getByRole('heading', { name: 'Restore paused SQLite upgrade controls' })).toBeVisible();
-  await expect(prompt).toContainText('Do not generate a new key, reset the control volume or run provisioning again');
-  await expect(prompt).toContainText('RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1');
+  await expect(prompt).toContainText('Do not reset the control volume or run provisioning again');
+  await expect(prompt).toContainText('original persistent control volume');
+  await expect(prompt).not.toContainText('RIVET_LOCAL_METADATA_UPGRADE_ENABLED');
   await expect(prompt.getByRole('button', { name: 'Review upgrade steps' })).toHaveCount(0);
   await page.route('**/api/app-settings/local-upgrade', (route) =>
     route.fulfill({ json: { ...legacyStatus, available: false, runningBackend: 'sqlite' } }),
@@ -206,7 +256,8 @@ test('Storage cannot enable managed mode before local migration; existing manage
     storageAccessKeyConfigured: false,
     updatedAt: null,
     source: 'default',
-    storageModeChangeBlockedReason: 'Complete the local files-to-SQLite migration first.',
+    storageModeChangeBlockedReason:
+      'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab first.',
   };
   await page.route('**/api/app-settings/deployment-storage', (route) => route.fulfill({ json: storage }));
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -217,6 +268,7 @@ test('Storage cannot enable managed mode before local migration; existing manage
   await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
   await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeDisabled();
   await expect(modal.getByRole('note')).toContainText('files-to-SQLite');
+  await expect(modal.getByRole('note')).toContainText('in the "Local storage upgrade" tab');
   await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeEnabled();
   await page.route('**/api/app-settings/deployment-storage', (route) =>
     route.fulfill({

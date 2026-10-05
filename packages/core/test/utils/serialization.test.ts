@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { NodeGraph, Project } from '../../src/index.js';
@@ -21,6 +21,18 @@ import {
   packVisualDataV3,
   packVisualDataV4,
 } from '../../src/utils/serialization/serializationHelpers.js';
+
+it('project deserialization can suppress parser logging without suppressing failure or changing the default', () => {
+  const warning = mock.method(console, 'warn', () => undefined);
+  try {
+    assert.throws(() => deserializeProject('{}', null, { logErrors: false }));
+    assert.equal(warning.mock.callCount(), 0);
+    assert.throws(() => deserializeProject('{}'));
+    assert.equal(warning.mock.callCount(), 1);
+  } finally {
+    warning.mock.restore();
+  }
+});
 
 const baseGraph: NodeGraph = {
   metadata: {

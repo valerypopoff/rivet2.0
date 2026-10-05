@@ -160,63 +160,49 @@ export const LocalStorageUpgradePrompt: FC<{
                 <>
                   <h2>Prepare the local storage upgrade</h2>
                   <p>
-                    The guided upgrade can prepare this server for you: create private persistent control storage,
-                    generate its encryption key and restart the backend. No console commands or Environment variables
-                    entries are needed.
+                    The guided upgrade can prepare persistent control storage and restart the backend for you. Local
+                    settings are unencrypted. No encryption key, console commands or .env entries are needed.
                   </p>
                   <p>
-                    Then pause writes, create and download the verified backup and its separate key, copy and verify,
-                    and activate SQLite. Restarts and paused validation are automatic. You make the final decision to
-                    resume writes.
+                    Then pause writes, create and download the verified backup, copy and verify, and activate SQLite.
+                    Restarts and paused validation are automatic. You make the final decision to resume writes.
                   </p>
                   <p>
-                    You can postpone, or return to legacy before resuming SQLite writes. Keep the downloaded backup and
-                    key securely outside this VM.
+                    You can postpone, or return to legacy before resuming SQLite writes. Keep the downloaded backup
+                    securely outside this VM; it contains private settings and credentials.
                   </p>
                 </>
               ) : prompt.kind === 'setup' && prompt.setup.sqliteSelected ? (
                 <>
                   <h2>Restore paused SQLite upgrade controls</h2>
                   <p>
-                    SQLite is already selected, but writes are still paused. Restore the original deployment environment
-                    values for <code>RIVET_LOCAL_METADATA_ENCRYPTION_KEY</code> and{' '}
-                    <code>RIVET_LOCAL_METADATA_CONTROL_ROOT</code>, then set{' '}
-                    <code>RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1</code> and recreate the combined backend. These are
-                    server startup variables, not Rivet’s Environment variables Settings tab.
+                    SQLite is already selected, but writes are still paused. Restore the original persistent control
+                    volume and use the supported combined backend launcher. Do not select a new empty storage root.
                   </p>
                   <p>
-                    Do not generate a new key, reset the control volume or run provisioning again. Once the backend is
-                    available, continue paused validation or return to legacy. If it cannot start, use the documented
-                    offline recovery procedure; never clear the maintenance marker by hand.
+                    Do not reset the control volume or run provisioning again. Older encrypted installations also need
+                    their original key until plaintext conversion completes. Once the backend is available, continue
+                    paused validation or return to legacy. If it cannot start, use the documented offline recovery
+                    procedure; never clear the maintenance marker by hand.
                   </p>
                 </>
               ) : prompt.kind === 'setup' ? (
                 <>
                   <h2>Prepare the local storage upgrade</h2>
                   <p>
-                    Before starting the migration, a deployment administrator must configure the VM. These are server
-                    startup variables in its protected deployment environment, not entries in Rivet’s Environment
-                    variables Settings tab. Do not enter the encryption key in this browser.
+                    This deployment cannot prepare persistent control storage from the browser. Update the Compose
+                    definition and combined backend launcher to enable guided preparation. The supported launcher
+                    selects storage automatically; new migrations do not require an encryption key or .env entries.
                   </p>
                   <ul>
                     <li>
-                      Set <code>RIVET_LOCAL_METADATA_ENCRYPTION_KEY</code> to a dedicated, securely generated secret of
-                      at least 32 characters, and keep a separate protected backup. If this VM has already started an
-                      upgrade, restore its original key; never replace it with a new one.{' '}
-                      {prompt.setup.encryptionKeyReady ? 'Configured.' : 'Not configured yet.'}
+                      Preserve the persistent <code>rivet_local_metadata</code> volume and all four original source
+                      mounts. Never reset or re-provision an existing upgrade.
                     </li>
                     <li>
-                      Use the persistent <code>rivet_local_metadata</code> volume and configure{' '}
-                      <code>RIVET_LOCAL_METADATA_CONTROL_ROOT=/data/local-metadata</code>. On a fresh control volume
-                      only, stop the backend and run the one-time <code>local-metadata-control --provision</code>{' '}
-                      command using that volume and root. Never reset or re-provision an existing upgrade. Do not start
-                      the normal backend with a new root until provisioning succeeds.{' '}
-                      {prompt.setup.controlRootConfigured ? 'Root configured.' : 'Root not configured yet.'}
-                    </li>
-                    <li>
-                      Set <code>RIVET_LOCAL_METADATA_UPGRADE_ENABLED=1</code> and recreate the backend using the normal
-                      launcher; restarting an existing container does not load changed environment values.{' '}
-                      {prompt.setup.upgradeEnabled ? 'Enabled.' : 'Not enabled yet.'}
+                      Custom launchers require administrator setup using the documented manual procedure. Older
+                      encrypted installations must retain their original key until conversion completes; never generate
+                      a replacement key or enter it in this browser.
                     </li>
                   </ul>
                   <p>

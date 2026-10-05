@@ -6,6 +6,10 @@ import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesy
 import type { LocalMetadataSourceRoots } from './source-identity.js';
 import type { LocalMetadataCandidateReport } from './stage-local-metadata-candidate.js';
 import {
+  LOCAL_UPGRADE_FAILURE_REASONS,
+  type LocalUpgradeFailureReason,
+} from '../../../studio-server-shared/local-upgrade-types.js';
+import {
   LOCAL_UPGRADE_STAGES,
   LOCAL_UPGRADE_FAILURE_CODES,
   type LocalUpgradeStage,
@@ -29,7 +33,10 @@ export type LocalUpgradeCertificate = {
   source: LocalMetadataSourceRoots;
   backupReference: string;
   backupConfirmedAt: string;
-  encryptionKeyId: string;
+  /** Present only on certificates created by encrypted-storage releases. */
+  encryptionKeyId?: string;
+  /** Empty first-run initialization, not a certificate of a restored backup. */
+  origin?: 'empty-installation';
   report: LocalMetadataCandidateReport;
   operational: Record<string, string | null>;
 };
@@ -47,7 +54,19 @@ const jobSchema = z
     backupReference: z.string().min(1).max(512).optional(),
     stage: z.enum(LOCAL_UPGRADE_STAGES).optional(),
     failure: z
-      .object({ stage: z.enum(LOCAL_UPGRADE_STAGES), code: z.enum(LOCAL_UPGRADE_FAILURE_CODES) })
+      .object({
+        stage: z.enum(LOCAL_UPGRADE_STAGES),
+        code: z.enum(LOCAL_UPGRADE_FAILURE_CODES),
+        reason: z
+          .enum(
+            Object.keys(LOCAL_UPGRADE_FAILURE_REASONS) as [LocalUpgradeFailureReason, ...LocalUpgradeFailureReason[]],
+          )
+          .optional(),
+        sourceReference: z
+          .string()
+          .regex(/^[a-f0-9]{16}$/)
+          .optional(),
+      })
       .strict()
       .nullable()
       .optional(),
@@ -63,7 +82,8 @@ const certificateSchema = z
       .refine((value) => Object.values(value).every(path.isAbsolute)),
     backupReference: z.string().min(1).max(512),
     backupConfirmedAt: z.string().datetime(),
-    encryptionKeyId: digest,
+    encryptionKeyId: digest.optional(),
+    origin: z.literal('empty-installation').optional(),
     report: z
       .object({
         reportVersion: z.literal(1),
@@ -194,5 +214,8 @@ export class LocalUpgradeOperatorStore {
     if (value.version !== 1 || value.generationId !== generationId || !value.report || !value.source)
       throw new Error('Invalid local verification certificate.');
     return value;
+  }
+  hasCertificate(generationId: string): boolean {
+    return !!this.#database().prepare('SELECT 1 FROM certificates WHERE generation_id = ?').get(generationId);
   }
 }

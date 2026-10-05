@@ -213,7 +213,16 @@ storage or change `.env`. See the [staging VM procedure](../../developer-docs/st
 
 ## Development
 
-For existing file-backed single-host installations, the updated Compose stack offers **Settings → Local storage upgrade** as a browser-guided migration: prepare the server if prompted, pause and create a verified backup, download the archive and encryption key separately, copy/verify, activate and validate while paused, then explicitly resume writes. The supervisor performs the necessary API/executor restarts; web/proxy are not restarted. Preserve the reserved `rivet_local_metadata` volume and the App Data installation binding. A lost/corrupt volume or a custom unsupported launcher still requires administrator recovery; the UI must never initialize a replacement over an existing migration. See the [local upgrade runbook](../../developer-docs/studio-server/local-metadata-upgrade.md).
+Fresh single-host Compose installations initialize SQLite automatically before
+serving: metadata, default App Settings and operational stores use SQLite, while
+large project/dataset/recording/library payloads use checksum-addressed files.
+There is no upgrade tab or reminder on fresh/completed SQLite installations.
+Any retained entry in the four source roots keeps the explicit legacy workflow;
+empty projects alone are not evidence of a new installation. Preserve all data
+and control volumes from first start. Interrupted initialization retries its
+owned identity and never launches a legacy fallback.
+
+For existing file-backed single-host installations, the updated Compose stack offers **Settings → Local storage upgrade** as a browser-guided migration: prepare the server if prompted, pause and create a verified backup, download the archive, copy/verify, activate and validate while paused, then explicitly resume writes. New local settings are plaintext, including credentials: protect volumes and backups. The supported launcher requires none of `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`, `RIVET_LOCAL_METADATA_CONTROL_ROOT` or `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` in user `.env`. Older manual encrypted databases still need their original key until live plaintext conversion completes; custom roots need one boot with their original root to retain its binding. The supervisor performs the necessary API/executor restarts; web/proxy are not restarted. Preserve the reserved `rivet_local_metadata` volume and the App Data installation binding. A lost/corrupt volume or a custom unsupported launcher still requires administrator recovery; the UI must never initialize a replacement over an existing migration. See the [local upgrade runbook](../../developer-docs/studio-server/local-metadata-upgrade.md).
 
 The Docker development stack is the default production-shaped loop:
 

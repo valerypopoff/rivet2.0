@@ -10,6 +10,7 @@ import {
   prepareLocalUpgradeFromUi,
   restartLocalUpgradeFromUi,
   getLocalUpgradeReport,
+  getLocalUpgradeProjectReference,
   inspectLocalUpgradeSource,
   localUpgradeBackupFingerprint,
   pauseLocalUpgradeSource,
@@ -172,6 +173,16 @@ appSettingsRouter.get(
   }),
 );
 appSettingsRouter.get(
+  '/local-upgrade/project-reference',
+  asyncHandler(async (req, res) => {
+    const reference = z
+      .string()
+      .regex(/^[a-f0-9]{16}$/)
+      .parse(req.query.reference);
+    res.set('Cache-Control', 'no-store').json(await getLocalUpgradeProjectReference(reference));
+  }),
+);
+appSettingsRouter.get(
   '/local-upgrade/inventory',
   asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await inspectLocalUpgradeSource());
@@ -266,7 +277,8 @@ appSettingsRouter.post(
         backupReference: z.string().trim().min(1).max(512),
         backupSourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
         backupRestored: z.literal(true),
-        encryptionKeyBackedUp: z.literal(true),
+        // Accepted for older clients, not required for plaintext local storage.
+        encryptionKeyBackedUp: z.boolean().optional(),
         retryJobId: z.string().optional(),
       })
       .strict()

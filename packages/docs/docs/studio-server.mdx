@@ -59,6 +59,14 @@ For an existing VM, wait for the staging commit's **Build Images** workflow to s
 
 ### Upgrade local metadata to SQLite
 
+New single-host installations start with SQLite automatically. Project and
+recording metadata, App Settings and operational data go into SQLite; large
+project, dataset, recording and runtime-library payloads remain local files.
+There is nothing to migrate and no **Local storage upgrade** tab or reminder.
+Keep the persistent data/control volumes and back them up together.
+
+The following steps apply only to older installations with file-backed metadata.
+
 The operator-only **App Settings → Local storage upgrade** workflow keeps project, snapshot and recording payloads as local artifact files while moving their authoritative metadata and App Settings to SQLite. It is a separate operation from S3/PostgreSQL migration; changing the Storage selector does not perform it.
 
 On the updated single-host Compose stack, the normal migration can be completed from the UI:
@@ -69,13 +77,17 @@ the current page. Once started, it offers continuation/recovery instead. After
 SQLite is live and the final restart is complete, it stops appearing. Managed
 S3/PostgreSQL deployments never receive this local migration suggestion.
 
-1. If offered, choose **Prepare server for migration**. Rivet securely generates and retains its encryption key, prepares persistent control storage and restarts both backend processes. You do not enter secrets or run console commands.
+1. If offered, choose **Prepare server for migration**. Rivet prepares persistent control storage and restarts both backend processes. New local settings are unencrypted: no encryption key, console commands or migration entries in `.env` are needed.
 2. Choose **Pause writes and create verified backup**. Rivet checks capacity, stops new changes, waits for active work and creates a backup of the four original data folders. It restores the actual archive into separate scratch storage and checks it. If active work is still draining, wait and choose **Create verified backup** when the source is quiet.
-3. Use **Download verified backup** and **Download encryption key separately**. Wait for both downloads to finish, save them in separate protected locations outside the VM, confirm both checks, then **Copy and verify**. You do not need to type a fingerprint; manual backup evidence is an advanced alternative.
+3. Use **Download verified backup**. Wait for the download to finish, save it in a protected location outside the VM, confirm that check, then **Copy and verify**. You do not need to type a fingerprint; manual backup evidence is an advanced alternative. There is no key download or key-backup checkbox on a new server.
 4. Choose **Activate SQLite while paused**. Rivet restarts both backend processes, reconnects and validates automatically. Writes remain paused. If validation fails, retry it or choose **Return to legacy while paused**.
 5. Review successful validation, acknowledge that resuming closes one-click rollback, and **Resume writes**. Rivet performs the final restart automatically. Completion shows SQLite live with no pending restart.
 
-The archive contains private settings and may contain credentials; do not share it publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage or replaces an existing encryption key.
+**Copy and verify** starts a background job. Its status shows preparation (capacity, source fingerprint and backup verification) before conversion begins; accepting the request does not mean the copy passed. You can reload or reopen Settings to check progress. If the connection drops, check current status before retrying. A failed copy keeps the original files selected and writes paused, and shows a specific reason and affected project when available. Download the diagnostic report; do not delete source data or bypass a capacity/integrity refusal. Older failed jobs may only have a generic reason.
+
+The archive and SQLite settings contain private settings and credentials in plaintext; do not share them publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage.
+
+On the supported updated Compose stack, you can omit `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`, `RIVET_LOCAL_METADATA_CONTROL_ROOT` and `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` from `.env`. Exception: an older manually configured encrypted SQLite installation must retain its original key until conversion finishes after writes resume. UI-generated original keys are retained automatically for that compatibility step. Custom control roots must boot the updated launcher once with their original root to remember it. Never delete persistent volumes or historical backup keys to remove environment configuration.
 
 The browser backup is for the original legacy data before SQLite activation. A same-server test restore cannot prove recovery after VM/disk loss, so keep the independent restored-copy rehearsal below. After SQLite resumes writes, use the coordinated full backup procedure that also includes local-metadata control storage; the pre-upgrade download does not contain subsequent SQLite changes.
 
@@ -83,7 +95,7 @@ The S3/PostgreSQL migration tool below currently supports legacy file metadata, 
 
 Do not activate this on a production server before an isolated restored copy of its data has passed conversion, restart, controlled writes and recovery. Conversion processes bounded bundles rather than loading the whole installation into memory. An oversized individual project/history or recording is refused; a multi-gigabyte collection must still pass measured RAM/disk checks on its actual data. Keep serving from the existing files until the installation is within a tested capacity envelope. The [local upgrade runbook](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-upgrade.md) documents configuration, backup and recovery requirements.
 
-Before writes resume, a failed paused activation can return to the intact old files. After SQLite accepts new writes, those files are stale: recovery requires a coordinated SQLite-plus-artifact backup, not switching back to the old mode. The [backup/restore procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-backup-rehearsal.md) provides separate legacy and post-upgrade formats; the latter includes persistent control storage and the selected generation. Preserve the encryption key separately. On older deployments with a separate executor container, stop both API and executor before taking a consistent filesystem backup. Restoration is tested on a fresh isolated stack before any production routing change.
+Before writes resume, a failed paused activation can return to the intact old files. After SQLite accepts new writes, those files are stale: recovery requires a coordinated SQLite-plus-artifact backup, not switching back to the old mode. The [backup/restore procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-backup-rehearsal.md) provides separate legacy and post-upgrade formats; the latter includes persistent control storage and the selected generation. Original keys are needed only for historical encrypted backups, not new plaintext settings. On older deployments with a separate executor container, stop both API and executor before taking a consistent filesystem backup. Restoration is tested on a fresh isolated stack before any production routing change.
 
 ### Move an existing VM to managed storage
 

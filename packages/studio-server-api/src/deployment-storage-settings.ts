@@ -319,7 +319,7 @@ function storageModeChangeBlockedReason(settings: DeploymentStorageRuntimeSettin
   if (getLocalMetadataServingSelection())
     return 'This installation uses local SQLite metadata. Changing backend requires a separate verified managed migration, not a Storage-tab toggle.';
   return settings.storageMode === 'filesystem'
-    ? 'Complete the local files-to-SQLite migration first. Switching to S3 + PostgreSQL requires a separate verified operator migration; a Storage-tab toggle does not transfer data.'
+    ? 'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab first. Switching to S3 + PostgreSQL requires a separate verified operator migration; a Storage-tab toggle does not transfer data.'
     : 'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration; a Storage-tab toggle does not transfer data.';
 }
 

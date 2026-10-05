@@ -47,6 +47,18 @@ function composeServiceNames(compose: string): string[] {
   return names;
 }
 
+test('supported Compose proxies consume authenticated settings projections for SQLite and legacy installations', () => {
+  for (const file of [
+    'deploy/studio-server/compose/docker-compose.yml',
+    'deploy/studio-server/compose/docker-compose.dev.yml',
+  ]) {
+    assert.match(
+      composeServiceBlock(readRepoFile(file), 'proxy'),
+      /RIVET_PROXY_SETTINGS_URL=http:\/\/api:80\/internal\/app-settings\/proxy-config/,
+    );
+  }
+});
+
 test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-only hop', () => {
   const image = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
   const overlay = readRepoFile('deploy/studio-server/compose/docker-compose.vm-tls.yml');

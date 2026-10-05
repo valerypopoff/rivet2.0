@@ -11,6 +11,7 @@ export default defineConfig({
   testDir: './playwright-observe',
   testMatch: [
     'fullscreen-output-search-paging.spec.ts',
+    'hosted-dashboard-contracts.spec.ts',
     'sidebar-name-wrapping.spec.ts',
     'streaming-nodes.spec.ts',
     'project-tree-activation.spec.ts',
@@ -38,7 +39,9 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: `node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-web run dev --host 127.0.0.1 --port ${port} --strictPort`,
+    // CI restores this same-commit build before running the browser lane. Do
+    // not rebuild through HMR or flood each isolated context with source modules.
+    command: `node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-studio-server-web run preview --host 127.0.0.1 --port ${port} --strictPort`,
     cwd: workspaceRoot,
     url: baseURL,
     reuseExistingServer: false,

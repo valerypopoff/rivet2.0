@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getWorkflowsRoot } from '../../security.js';
-import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
+import { loadProjectFromFile, loadProjectFromString } from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowDraftPublicationPreconditions,
@@ -16,6 +16,7 @@ import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../studi
 import { createHttpError } from '../../utils/httpError.js';
 import { readMigrationSourceUtf8 } from '../../scripts/migration-source-utf8.js';
 import { withLocalSourceBudget } from '../../local-metadata/source-budget.js';
+import { LocalUpgradeDiagnosticError } from '../../local-metadata/upgrade-diagnostics.js';
 import {
   ensureWorkflowsRoot,
   getPublishedSnapshotsRoot,
@@ -23,6 +24,7 @@ import {
   getPublishedWorkflowSnapshotMetadataPath,
   getPublishedWorkflowSnapshotPath,
   getWorkflowDatasetPath,
+  getWorkflowProjectSettingsPath,
   isSafePublishedSnapshotId,
   pathExists,
   PROJECT_EXTENSION,
@@ -153,9 +155,13 @@ function getPublishedVersionDownloadFileName(projectName: string, publishedAt: s
   return `${projectName} [published ${timestamp}]${PROJECT_EXTENSION}`;
 }
 
-async function readWorkflowProjectMetadataId(projectPath: string): Promise<string> {
+async function readWorkflowProjectMetadataId(projectPath: string, strict = false): Promise<string> {
   try {
-    const project = await loadProjectFromFile(projectPath);
+    const project = strict
+      ? loadProjectFromString(await withLocalSourceBudget(() => readMigrationSourceUtf8(projectPath)), {
+          logErrors: false,
+        })
+      : await loadProjectFromFile(projectPath, { logErrors: false });
     const projectId = project.metadata.id;
     if (!projectId) {
       throw createHttpError(400, 'Project is missing metadata.id');
@@ -163,6 +169,7 @@ async function readWorkflowProjectMetadataId(projectPath: string): Promise<strin
 
     return projectId;
   } catch (error) {
+    if (strict) throw error;
     if ((error as { status?: number }).status) {
       throw error;
     }
@@ -181,7 +188,9 @@ async function ensurePublishedSnapshotProjectIdMatches(
   projectId: string,
 ): Promise<void> {
   try {
-    const snapshotProject = await loadProjectFromFile(getPublishedWorkflowSnapshotPath(root, snapshotId));
+    const snapshotProject = await loadProjectFromFile(getPublishedWorkflowSnapshotPath(root, snapshotId), {
+      logErrors: false,
+    });
     if (snapshotProject.metadata.id !== projectId) {
       throw createHttpError(409, 'Published version snapshot belongs to a different project');
     }
@@ -197,10 +206,12 @@ async function ensurePublishedSnapshotProjectIdMatches(
 async function readPublishedVersionMetadata(
   root: string,
   snapshotId: string,
+  checkedText?: string,
 ): Promise<StoredPublishedVersionMetadata | null> {
   let metadataText: string;
   try {
-    metadataText = await fs.readFile(getPublishedWorkflowSnapshotMetadataPath(root, snapshotId), 'utf8');
+    metadataText =
+      checkedText ?? (await fs.readFile(getPublishedWorkflowSnapshotMetadataPath(root, snapshotId), 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -231,6 +242,7 @@ async function createLegacyCurrentPublishedVersionRecord(options: {
   projectId: string;
   projectName: string;
   settings: StoredWorkflowProjectSettings;
+  strict?: boolean;
 }): Promise<FilesystemPublishedVersionRecord | null> {
   const snapshotId = options.settings.publishedSnapshotId;
   if (!snapshotId) {
@@ -239,13 +251,17 @@ async function createLegacyCurrentPublishedVersionRecord(options: {
 
   const snapshotPath = getPublishedWorkflowSnapshotPath(options.root, snapshotId);
   try {
-    const snapshotProject = await loadProjectFromFile(snapshotPath);
+    const snapshotProject = options.strict
+      ? loadProjectFromString(await readMigrationSourceUtf8(snapshotPath), { logErrors: false })
+      : await loadProjectFromFile(snapshotPath);
     if (snapshotProject.metadata.id !== options.projectId) {
+      if (options.strict) throw new LocalUpgradeDiagnosticError('publication-owner-mismatch');
       return null;
     }
 
     const endpointName = options.settings.publishedEndpointName || options.settings.endpointName;
     if (!endpointName) {
+      if (options.strict) throw new LocalUpgradeDiagnosticError('publication-history-invalid');
       return null;
     }
 
@@ -265,6 +281,7 @@ async function createLegacyCurrentPublishedVersionRecord(options: {
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (options.strict) throw new LocalUpgradeDiagnosticError('publication-snapshot-missing', undefined, error);
       return null;
     }
 
@@ -326,6 +343,7 @@ async function listPublishedVersionRecords(
   root: string,
   projectId: string,
   currentSnapshotId: string | null,
+  strict = false,
 ): Promise<FilesystemPublishedVersionRecord[]> {
   const publishedRoot = getPublishedSnapshotsRoot(root);
   let entries: Dirent[];
@@ -349,9 +367,14 @@ async function listPublishedVersionRecords(
     const snapshotId = entry.name.slice(0, -'.json'.length);
     let metadata: StoredPublishedVersionMetadata | null;
     try {
-      metadata = await readPublishedVersionMetadata(root, snapshotId);
+      const checkedText = strict
+        ? await withLocalSourceBudget(() =>
+            readMigrationSourceUtf8(getPublishedWorkflowSnapshotMetadataPath(root, snapshotId)),
+          )
+        : undefined;
+      metadata = await readPublishedVersionMetadata(root, snapshotId, checkedText);
     } catch (error) {
-      if (snapshotId === currentSnapshotId) throw error;
+      if (strict || snapshotId === currentSnapshotId) throw error;
       console.warn(
         `[workflow-storage] Preserving but omitting corrupt noncurrent published-version metadata ${snapshotId}:`,
         error,
@@ -361,11 +384,19 @@ async function listPublishedVersionRecords(
     if (snapshotId === currentSnapshotId && metadata && metadata.projectId !== projectId) {
       throw new Error(`Published-version metadata for ${snapshotId} belongs to a different project`);
     }
+    if (!metadata && strict) throw new LocalUpgradeDiagnosticError('publication-history-invalid');
     if (!metadata || metadata.projectId !== projectId) {
       continue;
     }
 
-    if (!(await pathExists(getPublishedWorkflowSnapshotPath(root, snapshotId)))) {
+    if (strict) {
+      const stat = await fs.lstat(getPublishedWorkflowSnapshotPath(root, snapshotId)).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          throw new LocalUpgradeDiagnosticError('publication-snapshot-missing', undefined, error);
+        throw error;
+      });
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new LocalUpgradeDiagnosticError('unsupported-source-entry');
+    } else if (!(await pathExists(getPublishedWorkflowSnapshotPath(root, snapshotId)))) {
       continue;
     }
 
@@ -381,11 +412,23 @@ async function listPublishedVersionRecords(
 async function listPublishedVersionRecordsForProject(
   root: string,
   projectPath: string,
+  strict = false,
+  sourceSnapshot?: { projectId: string; settings: StoredWorkflowProjectSettings },
 ): Promise<FilesystemPublishedVersionRecord[]> {
-  const projectId = await readWorkflowProjectMetadataId(projectPath);
+  const projectId = sourceSnapshot?.projectId ?? (await readWorkflowProjectMetadataId(projectPath, strict));
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
-  const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-  const records = await listPublishedVersionRecords(root, projectId, settings.publishedSnapshotId);
+  const checkedText =
+    strict && !sourceSnapshot
+      ? await withLocalSourceBudget(() => readMigrationSourceUtf8(getWorkflowProjectSettingsPath(projectPath))).catch(
+          (error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+          },
+        )
+      : undefined;
+  const settings =
+    sourceSnapshot?.settings ?? (await readStoredWorkflowProjectSettings(projectPath, projectName, checkedText));
+  const records = await listPublishedVersionRecords(root, projectId, settings.publishedSnapshotId, strict);
 
   if (settings.publishedSnapshotId && !records.some((record) => record.id === settings.publishedSnapshotId)) {
     const legacyCurrentRecord = await createLegacyCurrentPublishedVersionRecord({
@@ -394,6 +437,7 @@ async function listPublishedVersionRecordsForProject(
       projectId,
       projectName,
       settings,
+      strict,
     });
     if (legacyCurrentRecord) {
       records.push(legacyCurrentRecord);
@@ -421,8 +465,10 @@ export async function validateFilesystemPublishedVersionArchiveForMigration(root
   for (const entry of entries) {
     if (!entry.name.endsWith('.json')) continue;
     if (!entry.isFile()) throw new Error(`Published-version metadata is not a regular file: ${entry.name}`);
-    await readMigrationSourceUtf8(path.join(publishedRoot, entry.name));
-    const metadata = await readPublishedVersionMetadata(root, entry.name.slice(0, -'.json'.length));
+    const metadataText = await withLocalSourceBudget(() =>
+      readMigrationSourceUtf8(path.join(publishedRoot, entry.name)),
+    );
+    const metadata = await readPublishedVersionMetadata(root, entry.name.slice(0, -'.json'.length), metadataText);
     if (!metadata) throw new Error(`Invalid published-version metadata: ${entry.name}`);
     const snapshotPath = getPublishedWorkflowSnapshotPath(root, metadata.id);
     const snapshotStat = await fs.lstat(snapshotPath).catch((error: unknown) => {
@@ -436,8 +482,10 @@ export async function validateFilesystemPublishedVersionArchiveForMigration(root
       throw new Error(`Published-version snapshot must be a regular file: ${metadata.id}`);
     }
     // Validate bytes under a per-document budget before parsing a graph.
-    await withLocalSourceBudget(() => readMigrationSourceUtf8(snapshotPath));
-    await ensurePublishedSnapshotProjectIdMatches(root, metadata.id, metadata.projectId);
+    const contents = await withLocalSourceBudget(() => readMigrationSourceUtf8(snapshotPath));
+    const snapshotProject = loadProjectFromString(contents, { logErrors: false });
+    if (snapshotProject.metadata.id !== metadata.projectId)
+      throw new LocalUpgradeDiagnosticError('publication-owner-mismatch');
     projectIds.add(metadata.projectId);
   }
   return projectIds;
@@ -446,6 +494,7 @@ export async function validateFilesystemPublishedVersionArchiveForMigration(root
 export async function readFilesystemPublishedVersionsForMigration(
   root: string,
   projectPath: string,
+  sourceSnapshot?: { projectId: string; settings: StoredWorkflowProjectSettings },
 ): Promise<
   Array<{
     versionId: string;
@@ -457,30 +506,35 @@ export async function readFilesystemPublishedVersionsForMigration(
     datasetsContents: string | null;
   }>
 > {
-  const records = await listPublishedVersionRecordsForProject(root, projectPath);
-  const result = [];
-  for (const record of records)
-    result.push({
-      versionId: record.id,
-      endpointName: record.endpointName,
-      publishedAt: record.publishedAt,
-      isStarred: record.isStarred,
-      comment: record.comment,
-      contents: await readMigrationSourceUtf8(getPublishedWorkflowSnapshotPath(root, record.id)),
-      datasetsContents: await (async () => {
-        const datasetPath = getPublishedWorkflowSnapshotDatasetPath(root, record.id);
-        const datasetStat = await fs.lstat(datasetPath).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-          throw error;
+  return withLocalSourceBudget(
+    async () => {
+      const records = await listPublishedVersionRecordsForProject(root, projectPath, true, sourceSnapshot);
+      const result = [];
+      for (const record of records)
+        result.push({
+          versionId: record.id,
+          endpointName: record.endpointName,
+          publishedAt: record.publishedAt,
+          isStarred: record.isStarred,
+          comment: record.comment,
+          contents: await readMigrationSourceUtf8(getPublishedWorkflowSnapshotPath(root, record.id)),
+          datasetsContents: await (async () => {
+            const datasetPath = getPublishedWorkflowSnapshotDatasetPath(root, record.id);
+            const datasetStat = await fs.lstat(datasetPath).catch((error: unknown) => {
+              if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+              throw error;
+            });
+            if (!datasetStat) return null;
+            if (!datasetStat.isFile() || datasetStat.isSymbolicLink()) {
+              throw new Error(`Published-version dataset must be a regular file: ${record.id}`);
+            }
+            return readMigrationSourceUtf8(datasetPath);
+          })(),
         });
-        if (!datasetStat) return null;
-        if (!datasetStat.isFile() || datasetStat.isSymbolicLink()) {
-          throw new Error(`Published-version dataset must be a regular file: ${record.id}`);
-        }
-        return readMigrationSourceUtf8(datasetPath);
-      })(),
-    });
-  return result;
+      return result;
+    },
+    { reuse: true },
+  );
 }
 
 async function resolveFilesystemPublishedVersion(

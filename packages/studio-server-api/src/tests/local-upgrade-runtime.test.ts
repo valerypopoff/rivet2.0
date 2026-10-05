@@ -73,7 +73,10 @@ async function fixture(
         process.execPath,
         ['--import', 'tsx', fileURLToPath(new URL('./helpers/local-upgrade-runtime.ts', import.meta.url)), name],
         {
-          timeout: 90_000,
+          // The UI rehearsal performs several real API/executor boots. Each
+          // phase has its own bounded status deadline; the outer process must
+          // allow their cumulative duration rather than kill a healthy restart.
+          timeout: name === 'ui-workflow' ? 300_000 : 90_000,
           maxBuffer: 1024 * 1024,
           env: {
             ...process.env,
@@ -176,9 +179,22 @@ test('operator inspection refuses oversized sources before parsing project or pu
   });
 });
 
-test('copy capacity refusal is actionable and cannot start a job or modify the frozen source', async () => {
+test('background copy capacity refusal is durable and cannot create a candidate or modify the frozen source', async () => {
   await fixture(async (_source, _control, command) => {
     await command('copy-capacity-refusal');
+  });
+});
+
+test('background source fingerprint mismatch is durable and never creates a candidate', async () => {
+  await fixture(async (_source, _control, command) => {
+    await command('copy-fingerprint-mismatch');
+  });
+});
+
+test('failed workflow diagnostics survive polling and same-generation retry and resolve a project read-only', async () => {
+  await fixture(async (source, _control, command) => {
+    await fs.writeFile(path.join(source.workflows, 'invalid.rivet-project'), 'password=private-malformed-fixture');
+    await command('copy-source-diagnostic');
   });
 });
 
@@ -200,9 +216,9 @@ test('status rereads backup evidence when its worker finishes during a held meta
   });
 });
 
-test('copy preflight rejects absent or short settings keys without creating a job or changing source authority', async () => {
+test('copy verifies plaintext settings without an encryption key, enable flag or key attestation', async () => {
   await fixture(async (_source, _control, command) => {
-    await command('copy-invalid-key');
+    await command('copy-without-key');
   });
 });
 
@@ -315,7 +331,12 @@ for (const [point, mode] of [
   });
 }
 
-for (const point of ['copy:recordings', 'copy:certificate-committed', 'copy:selection-certified']) {
+for (const point of [
+  'copy:source-fingerprint',
+  'copy:recordings',
+  'copy:certificate-committed',
+  'copy:selection-certified',
+]) {
   test(`forced termination at ${point} leaves durable evidence, paused legacy and usable recovery`, async () => {
     await fixture(async (source, _control, command) => {
       const fingerprint = await fingerprintVmMigrationSource(source);

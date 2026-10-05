@@ -192,9 +192,9 @@ try {
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), {
         eligible: true,
-        upgradeEnabled: false,
+        upgradeEnabled: true,
         controlRootConfigured: false,
-        encryptionKeyReady: false,
+        encryptionKeyReady: true,
         sqliteSelected: false,
         liveSqlite: false,
         uiPreparationAvailable: false,
@@ -213,9 +213,9 @@ try {
         assert.equal(capable.status, 200);
         assert.deepEqual(await capable.json(), {
           eligible: true,
-          upgradeEnabled: false,
+          upgradeEnabled: true,
           controlRootConfigured: false,
-          encryptionKeyReady: false,
+          encryptionKeyReady: true,
           sqliteSelected: false,
           liveSqlite: false,
           uiPreparationAvailable: prepare === '1',
@@ -226,7 +226,9 @@ try {
         (await fetch(setupUrl, { headers: { 'x-rivet-proxy-auth': headers['x-rivet-proxy-auth'] } })).status,
         403,
       );
-      assert.equal((await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade`, { headers })).status, 404);
+      const unprepared = await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade`, { headers });
+      assert.equal(unprepared.status, 200);
+      assert.equal((await unprepared.json()).available, false);
 
       process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = '1';
       process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = original.root;
@@ -278,10 +280,22 @@ try {
     const { createApiApp } = await import('../../app.js');
     const listener = await listenTestServer(http.createServer(createApiApp('combined')));
     const disk = await fs.statfs(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!);
-    const statfs = mock.method(fs, 'statfs', async () => ({ ...disk, bavail: 0, bfree: 0 }));
+    let releaseCapacity!: () => void, capacityArrived!: () => void;
+    const capacityHeld = new Promise<void>((resolve) => {
+      releaseCapacity = resolve;
+    });
+    const capacityReached = new Promise<void>((resolve) => {
+      capacityArrived = resolve;
+    });
+    const statfs = mock.method(fs, 'statfs', async () => {
+      capacityArrived();
+      await capacityHeld;
+      return { ...disk, bavail: 0, bfree: 0 };
+    });
     try {
       const response = await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade/copy`, {
         method: 'POST',
+        signal: AbortSignal.timeout(5000),
         headers: {
           'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
           cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
@@ -297,16 +311,35 @@ try {
           encryptionKeyBackedUp: true,
         }),
       });
-      assert.equal(response.status, 409);
-      const body = (await response.json()) as { code: string; error: string };
-      assert.equal(body.code, 'local-copy-capacity');
-      assert.match(body.error, /disk-space/);
-      assert.match(body.error, /Available disk: 0 MiB/);
-      assert.match(body.error, /No copy was started/);
+      assert.equal(response.status, 202);
+      await response.json();
+      await capacityReached;
+      const preparing = await getLocalUpgradeStatus();
+      assert.equal(preparing.operation, 'copy');
+      assert.equal(preparing.job?.phase, 'copying');
+      assert.equal(preparing.job?.stage, 'capacity');
+      await assert.rejects(
+        startLocalUpgradeCopy({
+          revision: before.transition!.revision,
+          backupReference: 'fixture-restored-backup',
+          backupSourceFingerprint: fingerprint,
+          backupRestored: true,
+          encryptionKeyBackedUp: true,
+        }),
+        { status: 409, code: 'local-upgrade-busy' },
+      );
+      releaseCapacity();
+      const deadline = Date.now() + 10_000;
+      let after;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        after = await getLocalUpgradeStatus();
+      } while (after.operation && Date.now() < deadline);
+      assert.equal(after.job?.phase, 'failed');
+      assert.equal(after.job?.stage, 'capacity');
+      assert.equal(after.job?.failure?.reason, 'capacity-refused');
       for (const privateValue of [...Object.values(source), 'never-return-this-secret'])
-        assert.equal(body.error.includes(privateValue), false);
-      const after = await getLocalUpgradeStatus();
-      assert.equal(after.job, null);
+        assert.equal(JSON.stringify(after.job).includes(privateValue), false);
       assert.equal(after.operation, null);
       assert.deepEqual(after.transition, before.transition);
       assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
@@ -315,8 +348,78 @@ try {
         code: 'ENOENT',
       });
     } finally {
+      releaseCapacity();
       statfs.mock.restore();
       await listener.close();
+    }
+  } else if (command === 'copy-fingerprint-mismatch' || command === 'copy-source-diagnostic') {
+    await pauseLocalUpgradeSource();
+    const source = localMetadataSourceRoots();
+    const fingerprint = await fingerprintVmMigrationSource(source);
+    const input = {
+      revision: state.revision,
+      backupReference: 'fixture-restored-copy',
+      backupSourceFingerprint: command === 'copy-fingerprint-mismatch' ? '0'.repeat(64) : fingerprint,
+      backupRestored: true,
+      encryptionKeyBackedUp: true,
+    };
+    const logs: string[] = [];
+    const warning = mock.method(console, 'warn', (...values: unknown[]) => {
+      logs.push(format(...values));
+    });
+    const waitForTerminal = async () => {
+      const deadline = Date.now() + 15_000;
+      let status;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        status = await getLocalUpgradeStatus();
+      } while (status.operation && Date.now() < deadline);
+      assert.equal(status.operation, null);
+      assert.equal(status.job?.phase, 'failed', JSON.stringify(status));
+      return status;
+    };
+    try {
+      await startLocalUpgradeCopy(input);
+      const failed = await waitForTerminal();
+      assert.equal(failed.job?.stage, command === 'copy-fingerprint-mismatch' ? 'source-fingerprint' : 'workflows');
+      assert.equal(
+        failed.job?.failure?.reason,
+        command === 'copy-fingerprint-mismatch' ? 'source-fingerprint-mismatch' : 'project-parse-failed',
+      );
+      assert.equal(failed.transition?.generationId, null);
+      assert.equal(failed.runningBackend, 'legacy');
+      assert.equal(isVmMigrationMaintenanceActive(), true);
+      assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
+      assert.equal(JSON.stringify(await getLocalUpgradeReport()).includes('private-malformed-fixture'), false);
+      assert.equal(logs.join('\n').includes('private-malformed-fixture'), false);
+      if (command === 'copy-fingerprint-mismatch') {
+        await assert.rejects(fs.stat(path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'generations')), {
+          code: 'ENOENT',
+        });
+      } else {
+        await startLocalUpgradeCopy({ ...input, retryJobId: failed.job!.id });
+        const retried = await waitForTerminal();
+        assert.equal(retried.job?.id, failed.job!.id);
+        assert.deepEqual(retried.job?.failure, failed.job!.failure);
+        const { createApiApp } = await import('../../app.js');
+        const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+        const headers = {
+          'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+          cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+        };
+        try {
+          const url = `${listener.baseUrl}/api/app-settings/local-upgrade/project-reference?reference=${failed.job!.failure!.sourceReference}`;
+          const response = await fetch(url, { headers });
+          assert.equal(response.status, 200);
+          assert.equal(response.headers.get('cache-control'), 'no-store');
+          assert.deepEqual((await response.json()).paths, ['invalid.rivet-project']);
+          assert.equal((await fetch(url)).status, 403);
+        } finally {
+          await listener.close();
+        }
+      }
+    } finally {
+      warning.mock.restore();
     }
   } else if (command === 'inspect-error-redacted') {
     const { createApiApp } = await import('../../app.js');
@@ -566,19 +669,43 @@ try {
         /stale or unverified/,
       );
       await fs.writeFile(backupStatePath, validBackupStatus);
-      await startLocalUpgradeCopy({
+      const copyInput = {
         revision: state.revision,
         backupReference: `browser-backup:${id}:${status.backup!.archiveHash}`,
         backupSourceFingerprint: fingerprint,
         backupRestored: true,
         encryptionKeyBackedUp: true,
+      };
+      const archivePath = path.join(
+        process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!,
+        'browser-backups',
+        id,
+        'backup.tar.gz',
+      );
+      await fs.appendFile(archivePath, 'tampered before copy');
+      await startLocalUpgradeCopy(copyInput);
+      const failureDeadline = Date.now() + 30_000;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        status = await getLocalUpgradeStatus();
+      } while (status.operation && Date.now() < failureDeadline);
+      assert.equal(status.job?.phase, 'failed', JSON.stringify(status));
+      assert.equal(status.job?.failure?.reason, 'backup-archive-mismatch');
+      assert.equal(status.job?.stage, 'backup-verification');
+      assert.equal(status.transition?.generationId, null);
+      await assert.rejects(fs.stat(path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'generations')), {
+        code: 'ENOENT',
       });
+      const failedJobId = status.job!.id;
+      await fs.writeFile(archivePath, archive);
+      await startLocalUpgradeCopy({ ...copyInput, retryJobId: failedJobId });
       const copyDeadline = Date.now() + 30_000;
       do {
         await new Promise((resolve) => setTimeout(resolve, 20));
         status = await getLocalUpgradeStatus();
       } while (status.operation && Date.now() < copyDeadline);
       assert.equal(status.job?.phase, 'verified', JSON.stringify(status));
+      assert.equal(status.job?.id, failedJobId);
       assert.match(
         ((await getLocalUpgradeReport()) as { backupCertification: string }).backupCertification,
         /Server restored and verified/,
@@ -591,47 +718,52 @@ try {
     } finally {
       await listener.close();
     }
-  } else if (command === 'copy-invalid-key') {
+  } else if (command === 'copy-without-key') {
     await pauseLocalUpgradeSource();
     const fingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
     const { createApiApp } = await import('../../app.js');
     const listener = await listenTestServer(http.createServer(createApiApp('combined')));
     const previousKey = process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY;
+    const previousEnabled = process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED;
     try {
-      for (const key of ['', 'bad', 'x'.repeat(31)]) {
-        process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = key;
-        const before = await getLocalUpgradeStatus();
-        assert.equal(before.copyConfigurationReady, false);
-        const response = await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade/copy`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Rivet-Migration-Intent': '1',
-            Origin: listener.baseUrl,
-            'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
-            cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
-          },
-          body: JSON.stringify({
-            revision: state.revision,
-            backupReference: 'fixture-restored-copy',
-            backupSourceFingerprint: fingerprint,
-            backupRestored: true,
-            encryptionKeyBackedUp: true,
-          }),
-        });
-        assert.equal(response.status, 409);
-        const body = await response.json();
-        assert.equal(body.code, 'local-encryption-key-required');
-        assert.match(body.error, /No copy was started/);
-        const after = await getLocalUpgradeStatus();
-        assert.equal(after.job, null);
-        assert.deepEqual(after.transition, before.transition);
-        assert.equal(isVmMigrationMaintenanceActive(), true);
-        assert.equal(await fingerprintVmMigrationSource(localMetadataSourceRoots()), fingerprint);
+      delete process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY;
+      delete process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED;
+      const before = await getLocalUpgradeStatus();
+      assert.equal(before.copyConfigurationReady, true);
+      assert.equal(before.settingsEncryptionRequired, false);
+      const response = await fetch(`${listener.baseUrl}/api/app-settings/local-upgrade/copy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rivet-Migration-Intent': '1',
+          Origin: listener.baseUrl,
+          'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+          cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+        },
+        body: JSON.stringify({
+          revision: state.revision,
+          backupReference: 'fixture-restored-copy',
+          backupSourceFingerprint: fingerprint,
+          backupRestored: true,
+        }),
+      });
+      assert.equal(response.status, 202);
+      let after = await getLocalUpgradeStatus();
+      const deadline = Date.now() + 60_000;
+      while (after.operation && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        after = await getLocalUpgradeStatus();
       }
+      assert.equal(after.job?.phase, 'verified', JSON.stringify(after));
+      assert.equal(after.transition?.backend, before.transition?.backend);
+      assert.equal(after.transition?.phase, 'verified');
+      assert.equal(isVmMigrationMaintenanceActive(), true);
+      assert.equal(await fingerprintVmMigrationSource(localMetadataSourceRoots()), fingerprint);
     } finally {
       if (previousKey === undefined) delete process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY;
       else process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY = previousKey;
+      if (previousEnabled === undefined) delete process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED;
+      else process.env.RIVET_LOCAL_METADATA_UPGRADE_ENABLED = previousEnabled;
       await listener.close();
     }
     assert.equal((await getLocalUpgradeStatus()).copyConfigurationReady, true);
@@ -803,16 +935,17 @@ try {
     await pauseLocalUpgradeSource();
     const fingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
     const previousJob = (await getLocalUpgradeStatus()).job;
-    // Rejected backup certification must not start a durable job.
+    // Malformed admission evidence is rejected before durable work starts.
+    // Full fingerprint verification belongs to the background job below.
     await assert.rejects(
       startLocalUpgradeCopy({
         revision: state.revision,
         backupReference: 'fixture-restored-copy',
         backupSourceFingerprint: '0'.repeat(64),
-        backupRestored: true,
+        backupRestored: false,
         encryptionKeyBackedUp: true,
       }),
-      /fingerprint/,
+      /must be certified/,
     );
     assert.deepEqual((await getLocalUpgradeStatus()).job, previousJob);
     await startLocalUpgradeCopy(

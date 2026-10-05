@@ -6750,7 +6750,9 @@
         {
           "path": "packages/studio-server-web/tests/hosted-fonts.test.ts",
           "migrationMode": "100644",
-          "migrationBlob": "61435810632e12160bbf9d6480293a46995528f7"
+          "migrationBlob": "61435810632e12160bbf9d6480293a46995528f7",
+          "currentPath": "packages/studio-server-web/playwright-observe/hosted-dashboard-contracts.spec.ts",
+          "currentReason": "Font source-text assertions were replaced by the rendered dashboard/editor contract in the headless CI lane."
         }
       ]
     },
@@ -6790,7 +6792,9 @@
         {
           "path": "packages/studio-server-web/tests/modal-theme-contract.test.ts",
           "migrationMode": "100644",
-          "migrationBlob": "4ac4f3d4db35a77a013b9176bbdbea048dcfbe90"
+          "migrationBlob": "4ac4f3d4db35a77a013b9176bbdbea048dcfbe90",
+          "currentPath": "packages/studio-server-web/playwright-observe/hosted-dashboard-contracts.spec.ts",
+          "currentReason": "Modal source-text assertions were replaced by computed-style checks on all seven rendered dashboard dialogs."
         }
       ]
     },

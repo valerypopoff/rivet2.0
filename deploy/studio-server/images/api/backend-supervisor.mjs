@@ -5,7 +5,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { acquireLocalMetadataOwnerLease, assertLegacyLocalMetadataStartup } from './local-metadata-owner-lease.mjs';
-import { loadUiUpgradeEnvironment, prepareUiUpgrade, uiPreparationAvailable } from './local-upgrade-ui.mjs';
+import {
+  loadUiUpgradeEnvironment,
+  prepareUiUpgrade,
+  uiPreparationAvailable,
+  rememberManualControlRoot,
+  initializeNewLocalStorage,
+} from './local-upgrade-ui.mjs';
 
 const API_ENTRYPOINT = '/opt/rivet/api-entrypoint.sh';
 const EXECUTOR_ENTRYPOINT = '/opt/rivet/executor-entrypoint.sh';
@@ -99,6 +105,7 @@ export async function startBackendSupervisor({
         env.RIVET_APP_DATA_ROOT || '/data/rivet-app',
         { allowSqlite: true },
       );
+      rememberManualControlRoot(env);
       for (const child of [config.api, config.executor]) {
         child.RIVET_LOCAL_METADATA_SUPERVISED = '1';
         child.RIVET_LOCAL_METADATA_BOOT_GENERATION = selection.generationId;
@@ -326,9 +333,15 @@ export async function startBackendSupervisor({
 export async function runBackendSupervisor(options = {}) {
   const originalEnv = options.env || process.env;
   const signals = options.signalSource || process;
+  const setupCancellation = new AbortController();
+  const setupOptions = {
+    signal: setupCancellation.signal,
+    shutdownTimeoutMs: options.shutdownTimeoutMs ?? Number(originalEnv.RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS ?? 130_000),
+  };
   let stopped = false;
   const onSignal = () => {
     stopped = true;
+    setupCancellation.abort();
   };
   signals.on('SIGINT', onSignal);
   signals.on('SIGTERM', onSignal);
@@ -340,11 +353,24 @@ export async function runBackendSupervisor(options = {}) {
     if (
       originalEnv.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
       originalEnv.RIVET_LOCAL_METADATA_UI_ROOT &&
-      !originalEnv.RIVET_LOCAL_METADATA_CONTROL_ROOT
+      (!env.RIVET_LOCAL_METADATA_CONTROL_ROOT ||
+        path.resolve(env.RIVET_LOCAL_METADATA_CONTROL_ROOT) !== path.resolve(originalEnv.RIVET_LOCAL_METADATA_UI_ROOT))
     )
       uiVolumeLease = acquireLocalMetadataOwnerLease(originalEnv.RIVET_LOCAL_METADATA_UI_ROOT);
+    env = await initializeNewLocalStorage(
+      originalEnv,
+      options.localStorageInitializeCommand || [
+        process.execPath,
+        '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/local-metadata-control.js',
+        '--initialize-empty',
+      ],
+      setupOptions,
+    );
     while (!stopped) {
       const supervisor = await startBackendSupervisor({ ...options, env });
+      // A signal can arrive while the health listener is opening, before the
+      // child supervisor has installed its own signal handlers.
+      if (stopped) await supervisor.stop();
       const code = await supervisor.completed;
       if (stopped || code !== 0 || !supervisor.requestedAction) return code;
       if (supervisor.requestedAction === 'prepare') {
@@ -355,10 +381,14 @@ export async function runBackendSupervisor(options = {}) {
             '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/local-metadata-control.js',
             '--provision',
           ],
+          setupOptions,
         );
       }
     }
     return 0;
+  } catch (error) {
+    if (error === setupCancellation.signal.reason && stopped) return 0;
+    throw error;
   } finally {
     uiVolumeLease?.release();
     signals.off('SIGINT', onSignal);

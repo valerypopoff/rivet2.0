@@ -136,216 +136,224 @@ const cases = [
 ];
 
 for (const fixture of cases) {
-  for (const focused of [true, false]) {
-    test(`${fixture.type}: cloned IDs keep owner text, dirty state and saved bytes (${focused ? 'focused' : 'unfocused'})`, async ({
-      page,
-    }) => {
-      const projects = ['A', 'B'].map((name) => ({
-        id: `ownership-${name}`,
-        name: `ownership-${name}`,
-        fileName: `ownership-${name}.rivet-project`,
-        relativePath: `ownership-${name}.rivet-project`,
-        absolutePath: `/workflows/ownership-${name}.rivet-project`,
-        updatedAt: '2026-10-02T00:00:00.000Z',
-        settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
-      }));
-      const contents = (project: (typeof projects)[number]) =>
-        [
-          'version: 4',
-          'data:',
-          '  metadata:',
-          `    id: ${project.id}`,
-          `    title: ${project.name}`,
-          '    description: ""',
-          '    mainGraphId: shared-graph',
-          '  graphs:',
-          '    shared-graph:',
-          '      metadata:',
-          '        id: shared-graph',
-          '        name: Main Graph',
-          '        description: ""',
-          '      nodes:',
-          `        \'[shared-node]:${fixture.type} "Ownership Node"\':`,
-          '          visualData: 520/300/260/null//',
-          '          data:',
-          `            ${fixture.field}: ${JSON.stringify(fixture.initial)}`,
-          ...(fixture.type === 'prompt' ? ['            type: user'] : []),
-          '          variants:',
-          '            - id: alternate',
-          '              data:',
-          `                ${fixture.field}: ${JSON.stringify(fixture.a.replace('edited-A', 'variant-preview'))}`,
-          ...(fixture.type === 'prompt' ? ['                type: user'] : []),
-          '      connections: []',
-          '  plugins: []',
-          '  references: []',
-          '',
-        ].join('\n');
-      let releaseDictionary!: () => void;
-      let dictionaryRequested = false;
-      if (fixture.type === 'prompt' && focused) {
-        const dictionaryReady = new Promise<void>((resolve) => {
-          releaseDictionary = resolve;
-        });
-        await page.route(/rivet-dictionary-en-browser/, async (route) => {
-          dictionaryRequested = true;
-          await dictionaryReady;
-          await route.continue();
-        });
-      }
-      await mockHostedEditorBootstrap(page);
-      await page.route('**/api/workflows/tree', (route) =>
-        route.fulfill({
-          json: {
-            root: '/workflows',
-            sync: { epoch: 'ownership', revision: 0 },
-            folders: [],
-            projects,
+  test(`${fixture.type}: cloned IDs preserve focused and blurred edits, dirty state and saved bytes`, async ({
+    page,
+  }) => {
+    const projects = ['A', 'B'].map((name) => ({
+      id: `ownership-${name}`,
+      name: `ownership-${name}`,
+      fileName: `ownership-${name}.rivet-project`,
+      relativePath: `ownership-${name}.rivet-project`,
+      absolutePath: `/workflows/ownership-${name}.rivet-project`,
+      updatedAt: '2026-10-02T00:00:00.000Z',
+      settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+    }));
+    const contents = (project: (typeof projects)[number]) =>
+      serializeProject({
+        metadata: { id: project.id, title: project.name, description: '', mainGraphId: 'shared-graph' },
+        graphs: {
+          'shared-graph': {
+            metadata: { id: 'shared-graph', name: 'Main Graph', description: '' },
+            nodes: [
+              {
+                id: 'shared-node',
+                type: fixture.type,
+                title: 'Ownership Node',
+                visualData: { x: 520, y: 300, width: 260 },
+                data: { [fixture.field]: fixture.initial, ...(fixture.type === 'prompt' ? { type: 'user' } : {}) },
+                variants: [
+                  {
+                    id: 'alternate',
+                    data: {
+                      [fixture.field]: fixture.a.replace('edited-A', 'variant-preview'),
+                      ...(fixture.type === 'prompt' ? { type: 'user' } : {}),
+                    },
+                  },
+                ],
+              },
+            ],
+            connections: [],
           },
-        }),
-      );
-      let loads = 0;
-      await page.route('**/api/projects/load', (route) => {
-        const { path } = route.request().postDataJSON();
-        const project = projects.find((entry) => entry.absolutePath === path);
-        expect(project).toBeDefined();
-        loads++;
-        return route.fulfill({ json: { contents: contents(project!), datasetsContents: null, revisionId: null } });
+        },
+        plugins: [],
+        references: [],
+      } as unknown as Project);
+    let releaseDictionary!: () => void;
+    let dictionaryRequested = false;
+    if (fixture.type === 'prompt') {
+      const dictionaryReady = new Promise<void>((resolve) => {
+        releaseDictionary = resolve;
       });
-      const saves: { path: string; value: unknown; title: string; description?: string }[] = [];
-      await page.route('**/api/projects/save', (route) => {
-        const body = route.request().postDataJSON();
-        const [project] = deserializeProject(body.contents);
-        const node = Object.values(project.graphs)[0]!.nodes.find((entry) => entry.id === 'shared-node')!;
-        saves.push({
-          path: body.path,
-          value: (node.data as Record<string, unknown>)[fixture.field],
-          title: node.title,
-          description: node.description,
-        });
-        return route.fulfill({ json: { path: body.path, revisionId: `ownership-save-${saves.length}` } });
+      await page.route(/rivet-dictionary-en-browser/, async (route) => {
+        dictionaryRequested = true;
+        await dictionaryReady;
+        await route.continue();
       });
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await waitForDashboardReady(page);
-      const frame = page.frameLocator('iframe.dashboard-editor-frame');
-      const tabs = frame.locator('.projects-container .project:not(.opening)');
-      const tab = (name: string) => tabs.filter({ hasText: `ownership-${name}` });
-      const row = (name: string) => page.locator('.project-row', { hasText: `ownership-${name}` });
-      const node = frame.locator('.node[data-nodeid="shared-node"]');
-      const input = frame.locator('.monaco-editor textarea').first();
-      const view = frame.locator('.monaco-editor .view-lines').first();
-      const edit = async (text: string) => {
-        await input.focus();
-        await input.press('ControlOrMeta+a');
-        await input.press('Backspace');
-        await page.keyboard.insertText(text);
-      };
-      await expect(row('A')).toBeEnabled({ timeout: 120_000 });
-      await row('A').dblclick();
-      await expect(tab('A')).toHaveClass(/\bactive\b/);
-      await node.locator('.edit-button').dispatchEvent('click');
-      await expect(view).toContainText('original-A');
-      await row('B').dblclick();
-      await expect(tab('B')).toHaveClass(/\bactive\b/);
-      await node.locator('.edit-button').dispatchEvent('click');
-      if (fixture.type === 'prompt' && focused) {
-        try {
-          await edit('mispelled wrds');
-          const checkSpelling = async () => {
-            await view.click({ button: 'right' });
-            // Monaco arms pointer actions after 100 ms and a programmatic
-            // focus alone does not update its ActionBar selection. Navigate
-            // to the first action through the keyboard before invoking it.
-            const action = frame.getByRole('menuitem', { name: 'Check spelling', exact: true });
-            await action.press('ArrowDown');
-            await expect(action).toBeFocused();
-            await action.press('Enter');
-          };
-          await checkSpelling();
-          await expect(frame.locator('.editor-spellcheck-status')).toHaveText('Checking spelling...');
-          await expect.poll(() => dictionaryRequested).toBe(true);
-          await checkSpelling();
-          releaseDictionary();
-          await expect(frame.locator('.editor-spellcheck-status')).toHaveText('2 possible spelling issues');
-          // The superseded check must not clear the newer check's markers.
-          await expect(frame.locator('.monaco-editor .squiggly-warning')).toHaveCount(2);
-        } finally {
-          releaseDictionary();
-        }
-      }
-      await edit(fixture.b);
-      if (fixture.type === 'prompt' && focused) {
-        await expect(frame.locator('.editor-spellcheck-status')).toHaveCount(0);
-        await expect(frame.locator('.monaco-editor .squiggly-warning')).toHaveCount(0);
-      }
-      if (!focused) await input.evaluate((element) => (element as HTMLElement).blur());
-      if (fixture.type === 'codeNew' && focused) {
-        await frame.getByRole('button', { name: 'Edit node title', exact: true }).click();
-        await frame.locator('#node-title-shared-node').fill('Edited B node');
-        await frame.locator('.description-read-content').click();
-        await frame.locator('.node-description-field textarea').fill('Edited B description');
-      }
-      // No debounce wait: leaving must preserve the last input event.
-      await tab('A').click();
-      await expect(tab('A')).toHaveClass(/\bactive\b/);
-      await expect(view).toContainText('original-A');
-      await expect(view).not.toContainText('edited-B');
-      await expect(node.locator('.node-body')).toContainText('original-A');
-      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-      await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
-      if (fixture.type === 'codeNew' && focused) {
-        await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Ownership Node');
-        await expect(frame.locator('.description-read-content')).toHaveText('Description...');
-      }
-      await frame.locator('.variant-select').click();
-      await frame.getByText('alternate', { exact: true }).click();
-      await expect(view).toContainText('variant-preview');
-      await input.focus();
-      await page.keyboard.insertText('must-not-change-variant');
-      await expect(view).not.toContainText('must-not-change-variant');
-      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-      await frame.locator('.variant-select').click();
-      await frame.getByText('(Current)', { exact: true }).click();
-      await expect(view).toContainText('original-A');
-      await edit(fixture.a);
-      await page.locator('.active-project-save-button').click();
-      await expect.poll(() => saves.find((entry) => entry.path === projects[0]!.absolutePath)?.value).toBe(fixture.a);
-      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-      await tab('B').click();
-      await expect(view).toContainText('edited-B');
-      await expect(node.locator('.node-body')).toContainText('edited-B');
-      await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
-      if (fixture.type === 'codeNew' && focused) {
-        await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Edited B node');
-        await expect(frame.locator('.description-read-content')).toHaveText('Edited B description');
-      }
-      await page.locator('.active-project-save-button').click();
-      await expect.poll(() => saves.find((entry) => entry.path === projects[1]!.absolutePath)?.value).toBe(fixture.b);
-      if (fixture.type === 'codeNew' && focused) {
-        expect(saves.find((entry) => entry.path === projects[1]!.absolutePath)).toMatchObject({
-          title: 'Edited B node',
-          description: 'Edited B description',
-        });
-      }
-      await tab('A').click();
-      await expect(view).toContainText('edited-A');
-      await row('A').dblclick();
-      await expect(view).toContainText('edited-A');
-      expect(loads).toBe(2);
-      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-      if (fixture.type === 'codeNew' && focused) {
-        await frame.getByRole('button', { name: 'Edit node title', exact: true }).click();
-        await frame.locator('#node-title-shared-node').fill('Cancel this title');
-        await frame.locator('#node-title-shared-node').press('Escape');
-        await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Ownership Node');
-        await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-        await frame.locator('.description-read-content').click();
-        await frame.locator('.node-description-field textarea').fill('Cancel this description');
-        await frame.locator('.node-description-field textarea').press('Escape');
-        await expect(frame.locator('.description-read-content')).toHaveText('Description...');
-        await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
-      }
+    }
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: {
+          root: '/workflows',
+          sync: { epoch: 'ownership', revision: 0 },
+          folders: [],
+          projects,
+        },
+      }),
+    );
+    let loads = 0;
+    await page.route('**/api/projects/load', (route) => {
+      const { path } = route.request().postDataJSON();
+      const project = projects.find((entry) => entry.absolutePath === path);
+      expect(project).toBeDefined();
+      loads++;
+      return route.fulfill({ json: { contents: contents(project!), datasetsContents: null, revisionId: null } });
     });
-  }
+    const saves: { path: string; value: unknown; title: string; description?: string }[] = [];
+    await page.route('**/api/projects/save', (route) => {
+      const body = route.request().postDataJSON();
+      const [project] = deserializeProject(body.contents);
+      const node = Object.values(project.graphs)[0]!.nodes.find((entry) => entry.id === 'shared-node')!;
+      saves.push({
+        path: body.path,
+        value: (node.data as Record<string, unknown>)[fixture.field],
+        title: node.title,
+        description: node.description,
+      });
+      return route.fulfill({ json: { path: body.path, revisionId: `ownership-save-${saves.length}` } });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await waitForDashboardReady(page);
+    const frame = page.frameLocator('iframe.dashboard-editor-frame');
+    const tabs = frame.locator('.projects-container .project:not(.opening)');
+    const tab = (name: string) => tabs.filter({ hasText: `ownership-${name}` });
+    const row = (name: string) => page.locator('.project-row', { hasText: `ownership-${name}` });
+    const node = frame.locator('.node[data-nodeid="shared-node"]');
+    const input = frame.locator('.monaco-editor textarea').first();
+    const view = frame.locator('.monaco-editor .view-lines').first();
+    const edit = async (text: string) => {
+      await input.focus();
+      await input.press('ControlOrMeta+a');
+      await input.press('Backspace');
+      await page.keyboard.insertText(text);
+    };
+    await expect(row('A')).toBeEnabled({ timeout: 120_000 });
+    await row('A').dblclick();
+    await expect(tab('A')).toHaveClass(/\bactive\b/);
+    await node.locator('.edit-button').dispatchEvent('click');
+    await expect(view).toContainText('original-A');
+    await row('B').dblclick();
+    await expect(tab('B')).toHaveClass(/\bactive\b/);
+    await node.locator('.edit-button').dispatchEvent('click');
+    if (fixture.type === 'prompt') {
+      try {
+        await edit('mispelled wrds');
+        const checkSpelling = async () => {
+          await view.click({ button: 'right' });
+          // Monaco arms pointer actions after 100 ms and a programmatic
+          // focus alone does not update its ActionBar selection. Navigate
+          // to the first action through the keyboard before invoking it.
+          const action = frame.getByRole('menuitem', { name: 'Check spelling', exact: true });
+          await action.press('ArrowDown');
+          await expect(action).toBeFocused();
+          await action.press('Enter');
+        };
+        await checkSpelling();
+        await expect(frame.locator('.editor-spellcheck-status')).toHaveText('Checking spelling...');
+        await expect.poll(() => dictionaryRequested).toBe(true);
+        await checkSpelling();
+        releaseDictionary();
+        await expect(frame.locator('.editor-spellcheck-status')).toHaveText('2 possible spelling issues');
+        // The superseded check must not clear the newer check's markers.
+        await expect(frame.locator('.monaco-editor .squiggly-warning')).toHaveCount(2);
+      } finally {
+        releaseDictionary();
+      }
+    }
+    await edit(fixture.b);
+    if (fixture.type === 'prompt') {
+      await expect(frame.locator('.editor-spellcheck-status')).toHaveCount(0);
+      await expect(frame.locator('.monaco-editor .squiggly-warning')).toHaveCount(0);
+    }
+    // Exercise the focused transition before touching another settings field.
+    await tab('A').click();
+    await expect(view).toContainText('original-A');
+    await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    await tab('B').click();
+    await expect(view).toContainText('edited-B');
+    // Reuse the loaded workspace for the unfocused race, but use a different
+    // value so an old snapshot cannot accidentally satisfy the assertion.
+    const blurredB = fixture.b.replace('edited-B', 'blurred-B');
+    await edit(blurredB);
+    await input.evaluate((element) => (element as HTMLElement).blur());
+    if (fixture.type === 'codeNew') {
+      await frame.getByRole('button', { name: 'Edit node title', exact: true }).click();
+      await frame.locator('#node-title-shared-node').fill('Edited B node');
+      await frame.locator('.description-read-content').click();
+      await frame.locator('.node-description-field textarea').fill('Edited B description');
+    }
+    // No debounce wait: leaving must preserve the last input event.
+    await tab('A').click();
+    await expect(tab('A')).toHaveClass(/\bactive\b/);
+    await expect(view).toContainText('original-A');
+    await expect(view).not.toContainText('blurred-B');
+    await expect(node.locator('.node-body')).toContainText('original-A');
+    await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    if (fixture.type === 'codeNew') {
+      await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Ownership Node');
+      await expect(frame.locator('.description-read-content')).toHaveText('Description...');
+    }
+    await frame.locator('.variant-select').click();
+    await frame.getByText('alternate', { exact: true }).click();
+    await expect(view).toContainText('variant-preview');
+    await input.focus();
+    await page.keyboard.insertText('must-not-change-variant');
+    await expect(view).not.toContainText('must-not-change-variant');
+    await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    await frame.locator('.variant-select').click();
+    await frame.getByText('(Current)', { exact: true }).click();
+    await expect(view).toContainText('original-A');
+    await edit(fixture.a);
+    await page.locator('.active-project-save-button').click();
+    await expect.poll(() => saves.find((entry) => entry.path === projects[0]!.absolutePath)?.value).toBe(fixture.a);
+    await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    await tab('B').click();
+    await expect(view).toContainText('blurred-B');
+    await expect(node.locator('.node-body')).toContainText('blurred-B');
+    await expect(tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    if (fixture.type === 'codeNew') {
+      await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Edited B node');
+      await expect(frame.locator('.description-read-content')).toHaveText('Edited B description');
+    }
+    await page.locator('.active-project-save-button').click();
+    await expect.poll(() => saves.find((entry) => entry.path === projects[1]!.absolutePath)?.value).toBe(blurredB);
+    if (fixture.type === 'codeNew') {
+      expect(saves.find((entry) => entry.path === projects[1]!.absolutePath)).toMatchObject({
+        title: 'Edited B node',
+        description: 'Edited B description',
+      });
+    }
+    await tab('A').click();
+    await expect(view).toContainText('edited-A');
+    await row('A').dblclick();
+    await expect(view).toContainText('edited-A');
+    expect(loads).toBe(2);
+    await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    if (fixture.type === 'codeNew') {
+      await frame.getByRole('button', { name: 'Edit node title', exact: true }).click();
+      await frame.locator('#node-title-shared-node').fill('Cancel this title');
+      await frame.locator('#node-title-shared-node').press('Escape');
+      await expect(frame.getByRole('button', { name: 'Edit node title', exact: true })).toHaveText('Ownership Node');
+      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+      await frame.locator('.description-read-content').click();
+      await frame.locator('.node-description-field textarea').fill('Cancel this description');
+      await frame.locator('.node-description-field textarea').press('Escape');
+      await expect(frame.locator('.description-read-content')).toHaveText('Description...');
+      await expect(tab('A')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    }
+  });
 }
 
 test('JSON object drafts stay with their owner and formatting acknowledgements preserve text', async ({ page }) => {

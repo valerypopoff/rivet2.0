@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -1156,6 +1157,7 @@ test('Deployment storage settings API refuses an unmigrated local switch without
   await withAppSettingsEnv(async () => {
     const before = await readDeploymentStorageSettings();
     assert.match(before.storageModeChangeBlockedReason!, /files-to-SQLite/);
+    assert.match(before.storageModeChangeBlockedReason!, /in the "Local storage upgrade" tab/);
     const server = await startServer();
     try {
       const response = await fetch(`${server.baseUrl}/api/app-settings/deployment-storage`, {

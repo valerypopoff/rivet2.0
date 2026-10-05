@@ -43,17 +43,13 @@ function waitForActionLoadingPresentation(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ACTION_LOADING_PRESENTATION_WAIT_MS));
 }
 
-async function waitForWebAppCondition(
-  dom: JSDOM,
-  description: string,
-  condition: () => boolean,
-): Promise<void> {
-  const maximumChecks = 20;
-  for (let check = 0; check < maximumChecks; check += 1) {
+async function waitForWebAppCondition(dom: JSDOM, description: string, condition: () => boolean): Promise<void> {
+  const deadline = performance.now() + 5_000;
+  while (performance.now() < deadline) {
     if (condition()) return;
-    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Timed out waiting for ${description}.`);
+  throw new Error(`Timed out waiting for ${description} at ${dom.window.location.href}.`);
 }
 
 function installWebAppBrowserGlobals(dom: JSDOM): void {
@@ -70,15 +66,13 @@ function installWebAppBrowserGlobals(dom: JSDOM): void {
 
 async function waitForWebAppMount(dom: JSDOM): Promise<void> {
   installWebAppBrowserGlobals(dom);
-  const maximumChecks = 20;
   let observedSurface: Element | null = null;
-  for (let check = 0; check < maximumChecks; check += 1) {
+  await waitForWebAppCondition(dom, 'the Rivet web app to finish initializing', () => {
     const surface = dom.window.document.querySelector('.rivet-web-app-surface');
-    if (surface != null && surface === observedSurface) return;
+    const mounted = surface != null && surface === observedSurface;
     observedSurface = surface;
-    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
-  }
-  throw new Error('Timed out waiting for the Rivet web app to finish initializing.');
+    return mounted;
+  });
 }
 
 function makeKnowledgeStore(message: string): RivetKnowledgeStore {
@@ -1086,7 +1080,7 @@ void describe('createRivetWebAppHandler', () => {
     dom.window.close();
   });
 
-  void it('reconnects the hosted client and resumes a run after the last received sequence', async () => {
+  void it('reconnects the hosted client and resumes a run after the last received sequence', async (t) => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     uiGraph.components.push({
@@ -1108,10 +1102,15 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    t.after(() => dom.window.close());
     await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForWebAppCondition(
+      dom,
+      'initial action start',
+      () => sockets[0]?.sent.some((message) => message.type === 'action.start') === true,
+    );
     const firstSocket = sockets[0]!;
     const start = firstSocket.sent.find((message) => message.type === 'action.start')!;
     firstSocket.receive({
@@ -1129,7 +1128,11 @@ void describe('createRivetWebAppHandler', () => {
     });
     firstSocket.close();
 
-    await new Promise((resolve) => setTimeout(resolve, 550));
+    await waitForWebAppCondition(
+      dom,
+      'reconnect and resume',
+      () => sockets[1]?.sent.some((message) => message.type === 'run.resume') === true,
+    );
     const secondSocket = sockets[1]!;
     assert.deepEqual(
       secondSocket.sent.find((message) => message.type === 'run.resume'),
@@ -1142,13 +1145,14 @@ void describe('createRivetWebAppHandler', () => {
       sequence: 3,
       statePatch: { result: 'Reconnected' },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    assert.equal(dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent, 'Reconnected');
-    dom.window.close();
+    await waitForWebAppCondition(
+      dom,
+      'the completed resumed output',
+      () => dom.window.document.querySelector('.rivet-web-app-output pre')?.textContent === 'Reconnected',
+    );
   });
 
-  void it('surfaces non-retryable WebSocket closes instead of reconnecting forever', async () => {
+  void it('surfaces non-retryable WebSocket closes instead of reconnecting forever', async (t) => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const sockets: FakeBrowserWebSocket[] = [];
@@ -1164,19 +1168,21 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    t.after(() => dom.window.close());
     await waitForWebAppMount(dom);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     sockets[0]!.close(1008, 'Authentication expired');
-    await new Promise((resolve) => setTimeout(resolve, 550));
+    t.mock.timers.tick(10_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.equal(sockets.length, 1);
     assert.equal(dom.window.document.querySelector('.rivet-web-app-error')?.textContent, 'Authentication expired');
-    dom.window.close();
   });
 
-  void it('backs off repeated sockets that open but never complete the protocol handshake', async () => {
+  void it('backs off repeated sockets that open but never complete the protocol handshake', async (t) => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const sockets: FakeBrowserWebSocket[] = [];
@@ -1193,25 +1199,32 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    t.after(() => dom.window.close());
     await waitForWebAppMount(dom);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     sockets[0]!.close(1006);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    t.mock.timers.tick(249);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(sockets.length, 1);
+    t.mock.timers.tick(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(sockets.length, 2);
 
     sockets[1]!.close(1006);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    t.mock.timers.tick(499);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(sockets.length, 2);
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    t.mock.timers.tick(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(sockets.length, 3);
 
     dom.window.dispatchEvent(new dom.window.Event('pagehide'));
-    dom.window.close();
   });
 
-  void it('replays a sent start after reconnect so cancellation before acceptance reaches the server', async () => {
+  void it('replays a sent start after reconnect so cancellation before acceptance reaches the server', async (t) => {
     const project = makeProject();
     const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
     const sockets: FakeBrowserWebSocket[] = [];
@@ -1227,16 +1240,30 @@ void describe('createRivetWebAppHandler', () => {
         url: 'https://example.test/app',
       },
     );
+    t.after(() => dom.window.close());
     await waitForWebAppMount(dom);
 
     (dom.window.document.querySelector('.rivet-web-app-button') as HTMLButtonElement).click();
-    await waitForActionLoadingPresentation();
+    await waitForWebAppCondition(
+      dom,
+      'initial action start',
+      () => sockets[0]?.sent.some((message) => message.type === 'action.start') === true,
+    );
     const firstSocket = sockets[0]!;
     const start = firstSocket.sent.find((message) => message.type === 'action.start')!;
+    await waitForWebAppCondition(
+      dom,
+      'cancel button',
+      () => dom.window.document.querySelector('.rivet-web-app-abort-button') != null,
+    );
     (dom.window.document.querySelector('.rivet-web-app-abort-button') as HTMLButtonElement).click();
     firstSocket.close();
 
-    await new Promise((resolve) => setTimeout(resolve, 550));
+    await waitForWebAppCondition(
+      dom,
+      'reconnect and replay start',
+      () => sockets[1]?.sent.some((message) => message.type === 'action.start') === true,
+    );
     const secondSocket = sockets[1]!;
     assert.deepEqual(
       secondSocket.sent.find((message) => message.type === 'action.start'),
@@ -1258,10 +1285,11 @@ void describe('createRivetWebAppHandler', () => {
       runId: 'run-cancel-before-accept',
       sequence: 2,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    assert.equal(dom.window.document.querySelector('.rivet-web-app-button')?.textContent, 'Run');
-    dom.window.close();
+    await waitForWebAppCondition(
+      dom,
+      'the cancelled action to become runnable',
+      () => dom.window.document.querySelector('.rivet-web-app-button')?.textContent === 'Run',
+    );
   });
 
   void it('renders a friendly HTTP error when a proxy returns non-JSON action content', async () => {
