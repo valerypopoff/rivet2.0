@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import type { NodeConnection, PortId } from '../../../src/index.js';
-import { StartBackgroundBranchNodeImpl } from '../../../src/index.js';
+import { StartBackgroundBranchNodeImpl } from '../../../src/model/nodes/StartBackgroundBranchNode.js';
 
 void describe('StartBackgroundBranchNodeImpl', () => {
   void it('creates an async branch node with no settings', () => {

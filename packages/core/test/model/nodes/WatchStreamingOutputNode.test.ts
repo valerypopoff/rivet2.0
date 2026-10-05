@@ -1,15 +1,15 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import { StreamValueNodeImpl } from '../../../src/model/nodes/StreamValueNode.js';
 import {
-  StreamValueNodeImpl,
   MAX_CAUGHT_STREAMING_CHUNKS,
-  StopWatchingStreamingOutputNodeImpl,
   CatchStreamingChunksNodeImpl,
-  WatchStreamingOutputNodeImpl,
-  type InternalProcessContext,
-  type PortId,
-} from '../../../src/index.js';
+} from '../../../src/model/nodes/CatchStreamingChunksNode.js';
+import { StopWatchingStreamingOutputNodeImpl } from '../../../src/model/nodes/StopWatchingStreamingOutputNode.js';
+import { WatchStreamingOutputNodeImpl } from '../../../src/model/nodes/WatchStreamingOutputNode.js';
+import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
+import type { PortId } from '../../../src/model/NodeBase.js';
 
 describe('WatchStreamingOutputNode', () => {
   it('places every streaming node in the Streaming group only', () => {
@@ -36,10 +36,9 @@ describe('WatchStreamingOutputNode', () => {
     const node = new StreamValueNodeImpl(StreamValueNodeImpl.create());
     const partials: unknown[] = [];
     const input = { type: 'object' as const, value: { name: 'ready' } };
-    const outputs = await node.process(
-      { ['value' as PortId]: input },
-      { onPartialOutputs: (partial) => partials.push(partial) } as InternalProcessContext,
-    );
+    const outputs = await node.process({ ['value' as PortId]: input }, {
+      onPartialOutputs: (partial) => partials.push(partial),
+    } as InternalProcessContext);
     assert.deepEqual(partials, [outputs]);
     assert.equal(outputs['value' as PortId], input);
   });
@@ -74,7 +73,9 @@ describe('WatchStreamingOutputNode', () => {
     const editors = new WatchStreamingOutputNodeImpl(node).getEditors();
     const interval = editors.find((editor) => 'dataKey' in editor && editor.dataKey === 'intervalMs');
     const maxParallelRuns = editors.find((editor) => 'dataKey' in editor && editor.dataKey === 'maxParallelRuns');
-    const queueOverflowBehavior = editors.find((editor) => 'dataKey' in editor && editor.dataKey === 'queueOverflowBehavior');
+    const queueOverflowBehavior = editors.find(
+      (editor) => 'dataKey' in editor && editor.dataKey === 'queueOverflowBehavior',
+    );
 
     assert.equal(interval?.hideIf?.({ ...node.data, triggerMode: 'every-update' }), true);
     assert.equal(interval?.hideIf?.({ ...node.data, triggerMode: 'interval' }), false);

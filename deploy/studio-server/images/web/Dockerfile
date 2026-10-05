@@ -24,10 +24,30 @@ ENV no_proxy=$no_proxy
 RUN corepack enable
 
 WORKDIR /app
-COPY . .
+# Dependency inputs are stable across source-only changes. Keep every workspace
+# manifest so Yarn resolves the same lockfile and workspace links as a full checkout.
+COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn ./.yarn
+COPY scripts/checks/check-package-manager.mjs ./scripts/checks/check-package-manager.mjs
+COPY packages/app/package.json ./packages/app/package.json
+COPY packages/app-executor/package.json ./packages/app-executor/package.json
+COPY packages/cli/package.json ./packages/cli/package.json
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/docs/package.json ./packages/docs/package.json
+COPY packages/evaluations/package.json ./packages/evaluations/package.json
+COPY packages/node/package.json ./packages/node/package.json
+COPY packages/studio-server-api/package.json ./packages/studio-server-api/package.json
+COPY packages/studio-server-bootstrap/package.json ./packages/studio-server-bootstrap/package.json
+COPY packages/studio-server-executor/package.json ./packages/studio-server-executor/package.json
+COPY packages/studio-server-shared/package.json ./packages/studio-server-shared/package.json
+COPY packages/studio-server-web/package.json ./packages/studio-server-web/package.json
 
 RUN --mount=type=cache,target=/root/.cache/yarn \
     YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
+COPY packages ./packages
+COPY scripts ./scripts
+COPY deploy ./deploy
+COPY tsconfig.base.json LICENSE README.md ./
 RUN YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
 
 ARG VITE_RIVET_DEBUG_LOGS=false

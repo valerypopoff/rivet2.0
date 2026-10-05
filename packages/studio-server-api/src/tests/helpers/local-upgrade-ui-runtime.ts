@@ -3,11 +3,11 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { runtimeTestEntry, runtimeTestRepo as repo } from './runtime-test-entry.js';
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../../auth.js';
 import { listenTestServer } from './http-server-harness.js';
 
-const repo = fileURLToPath(new URL('../../../../../', import.meta.url));
 const { runBackendSupervisor } = await import(
   pathToFileURL(path.join(repo, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
 );
@@ -46,9 +46,7 @@ const completed = runBackendSupervisor({
     process.execPath,
     '--import',
     pathToFileURL(path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs')).href,
-    '--import',
-    'tsx',
-    path.join(repo, 'packages/studio-server-api/src/server.ts'),
+    ...runtimeTestEntry('server.js'),
   ],
   executorCommand: [
     process.execPath,
@@ -61,9 +59,7 @@ const completed = runBackendSupervisor({
   signalSource: signals,
   localUpgradeProvisionCommand: [
     process.execPath,
-    '--import',
-    'tsx',
-    path.join(repo, 'packages/studio-server-api/src/scripts/local-metadata-control.ts'),
+    ...runtimeTestEntry('scripts/local-metadata-control.js'),
     '--provision',
   ],
   apiStartupTimeoutMs: 45000,

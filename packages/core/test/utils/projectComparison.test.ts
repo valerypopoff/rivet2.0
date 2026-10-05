@@ -1,20 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  compareProjects,
-  getProjectConnectionComparisonKey,
-  getProjectNodeFieldComparisons,
-  type ChartNode,
-  type GraphId,
-  type NodeConnection,
-  type NodeGraph,
-  type NodeId,
-  type PortId,
-  type Project,
-  type ProjectId,
-  type UiComponentId,
-  type UiGraphId,
-} from '../../src/index.js';
+import { compareProjects } from '../../src/utils/projectComparison.js';
+import { getProjectConnectionComparisonKey } from '../../src/utils/projectComparison/connections.js';
+import { getProjectNodeFieldComparisons } from '../../src/utils/projectComparison/nodes.js';
+import type { ChartNode, NodeConnection, NodeId, PortId } from '../../src/model/NodeBase.js';
+import type { GraphId, NodeGraph } from '../../src/model/NodeGraph.js';
+import type { Project, ProjectId } from '../../src/model/Project.js';
+import type { UiComponentId, UiGraphId } from '../../src/model/UiGraph.js';
 import { compareConnections } from '../../src/utils/projectComparison/connections.js';
 import { compareGraphs } from '../../src/utils/projectComparison/graphs.js';
 import { compareNodes, getComparableGraphNodes } from '../../src/utils/projectComparison/nodes.js';

@@ -132,6 +132,10 @@ jobs:
         run: yarn check:compiled-workspace-exports
       - name: Run API test shard
         run: node deploy/studio-server/scripts/run-api-tests.mjs --shard-index ${{ matrix.shard }} --shard-count 4
+        env:
+          # Rehearsal subprocesses consume this verified same-commit tsc build,
+          # avoiding hundreds of repeated source transformations across restarts.
+          RIVET_API_TEST_RUNTIME: prebuilt
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "API tests ${{ matrix.label }}/4"

@@ -1,6 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { ReportProgressNodeImpl, type GraphProgress, type Inputs, type PortId } from '../../../src/index.js';
+import { ReportProgressNodeImpl } from '../../../src/model/nodes/ReportProgressNode.js';
+import type { GraphProgress } from '../../../src/model/GraphProgress.js';
+import type { Inputs } from '../../../src/model/GraphProcessor.js';
+import type { PortId } from '../../../src/model/NodeBase.js';
 
 void describe('ReportProgressNodeImpl', () => {
   void it('reports configured progress and passes its sequencing value through unchanged', async () => {

@@ -303,7 +303,28 @@ const dockerfiles = [
 ];
 for (const dockerfilePath of dockerfiles) {
   const dockerfile = readText(dockerfilePath);
-  assert.match(dockerfile, /COPY \. \./, `${dockerfilePath} must build from the monorepo root.`);
+  assert.match(
+    dockerfile,
+    /COPY package\.json yarn\.lock \.yarnrc\.yml \.\//,
+    `${dockerfilePath} must use root dependency inputs.`,
+  );
+  assert.match(
+    dockerfile,
+    /COPY packages \.\/packages/,
+    `${dockerfilePath} must build the monorepo workspace sources.`,
+  );
+  assert.doesNotMatch(
+    dockerfile,
+    /COPY \. \./,
+    `${dockerfilePath} must not recopy the dependency cache after installing.`,
+  );
+  assert.ok(
+    dockerfile.indexOf('yarn install --immutable') < dockerfile.indexOf('COPY packages ./packages'),
+    `${dockerfilePath} must install before copying changing sources.`,
+  );
+  for (const manifest of workspaceManifestPaths) {
+    assert.ok(dockerfile.includes(`COPY ${manifest} ./`), `${dockerfilePath} must include ${manifest} before install.`);
+  }
   assert.match(dockerfile, /yarn install --immutable/, `${dockerfilePath} must use the root Yarn lockfile.`);
   assert.doesNotMatch(dockerfile, /rivet_source|rivet_dependency_metadata|\.rivet-package-links|wrapper\//);
 }

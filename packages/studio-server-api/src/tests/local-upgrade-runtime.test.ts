@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, test } from 'node:test';
+import { selectTestShard } from '../../../../scripts/ci/test-shard-options.mjs';
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 import { provisionLocalMetadataControl } from '../local-metadata/runtime-control.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
@@ -13,6 +13,27 @@ import { LocalMetadataTransitionJournal } from '../local-metadata/transition-jou
 import { recoverLocalMetadataToLegacy } from '../local-metadata/recover-legacy.js';
 import { FilesystemRivetEvaluationStore } from '../evaluation-runs/filesystem-store.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
+import { runtimeTestEntry } from './helpers/runtime-test-entry.js';
+
+test('runtime test entries preserve source mode and fail closed for invalid or missing prebuilt entries', () => {
+  const source = runtimeTestEntry('tests/helpers/local-upgrade-runtime.js', 'source');
+  assert.deepEqual(source.slice(0, 2), ['--import', 'tsx']);
+  assert.ok(source[2]!.endsWith(path.join('src', 'tests', 'helpers', 'local-upgrade-runtime.ts')));
+  assert.throws(() => runtimeTestEntry('server.js', 'unknown'), /Invalid API test runtime/);
+  assert.throws(
+    () => runtimeTestEntry('tests/helpers/missing-fixture.js', 'prebuilt'),
+    /Missing prebuilt API test entry/,
+  );
+  if (process.env.RIVET_API_TEST_RUNTIME === 'prebuilt') {
+    const compiled = runtimeTestEntry('tests/helpers/local-upgrade-runtime.js');
+    assert.equal(compiled.length, 1);
+    assert.ok(
+      compiled[0]!.endsWith(
+        path.join('dist', 'studio-server-api', 'src', 'tests', 'helpers', 'local-upgrade-runtime.js'),
+      ),
+    );
+  }
+});
 
 // test-style: fixture-read: reads only generated legacy and candidate fixtures to verify conversion and recovery.
 async function fixture(
@@ -71,7 +92,7 @@ async function fixture(
     const command = async (name: string, extra: NodeJS.ProcessEnv = {}) => {
       const result = await promisify(execFile)(
         process.execPath,
-        ['--import', 'tsx', fileURLToPath(new URL('./helpers/local-upgrade-runtime.ts', import.meta.url)), name],
+        [...runtimeTestEntry('tests/helpers/local-upgrade-runtime.js'), name],
         {
           // The UI rehearsal performs several real API/executor boots. Each
           // phase has its own bounded status deadline; the outer process must
@@ -118,63 +139,79 @@ async function fixture(
 
 // Each case owns all four roots, its control journal, child environment and
 // ephemeral HTTP ports. Keep restart/fault phases serial within a case, while
-// bounding independent cases to four workers; other API files remain serial.
-describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
-  test('authenticated browser backup and project export work while paused and certify an actual restored archive', async () => {
-    await fixture(async (_source, _control, command) => {
-      await command('browser-backup');
-    });
-  });
+// bounding independent cases to two workers per hosted runner (four locally);
+// other API files remain serial.
+const concurrency = process.env.RIVET_API_RUNTIME_SHARD ? 2 : 4;
+describe('isolated local upgrade runtime scenarios', { concurrency }, () => {
+  const scenarios: { name: string; run: () => Promise<void> }[] = [];
+  const scenario = (name: string, run: () => Promise<void>) => scenarios.push({ name, run });
+  scenario(
+    'authenticated browser backup and project export work while paused and certify an actual restored archive',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('browser-backup');
+      });
+    },
+  );
 
-  test('UI prepares, backs up, copies, restarts, validates and resumes a real supervised backend without console intervention', async () => {
-    await fixture(async (_source, _control, command) => {
-      await command('ui-workflow');
-    });
-  });
+  scenario(
+    'UI prepares, backs up, copies, restarts, validates and resumes a real supervised backend without console intervention',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('ui-workflow');
+      });
+    },
+  );
 
-  test('operator copy, restart, validation, resume and ordinary serving select SQLite without changing retained files', async () => {
-    await fixture(async (source, control, command) => {
-      const fingerprint = await fingerprintVmMigrationSource(source);
-      await command('copy');
-      const selection = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
-      let runtimeCache: string;
-      try {
-        await selection.initialize({ readOnly: true });
-        runtimeCache = path.join(control, 'generations', selection.read().generation!.id, 'runtime-cache');
-      } finally {
-        selection.close();
-      }
-      // The archive is durable business data; an extracted package cache is not.
-      // Actual supervised startup on Linux must rebuild it, not fail closed as
-      // though an authoritative database or artifact had disappeared.
-      await fs.rm(runtimeCache, { recursive: true });
-      await fs.symlink(source.runtimeLibraries, runtimeCache, process.platform === 'win32' ? 'junction' : 'dir');
-      await assert.rejects(command('validate'), /Selected runtime-library cache must be a real directory/);
-      await fs.unlink(runtimeCache);
-      if (process.platform !== 'win32') await command('supervised');
-      await command('validate');
-      assert.ok((await fs.stat(path.join(runtimeCache, 'current', 'node_modules', 'example', 'index.js'))).isFile());
-      await command('resume');
-      await command('live');
-      assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
-      const journal = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
-      try {
-        await journal.initialize({ readOnly: true });
-        assert.equal(journal.read().phase, 'sqlite-live');
-        assert.equal(journal.read().canReturnToLegacy, false);
-      } finally {
-        journal.close();
-      }
-    });
-  });
+  scenario(
+    'operator copy, restart, validation, resume and ordinary serving select SQLite without changing retained files',
+    async () => {
+      await fixture(async (source, control, command) => {
+        const fingerprint = await fingerprintVmMigrationSource(source);
+        await command('copy');
+        const selection = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
+        let runtimeCache: string;
+        try {
+          await selection.initialize({ readOnly: true });
+          runtimeCache = path.join(control, 'generations', selection.read().generation!.id, 'runtime-cache');
+        } finally {
+          selection.close();
+        }
+        // The archive is durable business data; an extracted package cache is not.
+        // Actual supervised startup on Linux must rebuild it, not fail closed as
+        // though an authoritative database or artifact had disappeared.
+        await fs.rm(runtimeCache, { recursive: true });
+        await fs.symlink(source.runtimeLibraries, runtimeCache, process.platform === 'win32' ? 'junction' : 'dir');
+        await assert.rejects(command('validate'), /Selected runtime-library cache must be a real directory/);
+        await fs.unlink(runtimeCache);
+        if (process.platform !== 'win32') await command('supervised');
+        await command('validate');
+        assert.ok((await fs.stat(path.join(runtimeCache, 'current', 'node_modules', 'example', 'index.js'))).isFile());
+        await command('resume');
+        await command('live');
+        assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
+        const journal = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
+        try {
+          await journal.initialize({ readOnly: true });
+          assert.equal(journal.read().phase, 'sqlite-live');
+          assert.equal(journal.read().canReturnToLegacy, false);
+        } finally {
+          journal.close();
+        }
+      });
+    },
+  );
 
-  test('operator setup status is available before opt-in without exposing configuration to unsigned sessions', async () => {
-    await fixture(async (_source, _control, command) => {
-      await command('setup-status');
-    });
-  });
+  scenario(
+    'operator setup status is available before opt-in without exposing configuration to unsigned sessions',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('setup-status');
+      });
+    },
+  );
 
-  test('operator inspection refuses oversized sources before parsing project or publication content', async () => {
+  scenario('operator inspection refuses oversized sources before parsing project or publication content', async () => {
     await fixture(async (source, _control, command) => {
       // Deliberately invalid project bytes: entering the inventory parser would
       // throw, rather than returning the explicit capacity refusal below.
@@ -183,50 +220,59 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
     });
   });
 
-  test('background copy capacity refusal is durable and cannot create a candidate or modify the frozen source', async () => {
-    await fixture(async (_source, _control, command) => {
-      await command('copy-capacity-refusal');
-    });
-  });
+  scenario(
+    'background copy capacity refusal is durable and cannot create a candidate or modify the frozen source',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('copy-capacity-refusal');
+      });
+    },
+  );
 
-  test('background source fingerprint mismatch is durable and never creates a candidate', async () => {
+  scenario('background source fingerprint mismatch is durable and never creates a candidate', async () => {
     await fixture(async (_source, _control, command) => {
       await command('copy-fingerprint-mismatch');
     });
   });
 
-  test('failed workflow diagnostics survive polling and same-generation retry and resolve a project read-only', async () => {
-    await fixture(async (source, _control, command) => {
-      await fs.writeFile(path.join(source.workflows, 'invalid.rivet-project'), 'password=private-malformed-fixture');
-      await command('copy-source-diagnostic');
-    });
-  });
+  scenario(
+    'failed workflow diagnostics survive polling and same-generation retry and resolve a project read-only',
+    async () => {
+      await fixture(async (source, _control, command) => {
+        await fs.writeFile(path.join(source.workflows, 'invalid.rivet-project'), 'password=private-malformed-fixture');
+        await command('copy-source-diagnostic');
+      });
+    },
+  );
 
-  test('operator activity remains visible across HTTP clients and competing actions fail with a safe conflict', async () => {
-    await fixture(async (_source, _control, command) => {
-      await command('copy-operation-status');
-    });
-  });
+  scenario(
+    'operator activity remains visible across HTTP clients and competing actions fail with a safe conflict',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('copy-operation-status');
+      });
+    },
+  );
 
-  test('status cannot report an interrupted copy when its worker finishes during optional backup IO', async () => {
+  scenario('status cannot report an interrupted copy when its worker finishes during optional backup IO', async () => {
     await fixture(async (_source, _control, command) => {
       await command('copy-status-race');
     });
   });
 
-  test('status rereads backup evidence when its worker finishes during a held metadata read', async () => {
+  scenario('status rereads backup evidence when its worker finishes during a held metadata read', async () => {
     await fixture(async (_source, _control, command) => {
       await command('backup-status-race');
     });
   });
 
-  test('copy verifies plaintext settings without an encryption key, enable flag or key attestation', async () => {
+  scenario('copy verifies plaintext settings without an encryption key, enable flag or key attestation', async () => {
     await fixture(async (_source, _control, command) => {
       await command('copy-without-key');
     });
   });
 
-  test('operator inspection errors redact private source contents from HTTP responses and API logs', async () => {
+  scenario('operator inspection errors redact private source contents from HTTP responses and API logs', async () => {
     await fixture(async (source, _control, command) => {
       const bundle = path.join(source.recordings, 'fixture-project', 'fixture-run');
       await fs.mkdir(bundle, { recursive: true });
@@ -235,74 +281,80 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
     });
   });
 
-  test('failed selected startup can return to legacy without the candidate encryption key or an intact candidate', async () => {
-    await fixture(async (source, control, command) => {
-      const fingerprint = await fingerprintVmMigrationSource(source);
-      await command('copy');
-      const journal = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
-      let state;
-      try {
-        await journal.initialize({ readOnly: true });
-        state = journal.read();
-      } finally {
-        journal.close();
-      }
-      await fs.writeFile(
-        path.join(control, 'generations', state.generation!.id, 'settings.sqlite'),
-        'broken candidate',
-      );
-      await assert.rejects(command('validate'));
-      const recovered = await recoverLocalMetadataToLegacy({
-        controlRoot: control,
-        source,
-        expectedRevision: state.revision,
-        expectedGenerationId: state.generation!.id,
-        withExclusiveOwner: async (operation) => operation(),
+  scenario(
+    'failed selected startup can return to legacy without the candidate encryption key or an intact candidate',
+    async () => {
+      await fixture(async (source, control, command) => {
+        const fingerprint = await fingerprintVmMigrationSource(source);
+        await command('copy');
+        const journal = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
+        let state;
+        try {
+          await journal.initialize({ readOnly: true });
+          state = journal.read();
+        } finally {
+          journal.close();
+        }
+        await fs.writeFile(
+          path.join(control, 'generations', state.generation!.id, 'settings.sqlite'),
+          'broken candidate',
+        );
+        await assert.rejects(command('validate'));
+        const recovered = await recoverLocalMetadataToLegacy({
+          controlRoot: control,
+          source,
+          expectedRevision: state.revision,
+          expectedGenerationId: state.generation!.id,
+          withExclusiveOwner: async (operation) => operation(),
+        });
+        assert.equal(recovered.backend, 'legacy');
+        await command('validate', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        await command('resume', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        await command('legacy', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
       });
-      assert.equal(recovered.backend, 'legacy');
-      await command('validate', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      await command('resume', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      await command('legacy', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
-    });
-  });
+    },
+  );
 
-  test('legacy recovery refuses replacement source mounts and drift before initializing file-backed authorities', async () => {
-    await fixture(async (source, control, command) => {
-      const fingerprint = await fingerprintVmMigrationSource(source);
-      await command('copy');
-      await command('return');
-      for (const [role, variable] of [
-        ['workflows', 'RIVET_WORKFLOWS_ROOT'],
-        ['recordings', 'RIVET_WORKFLOW_RECORDINGS_ROOT'],
-        ['appData', 'RIVET_APP_DATA_ROOT'],
-        ['runtimeLibraries', 'RIVET_RUNTIME_LIBRARIES_ROOT'],
-      ] as const) {
-        const replacement = path.join(path.dirname(control), `replacement-${role}`);
-        await fs.mkdir(replacement);
-        await assert.rejects(command('legacy', { [variable]: replacement }), /source mount identity/);
-        assert.deepEqual(await fs.readdir(replacement), [], 'Rejected startup must not create new legacy defaults.');
-      }
-      assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
-      const projectPath = path.join(source.workflows, 'story.rivet-project');
-      const original = await fs.readFile(projectPath);
-      await fs.writeFile(projectPath, createBlankProjectFile('Changed during paused recovery'));
-      await assert.rejects(command('legacy'), /Retained legacy source differs/);
-      await fs.writeFile(projectPath, original);
-      await command('validate', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      await command('resume', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      // Legitimate legacy writes after resumption are allowed; its old content
-      // proof is not a permanent read-only lock, but mount identity still is.
-      await fs.writeFile(projectPath, createBlankProjectFile('New live legacy save'));
-      await command('legacy', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
-      await assert.rejects(
-        command('legacy', { RIVET_WORKFLOWS_ROOT: path.join(path.dirname(control), 'replacement-workflows') }),
-        /source mount identity/,
-      );
-    });
-  });
+  scenario(
+    'legacy recovery refuses replacement source mounts and drift before initializing file-backed authorities',
+    async () => {
+      await fixture(async (source, control, command) => {
+        const fingerprint = await fingerprintVmMigrationSource(source);
+        await command('copy');
+        await command('return');
+        for (const [role, variable] of [
+          ['workflows', 'RIVET_WORKFLOWS_ROOT'],
+          ['recordings', 'RIVET_WORKFLOW_RECORDINGS_ROOT'],
+          ['appData', 'RIVET_APP_DATA_ROOT'],
+          ['runtimeLibraries', 'RIVET_RUNTIME_LIBRARIES_ROOT'],
+        ] as const) {
+          const replacement = path.join(path.dirname(control), `replacement-${role}`);
+          await fs.mkdir(replacement);
+          await assert.rejects(command('legacy', { [variable]: replacement }), /source mount identity/);
+          assert.deepEqual(await fs.readdir(replacement), [], 'Rejected startup must not create new legacy defaults.');
+        }
+        assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
+        const projectPath = path.join(source.workflows, 'story.rivet-project');
+        const original = await fs.readFile(projectPath);
+        await fs.writeFile(projectPath, createBlankProjectFile('Changed during paused recovery'));
+        await assert.rejects(command('legacy'), /Retained legacy source differs/);
+        await fs.writeFile(projectPath, original);
+        await command('validate', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        await command('resume', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        // Legitimate legacy writes after resumption are allowed; its old content
+        // proof is not a permanent read-only lock, but mount identity still is.
+        await fs.writeFile(projectPath, createBlankProjectFile('New live legacy save'));
+        await command('legacy', { RIVET_LOCAL_METADATA_ENCRYPTION_KEY: '' });
+        await assert.rejects(
+          command('legacy', { RIVET_WORKFLOWS_ROOT: path.join(path.dirname(control), 'replacement-workflows') }),
+          /source mount identity/,
+        );
+      });
+    },
+  );
 
-  test('restored-clone legacy resumption can be refenced before restart and a second conversion', async () => {
+  scenario('restored-clone legacy resumption can be refenced before restart and a second conversion', async () => {
     await fixture(async (source, _control, command) => {
       const fingerprint = await fingerprintVmMigrationSource(source);
       await command('copy');
@@ -321,21 +373,24 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
     ['copy:settings', 'ENOSPC'],
     ['copy:runtime-cache', 'EACCES'],
   ] as const) {
-    test(`durable copy failure ${mode} at ${point} is redacted and retries the same generation exactly`, async () => {
-      await fixture(async (source, _control, command) => {
-        const fingerprint = await fingerprintVmMigrationSource(source);
-        await command('copy-fault', { REHEARSAL_FAULT_POINT: point, REHEARSAL_FAULT_MODE: mode });
-        await command('copy-retry');
-        await command('return');
-        await command('validate');
-        await command('resume');
-        await command('legacy');
-        assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
-        // The journal retains the returned generation. A later failure must
-        // report the new job, never that older successful certificate.
-        await command('copy-fault', { REHEARSAL_FAULT_POINT: point, REHEARSAL_FAULT_MODE: mode });
-      });
-    });
+    scenario(
+      `durable copy failure ${mode} at ${point} is redacted and retries the same generation exactly`,
+      async () => {
+        await fixture(async (source, _control, command) => {
+          const fingerprint = await fingerprintVmMigrationSource(source);
+          await command('copy-fault', { REHEARSAL_FAULT_POINT: point, REHEARSAL_FAULT_MODE: mode });
+          await command('copy-retry');
+          await command('return');
+          await command('validate');
+          await command('resume');
+          await command('legacy');
+          assert.equal(await fingerprintVmMigrationSource(source), fingerprint);
+          // The journal retains the returned generation. A later failure must
+          // report the new job, never that older successful certificate.
+          await command('copy-fault', { REHEARSAL_FAULT_POINT: point, REHEARSAL_FAULT_MODE: mode });
+        });
+      },
+    );
   }
 
   for (const point of [
@@ -344,7 +399,7 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
     'copy:certificate-committed',
     'copy:selection-certified',
   ]) {
-    test(`forced termination at ${point} leaves durable evidence, paused legacy and usable recovery`, async () => {
+    scenario(`forced termination at ${point} leaves durable evidence, paused legacy and usable recovery`, async () => {
       await fixture(async (source, _control, command) => {
         const fingerprint = await fingerprintVmMigrationSource(source);
         await assert.rejects(command('copy-fault', { REHEARSAL_FAULT_POINT: point, REHEARSAL_FAULT_MODE: 'kill' }));
@@ -358,7 +413,7 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
     });
   }
 
-  test('forced termination after activation commit remains reversible and does not admit writes', async () => {
+  scenario('forced termination after activation commit remains reversible and does not admit writes', async () => {
     await fixture(async (source, control, command) => {
       await command('copy-fault', { REHEARSAL_FAULT_POINT: 'copy:settings', REHEARSAL_FAULT_MODE: 'ENOSPC' });
       await command('copy-retry');
@@ -389,7 +444,7 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
   });
 
   for (const point of ['resume:committed', 'resume:maintenance-removed']) {
-    test(`forced termination at ${point} cannot reopen rollback and can complete resumption`, async () => {
+    scenario(`forced termination at ${point} cannot reopen rollback and can complete resumption`, async () => {
       await fixture(async (_source, control, command) => {
         await command('copy');
         await command('validate');
@@ -407,4 +462,13 @@ describe('isolated local upgrade runtime scenarios', { concurrency: 4 }, () => {
       });
     });
   }
+
+  const shard = process.env.RIVET_API_RUNTIME_SHARD;
+  let selected = scenarios;
+  if (shard) {
+    assert.match(shard, /^[1-4]\/4$/, 'Runtime scenarios support the four-runner hosted partition only.');
+    selected = selectTestShard(scenarios, Number(shard[0]) - 1, 4);
+  }
+  assert.ok(selected.length > 0, 'Runtime scenario partition must not be empty.');
+  for (const { name, run } of selected) test(name, run);
 });
