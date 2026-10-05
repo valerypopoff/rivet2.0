@@ -11,11 +11,64 @@ import {
   redactedRestoredFailureStep,
 } from './local-upgrade-restored-rehearsal.mjs';
 import { restoreLocalUpgradeBackup, assertBackupDirectory } from './local-upgrade-backup.mjs';
+import { REHEARSAL_TOOLS } from './local-upgrade-rehearsal-safety.mjs';
 
 // Runs directly on a Linux Docker host. No Docker socket is ever mounted into
 // a container. All payloads are generated here, not copied from a real stack.
 const exec = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+// Keep the production fixture command testable without running the host gate.
+// Shared dependency paths are preserved, including the UI-managed layout helper.
+export function restoredHostFixtureArgs(imageId, volume) {
+  return [
+    '--network',
+    'none',
+    '--user',
+    '0',
+    '--mount',
+    `type=volume,source=${volume},target=/fixture`,
+    ...REHEARSAL_TOOLS.flatMap((file) => [
+      '--mount',
+      `type=bind,source=${path.join(root, 'deploy/studio-server', file)},target=/tools/${file},readonly`,
+    ]),
+    '--entrypoint',
+    'node',
+    imageId,
+    '--input-type=module',
+    '-e',
+    `
+      const fs=await import('node:fs/promises');
+      const base='/app/packages/studio-server-api/dist/studio-server-api/src/';
+      const {createBlankProjectFile}=await import(base+'routes/workflows/fs-helpers.js');
+      const {createLocalUpgradeBackup}=await import('/tools/scripts/local-upgrade-backup.mjs');
+      const roots=Object.fromEntries(['workflows','recordings','appData','runtimeLibraries'].map(domain=>[domain,'/fixture/source/'+domain]));
+      for(const directory of Object.values(roots))await fs.mkdir(directory,{recursive:true,mode:0o700});
+      await fs.mkdir(roots.workflows+'/empty');
+      // Model an already-running legacy server: its normal startup creates
+      // these empty roots. If omitted, first clone boot changes the frozen
+      // source fingerprint even though no user data was written.
+      for(const directory of ['.published','.rivet-move-transactions','.rivet-publication-transactions'])
+        await fs.mkdir(roots.workflows+'/'+directory);
+      await fs.mkdir(roots.runtimeLibraries+'/staging');
+      await fs.writeFile(roots.workflows+'/fixture.rivet-project',createBlankProjectFile('Host rehearsal'));
+      await fs.mkdir(roots.appData+'/settings');
+      await fs.writeFile(roots.appData+'/settings/environment-variables.json',JSON.stringify({version:1,variables:[{id:'fixture-env',name:'FIXTURE_VALUE',value:'synthetic',browserAccess:false}]}));
+      const {FilesystemRivetEvaluationStore}=await import(base+'evaluation-runs/filesystem-store.js');
+      const {FilesystemRivetLLMProfileHealthStore}=await import(base+'llm-profile-health/filesystem-store.js');
+      const evaluations=new FilesystemRivetEvaluationStore(roots.appData+'/evaluation-runs.sqlite');
+      const health=new FilesystemRivetLLMProfileHealthStore(roots.appData+'/llm-profile-health.sqlite');
+      try {await evaluations.getLibrarySnapshot();await health.list();}
+      finally {await evaluations.dispose();await health.dispose();}
+      await fs.mkdir(roots.runtimeLibraries+'/current/node_modules/example',{recursive:true});
+      await fs.writeFile(roots.runtimeLibraries+'/current/package.json','{"private":true}');
+      await fs.writeFile(roots.runtimeLibraries+'/current/node_modules/example/index.js','module.exports=42;');
+      await fs.writeFile(roots.runtimeLibraries+'/manifest.json',JSON.stringify({packages:{example:{name:'example',version:'1.0.0'}},updatedAt:'2026-01-01T00:00:00.000Z'}));
+      const result=await createLocalUpgradeBackup({roots,destination:'/fixture/backup',assertFrozen:async()=>{}});
+      console.log(JSON.stringify({receipt:result.receipt}));
+      `,
+  ];
+}
+
 async function main() {
   assert.equal(process.platform, 'linux', 'This integration gate requires a Linux Docker host.');
   assert.equal(process.getuid(), 0, 'Use sudo for ownership-preserving disposable host fixtures.');
@@ -55,53 +108,7 @@ async function main() {
     volumeCreated = true;
     // Only generated package/project bytes; no workflow is executed and no
     // public registry, provider, database or production mount is reachable.
-    await tracker.start([
-      '--network',
-      'none',
-      '--user',
-      '0',
-      '--mount',
-      `type=volume,source=${volume},target=/fixture`,
-      '--mount',
-      `type=bind,source=${path.join(root, 'deploy/studio-server/scripts/local-upgrade-backup.mjs')},target=/tools/local-upgrade-backup.mjs,readonly`,
-      '--mount',
-      `type=bind,source=${path.join(root, 'deploy/studio-server/scripts/local-upgrade-snapshot-plan.mjs')},target=/tools/local-upgrade-snapshot-plan.mjs,readonly`,
-      '--entrypoint',
-      'node',
-      image.Id,
-      '--input-type=module',
-      '-e',
-      `
-      const fs=await import('node:fs/promises');
-      const base='/app/packages/studio-server-api/dist/studio-server-api/src/';
-      const {createBlankProjectFile}=await import(base+'routes/workflows/fs-helpers.js');
-      const {createLocalUpgradeBackup}=await import('/tools/local-upgrade-backup.mjs');
-      const roots=Object.fromEntries(['workflows','recordings','appData','runtimeLibraries'].map(domain=>[domain,'/fixture/source/'+domain]));
-      for(const directory of Object.values(roots))await fs.mkdir(directory,{recursive:true,mode:0o700});
-      await fs.mkdir(roots.workflows+'/empty');
-      // Model an already-running legacy server: its normal startup creates
-      // these empty roots. If omitted, first clone boot changes the frozen
-      // source fingerprint even though no user data was written.
-      for(const directory of ['.published','.rivet-move-transactions','.rivet-publication-transactions'])
-        await fs.mkdir(roots.workflows+'/'+directory);
-      await fs.mkdir(roots.runtimeLibraries+'/staging');
-      await fs.writeFile(roots.workflows+'/fixture.rivet-project',createBlankProjectFile('Host rehearsal'));
-      await fs.mkdir(roots.appData+'/settings');
-      await fs.writeFile(roots.appData+'/settings/environment-variables.json',JSON.stringify({version:1,variables:[{id:'fixture-env',name:'FIXTURE_VALUE',value:'synthetic',browserAccess:false}]}));
-      const {FilesystemRivetEvaluationStore}=await import(base+'evaluation-runs/filesystem-store.js');
-      const {FilesystemRivetLLMProfileHealthStore}=await import(base+'llm-profile-health/filesystem-store.js');
-      const evaluations=new FilesystemRivetEvaluationStore(roots.appData+'/evaluation-runs.sqlite');
-      const health=new FilesystemRivetLLMProfileHealthStore(roots.appData+'/llm-profile-health.sqlite');
-      try {await evaluations.getLibrarySnapshot();await health.list();}
-      finally {await evaluations.dispose();await health.dispose();}
-      await fs.mkdir(roots.runtimeLibraries+'/current/node_modules/example',{recursive:true});
-      await fs.writeFile(roots.runtimeLibraries+'/current/package.json','{"private":true}');
-      await fs.writeFile(roots.runtimeLibraries+'/current/node_modules/example/index.js','module.exports=42;');
-      await fs.writeFile(roots.runtimeLibraries+'/manifest.json',JSON.stringify({packages:{example:{name:'example',version:'1.0.0'}},updatedAt:'2026-01-01T00:00:00.000Z'}));
-      const result=await createLocalUpgradeBackup({roots,destination:'/fixture/backup',assertFrozen:async()=>{}});
-      console.log(JSON.stringify({receipt:result.receipt}));
-      `,
-    ]);
+    await tracker.start(restoredHostFixtureArgs(image.Id, volume));
     assert.equal((await docker(['wait', owner])).stdout.trim(), '0', 'Fixture generation failed.');
     const logs = (await docker(['logs', owner])).stdout;
     receipt = JSON.parse(
@@ -193,9 +200,10 @@ async function main() {
   });
   console.log('PASS: direct Linux-host restored-copy runner; synthetic data, not production certification.');
 }
-main().catch(() => {
-  console.error(
-    'Linux-host restored-copy gate failed. Inspect protected owned fixture reports; production was not touched.',
-  );
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch(() => {
+    console.error(
+      'Linux-host restored-copy gate failed. Inspect protected owned fixture reports; production was not touched.',
+    );
+    process.exitCode = 1;
+  });

@@ -173,6 +173,18 @@ The host gate validates the entire restored runner receipt before publishing PAS
 
 `local-upgrade-restored-host.integration.mjs` runs the complete restored-copy orchestration directly on a Linux Docker host, using generated data, an immutable API image and 1 GiB/1 CPU test limits. It creates its own stopped seed container and owned volume, copies a checksummed backup out, restores an independent host copy, and invokes the real runner for conversion/restart/online and key-free offline recovery. No Docker socket is mounted. It requires elevated permissions only for ownership-preserving **fresh disposable** host roots. It never consumes a dev/production source path or executes a production graph.
 
+Its seed container uses the same explicit backup-tool dependency list as the browser image rehearsal. Each module is mounted read-only under `/tools` with its deployment-relative path (`scripts/…` or `images/api/…`); flattening the scripts or omitting the UI-managed layout helper breaks imports before fixture generation. The exported fixture-argument factory is used by both the host gate and its regression, not duplicated in the test. The ordinary production-cutover suite checks the exact mount plan and imports that plan's copied modules in a fresh Node process without unrelated files available. It also confirms that removing the layout helper fails import.
+
+For a Docker-capable checkout with a built API image, run the actual seed-container regression too:
+
+```powershell
+$env:RIVET_REHEARSAL_API_IMAGE = 'your-tested-api-image'
+node --test deploy/studio-server/scripts/local-upgrade-restored-host.test.mjs
+Remove-Item Env:RIVET_REHEARSAL_API_IMAGE
+```
+
+Without that explicit image, only the Docker case is skipped; the mount/import regressions still run. With it, the test pins the inspected image ID, executes the exact host fixture command with no network and a fresh labeled volume, requires a real checksum receipt, and removes only its ownership-checked container/volume. This seed test works with Docker Desktop but does **not** qualify the later native Linux-host writer discovery, restore or orchestration phases. The full Linux-host gate remains required in image CI.
+
 The isolated clone sets `RIVET_SHUTDOWN_GRACE_SECONDS=10` because the rehearsal admits no active workflow executions and deliberately restarts the backend several times. Production keeps its normal shutdown grace. Docker still has its separate 150-second stop allowance if cleanup does not finish promptly. Without the shorter clone-only grace, repeated idle shutdowns can consume the host runner's 15-minute deadline before the final legacy-resumption assertion.
 
 The generated settings must satisfy the current serving validators before the clone starts. In particular, its synthetic environment-variable ID uses the supported 8–128 character format; otherwise startup reconciliation fails and the gate times out before exercising conversion. The fixture must also include the empty workflow transaction/publication roots and runtime-library staging root created by a normally initialized legacy server. They are included in the frozen source fingerprint; omitting them makes first boot look like source drift even when no user data changed.
