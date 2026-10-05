@@ -475,9 +475,24 @@ an additive disk estimate: decoded recordings once, separate metadata/library
 and operational snapshot reserves, allocation/path overhead, one transient
 bundle and fixed headroom. The actual converter/extraction fixture samples disk
 allocation; it is not a production-data high-water qualification. HTTP copy
-capacity refusals are actionable 409 `local-copy-capacity` responses before
-any job or generation is created. See the owning
+admission records a durable job and returns 202 before expensive capacity,
+source-fingerprint and archive checks. A refusal becomes a failed job with a
+fixed stage/reason, before a candidate is created; acceptance is not success.
+The UI retains compatibility with older synchronous 409 refusals. Workflow
+failures carry an opaque project reference; an authenticated, read-only lookup
+provides its current path to the panel without persisting paths or parser/SQL
+messages in reports. Core's optional `{ logErrors: false }` deserialization and
+Node file-reader option suppress parser warnings for these protected reads;
+ordinary callers retain their existing warnings. Strict migration history reads
+must not silently omit corrupt archived versions. See the owning
 [upgrade runbook](./local-metadata-upgrade.md) for the formula and limitations.
+Migration publication helpers accept the already checked project/dataset/settings
+snapshot, so derived status and legacy resolution cannot bypass memory limits by
+reopening drafts. History readers without that snapshot use bounded reads too;
+permission/IO errors remain distinct from missing snapshots. Generated-fixture
+tests guard these IO boundaries without reading application source text.
+Budget regressions assert the fixed `source-bundle-limit` reason rather than
+human-facing message wording, and cover direct and enclosing-budget reuse.
 The supervised UI runtime fixture passes bootstrap `--import` paths as file
 URLs, so Windows drive-letter paths work as well as Linux deployment paths.
 
@@ -487,6 +502,13 @@ It owns disposable volumes only, keeps API/executor egress isolated, and must
 not point at VM/dev mounts. See the owning runbook for image environment names
 and the remaining actual-VM-data rehearsal. `local-metadata-control --capacity`
 provides a read-only resource preflight for that later rehearsal.
+`local-metadata-control --check-workflows` reads the bounded workflow/publication
+source without writing, opening control databases or certifying migration.
+It emits counts or fixed diagnostic fields (failure exit 2). The runtime suite
+covers held preflight IO, background fingerprint failure, same-job retries and
+read-only project reference authorization. Do not rebuild/delete Core or Node
+outputs concurrently with runtime tests that load those outputs in child
+processes; that races the test harness, not migration authority.
 
 Packaged-rehearsal SQLite probes use read-only connections with a bounded
 five-second lock wait, rather than SQLite's default immediate failure beside

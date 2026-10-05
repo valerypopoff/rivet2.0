@@ -10,6 +10,7 @@ import {
   prepareLocalUpgradeFromUi,
   restartLocalUpgradeFromUi,
   getLocalUpgradeReport,
+  getLocalUpgradeProjectReference,
   inspectLocalUpgradeSource,
   localUpgradeBackupFingerprint,
   pauseLocalUpgradeSource,
@@ -169,6 +170,16 @@ appSettingsRouter.get(
   '/local-upgrade',
   asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await getLocalUpgradeStatus());
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/project-reference',
+  asyncHandler(async (req, res) => {
+    const reference = z
+      .string()
+      .regex(/^[a-f0-9]{16}$/)
+      .parse(req.query.reference);
+    res.set('Cache-Control', 'no-store').json(await getLocalUpgradeProjectReference(reference));
   }),
 );
 appSettingsRouter.get(

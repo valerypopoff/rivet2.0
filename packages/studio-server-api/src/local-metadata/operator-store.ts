@@ -6,6 +6,10 @@ import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesy
 import type { LocalMetadataSourceRoots } from './source-identity.js';
 import type { LocalMetadataCandidateReport } from './stage-local-metadata-candidate.js';
 import {
+  LOCAL_UPGRADE_FAILURE_REASONS,
+  type LocalUpgradeFailureReason,
+} from '../../../studio-server-shared/local-upgrade-types.js';
+import {
   LOCAL_UPGRADE_STAGES,
   LOCAL_UPGRADE_FAILURE_CODES,
   type LocalUpgradeStage,
@@ -47,7 +51,19 @@ const jobSchema = z
     backupReference: z.string().min(1).max(512).optional(),
     stage: z.enum(LOCAL_UPGRADE_STAGES).optional(),
     failure: z
-      .object({ stage: z.enum(LOCAL_UPGRADE_STAGES), code: z.enum(LOCAL_UPGRADE_FAILURE_CODES) })
+      .object({
+        stage: z.enum(LOCAL_UPGRADE_STAGES),
+        code: z.enum(LOCAL_UPGRADE_FAILURE_CODES),
+        reason: z
+          .enum(
+            Object.keys(LOCAL_UPGRADE_FAILURE_REASONS) as [LocalUpgradeFailureReason, ...LocalUpgradeFailureReason[]],
+          )
+          .optional(),
+        sourceReference: z
+          .string()
+          .regex(/^[a-f0-9]{16}$/)
+          .optional(),
+      })
       .strict()
       .nullable()
       .optional(),

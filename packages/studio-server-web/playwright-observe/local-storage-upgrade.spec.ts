@@ -1529,7 +1529,7 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
 });
 
-test('copy capacity changing after inspection shows actionable refusal without implying a failed copy job', async ({
+test('older-server synchronous copy capacity refusal remains actionable without implying a failed copy job', async ({
   page,
 }) => {
   const message =
@@ -1561,6 +1561,72 @@ test('copy capacity changing after inspection shows actionable refusal without i
   await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
   await expect(panel.getByRole('button', { name: 'Download verification report' })).toBeDisabled();
+});
+
+test('background copy preparation stays busy after acceptance and shows a specific failed-project diagnostic', async ({
+  page,
+}) => {
+  const fingerprint = 'a'.repeat(64),
+    reference = '0123456789abcdef';
+  let paused = false,
+    started = false,
+    failed = false;
+  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+    if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+    if (pathname.endsWith('/project-reference'))
+      return route.fulfill({ json: { reference, paths: ['Test/problem.rivet-project'] } });
+    if (pathname.endsWith('/pause')) {
+      paused = true;
+      return route.fulfill({ status: 204 });
+    }
+    if (pathname.endsWith('/copy')) {
+      started = true;
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          pausedAt: paused ? '2026-09-28T00:00:00Z' : null,
+          operation: started && !failed ? 'copy' : null,
+        }),
+        job: started
+          ? {
+              id: 'background-fixture',
+              phase: failed ? 'failed' : 'copying',
+              stage: failed ? 'workflows' : 'capacity',
+              message: 'Legacy source is untouched and writes remain paused.',
+              failure: failed
+                ? {
+                    stage: 'workflows',
+                    code: 'invalid-data',
+                    reason: 'project-id-duplicate',
+                    sourceReference: reference,
+                  }
+                : null,
+            }
+          : null,
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+  await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
+  await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
+  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+  await panel.getByLabel('I backed up the local settings encryption key separately.').check();
+  await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
+  await expect(panel.getByText(/Copy status: copying. Stage: capacity/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  failed = true;
+  await expect(panel.getByText(/Two source projects have the same project ID/)).toBeVisible();
+  await expect(panel.getByText(/Affected project: Test\/problem.rivet-project/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Retry copy and verification', exact: true })).toBeEnabled();
 });
 
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {

@@ -10,6 +10,7 @@ import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-
 import type { RuntimeLibraryManifest } from '../runtime-libraries/manifest.js';
 import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
+import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -505,7 +506,12 @@ export class LocalWorkflowCatalog {
         const key = name.toLowerCase(),
           owner = endpoints.get(key);
         if (owner && owner !== row.workflow_id)
-          throw new Error('Local catalog endpoint already exists (case-insensitive route collision).');
+          throw new LocalUpgradeDiagnosticError(
+            'publication-route-conflict',
+            undefined,
+            undefined,
+            'Local catalog endpoint already exists (case-insensitive route collision).',
+          );
         endpoints.set(key, row.workflow_id);
       }
     }
@@ -513,7 +519,12 @@ export class LocalWorkflowCatalog {
     for (const row of db.prepare('SELECT slug FROM web_apps').all() as WebAppRow[]) {
       const key = row.slug.toLowerCase();
       if (slugs.has(key))
-        throw new Error('Local catalog web-app slug already exists (case-insensitive route collision).');
+        throw new LocalUpgradeDiagnosticError(
+          'publication-route-conflict',
+          undefined,
+          undefined,
+          'Local catalog web-app slug already exists (case-insensitive route collision).',
+        );
       slugs.add(key);
     }
   }
@@ -896,8 +907,7 @@ export class LocalWorkflowCatalog {
     assertProjectSnapshot(snapshot);
     const existing = await this.readProject(snapshot.relativePath);
     if (existing) {
-      if (!sameJson(existing, snapshot))
-        throw new Error(`Local catalog project differs on retry: ${snapshot.relativePath}`);
+      if (!sameJson(existing, snapshot)) throw new LocalUpgradeDiagnosticError('candidate-retry-mismatch');
       return;
     }
     const { project, versions, apps } = await this.#encodeProject(snapshot, true);

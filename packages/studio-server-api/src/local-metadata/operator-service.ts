@@ -39,7 +39,14 @@ import { createRequire } from 'node:module';
 import { readSourceManifest } from '../scripts/migrate-runtime-libraries.js';
 import { DatabaseSync } from 'node:sqlite';
 import { assertEmptyLocalOperationalDatabase, assertLocalOperationalSchema } from './operational-schema.js';
-import { localUpgradeFailure, type LocalUpgradeStage, type LocalUpgradeHooks } from './upgrade-diagnostics.js';
+import {
+  LocalUpgradeDiagnosticError,
+  localUpgradeFailure,
+  localUpgradeSourceReference,
+  type LocalUpgradeStage,
+  type LocalUpgradeHooks,
+} from './upgrade-diagnostics.js';
+import { listProjectPathsRecursive } from '../routes/workflows/fs-helpers.js';
 import { createHttpError } from '../utils/httpError.js';
 import type { LocalUpgradeOperation } from '../../../studio-server-shared/local-upgrade-types.js';
 import {
@@ -340,19 +347,9 @@ export async function startLocalUpgradeCopy(
       );
     const source = localMetadataSourceRoots();
     await assertLocalControlPaths(localMetadataControlRoot(), source);
-    const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
-    if (!capacity.fits)
-      throw createHttpError(
-        409,
-        `Local copy capacity preflight failed (${capacity.reasons.join(', ')}). ` +
-          `Available disk: ${Math.floor(capacity.freeBytes / 1048576)} MiB; ` +
-          `estimated additional disk required: ${Math.ceil(capacity.requiredBytes / 1048576)} MiB. ` +
-          'Reload source inspection for disk, bundle and memory details. No copy was started.',
-        { code: 'local-copy-capacity' },
-      );
-    const sourceFingerprint = await fingerprintVmMigrationSource(source);
-    if (input.backupSourceFingerprint !== sourceFingerprint)
-      throw new Error('The restored backup fingerprint does not match the frozen source.');
+    // Only cheap admission checks belong in the HTTP request. Full source
+    // scans and archive hashing must run after the durable job is accepted.
+    const sourceFingerprint = input.backupSourceFingerprint;
     if (input.backupReference.startsWith('browser-backup:')) {
       const backup = await readBrowserBackup(localMetadataControlRoot());
       if (
@@ -364,12 +361,6 @@ export async function startLocalUpgradeCopy(
         backup.sourceFingerprint !== sourceFingerprint
       )
         throw new Error('The browser backup is stale or unverified. Create and download a current backup.');
-      if (
-        (await hashBackupArchive(
-          path.join(browserBackupDirectory(localMetadataControlRoot(), backup.id), 'backup.tar.gz'),
-        )) !== backup.archiveHash
-      )
-        throw new Error('The verified backup archive changed.');
     }
     const job = await withLocalMetadataControl(async (journal, store) => {
       const state = journal.read();
@@ -411,9 +402,11 @@ export async function startLocalUpgradeCopy(
       store.saveJob(next);
       return next;
     });
-    runningJob = copyGeneration(job, source, key, input.revision, hooks).finally(() => {
-      runningJob = null;
-    });
+    runningJob = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => copyGeneration(job, source, key, input.revision, hooks))
+      .finally(() => {
+        runningJob = null;
+      });
   });
 }
 
@@ -433,6 +426,33 @@ async function copyGeneration(
   };
   try {
     await onStage('preflight');
+    await assertDrained();
+    await onStage('capacity');
+    const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
+    if (!capacity.fits) throw new LocalUpgradeDiagnosticError('capacity-refused');
+    await onStage('source-fingerprint');
+    if ((await fingerprintVmMigrationSource(source)) !== job.sourceFingerprint)
+      throw new LocalUpgradeDiagnosticError('source-fingerprint-mismatch');
+    await onStage('backup-verification');
+    if (job.backupReference?.startsWith('browser-backup:')) {
+      const backup = await readBrowserBackup(localMetadataControlRoot());
+      if (
+        !backup ||
+        backup.phase !== 'ready' ||
+        job.backupReference !== `browser-backup:${backup.id}:${backup.archiveHash}` ||
+        backup.revision !== revision ||
+        backup.pausedAt !== readVmMigrationMaintenance()?.enteredAt ||
+        backup.sourceFingerprint !== job.sourceFingerprint
+      )
+        throw new LocalUpgradeDiagnosticError('backup-evidence-mismatch');
+      if (
+        (await hashBackupArchive(
+          path.join(browserBackupDirectory(localMetadataControlRoot(), backup.id), 'backup.tar.gz'),
+        )) !== backup.archiveHash
+      )
+        throw new LocalUpgradeDiagnosticError('backup-archive-mismatch');
+    }
+    await assertDrained();
     const paths = localMetadataGenerationPaths(localMetadataControlRoot(), job.id);
     await fs.mkdir(paths.root, { recursive: true, mode: 0o700 });
     await fs.mkdir(paths.operationalRoot, { mode: 0o700, recursive: true });
@@ -651,6 +671,20 @@ export async function getLocalUpgradeReport() {
       operational: certificate.operational,
     };
   }, true);
+}
+
+/** Optional read-only name lookup. Paths never enter the durable failure ledger. */
+export async function getLocalUpgradeProjectReference(reference: string) {
+  assertAvailable();
+  if (!/^[a-f0-9]{16}$/.test(reference)) throw createHttpError(400, 'Invalid project reference.');
+  const root = localMetadataSourceRoots().workflows;
+  const paths = [];
+  for (const file of await listProjectPathsRecursive(root)) {
+    const relative = path.relative(root, file).replace(/\\/g, '/');
+    if (localUpgradeSourceReference(relative) === reference) paths.push(relative);
+  }
+  // Preserve ambiguity instead of silently choosing a hash collision.
+  return { reference, paths };
 }
 export async function transitionLocalUpgrade(
   action: 'activate' | 'validate' | 'return-to-legacy' | 'resume' | 'cancel',

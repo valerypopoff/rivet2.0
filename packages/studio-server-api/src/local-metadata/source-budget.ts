@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
 
 // Limits decoded source material per project (including history), recording
 // bundle, settings import, or library archive, not per installation.
@@ -8,14 +9,15 @@ export function localSourceBundleLimit(): number {
   if (!Number.isInteger(mib) || mib < 1 || mib > 128) throw new Error('Local source bundle budget must be 1–128 MiB.');
   return mib * 1048576;
 }
-export function withLocalSourceBudget<T>(read: () => Promise<T>): Promise<T> {
+export function withLocalSourceBudget<T>(read: () => Promise<T>, options: { reuse?: boolean } = {}): Promise<T> {
+  if (options.reuse && budgets.getStore()) return read();
   return budgets.run({ used: 0, limit: localSourceBundleLimit() }, read);
 }
 export function chargeLocalSourceBytes(bytes: number): void {
   const budget = budgets.getStore();
   if (!budget) return;
   if (!Number.isSafeInteger(bytes) || bytes < 0 || budget.used + bytes > budget.limit)
-    throw new Error('Local source bundle exceeds the decoded-memory budget; legacy storage remains selected.');
+    throw new LocalUpgradeDiagnosticError('source-bundle-limit');
   budget.used += bytes;
 }
 export function remainingLocalSourceBytes(): number | undefined {

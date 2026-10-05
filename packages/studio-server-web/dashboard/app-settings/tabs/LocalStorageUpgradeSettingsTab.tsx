@@ -3,7 +3,11 @@ import { LoadingButton } from '@atlaskit/button';
 import TextField from '@atlaskit/textfield';
 import { RIVET_API_BASE_URL } from '../../../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from '../../apiRequest';
-import type { LocalUpgradeOperation } from '../../../../studio-server-shared/local-upgrade-types';
+import {
+  LOCAL_UPGRADE_FAILURE_REASONS,
+  type LocalUpgradeFailureReason,
+  type LocalUpgradeOperation,
+} from '../../../../studio-server-shared/local-upgrade-types';
 import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
@@ -40,7 +44,7 @@ type Status = {
     phase: string;
     message: string | null;
     stage?: string;
-    failure?: { stage: string; code: string } | null;
+    failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
 };
 type Inventory = {
@@ -154,6 +158,35 @@ export function LocalStorageUpgradeSettingsTab() {
   } | null>(null);
   const setupSnapshot = useRef(setup);
   const [status, setStatus] = useState<Status | null>(null);
+  const [projectDiagnostic, setProjectDiagnostic] = useState<{ token: string; paths: string[] } | null>(null);
+  const diagnosticReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
+  const diagnosticToken = diagnosticReference ? `${status?.job?.id}:${diagnosticReference}` : null;
+  useEffect(() => {
+    if (!diagnosticToken || !diagnosticReference || !/^[a-f0-9]{16}$/.test(diagnosticReference)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
+    void request<{ reference: string; paths: string[] }>(
+      `/project-reference?reference=${diagnosticReference}`,
+      undefined,
+      controller.signal,
+    )
+      .then((result) => {
+        if (
+          !controller.signal.aborted &&
+          result.reference === diagnosticReference &&
+          Array.isArray(result.paths) &&
+          result.paths.every((value) => typeof value === 'string')
+        )
+          setProjectDiagnostic({ token: diagnosticToken, paths: result.paths });
+      })
+      .catch(() => {
+        /* Optional name lookup cannot unlock controls or conceal the durable failure. */
+      });
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [diagnosticToken, diagnosticReference]);
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [pendingAction, setPendingAction] = useState<UpgradeAction | null>(null);
   const [awaitingRestart, setAwaitingRestart] = useState(false);
@@ -283,7 +316,8 @@ export function LocalStorageUpgradeSettingsTab() {
   };
   const transition = status?.transition;
   const guided = status?.uiRestartAvailable === true || setup?.uiRestartAvailable === true;
-  const needsPreparation = setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
+  const needsPreparation =
+    setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
   const resumed = transition?.phase === 'sqlite-live' || transition?.phase === 'legacy-resumed';
   const activeAction =
     pendingAction ?? (status?.operation === 'resume' && resumed ? 'finish-resume' : status?.operation);
@@ -782,6 +816,15 @@ export function LocalStorageUpgradeSettingsTab() {
             {status.job.message}
             {status.job.failure &&
               ` Failure: ${status.job.failure.code} at ${status.job.failure.stage}. Download the diagnostic report; no exception contents or secrets are included.`}
+            {status.job.failure?.reason &&
+              Object.hasOwn(LOCAL_UPGRADE_FAILURE_REASONS, status.job.failure.reason) &&
+              ` ${LOCAL_UPGRADE_FAILURE_REASONS[status.job.failure.reason]}`}
+            {status.job.failure?.sourceReference &&
+              /^[a-f0-9]{16}$/.test(status.job.failure.sourceReference) &&
+              ` Project reference: ${status.job.failure.sourceReference}.`}
+            {projectDiagnostic?.token === diagnosticToken &&
+              projectDiagnostic.paths.length > 0 &&
+              ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
         )}
       </section>

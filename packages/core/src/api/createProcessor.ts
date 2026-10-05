@@ -302,8 +302,8 @@ export async function coreRunGraph(project: Project, options: RunGraphOptions): 
   return processorInfo.run();
 }
 
-export function loadProjectFromString(content: string): Project {
-  const [project] = deserializeProject(content);
+export function loadProjectFromString(content: string, options: { logErrors?: boolean } = {}): Project {
+  const [project] = deserializeProject(content, null, options);
   return project;
 }
 
