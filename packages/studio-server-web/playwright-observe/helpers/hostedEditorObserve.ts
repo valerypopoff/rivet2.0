@@ -30,6 +30,13 @@ export async function authenticateIfNeeded(page: Page) {
  * library before it can mount the editor.
  */
 export async function mockHostedEditorBootstrap(page: Page): Promise<void> {
+  // Isolated editor fixtures have no ambient server credentials. Avoid sending
+  // optional provider lookups to a local API (or flooding CI's proxy logs).
+  // A scenario can install its own more-specific route after this default.
+  await page.route('**/api/config/env/*', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await route.fulfill({ json: { value: null } });
+  });
   await page.route('**/api/config', async (route) => {
     if (route.request().method() !== 'GET') {
       await route.fallback();

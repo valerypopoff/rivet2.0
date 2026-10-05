@@ -24,6 +24,8 @@ const studioRuntimePrefixes = [
 ];
 
 const desktopPrefixes = [
+  '.github/desktop-prebuilt.conf.json',
+  '.github/workflows/desktop-release.yml',
   '.yarn/',
   '.github/actions/',
   '.github/scripts/',
@@ -36,6 +38,7 @@ const desktopPrefixes = [
   'packages/evaluations/',
   'packages/node/',
   'scripts/build-wrapper-target.mjs',
+  'scripts/ci/desktop-web-artifact.mjs',
   'scripts/checks/check-graph-builder',
   'scripts/sync-desktop-version.mjs',
 ];
@@ -119,6 +122,31 @@ export function listChangedPaths(base, head, cwd = rootDir) {
     .filter(Boolean);
 }
 
+export function ensureDiffCommits(base, head, cwd = rootDir) {
+  // Checkout is shallow. Fetch only missing event endpoints, not years of
+  // deleted zero-install archives. Never infer a multi-commit push from HEAD~1.
+  const commits = [...new Set([base, head])];
+  for (const commit of commits) {
+    if (!/^[a-f\d]{40}$/i.test(commit)) throw new Error('CI diff endpoints must be full commit SHAs.');
+  }
+  for (const commit of commits) {
+    try {
+      // Sparse checkout is a partial clone. An existence probe must not lazily
+      // fetch the endpoint (and its unbounded parents) before our depth=1 fetch.
+      execFileSync('git', ['cat-file', '-e', `${commit}^{commit}`], {
+        cwd,
+        stdio: 'ignore',
+        env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
+      });
+    } catch {
+      execFileSync('git', ['fetch', '--no-tags', '--depth=1', '--filter=blob:none', 'origin', commit], {
+        cwd,
+        stdio: 'inherit',
+      });
+    }
+  }
+}
+
 function appendOutput(name, value) {
   if (process.env.GITHUB_OUTPUT) {
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
@@ -134,6 +162,7 @@ function main() {
   const event = readEvent();
   const range = resolveDiffRange(eventName, event);
   const runEverything = force || eventName === 'workflow_dispatch' || eventName === 'schedule' || !range;
+  if (!runEverything) ensureDiffCommits(range[0], range[1]);
   const changedPaths = runEverything ? [] : listChangedPaths(range[0], range[1]);
   const classification = runEverything
     ? { studioServer: true, studioImages: true, desktop: true, npm: true, fullKubernetes: true }

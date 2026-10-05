@@ -25,7 +25,9 @@ export default defineConfig({
     timeout: 20_000,
   },
   fullyParallel: false,
-  workers: 1,
+  // Files own browser contexts, mocked APIs and temporary artifacts. Preserve
+  // serial scenarios within each file; use two independent files per runner.
+  workers: 2,
   outputDir: '../../artifacts/playwright/ci-test-results',
   reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/ci-report' }]],
   use: {

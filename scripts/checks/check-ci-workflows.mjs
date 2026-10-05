@@ -77,17 +77,29 @@ assert.deepEqual(
     'test:app --shard-index 3 --shard-count 4',
     'test:app-executor',
     'test:cli',
-    'test:core',
     'test:evaluations',
     'test:node',
+    'workspace @valerypopoff/rivet2-core run test:shard',
+    'workspace @valerypopoff/rivet2-core run test:shard',
   ],
-  'Build test matrix must retain every package suite and all four deterministic App shards.',
+  'Build test matrix must retain every package suite, two Core shards and all four App shards.',
+);
+assert.deepEqual(
+  buildJobs['package-tests'].strategy.matrix.include
+    .filter((entry) => entry['core-shard'])
+    .map((entry) => entry['core-shard'])
+    .sort(),
+  ['1/2', '2/2'],
+  'Both native Node test-runner Core partitions must run exactly once.',
 );
 const compiledArtifactUpload = findStep(
   buildJobs['compiled-artifacts'],
   'Upload compiled dependencies',
   'Compiled-artifacts job',
 );
+const packageTestStep = findStep(buildJobs['package-tests'], 'Test ${{ matrix.label }}', 'Package-tests job');
+assert.equal(packageTestStep.env?.RIVET_CORE_TEST_SHARD, '${{ matrix.core-shard }}');
+assert.equal(packageTestStep.env?.RIVET_NODE_TEST_DEPENDENCIES, 'prebuilt');
 const compiledArtifactDownload = findStep(
   buildJobs['package-tests'],
   'Download compiled dependencies',
@@ -156,6 +168,9 @@ const buildGate = findStep(buildJobs.build, 'Require every Build gate', 'Build a
 assert.equal(buildGate.env?.JAVASCRIPT_AUDIT_RESULT, '${{ needs.javascript-audit.result }}');
 assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must require the JavaScript audit result.');
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
+const buildTimingCheckout = findActionStep(buildJobs.build, 'actions/checkout@v6', 'Build timing');
+assert.equal(buildTimingCheckout.with?.['sparse-checkout'], 'scripts/ci/job-timing.mjs');
+assert.equal(buildTimingCheckout.with?.['sparse-checkout-cone-mode'], false);
 
 const studio = parseWorkflow('.github/workflows/studio-server-verify.yml');
 assert.deepEqual(
@@ -165,6 +180,22 @@ assert.deepEqual(
 );
 assertIncludesAll(studio.workflow.on.pull_request.branches, ['develop', 'staging'], 'Studio Server PR branches');
 const studioJobs = studio.workflow.jobs;
+assert.equal(findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['fetch-depth'], 1);
+assert.equal(
+  findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['sparse-checkout'],
+  'scripts/ci/ci-change-policy.mjs',
+);
+assert.equal(
+  findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['sparse-checkout-cone-mode'],
+  false,
+);
+const studioTimingCheckout = findActionStep(
+  studioJobs.verify,
+  'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5',
+  'Studio timing',
+);
+assert.equal(studioTimingCheckout.with?.['sparse-checkout'], 'scripts/ci/job-timing.mjs');
+assert.equal(studioTimingCheckout.with?.['sparse-checkout-cone-mode'], false);
 assert.ok(studio.workflow.on.workflow_call, 'Studio Server verification must remain reusable by the image pipeline.');
 assert.equal(
   studio.workflow.permissions.actions,
@@ -204,6 +235,34 @@ assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'bu
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
+const deploymentContracts = studioJobs['deployment-contracts'];
+assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'gateway']);
+assert.equal(deploymentContracts.strategy['fail-fast'], false);
+assert.equal(deploymentContracts.strategy['max-parallel'], 2);
+for (const [lane, names] of [
+  [
+    'managed',
+    [
+      'Set Up Kubernetes Tools',
+      'Verify compiled migrations on PostgreSQL',
+      'Verify async endpoint completion with managed storage',
+      'Verify VM-to-managed copy, retry, and exact readback',
+      'Verify Kubernetes and deployment contracts',
+    ],
+  ],
+  [
+    'gateway',
+    [
+      'Verify proxy recovery after container address changes',
+      'Verify single-VM nginx TLS gateway',
+      'Verify trusted-client proxy templates and executor upgrades',
+    ],
+  ],
+]) {
+  for (const name of names) {
+    assert.equal(findStep(deploymentContracts, name, 'Deployment contracts').if, `matrix.lane == '${lane}'`);
+  }
+}
 assert.equal(
   findStep(studioJobs['deployment-contracts'], 'Verify compiled migrations on PostgreSQL', 'Deployment contracts').run,
   'yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs',
@@ -283,6 +342,15 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+assert.equal(findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['fetch-depth'], 1);
+assert.equal(
+  findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout'],
+  'scripts/ci/ci-change-policy.mjs',
+);
+assert.equal(
+  findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout-cone-mode'],
+  false,
+);
 assertIncludesAll(images.workflow.on.push.branches, ['staging', 'main'], 'Image push branches');
 const capacityDispatchInput = images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_capacity_gate;
 assert.equal(
@@ -757,13 +825,40 @@ assert.match(
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;
-for (const buildJob of ['build-windows', 'build-macos', 'build-docs']) {
+for (const buildJob of ['build-desktop-web', 'build-docs']) {
   assert.equal(
     reusableJobs[buildJob].needs,
     undefined,
     `${buildJob} must run concurrently with graph asset verification.`,
   );
 }
+const desktopWebUpload = findStep(
+  reusableJobs['build-desktop-web'],
+  'Upload desktop frontend',
+  'Desktop frontend producer',
+);
+assert.equal(desktopWebUpload.with?.name, 'rivet-${{ inputs.channel }}-desktop-web-${{ github.sha }}');
+assert.equal(desktopWebUpload.with?.overwrite, true);
+assert.equal(desktopWebUpload.with?.['if-no-files-found'], 'error');
+assert.ok(
+  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Seal desktop frontend artifact') <
+    reusableJobs['build-desktop-web'].steps.indexOf(desktopWebUpload),
+);
+for (const nativeJob of ['build-windows', 'build-macos']) {
+  assert.deepEqual(asArray(reusableJobs[nativeJob].needs), ['build-desktop-web']);
+  const download = findStep(reusableJobs[nativeJob], 'Download shared desktop frontend', nativeJob);
+  assert.equal(download.with?.name, desktopWebUpload.with.name);
+  assert.equal(download.with?.path, 'packages/app');
+}
+assert.match(
+  findStep(reusableJobs['build-windows'], 'Build Tauri Windows bundle', 'Windows release').run,
+  /--config .*desktop-prebuilt\.conf\.json/,
+);
+assert.match(findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release').run, /--prebuilt-web/);
+assert.match(
+  JSON.parse(read('.github/desktop-prebuilt.conf.json')).build.beforeBuildCommand,
+  /^node .*desktop-web-artifact\.mjs verify && .*prepare:tauri$/,
+);
 assert.equal(reusableJobs['publish-pages'].concurrency.group, 'rivet-docs-pages');
 assertIncludesAll(
   asArray(reusableJobs['publish-pages'].needs),

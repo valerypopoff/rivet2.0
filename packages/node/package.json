@@ -41,7 +41,7 @@
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx bench/runtimeSpeed.bench.ts",
     "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",
     "lint": "eslint ./src ./bench",
-    "pretest": "yarn workspace @valerypopoff/rivet2-core run build:esm && yarn workspace @valerypopoff/rivet2-core run build:cjs && yarn build:esm && yarn build:cjs",
+    "pretest": "node scripts/prepare-tests.mjs",
     "test": "yarn pretest && tsx --test test/**/*.test.ts"
   },
   "dependencies": {

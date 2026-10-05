@@ -63,8 +63,12 @@ jobs:
       max-parallel: 6
       matrix:
         include:
-          - label: Core
-            command: test:core
+          - label: Core 1/2
+            command: workspace @valerypopoff/rivet2-core run test:shard
+            core-shard: 1/2
+          - label: Core 2/2
+            command: workspace @valerypopoff/rivet2-core run test:shard
+            core-shard: 2/2
           - label: Node
             command: test:node
           - label: Evaluations
@@ -104,6 +108,8 @@ jobs:
           # App shards consume the verified same-commit artifact instead of
           # rebuilding Core independently in all four consumer jobs.
           RIVET_APP_TEST_DEPENDENCIES: prebuilt
+          RIVET_CORE_TEST_SHARD: ${{ matrix.core-shard }}
+          RIVET_NODE_TEST_DEPENDENCIES: prebuilt
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Test ${{ matrix.label }}"
@@ -239,6 +245,9 @@ jobs:
           done
       - uses: actions/checkout@v6
         if: always()
+        with:
+          sparse-checkout: scripts/ci/job-timing.mjs
+          sparse-checkout-cone-mode: false
       - name: Report Build critical path
         if: always()
         continue-on-error: true

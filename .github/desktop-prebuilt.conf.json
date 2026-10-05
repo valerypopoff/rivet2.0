@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBuildCommand": "node ../../scripts/ci/desktop-web-artifact.mjs verify && node ../../.yarn/releases/yarn-4.17.1.cjs prepare:tauri"
+  }
+}

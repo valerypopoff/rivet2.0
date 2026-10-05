@@ -1,5 +1,9 @@
 # Development
 
+See [GitHub Actions performance](ci-performance.md) for measured branch-workflow
+bottlenecks, bounded API/browser concurrency, shared desktop artifacts, and the
+verification boundaries that must remain intact when optimizing CI.
+
 Portable exports have a dedicated [project-bundle contract and verification guide](project-bundles.md).
 That guide covers public ESM/CommonJS loader checks, legacy alias dataset ownership,
 release coordination, and the opt-in bounded packaging capacity probe.
@@ -887,7 +891,7 @@ It removes only its own fixtures. Also
 run the API proxy-image contract tests and `yarn studio-server:ui:observe proxy-routing.spec.ts`
 with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`; require a fresh report under
 `artifacts/playwright/`, not merely a successful launcher exit.
-The Studio Server deployment-contracts CI job also runs the isolated DNS fixture.
+The Studio Server deployment-contracts gateway CI lane also runs the isolated DNS fixture.
 
 ## Environment loading
 
