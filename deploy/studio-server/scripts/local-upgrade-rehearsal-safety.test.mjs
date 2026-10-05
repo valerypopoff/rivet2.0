@@ -15,8 +15,320 @@ import { gunzipSync } from 'node:zlib';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run as runRehearsalCommand, stageLocalUpgradeRehearsalTools } from './local-upgrade-image-rehearsal.mjs';
+import {
+  run as runRehearsalCommand,
+  stageLocalUpgradeRehearsalTools,
+  readOnlyRehearsalSqliteScript,
+  webAppBindingProbeScript,
+  waitForRehearsalCondition,
+  readRehearsalSourceFingerprint,
+} from './local-upgrade-image-rehearsal.mjs';
 import { pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
+
+// test-style: fixture-read: Compare only test-generated SQLite database bytes before and after the read-only probe; never read production source text.
+
+for (const lockedFile of ['transition.sqlite', 'generations/fixture/catalog.sqlite']) {
+  for (const releaseLock of [true, false]) {
+    test(`web-app probe ${releaseLock ? 'waits for' : 'refuses a persistent'} lock on ${lockedFile}`, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-sqlite-'));
+      let writer;
+      let reader;
+      let releaseTimer;
+      let deadline;
+      const binding = { appId: 'fixture-app', slug: 'fixture-slug', allowedEmails: ['fixture@example.invalid'] };
+      try {
+        await fs.mkdir(path.join(root, 'generations/fixture'), { recursive: true });
+        const journal = new DatabaseSync(path.join(root, 'transition.sqlite'));
+        try {
+          journal.exec(
+            "CREATE TABLE transition_state(singleton INTEGER,phase TEXT,generation_id TEXT); INSERT INTO transition_state VALUES(1,'sqlite-live','fixture');",
+          );
+        } finally {
+          journal.close();
+        }
+        const catalog = new DatabaseSync(path.join(root, 'generations/fixture/catalog.sqlite'));
+        try {
+          catalog.exec('CREATE TABLE web_apps(metadata_json TEXT);');
+          catalog
+            .prepare('INSERT INTO web_apps VALUES(?)')
+            .run(JSON.stringify({ ...binding, uiGraphId: 'release-gate-web-app' }));
+        } finally {
+          catalog.close();
+        }
+        writer = new DatabaseSync(path.join(root, lockedFile));
+        writer.exec('BEGIN EXCLUSIVE');
+        const script = webAppBindingProbeScript(root, releaseLock ? 5000 : 50);
+        reader = spawn(
+          process.execPath,
+          ['--input-type=module', '-e', `await import('node:sqlite');process.send('started');${script}`],
+          {
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+            windowsHide: true,
+          },
+        );
+        let output = '';
+        let errors = '';
+        let started = false;
+        reader.stdout.on('data', (chunk) => {
+          output += chunk;
+        });
+        reader.stderr.on('data', (chunk) => {
+          errors += chunk;
+        });
+        reader.on('message', (message) => {
+          assert.equal(message, 'started');
+          started = true;
+          if (releaseLock) releaseTimer = setTimeout(() => writer.exec('COMMIT'), 500);
+        });
+        const code = await new Promise((resolve, reject) => {
+          reader.once('error', reject);
+          reader.once('close', resolve);
+          deadline = setTimeout(() => {
+            reader.kill();
+            reject(new Error('Probe did not respect its lock deadline'));
+          }, 15_000);
+        });
+        assert.equal(started, true);
+        if (releaseLock) {
+          assert.equal(code, 0, errors);
+          assert.deepEqual(JSON.parse(output.trim()), binding);
+        } else {
+          assert.notEqual(code, 0);
+          assert.match(errors, /database is locked/);
+          assert.equal(output, '', 'A timed-out probe must not publish a binding.');
+        }
+      } finally {
+        clearTimeout(releaseTimer);
+        clearTimeout(deadline);
+        reader?.kill();
+        writer?.close();
+        assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const module of [true, false]) {
+  test(`rehearsal SQLite reader stays read-only in ${module ? 'ESM' : 'CommonJS'} scripts`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-readonly-'));
+    try {
+      const file = path.join(root, 'fixture.sqlite');
+      const db = new DatabaseSync(file);
+      db.exec('CREATE TABLE fixture(value INTEGER); INSERT INTO fixture VALUES(7)');
+      db.close();
+      const before = await fs.readFile(file);
+      const script = readOnlyRehearsalSqliteScript(
+        `
+        const db=openReadOnly(${JSON.stringify(file)});
+        try {
+          if(db.prepare('PRAGMA busy_timeout').get().timeout!==5000)throw Error('Wrong timeout');
+          console.log(db.prepare('SELECT value FROM fixture').get().value);
+          db.exec('UPDATE fixture SET value=8');
+        } finally { db.close(); }
+      `,
+        { module },
+      );
+      const result = await runRehearsalCommand(
+        process.execPath,
+        [...(module ? ['--input-type=module'] : []), '-e', script],
+        process.env,
+        true,
+      );
+      assert.notEqual(result.code, 0);
+      assert.match(result.output, /7\r?\n/);
+      assert.match(result.output, /readonly database/);
+      assert.deepEqual(await fs.readFile(file), before);
+    } finally {
+      assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('rehearsal SQLite lock waits are finite and cannot be configured away', () => {
+  for (const busyTimeoutMs of [0, -1, 5001, Infinity, NaN, 0.5, '5000']) {
+    assert.throws(() => readOnlyRehearsalSqliteScript('', { busyTimeoutMs }));
+  }
+});
+
+for (const failure of [
+  'wrong-phase',
+  'invalid-generation',
+  'missing-binding',
+  'corrupt-catalog',
+  'duplicate-binding',
+  'invalid-binding',
+  'invalid-policy',
+  'malformed-metadata',
+]) {
+  test(`web-app probe still rejects ${failure} without publishing evidence`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-invalid-'));
+    try {
+      await fs.mkdir(path.join(root, 'generations/fixture'), { recursive: true });
+      const journal = new DatabaseSync(path.join(root, 'transition.sqlite'));
+      try {
+        journal.exec('CREATE TABLE transition_state(singleton INTEGER,phase TEXT,generation_id TEXT)');
+        journal
+          .prepare('INSERT INTO transition_state VALUES(1,?,?)')
+          .run(
+            failure === 'wrong-phase' ? 'legacy' : 'sqlite-live',
+            failure === 'invalid-generation' ? '../foreign' : 'fixture',
+          );
+      } finally {
+        journal.close();
+      }
+      const file = path.join(root, 'generations/fixture/catalog.sqlite');
+      if (failure === 'corrupt-catalog') await fs.writeFile(file, 'not a database');
+      else {
+        const db = new DatabaseSync(file);
+        try {
+          db.exec('CREATE TABLE web_apps(metadata_json TEXT)');
+          const binding = {
+            appId: 'fixture-app',
+            slug: 'fixture-slug',
+            allowedEmails: [],
+            uiGraphId: 'release-gate-web-app',
+          };
+          if (failure === 'duplicate-binding') {
+            for (const appId of ['first', 'second'])
+              db.prepare('INSERT INTO web_apps VALUES(?)').run(JSON.stringify({ ...binding, appId }));
+          } else if (failure === 'invalid-binding' || failure === 'invalid-policy') {
+            db.prepare('INSERT INTO web_apps VALUES(?)').run(
+              JSON.stringify({
+                ...binding,
+                ...(failure === 'invalid-binding' ? { appId: null } : { allowedEmails: null }),
+              }),
+            );
+          } else if (failure === 'malformed-metadata') db.prepare('INSERT INTO web_apps VALUES(?)').run('{');
+        } finally {
+          db.close();
+        }
+      }
+      const result = await runRehearsalCommand(
+        process.execPath,
+        ['--input-type=module', '-e', webAppBindingProbeScript(root)],
+        process.env,
+        true,
+      );
+      assert.notEqual(result.code, 0);
+      assert.match(
+        result.output,
+        failure === 'corrupt-catalog'
+          ? /not a database/
+          : failure === 'malformed-metadata'
+            ? /SyntaxError/
+            : failure === 'missing-binding' || failure === 'duplicate-binding'
+              ? /Fixture binding absent or ambiguous/
+              : failure === 'invalid-binding' || failure === 'invalid-policy'
+                ? /Invalid fixture binding/
+                : /Not selected fixture/,
+      );
+      assert.doesNotMatch(result.output, /^\{"appId":/m, 'A failed probe must not emit a binding receipt.');
+      assert.deepEqual(await fs.readdir(path.join(root, 'generations')), ['fixture']);
+    } finally {
+      assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('fingerprint evidence accepts one valid CLI receipt with ordinary diagnostics', () => {
+  const fingerprint = 'ab'.repeat(32);
+  assert.equal(
+    readRehearsalSourceFingerprint(`ordinary warning\n${JSON.stringify({ sourceFingerprint: fingerprint })}\r\n`),
+    fingerprint,
+  );
+});
+
+test('fingerprint evidence rejects missing, malformed and ambiguous proof instead of equating absent values', () => {
+  const receipt = JSON.stringify({ sourceFingerprint: 'ab'.repeat(32) });
+  for (const output of [
+    '',
+    '{}',
+    '{',
+    '{"error":"failed"}',
+    `${receipt}\n${receipt}`,
+    ...[null, 0, '', 'ab'.repeat(31), 'AB'.repeat(32), 'x'.repeat(64)].map((sourceFingerprint) =>
+      JSON.stringify({ sourceFingerprint }),
+    ),
+  ]) {
+    assert.throws(() => readRehearsalSourceFingerprint(output));
+  }
+});
+
+test('readiness polling supplies a bounded shared IO budget and accepts timely readiness', async () => {
+  await waitForRehearsalCondition(
+    async (budget) => {
+      assert.ok(budget > 0 && budget <= 15_000);
+      return true;
+    },
+    120_000,
+    'not ready',
+  );
+});
+
+test('readiness polling rejects even successful evidence arriving after its deadline', async () => {
+  let calls = 0;
+  await assert.rejects(
+    waitForRehearsalCondition(
+      async (budget) => {
+        calls++;
+        assert.ok(budget > 0 && budget <= 50);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return true;
+      },
+      50,
+      'not ready in time',
+    ),
+    /not ready in time/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('readiness polling bounds a stalled child command and never mistakes timeout for readiness', async () => {
+  let calls = 0;
+  await assert.rejects(
+    waitForRehearsalCondition(
+      async (budget) => {
+        calls++;
+        const result = await runRehearsalCommand(
+          process.execPath,
+          ['-e', 'setInterval(()=>{},1000)'],
+          process.env,
+          true,
+          budget,
+        );
+        return result.code === 0;
+      },
+      250,
+      'stalled probe',
+    ),
+    /stalled probe/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('readiness polling validates finite deadlines and propagates safety failures without retry', async () => {
+  for (const timeout of [0, -1, 120001, Infinity, NaN, 0.5]) {
+    await assert.rejects(waitForRehearsalCondition(async () => true, timeout, 'invalid'));
+  }
+  let calls = 0;
+  await assert.rejects(
+    waitForRehearsalCondition(
+      async () => {
+        calls++;
+        throw new Error('ownership refused');
+      },
+      1000,
+      'not ready',
+    ),
+    /ownership refused/,
+  );
+  assert.equal(calls, 1);
+});
 
 test('staged backup tools import successfully with their real deployment dependencies', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-rehearsal-tools-'));
