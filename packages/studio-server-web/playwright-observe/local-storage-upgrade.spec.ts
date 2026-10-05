@@ -1529,6 +1529,40 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
 });
 
+test('copy capacity changing after inspection shows actionable refusal without implying a failed copy job', async ({
+  page,
+}) => {
+  const message =
+    'Local copy capacity preflight failed (disk-space). Available disk: 0 MiB; estimated additional disk required: 64 MiB. Reload source inspection for disk, bundle and memory details. No copy was started.';
+  const fingerprint = 'a'.repeat(64);
+  let paused = false;
+  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+    if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+    if (pathname.endsWith('/copy'))
+      return route.fulfill({ status: 409, json: { code: 'local-copy-capacity', error: message } });
+    if (pathname.endsWith('/pause')) {
+      paused = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ json: upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T00:00:00Z' : null }) });
+  });
+  const panel = await openLocalUpgrade(page);
+  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+  await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
+  await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
+  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+  await panel.getByLabel('I backed up the local settings encryption key separately.').check();
+  await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
+  await expect(panel.getByRole('alert').filter({ hasText: message })).toBeVisible();
+  await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Download verification report' })).toBeDisabled();
+});
+
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {
   await page.route('**/?editor', (route) =>
     route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor fixture</body></html>' }),

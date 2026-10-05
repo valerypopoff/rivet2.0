@@ -342,8 +342,13 @@ export async function startLocalUpgradeCopy(
     await assertLocalControlPaths(localMetadataControlRoot(), source);
     const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
     if (!capacity.fits)
-      throw new Error(
-        'Local copy exceeds its configured payload budget, candidate disk space or available memory headroom. No copy was started.',
+      throw createHttpError(
+        409,
+        `Local copy capacity preflight failed (${capacity.reasons.join(', ')}). ` +
+          `Available disk: ${Math.floor(capacity.freeBytes / 1048576)} MiB; ` +
+          `estimated additional disk required: ${Math.ceil(capacity.requiredBytes / 1048576)} MiB. ` +
+          'Reload source inspection for disk, bundle and memory details. No copy was started.',
+        { code: 'local-copy-capacity' },
       );
     const sourceFingerprint = await fingerprintVmMigrationSource(source);
     if (input.backupSourceFingerprint !== sourceFingerprint)

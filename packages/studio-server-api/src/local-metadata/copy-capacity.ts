@@ -20,6 +20,10 @@ export async function inspectLocalCopyCapacity(
 ) {
   let payloadBytes = 0,
     operationalBytes = 0;
+  let recordingArtifactBytes = 0,
+    metadataAndLibraryBytes = 0,
+    entries = 0,
+    pathBytes = 0;
   let measurementComplete = true;
   const maxPayloadBytes = localSourceBundleLimit();
   const recordingBundles = new Map<string, number>();
@@ -29,15 +33,18 @@ export async function inspectLocalCopyCapacity(
     payloadBytes += bytes;
     if (!Number.isSafeInteger(payloadBytes)) throw new Error('Local copy size is unsupported.');
   };
-  const walk = async (root: string, recording = false): Promise<void> => {
+  const walk = async (root: string, recording = false, relativePath = ''): Promise<void> => {
     if (!measurementComplete) return;
     const stat = await fs.lstat(root);
+    entries++;
+    pathBytes += Buffer.byteLength(JSON.stringify(relativePath));
     if (stat.isSymbolicLink()) {
       // Runtime package links are checked for confinement by the archive writer.
       return;
     }
     if (stat.isDirectory()) {
-      for (const name of await fs.readdir(root)) await walk(path.join(root, name), recording);
+      for (const name of await fs.readdir(root))
+        await walk(path.join(root, name), recording, path.join(relativePath, name));
       return;
     }
     if (!stat.isFile()) throw new Error('Local source contains an unsupported entry.');
@@ -70,11 +77,16 @@ export async function inspectLocalCopyCapacity(
       }
     }
     if (recording) {
+      // The catalog stores decoded recording artifacts once, outside SQLite.
+      // Compressed source bytes remain on the source mount and are already
+      // reflected in free disk space; they are not another candidate copy.
+      if (path.basename(root) === 'metadata.json') metadataAndLibraryBytes += stat.size;
+      else recordingArtifactBytes += decodedBytes;
       const directory = path.dirname(root);
       const bytes = (recordingBundles.get(directory) ?? 0) + decodedBytes;
       recordingBundles.set(directory, bytes);
       if (bytes > maxPayloadBytes) measurementComplete = false;
-    }
+    } else metadataAndLibraryBytes += stat.size;
     if (root.startsWith(source.runtimeLibraries + path.sep)) {
       // Tar headers/padding are also bounded; the actual archive is checked
       // before allocating its buffer.
@@ -112,7 +124,27 @@ export async function inspectLocalCopyCapacity(
   }
   const disk = await fs.statfs(controlRoot);
   const freeBytes = resources?.freeDiskBytes ?? disk.bavail * disk.bsize;
-  const requiredBytes = 4 * payloadBytes + 2 * operationalBytes + 32 * 1024 * 1024;
+  // Artifact publication hard-links a serial staging file, and serving
+  // verification only reads. Do not reserve four installation-wide copies of
+  // expanded recordings. Keep conservative multipliers for the much smaller
+  // metadata/library domains (SQLite rows/indexes/journals, encrypted settings,
+  // tar artifact + extraction tar + package cache) and operational snapshots.
+  // Account for small-file allocation, derived rows/paths, and one transient
+  // bounded artifact even when its hash duplicates an existing object.
+  const diskEstimate = {
+    recordingArtifactsBytes: recordingArtifactBytes,
+    metadataAndLibrariesBytes: 4 * metadataAndLibraryBytes,
+    operationalSnapshotsBytes: 2 * operationalBytes,
+    filesystemAllowanceBytes: entries * 4 * Math.max(4096, disk.bsize) + 8 * pathBytes,
+    transientArtifactBytes: maxPayloadBytes,
+    fixedReserveBytes: 32 * 1024 * 1024,
+  };
+  const requiredBytes = Object.values(diskEstimate).reduce((sum, value) => sum + value, 0);
+  if (
+    Object.values(diskEstimate).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    !Number.isSafeInteger(requiredBytes)
+  )
+    throw new Error('Local copy size is unsupported.');
   const availableMemoryBytes =
     resources?.availableMemoryBytes ??
     (typeof process.availableMemory === 'function' ? process.availableMemory() : os.freemem());
@@ -132,6 +164,7 @@ export async function inspectLocalCopyCapacity(
     operationalBytes,
     freeBytes,
     requiredBytes,
+    diskEstimate,
     maxPayloadBytes,
     estimatedWorkingBytes,
     memoryBudgetBytes,
