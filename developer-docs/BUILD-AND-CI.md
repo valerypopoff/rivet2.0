@@ -1099,6 +1099,14 @@ fixed release (rather than a floating caret), then run `yarn install` and the
 audit. This keeps the zero-install lockfile deterministic while the owning
 upstream packages catch up.
 
+The root `shell-quote` resolution pins 1.11.0 across the `concurrently` development
+launcher and other consumers. This fixes GHSA-pqg4-j6r4-53mv: a line terminator in
+a string after a shell comment could end that comment and inject a command. No
+audit exception is used. `dependency-security-regressions.test.mjs` resolves the
+library through `concurrently`, verifies rejection of all four affected line
+terminators (including parse/quote composition), and preserves ordinary quoting.
+Keep its lockfile, PnP mapping and cache archive aligned with the root pin.
+
 The root `js-yaml` resolutions keep `gray-matter`'s js-yaml 3.x path on 3.15.2
 and ESLint's js-yaml 4.x path on 4.3.2, the patched releases for merge-source
 CPU exhaustion. The root `svgo` resolutions keep both the SVGR and PostCSS
