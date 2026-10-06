@@ -1,4 +1,5 @@
 @import '../modal-sizing.css';
+@import '../dropdown-styles.css';
 @import './app-settings/AppSettingsModal.css';
 @import './PublishedVersionHistoryModal.css';
 @import './ProjectSettingsModal.css';

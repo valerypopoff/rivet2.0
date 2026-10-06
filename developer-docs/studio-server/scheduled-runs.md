@@ -10,11 +10,45 @@ the browser does not stop work; the server must be online.
 The list and separate Add/Edit dialogs participate in the shared Studio Server
 black-backdrop/dark-surface theme. Each header and close control stays visible while content scrolls;
 the two-column form becomes one column on narrow screens. Project/details,
-timing and execution settings have separate headings. Buttons, selects and
-checkboxes use the existing Atlaskit components, not native OS controls.
-Select labels explicitly target their input IDs; the project hint is associated
-with its input. Field-box CSS applies only to direct text fields, not selects'
-internal inputs. Pending operations mark the region busy and disable editing;
+timing and execution settings are three individually bordered cards, not one
+enclosing form card. Enabled state is controlled only by Pause/Enable in the
+list; new schedules start enabled and editing preserves the saved state.
+The editor form owns a scrollable content region and a separate non-shrinking
+footer: Preview stays on the left and the blue Save submit button on the right.
+The footer remains visible on narrow/short viewports. Keep both regions inside
+the same form for native required-field validation and keyboard submission.
+The browser regression verifies that the footer is outside the scrolling content
+and both actions stay visible, allowing only one CSS pixel of flex-layout rounding
+after scrolling. Exact integer coordinate equality is fragile across browsers.
+Failed Save/Preview diagnostics scroll into view without moving the footer.
+Close is the only draft-cancellation control. Name and description span the form;
+Project and Version share a row (stacked on mobile). Maximum run duration replaces
+the ambiguous Timeout label; it includes preparation and cancels the run at its
+limit, without undoing external side effects.
+Do not repeat project-picker or list enable/pause instructions in the editor.
+Scheduling notes belong inside When to run: daylight-saving skip/repeat rules
+appear only for daily/weekly/monthly wall-clock schedules, and absent-day rules
+only for numeric monthly days 29–31 (not Last day). Once and Interval show only
+the non-overlap rule, which applies to every schedule type: an occurrence is
+skipped while an earlier occurrence is pending/running. The removed project hint
+must not leave a dangling `aria-describedby` on the picker.
+Use React Select's standard Input component here: Atlaskit 16's default wrapper
+stringifies its absent description as `"undefined"`. Native live-region references
+and keyboard behavior remain owned by React Select.
+List cards use a wrapping, aligned name/status header and a labelled trash-icon
+button at the top right; deletion retains confirmation and revision checks.
+Description/detail lines are compact and actions have no horizontal divider.
+Recent runs is a native keyboard-accessible disclosure, collapsed on each modal
+opening, with the count of history entries returned by the API (up to 300).
+Claimed/running entries precede queued entries and then recent terminal results,
+so an old catch-up run cannot lose its Cancel control behind newer history.
+Expanding renders up to 100 entries and explains that limit when needed; polling
+updates the count without resetting expansion. Open recording is an inline link
+that retains the existing busy/error guard and does not navigate away.
+Buttons, selects and checkboxes use the existing Atlaskit components, not native
+OS controls. Select labels explicitly target their input IDs. Field-box CSS
+applies only to direct text fields, not selects' internal inputs.
+Pending operations mark the region busy and disable editing;
 previewing never changes the Save label to claim a save is in progress. A
 successful action/list refresh immediately clears a retired polling error.
 The modal tracks the currently open select by input ID: Escape closes its menu
@@ -39,7 +73,10 @@ without selecting a runnable target or closing the menu. Only project rows selec
 a target; schedules always run its main graph, so there is no graph-selection step.
 The selected project's ancestors expand on opening. Project rows have icons and
 visible filenames. Search matches project names and paths; identical display names retain separate
-project IDs. Search reveals matching descendants of collapsed folders without
+metadata IDs (`projectMetadataId`), never tree row IDs (`id`, which are paths in
+filesystem/SQLite mode). Default selection, lookup, list labels and saved payloads
+use that same immutable identity. Missing metadata IDs are not runnable choices;
+never fall back to a path. Search reveals matching descendants of collapsed folders without
 altering persistent expansion state. The picker retains an
 unavailable saved project visibly rather than silently substituting another.
 `scheduledProjectOptions.ts` owns normalization/hierarchy/natural sorting without
@@ -47,6 +84,10 @@ mutating the tree data. The observable scheduled-runs regression checks folder
 expansion/search/keyboard selection, separate editor/focus restoration, sidebar
 order/icon, custom controls, modal colors and narrow-screen layout
 alongside its existing real-API save/execution/restart coverage.
+The browser fixture reads its base item from the real local tree and asserts
+that its row ID differs from its metadata ID; a fabricated tree must not collapse
+those two fields. Existing schedules accidentally saved with a path are not
+silently rebound: edit and reselect the intended project to repair the target.
 
 ## Guarantees and owners
 
@@ -56,6 +97,9 @@ alongside its existing real-API save/execution/restart coverage.
   including normalized invalid dates such as February 30. Absent monthly days are
   skipped. Interval anchors require an explicit UTC offset and a real calendar
   date; they do not drift with execution completion.
+  Wall-clock fields require strings before parsing (malformed JSON shapes return
+  400, not a coercion exception). Latest-occurrence lookup never returns a future
+  one-time run.
 - `store.ts`: queue decisions are transactional. SQLite uses WAL, FULL synchronization,
   a shared per-file in-process queue and `BEGIN IMMEDIATE`. PostgreSQL uses a
   transaction advisory lock and database time. No external IO occurs in transactions.
@@ -86,10 +130,22 @@ alongside its existing real-API save/execution/restart coverage.
   of external services: `context.schedule.occurrenceId` is available for idempotency.
 - Missed work defaults to skip with 60-second start grace. Catch-up selects only the
   latest due instant. One pending/running occurrence prevents ordinary overlap.
-  Capacity lateness is bounded to 15 minutes. SQL-wide concurrency defaults to one;
+  Capacity waiting is bounded to 15 minutes from durable queue admission, including
+  catch-up work: downtime before admission does not consume that window, but a
+  Catch-up reason label must never exempt a run indefinitely. `queuedAt` survives
+  restart/reclaim/import in occurrence JSON without a SQL schema change; older
+  rows without it use their due time conservatively. A claim scan retires all
+  expired queued entries before selecting fresh work, avoiding a two-second delay
+  per stale entry. Overlap-skipped occurrences include `finishedAt`.
+  Queue scans read only small occurrence metadata; the potentially 1 MiB input
+  snapshot is fetched only for the selected claim, not every expired entry.
+  SQL-wide concurrency defaults to one;
   `RIVET_SCHEDULED_RUNS_MAX_CONCURRENT=1..8` must be consistent across control replicas.
-  Timeout is 1–1,440 minutes including preparation. Limits: 1,000 schedules, 1 MiB
+  Maximum run duration is 1–1,440 minutes including preparation. Limits: 1,000 schedules, 1 MiB
   input each, 1,000 terminal history entries (300 returned, 100 displayed).
+  Housekeeping prunes after queue/lease retirement; active entries survive and
+  do not consume terminal-history slots. List limits apply after active-first
+  ordering, with claimed/running work prioritized over queued work.
 
 ## Execution and recording wiring
 
@@ -108,6 +164,12 @@ occurrence correlation key. The `scheduled` surface and schedule/name/occurrence
 identity survive every metadata reader. Scheduled roots are excluded from endpoint
 statistics. Retention uses schedule ID, not its renameable name. Recording/profile
 health failures do not turn graph success into failure or trigger execution retry.
+Recorder and listener setup share the processor's disposal scope; failed setup
+does not invoke the graph or publish an unstarted recording.
+Recording persistence requires actual processor invocation, not merely recorder
+setup or durable acceptance. An acceptance exception (even after its commit)
+does not fabricate a graph replay; preparation/acceptance failures are labelled
+separately from graph execution failures, without exposing exception contents.
 An outcome database write failure likewise never fabricates a graph failure or
 replays it. The accepted lease is reconciled as interrupted/outcome-uncertain when
 it expires; a successfully committed outcome remains authoritative.
@@ -135,6 +197,12 @@ free a slot. Subsequent worker-loss recovery is durable.
 Scheduler startup is idempotent and polling is single-flight, including explicit
 ticks. Shutdown tracks an in-flight claim even when it was not started by the
 poll timer, and storage errors do not skip shutdown cleanup.
+Full local worker capacity does not stop due-time/lease housekeeping. A full
+worker calls the store with zero claim capacity; reconciliation continues, but
+no extra graph is claimed even if an old local execution is still unwinding
+after durable ownership loss.
+Expired queued work is also retired while capacity is full, rather than appearing
+pending indefinitely or blocking subsequent due occurrences.
 
 Local state is `scheduled-runs.sqlite` in selected operational storage or legacy
 app data. Existing authority is checked before DDL. SQLite schema version 1 adds
@@ -197,6 +265,10 @@ that new mutations are rejected without losing the admitted action.
 The Docker gate verifies real PostgreSQL migration, replica claims, lost-worker fencing and the
 SQLite import's disabled/interrupted safety transform. The existing managed
 deployment-contract CI lane runs this gate; local invocation is opt-in.
+It also verifies that an expired queue entry is retired and fresh work claimed
+in the same transaction, without real-time sleeps.
+The managed gate also checks active-first history and terminal retention against
+an owned overflow fixture using the real PostgreSQL queries.
 Deterministic tests cover calendar boundaries, competing claims, corruption, stale
 leases, CAS, overlap, maintenance, catch-up, acknowledgement restart/deletion,
 cancelled/late preparation, bounded shutdown (including late recording cleanup)
@@ -204,6 +276,14 @@ and restored installation binding. Receipt expiry retains active work; count and
 byte budget rejection is tested for atomic rollback and successful recovery.
 An injected outcome-commit failure verifies that graph success is not rewritten
 as failure and that only one execution occurs.
+An owned overflow fixture covers active-first history discovery and the exact
+terminal retention cap after retiring queued work in the same transaction.
+Admission/deadline tests cover old due instants, restart, unaccepted worker
+reclaim, catch-up expiry and multiple expired entries ahead of fresh work.
+A busy-worker test verifies continued reconciliation with no extra invocation;
+the real execution fixture injects recorder setup failure before acceptance.
+It also injects acceptance errors before and after commit and verifies that no
+uninvoked root/child recording is published.
 `scheduled-run-api.test.ts` runs in the regular web suite and covers malformed
 acknowledgements, retired-response races, definitive/uncertain HTTP errors and
 the client ledger's age/count limits with deterministic request fixtures.

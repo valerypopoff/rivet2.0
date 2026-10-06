@@ -98,6 +98,54 @@ try {
   assert.equal(retries[0]!.id, retries[1]!.id);
   assert.equal((await a.list()).history.filter((r) => r.status === 'queued').length, 1);
   await a.cancel(retries[0]!.id);
+  const expired = await a.runNow(s.id, s.revision);
+  const oldTime = Date.now() - 16 * 60_000;
+  // Owned fixture timestamps exercise expiry without a fifteen-minute sleep.
+  await pool.query('UPDATE rivet_schedule_runs SET scheduled_at=$1,json=$2 WHERE id=$3', [
+    oldTime,
+    JSON.stringify({ ...expired, scheduledAt: oldTime, queuedAt: oldTime }),
+    expired.id,
+  ]);
+  const freshSchedule = await a.save({ ...s, name: 'Fresh queue work' });
+  const fresh = await a.runNow(freshSchedule.id, freshSchedule.revision);
+  assert.equal((await b.tick('fresh-worker', 1))?.occurrence.id, fresh.id);
+  const retired = (await a.list()).history.find((run) => run.id === expired.id)!;
+  assert.equal(retired.status, 'skipped');
+  assert.ok(retired.finishedAt! > oldTime);
+  await pool.query('UPDATE rivet_schedule_runs SET scheduled_at=$1,json=$2 WHERE id=$3', [
+    oldTime,
+    JSON.stringify({ ...fresh, status: 'claimed', scheduledAt: oldTime }),
+    fresh.id,
+  ]);
+  // Large owned history exercises the portable priority/pruning SQL without
+  // thousands of network round trips or any wall-clock execution waits.
+  await pool.query(
+    `INSERT INTO rivet_schedule_runs(id,schedule_id,status,scheduled_at,json,draft_json)
+     SELECT 'fixture-terminal-' || n, $1, 'succeeded', $2::bigint+n,
+       ($3::jsonb || jsonb_build_object('id','fixture-terminal-' || n,'scheduledAt',$2::bigint+n))::text, $4
+     FROM generate_series(1,1001) AS n`,
+    [
+      freshSchedule.id,
+      Date.now(),
+      JSON.stringify({ ...fresh, status: 'succeeded', finishedAt: Date.now() }),
+      JSON.stringify(freshSchedule),
+    ],
+  );
+  assert.equal((await a.list()).history[0]?.id, fresh.id);
+  await b.tick('full-worker', 0);
+  assert.equal(
+    Number(
+      (
+        await pool.query(
+          "SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status NOT IN ('queued','claimed','running')",
+        )
+      ).rows[0].count,
+    ),
+    1000,
+  );
+  assert.equal((await a.list()).history[0]?.id, fresh.id);
+  await a.cancel(fresh.id);
+  await a.delete(freshSchedule.id, freshSchedule.revision);
   await assert.rejects(() => b!.save({ ...s, name: 'Stale' }, s.id, 0), /another window/);
   await a.delete(s.id, s.revision);
   await pool.query('DELETE FROM rivet_schedule_runs');
@@ -129,7 +177,9 @@ try {
   assert.equal(importedState.schedules[0]?.enabled, false);
   assert.equal(importedState.history[0]?.status, 'interrupted');
   assert.equal(await b.tick('destination'), undefined);
-  console.log('Real PostgreSQL scheduler migration, competing claims, CAS and lost-worker checks passed.');
+  console.log(
+    'Real PostgreSQL scheduler migration, competing claims, queue expiry, history bounds, CAS and lost-worker checks passed.',
+  );
 } finally {
   await a?.close();
   await b?.close();

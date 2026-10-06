@@ -4,10 +4,26 @@ import { scheduledProjectOptions } from '../dashboard/scheduledProjectOptions';
 
 test('hierarchical project choices expand folders, search hidden descendants, and preserve identities and source data', () => {
   const projects = [
-    { id: 'ten', name: 'Job 10', relativePath: 'Work/Nested/ten.rivet-project' },
-    { id: 'other', name: 'Job 2', relativePath: 'Other/two.rivet-project' },
-    { id: 'two', name: 'Job 2', relativePath: 'Work\\Nested\\two.rivet-project' },
-    { id: 'root', name: 'Root', relativePath: 'root.rivet-project' },
+    {
+      id: 'Work/Nested/ten.rivet-project',
+      projectMetadataId: 'ten',
+      name: 'Job 10',
+      relativePath: 'Work/Nested/ten.rivet-project',
+    },
+    {
+      id: 'Other/two.rivet-project',
+      projectMetadataId: 'other',
+      name: 'Job 2',
+      relativePath: 'Other/two.rivet-project',
+    },
+    {
+      id: 'Work/Nested/two.rivet-project',
+      projectMetadataId: 'two',
+      name: 'Job 2',
+      relativePath: 'Work\\Nested\\two.rivet-project',
+    },
+    { id: 'root.rivet-project', projectMetadataId: 'root', name: 'Root', relativePath: 'root.rivet-project' },
+    { id: 'broken.rivet-project', name: 'Unreadable project', relativePath: 'broken.rivet-project' },
   ];
   const before = structuredClone(projects);
   const expanded = new Set<string>();
@@ -47,6 +63,15 @@ test('hierarchical project choices expand folders, search hidden descendants, an
   );
   assert.deepEqual(scheduledProjectOptions(projects, expanded, 'missing'), []);
   assert.deepEqual(scheduledProjectOptions([], expanded, ''), []);
+  const moved = projects.map((project) =>
+    project.projectMetadataId === 'root'
+      ? { ...project, id: 'Moved/root.rivet-project', relativePath: 'Moved/root.rivet-project' }
+      : project,
+  );
+  assert.equal(
+    scheduledProjectOptions(moved, new Set(), 'Root').find((option) => option.kind === 'project')?.value,
+    'root',
+  );
   assert.deepEqual(projects, before);
   assert.deepEqual([...expanded], ['Work', 'Work/Nested']);
 });

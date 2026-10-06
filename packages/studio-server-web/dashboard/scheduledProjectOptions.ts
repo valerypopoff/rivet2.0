@@ -10,7 +10,7 @@ export type ScheduledProjectOption = {
   unavailable?: boolean;
 };
 
-type ProjectChoice = Pick<WorkflowProjectItem, 'id' | 'name' | 'relativePath'>;
+type ProjectChoice = Pick<WorkflowProjectItem, 'projectMetadataId' | 'name' | 'relativePath'>;
 type Folder = { path: string; name: string; folders: Map<string, Folder>; projects: ProjectChoice[] };
 
 // Match the Subgraph picker: folders toggle in place; search reveals descendants
@@ -22,6 +22,9 @@ export function scheduledProjectOptions(
 ): ScheduledProjectOption[] {
   const root: Folder = { path: '', name: '', folders: new Map(), projects: [] };
   for (const project of projects) {
+    // Tree row IDs are paths in local storage; runtime targets require the
+    // immutable metadata ID. Never substitute a row ID for a missing identity.
+    if (!project.projectMetadataId) continue;
     const path = project.relativePath.replaceAll('\\', '/');
     let parent = root;
     for (const name of path.split('/').slice(0, -1)) {
@@ -57,7 +60,13 @@ export function scheduledProjectOptions(
       (a, b) => compare(a.name, b.name) || compare(a.relativePath, b.relativePath),
     )) {
       if (query && !`${project.name} ${project.relativePath}`.toLocaleLowerCase().includes(query)) continue;
-      options.push({ value: project.id, label: project.name, path: project.relativePath, kind: 'project', depth });
+      options.push({
+        value: project.projectMetadataId!,
+        label: project.name,
+        path: project.relativePath,
+        kind: 'project',
+        depth,
+      });
     }
     return options;
   };

@@ -12,6 +12,7 @@ import {
 } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import type { ScheduledRunList } from '../../studio-server-shared/scheduled-run-types';
+import type { WorkflowTreeResponse } from '../../studio-server-shared/workflow-types';
 import { mockHostedEditorBootstrap, authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { expectStudioModalSizing } from './helpers/modalSizing';
 
@@ -44,15 +45,17 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     const fixture = projectBundleFixture();
     await fs.writeFile(path.join(api.root, 'workflows', 'root.rivet-project'), fixture.root.projectContents);
     await fs.writeFile(path.join(api.root, 'workflows', 'child.rivet-project'), fixture.child.projectContents);
+    // Use the real local tree contract: row IDs are paths, not runtime IDs.
+    // The former fixture used metadata IDs for both and masked failed saves.
+    const treeResponse = await fetch(api.baseUrl + '/api/workflows/tree', { headers });
+    expect(treeResponse.status).toBe(200);
+    const tree = (await treeResponse.json()) as WorkflowTreeResponse;
     const project = {
-      id: fixture.root.project.metadata.id,
+      ...tree.projects.find((item) => item.relativePath === 'root.rivet-project')!,
       name: 'Scheduled fixture',
-      fileName: 'root.rivet-project',
-      relativePath: 'root.rivet-project',
-      absolutePath: path.join(api.root, 'workflows', 'root.rivet-project'),
-      updatedAt: new Date().toISOString(),
-      settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
     };
+    expect(project.projectMetadataId).toBe(fixture.root.project.metadata.id);
+    expect(project.id).not.toBe(project.projectMetadataId);
     expect((await fetch(api.baseUrl + base)).status).toBe(403);
     let loseCreateResponse = true,
       loseRunResponse = true,
@@ -94,10 +97,17 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
                 {
                   ...project,
                   id: 'folder-project',
+                  projectMetadataId: 'folder-project-metadata',
                   name: 'Scheduled fixture',
                   relativePath: 'Useful/Nested/job.rivet-project',
                 },
-                { ...project, id: 'other-project', name: 'Other work', relativePath: 'Other/job.rivet-project' },
+                {
+                  ...project,
+                  id: 'other-project',
+                  projectMetadataId: 'other-project-metadata',
+                  name: 'Other work',
+                  relativePath: 'Other/job.rivet-project',
+                },
               ],
               sync: { epoch: 'scheduled-fixture', revision: 0 },
             },
@@ -126,6 +136,10 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     const modal = page.getByTestId('scheduled-runs-modal');
     const editor = page.getByTestId('scheduled-run-editor-modal');
     await expect(modal).toBeVisible();
+    const history = modal.locator('.scheduled-run-history');
+    const historyToggle = history.locator('summary');
+    await expect(historyToggle).toHaveText('Recent runs (0)');
+    await expect(history).not.toHaveAttribute('open');
     await expectStudioModalSizing(modal);
     await expect(page.getByTestId('scheduled-runs-modal--blanket')).toHaveCSS(
       'background-color',
@@ -134,9 +148,71 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
     await modal.getByRole('button', { name: 'Add scheduled run', exact: true }).click();
     await editor.getByLabel('Name', { exact: true }).fill('Draft retained');
+    const save = editor.getByRole('button', { name: 'Save', exact: true });
+    const preview = editor.getByRole('button', { name: 'Preview next runs', exact: true });
+    await expect(editor.getByRole('button', { name: /Cancel/ })).toHaveCount(0);
+    await expect(save).toHaveCSS('background-color', 'rgb(12, 102, 228)');
+    await expect(editor.getByLabel('Maximum run duration (minutes)', { exact: true })).toHaveValue('60');
+    expect(
+      await editor
+        .locator('.scheduled-run-fields')
+        .first()
+        .evaluate((section) => {
+          const project = section.querySelector('label[for="scheduled-run-project"]')!.getBoundingClientRect();
+          const version = section.querySelector('label[for="scheduled-run-version"]')!.getBoundingClientRect();
+          return Math.abs(project.top - version.top) < 1 && version.left > project.left;
+        }),
+    ).toBe(true);
+    const expectFixedFooter = async () => {
+      const footer = editor.locator('.scheduled-run-footer');
+      await page.evaluate(() => document.fonts.ready);
+      expect(await footer.evaluate((element) => element.parentElement?.classList.contains('scheduled-run-form'))).toBe(
+        true,
+      );
+      // Layout coordinates exclude the modal's entrance translation animation.
+      const top = await footer.evaluate((element) => (element as HTMLElement).offsetTop);
+      await editor.locator('.scheduled-runs-content').evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect(save).toBeInViewport();
+      await expect(preview).toBeInViewport();
+      // Fractional flex sizes can round to adjacent CSS pixels during layout.
+      // This tolerance is not a scroll tolerance: both controls remain visible
+      // and the footer must live outside the scrolling content region.
+      expect(
+        Math.abs((await footer.evaluate((element) => (element as HTMLElement).offsetTop)) - top),
+      ).toBeLessThanOrEqual(1);
+      expect(await save.evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThan(
+        await preview.evaluate((element) => element.getBoundingClientRect().right),
+      );
+      await editor.locator('.scheduled-runs-content').evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await expect(save).toBeInViewport();
+    };
+    await expectFixedFooter();
+    await editor.getByLabel('Name', { exact: true }).fill('');
+    await save.click();
+    await expect(editor.getByLabel('Name', { exact: true })).toBeFocused();
+    expect((await read()).schedules).toHaveLength(0);
+    await editor.getByLabel('Name', { exact: true }).fill('Draft retained');
     await expectStudioModalSizing(editor);
     await expect(editor.locator('select')).toHaveCount(0);
+    await expect(editor.getByRole('checkbox', { name: 'Enabled', exact: true })).toHaveCount(0);
+    await expect(
+      editor.getByText('Browse by folder, or search by project name or path. The main graph runs.'),
+    ).toHaveCount(0);
+    await expect(editor.getByText(/Enable or pause this schedule|New schedules start enabled/)).toHaveCount(0);
+    const sections = editor.locator('.scheduled-run-fields');
+    await expect(sections).toHaveCount(3);
+    for (const section of await sections.all()) {
+      await expect(section).toHaveCSS('border-top-width', '1px');
+      await expect(section).toHaveCSS('border-radius', '12px');
+      await expect(section).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.03)');
+    }
+    await expect(editor.locator('form')).toHaveCSS('border-top-width', '0px');
     const picker = editor.getByLabel('Project', { exact: true });
+    await expect(picker).not.toHaveAttribute('aria-describedby');
     await picker.click();
     await expect(editor).toBeVisible();
     await expect(modal.locator('form')).toHaveCount(0);
@@ -189,16 +265,28 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     expect((await read()).schedules).toHaveLength(0);
     await editor.locator('label[for="scheduled-run-kind"]').click();
     await expect(editor.getByLabel('Schedule', { exact: true })).toBeFocused();
+    const timingNotes = editor.locator('[aria-labelledby="scheduled-run-timing-heading"] .scheduled-run-timing-notes');
+    const noOverlap = 'A run is skipped if a previous run from this schedule is still pending or running.';
+    const daylightSaving = 'Missing daylight-saving times are skipped; repeated times run once.';
+    await expect(timingNotes).toHaveText(`${daylightSaving} ${noOverlap}`);
     await choose('Schedule', 'Weekly');
+    await expect(timingNotes).toHaveText(`${daylightSaving} ${noOverlap}`);
     await editor.getByRole('checkbox', { name: 'Wed', exact: true }).check();
     await expect(editor.getByRole('checkbox', { name: 'Wed', exact: true })).toBeChecked();
     await choose('Schedule', 'Monthly');
+    await expect(timingNotes).toHaveText(`${daylightSaving} ${noOverlap}`);
+    await choose('Day of month', '31');
+    await expect(timingNotes).toHaveText(`${daylightSaving} Months without the selected day are skipped. ${noOverlap}`);
     await choose('Day of month', 'Last day');
+    await expect(timingNotes).toHaveText(`${daylightSaving} ${noOverlap}`);
     await choose('Schedule', 'Interval');
+    await expect(timingNotes).toHaveText(noOverlap);
     await expect(editor.getByLabel('Every (minutes)', { exact: true })).toHaveValue('60');
     await choose('Schedule', 'Once');
+    await expect(timingNotes).toHaveText(noOverlap);
     await expect(editor.getByLabel('Date and time', { exact: true })).toBeVisible();
     await choose('Schedule', 'Daily');
+    await expect(timingNotes).toHaveText(`${daylightSaving} ${noOverlap}`);
     await choose('Version', 'Published');
     await choose('Version', 'Saved latest');
     await choose('Missed runs', 'Catch up latest only');
@@ -211,13 +299,17 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(recording).not.toBeChecked();
     await recording.check();
     await page.setViewportSize({ width: 540, height: 740 });
+    await expectFixedFooter();
     await expectStudioModalSizing(editor);
     await expect
       .poll(async () =>
-        editor.locator('.scheduled-run-fields').evaluate((element) => {
-          const labels = element.querySelectorAll(':scope > :is(label, .scheduled-run-field)');
-          return Math.abs(labels[0]!.getBoundingClientRect().left - labels[1]!.getBoundingClientRect().left) < 1;
-        }),
+        editor
+          .locator('.scheduled-run-fields')
+          .first()
+          .evaluate((element) => {
+            const labels = element.querySelectorAll(':scope > :is(label, .scheduled-run-field)');
+            return Math.abs(labels[0]!.getBoundingClientRect().left - labels[1]!.getBoundingClientRect().left) < 1;
+          }),
       )
       .toBe(true);
     expect(
@@ -236,7 +328,7 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     for (const label of ['Name', 'Project', 'Version', 'Schedule', 'Time zone'])
       await expect(editor.getByLabel(label, { exact: true })).toBeDisabled();
     await expect(recording).toBeDisabled();
-    await expect(editor.getByRole('button', { name: 'Save schedule', exact: true })).toBeDisabled();
+    await expect(editor.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
     await expect(editor.getByRole('button', { name: 'Close', exact: true })).toBeDisabled();
     await page.keyboard.press('Escape');
     await expect(editor).toBeVisible();
@@ -247,27 +339,60 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(editor.getByRole('alert')).toHaveCount(0);
     listUnavailable = false;
     await page.screenshot({ path: test.info().outputPath('scheduled-run-form.png') });
-    await editor.getByRole('button', { name: 'Save schedule', exact: true }).click();
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(editor.getByRole('alert')).toBeVisible();
-    await editor.getByRole('button', { name: 'Save schedule', exact: true }).click();
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(modal.getByRole('heading', { name: 'Useful work Enabled' })).toBeVisible();
+    const card = modal.locator('.scheduled-run-card').first();
+    const deleteSchedule = modal.getByRole('button', { name: 'Delete schedule Useful work', exact: true });
+    await expect(deleteSchedule.locator('svg')).toHaveCount(1);
+    await expect(card.locator('.scheduled-run-buttons')).toHaveCSS('border-top-width', '0px');
+    await expect(card.locator('p').first()).toHaveCSS('margin-bottom', '6px');
+    expect(
+      await card.locator('.scheduled-run-header').evaluate((header) => {
+        const heading = header.querySelector('h3')!.getBoundingClientRect();
+        const pill = header.querySelector('small')!.getBoundingClientRect();
+        const trash = header.querySelector('button')!.getBoundingClientRect();
+        return pill.top >= heading.top && pill.bottom <= heading.bottom && trash.left > heading.right;
+      }),
+    ).toBe(true);
     await expect(editor).toHaveCount(0);
     expect((await read()).schedules).toHaveLength(1);
+    expect((await read()).schedules[0]?.projectId).toBe(project.projectMetadataId);
     expect((await read()).schedules[0]?.input).toEqual({ score: 0.5 });
     await modal.getByRole('button', { name: 'Edit', exact: true }).click();
     await editor.getByLabel('Input JSON object (optional)').fill('[]');
-    await editor.getByRole('button', { name: 'Save schedule', exact: true }).click();
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(editor.getByRole('alert')).toContainText('JSON object');
+    await expect(editor.getByRole('alert')).toBeInViewport();
     await editor.getByLabel('Input JSON object (optional)').fill('');
-    await editor.getByRole('button', { name: 'Save schedule', exact: true }).click();
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
     expect((await read()).schedules[0]?.input).toBeUndefined();
     await modal.getByRole('button', { name: 'Pause', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
+    await modal.getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(editor.getByRole('checkbox', { name: 'Enabled', exact: true })).toHaveCount(0);
+    await expect(
+      editor.locator('.scheduled-select__single-value').filter({ hasText: 'root.rivet-project' }),
+    ).toBeVisible();
+    await editor.getByLabel('Description (optional)').fill('Editing does not re-enable a paused schedule.');
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    expect((await read()).schedules[0]?.enabled).toBe(false);
+    await expect(modal.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
     await modal.getByRole('button', { name: 'Run now', exact: true }).click();
     await expect(modal.getByRole('alert')).toBeVisible();
     await modal.getByRole('button', { name: 'Run now', exact: true }).click();
-    await expect(modal.getByRole('button', { name: 'Open recording', exact: true })).toBeVisible();
+    await expect(historyToggle).toHaveText('Recent runs (1)');
+    await expect(history).not.toHaveAttribute('open');
+    await expect(modal.getByRole('link', { name: 'Open recording', exact: true })).not.toBeVisible();
+    await historyToggle.focus();
+    await historyToggle.press('Enter');
+    await expect(modal.getByRole('link', { name: 'Open recording', exact: true })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('scheduled-runs-expanded.png') });
+    await historyToggle.press('Space');
+    await expect(history).not.toHaveAttribute('open');
     const state = await read();
     expect(state.history).toHaveLength(1);
     expect(state.history[0]?.status).toBe('succeeded');
@@ -305,7 +430,7 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(
       editor.locator('.scheduled-select__single-value').filter({ hasText: 'Unavailable project' }),
     ).toContainText('Missing');
-    expect((await read()).schedules[0]?.projectId).toBe(project.id);
+    expect((await read()).schedules[0]?.projectId).toBe(project.projectMetadataId);
     await editor.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(editor).toHaveCount(0);
     await expect(modal.getByRole('button', { name: 'Edit', exact: true })).toBeFocused();
@@ -325,14 +450,16 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     });
     expect(changed.ok).toBe(true);
     await editor.getByLabel('Name', { exact: true }).fill('Stale edit');
-    await editor.getByRole('button', { name: 'Save schedule', exact: true }).click();
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(editor.getByRole('alert')).toContainText('another window');
     expect((await read()).schedules[0]?.name).toBe('Changed elsewhere');
-    await editor.getByRole('button', { name: 'Cancel editing', exact: true }).click();
+    await editor.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(modal.getByRole('heading', { name: 'Changed elsewhere Paused' })).toBeVisible();
 
     // Removing an owned child fixture makes the real runner fail; Retry must
     // remain idempotent even when its successful acknowledgement is lost.
+    await expect(history).not.toHaveAttribute('open');
+    await historyToggle.click();
     await fs.unlink(path.join(api.root, 'workflows', 'child.rivet-project'));
     await modal.getByRole('button', { name: 'Run now', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Retry run', exact: true })).toHaveCount(1);
@@ -371,7 +498,7 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(modal.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
     await expect(modal.getByRole('alert')).toHaveCount(0);
     page.once('dialog', (dialog) => dialog.accept());
-    await modal.getByRole('button', { name: 'Delete', exact: true }).click();
+    await modal.getByRole('button', { name: 'Delete schedule Changed elsewhere', exact: true }).click();
     await expect(modal.getByText('No scheduled runs yet.')).toBeVisible();
     expect((await read()).history.filter((r) => r.status === 'succeeded')).toHaveLength(2);
     await modal.getByRole('button', { name: 'Close', exact: true }).focus();
@@ -379,6 +506,8 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await expect(modal).toHaveCount(0);
     await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
     await expect(modal.getByText('No scheduled runs yet.')).toBeVisible();
+    await expect(historyToggle).toHaveText('Recent runs (4)');
+    await expect(history).not.toHaveAttribute('open');
     await page.screenshot({ path: test.info().outputPath('scheduled-runs.png') });
   } finally {
     releasePreview();

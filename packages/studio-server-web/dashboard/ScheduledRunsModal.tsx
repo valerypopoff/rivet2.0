@@ -3,6 +3,7 @@ import Button from '@atlaskit/button';
 import Checkbox from '@atlaskit/checkbox';
 import Select from '@atlaskit/select';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
+import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import type {
   ScheduledRun,
   ScheduledRunDraft,
@@ -123,6 +124,10 @@ export const ScheduledRunsModal: FC<{
     working = useRef(false);
   const editorOpener = useRef<HTMLElement | null>(null);
   const listClose = useRef<HTMLButtonElement>(null);
+  const editorContent = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) editorContent.current?.querySelector('[role="alert"]')?.scrollIntoView({ block: 'nearest' });
+  }, [error]);
   useEffect(() => {
     if (draft || busy || !listForeground || !editorOpener.current) return;
     // The list's focus lock reactivates when the editor leaves the modal stack.
@@ -204,7 +209,7 @@ export const ScheduledRunsModal: FC<{
         : {
             name: '',
             description: '',
-            projectId: projects[0]?.id ?? '',
+            projectId: projects.find((project) => project.projectMetadataId)?.projectMetadataId ?? '',
             version: 'latest',
             enabled: true,
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -291,20 +296,42 @@ export const ScheduledRunsModal: FC<{
               {!loaded ? <p>Loading scheduled runs…</p> : !data.schedules.length ? <p>No scheduled runs yet.</p> : null}
               {data.schedules.map((s) => (
                 <section key={s.id} className="scheduled-run-card">
-                  <h3>
-                    {s.name}{' '}
-                    <small>
-                      {s.enabled
-                        ? 'Enabled'
-                        : s.schedule.kind === 'once' && s.nextAt === null
-                          ? 'Paused or completed'
-                          : 'Paused'}
-                    </small>
-                  </h3>
+                  <div className="scheduled-run-header">
+                    <h3>
+                      {s.name}{' '}
+                      <small>
+                        {s.enabled
+                          ? 'Enabled'
+                          : s.schedule.kind === 'once' && s.nextAt === null
+                            ? 'Paused or completed'
+                            : 'Paused'}
+                      </small>
+                    </h3>
+                    <button
+                      type="button"
+                      className="scheduled-run-delete"
+                      aria-label={`Delete schedule ${s.name}`}
+                      title="Delete schedule"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            'Delete this schedule? Pending work is cancelled; an already-running graph continues.',
+                          )
+                        )
+                          void action(() =>
+                            request(`/${encodeURIComponent(s.id)}`, 'DELETE', { revision: s.revision }),
+                          );
+                      }}
+                    >
+                      <DeleteBinIcon aria-hidden="true" />
+                    </button>
+                  </div>
                   {s.description ? <p>{s.description}</p> : null}
                   <p>
-                    {projects.find((p) => p.id === s.projectId)?.name ?? `Unavailable project (${s.projectId})`} ·{' '}
-                    {s.version === 'latest' ? 'Saved latest' : 'Published'}
+                    {projects.find((p) => p.projectMetadataId === s.projectId)?.name ??
+                      `Unavailable project (${s.projectId})`}{' '}
+                    · {s.version === 'latest' ? 'Saved latest' : 'Published'}
                   </p>
                   <p>
                     {description(s)} · {s.timeZone} · Next: {date(s.nextAt, s.timeZone)}
@@ -335,78 +362,73 @@ export const ScheduledRunsModal: FC<{
                     >
                       Run now
                     </ScheduleButton>
-                    <ScheduleButton
-                      disabled={busy}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            'Delete this schedule? Pending work is cancelled; an already-running graph continues.',
-                          )
-                        )
-                          void action(() =>
-                            request(`/${encodeURIComponent(s.id)}`, 'DELETE', { revision: s.revision }),
-                          );
-                      }}
-                    >
-                      Delete
-                    </ScheduleButton>
                   </div>
                 </section>
               ))}
-              <h3>Recent runs</h3>
-              <p>
-                History is separate from recordings. Failed or interrupted runs are not automatically retried because
-                external side effects may already have happened.
-              </p>
-              {data.history.slice(0, 100).map((run) => (
-                <section className="scheduled-run-card" key={run.id}>
-                  <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
-                  {run.reason ? <p>{run.reason}</p> : null}
-                  {run.recordingStatus === 'unavailable' ? (
-                    <p>Recording unavailable. The execution result is unchanged.</p>
-                  ) : null}
-                  <div className="scheduled-run-buttons">
-                    {run.recordingId ? (
-                      <ScheduleButton
-                        disabled={busy}
-                        onClick={() => void action(() => onOpenRecording(run.recordingId!), false)}
-                      >
-                        Open recording
-                      </ScheduleButton>
+              <details className="scheduled-run-history">
+                <summary>Recent runs ({data.history.length})</summary>
+                <p>
+                  History is separate from recordings. Failed or interrupted runs are not automatically retried because
+                  external side effects may already have happened.
+                </p>
+                {data.history.length > 100 ? <p>Showing up to 100 runs, with active runs first.</p> : null}
+                {loaded && !data.history.length ? <p>No recent runs yet.</p> : null}
+                {data.history.slice(0, 100).map((run) => (
+                  <section className="scheduled-run-card" key={run.id}>
+                    <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
+                    {run.reason ? <p>{run.reason}</p> : null}
+                    {run.recordingStatus === 'unavailable' ? (
+                      <p>Recording unavailable. The execution result is unchanged.</p>
                     ) : null}
-                    {['queued', 'claimed', 'running'].includes(run.status) ? (
-                      <ScheduleButton
-                        disabled={busy || run.cancelRequested}
-                        onClick={() =>
-                          void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
-                        }
-                      >
-                        {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
-                      </ScheduleButton>
-                    ) : null}
-                    {['failed', 'interrupted'].includes(run.status) &&
-                    data.schedules.some((s) => s.id === run.scheduleId) ? (
-                      <ScheduleButton
-                        disabled={busy}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              'Retry may repeat external side effects. Check what happened before retrying. Continue?',
+                    <div className="scheduled-run-buttons">
+                      {run.recordingId ? (
+                        <a
+                          href="#"
+                          className="scheduled-run-recording-link"
+                          aria-disabled={busy}
+                          tabIndex={busy ? -1 : undefined}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (!busy) void action(() => onOpenRecording(run.recordingId!), false);
+                          }}
+                        >
+                          Open recording
+                        </a>
+                      ) : null}
+                      {['queued', 'claimed', 'running'].includes(run.status) ? (
+                        <ScheduleButton
+                          disabled={busy || run.cancelRequested}
+                          onClick={() =>
+                            void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
+                          }
+                        >
+                          {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
+                        </ScheduleButton>
+                      ) : null}
+                      {['failed', 'interrupted'].includes(run.status) &&
+                      data.schedules.some((s) => s.id === run.scheduleId) ? (
+                        <ScheduleButton
+                          disabled={busy}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                'Retry may repeat external side effects. Check what happened before retrying. Continue?',
+                              )
                             )
-                          )
-                            void action(() =>
-                              request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
-                                confirmSideEffects: true,
-                              }),
-                            );
-                        }}
-                      >
-                        Retry run
-                      </ScheduleButton>
-                    ) : null}
-                  </div>
-                </section>
-              ))}
+                              void action(() =>
+                                request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
+                                  confirmSideEffects: true,
+                                }),
+                              );
+                          }}
+                        >
+                          Retry run
+                        </ScheduleButton>
+                      ) : null}
+                    </div>
+                  </section>
+                ))}
+              </details>
             </div>
           </div>
         </ModalBody>
@@ -441,23 +463,30 @@ export const ScheduledRunsModal: FC<{
                   ×
                 </button>
               </div>
-              <div className="scheduled-runs-content">
-                {error ? <div role="alert">{error}</div> : null}
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void action(async () => {
-                      await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
-                        draft: payload(),
-                        ...(editing ? { revision: editing.revision } : {}),
-                      });
-                      if (mounted.current) setDraft(null);
+              <form
+                className="scheduled-run-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void action(async () => {
+                    await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
+                      draft: payload(),
+                      ...(editing ? { revision: editing.revision } : {}),
                     });
-                  }}
-                >
-                  <fieldset className="scheduled-run-fields" disabled={busy}>
-                    <h4 className="scheduled-run-section-title">Project and details</h4>
-                    <label>
+                    if (mounted.current) setDraft(null);
+                  });
+                }}
+              >
+                <div className="scheduled-runs-content" ref={editorContent}>
+                  {error ? <div role="alert">{error}</div> : null}
+                  <fieldset
+                    className="scheduled-run-fields"
+                    disabled={busy}
+                    aria-labelledby="scheduled-run-details-heading"
+                  >
+                    <h4 id="scheduled-run-details-heading" className="scheduled-run-section-title">
+                      Project and details
+                    </h4>
+                    <label className="scheduled-run-wide">
                       Name
                       <input
                         required
@@ -466,6 +495,24 @@ export const ScheduledRunsModal: FC<{
                         onChange={(e) => update({ name: e.target.value })}
                       />
                     </label>
+                    <label className="scheduled-run-wide">
+                      Description (optional)
+                      <textarea
+                        maxLength={2000}
+                        value={draft.description}
+                        onChange={(e) => update({ description: e.target.value })}
+                      />
+                    </label>
+                    <div className="scheduled-run-field">
+                      <label htmlFor="scheduled-run-project">Project</label>
+                      <ScheduledProjectSelect
+                        projects={projects}
+                        onMenuChange={trackSelect}
+                        value={draft.projectId}
+                        disabled={busy}
+                        onChange={(projectId) => update({ projectId })}
+                      />
+                    </div>
                     <ScheduleSelect
                       id="scheduled-run-version"
                       onMenuChange={trackSelect}
@@ -478,28 +525,15 @@ export const ScheduledRunsModal: FC<{
                         { value: 'published', label: 'Published' },
                       ]}
                     />
-                    <label className="scheduled-run-wide">
-                      Description (optional)
-                      <textarea
-                        maxLength={2000}
-                        value={draft.description}
-                        onChange={(e) => update({ description: e.target.value })}
-                      />
-                    </label>
-                    <div className="scheduled-run-field scheduled-run-wide">
-                      <label htmlFor="scheduled-run-project">Project</label>
-                      <ScheduledProjectSelect
-                        projects={projects}
-                        onMenuChange={trackSelect}
-                        value={draft.projectId}
-                        disabled={busy}
-                        onChange={(projectId) => update({ projectId })}
-                      />
-                      <span className="scheduled-runs-help" id="scheduled-run-project-help">
-                        Browse by folder, or search by project name or path. The main graph runs.
-                      </span>
-                    </div>
-                    <h4 className="scheduled-run-section-title">When to run</h4>
+                  </fieldset>
+                  <fieldset
+                    className="scheduled-run-fields"
+                    disabled={busy}
+                    aria-labelledby="scheduled-run-timing-heading"
+                  >
+                    <h4 id="scheduled-run-timing-heading" className="scheduled-run-section-title">
+                      When to run
+                    </h4>
                     <ScheduleSelect
                       id="scheduled-run-kind"
                       onMenuChange={trackSelect}
@@ -631,7 +665,24 @@ export const ScheduledRunsModal: FC<{
                         ]}
                       />
                     ) : null}
-                    <h4 className="scheduled-run-section-title">Execution</h4>
+                    <p className="scheduled-runs-help scheduled-run-wide scheduled-run-timing-notes">
+                      {['daily', 'weekly', 'monthly'].includes(draft.schedule.kind) ? (
+                        <>Missing daylight-saving times are skipped; repeated times run once. </>
+                      ) : null}
+                      {draft.schedule.kind === 'monthly' && draft.schedule.day !== 'last' && draft.schedule.day > 28 ? (
+                        <>Months without the selected day are skipped. </>
+                      ) : null}
+                      A run is skipped if a previous run from this schedule is still pending or running.
+                    </p>
+                  </fieldset>
+                  <fieldset
+                    className="scheduled-run-fields"
+                    disabled={busy}
+                    aria-labelledby="scheduled-run-execution-heading"
+                  >
+                    <h4 id="scheduled-run-execution-heading" className="scheduled-run-section-title">
+                      Execution
+                    </h4>
                     <ScheduleSelect
                       id="scheduled-run-missed"
                       onMenuChange={trackSelect}
@@ -645,8 +696,9 @@ export const ScheduledRunsModal: FC<{
                       ]}
                     />
                     <label>
-                      Timeout (minutes)
+                      Maximum run duration (minutes)
                       <input
+                        title="Includes preparation. When this limit is reached, the server cancels the run."
                         type="number"
                         min={1}
                         max={1440}
@@ -669,12 +721,6 @@ export const ScheduledRunsModal: FC<{
                     </label>
                     <div className="scheduled-run-toggles scheduled-run-wide">
                       <Checkbox
-                        label="Enabled"
-                        isDisabled={busy}
-                        isChecked={draft.enabled}
-                        onChange={(e) => update({ enabled: e.target.checked })}
-                      />
-                      <Checkbox
                         label="Record these runs (requires server recording setting)"
                         isDisabled={busy}
                         isChecked={draft.record}
@@ -682,30 +728,6 @@ export const ScheduledRunsModal: FC<{
                       />
                     </div>
                   </fieldset>
-                  <p>
-                    Recurring missing DST times are skipped; repeated times run once. Days absent from a month are
-                    skipped. Previous pending/running occurrences never overlap.
-                  </p>
-                  <div className="scheduled-run-buttons">
-                    <ScheduleButton
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void action(async () => {
-                          const result = await request<{ times: number[] }>('/preview', 'POST', payload());
-                          if (mounted.current) setTimes(result.times);
-                        }, false)
-                      }
-                    >
-                      Preview next runs
-                    </ScheduleButton>
-                    <ScheduleButton primary type="submit" disabled={busy}>
-                      Save schedule
-                    </ScheduleButton>
-                    <ScheduleButton disabled={busy} onClick={closeEditor}>
-                      Cancel editing
-                    </ScheduleButton>
-                  </div>
                   {times.length ? (
                     <ul aria-label="Next runs">
                       {times.map((t) => (
@@ -713,8 +735,25 @@ export const ScheduledRunsModal: FC<{
                       ))}
                     </ul>
                   ) : null}
-                </form>
-              </div>
+                </div>
+                <div className="scheduled-run-footer">
+                  <ScheduleButton
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        const result = await request<{ times: number[] }>('/preview', 'POST', payload());
+                        if (mounted.current) setTimes(result.times);
+                      }, false)
+                    }
+                  >
+                    Preview next runs
+                  </ScheduleButton>
+                  <ScheduleButton primary type="submit" disabled={busy}>
+                    Save
+                  </ScheduleButton>
+                </div>
+              </form>
             </div>
           </ModalBody>
         </ModalDialog>

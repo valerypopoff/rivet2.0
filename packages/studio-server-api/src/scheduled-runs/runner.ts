@@ -59,21 +59,29 @@ export async function runScheduledGraph(
     signal,
     (late) => late.dispose(),
   );
-  const recorder = recording ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
-  recorder?.record(processor.processor);
+  let recorder: ExecutionRecorder | null = null;
   const controller = new AbortController();
-  // Interactive nodes have no browser owner in this execution surface.
-  processor.processor.on('userInput', () => {
-    controller.abort();
-    void processor.processor.abort().catch(() => {});
-  });
   const started = performance.now();
   let status: ScheduledOccurrence['status'] = 'succeeded';
   let reason: string | undefined;
+  let invoked = false;
   try {
+    // Setup also belongs to the processor's cleanup scope. A recorder/listener
+    // failure must not leak a processor prepared before durable acceptance.
+    if (recording) {
+      const prepared = new ExecutionRecorder(getWorkflowExecutionRecorderOptions());
+      prepared.record(processor.processor);
+      recorder = prepared;
+    }
+    // Interactive nodes have no browser owner in this execution surface.
+    processor.processor.on('userInput', () => {
+      controller.abort();
+      void processor.processor.abort().catch(() => {});
+    });
     if (!(await store.accept(occurrence.id, owner, { revisionKey: resolved.revisionKey, graphId })))
       return { status: 'cancelled' };
     signal.throwIfAborted();
+    invoked = true;
     await processor.run();
     await processor.processor.waitForRunCompletion();
     if (controller.signal.aborted) throw new Error('Interactive input is not supported for scheduled runs.');
@@ -84,13 +92,15 @@ export async function runScheduledGraph(
       ? 'This graph requested interactive input.'
       : signal.aborted
         ? 'Execution cancelled, timed out or worker ownership lost; check side effects before retrying.'
-        : 'Graph execution failed. Inspect its recording when available.';
+        : invoked
+          ? 'Graph execution failed. Inspect its recording when available.'
+          : 'Execution preparation or acceptance failed; the graph was not invoked.';
   } finally {
     processor.dispose();
   }
   let recordingId: string | undefined;
   let recordingStatus: ScheduledOccurrence['recordingStatus'] = draft.record ? 'unavailable' : 'off';
-  if (recorder) {
+  if (recorder && invoked) {
     try {
       const [project, attached] = loadProjectAndAttachedDataFromString(resolved.projectContents);
       recordingId = await persistWorkflowExecutionRecordingWithBackend({

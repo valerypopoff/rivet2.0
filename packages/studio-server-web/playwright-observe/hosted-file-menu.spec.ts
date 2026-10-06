@@ -33,12 +33,7 @@ test.describe('Hosted editor File menu', () => {
     await authenticateIfNeeded(page);
 
     const { fileMenu } = await openHostedFileMenu(page);
-    await expect(fileMenu.getByRole('menuitem')).toHaveText([
-      'Import graph',
-      'Export graph',
-      'Rivet settings',
-      'Help',
-    ]);
+    await expect(fileMenu.getByRole('menuitem')).toHaveText(['Import graph', 'Export graph', 'Rivet settings', 'Help']);
     await expect(fileMenu.getByRole('separator')).toHaveCount(1);
   });
 
@@ -60,6 +55,23 @@ test.describe('Hosted editor File menu', () => {
     await page.setViewportSize({ width: 740, height: 1000 });
     await expectStudioModalSizing(modal);
     await expectStackedSettingsLayout(modal);
+    await modal.getByRole('button', { name: 'LLM', exact: true }).click();
+    const provider = modal.getByRole('combobox').first();
+    const selectedLabel = await modal.locator('[class$="-singleValue"]').first().innerText();
+    await provider.click();
+    // Atlaskit 16's option rows have stable IDs but do not consistently expose
+    // option/listbox roles or aria-selected. Cover the actual shipped DOM.
+    const options = editorFrame.locator('[id^="react-select-"][id*="-option-"]');
+    const selectedOption = options.filter({ hasText: selectedLabel });
+    await expect(selectedOption).toHaveCSS('box-shadow', 'none');
+    await expect(selectedOption).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    const hoveredOption = options.filter({ hasNotText: selectedLabel }).first();
+    await hoveredOption.hover();
+    await expect(hoveredOption).toHaveCSS('box-shadow', 'none');
+    await expect(hoveredOption).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await provider.press('Escape');
+    await expect(options).toHaveCount(0);
+    await expect(modal).toBeVisible();
   });
 
   test('keeps the Plugins catalog identity column compact', async ({ page }) => {

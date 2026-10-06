@@ -1,4 +1,5 @@
 @import './modal-sizing.css';
+@import './dropdown-styles.css';
 
 /* Width is shared with the dashboard, but upstream desktop settings still use
    fixed navigation columns. Stack these within a narrow editor iframe so the

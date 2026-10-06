@@ -1,5 +1,21 @@
 # Development
 
+## Shared dropdown styling
+
+`packages/studio-server-web/dropdown-styles.css` is loaded in both the dashboard
+and hosted editor. It removes Atlaskit's inset colored left-edge shadow from
+dropdown options, including portalled menus. Hover/selected backgrounds, input
+focus rings, menu shadows and keyboard selection remain unchanged. Keep this
+override at the shared Studio Server boundary, not in individual select controls
+or upstream standalone desktop styles.
+The installed Atlaskit 16 uses `react-select-…-option-…` IDs and does not
+consistently expose option/listbox roles; the shared selector covers those
+option rows as well as semantic options.
+
+Verify the dashboard and editor paths with headless
+`yarn studio-server:ui:observe run-recordings-modal.spec.ts hosted-file-menu.spec.ts
+--grep "Any is first|shared Studio Server modal dimensions"`.
+
 ## Shared modal sizing
 
 `packages/studio-server-web/modal-sizing.css` owns all Studio Server modal

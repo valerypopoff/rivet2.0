@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import Select from '@atlaskit/select';
+import Select, { components } from '@atlaskit/select';
 import FolderIcon from 'majesticons/line/folder-line.svg?react';
 import FileIcon from 'majesticons/line/file-line.svg?react';
 import type { WorkflowProjectItem } from './types';
@@ -22,7 +22,7 @@ export function ScheduledProjectSelect({
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const options = useMemo(() => scheduledProjectOptions(projects, expanded, search), [projects, expanded, search]);
-  const project = projects.find((item) => item.id === value);
+  const project = projects.find((item) => item.projectMetadataId === value);
   const selected: ScheduledProjectOption | null = value
     ? {
         value,
@@ -55,7 +55,8 @@ export function ScheduledProjectSelect({
       }}
       onMenuClose={close}
       aria-label="Project"
-      aria-describedby="scheduled-run-project-help"
+      // Atlaskit 16's description wrapper emits "undefined" without a hint.
+      components={{ Input: components.Input }}
       options={options}
       value={selected}
       isDisabled={disabled}

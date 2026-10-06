@@ -91,8 +91,10 @@ test('dashboard dialogs share responsive dimensions, including nested schedule e
         await page.setViewportSize({ width, height: 1000 });
         await expectStudioModalSizing(editor);
         await expectStudioModalSizing(modal);
+        await expect(editor.getByRole('button', { name: 'Save', exact: true })).toBeInViewport();
+        await expect(editor.getByRole('button', { name: 'Preview next runs', exact: true })).toBeInViewport();
       }
-      await editor.getByRole('button', { name: 'Cancel editing', exact: true }).click();
+      await editor.getByRole('button', { name: 'Close', exact: true }).click();
       await expect(editor).toHaveCount(0);
     }
     await modal.getByRole('button', { name: close, exact: true }).click();
