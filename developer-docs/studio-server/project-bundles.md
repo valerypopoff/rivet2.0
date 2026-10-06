@@ -182,6 +182,11 @@ runtime-library, app-data and local-upgrade roots, so exports do not inflate sou
 inventories or migration backups. It survives container recreation; normal job
 expiry and cleanup remain responsible for disposal. Do not remove this volume
 while downloads are active. Mounted dotenv cannot override the deployment root.
+The staging preflight requires API and initializer to share this writable named
+volume, separate from authoritative state volumes. A predecessor without export
+scratch may add it on first rollout; an existing export volume cannot be silently
+redirected. The isolated migration image rehearsal's replacement initializer also
+sets export ownership and 0700 permissions instead of bypassing the production fix.
 Compose passes optional payload/scratch budgets and the free-space reserve with
 their normal defaults. These are limits/headroom, not preallocated disk space.
 
@@ -256,7 +261,8 @@ Do not describe the feature as available in npm until this release gate passes.
 ```powershell
 yarn workspace @valerypopoff/rivet2-node exec tsx --test test/projectBundle.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-api exec tsx --test src/tests/project-bundle.test.ts src/tests/project-bundle-sqlite.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/managed-execution-service.test.ts
-yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/kubernetes-contract.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/kubernetes-contract.test.ts src/tests/proxy-image-contract.test.ts
+node --test deploy/studio-server/scripts/staging-docker.test.mjs deploy/studio-server/scripts/local-upgrade-rehearsal-safety.test.mjs
 node --test scripts/ci/api-test-shards.test.mjs
 $env:PLAYWRIGHT_HEADLESS='1'
 $env:PLAYWRIGHT_SLOW_MO='0'
@@ -301,6 +307,11 @@ Filesystem and selected native-SQLite variants run in the normal API test list.
 The shard-manifest check ensures these files remain assigned to CI. Deployment
 contracts render Helm and inspect Compose mounts, ownership, environment settings
 and capacity validation; they do not launch a Kubernetes cluster.
+`proxy-image-contract.test.ts` also checks that the Compose initializer mounts
+every writable API storage directory and its ownership loop covers exactly those
+mounts, independent of directory order. The export root must receive private 0700
+permissions. New storage mounts must extend this coverage, not preserve an old
+literal shell-loop snapshot. Include this test when changing export deployment.
 The SQLite fixture installs an isolated serving selection; supervisor startup and
 migration validation remain covered by the local-upgrade tests.
 

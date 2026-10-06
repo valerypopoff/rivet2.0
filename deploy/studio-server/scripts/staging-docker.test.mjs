@@ -125,6 +125,7 @@ test('staging refuses changed artifact or named-volume mounts before recreation'
         target: '/home/rivet/.local/share/com.valerypopoff.rivet2',
       },
       { type: 'volume', source: 'rivet_local_metadata', target: '/data/local-metadata' },
+      { type: 'volume', source: 'rivet_project_bundles', target: '/data/project-bundles' },
     ];
     const volumes = [...artifactVolumes, ...namedVolumes];
     const config = {
@@ -145,6 +146,42 @@ test('staging refuses changed artifact or named-volume mounts before recreation'
       })),
     };
     assert.doesNotThrow(() => assertStagingDataMounts(config, expected, previous));
+    assert.doesNotThrow(
+      () =>
+        assertStagingDataMounts(config, expected, {
+          Mounts: previous.Mounts.filter((mount) => mount.Destination !== '/data/project-bundles'),
+        }),
+      'first rollout may add the disposable export volume',
+    );
+    for (const [service, change, pattern] of [
+      ['api', { read_only: true }, /must be writable/],
+      ['filesystem-artifacts-init', { read_only: true }, /must be writable/],
+      ['filesystem-artifacts-init', { source: 'rivet_workspace' }, /must use the API's export volume/],
+      ['api', { source: 'rivet_data' }, /must not share an authoritative/],
+    ]) {
+      const changed = structuredClone(config);
+      changed.services[service].volumes = changed.services[service].volumes.map((mount) =>
+        mount.target === '/data/project-bundles' ? { ...mount, ...change } : mount,
+      );
+      assert.throws(() => assertStagingDataMounts(changed, expected, previous), pattern);
+    }
+    assert.throws(
+      () =>
+        assertStagingDataMounts(config, expected, {
+          Mounts: previous.Mounts.map((mount) =>
+            mount.Destination === '/data/project-bundles' ? { ...mount, Name: 'other_exports' } : mount,
+          ),
+        }),
+      /would change the existing export volume/,
+    );
+    const missingExport = structuredClone(config);
+    missingExport.services.api.volumes = missingExport.services.api.volumes.filter(
+      (mount) => mount.target !== '/data/project-bundles',
+    );
+    assert.throws(
+      () => assertStagingDataMounts(missingExport, expected, previous),
+      /mount \/data\/project-bundles exactly once/,
+    );
     assert.throws(
       () =>
         assertStagingDataMounts(

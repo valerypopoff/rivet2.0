@@ -83,6 +83,7 @@ function namedVolume(config, service, target) {
   const matches = volumes.filter((volume) => volume.target === target);
   assert.equal(matches.length, 1, `${service} must mount ${target} exactly once.`);
   assert.equal(matches[0].type, 'volume', `${service} must use a named volume at ${target}.`);
+  assert.notEqual(matches[0].read_only, true, `${service} must be writable at ${target}.`);
   const name = config.volumes?.[matches[0].source]?.name;
   assert.ok(name, `${service} ${target} has no resolved named volume.`);
   return name;
@@ -124,6 +125,25 @@ export function assertStagingDataMounts(config, environment, previousApiInspecti
         `filesystem-artifacts-init ${target} must use the API's data volume.`,
       );
     }
+  }
+  // Disposable exports may be added on first rollout, but must never alias
+  // authoritative state or be redirected away from already retained downloads.
+  const exportTarget = '/data/project-bundles';
+  const exportVolume = namedVolume(config, 'api', exportTarget);
+  assert.ok(
+    !stateVolumeTargets.some((target) => namedVolume(config, 'api', target) === exportVolume),
+    'Project bundle scratch must not share an authoritative data volume.',
+  );
+  assert.equal(
+    namedVolume(config, 'filesystem-artifacts-init', exportTarget),
+    exportVolume,
+    "filesystem-artifacts-init /data/project-bundles must use the API's export volume.",
+  );
+  const previousExports = previousApiInspection.Mounts.filter((mount) => mount.Destination === exportTarget);
+  assert.ok(previousExports.length <= 1, 'Existing export volume is ambiguous.');
+  if (previousExports.length) {
+    assert.equal(previousExports[0].Type, 'volume', 'Existing export scratch must use a named volume.');
+    assert.equal(previousExports[0].Name, exportVolume, 'Staging would change the existing export volume.');
   }
 }
 

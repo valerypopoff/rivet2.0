@@ -51,6 +51,34 @@ It was therefore not installed, and the age gate remains unchanged. Test the
 actual prohibited cache-reuse cases before removing the exception; merely moving
 beyond an advisory's version range is insufficient.
 
+## 2026-10-06 MCP SDK remediation
+
+The Node package requires `@modelcontextprotocol/sdk` **1.32.1 or newer within
+1.x**, and the lockfile resolves that patched version. This raises the published
+package's dependency floor as well as fixing workspace/CI installations; a root
+Yarn override alone would not protect npm consumers. No exception was added.
+
+- [GHSA-6qxp-vccf-f47h](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-6qxp-vccf-f47h)
+  (audit 1241339) fixes OAuth credentials being sent to a server-selected issuer
+  in 1.31.0. Rivet's default `NodeMCPProvider` constructs HTTP transports without
+  an `authProvider` and does not persist OAuth tokens or client credentials.
+- [GHSA-22jm-h49p-29qw](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-22jm-h49p-29qw)
+  fixes experimental task/session isolation in 1.32.0. Rivet's provider is a
+  client and does not create an MCP server or `taskStore`.
+
+If OAuth support is added later, pin trusted authorization issuers, preserve
+`issuer` on saved credentials, and bind pre-registered credentials to their issuer.
+An SDK upgrade alone does not secure bundled providers without `expectedIssuer`
+or previously saved credentials without `issuer`; see the upstream advisory.
+Do not weaken the audit gate based on the current provider's limited exposure.
+
+Keep the generated PnP map and checked-in Yarn cache archives synchronized with
+the lockfile: CI uses `yarn install --immutable --immutable-cache`. The SDK's new
+compatible `@hono/node-server` dependency is included in that cache update.
+Verify with that immutable install, `yarn security:audit`, Node package builds,
+and the MCP provider tests.
+This dependency-only change requires no UI or Kubernetes rehearsal.
+
 ## CI test contracts
 
 `yarn test:style` continues rejecting new production-source-reading tests. Static

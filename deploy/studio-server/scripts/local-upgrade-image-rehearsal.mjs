@@ -23,6 +23,12 @@ const cli = '/app/packages/studio-server-api/dist/studio-server-api/src/scripts/
 const prefix = 'rivet-local-upgrade-rehearsal-';
 const requiredPhases = REHEARSAL_PHASES;
 
+export function rehearsalInitializerCommand() {
+  // Seed a real legacy folder before fresh-install detection, and initialize
+  // every inherited production storage mount, including disposable exports.
+  return 'mkdir -p /restored /workflows/empty; chown -R 10001:10001 /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /data/project-bundles /restored; chmod 700 /data/project-bundles';
+}
+
 export function assertLegacyRehearsalSource(status) {
   // Before provisioning, the status API reports the settings backend (file).
   // Once configured, it reports the migration authority (legacy).
@@ -770,12 +776,7 @@ async function main() {
         },
         'filesystem-artifacts-init': {
           volumes: volumes.filter((mount) => mount.type === 'volume'),
-          command: [
-            // An empty retained folder is genuine legacy source. It must exist
-            // BEFORE the supervisor starts, otherwise fresh-install setup
-            // selects SQLite before the API can seed our migration fixture.
-            'mkdir -p /restored /workflows/empty; chown -R 10001:10001 /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /restored',
-          ],
+          command: [rehearsalInitializerCommand()],
         },
       },
       volumes: { fixture_workflows: {}, fixture_recordings: {}, fixture_libraries: {}, fixture_backup: {} },
