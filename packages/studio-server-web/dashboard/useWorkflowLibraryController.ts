@@ -109,7 +109,6 @@ export function useWorkflowLibraryController(options: {
   } = useWorkflowLibraryTree(projectSaveSequence);
   const runRecordings = useRunRecordingsModalState();
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
-  const [publishedHistoryProject, setPublishedHistoryProject] = useState<WorkflowProjectItem | null>(null);
   const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
   const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
@@ -154,21 +153,6 @@ export function useWorkflowLibraryController(options: {
       setSettingsModalProject(matchingProject);
     }
   }, [allProjects, settingsModalOpen, settingsModalProject]);
-
-  useEffect(() => {
-    if (!publishedHistoryProject) {
-      return;
-    }
-
-    const matchingProject = allProjects.find(
-      (project) => project.absolutePath === publishedHistoryProject.absolutePath,
-    );
-    if (!matchingProject) {
-      setPublishedHistoryProject(null);
-    } else if (matchingProject !== publishedHistoryProject) {
-      setPublishedHistoryProject(matchingProject);
-    }
-  }, [allProjects, publishedHistoryProject]);
 
   const applyWorkflowProjectPathMoves = useCallback(
     async (moves: WorkflowProjectPathMove[]) => {
@@ -307,7 +291,6 @@ export function useWorkflowLibraryController(options: {
       folderContextMenuState ||
       projectContextMenuState ||
       projectModalProject ||
-      publishedHistoryProject ||
       runRecordings.open ||
       runStatisticsOpen ||
       publishedItemsOpen ||
@@ -592,14 +575,6 @@ export function useWorkflowLibraryController(options: {
     setSettingsModalProject(null);
   }, []);
 
-  const openPublishedHistoryModal = useCallback((project: WorkflowProjectItem) => {
-    setPublishedHistoryProject(project);
-  }, []);
-
-  const closePublishedHistoryModal = useCallback(() => {
-    setPublishedHistoryProject(null);
-  }, []);
-
   const handlePublishedVersionRestored = useCallback(
     async (response: WorkflowPublishedVersionRestoreResponse) => {
       onRefreshOpenProjectFromDisk(response.project.absolutePath);
@@ -687,7 +662,6 @@ export function useWorkflowLibraryController(options: {
     renamingProjectPath,
     settingsModalOpen,
     settingsModalProject,
-    publishedHistoryProject,
     runRecordingsOpen: runRecordings.open,
     runRecordingsRetained: runRecordings.retained,
     runRecordingsFoundCount: runRecordings.foundCount,
@@ -705,8 +679,6 @@ export function useWorkflowLibraryController(options: {
     handleCreateFolder,
     handleOpenSettings,
     closeSettingsModal,
-    openPublishedHistoryModal,
-    closePublishedHistoryModal,
     handlePublishedVersionRestored,
     closeProjectContextMenu,
     closeFolderContextMenu,
@@ -753,7 +725,6 @@ export function useWorkflowLibraryController(options: {
     setAppSettingsOpen,
     onOpenRecording,
     onOpenPublishedVersionPreview: (relativePath: string, versionId: string) => {
-      setPublishedHistoryProject(null);
       setSettingsModalProject(null);
       onOpenPublishedVersionPreview(relativePath, versionId);
     },

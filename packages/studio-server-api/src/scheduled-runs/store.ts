@@ -128,6 +128,11 @@ export class ScheduledRunStore {
       ).map((r) => decode<ScheduledOccurrence>(r)),
     }));
   }
+  enabledCount(): Promise<number> {
+    return this.transaction(async (q) =>
+      Number((await q('SELECT COUNT(*) AS count FROM rivet_schedules WHERE enabled=1'))[0]!.count),
+    );
+  }
   acknowledged<T>(key: string, intent: unknown): Promise<T | undefined> {
     return this.transaction(async (q) => {
       const row = (await q('SELECT fingerprint,json FROM rivet_schedule_requests WHERE id=$1', [requestId(key)]))[0];

@@ -518,6 +518,7 @@ test('durable queue handles CAS, competing claims, overlap, cancellation and wor
     await fs.rm(root, { recursive: true, force: true });
   });
   const s = await a.save(draft());
+  assert.equal(await b.enabledCount(), 1);
   await assert.rejects(() => b.save(draft(), s.id, 0), /another window/);
   now += 60_000;
   const claims = await Promise.all([a.tick('a'), b.tick('b')]);
@@ -541,6 +542,7 @@ test('durable queue handles CAS, competing claims, overlap, cancellation and wor
   const changed = await b.save(draft({ name: 'Changed' }), s.id, s.revision);
   assert.equal(await a.accept(manual.id, 'old', { graphId: 'g' }), false);
   await a.delete(changed.id, changed.revision);
+  assert.equal(await b.enabledCount(), 0);
   await assert.rejects(() => a.retry(job.occurrence.id), /deleted/);
 });
 
@@ -562,6 +564,7 @@ test('catch-up capacity deadlines survive restart and expired queues do not bloc
   now += 86400_000;
   assert.equal(await store.tick('full', 0), undefined);
   const admitted = (await store.list()).history[0]!;
+  assert.equal(await store.enabledCount(), 0); // Consumed once schedules are no longer enabled.
   assert.equal(admitted.scheduleId, catchup.id);
   assert.equal(admitted.status, 'queued');
   assert.equal(admitted.scheduledAt, initial + 60_000);

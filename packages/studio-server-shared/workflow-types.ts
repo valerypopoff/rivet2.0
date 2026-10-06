@@ -160,6 +160,33 @@ export type WorkflowProjectWebAppsResponse = {
   webApps: WorkflowProjectWebAppSummary[];
 };
 
+export type WorkflowProjectReferenceSource = {
+  kind: 'saved-latest' | 'published-endpoint' | 'published-web-app';
+  /** Endpoint name or web-app slug, not an absolute storage path. */
+  label?: string;
+};
+
+export type WorkflowProjectIncomingReference = {
+  projectId: string;
+  name: string;
+  relativePath: string;
+  sources: Array<
+    WorkflowProjectReferenceSource & {
+      targetVersions: Array<'latest' | 'published' | 'project-reference'>;
+    }
+  >;
+};
+
+export type WorkflowProjectReferencesResponse = {
+  projectId: string;
+  references: WorkflowProjectIncomingReference[];
+  checkedProjects: number;
+  totalProjects: number;
+  complete: boolean;
+  changedDuringScan: boolean;
+  unreadableProjects: Array<{ name: string; relativePath: string }>;
+};
+
 export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE = 'Choose a Main Graph before publishing this endpoint.';
 
 export type WorkflowProjectWebAppPublicationDraft = {

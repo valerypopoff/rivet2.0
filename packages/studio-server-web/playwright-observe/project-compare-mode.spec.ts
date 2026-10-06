@@ -439,7 +439,9 @@ test.describe('Project compare mode', () => {
     });
   }
 
-  test('starts compare mode from another project row context menu', async ({ page }) => {
+  test('compares another project with node settings above the notice and scrollable, optionally wrapped diffs', async ({
+    page,
+  }, testInfo) => {
     test.slow();
 
     const currentProject = createCompareProjectItem('codex-compare-current');
@@ -449,7 +451,7 @@ test.describe('Project compare mode', () => {
         currentProject.absolutePath,
         createCompareProjectFile({
           graphId: 'compare-current-graph',
-          nodeText: 'current',
+          nodeText: JSON.stringify('current configuration '.repeat(60)),
           projectId: currentProject.id,
           secondNode: true,
           title: currentProject.name,
@@ -459,7 +461,7 @@ test.describe('Project compare mode', () => {
         referenceProject.absolutePath,
         createCompareProjectFile({
           graphId: 'compare-current-graph',
-          nodeText: 'reference',
+          nodeText: JSON.stringify('reference configuration '.repeat(60)),
           projectId: referenceProject.id,
           title: referenceProject.name,
         }),
@@ -493,6 +495,52 @@ test.describe('Project compare mode', () => {
         .getByText(`Compare mode: ${currentProject.name} against ${referenceProject.name}`),
     ).toBeVisible({ timeout: 30_000 });
     await expect(editorFrame.getByText(referenceProject.fileName)).toBeVisible({ timeout: 30_000 });
+    await editorFrame.locator('.node[data-nodeid="compare-node-1"]').dblclick();
+    const settingsPanel = editorFrame.locator('.node-editor-width-resize-handle').locator('..');
+    await expect(settingsPanel).toBeVisible();
+    await expect
+      .poll(() =>
+        settingsPanel.evaluate((panel) => {
+          const notice = panel.ownerDocument.querySelector('.project-compare-notice')!;
+          const a = panel.getBoundingClientRect();
+          const b = notice.getBoundingClientRect();
+          const left = Math.max(a.left, b.left);
+          const right = Math.min(a.right, b.right);
+          const top = Math.max(a.top, b.top);
+          const bottom = Math.min(a.bottom, b.bottom);
+          return (
+            right > left &&
+            bottom > top &&
+            panel.contains(panel.ownerDocument.elementFromPoint((left + right) / 2, (top + bottom) / 2))
+          );
+        }),
+      )
+      .toBe(true);
+
+    await settingsPanel.click({ position: { x: 30, y: 20 } });
+    await page.keyboard.press('Escape');
+    await expect(settingsPanel).toHaveCount(0);
+    await editorFrame.locator('.node.compare-changed .project-compare-changes-button').click();
+    const wrapToggle = editorFrame.getByRole('checkbox', { name: 'Wrap lines', exact: true });
+    await expect(wrapToggle).not.toBeChecked();
+    const diff = editorFrame.locator('.project-compare-monaco-diff-editor').first();
+    const horizontalBars = diff.locator('.monaco-scrollable-element > .scrollbar.horizontal');
+    await expect(horizontalBars).toHaveCount(2);
+    for (const bar of await horizontalBars.all()) await expect(bar).toHaveClass(/(?:^|\s)visible(?:\s|$)/);
+    const modifiedLines = diff.locator('.modified-in-monaco-diff-editor .view-lines > .view-line');
+    await expect(modifiedLines).toHaveCount(1);
+    await editorFrame.locator('label[for="project-compare-wrap-lines"]').click();
+    await expect(wrapToggle).toBeChecked();
+    await expect.poll(() => modifiedLines.count()).toBeGreaterThan(1);
+    for (const bar of await horizontalBars.all()) await expect(bar).toHaveClass(/invisible/);
+    await page.screenshot({ path: testInfo.outputPath('node-config-wrap-lines.png') });
+    await wrapToggle.press('Space');
+    await expect(wrapToggle).not.toBeChecked();
+    await expect(modifiedLines).toHaveCount(1);
+    for (const bar of await horizontalBars.all()) await expect(bar).toHaveClass(/(?:^|\s)visible(?:\s|$)/);
+    await editorFrame.getByRole('button', { name: 'Done', exact: true }).click();
+    await editorFrame.locator('.node.compare-changed .project-compare-changes-button').click();
+    await expect(wrapToggle).not.toBeChecked();
   });
 
   test('starts compare mode against the current published version from the open project row', async ({ page }) => {

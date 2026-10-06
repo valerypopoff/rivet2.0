@@ -10,6 +10,15 @@ jobs retain **Prepare another bundle** for choosing a different version. Status
 responses and polling errors are fenced by the current job ID, so late replies
 from a disposed job cannot overwrite the retry's progress or download link.
 
+The bundle dialog uses the shared responsive modal dimensions, black backdrop,
+dark surface and header/close styling. Project details and export progress use
+bordered cards with the shared 14px/1.5 description typography. Root-version
+selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
+in a non-scrolling footer; Prepare/Download are blue primary actions on the right.
+The body alone scrolls, keeping the title, close control and actions visible on
+short viewports. Download remains a real anchor with the authenticated archive
+URL, preserving native browser downloads and resume rather than buffering a blob.
+
 ## Ownership and snapshots
 
 - Core owns the versioned `ProjectBundleManifest`, validation, prefab-aware

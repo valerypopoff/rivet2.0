@@ -95,7 +95,7 @@ const Container = styled.div`
     position: absolute;
     top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px) + 12px);
     left: 50%;
-    z-index: 450;
+    z-index: 200;
     display: flex;
     align-items: flex-start;
     gap: 12px;

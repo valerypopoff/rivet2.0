@@ -2,7 +2,30 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
-## Version update: 2026-10-06
+## Version update: 2026-10-06 — settings, references and scheduled-run refinement
+
+Changes since the latest package bump in `051b183b1`, including the current
+settings, comparison, scheduled-run and dependency-download changes:
+
+| Packages                        | Version              | Changes                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.22.0` → `2.23.0`  | Adds optional line wrapping and horizontal scrolling to node comparison diffs; fixes comparison-banner layering beneath node settings and simplifies comparison-modal state handling.                                                                                                                                                                                                       |
+| All five Studio Server packages | `1.21.0` → `1.22.0`  | Adds authenticated direct incoming-project reference checks across filesystem, SQLite and managed storage, settings-integrated publication history and Danger zone, enabled-schedule counts and paginated history. Includes coordinated settings UI, queue-lifecycle, restart and request-acknowledgement hardening since the previous bump. Bootstrap and executor are release companions. |
+| Docs                            | `2.14.0` → `2.15.0`  | Documents scheduled-run controls/history, project publication/history tabs, deletion impact and incoming-reference checks.                                                                                                                                                                                                                                                                  |
+| Core, Node, CLI, Evaluations    | `2.16.0` (unchanged) | No package-local changes since `051b183b1`; the public npm release family remains aligned.                                                                                                                                                                                                                                                                                                  |
+| App Executor                    | `2.8.0` (unchanged)  | No package-local changes since the latest bump.                                                                                                                                                                                                                                                                                                                                             |
+
+Compatible feature additions use minor increments. Desktop Tauri/Cargo metadata
+is synchronized to App. Studio Server remains lockstep; Helm chart versions and
+the unchanged public npm/CLI Docker fallback are independent. Internal dependencies
+use `workspace:` ranges, so no dependency lockfile changes are required. These
+versions are release metadata only, not a package publication or deployment.
+
+Studio Server's bundle preparation/download modal also adopts the shared modal
+dimensions, typography, segmented version selector and fixed action footer.
+Native resumable downloads and background export-job behavior are unchanged.
+
+## Version update: 2026-10-06 — bundles and initial scheduled runs
 
 Changes since the last release-family bump in `6f8e9e6c8`, through `a4fca0b91`
 and the current uncommitted scheduled-runs implementation:
@@ -691,7 +714,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.22.0`
+- Version: `2.23.0`
 - Private: yes
 
 ### Runtime shape
@@ -1017,7 +1040,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.14.0`
+- Version: `2.15.0`
 - Private: yes
 
 ### Script surface

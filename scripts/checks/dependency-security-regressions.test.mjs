@@ -8,6 +8,23 @@ import { fileURLToPath } from 'node:url';
 const apiRequire = createRequire(new URL('../../packages/studio-server-api/package.json', import.meta.url));
 const expressRequire = createRequire(apiRequire.resolve('express'));
 const proxyaddr = expressRequire('proxy-addr');
+const webRequire = createRequire(new URL('../../packages/studio-server-web/package.json', import.meta.url));
+const concurrentlyRequire = createRequire(webRequire.resolve('concurrently'));
+const shellQuote = concurrentlyRequire('shell-quote');
+
+test('concurrently rejects command injection through strings following shell comments', () => {
+  for (const terminator of ['\n', '\r', '\u2028', '\u2029']) {
+    assert.throws(() => shellQuote.quote(['echo', 'ok', { comment: 'note' }, `a${terminator}injected;#`]), TypeError);
+    // parse() can produce a comment even when # occurs in the middle of a word.
+    assert.throws(
+      () => shellQuote.quote([...shellQuote.parse('echo http://example.com/#fragment'), `a${terminator}injected;#`]),
+      TypeError,
+    );
+  }
+  const tokens = ['echo', 'space in an argument', 'quote\'and"double', '$value; & |'];
+  assert.deepEqual(shellQuote.parse(shellQuote.quote(tokens)), tokens);
+  assert.equal(shellQuote.quote(['echo', { comment: 'note' }, 'ordinary text']), "echo #note 'ordinary text'");
+});
 
 test('Express proxy trust rejects IPv4 matches against short mapped/zero-leading IPv6 prefixes', () => {
   for (const subnet of ['::ffff:10.0.0.0/8', '::/1']) {

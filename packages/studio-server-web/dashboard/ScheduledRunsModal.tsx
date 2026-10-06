@@ -13,6 +13,7 @@ import type {
 import type { WorkflowProjectItem } from './types';
 import { requestScheduledRuns as request } from './scheduledRunApi';
 import { ScheduledProjectSelect } from './ScheduledProjectSelect';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import './ScheduledRunsModal.css';
 
 function ScheduleButton({
@@ -105,8 +106,16 @@ export const ScheduledRunsModal: FC<{
   projects: WorkflowProjectItem[];
   onClose(): void;
   onOpenRecording(id: string): Promise<unknown>;
-}> = ({ projects, onClose, onOpenRecording }) => {
+  onEnabledCountChange(count: number): void;
+}> = ({ projects, onClose, onOpenRecording, onEnabledCountChange }) => {
   const [data, setData] = useState<ScheduledRunList>({ schedules: [], history: [] });
+  const [historyPageSize, setHistoryPageSize] = useState(10);
+  const [historyPage, setHistoryPage] = useState(1);
+  const historyPages = Math.max(1, Math.ceil(data.history.length / historyPageSize));
+  const currentHistoryPage = Math.min(historyPage, historyPages);
+  useEffect(() => {
+    setHistoryPage((current) => Math.min(current, historyPages));
+  }, [historyPages]);
   const [loaded, setLoaded] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -119,6 +128,8 @@ export const ScheduledRunsModal: FC<{
     [editing, setEditing] = useState<ScheduledRun | null>(null);
   const [input, setInput] = useState(''),
     [times, setTimes] = useState<number[]>([]);
+  const initialForm = useRef('');
+  const dirty = draft !== null && JSON.stringify({ draft, input }) !== initialForm.current;
   const mounted = useRef(true),
     epoch = useRef(0),
     working = useRef(false);
@@ -158,6 +169,7 @@ export const ScheduledRunsModal: FC<{
             setPollError('');
             setError((current) => (current === reconnectWarning ? '' : current));
             setData(result);
+            onEnabledCountChange(result.schedules.filter((schedule) => schedule.enabled).length);
             setLoaded(true);
           }
         }
@@ -171,7 +183,7 @@ export const ScheduledRunsModal: FC<{
       controller.abort();
       clearTimeout(timer);
     };
-  }, []);
+  }, [onEnabledCountChange]);
   const action = async (operation: () => Promise<unknown>, refresh = true) => {
     if (working.current) return;
     working.current = true;
@@ -186,6 +198,7 @@ export const ScheduledRunsModal: FC<{
       const result = await request<ScheduledRunList>();
       if (mounted.current) {
         setData(result);
+        onEnabledCountChange(result.schedules.filter((schedule) => schedule.enabled).length);
         setLoaded(true);
         setPollError('');
       }
@@ -202,23 +215,24 @@ export const ScheduledRunsModal: FC<{
     setEditing(s ?? null);
     setTimes([]);
     setError('');
-    setInput(s?.input === undefined ? '' : JSON.stringify(s.input, null, 2));
-    setDraft(
-      s
-        ? structuredClone(s)
-        : {
-            name: '',
-            description: '',
-            projectId: projects.find((project) => project.projectMetadataId)?.projectMetadataId ?? '',
-            version: 'latest',
-            enabled: true,
-            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            schedule: { kind: 'daily', time: '10:00' },
-            record: true,
-            timeoutMinutes: 60,
-            missed: 'skip',
-          },
-    );
+    const initialInput = s?.input === undefined ? '' : JSON.stringify(s.input, null, 2);
+    const initialDraft: ScheduledRunDraft = s
+      ? structuredClone(s)
+      : {
+          name: '',
+          description: '',
+          projectId: projects.find((project) => project.projectMetadataId)?.projectMetadataId ?? '',
+          version: 'latest',
+          enabled: true,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          schedule: { kind: 'daily', time: '10:00' },
+          record: true,
+          timeoutMinutes: 60,
+          missed: 'skip',
+        };
+    initialForm.current = JSON.stringify({ draft: initialDraft, input: initialInput });
+    setInput(initialInput);
+    setDraft(initialDraft);
   };
   const update = (changes: Partial<ScheduledRunDraft>) => {
     setDraft((d) => (d ? { ...d, ...changes } : d));
@@ -291,21 +305,19 @@ export const ScheduledRunsModal: FC<{
               </p>
               {!draft && (error || pollError) ? <div role="alert">{error || pollError}</div> : null}
               <ScheduleButton primary disabled={busy} onClick={(event) => edit(undefined, event.currentTarget)}>
-                Add scheduled run
+                + Add scheduled run
               </ScheduleButton>
               {!loaded ? <p>Loading scheduled runs…</p> : !data.schedules.length ? <p>No scheduled runs yet.</p> : null}
               {data.schedules.map((s) => (
-                <section key={s.id} className="scheduled-run-card">
+                <section key={s.id} className={`scheduled-run-card${s.enabled ? '' : ' scheduled-run-card--paused'}`}>
                   <div className="scheduled-run-header">
                     <h3>
                       {s.name}{' '}
-                      <small>
-                        {s.enabled
-                          ? 'Enabled'
-                          : s.schedule.kind === 'once' && s.nextAt === null
-                            ? 'Paused or completed'
-                            : 'Paused'}
-                      </small>
+                      {!s.enabled ? (
+                        <small>
+                          {s.schedule.kind === 'once' && s.nextAt === null ? 'Paused or completed' : 'Paused'}
+                        </small>
+                      ) : null}
                     </h3>
                     <button
                       type="button"
@@ -352,7 +364,7 @@ export const ScheduledRunsModal: FC<{
                         )
                       }
                     >
-                      {s.enabled ? 'Pause' : 'Enable'}
+                      {s.enabled ? 'Pause' : 'Unpause'}
                     </ScheduleButton>
                     <ScheduleButton
                       disabled={busy}
@@ -371,63 +383,105 @@ export const ScheduledRunsModal: FC<{
                   History is separate from recordings. Failed or interrupted runs are not automatically retried because
                   external side effects may already have happened.
                 </p>
-                {data.history.length > 100 ? <p>Showing up to 100 runs, with active runs first.</p> : null}
-                {loaded && !data.history.length ? <p>No recent runs yet.</p> : null}
-                {data.history.slice(0, 100).map((run) => (
-                  <section className="scheduled-run-card" key={run.id}>
-                    <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
-                    {run.reason ? <p>{run.reason}</p> : null}
-                    {run.recordingStatus === 'unavailable' ? (
-                      <p>Recording unavailable. The execution result is unchanged.</p>
-                    ) : null}
-                    <div className="scheduled-run-buttons">
-                      {run.recordingId ? (
-                        <a
-                          href="#"
-                          className="scheduled-run-recording-link"
-                          aria-disabled={busy}
-                          tabIndex={busy ? -1 : undefined}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            if (!busy) void action(() => onOpenRecording(run.recordingId!), false);
-                          }}
-                        >
-                          Open recording
-                        </a>
-                      ) : null}
-                      {['queued', 'claimed', 'running'].includes(run.status) ? (
-                        <ScheduleButton
-                          disabled={busy || run.cancelRequested}
-                          onClick={() =>
-                            void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
-                          }
-                        >
-                          {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
-                        </ScheduleButton>
-                      ) : null}
-                      {['failed', 'interrupted'].includes(run.status) &&
-                      data.schedules.some((s) => s.id === run.scheduleId) ? (
-                        <ScheduleButton
-                          disabled={busy}
+                {data.history.length > 0 ? (
+                  <div className="scheduled-run-history-controls">
+                    <span className="scheduled-run-history-label">Per page</span>
+                    <SegmentedControl label="Recent runs per page">
+                      {[10, 20, 50, 100].map((size) => (
+                        <SegmentedControlButton
+                          key={size}
+                          selected={historyPageSize === size}
                           onClick={() => {
-                            if (
-                              window.confirm(
-                                'Retry may repeat external side effects. Check what happened before retrying. Continue?',
-                              )
-                            )
-                              void action(() =>
-                                request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
-                                  confirmSideEffects: true,
-                                }),
-                              );
+                            if (historyPageSize === size) return;
+                            setHistoryPageSize(size);
+                            setHistoryPage(1);
                           }}
                         >
-                          Retry run
-                        </ScheduleButton>
+                          {size}
+                        </SegmentedControlButton>
+                      ))}
+                    </SegmentedControl>
+                  </div>
+                ) : null}
+                {loaded && !data.history.length ? <p>No recent runs yet.</p> : null}
+                {data.history
+                  .slice((currentHistoryPage - 1) * historyPageSize, currentHistoryPage * historyPageSize)
+                  .map((run) => (
+                    <section className="scheduled-run-card" key={run.id}>
+                      <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
+                      {run.reason ? <p>{run.reason}</p> : null}
+                      {run.recordingStatus === 'unavailable' ? (
+                        <p>Recording unavailable. The execution result is unchanged.</p>
                       ) : null}
-                    </div>
-                  </section>
-                ))}
+                      <div className="scheduled-run-buttons">
+                        {run.recordingId ? (
+                          <a
+                            href="#"
+                            className="scheduled-run-recording-link"
+                            aria-disabled={busy}
+                            tabIndex={busy ? -1 : undefined}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (!busy) void action(() => onOpenRecording(run.recordingId!), false);
+                            }}
+                          >
+                            Open recording
+                          </a>
+                        ) : null}
+                        {['queued', 'claimed', 'running'].includes(run.status) ? (
+                          <ScheduleButton
+                            disabled={busy || run.cancelRequested}
+                            onClick={() =>
+                              void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
+                            }
+                          >
+                            {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
+                          </ScheduleButton>
+                        ) : null}
+                        {['failed', 'interrupted'].includes(run.status) &&
+                        data.schedules.some((s) => s.id === run.scheduleId) ? (
+                          <ScheduleButton
+                            disabled={busy}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  'Retry may repeat external side effects. Check what happened before retrying. Continue?',
+                                )
+                              )
+                                void action(() =>
+                                  request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
+                                    confirmSideEffects: true,
+                                  }),
+                                );
+                            }}
+                          >
+                            Retry run
+                          </ScheduleButton>
+                        ) : null}
+                      </div>
+                    </section>
+                  ))}
+                {historyPages > 1 ? (
+                  <nav className="scheduled-run-history-pagination" aria-label="Recent runs pages">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryPage(currentHistoryPage - 1)}
+                      disabled={currentHistoryPage === 1}
+                    >
+                      Previous
+                    </button>
+                    <span role="status" aria-live="polite" aria-atomic="true">
+                      Page {currentHistoryPage} of {historyPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryPage(currentHistoryPage + 1)}
+                      disabled={currentHistoryPage === historyPages}
+                    >
+                      Next
+                    </button>
+                  </nav>
+                ) : null}
               </details>
             </div>
           </div>
@@ -467,6 +521,7 @@ export const ScheduledRunsModal: FC<{
                 className="scheduled-run-form"
                 onSubmit={(event) => {
                   event.preventDefault();
+                  if (!dirty) return;
                   void action(async () => {
                     await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
                       draft: payload(),
@@ -486,21 +541,13 @@ export const ScheduledRunsModal: FC<{
                     <h4 id="scheduled-run-details-heading" className="scheduled-run-section-title">
                       Project and details
                     </h4>
-                    <label className="scheduled-run-wide">
+                    <label>
                       Name
                       <input
                         required
                         maxLength={120}
                         value={draft.name}
                         onChange={(e) => update({ name: e.target.value })}
-                      />
-                    </label>
-                    <label className="scheduled-run-wide">
-                      Description (optional)
-                      <textarea
-                        maxLength={2000}
-                        value={draft.description}
-                        onChange={(e) => update({ description: e.target.value })}
                       />
                     </label>
                     <div className="scheduled-run-field">
@@ -513,6 +560,14 @@ export const ScheduledRunsModal: FC<{
                         onChange={(projectId) => update({ projectId })}
                       />
                     </div>
+                    <label>
+                      Description (optional)
+                      <textarea
+                        maxLength={2000}
+                        value={draft.description}
+                        onChange={(e) => update({ description: e.target.value })}
+                      />
+                    </label>
                     <ScheduleSelect
                       id="scheduled-run-version"
                       onMenuChange={trackSelect}
@@ -665,15 +720,16 @@ export const ScheduledRunsModal: FC<{
                         ]}
                       />
                     ) : null}
-                    <p className="scheduled-runs-help scheduled-run-wide scheduled-run-timing-notes">
-                      {['daily', 'weekly', 'monthly'].includes(draft.schedule.kind) ? (
-                        <>Missing daylight-saving times are skipped; repeated times run once. </>
-                      ) : null}
-                      {draft.schedule.kind === 'monthly' && draft.schedule.day !== 'last' && draft.schedule.day > 28 ? (
-                        <>Months without the selected day are skipped. </>
-                      ) : null}
-                      A run is skipped if a previous run from this schedule is still pending or running.
-                    </p>
+                    {['daily', 'weekly', 'monthly'].includes(draft.schedule.kind) ? (
+                      <p className="scheduled-runs-help scheduled-run-wide scheduled-run-timing-notes">
+                        Missing daylight-saving times are skipped; repeated times run once.
+                        {draft.schedule.kind === 'monthly' &&
+                        draft.schedule.day !== 'last' &&
+                        draft.schedule.day > 28 ? (
+                          <> Months without the selected day are skipped.</>
+                        ) : null}
+                      </p>
+                    ) : null}
                   </fieldset>
                   <fieldset
                     className="scheduled-run-fields"
@@ -727,6 +783,9 @@ export const ScheduledRunsModal: FC<{
                         onChange={(e) => update({ record: e.target.checked })}
                       />
                     </div>
+                    <p className="scheduled-runs-help scheduled-run-wide scheduled-run-overlap-note">
+                      A run is skipped if a previous run from this schedule is still pending or running.
+                    </p>
                   </fieldset>
                   {times.length ? (
                     <ul aria-label="Next runs">
@@ -749,7 +808,7 @@ export const ScheduledRunsModal: FC<{
                   >
                     Preview next runs
                   </ScheduleButton>
-                  <ScheduleButton primary type="submit" disabled={busy}>
+                  <ScheduleButton primary type="submit" disabled={busy || !dirty}>
                     Save
                   </ScheduleButton>
                 </div>

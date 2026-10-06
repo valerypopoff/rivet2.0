@@ -130,6 +130,58 @@ function createCatalogForDeleteGuard(
   });
 }
 
+test('managed reference catalog and snapshots read active project revisions only and deduplicate shared blobs', async () => {
+  const workflow = createWorkflowRow({ published_revision_id: 'published', published_endpoint_name: 'live' });
+  const apps = [createWebAppPublicationRow(workflow.workflow_id, 'published', 'ui')];
+  const revisions = new Map(
+    [workflow.current_draft_revision_id, 'published'].map((id) => [id, createRevisionRow(workflow.workflow_id, id)]),
+  );
+  const reads: string[] = [];
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    db: { queryRows: async () => apps },
+    queries: {
+      listWorkflowRows: async () => [workflow],
+      getWorkflowByRelativePath: async () => workflow,
+      getRevision: async (_pool: unknown, id: string) => revisions.get(id),
+    },
+    revisions: {
+      readRevisionProjectContents: async (revision: RevisionRow) => {
+        reads.push(revision.revision_id);
+        return `contents:${revision.revision_id}`;
+      },
+      readRevisionContents: async () => {
+        throw new Error('Datasets must not be read');
+      },
+    },
+    mappers: managedMappers,
+    blobStore: {},
+    maintenance: {},
+    executionInvalidationController: {
+      queueWorkflowInvalidation: async () => {},
+      queueGlobalInvalidation: async () => {},
+    },
+  };
+  const catalog = createManagedWorkflowCatalogService({
+    context: context as never,
+    saveHostedProject: async () => {
+      throw new Error('Read-only scan');
+    },
+  });
+  const entries = await catalog.listWorkflowProjectReferenceCatalog();
+  assert.equal(reads.length, 0);
+  assert.equal(entries[0]?.projectMetadataId, workflow.workflow_id);
+  assert.deepEqual(await catalog.readWorkflowProjectReferenceSnapshots(workflow.relative_path), [
+    { source: { kind: 'saved-latest' }, contents: `contents:${workflow.current_draft_revision_id}` },
+    { source: { kind: 'published-endpoint', label: 'live' }, contents: 'contents:published' },
+    { source: { kind: 'published-web-app', label: 'ui' }, contents: 'contents:published' },
+  ]);
+  assert.deepEqual(reads, [workflow.current_draft_revision_id, 'published']);
+  revisions.set('published', createRevisionRow('wrong-workflow', 'published'));
+  await assert.rejects(catalog.readWorkflowProjectReferenceSnapshots(workflow.relative_path), { status: 409 });
+});
+
 test('managed workflow tree includes graph and node stats from current draft revision metadata', async () => {
   const workflowRow = createWorkflowRow();
   const revisionRow = createRevisionRow(workflowRow.workflow_id, workflowRow.current_draft_revision_id);

@@ -142,7 +142,6 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   const serverWebAppSlugs = useRef<Record<string, string>>({});
   const serverWebAppAllowedEmails = useRef<Record<string, string>>({});
   const [hasMainGraph, setHasMainGraph] = useState<boolean | null>(null);
-  const [savedLatestSubgraphProjectIds, setSavedLatestSubgraphProjectIds] = useState<string[]>([]);
   const [loadingWebApps, setLoadingWebApps] = useState(false);
   const [savingWebApps, setSavingWebApps] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -176,7 +175,6 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
       }
       setWebApps(response.webApps);
       setHasMainGraph(response.hasMainGraph);
-      setSavedLatestSubgraphProjectIds(response.savedLatestSubgraphProjectIds ?? []);
       setSnapshotProject(response.project);
       const matchesMutation =
         !expectedAfterMutation ||
@@ -248,7 +246,6 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   useEffect(() => {
     setWebApps([]);
     setHasMainGraph(null);
-    setSavedLatestSubgraphProjectIds([]);
     setSnapshotProject(null);
     setWebAppSlugDrafts({});
     setWebAppAllowedEmailDrafts({});
@@ -409,6 +406,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   };
 
   const reviewLatestPublication = async () => {
+    setReviewedPublication(null);
     setLoadingWebApps(true);
     try {
       const snapshot = await fetchWorkflowProjectWebApps(activeProject.relativePath);
@@ -670,7 +668,6 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     webAppAccessValidationErrors,
     loadingWebApps,
     reviewedPublication,
-    savedLatestSubgraphProjectIds,
     publicationConflict,
     reviewLatestPublication,
     savingWebApps,

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type FC } from 'react';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
+import Button from '@atlaskit/button';
 import type { ProjectBundleJobStatus } from '../../studio-server-shared/project-bundle-types';
 import type { WorkflowProjectDownloadVersion, WorkflowProjectItem } from './types';
+import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import './WorkflowProjectBundleModal.css';
 
 const endpoint = '/api/workflows/project-bundles';
 async function responseJson<T>(response: Response): Promise<T> {
@@ -145,13 +148,9 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
   if (!isOpen) return null;
   return (
     <ModalTransition>
-      <ModalDialog
-        testId="workflow-project-bundle-modal"
-        label="Download with dependencies"
-        onClose={onClose}
-      >
+      <ModalDialog testId="workflow-project-bundle-modal" label="Download with dependencies" onClose={onClose}>
         <ModalBody>
-          <div className="project-settings-modal-shell">
+          <div className="project-settings-modal-shell workflow-project-bundle-shell">
             <div className="project-settings-modal-header-row">
               <div className="project-settings-modal-title">Download with dependencies</div>
               <button
@@ -163,63 +162,82 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                 ×
               </button>
             </div>
-            <div className="project-settings-modal-content">
-              <p>{project.name}</p>
-              <p className="project-settings-help">
-                Includes saved projects, their dependencies and datasets. Unsaved editor changes are excluded. Project
-                files and datasets may contain sensitive values. Credentials and server settings are not copied
-                separately.
-              </p>
-              {!jobId ? (
-                <>
-                  {project.settings.status === 'unpublished_changes' ? (
-                    <label>
-                      Root version{' '}
-                      <select
-                        aria-label="Bundle root version"
-                        value={version}
-                        onChange={(event) => setVersion(event.target.value as WorkflowProjectDownloadVersion)}
+            <div className="project-settings-modal-content workflow-project-bundle-content">
+              <section className="workflow-project-bundle-card" aria-labelledby="bundle-project-heading">
+                <h3 id="bundle-project-heading">{project.name}</h3>
+                <p className="project-settings-help">
+                  Includes saved projects, their dependencies and datasets. Unsaved editor changes are excluded. Project
+                  files and datasets may contain sensitive values. Credentials and server settings are not copied
+                  separately.
+                </p>
+                {!jobId && project.settings.status === 'unpublished_changes' ? (
+                  <div className="workflow-project-bundle-version">
+                    <span>Root version</span>
+                    <SegmentedControl label="Bundle root version">
+                      <SegmentedControlButton
+                        selected={version === 'published'}
+                        disabled={busy}
+                        onClick={() => setVersion('published')}
                       >
-                        <option value="published">Published</option>
-                        <option value="live">Saved latest (unpublished changes)</option>
-                      </select>
-                    </label>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="project-settings-primary-button button-size-l"
-                    disabled={busy}
-                    onClick={() => void prepare()}
-                  >
-                    Prepare bundle
-                  </button>
-                </>
-              ) : (
-                <>
-                  <p role="status">
+                        Published
+                      </SegmentedControlButton>
+                      <SegmentedControlButton
+                        selected={version === 'live'}
+                        disabled={busy}
+                        onClick={() => setVersion('live')}
+                      >
+                        Saved latest
+                      </SegmentedControlButton>
+                    </SegmentedControl>
+                  </div>
+                ) : null}
+              </section>
+              {jobId ? (
+                <section className="workflow-project-bundle-card" aria-label="Export progress">
+                  <p className="project-settings-help" role="status" aria-live="polite" aria-atomic="true">
                     {job
                       ? `Export: ${job.phase}. ${job.projects} project snapshots; ${(job.bytes / 1048576).toFixed(2)} MiB captured.`
                       : 'Reading export progress…'}
                   </p>
-                  {job?.error ? <p role="alert">{job.error}</p> : null}
-                  {job?.phase === 'ready' ? (
-                    <>
-                      <a
-                        className="project-settings-primary-button button-size-l"
-                        href={`${endpoint}/${jobId}/download`}
-                      >
-                        Download bundle
-                      </a>
-                      <p className="project-settings-help">
-                        Extract the ZIP and follow README.txt to run it with the Node package. Latest targets are frozen
-                        at export time.
-                      </p>
-                    </>
+                  {job?.error ? (
+                    <p className="workflow-project-bundle-error" role="alert">
+                      {job.error}
+                    </p>
                   ) : null}
-                  <button
-                    type="button"
-                    className="project-settings-secondary-button button-size-l"
-                    disabled={busy}
+                  {job?.phase === 'ready' ? (
+                    <p className="project-settings-help">
+                      Extract the ZIP and follow README.txt to run it with the Node package. Latest targets are frozen
+                      at export time.
+                    </p>
+                  ) : null}
+                </section>
+              ) : null}
+              {error ? (
+                <p className="workflow-project-bundle-error" role="alert">
+                  {error} Progress will be checked again while this window is open.
+                </p>
+              ) : null}
+              <p className="project-settings-help">
+                Closing this window does not cancel preparation. Reopen this project’s download action to check its
+                progress.
+              </p>
+            </div>
+            <div className="workflow-project-bundle-footer">
+              {!jobId ? (
+                <Button
+                  appearance="primary"
+                  className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
+                  isDisabled={busy}
+                  onClick={() => void prepare()}
+                >
+                  Prepare bundle
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    appearance="subtle"
+                    className="workflow-project-bundle-action button-size-l"
+                    isDisabled={busy}
                     onClick={() => void (job && !active(job) && job.phase !== 'ready' ? retry() : dispose())}
                   >
                     {active(job) || !job
@@ -227,14 +245,18 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                       : job.phase === 'ready'
                         ? 'Prepare another bundle'
                         : 'Retry export'}
-                  </button>
+                  </Button>
+                  {job?.phase === 'ready' ? (
+                    <Button
+                      appearance="primary"
+                      className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
+                      href={`${endpoint}/${jobId}/download`}
+                    >
+                      Download bundle
+                    </Button>
+                  ) : null}
                 </>
               )}
-              {error ? <p role="alert">{error} Progress will be checked again while this window is open.</p> : null}
-              <p className="project-settings-help">
-                Closing this window does not cancel preparation. Reopen this project’s download action to check its
-                progress.
-              </p>
             </div>
           </div>
         </ModalBody>

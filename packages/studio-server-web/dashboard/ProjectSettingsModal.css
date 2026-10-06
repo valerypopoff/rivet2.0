@@ -53,6 +53,7 @@
 }
 
 .project-settings-section-switcher {
+  flex-wrap: wrap;
   width: fit-content;
   max-width: 100%;
   flex: 0 0 auto;
@@ -298,7 +299,8 @@
 }
 
 .project-settings-help {
-  font-size: var(--workflow-library-font-size-l);
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
   color: var(--grey-light);
   padding-right: 10%;
 }
@@ -441,32 +443,52 @@
   color: #9de6ad;
 }
 
-.published-version-history-button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  width: fit-content;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  background: rgba(255, 255, 255, 0.08) !important;
-}
-
-.published-version-history-button:hover:not(:disabled),
-.published-version-history-button:focus-visible:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.28) !important;
-  background: rgba(255, 255, 255, 0.12) !important;
-}
-
 .project-settings-danger-section {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  align-items: flex-start;
+  padding: 18px;
+  border: 1px solid rgba(255, 107, 122, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 107, 122, 0.035);
 }
 
-.project-settings-danger-section.has-history-action {
-  justify-content: space-between;
+.project-settings-danger-section h3,
+.project-settings-danger-section p {
+  margin: 0;
+}
+
+.project-settings-danger-section .project-settings-help {
+  padding-right: 0;
+}
+
+.project-settings-incoming-references {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.project-settings-incoming-references h4 {
+  margin: 0;
+}
+
+.project-settings-incoming-references > button {
+  align-self: flex-start;
+}
+
+.project-settings-reference-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.project-settings-reference-list li > span {
+  display: block;
+}
+
+.project-settings-reference-path {
+  overflow-wrap: anywhere;
 }
 
 .project-settings-delete-button {

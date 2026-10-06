@@ -3,8 +3,10 @@ import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import ScheduleIcon from 'majesticons/line/calendar-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScheduledRunsModal } from './ScheduledRunsModal';
+import { requestScheduledRuns } from './scheduledRunApi';
+import type { ScheduledRunSummary } from '../../studio-server-shared/scheduled-run-types';
 import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
@@ -104,6 +106,47 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onRouteConfigChange,
 }) => {
   const [scheduledRunsOpen, setScheduledRunsOpen] = useState(false);
+  const [enabledScheduleCount, setEnabledScheduleCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (scheduledRunsOpen) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight || controller.signal.aborted) return;
+      inFlight = true;
+      try {
+        if (!document.hidden) {
+          const result = await requestScheduledRuns<ScheduledRunSummary>(
+            '/summary',
+            'GET',
+            undefined,
+            controller.signal,
+          );
+          if (!controller.signal.aborted)
+            setEnabledScheduleCount(
+              Number.isSafeInteger(result.enabledCount) && result.enabledCount >= 0 ? result.enabledCount : null,
+            );
+        }
+      } catch {
+        if (!controller.signal.aborted) setEnabledScheduleCount(null);
+      } finally {
+        inFlight = false;
+        if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 30_000);
+      }
+    };
+    const onVisibilityChange = () => {
+      clearTimeout(timer);
+      void poll();
+    };
+    void poll();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [scheduledRunsOpen]);
   const controller = useWorkflowLibraryController({
     onOpenProject,
     onRefreshOpenProjectFromDisk,
@@ -297,17 +340,27 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           >
             <span className="panel-bottom-button-label">Published</span>
           </Button>
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setScheduledRunsOpen(true)}
-            title="Schedule saved projects to run automatically"
-          >
-            <span className="panel-bottom-button-icon" aria-hidden="true">
-              <ScheduleIcon />
-            </span>
-            <span className="panel-bottom-button-label">Scheduled runs</span>
-          </Button>
+          <div className={`panel-bottom-action-with-summary${enabledScheduleCount ? ' has-summary' : ''}`}>
+            <Button
+              appearance="subtle"
+              className="panel-bottom-button project-settings-secondary-button button-size-m"
+              onClick={() => setScheduledRunsOpen(true)}
+              title="Schedule saved projects to run automatically"
+            >
+              <span className="panel-bottom-button-icon" aria-hidden="true">
+                <ScheduleIcon />
+              </span>
+              <span className="panel-bottom-button-label">Scheduled runs</span>
+            </Button>
+            {enabledScheduleCount ? (
+              <div
+                className="panel-bottom-action-summary"
+                aria-label={`${enabledScheduleCount} enabled scheduled runs`}
+              >
+                Enabled: {enabledScheduleCount}
+              </div>
+            ) : null}
+          </div>
           <Button
             appearance="subtle"
             className="panel-bottom-button project-settings-secondary-button button-size-m"
@@ -333,6 +386,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             projects={controller.allProjects}
             onClose={() => setScheduledRunsOpen(false)}
             onOpenRecording={onOpenRecording}
+            onEnabledCountChange={setEnabledScheduleCount}
           />
         ) : null}
       </div>

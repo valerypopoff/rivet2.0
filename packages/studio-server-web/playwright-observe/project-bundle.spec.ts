@@ -9,7 +9,8 @@ import {
   projectBundleFixture,
   extractProjectBundleFixture,
 } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { expectStudioModalSizing } from './helpers/modalSizing';
 
 test('download dependencies survives closing the dialog and runs the real downloaded bundle locally', async ({
   page,
@@ -99,6 +100,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
   await mockHostedEditorBootstrap(page);
   try {
     await page.goto('/');
+    await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     const row = page.locator('.project-row').filter({ hasText: 'Portable root' });
     await row.click({ button: 'right' });
@@ -106,7 +108,44 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(page.getByRole('dialog', { name: 'Download with dependencies' })).toBeVisible();
     await expect(page.getByTestId('workflow-project-bundle-modal')).toHaveCSS('background-color', 'rgb(31, 31, 34)');
     await expect(page.getByTestId('workflow-project-bundle-modal--body')).toHaveCSS('padding', '0px');
-    await page.getByLabel('Bundle root version').selectOption('live');
+    const dialog = page.getByTestId('workflow-project-bundle-modal');
+    const rootVersions = dialog.getByRole('group', { name: 'Bundle root version' });
+    await expect(dialog.locator('select')).toHaveCount(0);
+    await expect(rootVersions.getByRole('button', { name: 'Published', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await rootVersions.getByRole('button', { name: 'Saved latest', exact: true }).click();
+    await expect(rootVersions.getByRole('button', { name: 'Saved latest', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(dialog.locator('.project-settings-help').first()).toHaveCSS('font-size', '14px');
+    await expect(dialog.locator('.project-settings-help').first()).toHaveCSS('line-height', '21px');
+    const prepare = dialog.getByRole('button', { name: 'Prepare bundle', exact: true });
+    await expect(prepare).toHaveCSS('background-color', 'rgb(12, 102, 228)');
+    for (const width of [1600, 390]) {
+      await page.setViewportSize({ width, height: 520 });
+      await expectStudioModalSizing(dialog);
+      const content = dialog.locator('.workflow-project-bundle-content');
+      await content.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      expect(
+        await dialog.locator('.workflow-project-bundle-footer').evaluate((footer) => {
+          const body = footer.closest('[role="dialog"]')!.getBoundingClientRect();
+          const box = footer.getBoundingClientRect();
+          const heading = footer
+            .parentElement!.querySelector('.project-settings-modal-header-row')!
+            .getBoundingClientRect();
+          return box.bottom <= body.bottom + 1 && box.bottom <= window.innerHeight && heading.top >= body.top;
+        }),
+      ).toBe(true);
+      await expect(prepare).toBeInViewport();
+      await expect(dialog.getByRole('button', { name: 'Close bundle download' })).toBeInViewport();
+    }
+    await page.screenshot({ path: test.info().outputPath('bundle-modal-narrow.png') });
+    await page.setViewportSize({ width: 1600, height: 1000 });
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Download with dependencies' }).getByRole('status')).toContainText(
       'Export:',
@@ -116,8 +155,27 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
     const link = page.getByRole('link', { name: 'Download bundle', exact: true });
     await expect(link).toBeVisible();
+    await expect(link).toHaveCSS('background-color', 'rgb(12, 102, 228)');
+    await expect(link).toHaveAttribute('href', /\/api\/workflows\/project-bundles\/[^/]+\/download$/);
     releaseAcknowledgement();
     await expect(page.getByRole('button', { name: 'Prepare another bundle' })).toBeEnabled();
+    await expect
+      .poll(() =>
+        dialog.evaluate((element) => {
+          for (let current: Element | null = element; current; current = current.parentElement) {
+            if (Number(getComputedStyle(current).opacity) < 1) return false;
+          }
+          return true;
+        }),
+      )
+      .toBe(true);
+    await page.setViewportSize({ width: 390, height: 520 });
+    await expectStudioModalSizing(dialog);
+    await expect(link).toBeInViewport();
+    await expect(dialog.getByRole('button', { name: 'Prepare another bundle' })).toBeInViewport();
+    await page.screenshot({ path: test.info().outputPath('bundle-modal-ready-narrow.png') });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.screenshot({ path: test.info().outputPath('bundle-modal-ready.png') });
     await expect(page.getByRole('dialog', { name: 'Download with dependencies' }).getByRole('status')).toContainText(
       'Export: ready.',
     );

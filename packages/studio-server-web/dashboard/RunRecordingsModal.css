@@ -39,7 +39,8 @@
 .run-recordings-help {
   margin-top: 2px;
   color: var(--grey-light);
-  font-size: 15px;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
   max-width: 620px;
 }
 

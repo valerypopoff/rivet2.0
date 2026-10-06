@@ -32,6 +32,52 @@
   position: relative;
   flex: 0 0 auto;
 }
+.scheduled-run-history-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.scheduled-run-history-label {
+  color: var(--grey-light);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.scheduled-run-history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  color: var(--grey-light);
+  font-size: 13px;
+}
+.scheduled-run-history-pagination button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--grey-lightest);
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.scheduled-run-history-pagination button:hover:not(:disabled),
+.scheduled-run-history-pagination button:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(126, 226, 148, 0.3);
+}
+.scheduled-run-history-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .scheduled-runs h2 {
   margin: 0;
   font-size: var(--workflow-library-font-size-2xl);
@@ -62,13 +108,6 @@
 }
 .scheduled-run-footer .scheduled-run-action.scheduled-run-primary {
   margin-left: auto;
-  background: #0c66e4 !important;
-  border-color: #0c66e4 !important;
-  color: #fff !important;
-}
-.scheduled-run-footer .scheduled-run-action.scheduled-run-primary:hover:not(:disabled) {
-  background: #0055cc !important;
-  border-color: #0055cc !important;
 }
 .scheduled-runs h3 {
   margin: 0 0 12px;
@@ -81,8 +120,8 @@
 }
 .scheduled-runs-help {
   color: var(--grey-light);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
 }
 .scheduled-run-card,
 .scheduled-run-fields {
@@ -91,6 +130,14 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
+}
+.scheduled-run-card--paused {
+  background: rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.16);
+  border-style: dashed;
+}
+.scheduled-run-card--paused .scheduled-run-header h3 {
+  color: var(--grey-light);
 }
 .scheduled-run-header {
   display: flex;
@@ -244,9 +291,13 @@
   color: var(--grey-lightest) !important;
 }
 .scheduled-run-action.scheduled-run-primary {
-  background: rgba(126, 226, 148, 0.16) !important;
-  border-color: rgba(126, 226, 148, 0.35) !important;
-  color: #b7f6c3 !important;
+  background: #0c66e4 !important;
+  border-color: #0c66e4 !important;
+  color: #fff !important;
+}
+.scheduled-run-action.scheduled-run-primary:hover:not(:disabled) {
+  background: #0055cc !important;
+  border-color: #0055cc !important;
 }
 .scheduled-run-action:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08) !important;

@@ -85,7 +85,7 @@ test('dashboard dialogs share responsive dimensions, including nested schedule e
       await expectStudioModalSizing(modal);
     }
     if (link === 'Scheduled runs') {
-      await modal.getByRole('button', { name: 'Add scheduled run', exact: true }).click();
+      await modal.getByRole('button', { name: '+ Add scheduled run', exact: true }).click();
       const editor = page.getByTestId('scheduled-run-editor-modal');
       for (const width of [360, 1600]) {
         await page.setViewportSize({ width, height: 1000 });

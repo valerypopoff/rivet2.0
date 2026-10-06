@@ -80,6 +80,11 @@ try {
     createKey,
   );
   const occurrence = await a.runNow(s.id, s.revision, runKey);
+  assert.equal(await b.enabledCount(), 0);
+  const enabled = await a.save({ ...s, name: 'Enabled count fixture', enabled: true });
+  assert.equal(await b.enabledCount(), 1);
+  await a.delete(enabled.id, enabled.revision);
+  assert.equal(await b.enabledCount(), 0);
   assert.equal((await b.save(s, undefined, 0, createKey)).id, s.id);
   await assert.rejects(() => b!.save({ ...s, name: 'Different intent' }, undefined, 0, createKey), /different action/);
   assert.equal((await b.runNow(s.id, s.revision, runKey)).id, occurrence.id);

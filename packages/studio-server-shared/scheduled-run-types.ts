@@ -45,3 +45,4 @@ export type ScheduledOccurrence = {
   cancelRequested?: boolean;
 };
 export type ScheduledRunList = { schedules: ScheduledRun[]; history: ScheduledOccurrence[] };
+export type ScheduledRunSummary = { enabledCount: number };
