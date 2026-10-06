@@ -59,6 +59,10 @@ Run `yarn studio-server:build` first locally: the check imports the compiled API
 migration implementation used by the migration image, not a mock database.
 It verifies a fresh migration, verify-only startup, idempotent migration, and
 rejection of a same-named recordings index with an incorrect predicate.
+Helm contract tests derive the expected migration version and production release
+fixture from `CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION`. Rendering still compares
+the independent chart configuration with that runtime version; schema bumps must
+update the chart, but must not require copying another numeric test constant.
 Docker is required; the fixture accepts no external database URL, publishes
 only on loopback at an allocated port, and removes its container and volume.
 

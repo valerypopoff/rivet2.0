@@ -422,7 +422,7 @@ test('preparation owns staging cleanup until completion and blocks retry when re
   });
   const originalRm = fs.rm;
   let failCleanup = false;
-  let releaseDownload: (() => void) | undefined;
+  let id: string | undefined;
   const rmMock = t.mock.method(
     fs,
     'rm',
@@ -432,37 +432,37 @@ test('preparation owns staging cleanup until completion and blocks retry when re
         await heldCleanup;
         if (failCleanup) throw Object.assign(new Error('Owned staging removal failed'), { code: 'EACCES' });
       }
+      if (failCleanup && id && location === path.join(temporary, id))
+        throw Object.assign(new Error('Owned directory removal failed'), { code: 'EACCES' });
       return originalRm(location, options);
     },
   );
   try {
     const fixture = projectBundleFixture();
     const started = await jobs.start(fixture.source, 'latest');
+    id = started.id;
     await entered;
-    assert.equal((await jobs.status(started.id)).phase, 'ready');
-    const download = await jobs.download(started.id);
-    releaseDownload = download.release;
+    const pendingStatus = jobs.status(started.id);
+    const unavailable = assert.rejects(jobs.download(started.id), /not ready/);
     await assert.rejects(jobs.start(fixture.source, 'latest'), /Another project bundle/);
     failCleanup = true;
     releaseCleanup();
-    let status = await jobs.status(started.id);
-    for (let attempt = 0; attempt < 100 && status.phase === 'ready'; attempt++) {
-      await delay(10);
-      status = await jobs.status(started.id);
-    }
+    const status = await pendingStatus;
     assert.equal(status.phase, 'failed');
     assert.match(status.error!, /scratch cleanup failed/);
-    await assert.rejects(jobs.download(started.id), /not ready/);
-    await assert.rejects(jobs.start(fixture.source, 'latest'), /Another project bundle/);
-    assert.equal((await fs.stat(download.archive)).isFile(), true, 'existing download remains protected');
-    download.release();
+    await unavailable;
+    await assert.rejects(jobs.start(fixture.source, 'latest'), { code: 'EACCES' });
+    assert.equal(
+      (await fs.stat(path.join(temporary, started.id, 'bundle.zip'))).isFile(),
+      true,
+      'failed scratch stays owned',
+    );
     rmMock.mock.restore();
-    await jobs.cancel(started.id); // Wait for the failed prepare's final journal write before retrying.
+    await jobs.cleanup();
     const next = await jobs.start(fixture.source, 'latest');
     await jobs.cancel(next.id);
   } finally {
     releaseCleanup();
-    releaseDownload?.();
     rmMock.mock.restore();
     await jobs.dispose();
     await fs.rm(temporary, { recursive: true, force: true });
@@ -560,6 +560,74 @@ test('export rejects incompatible ports, wrong versions and recursive cross-proj
   indirect.child.projectContents = serializeProject(indirect.child.project) as string;
   await assert.rejects(collect(indirect), /dependency cycle/);
 });
+
+for (const fails of [false, true]) {
+  test(`terminal export ${fails ? 'failure' : 'success'} waits for cleanup before acknowledgement`, async (t) => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-settlement-'));
+    const jobs = new ProjectBundleJobs(temporary);
+    let releaseCleanup!: () => void;
+    let enteredCleanup!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      enteredCleanup = resolve;
+    });
+    const remove = fs.rm;
+    let blockOnce = true;
+    t.mock.method(fs, 'rm', async (...args: Parameters<typeof fs.rm>) => {
+      if (
+        blockOnce &&
+        String(args[0]).startsWith(temporary + path.sep) &&
+        path.basename(String(args[0])) === 'staging'
+      ) {
+        blockOnce = false;
+        enteredCleanup();
+        await held;
+      }
+      return remove(...args);
+    });
+    try {
+      const source = projectBundleFixture().source;
+      const started = await jobs.start(
+        fails
+          ? {
+              ...source,
+              root: async () => {
+                throw new Error('storage failed');
+              },
+            }
+          : source,
+        'latest',
+      );
+      await entered;
+      let acknowledged = false;
+      const status = jobs.status(started.id).then((value) => {
+        acknowledged = true;
+        return value;
+      });
+      const download = jobs.download(started.id).then(
+        (value) => {
+          value.release();
+          return true;
+        },
+        () => false,
+      );
+      await assert.rejects(jobs.start(source, 'latest'), /Another project bundle/);
+      assert.equal(acknowledged, false, 'cleanup must settle before exposing a terminal status');
+      releaseCleanup();
+      assert.equal((await status).phase, fails ? 'failed' : 'ready');
+      assert.equal(await download, !fails);
+      const retry = await jobs.start(source, 'latest');
+      await jobs.cancel(retry.id);
+    } finally {
+      releaseCleanup();
+      await jobs.dispose();
+      t.mock.restoreAll();
+      await fs.rm(temporary, { recursive: true, force: true });
+    }
+  });
+}
 
 test('failed storage does not publish partial archives or expose raw exception secrets', async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-failure-'));

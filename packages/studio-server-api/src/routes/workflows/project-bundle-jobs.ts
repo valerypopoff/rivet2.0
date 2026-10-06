@@ -303,7 +303,15 @@ export class ProjectBundleJobs {
   }
   async status(id: string): Promise<ProjectBundleJobStatus> {
     await this.cleanup();
-    return structuredClone(this.#requireJob(id).status);
+    const job = this.#requireJob(id);
+    await this.#settleTerminalJob(job);
+    return structuredClone(job.status);
+  }
+  async #settleTerminalJob(job: Job) {
+    // Terminal acknowledgement includes cleanup and release of the packaging
+    // slot. Otherwise a caller can observe failure, retry, and receive 409;
+    // or download a ready archive whose cleanup subsequently fails.
+    if (!['collecting', 'packaging'].includes(job.status.phase)) await job.done;
   }
   #requireJob(id: string): Job {
     const job = this.#jobs.get(id);
@@ -313,6 +321,7 @@ export class ProjectBundleJobs {
   async download(id: string) {
     await this.cleanup();
     const job = this.#requireJob(id);
+    await this.#settleTerminalJob(job);
     const status = structuredClone(job.status);
     if (status.phase !== 'ready') throw createHttpError(409, 'Project bundle is not ready.');
     const archive = path.join(this.#root, id, 'bundle.zip');
