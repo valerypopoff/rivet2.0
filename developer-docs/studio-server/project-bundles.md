@@ -32,7 +32,7 @@ URL, preserving native browser downloads and resume rather than buffering a blob
   versions of one project are separate artifacts. Legacy `Project.references`
   use a separate ID binding and select published, falling back to latest only
   when there is no published version. Stale hint paths are not export authority.
-- Every captured source is re-read before and after ZIP construction. A changed
+- Every captured source is re-read once after the ZIP closes, before publication. A changed
   project or dataset rejects publication; an export is not a transaction spanning
   databases, but it never knowingly publishes a mixed, changed capture.
 - Node `loadProjectBundle` validates the extracted manifest, contained real paths,
@@ -59,6 +59,34 @@ executing a bundle can execute its Code nodes and network requests.
 
 ## Job and download lifecycle
 
+### Storage-backend contract
+
+The serving backend, not the presence of a project path on the VM, selects the
+source reader. Bundle preparation uses the same saved-version resolver as execution:
+
+| Source setup            | Project and dataset snapshot authority                                                          | Downloadable ZIP                 |
+| ----------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------- |
+| Legacy VM files         | Saved project/sidecar files or the selected published snapshot, under the filesystem read fence | Private API disk scratch         |
+| Local SQLite            | Catalog-selected immutable local artifacts; virtual project paths need not exist as files       | Private API disk scratch         |
+| S3 + managed PostgreSQL | PostgreSQL selects the revision; S3 supplies that revision's project and matching dataset blobs | Private control-API disk scratch |
+
+Managed mode never reconstructs project files in the legacy workflows directory
+or hands the browser an S3 object URL. Authenticated ZIP download and Range resume
+are identical across the three setups, independent of bucket prefixes or virtual
+project paths. Root **Published**/**Saved latest**, explicit Subgraph versions and
+legacy references retain their existing selection policies. Both versions of the
+same child receive separate datasets. Source changes reject publication.
+
+All setups still require writable export scratch and enough space for compressed
+output plus headroom. Managed source storage does not eliminate that requirement.
+Compose supplies the same disk volume for local and managed VM deployments; Helm
+routes `/api/*` to the singleton control backend with its dedicated export volume.
+Custom launchers must provide private writable scratch. Source credentials and
+database connection/SSL configuration remain the normal storage prerequisites;
+export creates neither database migrations nor new bucket permissions.
+
+### HTTP and lifecycle
+
 Authenticated API routes under `/api/workflows/project-bundles` are:
 
 - `POST /` with `{relativePath, version: live|published, requestId?: UUID}` returns
@@ -69,25 +97,38 @@ Authenticated API routes under `/api/workflows/project-bundles` are:
   Range/If-Range support, attachment disposition and no-store headers.
 - `DELETE /:id` requires `X-Rivet-Bundle-Intent: 1` and cancels/disposes the export.
 
-Only one export prepares at a time, including final staging cleanup. Terminal
+Only one export prepares at a time, including writer drain and journal publication. Terminal
 status and download acknowledgement wait for that preparation owner to settle:
 observing failure guarantees its packaging slot is released before retry, and a
-ready archive is not exposed before a later cleanup failure can revoke readiness.
+ready archive is not exposed before a failed final journal write can revoke readiness.
 Expiry and cancellation use one serialized removal owner;
 failed deletions remain tracked for disk accounting and are retried instead of
-orphaning archives. Failed staging removal also blocks further preparation until
+orphaning archives. Failed archive removal also blocks further preparation until
 cleanup succeeds, while leased downloads may finish. Cancellation denies new
 downloads before removing scratch and protects its journal update from concurrent
 cleanup. Concurrent cancellation requests share one operation and journal write;
 atomic journal writes use unique temporary files. This avoids both temporary-file
 collisions and concurrent journal replacement on Windows, without filesystem retries.
+Failed journal replacement removes its attempt-owned temporary file without
+altering the previous journal. If removal also fails, ordinary owned-directory
+cleanup remains responsible for it. Scratch initialization is shared by concurrent
+requests, but a failed attempt is not cached permanently: repair the mount or
+permissions and retry without restarting the API. A disposed manager never retries
+initialization through preparation.
 A 30-minute deadline cancels stalled preparation;
 late non-abortable reads cannot publish. On API restart, unfinished journaled jobs
-become interrupted. Restart reconciliation removes leftover staging and partial
+become interrupted. Restart reconciliation removes legacy staging trees and partial
 archives even for ready jobs, preserves only durably published ready ZIPs, and
 keeps cleanup failures tracked/blocking until removal succeeds. Private scratch is
-installation-scoped under the OS temporary
-directory, with restricted creation modes. Ready jobs expire after 24 hours;
+reconciled before admitting another export: a ready ZIP must still be a regular,
+non-symlink file of the journaled size. Missing/truncated archives become failed
+and unavailable for download. Archive bytes/hash are cleared only after all owned
+archive cleanup succeeds, so interrupted jobs neither consume phantom budget nor
+hide files that could not be removed. The same file validation is used on download.
+Private scratch is installation-scoped beneath `RIVET_PROJECT_BUNDLE_SCRATCH_ROOT`,
+with restricted creation modes. The root must be absolute; a hash of the workflows root keeps
+installations sharing a base separate and stable across restarts. Standalone
+servers without this setting retain the OS temporary-directory fallback. Ready jobs expire after 24 hours;
 cleanup never removes an archive leased to an active download. Cancellation prevents
 new downloads immediately; an existing reader may finish and its retained archive
 continues to count toward the scratch budget until released. Expired, failed or
@@ -105,21 +146,70 @@ equivalent requirements are deduplicated. The loader also checks every included
 project's plugin requirements against the manifest, so omitting or changing a child
 plugin declaration cannot bypass the dependency contract.
 
-The collector releases raw project/dataset strings after staging; retained source
-checks contain fingerprints, not complete payloads. Parsed graph definitions remain
-available for closure/boundary validation. ZIP generation streams staged files.
+The collector feeds each captured file directly into a backpressured ZIP writer;
+there is no raw staging tree. It waits for each input to be consumed before reading
+the next artifact, releases consumed byte buffers, and retains source fingerprints
+rather than complete payloads. Parsed graph definitions remain for closure/boundary
+validation. Compression runs during collection; the packaging phase closes the ZIP
+and performs the final source check. SHA-256 is computed as ZIP output is written,
+without rereading the archive. Only a closed, validated archive is atomically renamed
+and published. Keeping this ZIP (rather than regenerating on download) preserves
+stable length, checksum, selected versions and browser Range resume.
 
 Defaults: 256 project/version artifacts, 64 MiB per project or dataset file, 512 MiB
-total captured payload, 2 GiB scratch budget, and 512 MiB free-space reserve. Operators
+total captured payload, 2 GiB scratch budget, and 32 MiB free-space reserve. Operators
 may deliberately set `RIVET_PROJECT_BUNDLE_MAX_BYTES` (up to 8 GiB) and
-`RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES` (up to 32 GiB). Scratch accounting reserves
-room for both staging and archive, counting each successful file write separately
-(including the manifest and README), not delayed whole-artifact progress. Free-space
-checks retain room for archiving all files already staged. Failed archive removal,
-like failed staging removal, blocks new preparation until owned scratch is removed;
+`RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES` (up to 32 GiB), and
+`RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` (1 MiB to 1 GiB). Scratch accounting
+counts retained archives plus actual compressed output, including ZIP headers,
+manifest and README, rather than raw payload size or a worst-case archive estimate.
+Free-space checks run before output consumes the available credit, every 4 MiB or
+one second of output, and after final source verification immediately before
+publication. The last check cannot use credit measured before a potentially slow
+source re-read. They keep the configured reserve plus 64 KiB
+for bounded queued writes and small journal replacements; real ENOSPC errors still
+abort and drain the writer. Failed archive removal blocks new preparation until owned scratch is removed;
 it must not erase retained archive accounting. Capacity exhaustion fails rather than
 deleting unexpired bundles. The Node loader defaults to 512 MiB total and accepts
 `maxTotalBytes` for intentionally larger trusted bundles.
+
+### Deployment scratch capacity
+
+Production and development Compose automatically mount the private, disk-backed
+`rivet_project_bundles` named volume at `/data/project-bundles`. The initializer
+owns it as UID/GID 10001 with mode 0700. It is separate from workflow, recording,
+runtime-library, app-data and local-upgrade roots, so exports do not inflate source
+inventories or migration backups. It survives container recreation; normal job
+expiry and cleanup remain responsible for disposal. Do not remove this volume
+while downloads are active. Mounted dotenv cannot override the deployment root.
+Compose passes optional payload/scratch budgets and the free-space reserve with
+their normal defaults. These are limits/headroom, not preallocated disk space.
+
+The Helm control backend uses a dedicated node-disk `emptyDir` at the same path,
+bounded by `writableVolumeLimits.projectBundles` (default `3Gi`: the `2Gi` export
+budget plus reserve and journal headroom). Execution, Evaluation, web
+and proxy containers do not mount it. Container restarts retain it within the Pod;
+Pod replacement discards exports, which can be prepared again. Increasing export
+budgets also requires enough volume and whole-Pod ephemeral-storage capacity.
+
+The old fixed 512 MiB reserve rejected even tiny exports on an empty 512 MiB tmpfs.
+The incremental writer no longer has that requirement, but large retained ZIPs
+still belong on disk rather than competing with workflow memory in tmpfs.
+Keep `/tmp` and `/var/tmp` unchanged for ordinary RAM-backed Compose scratch.
+For standalone deployments, select a private writable disk directory using the
+root setting rather than raising RAM-backed temporary capacity.
+
+After updating both images and deployment configuration, inspect the actual mount:
+
+```sh
+docker exec ops-api-1 printenv RIVET_PROJECT_BUNDLE_SCRATCH_ROOT
+docker exec ops-api-1 df -h /data/project-bundles /tmp
+docker inspect ops-api-1 --format '{{range .Mounts}}{{println .Type .Destination}}{{end}}'
+```
+
+Expect `/data/project-bundles` to be a Docker volume on disk, not tmpfs. The
+host disk must still have room for retained ZIPs, the current archive and the reserve.
+Updating only the API image cannot add the mount or its environment setting.
 
 ## Portability limits
 
@@ -165,7 +255,9 @@ Do not describe the feature as available in npm until this release gate passes.
 
 ```powershell
 yarn workspace @valerypopoff/rivet2-node exec tsx --test test/projectBundle.test.ts
-yarn workspace @valerypopoff/rivet-studio-server-api exec tsx --test src/tests/project-bundle.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/managed-execution-service.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api exec tsx --test src/tests/project-bundle.test.ts src/tests/project-bundle-sqlite.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/managed-execution-service.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/kubernetes-contract.test.ts
+node --test scripts/ci/api-test-shards.test.mjs
 $env:PLAYWRIGHT_HEADLESS='1'
 $env:PLAYWRIGHT_SLOW_MO='0'
 $env:PLAYWRIGHT_BASE_URL='http://127.0.0.1:5174'
@@ -177,10 +269,10 @@ ZIP extraction into another directory, and Node execution, plus delayed/lost sta
 acknowledgements, failed preparation followed by retry without reloading the
 workspace, and the shared modal theme. API tests cover auth,
 range resumption, redaction, cancellation, restart, coherent closure and reader
-retention, including cancelled reader capacity, held staging cleanup, retry after
+retention, including cancelled reader capacity, held terminal journal writes, retry after
 failed expiry removal and unclaimed scratch preservation.
-Held-cleanup fixtures cover both success/failure acknowledgements and prevent
-downloads from escaping a subsequent cleanup failure; they use explicit gates,
+Held-journal fixtures cover both success/failure acknowledgements and prevent
+downloads from escaping a failed publication; they use explicit gates,
 not sleep-based race timing.
 The real ZIP execution fixture includes a valid mutual-project call through a
 different graph; an indirect cross-project cycle through a local helper is rejected.
@@ -197,6 +289,36 @@ The closure fixture covers prefab/non-main targets, legacy back-edges, attachmen
 and a second version of the root. Storage failure followed by retry is covered.
 No Kubernetes rehearsal or production migration is required.
 
+The shared `project-bundle-download-contract.ts` fixture exercises actual HTTP
+upload/save/publish/export/download routes, full and Range ZIP responses, unauthenticated
+download rejection, extraction into another directory and local Node execution.
+It exports both root versions, two versions of one child, a dependency in a non-main
+graph and a stale-hint legacy reference. Root/child/version datasets share an ID
+but contain distinct rows, proving isolation rather than merely checking metadata.
+Every fixture HTTP request, including download bodies and disposal, has a deadline
+so an unresponsive endpoint cannot strand the test runner.
+Filesystem and selected native-SQLite variants run in the normal API test list.
+The shard-manifest check ensures these files remain assigned to CI. Deployment
+contracts render Helm and inspect Compose mounts, ownership, environment settings
+and capacity validation; they do not launch a Kubernetes cluster.
+The SQLite fixture installs an isolated serving selection; supervisor startup and
+migration validation remain covered by the local-upgrade tests.
+
+For managed end-to-end verification, reuse the existing opt-in owned-services gate:
+
+```powershell
+yarn workspace @valerypopoff/rivet-studio-server-api run test:async-managed
+```
+
+This command creates and deletes isolated PostgreSQL and S3-compatible containers;
+it accepts no deployment URL and never touches production data. The shared bundle
+contract runs through the real managed API, PostgreSQL revision catalog and S3 SDK,
+with a non-empty bucket prefix and no local project files. It also checks disposed
+export cleanup. On 2026-10-06 this passed with PostgreSQL 16.8 and a local MinIO
+fixture, in addition to the normal filesystem/SQLite checks. This is protocol and
+backend evidence, not a claim that every operator's live cloud credentials, SSL
+certificates, quotas or disk mounts have been verified.
+
 For an opt-in capacity measurement, not a slow CI regression:
 
 ```powershell
@@ -204,9 +326,11 @@ yarn workspace @valerypopoff/rivet-studio-server-api exec node --expose-gc --max
 ```
 
 The probe owns six random 16 MiB datasets, measures the real exporter and deletes
-all its fixtures. On the Windows checkout on 2026-10-05, 100,669,652 payload bytes
-produced a 75,824,624-byte ZIP in 3.02 seconds. Sampled peak heap was 140,393,088
-bytes; RSS increased from 344,428,544 to 447,676,416 bytes, and peak scratch was
-176,500,788 bytes. Export scratch after disposal was zero. These are fixture/host
+all its fixtures. On the Windows checkout on 2026-10-06, the same 100,669,652-byte
+payload used 176,500,776 peak scratch bytes with staging, versus 75,824,760 with
+incremental writing (57% less). The latter produced a 75,824,601-byte ZIP in 2.89
+seconds versus 3.14 seconds before. Sampled peak heap was 140,601,248 bytes;
+RSS increased from 347,684,864 to 443,109,376 bytes, comparable to the old writer's
+101,527,552-byte RSS increase. Export scratch after disposal was zero. These are fixture/host
 measurements, not universal memory or latency guarantees; the loader intentionally
 materializes project/dataset snapshots when executing them.

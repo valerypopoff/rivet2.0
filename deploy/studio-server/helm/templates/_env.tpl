@@ -165,6 +165,8 @@
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
 {{- if eq .profile "control" }}
+- name: RIVET_PROJECT_BUNDLE_SCRATCH_ROOT
+  value: /data/project-bundles
 - name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL
   value: {{ printf "http://%s:%v/internal/workflows" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.executionServiceName" $root))) $root.Values.service.execution.port | quote }}
 - name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL

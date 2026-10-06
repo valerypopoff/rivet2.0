@@ -18,8 +18,10 @@ ZIP jobs to Core-owned manifest validation and the public Node `loadProjectBundl
 loader. Explicit project/version bindings preserve matching datasets and Subgraph
 wire contracts; local execution never guesses server paths. Legacy aliases obtain
 their artifact-owned datasets through the additive reference-loader hook, not the
-caller's provider. Raw payloads are released after staging and ZIP packaging streams
-the staged files. See
+caller's provider. Captured files feed a backpressured ZIP writer without raw
+staging, then one final source check gates atomic publication. The same authenticated
+download contract serves filesystem, local SQLite and managed PostgreSQL/S3 sources;
+the ZIP always lives in private control-API scratch, not authoritative source storage. See
 [Portable project bundles](project-bundles.md) for ownership, limits, lifecycle,
 security, release requirements and regression commands.
 

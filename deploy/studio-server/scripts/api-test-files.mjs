@@ -80,6 +80,7 @@ export const defaultApiTestFiles = [
   'src/tests/node-executor-proxy-settings.test.ts',
   'src/tests/normalize-base-path.test.ts',
   'src/tests/plugin-installer.test.ts',
+  'src/tests/project-bundle-sqlite.test.ts',
   'src/tests/project-bundle.test.ts',
   'src/tests/project-references.test.ts',
   'src/tests/proxy-image-contract.test.ts',

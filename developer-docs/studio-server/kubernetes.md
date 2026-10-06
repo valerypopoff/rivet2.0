@@ -1074,6 +1074,21 @@ Runtime-library local files are caches/workspaces, not the source of truth in ma
 
 `tmpVolume` creates independent bounded `emptyDir` volumes at `/var/tmp` (default `2Gi`) and `/tmp` (default `1Gi`) for backend, execution, Evaluation, migration, web, and the optional embedded proxy. Node's `os.tmpdir()` and the API's native-I/O temporary root use `/tmp`; the migration Job explicitly stages its app data under `/var/tmp`. Keep both mounts: moving only one leaves the other on the container writable layer. Production rendering requires `tmpVolume.enabled=true`; the chart validates both sizes and reserves the `/tmp` volume name. Increase the limits only after measuring actual package-install, workflow, and migration high-water marks. Do not use the unsupported generic `writableDirs` overlay key. These mounts do not make Kubernetes disk-write-free: root writable layers for graph-capable containers, logs, and container images still use node storage. API/executor image defaults route npm and XDG caches under `/tmp`, and replicated entrypoints restore `TMPDIR`, the npm cache, and `XDG_CACHE_HOME` after loading Vault dotenv so stale secrets cannot redirect scratch. They also clear uppercase `NPM_CONFIG_CACHE`, which npm prefers over the lowercase cache setting. Hosted plugin installs pass an explicit scratch-local pnpm store; package trees and release artifacts remain in their existing app-data/runtime-library mounts. Application data is not redirected to scratch.
 
+### Dependency export scratch
+
+Dependency exports are separate from ordinary `/tmp` and `/var/tmp`: only the
+singleton control backend mounts `/data/project-bundles`, a node-disk `emptyDir`
+bounded by `writableVolumeLimits.projectBundles` (default `3Gi`). This accommodates
+the default `2Gi` application scratch budget and `32Mi` free-space reserve.
+These are ceilings/headroom, not preallocation: the exporter writes only the ZIP,
+with no raw staging tree. Accounting follows compressed output and retained ZIPs.
+Set `RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` through chart `env` to tune
+headroom (1 MiB to 1 GiB), and keep the volume and Pod limits consistent with budgets.
+Vault dotenv cannot redirect the configured export root; chart `env` cannot
+override it. Whole-Pod ephemeral-storage limits must also cover this volume.
+Exports survive container restart but not Pod replacement; prepare them again
+after replacement. See [project bundles](project-bundles.md#deployment-scratch-capacity).
+
 ### Gateway and public routes
 
 In external mode, the cluster-owned gateway implements the [external gateway contract](#external-gateway-contract) and routes to these chart Services. In embedded compatibility mode, the chart-owned Ingress enters the in-chart proxy, which applies the same routing:

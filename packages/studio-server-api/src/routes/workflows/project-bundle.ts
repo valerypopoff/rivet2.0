@@ -144,7 +144,7 @@ export async function collectProjectBundle(options: {
   const byTarget = new Map<string, ProjectBundleArtifact>();
   const checks: { fingerprint: string; read(): Promise<BundleSnapshot> }[] = [];
   // Keep graph definitions for closure validation, but release raw project and
-  // dataset strings once staged. Packaging must not retain every dataset in RAM.
+  // dataset strings once consumed by the writer. Do not retain every dataset in RAM.
   const snapshots = new Map<string, Pick<BundleSnapshot, 'project' | 'selectedVersion'>>();
   const references = new Set<string>();
   const pluginSpecs = new Set<string>();

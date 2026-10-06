@@ -127,17 +127,19 @@ services:
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /data/project-bundles; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
           fi
         done
+        chmod 700 /data/project-bundles
     volumes:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
       - rivet_local_metadata:/data/local-metadata
+      - rivet_project_bundles:/data/project-bundles
       - type: volume
         source: rivet_data
         target: /data/rivet-app
@@ -196,6 +198,10 @@ services:
       - RIVET_WORKFLOWS_ROOT=/workflows
       - RIVET_WORKFLOW_RECORDINGS_ROOT=/workflow-recordings
       - RIVET_APP_DATA_ROOT=/data/rivet-app
+      - RIVET_PROJECT_BUNDLE_SCRATCH_ROOT=/data/project-bundles
+      - RIVET_PROJECT_BUNDLE_MAX_BYTES=${RIVET_PROJECT_BUNDLE_MAX_BYTES:-536870912}
+      - RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES=${RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES:-2147483648}
+      - RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES=${RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES:-33554432}
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=api
       # Pull-only metrics stay on this direct internal API service; proxy does not route /metrics.
@@ -256,6 +262,7 @@ services:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
       - rivet_local_metadata:/data/local-metadata
+      - rivet_project_bundles:/data/project-bundles
     command: >
       sh -lc "
         corepack enable &&
@@ -285,6 +292,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  rivet_project_bundles:
+    driver: local
   rivet_local_metadata:
     driver: local
   web_node_modules:

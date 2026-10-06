@@ -1,13 +1,15 @@
-// test-style: fixture-read: reads only test-owned staged manifests and generated ZIP files.
+// test-style: fixture-read: reads only test-owned manifests and generated ZIP files.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs/promises';
+import { WriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { randomUUID } from 'node:crypto';
-import { loadProjectBundle, serializeProject } from '@valerypopoff/rivet2-node';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  loadProjectBundle,
+  serializeProject,
   SubGraphNodeImpl,
   ReferencedGraphAliasNodeImpl,
   getGraphBoundary,
@@ -17,14 +19,17 @@ import {
   type NodePrefabId,
   type DataId,
 } from '@valerypopoff/rivet2-node';
-import { collectProjectBundle } from '../routes/workflows/project-bundle.js';
-import { ProjectBundleJobs } from '../routes/workflows/project-bundle-jobs.js';
+import { collectProjectBundle, createSavedBundleSource } from '../routes/workflows/project-bundle.js';
+import {
+  ProjectBundleJobs,
+  getProjectBundleScratchRoot,
+  projectBundleJobs,
+} from '../routes/workflows/project-bundle-jobs.js';
 import { projectBundleFixture, extractProjectBundleFixture } from './helpers/project-bundle-fixture.js';
-import { createSavedBundleSource } from '../routes/workflows/project-bundle.js';
-import { projectBundleJobs } from '../routes/workflows/project-bundle-jobs.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import { getExpectedProxyAuthToken } from '../auth.js';
+import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
 
 test('export closure packages actual bytes and produces a relocatable locally runnable ZIP', async (t) => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-test-'));
@@ -297,13 +302,16 @@ test('cancel settles a hung source and restart marks unfinished jobs interrupted
   }
 });
 
-test('unavailable scratch rejects exports but cannot poison shutdown', async () => {
+test('unavailable scratch can recover without restart and cannot poison shutdown', async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-init-failure-'));
   const root = path.join(temporary, 'not-a-directory');
   await fs.writeFile(root, 'fixture');
   const jobs = new ProjectBundleJobs(root);
   try {
     await assert.rejects(jobs.start(projectBundleFixture().source, 'latest'));
+    await fs.unlink(root);
+    const recovered = await jobs.start(projectBundleFixture().source, 'latest');
+    await jobs.cancel(recovered.id);
     await jobs.dispose();
     await jobs.dispose();
     const unopenedRoot = path.join(temporary, 'never-started');
@@ -342,22 +350,50 @@ test('restart reconciles ready and interrupted scratch, and keeps failed cleanup
     await fs.mkdir(path.join(interrupted, 'staging'), { recursive: true });
     await fs.writeFile(
       path.join(interrupted, 'status.json'),
-      JSON.stringify({ ...started, id: interruptedId, phase: 'packaging' }),
+      JSON.stringify({ ...started, id: interruptedId, phase: 'packaging', archiveBytes: ready.archiveBytes }),
     );
     await fs.writeFile(path.join(interrupted, 'bundle.zip'), 'renamed but not durably published');
+    const damagedId = randomUUID();
+    const damaged = path.join(temporary, damagedId);
+    await fs.mkdir(damaged);
+    await fs.writeFile(path.join(damaged, 'status.json'), JSON.stringify({ ...ready, id: damagedId }));
+    await fs.writeFile(path.join(damaged, 'bundle.zip'), 'truncated');
+    const missingId = randomUUID();
+    const missing = path.join(temporary, missingId);
+    await fs.mkdir(missing);
+    await fs.writeFile(path.join(missing, 'status.json'), JSON.stringify({ ...ready, id: missingId }));
     restarted = new ProjectBundleJobs(temporary);
     assert.equal((await restarted.status(ready.id)).phase, 'ready');
-    assert.equal((await restarted.status(interruptedId)).phase, 'interrupted');
+    const interruptedStatus = await restarted.status(interruptedId);
+    assert.equal(interruptedStatus.phase, 'interrupted');
+    assert.equal(interruptedStatus.archiveBytes, undefined, 'removed archives no longer consume the budget');
+    const damagedStatus = await restarted.status(damagedId);
+    assert.equal(damagedStatus.phase, 'failed', 'restart must not advertise an unusable ready archive');
+    assert.equal(damagedStatus.archiveBytes, undefined);
+    await assert.rejects(restarted.download(damagedId), /not ready/);
+    assert.equal((await restarted.status(missingId)).phase, 'failed');
+    await assert.rejects(restarted.download(missingId), /not ready/);
     for (const removed of [
       staging,
       path.join(directory, 'bundle.partial'),
       path.join(interrupted, 'staging'),
       path.join(interrupted, 'bundle.zip'),
+      path.join(damaged, 'bundle.zip'),
     ])
       await assert.rejects(fs.stat(removed), { code: 'ENOENT' });
     const download = await restarted.download(ready.id);
     assert.equal((await fs.stat(download.archive)).size, ready.archiveBytes);
     download.release();
+    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES', String(ready.archiveBytes! * 2 + 100), async () => {
+      const next = await restarted!.start(fixture.source, 'latest');
+      let nextStatus = await restarted!.status(next.id);
+      for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(nextStatus.phase); attempt++) {
+        await delay(10);
+        nextStatus = await restarted!.status(next.id);
+      }
+      assert.equal(nextStatus.phase, 'ready', 'only retained ZIPs count against the recovered budget');
+      await restarted!.cancel(next.id);
+    });
     await restarted.dispose();
 
     // Restart cleanup failures must remain an owned job, not silently skip its bytes.
@@ -409,66 +445,6 @@ test('a colliding request ID cannot delete unclaimed scratch', async () => {
   }
 });
 
-test('preparation owns staging cleanup until completion and blocks retry when removal fails', async (t) => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-staging-'));
-  const jobs = new ProjectBundleJobs(temporary);
-  let releaseCleanup!: () => void;
-  const heldCleanup = new Promise<void>((resolve) => {
-    releaseCleanup = resolve;
-  });
-  let enteredCleanup!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    enteredCleanup = resolve;
-  });
-  const originalRm = fs.rm;
-  let failCleanup = false;
-  let id: string | undefined;
-  const rmMock = t.mock.method(
-    fs,
-    'rm',
-    async (location: Parameters<typeof fs.rm>[0], options: Parameters<typeof fs.rm>[1]) => {
-      if (String(location).endsWith(`${path.sep}staging`)) {
-        enteredCleanup();
-        await heldCleanup;
-        if (failCleanup) throw Object.assign(new Error('Owned staging removal failed'), { code: 'EACCES' });
-      }
-      if (failCleanup && id && location === path.join(temporary, id))
-        throw Object.assign(new Error('Owned directory removal failed'), { code: 'EACCES' });
-      return originalRm(location, options);
-    },
-  );
-  try {
-    const fixture = projectBundleFixture();
-    const started = await jobs.start(fixture.source, 'latest');
-    id = started.id;
-    await entered;
-    const pendingStatus = jobs.status(started.id);
-    const unavailable = assert.rejects(jobs.download(started.id), /not ready/);
-    await assert.rejects(jobs.start(fixture.source, 'latest'), /Another project bundle/);
-    failCleanup = true;
-    releaseCleanup();
-    const status = await pendingStatus;
-    assert.equal(status.phase, 'failed');
-    assert.match(status.error!, /scratch cleanup failed/);
-    await unavailable;
-    await assert.rejects(jobs.start(fixture.source, 'latest'), { code: 'EACCES' });
-    assert.equal(
-      (await fs.stat(path.join(temporary, started.id, 'bundle.zip'))).isFile(),
-      true,
-      'failed scratch stays owned',
-    );
-    rmMock.mock.restore();
-    await jobs.cleanup();
-    const next = await jobs.start(fixture.source, 'latest');
-    await jobs.cancel(next.id);
-  } finally {
-    releaseCleanup();
-    rmMock.mock.restore();
-    await jobs.dispose();
-    await fs.rm(temporary, { recursive: true, force: true });
-  }
-});
-
 test('failed expiry removal stays tracked and retryable instead of orphaning scratch', async (t) => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-removal-'));
   const jobs = new ProjectBundleJobs(temporary);
@@ -481,7 +457,7 @@ test('failed expiry removal stays tracked and retryable instead of orphaning scr
       status = await jobs.status(started.id);
     }
     assert.equal(status.phase, 'ready');
-    // Wait for staging cleanup too; ready publication can precede final disposal.
+    // Acknowledgement includes archive publication and its final journal write.
     const downloaded = await jobs.download(started.id);
     downloaded.release();
     const directory = path.join(temporary, started.id);
@@ -561,36 +537,38 @@ test('export rejects incompatible ports, wrong versions and recursive cross-proj
   await assert.rejects(collect(indirect), /dependency cycle/);
 });
 
-for (const fails of [false, true]) {
-  test(`terminal export ${fails ? 'failure' : 'success'} waits for cleanup before acknowledgement`, async (t) => {
+for (const outcome of ['ready', 'failed', 'journal-failed'] as const) {
+  test(`terminal export ${outcome} waits for durable journal before acknowledgement`, async (t) => {
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-settlement-'));
     const jobs = new ProjectBundleJobs(temporary);
-    let releaseCleanup!: () => void;
-    let enteredCleanup!: () => void;
+    let releaseJournal!: () => void;
+    let enteredJournal!: () => void;
     const held = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
+      releaseJournal = resolve;
     });
     const entered = new Promise<void>((resolve) => {
-      enteredCleanup = resolve;
+      enteredJournal = resolve;
     });
-    const remove = fs.rm;
+    const rename = fs.rename;
     let blockOnce = true;
-    t.mock.method(fs, 'rm', async (...args: Parameters<typeof fs.rm>) => {
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
       if (
         blockOnce &&
         String(args[0]).startsWith(temporary + path.sep) &&
-        path.basename(String(args[0])) === 'staging'
+        path.basename(String(args[1])) === 'status.json' &&
+        JSON.parse(await fs.readFile(args[0], 'utf8')).phase === (outcome === 'failed' ? 'failed' : 'ready')
       ) {
         blockOnce = false;
-        enteredCleanup();
+        enteredJournal();
         await held;
+        if (outcome === 'journal-failed') throw Object.assign(new Error('Owned journal write fault'), { code: 'EIO' });
       }
-      return remove(...args);
+      return rename(...args);
     });
     try {
       const source = projectBundleFixture().source;
       const started = await jobs.start(
-        fails
+        outcome === 'failed'
           ? {
               ...source,
               root: async () => {
@@ -614,14 +592,22 @@ for (const fails of [false, true]) {
         () => false,
       );
       await assert.rejects(jobs.start(source, 'latest'), /Another project bundle/);
-      assert.equal(acknowledged, false, 'cleanup must settle before exposing a terminal status');
-      releaseCleanup();
-      assert.equal((await status).phase, fails ? 'failed' : 'ready');
-      assert.equal(await download, !fails);
+      assert.equal(acknowledged, false, 'publication must settle before exposing a terminal status');
+      releaseJournal();
+      assert.equal((await status).phase, outcome === 'ready' ? 'ready' : 'failed');
+      assert.equal(await download, outcome === 'ready');
+      if (outcome === 'journal-failed') {
+        await assert.rejects(fs.stat(path.join(temporary, started.id, 'bundle.zip')), { code: 'ENOENT' });
+        assert.deepEqual(
+          await fs.readdir(path.join(temporary, started.id)),
+          ['status.json'],
+          'failed publication leaves no temporary journal behind',
+        );
+      }
       const retry = await jobs.start(source, 'latest');
       await jobs.cancel(retry.id);
     } finally {
-      releaseCleanup();
+      releaseJournal();
       await jobs.dispose();
       t.mock.restoreAll();
       await fs.rm(temporary, { recursive: true, force: true });
@@ -666,6 +652,70 @@ test('failed storage does not publish partial archives or expose raw exception s
   }
 });
 
+test('exports use configured disk scratch, preserve reserve checks, and recover after insufficient space', async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-disk-'));
+  let jobs: ProjectBundleJobs | undefined;
+  try {
+    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_ROOT', temporary, async () => {
+      const root = getProjectBundleScratchRoot();
+      assert.equal(path.dirname(root), temporary);
+      assert.equal(getProjectBundleScratchRoot(), root, 'restarts find the same installation namespace');
+      await withEnvOverride('RIVET_WORKFLOWS_ROOT', path.join(temporary, 'other-installation'), async () => {
+        assert.notEqual(getProjectBundleScratchRoot(), root);
+      });
+      jobs = new ProjectBundleJobs(root);
+      const stats = await fs.statfs(temporary);
+      let availableBytes = 32 * 1024 * 1024 - 4096;
+      t.mock.method(fs, 'statfs', async (directory: string) => {
+        assert.equal(path.dirname(String(directory)), root, 'measure the export filesystem, never OS scratch');
+        return { ...stats, bsize: 4096, bavail: Math.floor(availableBytes / 4096) };
+      });
+      const complete = async () => {
+        const started = await jobs!.start(projectBundleFixture().source, 'latest');
+        let status = await jobs!.status(started.id);
+        for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+          await delay(10);
+          status = await jobs!.status(started.id);
+        }
+        return status;
+      };
+      const failed = await complete();
+      assert.equal(failed.phase, 'failed');
+      assert.match(failed.error!, /Not enough free scratch space/);
+      await assert.rejects(jobs.download(failed.id), /not ready/);
+      await assert.rejects(fs.stat(path.join(root, failed.id, 'bundle.zip')), { code: 'ENOENT' });
+      availableBytes = 512 * 1024 * 1024 - 4096; // Even this formerly unusable capacity now fits a small export.
+      const ready = await complete();
+      assert.equal(ready.phase, 'ready', JSON.stringify(ready));
+      const download = await jobs.download(ready.id);
+      assert.ok((await fs.stat(download.archive)).size > 0);
+      download.release();
+      await withEnvOverride('RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES', String(1024 * 1024), async () => {
+        availableBytes = 2 * 1024 * 1024;
+        assert.equal((await complete()).phase, 'ready', 'small exports fit a deliberately small disk budget');
+      });
+      for (const invalid of ['0', 'NaN', String(1024 ** 3 + 1)]) {
+        await withEnvOverride('RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES', invalid, async () => {
+          const rejected = await complete();
+          assert.equal(rejected.phase, 'failed');
+          assert.match(rejected.error!, /Invalid project bundle free-space reserve/);
+          assert.deepEqual(await fs.readdir(path.join(root, rejected.id)), ['status.json']);
+        });
+      }
+    });
+    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_ROOT', 'relative/unsafe', async () => {
+      assert.throws(getProjectBundleScratchRoot, /absolute directory path/);
+    });
+    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_ROOT', '', async () => {
+      assert.equal(path.dirname(getProjectBundleScratchRoot()), os.tmpdir());
+    });
+  } finally {
+    t.mock.restoreAll();
+    await jobs?.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test('scratch budget failure is actionable and never publishes an archive', async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-budget-'));
   const jobs = new ProjectBundleJobs(temporary);
@@ -687,36 +737,175 @@ test('scratch budget failure is actionable and never publishes an archive', asyn
   }
 });
 
-test('scratch budget counts each staged file before writing the next file of the same artifact', async (t) => {
+test('scratch counts actual ZIP bytes, not raw payload, and rejects oversized compressed output', async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-file-budget-'));
   const jobs = new ProjectBundleJobs(temporary);
   const f = projectBundleFixture();
-  const graph = f.root.project.graphs[f.root.project.metadata.mainGraphId!]!;
-  graph.nodes = graph.nodes.filter((node) => node.type !== 'subGraph');
-  graph.connections = [];
-  f.root.projectContents = serializeProject(f.root.project) as string;
-  f.root.datasetsContents = '[]' + ' '.repeat(16 * 1024);
-  const projectBytes = Buffer.byteLength(f.root.projectContents);
-  const datasetBytes = Buffer.byteLength(f.root.datasetsContents);
-  const limit = 2 * Math.max(projectBytes, datasetBytes) + Math.min(projectBytes, datasetBytes);
-  const originalWrite = fs.writeFile;
-  let datasetWritten = false;
+  f.root.datasetsContents = '[]' + ' '.repeat(1024 * 1024);
   try {
-    t.mock.method(fs, 'writeFile', async (...args: Parameters<typeof fs.writeFile>) => {
-      if (String(args[0]).endsWith('.rivet-data')) datasetWritten = true;
-      return originalWrite(...args);
+    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES', String(32 * 1024), async () => {
+      const complete = async () => {
+        const started = await jobs.start(f.source, 'latest');
+        let status = await jobs.status(started.id);
+        for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+          await delay(10);
+          status = await jobs.status(started.id);
+        }
+        return status;
+      };
+      const ready = await complete();
+      assert.equal(ready.phase, 'ready', JSON.stringify(ready));
+      assert.ok(ready.bytes > 1024 * 1024);
+      const download = await jobs.download(ready.id);
+      const bytes = await fs.readFile(download.archive);
+      download.release();
+      assert.equal(bytes.length, ready.archiveBytes);
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), ready.archiveHash);
+      assert.ok(bytes.length < 32 * 1024);
+      assert.deepEqual((await fs.readdir(path.join(temporary, ready.id))).sort(), ['bundle.zip', 'status.json']);
+      const extracted = path.join(temporary, 'extracted');
+      await extractProjectBundleFixture(bytes, extracted);
+      const manifest = JSON.parse(await fs.readFile(path.join(extracted, 'rivet-bundle.json'), 'utf8'));
+      const root = manifest.artifacts.find((artifact: { id: string }) => artifact.id === manifest.rootArtifact);
+      assert.equal(await fs.readFile(path.join(extracted, root.datasets.path), 'utf8'), f.root.datasetsContents);
+      // Retained archives still count. New compressed data cannot bypass the same cap.
+      f.root.datasetsContents = JSON.stringify([randomBytes(128 * 1024).toString('base64')]);
+      const failed = await complete();
+      assert.equal(failed.phase, 'failed');
+      assert.match(failed.error!, /scratch budget/);
+      await assert.rejects(jobs.download(failed.id), /not ready/);
+      await assert.rejects(fs.stat(path.join(temporary, failed.id, 'bundle.partial')), { code: 'ENOENT' });
     });
-    await withEnvOverride('RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES', String(limit), async () => {
-      const started = await jobs.start(f.source, 'latest');
-      let status = await jobs.status(started.id);
-      for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
-        await delay(10);
-        status = await jobs.status(started.id);
+  } finally {
+    await jobs.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('writer capacity failure interrupts a hung dependency read and leaves the slot retryable', async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-writer-failure-'));
+  const jobs = new ProjectBundleJobs(temporary);
+  const stats = await fs.statfs(temporary);
+  let enteredTarget!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enteredTarget = resolve;
+  });
+  const fixture = projectBundleFixture();
+  try {
+    t.mock.method(fs, 'statfs', async () => {
+      await entered;
+      return { ...stats, bavail: 0 };
+    });
+    const started = await jobs.start(
+      {
+        ...fixture.source,
+        target: async () => {
+          enteredTarget();
+          return new Promise(() => {});
+        },
+      },
+      'latest',
+    );
+    await entered;
+    let status = await jobs.status(started.id);
+    for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+      await delay(10);
+      status = await jobs.status(started.id);
+    }
+    assert.equal(status.phase, 'failed');
+    assert.match(status.error!, /Not enough free scratch space/);
+    await assert.rejects(fs.stat(path.join(temporary, status.id, 'bundle.partial')), { code: 'ENOENT' });
+    t.mock.restoreAll();
+    const retry = await jobs.start(fixture.source, 'latest');
+    await jobs.cancel(retry.id);
+  } finally {
+    t.mock.restoreAll();
+    await jobs.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('final publication checks both source changes and disk pressure during revalidation', async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-final-check-'));
+  const jobs = new ProjectBundleJobs(temporary);
+  const fixture = projectBundleFixture();
+  let rootReads = 0;
+  try {
+    const started = await jobs.start(
+      {
+        ...fixture.source,
+        root: async () => {
+          rootReads++;
+          return rootReads === 1 ? fixture.root : { ...fixture.root, datasetsContents: 'changed after capture' };
+        },
+      },
+      'latest',
+    );
+    let status = await jobs.status(started.id);
+    for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+      await delay(10);
+      status = await jobs.status(started.id);
+    }
+    assert.equal(rootReads, 2, 'one capture plus one final consistency read');
+    assert.equal(status.phase, 'failed');
+    assert.match(status.error!, /changed while exporting/);
+    assert.deepEqual(await fs.readdir(path.join(temporary, started.id)), ['status.json']);
+    rootReads = 0;
+    const stats = await fs.statfs(temporary);
+    t.mock.method(fs, 'statfs', async () => (rootReads < 2 ? stats : { ...stats, bavail: 0 }));
+    const diskPressure = await jobs.start(
+      {
+        ...fixture.source,
+        root: async () => {
+          rootReads++;
+          return fixture.root;
+        },
+      },
+      'latest',
+    );
+    let diskStatus = await jobs.status(diskPressure.id);
+    for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(diskStatus.phase); attempt++) {
+      await delay(10);
+      diskStatus = await jobs.status(diskPressure.id);
+    }
+    assert.equal(rootReads, 2);
+    assert.equal(diskStatus.phase, 'failed', 'recheck disk after potentially slow source verification');
+    assert.match(diskStatus.error!, /Not enough free scratch space/);
+    assert.deepEqual(await fs.readdir(path.join(temporary, diskPressure.id)), ['status.json']);
+  } finally {
+    t.mock.restoreAll();
+    await jobs.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('disk write errors drain the archive, redact exception contents and permit retry', async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-enospc-'));
+  const jobs = new ProjectBundleJobs(temporary);
+  const write = WriteStream.prototype._write;
+  let injected = false;
+  try {
+    t.mock.method(WriteStream.prototype, '_write', function (this: WriteStream, ...args: Parameters<typeof write>) {
+      if (String(this.path).startsWith(temporary + path.sep)) {
+        injected = true;
+        args[2](Object.assign(new Error('ENOSPC password=PRIVATE_TEST_SENTINEL'), { code: 'ENOSPC' }));
+        return;
       }
-      assert.equal(status.phase, 'failed');
-      assert.match(status.error!, /scratch budget/);
-      assert.equal(datasetWritten, false, 'reject before the next file exceeds the reserved staging/archive budget');
+      write.apply(this, args);
     });
+    const started = await jobs.start(projectBundleFixture().source, 'latest');
+    let status = await jobs.status(started.id);
+    for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+      await delay(10);
+      status = await jobs.status(started.id);
+    }
+    assert.equal(injected, true);
+    assert.equal(status.phase, 'failed');
+    assert.equal(JSON.stringify(status).includes('PRIVATE_TEST_SENTINEL'), false);
+    assert.deepEqual(await fs.readdir(path.join(temporary, started.id)), ['status.json']);
+    t.mock.restoreAll();
+    const next = await jobs.start(projectBundleFixture().source, 'latest');
+    await jobs.cancel(next.id);
   } finally {
     t.mock.restoreAll();
     await jobs.dispose();
@@ -761,7 +950,7 @@ test('failed archive removal stays blocking until all owned scratch can be remov
     id = started.id;
     await entered;
     releaseRemoval();
-    // Wait until preparation/final staging cleanup settles without expiring the failed job.
+    // Wait until preparation/writer drain settles without expiring the failed job.
     await jobs.dispose();
     assert.ok((await fs.stat(path.join(temporary, id, 'bundle.partial'))).size > 0);
     const restarted = new ProjectBundleJobs(temporary);
@@ -872,6 +1061,9 @@ test('filesystem saved export HTTP requires auth and supports exact Range/If-Ran
         assert.equal(stale.status, 200);
         await stale.arrayBuffer();
         assert.equal((await fetch(`${url}/${id}/download`)).status, 403);
+      });
+      await suite.withHostedProjectApiServer(async (urls) => {
+        await verifyProjectBundleDownload({ ...urls, headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() } });
       });
     });
   } finally {

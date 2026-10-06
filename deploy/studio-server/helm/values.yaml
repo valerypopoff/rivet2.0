@@ -376,6 +376,8 @@ tmpVolume:
 # Every disposable writable volume receives a bounded starting capacity. Tune
 # these from representative per-workload measurements before raising them for production.
 writableVolumeLimits:
+  # Ceiling, not preallocation: 2Gi retained ZIP budget plus reserve/journal headroom.
+  projectBundles: 3Gi
   workspace: 2Gi
   workflows: 2Gi
   appData: 1Gi
