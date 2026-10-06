@@ -87,7 +87,11 @@ export function ScheduledProjectSelect({
         }
       }}
       formatOptionLabel={(option, { context }) => (
-        <span className="scheduled-project-option" style={{ paddingLeft: context === 'menu' ? option.depth * 12 : 0 }}>
+        <span
+          className="scheduled-project-option"
+          title={context === 'value' ? option.path : undefined}
+          style={{ paddingLeft: context === 'menu' ? option.depth * 12 : 0 }}
+        >
           {option.kind === 'folder' ? (
             <>
               <span aria-hidden="true">{option.expanded ? '▾' : '▸'}</span>
@@ -98,7 +102,7 @@ export function ScheduledProjectSelect({
           )}
           <span>
             <span className="scheduled-project-name">{option.label}</span>
-            {option.kind === 'project' ? (
+            {option.kind === 'project' && context === 'menu' ? (
               <span className="scheduled-project-path" title={option.path}>
                 {option.path}
               </span>

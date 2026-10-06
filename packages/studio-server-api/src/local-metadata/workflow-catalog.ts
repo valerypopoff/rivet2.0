@@ -11,6 +11,7 @@ import type { RuntimeLibraryManifest } from '../runtime-libraries/manifest.js';
 import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
 import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
+import type { WorkflowProjectReferenceSnapshot } from '../routes/workflows/project-reference-snapshots.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -1095,6 +1096,42 @@ export class LocalWorkflowCatalog {
       db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  listProjectReferenceCatalog() {
+    return this.listProjectPaths().map((relativePath) => {
+      const bundle = this.#readStoredProjectBundle(this.#database(), relativePath)!;
+      return {
+        name: bundle.project.name,
+        relativePath,
+        projectMetadataId: bundle.project.workflowId,
+        identity: JSON.stringify(bundle),
+      };
+    });
+  }
+
+  async readProjectReferenceSnapshots(relativePath: string): Promise<WorkflowProjectReferenceSnapshot[] | null> {
+    const bundle = this.#readStoredProjectBundle(this.#database(), relativePath);
+    if (!bundle) return null;
+    const snapshots: WorkflowProjectReferenceSnapshot[] = [];
+    const cache = new Map<string, string>();
+    const read = async (ref: ArtifactRef) => {
+      if (!ref) throw new Error('Project artifact is missing.');
+      const key = JSON.stringify(ref);
+      if (!cache.has(key)) cache.set(key, (await readText(this.#artifacts, ref))!);
+      return cache.get(key)!;
+    };
+    snapshots.push({ source: { kind: 'saved-latest' }, contents: await read(bundle.project.contents) });
+    if (bundle.project.publishedContents)
+      snapshots.push({
+        source: { kind: 'published-endpoint', label: bundle.project.publishedEndpointName },
+        contents: await read(bundle.project.publishedContents),
+      });
+    for (const app of bundle.apps)
+      snapshots.push({ source: { kind: 'published-web-app', label: app.slug }, contents: await read(app.contents) });
+    if (!sameJson(this.#readStoredProjectBundle(this.#database(), relativePath), bundle))
+      throw new Error('Project changed while checking references.');
+    return snapshots;
   }
 
   async readProject(relativePath: string): Promise<LocalWorkflowCatalogSnapshot | null> {

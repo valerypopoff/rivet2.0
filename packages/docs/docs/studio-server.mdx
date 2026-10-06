@@ -114,7 +114,9 @@ Return to hot reload with `yarn studio-server:dev`. Both commands use the same d
 ## Schedule useful work
 
 Open **Scheduled runs** (calendar icon, just above **Settings**) at the bottom of
-the project sidebar and choose **Add scheduled run** to open its separate editor.
+the project sidebar and choose **+ Add scheduled run** to open its separate editor.
+The sidebar shows how many schedules are enabled; paused or completed one-time
+schedules are not counted, and no badge is shown when none are enabled.
 Give it a name, optionally describe it, select a project and
 choose **Saved latest** or **Published**. Rivet runs that version's **Main Graph**:
 latest means its saved state at execution time, not unsaved editor changes.
@@ -122,15 +124,21 @@ Publishing is not required for Saved latest. Project moves/renames retain the
 schedule's project identity; deleting the project or its main graph makes runs fail.
 The project picker works like the Subgraph node's **Other projects** picker:
 expand folders to browse nested projects, or type a project name or folder path
-to find projects even in collapsed folders. Project rows show their paths;
-select a project with the mouse or arrow keys and Enter. Folder rows only expand
-or collapse and cannot become a run target. Project and Version are adjacent.
+to find projects even in collapsed folders. Dropdown project rows show their paths;
+the selected field shows the project name on one line, with its path on hover.
+Select a project with the mouse or arrow keys and Enter. Folder rows only expand
+or collapse and cannot become a run target. The details section places Name beside
+Project and Description beside Version; these fields stack on narrow screens.
 The footer stays visible while the form scrolls: Preview is on the left and the
 blue **Save** button on the right. Use the header's close button to discard changes.
+**Save** becomes available only after you change the form; reverting all edits
+disables it again. Previewing does not count as a change.
 Saving or closing returns to the run list; editing an existing schedule also
 opens the separate editor.
-New schedules start enabled. Use **Pause** or **Enable** in the scheduled runs
+New schedules start enabled. Use **Pause** or **Unpause** in the scheduled runs
 list to control automatic execution; editing a paused schedule does not enable it.
+Paused schedules have a darker, dashed-border card and a status pill; enabled
+schedules have no status pill. The non-overlap hint appears under Execution.
 If an older schedule shows **Unavailable project** despite the project still
 existing, edit the schedule and reselect its project before saving.
 
@@ -163,6 +171,8 @@ cannot wait for a browser and fail in scheduled runs.
 Use **Pause**, **Edit**, **Run now** or the trash icon in the card's top right
 as needed. **Recent runs** shows the available history count and starts collapsed;
 expand it to inspect runs and use the **Open recording** link for a replay.
+Choose **10**, **20**, **50** or **100** runs per page and use **Previous** / **Next**
+to browse the available history (up to 300 runs).
 Active runs appear before completed history, so long-delayed work remains easy
 to find and cancel.
 Deleting a schedule cancels pending work but does not stop an already-running
@@ -189,7 +199,15 @@ original: keep test clones offline or pause their schedules before starting them
 
 ## Publish a workflow endpoint
 
-Open a saved project in the browser editor, select its **Main Graph**, then open **Project settings → Endpoint**. Choose an endpoint name and click **Publish**. The published route, `/workflows/<name>` by default, runs the saved project version captured by that publish. Saving more changes to the project does not silently update it: use **Update** after reviewing the new draft. **Published version history** lets you inspect or restore an earlier version. **Unpublish** closes the endpoint routes without deleting the saved project.
+Open a saved project in the browser editor, select its **Main Graph**, then open **Project settings → Endpoint**. Choose an endpoint name and click **Publish**. The published route, `/workflows/<name>` by default, runs the saved project version captured by that publish. Saving more changes to the project does not silently update it: use **Update** after reviewing the new draft. The **Published version history** tab lets you inspect or restore an earlier version. **Unpublish** closes the endpoint routes without deleting the saved project.
+
+To delete a project, open **Project settings → Danger zone**. Unpublish its endpoint and all web apps first. Deletion is permanent and also removes its saved datasets, published version history, and run recordings, so download a backup before confirming. Other projects or schedules that use it may stop working.
+
+Danger zone checks which other projects directly reference this project. When connections exist, it shows the
+project names and folder paths, whether each connection belongs to a saved draft, published endpoint, or published
+web app, and whether it uses this project's **Saved latest**, **Published**, or a legacy project reference.
+An incomplete check is clearly marked and can be retried. This is a read-only warning, not a deletion block;
+it excludes unsaved edits, archived version history, indirect dependencies, and scheduled runs.
 
 While the project is published, `/workflows-latest/<draft-name>` runs the latest _saved_ draft. The draft name can differ from the published endpoint name until you click **Update**. The settings dialog shows the latest route when there are unpublished changes. It is useful for testing, but it can change whenever the project is saved; use the published route for clients that need a reviewed version. The route prefixes can be changed in **App Settings → Workflow endpoints → Routes**, so use the paths displayed by your server.
 

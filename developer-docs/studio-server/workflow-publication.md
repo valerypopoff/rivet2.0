@@ -310,11 +310,32 @@ In Project Settings:
 - older already-published projects that predate the explicit `lastPublishedAt` field fall back to the settings-sidecar file timestamp
 - the `Endpoint` tab always shows one compact endpoint row with a non-editable base path prefix, editable endpoint slug, and no extra visible field label; `Publish` creates the first workflow endpoint, while `Update` republishes unpublished changes or applies an endpoint slug change
 - `Unpublish` sits next to the workflow endpoint row whenever the workflow is currently published or has unpublished changes
-- `Delete project` is in a separated lower section that remains visible regardless of the selected Project Settings tab; it is enabled only when the workflow endpoint is unpublished and no web apps remain published. On the `Endpoint` tab only, that same lower section also shows the `Published version history` secondary action as a visible button.
+- `Delete project` appears only in the `Danger zone` tab, with an irreversible-deletion disclaimer; it is enabled only when verified publication details confirm the workflow endpoint is unpublished and no web apps remain published. Failed or incoherent publication reads keep deletion disabled until an explicit successful review; stale tree metadata alone is not sufficient. When deletion is blocked by publication, the unpublish prerequisite message appears below the delete button. `Published version history` is a separate tab, not an Endpoint footer button or nested modal.
 - endpoint validation in the dashboard mirrors the server: only `Published` and `Unpublished changes` projects reserve endpoint names; fully unpublished projects may keep a saved draft endpoint without blocking another project from publishing there
-- Project Settings is split into `Endpoint` and `Web apps` tabs. The `Endpoint` tab owns normal endpoint publication and published-version history. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
+- Project Settings has `Endpoint`, `Web apps`, `LLM profile suspension`, `Published version history`, and `Danger zone` tabs. The `Endpoint` tab owns normal endpoint publication. Its endpoint help always describes the currently saved publication until the user clicks `Publish` or `Update`. Endpoint and web-app slug validation errors render directly below their slug controls, before any publication URL/help text. The `Web apps` tab lists `Project.uiGraphs` when present, shows `No web apps in the project.` when there are none, shows `No web apps are published.` above the available list when none are published yet, and lets each web app publish, update, or unpublish its own compact prefixed slug row under `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}` without requiring or changing the workflow endpoint publication. Once a web app is published, the displayed `/apps/<slug>` path is a link that opens in a new browser tab using the current Rivet server origin; the `/apps-latest/<slug>` latest-draft link is shown only while that app row is in `Unpublished changes` and the UI graph still exists in the current draft. The app's `Update` button remains disabled until the slug draft changes or the row reports `Unpublished changes`. When web-app OAuth mode is enabled, each row also exposes an allowed-email list. Saving that access list is an access-control update only; it does not republish the app or change its publication status.
 
 The Endpoint tab separates the access control from the route help with a thin divider. Internal-only access applies to both published and latest-draft routes: when the project has unpublished changes, the help shows the private latest-draft URL below the private published URL. Both URLs come from deployment configuration (`http://api/internal/...` in Docker Compose; separate control-plane and execution Service URLs in Kubernetes).
+
+## Incoming project connections before deletion
+
+The Danger zone lazily checks direct incoming connections through the authenticated, non-cacheable
+`GET /api/workflows/projects/references?relativePath=...&projectId=...` endpoint. It lists referring project
+names and folder paths, the source snapshot (saved draft, active published endpoint, or active published web app),
+and the target choice (Saved latest, Published, or legacy `Project.references`). The scan uses Core's prefab-aware
+Subgraph traversal across all graphs, excludes disabled calls and the selected project itself, and deduplicates
+repeated version choices within a snapshot. It does not execute graphs or scan archived publications, recordings,
+unsaved browser edits, or transitive connections. It does not change publication status or block deletion.
+
+All three backends expose metadata-only catalog enumeration and project-only snapshot reads. Normal reads do not
+load datasets or historical project payloads. The filesystem's legacy missing-snapshot fallback may read a dataset
+to verify that the saved project still matches the published hash, using the existing runtime resolution policy.
+A per-API-process single-scan guard, a 1,000-caller limit,
+and a 30-second deadline checked between reads bound routine work; an individual storage read can exceed that
+deadline. Leaving Danger zone aborts further collection. Parser errors are not returned or logged with project
+contents. A corrupt later snapshot retains incoming edges verified from earlier snapshots of that caller, while
+marking its check incomplete. Failed callers, limit exhaustion, and catalog changes produce an explicitly incomplete result rather
+than an empty "safe to delete" claim. The UI offers retry/refresh. This is a point-in-time advisory, not an atomic
+deletion proof: users should review it just before deleting and retain a backup.
 
 ## Publish flow
 
@@ -444,7 +465,7 @@ The folder-row context menu exposes `Rename folder`, `New folder`, `New project`
 
 `Delete project` is still guarded:
 
-- for projects with no workflow endpoint publication and no published web apps, clicking it opens Project Settings and the user must click `Delete project` there to complete deletion
+- for projects with no workflow endpoint publication and no published web apps, clicking it opens Project Settings; the user must select `Danger zone` and click `Delete project` there to complete deletion
 - for projects with a published workflow endpoint, unpublished workflow changes, or any published web apps, the dashboard shows a toast telling the user to unpublish the workflow endpoint and web apps first
 
 The API delete route rejects direct deletion while a workflow endpoint or web app publication still exists. After the project is fully unpublished, deletion cleans up the project file, sidecars, recording references, and stored publication/history artifacts.
@@ -605,7 +626,9 @@ Filename format is:
 
 ## Published version history
 
-Project Settings exposes a `Published version history` link. The modal lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions with the same paging controls used by Run recordings, grows vertically before introducing list scrolling, and lets the user download, preview, or restore any stored project snapshot.
+Project Settings exposes a `Published version history` tab alongside Endpoint, Web apps, LLM profile suspension, and Danger zone. `WorkflowPublishedVersionHistoryPanel` lists publish events newest-first, marks the version that is currently serving the published endpoint as `Current`, lets the user star or unstar special versions, add a short comment label for each version, paginates the list after 10 versions, and lets the user download, preview, or restore any stored project snapshot. History is embedded in the settings tab; the obsolete standalone modal/controller state has been removed. History mutations lock tab navigation and modal dismissal until they settle. After restore, the settings publication snapshot is refreshed before the user can return to endpoint/web-app actions. Review first disarms the old publication preconditions, so a failed refresh leaves publication actions disabled until explicit fresh review succeeds.
+
+The Danger zone tab is the only place inside Project Settings that exposes Delete project. It explains irreversible removal of the project, dataset sidecars, publication history, and recordings, and warns about dependent projects/schedules. The existing fully-unpublished guard and final confirmation remain required; the other tabs do not render a delete footer. Settings tabs wrap on narrow screens. Descriptive/help text across project settings, app settings, scheduled runs, recordings, statistics, published items, and history shares the 14px/1.5 tokens in `modal-sizing.css`.
 
 Stars and comments are persisted with the published version record:
 
@@ -1006,7 +1029,7 @@ Operational defaults are intentionally conservative:
 
 The storage-backend recording entrypoint enforces `RIVET_RECORDINGS_DATASET_MODE` for every recording surface, including hosted editor uploads and cross-project Subgraph child runs. Callers may upload a dataset snapshot to reconstruct a run, but with the default `none` policy no replay dataset artifact is persisted. The API also avoids allocating a child recorder when recording is disabled and applies the configured partial-output and trace capture flags when recording is enabled.
 
-Project Settings receives Saved-latest cross-project Subgraph target IDs alongside the authoritative draft revision and publication version. Both filesystem and managed readers derive them from that same draft snapshot. A warning appears for endpoint and web-app publication because these dynamic dependencies can change behavior after the caller is published. This warning does not pin target revisions or change the publication precondition contract. Recording index and metadata readers must round-trip the `subgraph_project` execution surface and exclude it from endpoint/web-app run statistics; child and caller recording identities share the request/editor correlation key when both were captured.
+The project publication snapshot API includes Saved-latest cross-project Subgraph target IDs alongside the authoritative draft revision and publication version. Both filesystem and managed readers derive them from that same draft snapshot. Project Settings does not display a reminder about these dependencies. Target saves do not alter the caller's publication status or publication preconditions; Saved latest still resolves dynamically at execution, while Published resolves the target's published version. Removing the reminder does not pin target revisions. Recording index and metadata readers must round-trip the `subgraph_project` execution surface and exclude it from endpoint/web-app run statistics; child and caller recording identities share the request/editor correlation key when both were captured.
 
 Retention applies to both storage backends. The per-endpoint cap groups by workflow id plus historical endpoint name, preserving independent allowances when a slug is later reused by another project. Filesystem cleanup deletes bundle directories and SQLite rows. Managed cleanup deletes matching Postgres rows transactionally and removes their recording/replay objects after commit; concurrent replicas delete blobs only for rows they actually claimed. Per-endpoint and age cleanup stays workflow/endpoint-scoped on ordinary managed writes, while startup reconciliation and the optional global byte cap inspect the full recording metadata set.
 
@@ -1160,7 +1183,7 @@ The workflow-publication UI now follows the same controller-versus-view split as
 - `useWorkflowProjectVersionActions.ts` owns duplicate/download/compare version choice and busy state; `useRunRecordingsModalState.ts` owns retained Run recordings modal state
 - `ProjectSettingsModal.tsx` is mostly presentational
 - `useProjectSettingsActions.ts` owns publish, unpublish, and guarded delete flows
-- `WorkflowPublishedVersionHistoryModal.tsx` lists published versions for a project and stars, downloads, previews, or restores a selected stored snapshot
+- `WorkflowPublishedVersionHistoryModal.tsx` owns the history tab panel and stars, downloads, previews, or restores a selected stored snapshot (the filename is retained for migration-ledger provenance)
 - `projectSettingsForm.ts` owns endpoint validation, last-published labels, and status labels
 - `workflowApi.ts` keeps endpoint-specific calls flat while `apiRequest.ts` owns shared JSON/text parsing and error extraction
 

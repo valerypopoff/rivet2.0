@@ -21,6 +21,8 @@ export type WorkflowDataBackend = Pick<
   | 'duplicateWorkflowProjectItem'
   | 'uploadWorkflowProjectItem'
   | 'readWorkflowProjectDownload'
+  | 'readWorkflowProjectReferenceSnapshots'
+  | 'listWorkflowProjectReferenceCatalog'
   | 'listWorkflowPublishedVersions'
   | 'readWorkflowPublishedVersionDownload'
   | 'readWorkflowPublishedVersionPreview'

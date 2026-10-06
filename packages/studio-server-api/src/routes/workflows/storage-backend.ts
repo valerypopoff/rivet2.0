@@ -88,6 +88,10 @@ import {
 } from './web-app-publication.js';
 import { readWorkflowProjectDownload } from './workflow-download.js';
 import {
+  listFilesystemProjectReferenceCatalog,
+  readFilesystemProjectReferenceSnapshots,
+} from './project-reference-snapshots.js';
+import {
   listWorkflowPublishedVersions,
   readWorkflowPublishedVersionDownload,
   readWorkflowPublishedVersionPreview,
@@ -1063,6 +1067,20 @@ export async function readWorkflowProjectDownloadWithBackend(
   return delegate(
     async (backend) => backend.readWorkflowProjectDownload(relativePath, version),
     async () => withFilesystemWorkflowStorageRead(() => readWorkflowProjectDownload(relativePath, version)),
+  );
+}
+
+export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativePath: unknown) {
+  return delegate(
+    async (backend) => backend.readWorkflowProjectReferenceSnapshots(relativePath),
+    async () => withFilesystemWorkflowStorageRead(() => readFilesystemProjectReferenceSnapshots(relativePath)),
+  );
+}
+
+export async function listWorkflowProjectReferenceCatalogWithBackend() {
+  return delegate(
+    async (backend) => backend.listWorkflowProjectReferenceCatalog(),
+    async () => withFilesystemWorkflowStorageRead(listFilesystemProjectReferenceCatalog),
   );
 }
 

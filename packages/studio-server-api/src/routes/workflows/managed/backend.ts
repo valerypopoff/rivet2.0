@@ -228,6 +228,13 @@ export class ManagedWorkflowBackend {
     return this.#catalog.readWorkflowProjectDownload(relativePath, version);
   }
 
+  async readWorkflowProjectReferenceSnapshots(relativePath: unknown) {
+    return this.#catalog.readWorkflowProjectReferenceSnapshots(relativePath);
+  }
+  async listWorkflowProjectReferenceCatalog() {
+    return this.#catalog.listWorkflowProjectReferenceCatalog();
+  }
+
   async getLLMProfileHealthStore(): Promise<PostgresRivetLLMProfileHealthStore> {
     await this.initialize();
     return this.#llmProfileHealthStore;

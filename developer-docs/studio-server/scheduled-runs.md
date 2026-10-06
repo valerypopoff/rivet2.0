@@ -11,26 +11,43 @@ The list and separate Add/Edit dialogs participate in the shared Studio Server
 black-backdrop/dark-surface theme. Each header and close control stays visible while content scrolls;
 the two-column form becomes one column on narrow screens. Project/details,
 timing and execution settings are three individually bordered cards, not one
-enclosing form card. Enabled state is controlled only by Pause/Enable in the
+enclosing form card. Enabled state is controlled only by Pause/Unpause in the
 list; new schedules start enabled and editing preserves the saved state.
+The blue **+ Add scheduled run** action shares primary-button styling with Save.
+The sidebar shows **Enabled: N** only for a positive enabled-schedule count.
+Authenticated, non-cacheable `GET /api/workflows/scheduled-runs/summary` returns
+`{ enabledCount }` from a SQL count, without fetching inputs or history. The closed
+modal's sidebar polls every 30 seconds while the page is visible and refreshes on
+visibility return; the open modal updates the badge from its existing list poll
+and mutation refresh. Closing aborts obsolete polling; unavailable counts hide
+the badge rather than displaying an unverified zero. Consumed one-time schedules
+are excluded because the scheduler disables them.
+Enabled cards have no status pill. Paused cards use a darker surface, dashed border,
+muted heading and a Paused pill (Paused or completed for consumed/paused one-time
+schedules); Edit, Unpause, Run now and Delete remain usable.
 The editor form owns a scrollable content region and a separate non-shrinking
 footer: Preview stays on the left and the blue Save submit button on the right.
+Save is disabled until the draft fields or input text differ from their captured
+opening state, including for Add. Reverting all edits disables it again. Preview,
+folder browsing and background polling do not mark the form dirty. The submit
+handler also rejects unchanged drafts; failures retain changes for retry.
 The footer remains visible on narrow/short viewports. Keep both regions inside
 the same form for native required-field validation and keyboard submission.
 The browser regression verifies that the footer is outside the scrolling content
 and both actions stay visible, allowing only one CSS pixel of flex-layout rounding
 after scrolling. Exact integer coordinate equality is fragile across browsers.
 Failed Save/Preview diagnostics scroll into view without moving the footer.
-Close is the only draft-cancellation control. Name and description span the form;
-Project and Version share a row (stacked on mobile). Maximum run duration replaces
+Close is the only draft-cancellation control. Project/details uses two rows:
+Name / Project, then Description / Version. DOM and keyboard order follow these
+rows; narrow screens stack Name, Project, Description, Version. Maximum run duration replaces
 the ambiguous Timeout label; it includes preparation and cancels the run at its
 limit, without undoing external side effects.
 Do not repeat project-picker or list enable/pause instructions in the editor.
 Scheduling notes belong inside When to run: daylight-saving skip/repeat rules
 appear only for daily/weekly/monthly wall-clock schedules, and absent-day rules
-only for numeric monthly days 29–31 (not Last day). Once and Interval show only
-the non-overlap rule, which applies to every schedule type: an occurrence is
-skipped while an earlier occurrence is pending/running. The removed project hint
+only for numeric monthly days 29–31 (not Last day). Once and Interval have no
+timing note. The non-overlap rule belongs in Execution for every schedule type:
+an occurrence is skipped while an earlier occurrence is pending/running. The removed project hint
 must not leave a dangling `aria-describedby` on the picker.
 Use React Select's standard Input component here: Atlaskit 16's default wrapper
 stringifies its absent description as `"undefined"`. Native live-region references
@@ -42,8 +59,15 @@ Recent runs is a native keyboard-accessible disclosure, collapsed on each modal
 opening, with the count of history entries returned by the API (up to 300).
 Claimed/running entries precede queued entries and then recent terminal results,
 so an old catch-up run cannot lose its Cancel control behind newer history.
-Expanding renders up to 100 entries and explains that limit when needed; polling
-updates the count without resetting expansion. Open recording is an inline link
+Expanding paginates every returned entry with the recordings modal's segmented
+Per page control (10 by default, or 20/50/100) and Previous/Page/Next navigation.
+Changing page size starts at page one; reselecting the current size preserves the
+page. Page status is a polite, atomic live region for assistive technology. Native
+page buttons support keyboard activation and wrap within narrow modals. Closing
+and reopening restores the initial collapsed, ten-per-page view.
+Polling preserves expansion and the selected
+page, clamping to the last available page when history shrinks. Empty history has
+no pagination controls. Open recording is an inline link
 that retains the existing busy/error guard and does not navigate away.
 Buttons, selects and checkboxes use the existing Atlaskit components, not native
 OS controls. Select labels explicitly target their input IDs. Field-box CSS
@@ -71,8 +95,10 @@ and refresh the list. Polling cannot replace an open draft.
 expand-in-place folder interaction. Nested folders are indented and toggle
 without selecting a runnable target or closing the menu. Only project rows select
 a target; schedules always run its main graph, so there is no graph-selection step.
-The selected project's ancestors expand on opening. Project rows have icons and
-visible filenames. Search matches project names and paths; identical display names retain separate
+The selected project's ancestors expand on opening. Dropdown project rows have icons and
+visible filenames. The closed field shows only the icon and project name on one
+line (ellipsis for long names); its tooltip retains the full relative path.
+Search matches project names and paths; identical display names retain separate
 metadata IDs (`projectMetadataId`), never tree row IDs (`id`, which are paths in
 filesystem/SQLite mode). Default selection, lookup, list labels and saved payloads
 use that same immutable identity. Missing metadata IDs are not runnable choices;
@@ -142,7 +168,7 @@ silently rebound: edit and reselect the intended project to repair the target.
   SQL-wide concurrency defaults to one;
   `RIVET_SCHEDULED_RUNS_MAX_CONCURRENT=1..8` must be consistent across control replicas.
   Maximum run duration is 1–1,440 minutes including preparation. Limits: 1,000 schedules, 1 MiB
-  input each, 1,000 terminal history entries (300 returned, 100 displayed).
+  input each, 1,000 terminal history entries (300 returned, paginated in the UI).
   Housekeeping prunes after queue/lease retirement; active entries survive and
   do not consume terminal-history slots. List limits apply after active-first
   ordering, with claimed/running work prioritized over queued work.

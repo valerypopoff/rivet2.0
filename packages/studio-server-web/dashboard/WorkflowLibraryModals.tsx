@@ -4,7 +4,6 @@ import { LocalStorageUpgradePrompt } from './LocalStorageUpgradePrompt';
 import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { PublishedItemsModal } from './PublishedItemsModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
-import { WorkflowPublishedVersionHistoryModal } from './WorkflowPublishedVersionHistoryModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import type { HostedRouteConfig } from './types';
@@ -39,11 +38,8 @@ export const WorkflowLibraryModals: FC<{
   const {
     settingsModalOpen,
     settingsModalProject,
-    publishedHistoryProject,
     allProjects,
     closeSettingsModal,
-    openPublishedHistoryModal,
-    closePublishedHistoryModal,
     refresh,
     handlePublishedVersionRestored,
     onDeleteProject,
@@ -88,7 +84,6 @@ export const WorkflowLibraryModals: FC<{
           runRecordingsOpen ||
           runStatisticsOpen ||
           publishedItemsOpen ||
-          publishedHistoryProject != null ||
           projectModalProject != null
         }
         onStart={() => {
@@ -105,18 +100,12 @@ export const WorkflowLibraryModals: FC<{
           onClose={closeSettingsModal}
           onRefresh={() => refresh(false, { preserveVisibleTreeOnError: true })}
           onDeleteProject={onDeleteProject}
-          onOpenPublishedHistory={openPublishedHistoryModal}
+          onPreviewPublishedVersion={onOpenPublishedVersionPreview}
+          onPublishedVersionRestored={handlePublishedVersionRestored}
           onOpenRecording={onOpenRecording}
           routeConfig={routeConfig}
         />
       ) : null}
-      <WorkflowPublishedVersionHistoryModal
-        isOpen={publishedHistoryProject != null}
-        project={publishedHistoryProject}
-        onClose={closePublishedHistoryModal}
-        onPreviewVersion={onOpenPublishedVersionPreview}
-        onRestored={handlePublishedVersionRestored}
-      />
       <RunRecordingsModal
         isOpen={runRecordingsOpen}
         resetToken={runRecordingsResetToken}

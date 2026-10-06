@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { scheduledRunsRouter } from '../../scheduled-runs/router.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { projectBundleRouter } from './project-bundle-router.js';
+import { listIncomingProjectReferences } from './project-references.js';
 import { z } from 'zod';
 import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
 
@@ -782,6 +783,23 @@ workflowsRouter.post(
     });
     notifyWorkflowTreeChanged(req);
     res.json(result);
+  }),
+);
+
+workflowsRouter.get(
+  '/projects/references',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { relativePath, projectId } = z
+      .object({ relativePath: z.string().min(1), projectId: z.string().min(1).optional() })
+      .parse(req.query);
+    const { signal, cleanup } = createRequestAbortSignal(req, res);
+    try {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json(await listIncomingProjectReferences(relativePath, projectId, signal));
+    } finally {
+      cleanup();
+    }
   }),
 );
 

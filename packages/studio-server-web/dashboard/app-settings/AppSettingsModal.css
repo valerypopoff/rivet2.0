@@ -102,8 +102,8 @@
 
 .app-settings-field-help {
   color: var(--grey-light);
-  font-size: var(--workflow-library-font-size-s);
-  line-height: 1.35;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
 }
 
 .app-settings-inline-note {

@@ -166,7 +166,13 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   await row.click();
   await page.locator('.active-project-more-button').click();
   const settings = await checkTheme('workflow-project-settings-modal');
-  await expect(settings.getByRole('tab')).toHaveText(['Endpoint', 'Web apps', 'LLM profile suspension']);
+  await expect(settings.getByRole('tab')).toHaveText([
+    'Endpoint',
+    'Web apps',
+    'LLM profile suspension',
+    'Published version history',
+    'Danger zone',
+  ]);
   await settings.getByRole('tab', { name: 'LLM profile suspension' }).click();
   const suspended = settings.locator('.project-settings-llm-health-row-suspended');
   const recovering = settings.locator('.project-settings-llm-health-row-recovery');
@@ -179,10 +185,22 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   await expect.poll(() => healthRequests.length).toBeGreaterThanOrEqual(2);
   expect(new Set(healthRequests)).toEqual(new Set([project.projectMetadataId]));
   await settings.getByRole('tab', { name: 'Endpoint', exact: true }).click();
-  await settings.getByRole('button', { name: 'Published version history' }).click();
-  await close(await checkTheme('workflow-published-version-history-modal'));
-  // History replaces Project Settings; close it too if the parent was retained.
-  if (await settings.isVisible()) await close(settings);
+  await settings.getByRole('tab', { name: 'Published version history' }).click();
+  await expect(settings.getByRole('tabpanel', { name: 'Published version history' })).toContainText(
+    'No published versions',
+  );
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await settings.getByRole('tab', { name: 'Danger zone' }).click();
+  await expect(settings.getByRole('button', { name: 'Delete project' })).toBeDisabled();
+  await expect(settings).toContainText('permanent and cannot be undone');
+  const dangerHelp = settings.locator('.project-settings-danger-section .project-settings-help').first();
+  await expect(dangerHelp).toHaveCSS('font-size', '14px');
+  await expect(dangerHelp).toHaveCSS('line-height', '21px');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const tablist = settings.getByRole('tablist');
+  expect(await tablist.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(settings.getByRole('tab', { name: 'Published version history' })).toBeVisible();
+  await close(settings);
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Download', exact: true }).click();
   await close(await checkTheme('workflow-project-version-modal'));

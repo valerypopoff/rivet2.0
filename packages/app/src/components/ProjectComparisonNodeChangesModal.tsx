@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type FC } from 'react';
+import { lazy, Suspense, useState, type FC } from 'react';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { css } from '@emotion/react';
@@ -16,6 +16,7 @@ import {
   type ResolvedProjectCompareSideLabels,
 } from '../state/projectComparison.js';
 import { AppModalHeader } from './AppModalHeader.js';
+import { LabeledToggle } from './LabeledToggle.js';
 
 const PROJECT_COMPARE_NODE_CHANGES_MODAL_WIDTH = 'max(700px, 30vw, min(968px, calc(100vw - 48px)))';
 const LazyProjectComparisonDiffEditor = lazy(() => import('./ProjectComparisonDiffEditor.js'));
@@ -84,15 +85,12 @@ const styles = css`
 
 export const ProjectComparisonNodeChangesModalRenderer: FC = () => {
   const viewingNode = useAtomValue(viewingProjectComparisonNodeState);
-  const setViewingNode = useSetAtom(viewingProjectComparisonNodeState);
-  useEffect(() => {
-    if (!viewingNode) setViewingNode(undefined);
-  }, [viewingNode, setViewingNode]);
 
   return <ModalTransition>{viewingNode == null ? null : <ProjectComparisonNodeChangesModal />}</ModalTransition>;
 };
 
 export const ProjectComparisonNodeChangesModal: FC = () => {
+  const [wrapLines, setWrapLines] = useState(false);
   const viewingNode = useAtomValue(viewingProjectComparisonNodeState);
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const setViewingNode = useSetAtom(viewingProjectComparisonNodeState);
@@ -168,11 +166,24 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
           {fieldComparisons.length === 0 ? (
             <div className="project-compare-node-meta">No node config attribute changes were found.</div>
           ) : (
-            <div className="project-compare-field-list">
-              {fieldComparisons.map((fieldComparison) => (
-                <NodeFieldComparisonRow key={fieldComparison.field} fieldComparison={fieldComparison} labels={labels} />
-              ))}
-            </div>
+            <>
+              <LabeledToggle
+                id="project-compare-wrap-lines"
+                label="Wrap lines"
+                isChecked={wrapLines}
+                onChange={setWrapLines}
+              />
+              <div className="project-compare-field-list">
+                {fieldComparisons.map((fieldComparison) => (
+                  <NodeFieldComparisonRow
+                    key={fieldComparison.field}
+                    fieldComparison={fieldComparison}
+                    labels={labels}
+                    wrapLines={wrapLines}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       </ModalBody>
@@ -188,7 +199,8 @@ export const ProjectComparisonNodeChangesModal: FC = () => {
 const NodeFieldComparisonRow: FC<{
   fieldComparison: ProjectNodeFieldComparison;
   labels: ResolvedProjectCompareSideLabels;
-}> = ({ fieldComparison, labels }) => (
+  wrapLines: boolean;
+}> = ({ fieldComparison, labels, wrapLines }) => (
   <section className="project-compare-field">
     <div className="project-compare-field-header">{getNodeFieldLabel(fieldComparison)}</div>
     <div className="project-compare-field-labels">
@@ -200,6 +212,7 @@ const NodeFieldComparisonRow: FC<{
         <LazyProjectComparisonDiffEditor
           previousText={formatNodeFieldValue(fieldComparison.before)}
           currentText={formatNodeFieldValue(fieldComparison.after)}
+          wrapLines={wrapLines}
         />
       </Suspense>
     </div>

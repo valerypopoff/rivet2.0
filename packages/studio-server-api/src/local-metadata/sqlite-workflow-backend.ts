@@ -561,6 +561,16 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       );
     });
   }
+  async readWorkflowProjectReferenceSnapshots(value: unknown) {
+    const projectPath = relative(value);
+    if (!projectPath.endsWith('.rivet-project')) throw badRequest('Expected project path');
+    const snapshots = await this.#catalog.readProjectReferenceSnapshots(projectPath);
+    if (!snapshots) throw createHttpError(404, 'Project not found');
+    return snapshots;
+  }
+  async listWorkflowProjectReferenceCatalog() {
+    return this.#catalog.listProjectReferenceCatalog();
+  }
   async readWorkflowProjectDownload(value: unknown, version: WorkflowProjectDownloadVersion) {
     const project = await this.#project(value),
       contents = version === 'published' ? project.publishedContents : project.contents;

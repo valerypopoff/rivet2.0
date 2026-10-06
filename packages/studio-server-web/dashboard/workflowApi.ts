@@ -5,6 +5,7 @@ import {
 } from '../../studio-server-shared/hosted-env';
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
+  type WorkflowProjectReferencesResponse,
   type WorkflowTreeChangeEvent,
   type WorkflowTreeSyncState,
 } from '../../studio-server-shared/workflow-types';
@@ -522,6 +523,17 @@ export async function fetchWorkflowProjectWebApps(relativePath: string): Promise
     cache: 'no-store',
   });
   return workflowJsonResponse<WorkflowProjectWebAppsResponse>(response);
+}
+
+export async function fetchWorkflowProjectReferences(
+  relativePath: string,
+  projectId: string | undefined,
+  signal: AbortSignal,
+): Promise<WorkflowProjectReferencesResponse> {
+  const query = new URLSearchParams({ relativePath });
+  if (projectId) query.set('projectId', projectId);
+  const response = await fetch(`${API}/workflows/projects/references?${query}`, { cache: 'no-store', signal });
+  return workflowJsonResponse<WorkflowProjectReferencesResponse>(response);
 }
 
 export async function publishWorkflowProjectWebApps(

@@ -123,6 +123,29 @@ async function fixture(run: (catalog: LocalWorkflowCatalog, root: string) => Pro
   }
 }
 
+test('reference scans read only current draft and active publications, not datasets or archived history', async () => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    const catalogBefore = catalog.listProjectReferenceCatalog();
+    // Removing unrelated payloads proves this read does not materialize them.
+    for (const contents of [
+      source.datasetsContents!,
+      source.publishedWebApps[0]!.datasetsContents!,
+      source.publishedVersions[0]!.contents,
+    ]) {
+      const hash = createHash('sha256').update(contents).digest('hex');
+      await fs.rm(path.join(root, 'objects', hash.slice(0, 2), hash), { force: true });
+    }
+    assert.deepEqual(await catalog.readProjectReferenceSnapshots(source.relativePath), [
+      { source: { kind: 'saved-latest' }, contents: source.contents },
+      { source: { kind: 'published-endpoint', label: 'story' }, contents: source.publishedContents },
+      { source: { kind: 'published-web-app', label: 'story-ui' }, contents: source.publishedWebApps[0]!.contents },
+    ]);
+    assert.deepEqual(catalog.listProjectReferenceCatalog(), catalogBefore);
+  });
+});
+
 test('local catalog moves preserve recording rows and reject structural phantom writes', async () => {
   await fixture(async (catalog) => {
     catalog.importFolder('folder');

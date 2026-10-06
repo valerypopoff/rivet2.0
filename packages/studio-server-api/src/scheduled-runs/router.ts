@@ -58,6 +58,12 @@ scheduledRunsRouter.post(
     res.json({ times });
   }),
 );
+scheduledRunsRouter.get(
+  '/summary',
+  asyncHandler(async (_req, res) => {
+    res.json({ enabledCount: await getScheduledRunService().store.enabledCount() });
+  }),
+);
 const save = async (body: any, id?: string) => {
   const key = id ? undefined : requestId(body?.requestId);
   const draft = validateScheduledRun(body?.draft, id ? Date.now() : 0);

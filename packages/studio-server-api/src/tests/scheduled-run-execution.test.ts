@@ -160,6 +160,7 @@ test('scheduled root uses real cross-project execution and root/child recording 
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/schedules`;
     try {
       assert.equal((await fetch(base)).status, 403);
+      assert.equal((await fetch(base + '/summary')).status, 403);
       const headers = { 'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(), 'Content-Type': 'application/json' };
       assert.equal((await fetch(base, { headers })).status, 200);
       const createBody = { requestId: randomUUID(), draft: { ...disabled, name: 'API schedule', enabled: true } };
@@ -170,6 +171,9 @@ test('scheduled root uses real cross-project execution and root/child recording 
       });
       assert.equal(response.status, 201);
       const saved = await response.json();
+      const summary = await fetch(base + '/summary', { headers });
+      assert.equal(summary.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(await summary.json(), { enabledCount: 1 });
       const repeated = await fetch(base, { method: 'POST', headers, body: JSON.stringify(createBody) });
       assert.equal(repeated.status, 201);
       assert.equal((await repeated.json()).id, saved.id);

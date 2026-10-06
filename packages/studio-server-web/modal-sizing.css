@@ -5,6 +5,8 @@
   --studio-modal-min-width: 700px;
   --studio-modal-max-width: 960px;
   --studio-modal-gutter: 16px;
+  --studio-modal-description-font-size: 14px;
+  --studio-modal-description-line-height: 1.5;
 }
 
 /* Popovers and responsive activity drawers are not ordinary modal windows.

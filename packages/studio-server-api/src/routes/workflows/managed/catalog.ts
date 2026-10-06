@@ -19,6 +19,7 @@ import { badRequest, conflict, createHttpError } from '../../../utils/httpError.
 import { createBlankProjectFile, sanitizeWorkflowName } from '../fs-helpers.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import { getWorkflowDownloadFileName, getWorkflowDuplicateProjectName } from '../workflow-project-naming.js';
+import type { WorkflowProjectReferenceSnapshot } from '../project-reference-snapshots.js';
 import {
   getManagedWorkflowFolderVirtualPath,
   getManagedWorkflowProjectVirtualPath,
@@ -706,6 +707,63 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         });
         return result.project;
       }
+    },
+
+    async listWorkflowProjectReferenceCatalog() {
+      await deps.initialize();
+      const [workflows, apps] = await Promise.all([
+        deps.listWorkflowRows(),
+        deps.queryRows<WebAppPublicationRow>(deps.pool, 'SELECT * FROM workflow_web_apps ORDER BY app_id', []),
+      ]);
+      const byWorkflow = new Map<string, WebAppPublicationRow[]>();
+      for (const app of apps) {
+        const entries = byWorkflow.get(app.workflow_id) ?? [];
+        entries.push(app);
+        byWorkflow.set(app.workflow_id, entries);
+      }
+      return workflows.map((workflow) => ({
+        name: workflow.name,
+        relativePath: workflow.relative_path,
+        projectMetadataId: workflow.workflow_id,
+        identity: JSON.stringify([workflow, byWorkflow.get(workflow.workflow_id) ?? []]),
+      }));
+    },
+
+    async readWorkflowProjectReferenceSnapshots(relativePath: unknown): Promise<WorkflowProjectReferenceSnapshot[]> {
+      const workflow = await deps.getWorkflowByRelativePath(
+        deps.pool,
+        normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true }),
+      );
+      if (!workflow) throw createHttpError(404, 'Project not found');
+      const apps = await deps.queryRows<WebAppPublicationRow>(
+        deps.pool,
+        'SELECT * FROM workflow_web_apps WHERE workflow_id = $1 ORDER BY slug',
+        [workflow.workflow_id],
+      );
+      const snapshots: WorkflowProjectReferenceSnapshot[] = [];
+      const contents = new Map<string, string>();
+      const read = async (revisionId: string) => {
+        const cached = contents.get(revisionId);
+        if (cached !== undefined) return cached;
+        const revision = await deps.getRevision(deps.pool, revisionId);
+        if (!revision || revision.workflow_id !== workflow.workflow_id)
+          throw createHttpError(409, 'Project revision is unavailable.');
+        const text = await deps.readRevisionProjectContents(revision);
+        contents.set(revisionId, text);
+        return text;
+      };
+      snapshots.push({ source: { kind: 'saved-latest' }, contents: await read(workflow.current_draft_revision_id) });
+      if (workflow.published_revision_id)
+        snapshots.push({
+          source: { kind: 'published-endpoint', label: workflow.published_endpoint_name ?? workflow.endpoint_name },
+          contents: await read(workflow.published_revision_id),
+        });
+      for (const app of apps)
+        snapshots.push({
+          source: { kind: 'published-web-app', label: app.slug },
+          contents: await read(app.revision_id),
+        });
+      return snapshots;
     },
 
     async readWorkflowProjectDownload(
