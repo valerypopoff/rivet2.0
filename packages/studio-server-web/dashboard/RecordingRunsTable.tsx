@@ -129,6 +129,9 @@ function RecordingRow({
           <div className="run-recordings-run-header">
             <div className="run-recordings-run-main">
               <div className="run-recordings-run-title">
+                {recording.executionIdentity?.surface === 'scheduled' ? (
+                  <span>Scheduled · {recording.executionIdentity.scheduleName ?? 'Scheduled run'} · </span>
+                ) : null}
                 {isChild ? <span className="run-recordings-sub-run-label">Sub-run · </span> : null}
                 {formatTimestamp(recording.createdAt)}
               </div>

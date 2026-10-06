@@ -109,7 +109,11 @@ const certificateSchema = z
       })
       .strict(),
     operational: z
-      .object({ 'evaluation-runs.sqlite': digest.nullable(), 'llm-profile-health.sqlite': digest.nullable() })
+      .object({
+        'evaluation-runs.sqlite': digest.nullable(),
+        'llm-profile-health.sqlite': digest.nullable(),
+        'scheduled-runs.sqlite': digest.nullable().optional(),
+      })
       .strict(),
   })
   .strict();

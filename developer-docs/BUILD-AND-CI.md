@@ -872,6 +872,20 @@ surface merely to reduce image size. Included workspaces also retain their
 existing package licenses and readmes. The staging regression verifies that local
 overrides still win over an otherwise loadable hoisted version.
 
+`studio-server:verify:repo-structure` owns the production source-copy contract:
+all manifests precede the immutable install, source directories follow it, and
+`COPY . .` is forbidden because it would recopy the dependency cache. The API
+`proxy-image-contract.test.ts` keeps executor ports, build targets, entrypoints
+and Compose wiring under test; it must not require the retired whole-checkout
+copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
+dependency resolution behavior rather than matching Dockerfile text.
+The shared image-layout guard checks actual instruction order, not just the
+presence of a manifest string: root inputs, Yarn cache, package-manager check
+and every workspace manifest must precede installation; packages, scripts and
+deployment sources must follow it. Synthetic fixtures in
+`scripts/ci/ci-performance.test.mjs` reject absent/late inputs, comment-only
+copies, early sources and whole-checkout copies, and accept CRLF/continuations.
+
 Wrappers that build Docker images from this source should keep the Rivet build
 surface narrow:
 
@@ -902,8 +916,8 @@ Rust/Tauri targets, desktop sidecars, browser-test artifacts, and existing build
 outputs are never image inputs. The checked-in Yarn cache, Yarn release, patches,
 workspace manifests, and package source remain available to immutable installs.
 
-For cache-safe dependency install layers, copy only dependency metadata before
-`yarn install`:
+For cache-safe PnP wrapper dependency install layers, copy only dependency
+metadata before `yarn install`:
 
 - root `package.json`
 - `yarn.lock`
@@ -917,6 +931,9 @@ For cache-safe dependency install layers, copy only dependency metadata before
 
 Copy source files only after dependency installation. This keeps Docker
 dependency layers stable when regular TypeScript/source files change.
+Studio Server's own images use the node-modules linker instead: their
+`.dockerignore` excludes host PnP loaders, and the dependency stage copies the
+checked-in Yarn cache along with the manifests, lockfile and Yarn configuration.
 
 ### CLI
 

@@ -1,5 +1,16 @@
 # Architecture
 
+## Scheduled runs
+
+The sidebar's **Scheduled runs** action manages a server-owned durable SQL queue,
+not browser timers. Local `scheduled-runs.sqlite` and managed schema 14 share the
+transactional claim/revision contract. Execution uses saved project identity and
+the shared hosted processor policy, waits for full completion, and records root
+and called-project runs without adding endpoint statistics. Maintenance drains
+scheduled preparation/execution; uncertain worker loss is never automatically
+retried. See [Scheduled runs](./scheduled-runs.md) for calendar, lease, input,
+recording, backup and restored-installation guarantees and limits.
+
 ## Portable saved-project exports
 
 **Download with dependencies** connects API-owned snapshot collection and streaming

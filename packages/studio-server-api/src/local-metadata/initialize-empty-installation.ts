@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ScheduledRunStore } from '../scheduled-runs/store.js';
 import { FilesystemRivetEvaluationStore } from '../evaluation-runs/filesystem-store.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
 import { assertEmptyLocalOperationalDatabase } from './operational-schema.js';
@@ -104,18 +105,25 @@ export async function initializeEmptyLocalInstallation(root: string, source: Loc
     for (const [name, domain] of [
       ['evaluation-runs.sqlite', 'evaluations'],
       ['llm-profile-health.sqlite', 'health'],
+      ['scheduled-runs.sqlite', 'schedules'],
     ] as const) {
+      if (existing && domain === 'schedules' && !('scheduled-runs.sqlite' in existing.operational)) continue;
       const file = path.join(paths.operationalRoot, name);
       if (!existing) {
-        const empty =
-          domain === 'evaluations'
-            ? new FilesystemRivetEvaluationStore(file)
-            : new FilesystemRivetLLMProfileHealthStore(file);
-        try {
-          if (empty instanceof FilesystemRivetEvaluationStore) await empty.getLibrarySnapshot();
-          else await empty.list();
-        } finally {
-          await empty.dispose();
+        if (domain === 'schedules') {
+          const empty = ScheduledRunStore.sqlite(file);
+          await empty.close();
+        } else {
+          const empty =
+            domain === 'evaluations'
+              ? new FilesystemRivetEvaluationStore(file)
+              : new FilesystemRivetLLMProfileHealthStore(file);
+          try {
+            if (empty instanceof FilesystemRivetEvaluationStore) await empty.getLibrarySnapshot();
+            else await empty.list();
+          } finally {
+            await empty.dispose();
+          }
         }
       }
       const database = new DatabaseSync(file, { readOnly: true });

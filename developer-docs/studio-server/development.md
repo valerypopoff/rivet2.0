@@ -1,5 +1,26 @@
 # Development
 
+## Scheduled runs regression checks
+
+See [Scheduled runs](./scheduled-runs.md) for ownership, storage schema 14 and
+restore safety. After changes, run `yarn build:runtime`, API `test:files` for
+`scheduled-runs.test.ts`, `scheduled-run-execution.test.ts` and
+`managed-workflow-schema-migrations.test.ts`, plus the affected operational
+copy/first-start/recording suites. Run headless
+`yarn studio-server:ui:observe scheduled-runs.spec.ts`; it drives the modal against
+a disposable authenticated API process, SQLite scheduler and cross-project
+recording execution, including lost Create/Run/Retry responses, real server
+restart persistence, stale edits, temporary list outages and cancelling a waiting
+HTTP node. Unit checks also cover acknowledgement budgets/rollback and an outcome
+write failure after successful execution. Use `PLAYWRIGHT_BASE_URL` for a frontend served
+directly when the ambient authenticated proxy is unavailable. No Kubernetes
+rehearsal is required for modal changes. Concurrency/clock correctness on managed
+storage also needs the real PostgreSQL integration check described in the feature
+document, rather than relying only on SQL mocks.
+The standard web suite also includes `scheduled-run-api.test.ts` for malformed
+acknowledgements and overlapping retired-response races; the browser check verifies
+that accepted-action reconnection warnings disappear when the list recovers.
+
 See [GitHub Actions performance](ci-performance.md) for measured branch-workflow
 bottlenecks, bounded API/browser concurrency, shared desktop artifacts, and the
 verification boundaries that must remain intact when optimizing CI.
@@ -766,7 +787,7 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.20.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.21.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
@@ -789,6 +810,35 @@ these pins, regenerate `yarn.lock` and the committed PnP cache, then rerun the a
 and the bootstrap build. The three `brace-expansion` resolutions follow its
 separate 1.x, 2.x, and 5.x compatibility lines for the respective `minimatch`
 consumers; do not replace them with one cross-major override.
+
+The October 2026 audit fixes also require Compression 1.8.2, Proxy-addr
+2.0.8 and Source-map-js 1.2.2. Root resolutions keep these transitive fixes
+in the zero-install graph, including Express's `~2.0.7` Proxy-addr dependency.
+The Docusaurus `tinypool@^1.0.2` edge is deliberately overridden to 2.1.2:
+both critical prototype-pollution advisories require the 2.x fix, and the
+repository's Node 22 baseline satisfies its Node 20/22 requirement. Keep this
+override scoped to that dependency edge rather than forcing arbitrary future
+Tinypool consumers onto it. Validate the Docusaurus worker-thread SSG path
+(`future.faster.ssgWorkerThreads`, with
+`future.v4.removeLegacyPostBuildHeadAttribute`, and
+`DOCUSAURUS_SSG_WORKER_THREAD_COUNT=2`) when updating it; a normal single-threaded
+docs build does not exercise Tinypool. These fixes add no audit exceptions.
+See the upstream [Compression advisory](https://github.com/advisories/GHSA-vc2v-76pw-4v95),
+[Proxy-addr advisory](https://github.com/advisories/GHSA-jqcg-44mw-7w3h),
+[Source-map-js advisory](https://github.com/advisories/GHSA-68fv-2mgg-jv7q), and
+Tinypool [worker-options](https://github.com/advisories/GHSA-5gmw-xhrv-c9v3) /
+[run-options](https://github.com/advisories/GHSA-85c8-ppgw-ccpr) advisories.
+
+`yarn test:style` also runs `dependency-security-regressions.test.mjs` against
+Express's and Docusaurus's actual transitive dependencies. These behavioral
+checks cover spoofed forwarded addresses with short mapped/zero-leading IPv6
+trust prefixes, correct IPv4/mapped subnet matching, and inherited worker
+environment, arguments, and per-run filenames. Worker checks run in bounded,
+disposable child processes and use harmless sentinels, not executable payloads.
+They protect the security fixes without adding a full docs build to every test
+run; they do not replace the worker-thread SSG compatibility build above.
+Run them alone with
+`yarn node --test scripts/checks/dependency-security-regressions.test.mjs`.
 
 The command contract is deliberate: `yarn dev` starts the Rivet desktop/editor,
 while `yarn studio-server:dev`, `yarn studio-server:prod`, and

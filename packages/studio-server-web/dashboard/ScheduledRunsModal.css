@@ -1,0 +1,72 @@
+.scheduled-runs {
+  padding: 16px 0;
+  color: var(--text-color);
+}
+.scheduled-runs-heading,
+.scheduled-run-buttons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.scheduled-runs-heading {
+  justify-content: space-between;
+}
+.scheduled-runs h2,
+.scheduled-runs h3 {
+  margin: 12px 0;
+}
+.scheduled-runs p {
+  margin: 10px 0;
+}
+.scheduled-run-card {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border-color, #454545);
+  border-radius: 8px;
+}
+.scheduled-run-fields {
+  display: grid;
+  gap: 16px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.scheduled-run-fields label {
+  display: grid;
+  gap: 6px;
+}
+.scheduled-run-fields input:not([type='checkbox']),
+.scheduled-run-fields textarea,
+.scheduled-run-fields select {
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  color: inherit;
+  background: var(--background-color, #242424);
+  border: 1px solid var(--border-color, #555);
+  border-radius: 4px;
+}
+.scheduled-run-fields .scheduled-run-checkbox {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 12px;
+}
+.scheduled-runs button {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: inherit;
+  background: var(--background-color, #242424);
+  border: 1px solid var(--border-color, #555);
+  border-radius: 4px;
+}
+.scheduled-runs button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.scheduled-runs [role='alert'] {
+  padding: 12px;
+  border: 1px solid #d95;
+  margin: 12px 0;
+}

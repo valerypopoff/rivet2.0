@@ -1,5 +1,14 @@
 # Local metadata storage upgrade
 
+Scheduled-run definitions/history are an additional operational domain in
+`scheduled-runs.sqlite`. Fresh initialization and local copy create and certify
+it; earlier certificates without this optional domain remain readable. Existing
+schedule files participate in capacity/source checks. Scheduled preparation and
+execution block maintenance completion, and no new claims start while paused.
+Post-upgrade coordinated backups must include the selected operational schedule
+database and its WAL, not just project metadata. See [Scheduled runs](./scheduled-runs.md)
+for the separate-control-identity restore fence and clone limitations.
+
 ## Ownership and supported deployment
 
 This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. Upgrade availability is automatic for eligible, authenticated deployments; removing or setting the retired `RIVET_LOCAL_METADATA_UPGRADE_ENABLED` variable does not disable it. Availability never authorizes a copy or write resumption by itself.

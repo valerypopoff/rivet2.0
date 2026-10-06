@@ -85,7 +85,15 @@ export async function readVmMigrationSourceParts(roots: SourceRoots): Promise<Re
   const settings = createHash('sha256');
   await hashTree(settings, roots.appData, 'settings');
   parts.settings = settings.digest('hex');
-  for (const database of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+  for (const database of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
+    if (database === 'scheduled-runs.sqlite') {
+      try {
+        await fs.lstat(path.join(roots.appData, database));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+    }
     const hash = createHash('sha256');
     for (const suffix of ['', '-wal', '-shm']) {
       await hashTree(hash, roots.appData, `${database}${suffix}`);

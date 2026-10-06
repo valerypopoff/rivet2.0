@@ -108,7 +108,8 @@ export type RecordingRow = {
   status: 'succeeded' | 'failed' | 'suspicious';
   duration_ms: number;
   endpoint_name_at_execution: string;
-  execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | null;
+  execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | 'scheduled' | null;
+  scheduled_identity_json?: string | null;
   graph_id_at_execution: string | null;
   graph_name_at_execution: string | null;
   revision_key_at_execution: string | null;

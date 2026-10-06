@@ -94,13 +94,13 @@ export async function localCandidateFingerprint(controlRoot: string, generationI
   const hashes: Array<[string, string]> = [];
   for (const name of ['catalog.sqlite', 'settings.sqlite'])
     hashes.push([name, (await inspectLocalSqliteSnapshot(path.join(paths.root, name))).logicalHash]);
-  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
     const file = path.join(paths.operationalRoot, name);
     try {
       hashes.push([name, (await inspectLocalSqliteSnapshot(file)).logicalHash]);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      hashes.push([name, 'absent']);
+      if (name !== 'scheduled-runs.sqlite') hashes.push([name, 'absent']);
     }
   }
   const hash = createHash('sha256');

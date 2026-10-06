@@ -108,7 +108,8 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
     raw.surface !== 'workflow_endpoint' &&
     raw.surface !== 'web_app_action' &&
     raw.surface !== 'editor_local' &&
-    raw.surface !== 'subgraph_project'
+    raw.surface !== 'subgraph_project' &&
+    raw.surface !== 'scheduled'
   ) {
     return undefined;
   }
@@ -117,6 +118,9 @@ function normalizeExecutionIdentity(value: unknown): WorkflowRecordingExecutionI
 
   return {
     surface: raw.surface,
+    scheduleId: optionalString('scheduleId'),
+    scheduleName: optionalString('scheduleName'),
+    occurrenceId: optionalString('occurrenceId'),
     graphId: optionalString('graphId'),
     graphName: optionalString('graphName'),
     revisionKey: optionalString('revisionKey'),

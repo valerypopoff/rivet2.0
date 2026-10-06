@@ -110,7 +110,12 @@ function getTargetForRow(row: WorkflowRecordingStatisticsRow): WorkflowRunStatis
   const identity = row.executionIdentity;
   // Local editor evidence exists solely to make a suspension diagnosable. It
   // must never create a production endpoint or web-app analytics target.
-  if (identity?.surface === 'editor_local' || identity?.surface === 'subgraph_project') return null;
+  if (
+    identity?.surface === 'editor_local' ||
+    identity?.surface === 'subgraph_project' ||
+    identity?.surface === 'scheduled'
+  )
+    return null;
   if (identity?.surface === 'workflow_endpoint') {
     return { surface: 'endpoint', workflowId: row.workflowId };
   }

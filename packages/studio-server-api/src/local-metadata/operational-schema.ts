@@ -1,6 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 const schemas = {
+  schedules: {
+    rivet_schedules: ['id', 'revision', 'enabled', 'next_at', 'json'],
+    rivet_schedule_runs: ['id', 'schedule_id', 'status', 'owner', 'lease_until', 'scheduled_at', 'json', 'draft_json'],
+    rivet_schedule_installation: ['key', 'value'],
+    rivet_schedule_requests: ['id', 'fingerprint', 'expires_at', 'resource_id', 'json'],
+  },
   evaluations: {
     evaluation_library: ['singleton_key', 'revision', 'library_json', 'updated_at_ms'],
     evaluation_library_imports: ['source_fingerprint', 'imported_at_ms'],

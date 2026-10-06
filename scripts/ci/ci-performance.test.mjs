@@ -6,6 +6,47 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { desktopWebArtifact, verifyDesktopWebArtifact } from './desktop-web-artifact.mjs';
 import { nodeTestPrerequisites } from '../../packages/node/scripts/prepare-tests.mjs';
+import { assertImageDependencyLayout } from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
+
+test('image dependency layers require real inputs before installation and changing sources afterward', () => {
+  const manifest = 'packages/fixture/package.json';
+  const inputs = [
+    'COPY package.json yarn.lock .yarnrc.yml ./',
+    'COPY .yarn ./.yarn',
+    'COPY scripts/checks/check-package-manager.mjs ./scripts/checks/check-package-manager.mjs',
+    `COPY ${manifest} ./${manifest}`,
+  ];
+  const install =
+    'RUN --mount=type=cache,target=/cache \\\n+    YARN_NODE_LINKER=node-modules yarn install --immutable';
+  const sources = ['COPY packages ./packages', 'COPY scripts ./scripts', 'COPY deploy ./deploy'];
+  const fixture = ['FROM node:24-alpine AS builder', 'WORKDIR /app', ...inputs, install, ...sources];
+  const check = (lines) => assertImageDependencyLayout(lines.join('\n'), [manifest], 'fixture');
+  assert.doesNotThrow(() => check(fixture));
+  assert.doesNotThrow(() => assertImageDependencyLayout(fixture.join('\r\n'), [manifest], 'CRLF fixture'));
+  for (const input of inputs) {
+    const without = fixture.filter((line) => line !== input);
+    assert.throws(() => check(without), /before install/);
+    assert.throws(() => check([...without, input]), /before install/);
+    assert.throws(() => check([...without, `# ${input}`]), /before install/);
+  }
+  for (const source of sources) {
+    assert.throws(() => check([source, ...fixture.filter((line) => line !== source)]), /sources after install/);
+    assert.throws(() => check(fixture.filter((line) => line !== source)), /sources after install/);
+  }
+  assert.throws(() => check(fixture.filter((line) => line !== install)), /root Yarn lockfile/);
+  assert.throws(
+    () => check(fixture.map((line) => (line === install ? 'RUN yarn install --immutable-cache' : line))),
+    /root Yarn lockfile/,
+  );
+  assert.throws(() => check(fixture.filter((line) => line !== 'WORKDIR /app')), /work directory/);
+  assert.throws(
+    () => check(fixture.flatMap((line) => (line === install ? ['WORKDIR /wrong', line] : [line]))),
+    /work directory/,
+  );
+  for (const copy of ['COPY . .', 'COPY ./ ./']) {
+    assert.throws(() => check([...fixture, copy]), /recopy the dependency cache/);
+  }
+});
 
 // test-style: fixture-read: inspects only generated frontend artifacts, not implementation source.
 test('desktop frontend handoff detects stale, altered, missing and extra assets', async () => {
