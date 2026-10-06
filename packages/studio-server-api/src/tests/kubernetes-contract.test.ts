@@ -4,9 +4,79 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 
 import { readRepoFile, repoRoot } from './helpers/repo-contract-helpers.js';
 import { CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION } from '../routes/workflows/managed/schema-migrations.js';
+
+type RenderedResource = {
+  kind: string;
+  spec?: {
+    template?: {
+      spec: {
+        containers: {
+          name: string;
+          env?: { name: string; value?: string }[];
+          volumeMounts?: { name: string; mountPath: string }[];
+        }[];
+        volumes: { name: string; emptyDir?: { medium?: string; sizeLimit?: string } }[];
+      };
+    };
+  };
+};
+const deploymentYaml = createRequire(path.join(repoRoot, 'package.json'))('yaml') as {
+  parse(contents: string): {
+    services: Record<string, { environment?: string[]; volumes?: string[] }>;
+    volumes: Record<string, unknown>;
+  };
+  parseAllDocuments(contents: string): { toJS(): RenderedResource }[];
+};
+
+test('production and development Compose provide private disk-backed export storage independently of tmpfs', () => {
+  for (const filename of ['docker-compose.yml', 'docker-compose.dev.yml']) {
+    const model = deploymentYaml.parse(readRepoFile(`deploy/studio-server/compose/${filename}`));
+    const api = model.services.api!;
+    assert.ok(api.environment!.includes('RIVET_PROJECT_BUNDLE_SCRATCH_ROOT=/data/project-bundles'));
+    assert.ok(api.volumes!.includes('rivet_project_bundles:/data/project-bundles'));
+    assert.ok(
+      model.services['filesystem-artifacts-init']!.volumes!.includes('rivet_project_bundles:/data/project-bundles'),
+    );
+    assert.ok(Object.hasOwn(model.volumes, 'rivet_project_bundles'));
+    for (const service of ['web', 'proxy']) {
+      assert.equal(
+        model.services[service]!.volumes?.some(
+          (mount) => typeof mount === 'string' && mount.includes('project-bundles'),
+        ) ?? false,
+        false,
+      );
+    }
+  }
+});
+
+test('only the control backend mounts dedicated bounded node-disk export scratch', async () => {
+  const resources = deploymentYaml
+    .parseAllDocuments(await renderLocalKubernetesChart())
+    .map((document) => document.toJS());
+  const control = resources.find((resource) => resource.kind === 'StatefulSet')!.spec!.template!.spec;
+  const backend = control.containers.find((container) => container.name === 'backend')!;
+  assert.equal(
+    backend.env!.find((entry) => entry.name === 'RIVET_PROJECT_BUNDLE_SCRATCH_ROOT')?.value,
+    '/data/project-bundles',
+  );
+  assert.deepEqual(
+    backend.volumeMounts!.find((mount) => mount.name === 'project-bundles'),
+    { name: 'project-bundles', mountPath: '/data/project-bundles' },
+  );
+  assert.deepEqual(control.volumes.find((volume) => volume.name === 'project-bundles')?.emptyDir, { sizeLimit: '3Gi' });
+  for (const resource of resources.filter((resource) => resource.kind === 'Deployment')) {
+    for (const container of resource.spec!.template!.spec.containers) {
+      assert.equal(container.env?.some((entry) => entry.name === 'RIVET_PROJECT_BUNDLE_SCRATCH_ROOT') ?? false, false);
+      assert.equal(container.volumeMounts?.some((mount) => mount.name === 'project-bundles') ?? false, false);
+    }
+  }
+  await assertHelmTemplateFails(['writableVolumeLimits.projectBundles=0Gi'], /writableVolumeLimits.projectBundles/);
+  await assertHelmTemplateFails(['env.RIVET_PROJECT_BUNDLE_SCRATCH_ROOT=/tmp'], /deployment-owned/);
+});
 
 type K8sToolsModule = {
   resolveHelmBinOrThrow(rootDir: string, options?: { env?: NodeJS.ProcessEnv; launcherName?: string }): string;
@@ -472,20 +542,24 @@ test('dotenv cannot redirect replicated or single-host scratch paths but standal
   }
   const script =
     '. deploy/studio-server/images/lib/load-env.sh\n' +
-    'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; TMPDIR=/home/rivet/unsafe; npm_config_cache=/home/rivet/.npm; NPM_CONFIG_CACHE=/home/rivet/uppercase; XDG_CACHE_HOME=/home/rivet/.cache; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
+    'load_optional_dotenv() { RIVET_DEPLOYMENT_TOPOLOGY=standalone; TMPDIR=/home/rivet/unsafe; npm_config_cache=/home/rivet/.npm; NPM_CONFIG_CACHE=/home/rivet/uppercase; XDG_CACHE_HOME=/home/rivet/.cache; RIVET_PROJECT_BUNDLE_SCRATCH_ROOT=/tmp/unsafe; RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY=from-vault; }\n' +
     'load_optional_dotenv_preserving_deployment_storage /vault/dotenv\n' +
-    'printf "%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$TMPDIR" "$npm_config_cache" "$XDG_CACHE_HOME" "${NPM_CONFIG_CACHE-unset}" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY"';
+    'printf "%s|%s|%s|%s|%s|%s|%s" "$RIVET_DEPLOYMENT_TOPOLOGY" "$TMPDIR" "$npm_config_cache" "$XDG_CACHE_HOME" "${NPM_CONFIG_CACHE-unset}" "$RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY" "$RIVET_PROJECT_BUNDLE_SCRATCH_ROOT"';
   const run = (topology: string) =>
     execFileSync(shell, ['-c', script], {
       cwd: repoRoot,
-      env: { ...process.env, RIVET_DEPLOYMENT_TOPOLOGY: topology },
+      env: {
+        ...process.env,
+        RIVET_DEPLOYMENT_TOPOLOGY: topology,
+        RIVET_PROJECT_BUNDLE_SCRATCH_ROOT: '/data/project-bundles',
+      },
       encoding: 'utf8',
     });
-  assert.equal(run('replicated'), 'replicated|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
-  assert.equal(run('single-host'), 'single-host|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault');
+  assert.equal(run('replicated'), 'replicated|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault|/data/project-bundles');
+  assert.equal(run('single-host'), 'single-host|/tmp|/tmp/npm-cache|/tmp/cache|unset|from-vault|/data/project-bundles');
   assert.equal(
     run('standalone'),
-    'standalone|/home/rivet/unsafe|/home/rivet/.npm|/home/rivet/.cache|/home/rivet/uppercase|from-vault',
+    'standalone|/home/rivet/unsafe|/home/rivet/.npm|/home/rivet/.cache|/home/rivet/uppercase|from-vault|/tmp/unsafe',
   );
 });
 

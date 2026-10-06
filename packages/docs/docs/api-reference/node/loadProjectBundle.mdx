@@ -32,6 +32,22 @@ Run `node run.mjs` from the extracted directory. Configure provider credentials 
 environment variables as you would for any local Rivet execution. To select another
 root graph, pass `graph` to `bundle.createProcessor`.
 
+If preparation says **Not enough free scratch space**, the shortage is on the
+server, not your browser or local extraction directory. Current Docker deployments
+automatically use a private disk-backed export volume; update the deployment
+configuration as well as the API image. Standalone operators can select a private
+disk directory using `RIVET_PROJECT_BUNDLE_SCRATCH_ROOT`. Exports stream directly
+into the ZIP without raw staging. They require room for the ZIP, retained exports
+and a 32 MiB default free-space reserve, not a fixed 512 MiB minimum. Operators can
+tune headroom using `RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` (1 MiB to 1 GiB).
+Free disk space or correct the export mount, then retry.
+
+The same action works with projects stored on the VM (files or local SQLite) and
+with S3 + managed PostgreSQL. It uses the selected backend's saved project versions
+and matching datasets; you do not need to copy cloud projects onto the VM first.
+Even with cloud source storage, ZIP preparation uses private disk space on the API
+host. Download and browser resume use the same authenticated server URL in either setup.
+
 ## Contract
 
 ```typescript

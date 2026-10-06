@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createRequire } from 'node:module';
 
 import { extractBracedBlock, readRepoFile, readRepoJson, repoRoot } from './helpers/repo-contract-helpers.js';
 
@@ -742,6 +743,17 @@ test('CI and production launchers publish and run the Studio Server image set fr
 });
 
 test('Compose explicitly initializes every writable storage mount before runtime services start', () => {
+  type Mount = string | { target: string; read_only?: boolean };
+  const { parse } = createRequire(path.join(repoRoot, 'package.json'))('yaml') as {
+    parse(contents: string): { services: Record<string, { volumes: Mount[] }> };
+  };
+  const target = (mount: Mount) =>
+    typeof mount === 'string'
+      ? mount
+          .split(':')
+          .reverse()
+          .find((part) => part.startsWith('/'))!
+      : mount.target;
   for (const [topology, compose, expectedImage] of [
     [
       'production',
@@ -756,16 +768,33 @@ test('Compose explicitly initializes every writable storage mount before runtime
     assert.match(initializer, /user: ['"]0:0['"]/);
     assert.match(initializer, /entrypoint: \[['"]\/bin\/sh['"], ['"]-ec['"]\]/);
     assert.match(initializer, /command:\s*\n\s*- \|/);
-    assert.match(
-      initializer,
-      /for directory in \/workflows \/workflow-recordings \/data\/runtime-libraries \/data\/rivet-app \/data\/local-metadata; do/,
+    const services = parse(compose).services;
+    const initializedTargets = services['filesystem-artifacts-init']!.volumes.map(target);
+    const loop = /for directory in\s+([^;]+);\s*do/.exec(initializer);
+    assert.ok(loop, `${topology} initializer must own a directory loop`);
+    assert.deepEqual(
+      loop[1]!.trim().split(/\s+/).sort(),
+      initializedTargets.slice().sort(),
+      `${topology} loop must initialize every mounted storage directory, independent of order`,
     );
+    for (const mount of services.api!.volumes) {
+      const destination = target(mount);
+      const readOnly = typeof mount === 'string' ? mount.endsWith(':ro') : mount.read_only;
+      if (
+        !readOnly &&
+        (destination.startsWith('/data/') || ['/workflows', '/workflow-recordings'].includes(destination))
+      ) {
+        assert.ok(initializedTargets.includes(destination), `${topology} initializer must mount ${destination}`);
+      }
+    }
     assert.ok(initializer.includes('if [ "$$(stat -c \'%u:%g\' "$$directory")" != "10001:10001" ]; then'));
     assert.ok(initializer.includes('find "$$directory" -xdev -exec chown -h 10001:10001 {} +'));
     assert.match(initializer, /RIVET_WORKFLOWS_HOST_PATH.*:\/workflows/);
     assert.match(initializer, /RIVET_WORKFLOW_RECORDINGS_HOST_PATH.*:\/workflow-recordings/);
     assert.match(initializer, /RIVET_RUNTIME_LIBS_HOST_PATH.*:\/data\/runtime-libraries/);
     assert.match(initializer, /- rivet_local_metadata:\/data\/local-metadata/);
+    assert.match(initializer, /- rivet_project_bundles:\/data\/project-bundles/);
+    assert.match(initializer, /chmod 700 \/data\/project-bundles/);
     assert.match(
       initializer,
       /- type: volume\s+source: rivet_data\s+target: \/data\/rivet-app\s+volume:\s+nocopy: true/,

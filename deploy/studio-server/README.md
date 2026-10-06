@@ -170,6 +170,22 @@ recreate the backend. A full scratch mount causes a visible write failure for
 these standard temp paths. The graph-capable backend root is still writable,
 so this is not a blanket disk-write prohibition for arbitrary workflow code.
 
+Project dependency exports use a separate private **disk-backed** named volume,
+`rivet_project_bundles`, mounted at `/data/project-bundles` in both production
+and development Compose. No `.env` setting is required. Export accounting retains
+the 2 GiB scratch budget and a 32 MiB free-space reserve; optional
+`RIVET_PROJECT_BUNDLE_MAX_BYTES` / `RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES` tune
+payload and scratch budgets, not the underlying disk size.
+`RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` tunes reserve headroom (1 MiB to
+1 GiB). Files feed directly into the ZIP without raw staging; accounting follows
+actual compressed output and retained archives, not preallocated limits. Finished exports expire
+after 24 hours and cleanup protects active downloads. Keep ordinary tmpfs sizes
+unchanged: disk-backed exports avoid competing with workflow memory in tmpfs.
+Update the Compose files as well as the images, then recreate the stack through
+the normal launcher so the initializer creates and owns the new volume. Updating
+only an image does not install the mount. See the
+[bundle deployment checks](../../developer-docs/studio-server/project-bundles.md#deployment-scratch-capacity).
+
 Useful variants:
 
 | Command                           | Behavior                                                                                                                                                                    |

@@ -45,7 +45,7 @@
     "test": "yarn pretest && tsx --test test/**/*.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@valerypopoff/rivet2-core": "workspace:^",
     "dompurify": "^3.4.11",
     "emittery": "^1.0.1",

@@ -70,6 +70,8 @@ spec:
                   fieldPath: metadata.name
           volumeMounts:
 {{ include "rivet.pod.apiVolumeMounts" . | nindent 12 }}
+            - name: project-bundles
+              mountPath: /data/project-bundles
           resources:
 {{ toYaml .Values.resources.api | nindent 12 }}
         - name: executor
@@ -159,10 +161,15 @@ spec:
               value: {{ printf "http://127.0.0.1:%v/internal/executor-runtime-config" .Values.service.api.targetPort | quote }}
           volumeMounts:
 {{ include "rivet.pod.backendVolumeMounts" . | nindent 12 }}
+            - name: project-bundles
+              mountPath: /data/project-bundles
           resources:
 {{ toYaml .Values.resources.backend | nindent 12 }}
         {{- end }}
       volumes:
+        - name: project-bundles
+          emptyDir:
+            sizeLimit: {{ .Values.writableVolumeLimits.projectBundles }}
         - name: workspace
           emptyDir:
             sizeLimit: {{ .Values.writableVolumeLimits.workspace }}

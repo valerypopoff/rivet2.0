@@ -1,15 +1,12 @@
 import fs from 'node:fs/promises';
-import { createReadStream, createWriteStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
-import { pipeline } from 'node:stream/promises';
-import { Readable } from 'node:stream';
-import { ZipFile } from 'yazl';
 import { ProjectBundleError } from '@valerypopoff/rivet2-node';
 import { collectProjectBundle, DEFAULT_BUNDLE_MAX_BYTES, type BundleSource } from './project-bundle.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowsRoot } from '../../security.js';
+import { createProjectBundleArchive } from './project-bundle-archive.js';
 import type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
 
 export type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
@@ -47,7 +44,8 @@ export class ProjectBundleJobs {
         if (!ID.test(name)) continue;
         try {
           const directory = path.join(this.#root, name);
-          if (!(await fs.lstat(directory)).isDirectory() || (await fs.lstat(directory)).isSymbolicLink()) continue;
+          const directoryStat = await fs.lstat(directory);
+          if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) continue;
           const status = JSON.parse(
             await fs.readFile(path.join(directory, 'status.json'), 'utf8'),
           ) as ProjectBundleJobStatus;
@@ -73,10 +71,22 @@ export class ProjectBundleJobs {
           const job: Job = { status, controller: new AbortController(), readers: 0 };
           this.#jobs.set(name, job);
           try {
-            // Even ready jobs can retain staging after a crash between publication and cleanup.
+            if (status.phase === 'ready') {
+              try {
+                await this.#assertArchive(path.join(directory, 'bundle.zip'), status);
+              } catch {
+                status.phase = 'failed';
+                status.error = 'Bundle archive is unavailable. Prepare it again.';
+              }
+            }
+            // Older exporters could retain staging after publication; reconcile it too.
             await fs.rm(path.join(directory, 'staging'), { recursive: true, force: true });
             await fs.rm(path.join(directory, 'bundle.partial'), { force: true });
-            if (status.phase !== 'ready') await fs.rm(path.join(directory, 'bundle.zip'), { force: true });
+            if (status.phase !== 'ready') {
+              await fs.rm(path.join(directory, 'bundle.zip'), { force: true });
+              delete status.archiveBytes;
+              delete status.archiveHash;
+            }
           } catch {
             this.#markCleanupFailed(job);
           }
@@ -91,14 +101,26 @@ export class ProjectBundleJobs {
         }, 60_000);
         this.#cleanupTimer.unref();
       }
-    })();
+    })().catch((error) => {
+      // Keep one owner per attempt, but do not cache a transient mount/I/O failure
+      // for the lifetime of the server. No cleanup timer exists on this path.
+      this.#initialization = undefined;
+      throw error;
+    });
     await this.#initialization;
   }
   async #save(job: Job) {
     const directory = path.join(this.#root, job.status.id);
     const temporary = path.join(directory, `status-${randomUUID()}.tmp`);
-    await fs.writeFile(temporary, JSON.stringify(job.status), { mode: 0o600 });
-    await fs.rename(temporary, path.join(directory, 'status.json'));
+    try {
+      await fs.writeFile(temporary, JSON.stringify(job.status), { mode: 0o600 });
+      await fs.rename(temporary, path.join(directory, 'status.json'));
+    } catch (error) {
+      // Failed replacement must preserve the previous journal and discard only
+      // this attempt's temporary file. Directory cleanup remains the fallback.
+      await fs.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
   }
   #markCleanupFailed(job: Job) {
     job.cleanupFailed = true;
@@ -179,8 +201,8 @@ export class ProjectBundleJobs {
     return structuredClone(job.status);
   }
   async #prepare(job: Job, source: BundleSource, rootVersion: 'latest' | 'published') {
-    const directory = path.join(this.#root, job.status.id),
-      staging = path.join(directory, 'staging');
+    const directory = path.join(this.#root, job.status.id);
+    let writer: ReturnType<typeof createProjectBundleArchive> | undefined;
     const signal = job.controller.signal;
     const timeout = setTimeout(
       () => job.controller.abort(new Error('Export exceeded its 30 minute deadline.')),
@@ -188,47 +210,43 @@ export class ProjectBundleJobs {
     );
     timeout.unref();
     try {
-      await fs.mkdir(path.join(staging, 'projects'), { recursive: true, mode: 0o700 });
       const configured = Number(process.env.RIVET_PROJECT_BUNDLE_MAX_BYTES ?? DEFAULT_BUNDLE_MAX_BYTES);
       if (!Number.isSafeInteger(configured) || configured < 1 || configured > 8 * 1024 ** 3)
         throw new ProjectBundleError('Invalid project bundle size limit.');
       const scratchLimit = Number(process.env.RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES ?? 2 * 1024 ** 3);
       if (!Number.isSafeInteger(scratchLimit) || scratchLimit < 1 || scratchLimit > 32 * 1024 ** 3)
         throw new ProjectBundleError('Invalid project bundle size limit for scratch.');
-      const retainedJobs = this.#jobs;
-      // Progress is reported after a whole artifact, but its project and datasets
-      // are separate writes. Capacity owns a per-file counter, including metadata.
-      let stagedBytes = 0;
-      const writeStagedFile = async (name: string, contents: string) => {
-        signal.throwIfAborted();
-        const bytes = Buffer.byteLength(contents);
-        const retainedBytes = [...retainedJobs.values()].reduce(
-          (sum, entry) => sum + (entry.status.archiveBytes ?? 0),
-          0,
-        );
-        if (retainedBytes + (stagedBytes + bytes) * 2 > scratchLimit)
-          throw new ProjectBundleError(
-            'Project bundle exceeds the scratch budget. Remove old exports or increase the configured budget.',
-          );
-        const space = await fs.statfs(directory);
-        // Already-staged files still need room in the future archive.
-        if (space.bavail * space.bsize < stagedBytes + bytes * 2 + 512 * 1024 * 1024)
-          throw new ProjectBundleError('Not enough free scratch space to prepare this export.');
-        await fs.writeFile(path.join(staging, name), contents, { flag: 'wx', mode: 0o600 });
-        stagedBytes += bytes;
-      };
+      const reserveBytes = Number(process.env.RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES ?? 32 * 1024 * 1024);
+      if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 1024 * 1024 || reserveBytes > 1024 ** 3)
+        throw new ProjectBundleError('Invalid project bundle free-space reserve (1 MiB to 1 GiB).');
+      const archive = path.join(directory, 'bundle.partial');
+      writer = createProjectBundleArchive({
+        archive,
+        directory,
+        signal,
+        scratchLimit,
+        reserveBytes,
+        retainedBytes: () =>
+          [...this.#jobs.values()].reduce(
+            (sum, entry) => sum + (entry === job ? 0 : entry.status.archiveBytes ?? 0),
+            0,
+          ),
+        progress: (bytes) => {
+          job.status.archiveBytes = bytes;
+        },
+      });
       const captured = await collectProjectBundle({
         source,
         rootVersion,
-        signal,
+        signal: writer.signal,
         maxBytes: configured,
-        writeFile: writeStagedFile,
+        writeFile: writer.writeFile,
         progress: (_phase, projects, bytes) => {
           job.status.projects = projects;
           job.status.bytes = bytes;
         },
       });
-      await writeStagedFile(
+      await writer.writeFile(
         'README.txt',
         'Rivet project bundle\n\nExtract the complete ZIP. Install a release of @valerypopoff/rivet2-node that exports loadProjectBundle (bundle schema 1).\n' +
           'Older npm releases cannot load this bundle. Create run.mjs in the extracted directory:\n\n' +
@@ -243,35 +261,23 @@ export class ProjectBundleJobs {
           'Plugin declarations (no automatic installation):\n' +
           JSON.stringify(captured.manifest.plugins, null, 2),
       );
-      await captured.verify();
       job.status.phase = 'packaging';
       await this.#save(job);
-      const archive = path.join(directory, 'bundle.partial');
-      const zip = new ZipFile();
-      zip.once('error', (error: Error) => (zip.outputStream as Readable).destroy(error));
-      zip.addFile(path.join(staging, 'rivet-bundle.json'), 'rivet-bundle.json');
-      zip.addFile(path.join(staging, 'README.txt'), 'README.txt');
-      for (const a of captured.manifest.artifacts) {
-        for (const file of [a.project, ...(a.datasets ? [a.datasets] : [])])
-          zip.addFile(path.join(staging, file.path), file.path);
-      }
-      const written = pipeline(zip.outputStream, createWriteStream(archive, { flags: 'wx', mode: 0o600 }), { signal });
-      zip.end();
-      await written;
+      const completed = await writer.finish();
       await captured.verify();
-      const hash = createHash('sha256');
-      for await (const chunk of createReadStream(archive)) {
-        signal.throwIfAborted();
-        hash.update(chunk);
-      }
-      job.status.archiveBytes = (await fs.stat(archive)).size;
-      job.status.archiveHash = hash.digest('hex');
+      await writer.checkCapacity();
+      job.status.archiveBytes = completed.bytes;
+      job.status.archiveHash = completed.sha256;
       signal.throwIfAborted();
       await fs.rename(archive, path.join(directory, 'bundle.zip'));
       job.status.phase = 'ready';
       job.status.expiresAt = new Date(Date.now() + this.retentionMs).toISOString();
       await this.#save(job);
     } catch (error) {
+      await writer?.abort(error);
+      // Collection can wrap an abort as a dependency failure; preserve the writer's
+      // deliberate capacity error while still redacting raw filesystem exceptions.
+      error = writer?.error ?? error;
       job.status.phase = signal.aborted ? 'cancelled' : 'failed';
       // Deliberate domain errors only; nested storage/SQL/file exceptions may contain secrets and paths.
       job.status.error =
@@ -284,21 +290,13 @@ export class ProjectBundleJobs {
         delete job.status.archiveBytes;
         delete job.status.archiveHash;
       } catch {
-        // A failed archive unlink is just as blocking as failed staging cleanup.
+        // A failed archive unlink still owns disk until cleanup succeeds.
         // Never forget its retained bytes or admit another export around it.
         this.#markCleanupFailed(job);
       }
       await this.#save(job).catch(() => {});
     } finally {
       clearTimeout(timeout);
-      try {
-        await fs.rm(staging, { recursive: true, force: true });
-      } catch {
-        // Retained staging cannot be ignored by the next export's scratch budget.
-        // Expiry retries whole-job removal once existing downloads release their leases.
-        this.#markCleanupFailed(job);
-        await this.#save(job).catch(() => {});
-      }
     }
   }
   async status(id: string): Promise<ProjectBundleJobStatus> {
@@ -308,15 +306,20 @@ export class ProjectBundleJobs {
     return structuredClone(job.status);
   }
   async #settleTerminalJob(job: Job) {
-    // Terminal acknowledgement includes cleanup and release of the packaging
-    // slot. Otherwise a caller can observe failure, retry, and receive 409;
-    // or download a ready archive whose cleanup subsequently fails.
+    // Terminal acknowledgement includes writer drain, durable publication and
+    // release of the packaging slot. Otherwise retry can receive 409, or a ready
+    // archive can escape before its journal write fails and revokes readiness.
     if (!['collecting', 'packaging'].includes(job.status.phase)) await job.done;
   }
   #requireJob(id: string): Job {
     const job = this.#jobs.get(id);
     if (!ID.test(id) || !job) throw createHttpError(404, 'Project bundle export not found or expired.');
     return job;
+  }
+  async #assertArchive(archive: string, status: ProjectBundleJobStatus) {
+    const stat = await fs.lstat(archive);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== status.archiveBytes)
+      throw new Error('Archive unavailable');
   }
   async download(id: string) {
     await this.cleanup();
@@ -335,9 +338,7 @@ export class ProjectBundleJobs {
       }
     };
     try {
-      const stat = await fs.lstat(archive);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== status.archiveBytes)
-        throw new Error('Archive unavailable');
+      await this.#assertArchive(archive, status);
       return { archive, status, release };
     } catch {
       release();
@@ -378,9 +379,16 @@ export class ProjectBundleJobs {
   }
 }
 
-export const projectBundleJobs = new ProjectBundleJobs(
-  path.join(
-    os.tmpdir(),
+/** Deployment mounts supply disk-backed storage; standalone callers may choose their own base. */
+export function getProjectBundleScratchRoot() {
+  const configured = process.env.RIVET_PROJECT_BUNDLE_SCRATCH_ROOT?.trim();
+  if (configured && !path.isAbsolute(configured)) {
+    throw new Error('RIVET_PROJECT_BUNDLE_SCRATCH_ROOT must be an absolute directory path.');
+  }
+  return path.join(
+    configured || os.tmpdir(),
     `rivet-project-bundles-${createHash('sha256').update(getWorkflowsRoot()).digest('hex').slice(0, 16)}`,
-  ),
-);
+  );
+}
+
+export const projectBundleJobs = new ProjectBundleJobs(getProjectBundleScratchRoot());

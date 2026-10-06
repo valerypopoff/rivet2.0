@@ -51,6 +51,7 @@ async function startOwnedProcess(
     RIVET_WORKFLOWS_ROOT: path.join(root, 'workflows'),
     RIVET_WORKFLOW_RECORDINGS_ROOT: path.join(root, 'recordings'),
     RIVET_RUNTIME_LIBRARIES_ROOT: path.join(root, 'libraries'),
+    RIVET_PROJECT_BUNDLE_SCRATCH_ROOT: path.join(root, 'exports'),
     RIVET_KEY: 'async-fixture-key',
     RIVET_REQUIRE_UI_GATE_KEY: 'false',
     RIVET_API_PROFILE: 'combined',

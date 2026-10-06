@@ -25,10 +25,42 @@ import {
   assertLegacyRehearsalSource,
   rehearsalComposeInvocation,
   collectRehearsalDiagnostics,
+  rehearsalInitializerCommand,
 } from './local-upgrade-image-rehearsal.mjs';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+
+test('rehearsal initializer owns export scratch without losing the legacy source seed', (t) => {
+  const shell = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/sh.exe' : 'sh';
+  const probe = spawnSync(shell, ['-c', 'exit 0'], { encoding: 'utf8', timeout: 5000 });
+  if (probe.error?.code === 'ENOENT') return t.skip('POSIX shell unavailable');
+  assert.equal(probe.status, 0, probe.stderr);
+  // Observe shell actions without touching absolute fixture or production paths.
+  const script =
+    'mkdir() { printf "mkdir:%s\\n" "$*"; }; ' +
+    'chown() { printf "chown:%s\\n" "$*"; }; ' +
+    'chmod() { printf "chmod:%s\\n" "$*"; }; ' +
+    rehearsalInitializerCommand();
+  const result = spawnSync(shell, ['-ec', script], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 0, result.stderr);
+  const actions = result.stdout.trim().split(/\r?\n/);
+  assert.equal(actions[0], 'mkdir:-p /restored /workflows/empty');
+  assert.ok(actions[1].startsWith('chown:-R 10001:10001 '));
+  const owned = actions[1].slice('chown:-R 10001:10001 '.length).split(' ');
+  for (const directory of [
+    '/workflows',
+    '/workflow-recordings',
+    '/data/runtime-libraries',
+    '/data/rivet-app',
+    '/data/local-metadata',
+    '/data/project-bundles',
+    '/restored',
+  ])
+    assert.ok(owned.includes(directory), `${directory} must belong to the runtime user`);
+  assert.equal(actions[2], 'chmod:700 /data/project-bundles');
+  assert.equal(actions.length, 3);
+});
 
 test('Compose fixture excludes ambient app settings and provider credentials, and never loads repository dotenv', () => {
   const config = { project: 'owned', composeFile: path.resolve('owned/compose.json'), env: { RIVET_KEY: 'fixture' } };
