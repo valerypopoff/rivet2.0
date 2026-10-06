@@ -1,3 +1,5 @@
+@import '../modal-sizing.css';
+@import '../dropdown-styles.css';
 @import './app-settings/AppSettingsModal.css';
 @import './PublishedVersionHistoryModal.css';
 @import './ProjectSettingsModal.css';
@@ -40,8 +42,8 @@
   --workflow-library-row-gap: 8px;
   --workflow-library-row-padding: 6px;
   --workflow-library-footer-label-inset: calc(
-    var(--workflow-library-body-inset) + var(--workflow-library-row-padding) +
-    var(--workflow-button-height-s) + var(--workflow-library-row-gap)
+    var(--workflow-library-body-inset) + var(--workflow-library-row-padding) + var(--workflow-button-height-s) +
+      var(--workflow-library-row-gap)
   );
   position: relative;
   display: flex;
@@ -120,6 +122,8 @@
 }
 
 [data-testid='run-recordings-modal--blanket'],
+[data-testid='scheduled-runs-modal--blanket'],
+[data-testid='scheduled-run-editor-modal--blanket'],
 [data-testid='run-statistics-modal--blanket'],
 [data-testid='published-items-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
@@ -132,6 +136,8 @@
 
 [data-testid='workflow-project-settings-modal'],
 [data-testid='run-recordings-modal'],
+[data-testid='scheduled-runs-modal'],
+[data-testid='scheduled-run-editor-modal'],
 [data-testid='run-statistics-modal'],
 [data-testid='published-items-modal'],
 [data-testid='workflow-project-version-modal'],
@@ -160,6 +166,8 @@
 
 [data-testid='workflow-project-settings-modal--header'],
 [data-testid='run-recordings-modal--header'],
+[data-testid='scheduled-runs-modal--header'],
+[data-testid='scheduled-run-editor-modal--header'],
 [data-testid='run-statistics-modal--header'],
 [data-testid='published-items-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
@@ -171,6 +179,8 @@
 
 [data-testid='workflow-project-settings-modal--body'],
 [data-testid='run-recordings-modal--body'],
+[data-testid='scheduled-runs-modal--body'],
+[data-testid='scheduled-run-editor-modal--body'],
 [data-testid='run-statistics-modal--body'],
 [data-testid='published-items-modal--body'],
 [data-testid='workflow-project-version-modal--body'],

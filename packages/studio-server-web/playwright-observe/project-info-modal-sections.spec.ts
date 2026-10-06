@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { expectStudioModalSizing, expectStackedSettingsLayout } from './helpers/modalSizing';
 
 test('hosted project settings keeps the shared navigation and hides project references', async ({ page }) => {
   const projectId = 'project-settings-sections-project';
@@ -48,9 +49,7 @@ test('hosted project settings keeps the shared navigation and hides project refe
   await editor.getByRole('button', { name: 'Project settings', exact: true }).click();
 
   const modal = editor.getByTestId('project-settings-modal');
-  const modalWidth = await modal.evaluate((element) => element.getBoundingClientRect().width);
-  expect(modalWidth).toBeGreaterThanOrEqual(699);
-  expect(modalWidth).toBeLessThanOrEqual(701);
+  await expectStudioModalSizing(modal);
   const navigation = modal.getByRole('navigation', { name: 'Project settings' });
   await expect(navigation.getByRole('button')).toHaveText([
     'General',
@@ -90,4 +89,7 @@ test('hosted project settings keeps the shared navigation and hides project refe
   await expect(modal.locator('.project-info-section')).toContainText('Revisions');
   await expect(modal.locator('.project-info-foldable')).toHaveCount(0);
   await expect(editor.getByRole('button', { name: 'Done', exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 740, height: 1000 });
+  await expectStudioModalSizing(modal);
+  await expectStackedSettingsLayout(modal);
 });

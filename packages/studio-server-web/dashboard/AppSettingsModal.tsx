@@ -382,7 +382,7 @@ function OpenAppSettingsModal({
   const actionsDisabled = savingTab || tabActions.some((action) => action.disabled);
 
   return (
-    <ModalDialog testId="app-settings-modal" width="large" label="App settings" onClose={onClose}>
+    <ModalDialog testId="app-settings-modal" label="App settings" onClose={onClose}>
       <ModalBody>
         <div className="project-settings-modal-shell app-settings-modal-shell">
           <div className="project-settings-modal-header-row app-settings-modal-header-row">

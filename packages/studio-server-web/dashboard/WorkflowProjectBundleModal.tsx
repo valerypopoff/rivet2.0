@@ -148,7 +148,6 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
       <ModalDialog
         testId="workflow-project-bundle-modal"
         label="Download with dependencies"
-        width="medium"
         onClose={onClose}
       >
         <ModalBody>

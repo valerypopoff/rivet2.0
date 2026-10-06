@@ -12,8 +12,9 @@ import { ScheduledRunStore } from '../scheduled-runs/store.js';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 import { getActiveScheduledRunCount } from '../scheduled-runs/activity.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
+import { ExecutionRecorder } from '@valerypopoff/rivet2-node';
 
-test('scheduled root uses real cross-project execution and root/child recording wiring', async () => {
+test('scheduled root uses real cross-project execution and root/child recording wiring', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-execution-'));
   const keys = [
     'RIVET_WORKSPACE_ROOT',
@@ -88,6 +89,50 @@ test('scheduled root uses real cross-project execution and root/child recording 
     await store.finish(second.occurrence.id, 'worker', outcome);
     await recordings.flushWorkflowExecutionRecordingPersistence();
     assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+    const recordingFailure = await store.save({ ...disabled, record: true }, disabled.id, disabled.revision);
+    await store.runNow(recordingFailure.id, recordingFailure.revision);
+    const failedSetup = (await store.tick('worker'))!;
+    const recorderFailure = t.mock.method(ExecutionRecorder.prototype, 'record', () => {
+      throw new Error('Fixture recorder setup failure with sensitive contents');
+    });
+    try {
+      const failure = await runScheduledGraph(failedSetup, store, 'worker', new AbortController().signal);
+      assert.equal(failure.status, 'failed');
+      assert.equal(failure.recordingStatus, 'unavailable');
+      assert.equal(failure.recordingId, undefined);
+      assert.ok(!failure.reason?.includes('sensitive'));
+      await store.finish(failedSetup.occurrence.id, 'worker', failure);
+      const failedRun = (await store.list()).history.find((run) => run.id === failedSetup.occurrence.id)!;
+      assert.equal(failedRun.startedAt, undefined); // No processor invocation was accepted.
+      assert.equal(failedRun.status, 'failed');
+      assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+    } finally {
+      recorderFailure.mock.restore();
+    }
+    for (const committed of [false, true]) {
+      await store.runNow(recordingFailure.id, recordingFailure.revision);
+      const failedAcceptance = (await store.tick('worker'))!;
+      const accept = store.accept.bind(store);
+      const acceptanceFailure = t.mock.method(store, 'accept', async (...args: Parameters<typeof accept>) => {
+        if (committed) assert.equal(await accept(...args), true);
+        throw new Error('Fixture acceptance storage failure with sensitive contents');
+      });
+      try {
+        const failure = await runScheduledGraph(failedAcceptance, store, 'worker', new AbortController().signal);
+        assert.equal(failure.status, 'failed');
+        assert.equal(failure.recordingStatus, 'unavailable');
+        assert.equal(failure.recordingId, undefined);
+        assert.match(failure.reason!, /graph was not invoked/);
+        assert.ok(!failure.reason?.includes('sensitive'));
+        await store.finish(failedAcceptance.occurrence.id, 'worker', failure);
+        const failedRun = (await store.list()).history.find((run) => run.id === failedAcceptance.occurrence.id)!;
+        assert.equal(failedRun.startedAt !== undefined, committed);
+        await recordings.flushWorkflowExecutionRecordingPersistence();
+        assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+      } finally {
+        acceptanceFailure.mock.restore();
+      }
+    }
     const marker = path.join(root, 'app-data', 'vm-migration-maintenance.json');
     await fs.writeFile(marker, JSON.stringify({ version: 1, enteredAt: new Date().toISOString() }));
     await runtime.initializeScheduledRuns();

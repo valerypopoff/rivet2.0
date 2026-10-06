@@ -11,7 +11,7 @@ import type {
 } from '../../../studio-server-shared/scheduled-run-types.js';
 import { latestOccurrence, nextOccurrence, validateScheduledRun } from './calendar.js';
 import { SCHEDULE_SCHEMA_SQL } from './schema.js';
-import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
+import { assertLocalOperationalSchema, LOCAL_SCHEDULE_SCHEMA_VERSION } from '../local-metadata/operational-schema.js';
 import { createHttpError } from '../utils/httpError.js';
 import { requestId, requestFingerprint } from './requests.js';
 
@@ -38,7 +38,18 @@ export class ScheduledRunStore {
     const db = new DatabaseSync(file);
     try {
       if (existing) assertLocalOperationalSchema(db, 'schedules');
-      db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; ${SCHEDULE_SCHEMA_SQL}`);
+      db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
+      try {
+        // Recheck under the write lock: another process may have upgraded while
+        // this connection was waiting. DDL and its version marker commit together.
+        if (existing) assertLocalOperationalSchema(db, 'schedules');
+        db.exec(`${SCHEDULE_SCHEMA_SQL}\nPRAGMA user_version=${LOCAL_SCHEDULE_SCHEMA_VERSION};`);
+        assertLocalOperationalSchema(db, 'schedules');
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
       if (process.platform !== 'win32') chmodSync(file, 0o600);
     } catch (error) {
       db.close();
@@ -108,9 +119,13 @@ export class ScheduledRunStore {
   list(): Promise<ScheduledRunList> {
     return this.transaction(async (q) => ({
       schedules: (await q('SELECT json FROM rivet_schedules ORDER BY id')).map((r) => decode<ScheduledRun>(r)),
-      history: (await q('SELECT json FROM rivet_schedule_runs ORDER BY scheduled_at DESC, id DESC LIMIT 300')).map(
-        (r) => decode<ScheduledOccurrence>(r),
-      ),
+      // Old catch-up work must not lose its cancellation controls behind newer
+      // terminal history. Claimed/running work precedes queued and recent results.
+      history: (
+        await q(
+          "SELECT json FROM rivet_schedule_runs ORDER BY CASE WHEN status IN ('claimed','running') THEN 0 WHEN status='queued' THEN 1 ELSE 2 END, scheduled_at DESC, id DESC LIMIT 300",
+        )
+      ).map((r) => decode<ScheduledOccurrence>(r)),
     }));
   }
   acknowledged<T>(key: string, intent: unknown): Promise<T | undefined> {
@@ -254,7 +269,7 @@ export class ScheduledRunStore {
       [run.id, run.scheduleId, run.status, owner, lease, run.scheduledAt, JSON.stringify(run), draft],
     );
   }
-  private async enqueue(q: Query, s: ScheduledRun, at: number, id: string, reason?: string) {
+  private async enqueue(q: Query, s: ScheduledRun, at: number, id: string, now: number, reason?: string) {
     const pending =
       (
         await q(
@@ -269,9 +284,10 @@ export class ScheduledRunStore {
       name: s.name,
       projectId: s.projectId,
       scheduledAt: at,
+      queuedAt: now,
       status: pending ? 'skipped' : 'queued',
       ...(reason ? { reason } : {}),
-      ...(pending ? { reason: 'Previous occurrence is still pending or running.' } : {}),
+      ...(pending ? { finishedAt: now, reason: 'Previous occurrence is still pending or running.' } : {}),
     };
     await this.writeRun(q, run, JSON.stringify(s), null, null);
     return run;
@@ -282,7 +298,7 @@ export class ScheduledRunStore {
       if (!row) throw createHttpError(404, 'Schedule not found.');
       const s = decode<ScheduledRun>(row);
       if (s.revision !== revision) throw createHttpError(409, 'Schedule changed. Reload before running.');
-      return this.enqueue(q, s, now, randomUUID(), 'Manual run.');
+      return this.enqueue(q, s, now, randomUUID(), now, 'Manual run.');
     });
   }
   retry(id: string, key?: string): Promise<ScheduledOccurrence> {
@@ -294,7 +310,7 @@ export class ScheduledRunStore {
       // Retired/deleted schedules cannot be revived through historical records.
       if (!(await q('SELECT id FROM rivet_schedules WHERE id=$1', [draft.id])).length)
         throw createHttpError(409, 'Schedule was deleted.');
-      return this.enqueue(q, draft, now, randomUUID(), 'Explicit retry; earlier side effects may have occurred.');
+      return this.enqueue(q, draft, now, randomUUID(), now, 'Explicit retry; earlier side effects may have occurred.');
     });
   }
   cancel(id: string): Promise<void> {
@@ -364,6 +380,7 @@ export class ScheduledRunStore {
             s,
             at,
             id,
+            now,
             now - at > 60_000 ? 'Catch-up of missed work (one occurrence only).' : undefined,
           );
         s.nextAt = nextOccurrence(s.schedule, s.timeZone, now);
@@ -375,37 +392,49 @@ export class ScheduledRunStore {
           s.id,
         ]);
       }
-      // History is bounded independently of replay retention. Active rows survive.
+      // One queue entry per schedule bounds this scan to 1,000 rows. Retire all
+      // expired entries before choosing work, not one per two-second poll.
+      // Occurrence metadata is small; do not materialize up to 1,000 potentially
+      // 1 MiB input snapshots just to discard their expired queue entries.
+      let next: ScheduledOccurrence | undefined;
+      for (const row of await q(
+        "SELECT json FROM rivet_schedule_runs WHERE status='queued' ORDER BY scheduled_at,id",
+      )) {
+        const occurrence = decode<ScheduledOccurrence>(row);
+        // Catch-up may refer to an old due instant, but capacity waiting still
+        // has a deadline. Persist admission time rather than parsing reason text;
+        // legacy rows conservatively retain their original due-time deadline.
+        if (now - (occurrence.queuedAt ?? occurrence.scheduledAt) > 900_000) {
+          await q("UPDATE rivet_schedule_runs SET status='skipped',owner=NULL,lease_until=NULL,json=$1 WHERE id=$2", [
+            JSON.stringify({
+              ...occurrence,
+              status: 'skipped',
+              finishedAt: now,
+              reason: 'Capacity lateness window exceeded.',
+            }),
+            occurrence.id,
+          ]);
+          continue;
+        }
+        next ??= occurrence;
+      }
+      // Prune after all retirement transitions, including queue expiry. Active
+      // rows neither get evicted nor consume the 1,000 terminal-history slots.
       await q(
-        "DELETE FROM rivet_schedule_runs WHERE status NOT IN ('queued','claimed','running') AND id NOT IN (SELECT id FROM rivet_schedule_runs ORDER BY scheduled_at DESC, id DESC LIMIT 1000)",
+        "DELETE FROM rivet_schedule_runs WHERE status NOT IN ('queued','claimed','running') AND id NOT IN (SELECT id FROM rivet_schedule_runs WHERE status NOT IN ('queued','claimed','running') ORDER BY scheduled_at DESC, id DESC LIMIT 1000)",
       );
       if (
+        !next ||
         Number(
           (await q("SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status IN ('claimed','running')"))[0]!
             .count,
         ) >= maxActive
       )
         return;
-      const row = (
-        await q("SELECT * FROM rivet_schedule_runs WHERE status='queued' ORDER BY scheduled_at,id LIMIT 1")
-      )[0];
-      if (!row) return;
-      const occurrence = decode<ScheduledOccurrence>(row);
-      // A capacity queue is bounded by one entry per schedule and a 15 minute
-      // window, measured from due time (catch-up explicitly exempts downtime).
-      if (now - occurrence.scheduledAt > 900_000 && !occurrence.reason?.startsWith('Catch-up')) {
-        await this.writeRun(
-          q,
-          { ...occurrence, status: 'skipped', finishedAt: now, reason: 'Capacity lateness window exceeded.' },
-          row.draft_json,
-          null,
-          null,
-        );
-        return;
-      }
-      occurrence.status = 'claimed';
-      await this.writeRun(q, occurrence, row.draft_json, owner, now + 60_000);
-      return { occurrence, draft: JSON.parse(row.draft_json) };
+      next.status = 'claimed';
+      const draft = (await q('SELECT draft_json FROM rivet_schedule_runs WHERE id=$1', [next.id]))[0]!.draft_json;
+      await this.writeRun(q, next, draft, owner, now + 60_000);
+      return { occurrence: next, draft: JSON.parse(draft) };
     });
   }
   accept(id: string, owner: string, metadata: Pick<ScheduledOccurrence, 'revisionKey' | 'graphId'>): Promise<boolean> {

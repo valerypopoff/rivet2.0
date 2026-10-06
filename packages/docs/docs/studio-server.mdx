@@ -113,12 +113,26 @@ Return to hot reload with `yarn studio-server:dev`. Both commands use the same d
 
 ## Schedule useful work
 
-Open **Scheduled runs** at the bottom of the project sidebar and choose **Add
-scheduled run**. Give it a name, optionally describe it, select a project and
+Open **Scheduled runs** (calendar icon, just above **Settings**) at the bottom of
+the project sidebar and choose **Add scheduled run** to open its separate editor.
+Give it a name, optionally describe it, select a project and
 choose **Saved latest** or **Published**. Rivet runs that version's **Main Graph**:
 latest means its saved state at execution time, not unsaved editor changes.
 Publishing is not required for Saved latest. Project moves/renames retain the
 schedule's project identity; deleting the project or its main graph makes runs fail.
+The project picker works like the Subgraph node's **Other projects** picker:
+expand folders to browse nested projects, or type a project name or folder path
+to find projects even in collapsed folders. Project rows show their paths;
+select a project with the mouse or arrow keys and Enter. Folder rows only expand
+or collapse and cannot become a run target. Project and Version are adjacent.
+The footer stays visible while the form scrolls: Preview is on the left and the
+blue **Save** button on the right. Use the header's close button to discard changes.
+Saving or closing returns to the run list; editing an existing schedule also
+opens the separate editor.
+New schedules start enabled. Use **Pause** or **Enable** in the scheduled runs
+list to control automatic execution; editing a paused schedule does not enable it.
+If an older schedule shows **Unavailable project** despite the project still
+existing, edit the schedule and reselect its project before saving.
 
 Choose once, interval, daily, weekly or monthly, with an IANA time zone such as
 `Europe/London`. **Preview next runs** shows the calculated times. Intervals use
@@ -136,13 +150,23 @@ Run history remains available even when recording is off or fails.
 The server must stay online, but your browser can be closed. Missed runs are
 skipped by default; **Catch up latest only** starts only the newest missed run.
 Rivet avoids ordinary overlap for a schedule and defaults to one scheduled run
-at a time across the server. It limits capacity waiting to 15 minutes and supports
-an execution timeout of 1–1,440 minutes. Provider credentials, runtime libraries
-and other server execution settings still apply. Interactive User Input nodes
+at a time across the server. A run waiting for capacity is skipped after 15 minutes
+in the queue, including catch-up runs; downtime before catch-up is queued does
+not count toward that limit. Scheduling continues to track due work while other
+runs are busy. Rivet supports a **Maximum run duration (minutes)** of 1–1,440
+minutes, including preparation.
+At that limit, the server cancels the run; it cannot undo external side effects.
+Provider credentials, runtime libraries and other server execution settings
+still apply. Interactive User Input nodes
 cannot wait for a browser and fail in scheduled runs.
 
-Use **Pause**, **Edit**, **Delete** or **Run now** as needed. Deleting a schedule
-cancels pending work but does not stop an already-running graph; use **Cancel run**
+Use **Pause**, **Edit**, **Run now** or the trash icon in the card's top right
+as needed. **Recent runs** shows the available history count and starts collapsed;
+expand it to inspect runs and use the **Open recording** link for a replay.
+Active runs appear before completed history, so long-delayed work remains easy
+to find and cancel.
+Deleting a schedule cancels pending work but does not stop an already-running
+graph; use **Cancel run**
 for that. A failed/interrupted execution is not retried automatically: external
 side effects may already have happened. Inspect it before choosing **Retry run**,
 which uses that run's input/settings snapshot and warns about repeated effects.

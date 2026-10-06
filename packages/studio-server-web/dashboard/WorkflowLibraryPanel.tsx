@@ -1,6 +1,7 @@
 import Button from '@atlaskit/button';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
+import ScheduleIcon from 'majesticons/line/calendar-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
 import { useState } from 'react';
 import { ScheduledRunsModal } from './ScheduledRunsModal';
@@ -264,13 +265,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <div className="panel-bottom-actions">
-          <Button
-            appearance="subtle"
-            className="panel-bottom-button project-settings-secondary-button button-size-m"
-            onClick={() => setScheduledRunsOpen(true)}
-          >
-            <span className="panel-bottom-button-label">Scheduled runs</span>
-          </Button>
           <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
             <Button
               appearance="subtle"
@@ -302,6 +296,17 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             title="Browse published workflow endpoints and web apps"
           >
             <span className="panel-bottom-button-label">Published</span>
+          </Button>
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
+            onClick={() => setScheduledRunsOpen(true)}
+            title="Schedule saved projects to run automatically"
+          >
+            <span className="panel-bottom-button-icon" aria-hidden="true">
+              <ScheduleIcon />
+            </span>
+            <span className="panel-bottom-button-label">Scheduled runs</span>
           </Button>
           <Button
             appearance="subtle"

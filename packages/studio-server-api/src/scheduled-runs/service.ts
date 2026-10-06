@@ -49,11 +49,14 @@ export class ScheduledRunService {
     return operation;
   }
   private async pollOnce() {
-    if (this.stopping || !this.mayStart() || this.active.size >= this.maxConcurrent) return;
+    if (this.stopping || !this.mayStart()) return;
     const releaseActivity = beginScheduledActivity();
     let job: ClaimedRun | undefined;
     try {
-      job = await this.store.tick(this.owner, this.maxConcurrent);
+      // Keep due-time/lease reconciliation alive while every local slot is busy.
+      // Zero permits housekeeping but never another claim, even if a locally
+      // unwinding execution's durable lease has already expired.
+      job = await this.store.tick(this.owner, this.active.size >= this.maxConcurrent ? 0 : this.maxConcurrent);
     } catch (error) {
       releaseActivity();
       throw error;

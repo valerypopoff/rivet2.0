@@ -32,6 +32,8 @@ export type ScheduledOccurrence = {
   name: string;
   projectId: string;
   scheduledAt: number;
+  /** Durable queue admission time; absent in occurrences written by older servers. */
+  queuedAt?: number;
   startedAt?: number;
   finishedAt?: number;
   status: 'queued' | 'claimed' | 'running' | 'succeeded' | 'failed' | 'interrupted' | 'skipped' | 'cancelled';

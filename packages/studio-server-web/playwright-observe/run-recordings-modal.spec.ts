@@ -973,6 +973,13 @@ test.describe('Run recordings modal', () => {
     await expect(modal.locator('.run-recordings-details')).toHaveCSS('grid-template-rows', /^[\d.]+px$/);
     await modal.locator('.run-recordings-select__control').click();
     await expect(page.locator('.run-recordings-select__option').first()).toContainText('Any');
+    const selectedOption = page.locator('.run-recordings-select__option--is-selected');
+    await expect(selectedOption).toHaveCSS('box-shadow', 'none');
+    const hoveredOption = page.locator('.run-recordings-select__option').nth(1);
+    await hoveredOption.hover();
+    await expect(hoveredOption).toHaveCSS('box-shadow', 'none');
+    await expect(hoveredOption).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.08)');
+    await expect(selectedOption).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.08)');
     await page.locator('.run-recordings-select__option').first().click();
     await choosePageSizeTen(modal);
     await modal.getByRole('button', { name: 'Next', exact: true }).click();

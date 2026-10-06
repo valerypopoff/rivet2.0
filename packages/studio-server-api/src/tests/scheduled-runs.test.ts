@@ -12,8 +12,109 @@ import type { ScheduledRunDraft } from '../../../studio-server-shared/scheduled-
 import type { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { awaitPreparation } from '../scheduled-runs/cancellation.js';
+import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
 
 const initial = Date.parse('2026-01-01T00:00:00Z');
+test('the original three-table scheduler upgrades atomically without changing its schedules, history or binding', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-schema-'));
+  const file = path.join(root, 's.sqlite');
+  let store = ScheduledRunStore.sqlite(file, () => initial);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await store.bindInstallation('original');
+  const schedule = await store.save(draft({ enabled: false }));
+  await store.runNow(schedule.id, schedule.revision);
+  const before = await store.list();
+  await store.close();
+  const legacy = new DatabaseSync(file);
+  legacy.exec('DROP TABLE rivet_schedule_requests; PRAGMA user_version=0');
+  legacy.close();
+  const frozen = new DatabaseSync(file, { readOnly: true });
+  assertLocalOperationalSchema(frozen, 'schedules');
+  assert.equal(frozen.prepare('PRAGMA user_version').get()!.user_version, 0);
+  assert.equal(frozen.prepare("SELECT name FROM sqlite_master WHERE name='rivet_schedule_requests'").get(), undefined);
+  frozen.close();
+
+  const exec = DatabaseSync.prototype.exec;
+  const failure = t.mock.method(DatabaseSync.prototype, 'exec', function (this: DatabaseSync, sql: string) {
+    exec.call(this, sql);
+    if (sql.includes('PRAGMA user_version=1')) throw new Error('Interrupted before schema commit');
+  });
+  assert.throws(() => ScheduledRunStore.sqlite(file), /Interrupted before schema commit/);
+  failure.mock.restore();
+  const rolledBack = new DatabaseSync(file, { readOnly: true });
+  assert.equal(rolledBack.prepare('PRAGMA user_version').get()!.user_version, 0);
+  assert.equal(
+    rolledBack.prepare("SELECT name FROM sqlite_master WHERE name='rivet_schedule_requests'").get(),
+    undefined,
+  );
+  rolledBack.close();
+
+  store = ScheduledRunStore.sqlite(file, () => initial);
+  await store.bindInstallation('original');
+  assert.deepEqual(await store.list(), before);
+  await store.close();
+  const upgraded = new DatabaseSync(file);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get()!.user_version, 1);
+  assert.equal(upgraded.prepare('SELECT COUNT(*) AS count FROM rivet_schedule_requests').get()!.count, 0);
+  upgraded.exec('DROP TABLE rivet_schedule_requests');
+  upgraded.close();
+  assert.throws(() => ScheduledRunStore.sqlite(file), /missing tables/);
+});
+
+test('unmarked current scheduler databases retain receipts; unknown or incomplete schemas never receive DDL', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-schema-'));
+  const file = path.join(root, 's.sqlite');
+  let store = ScheduledRunStore.sqlite(file, () => initial);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const key = randomUUID();
+  const saved = await store.save(draft({ enabled: false }), undefined, 0, key);
+  await store.close();
+  const unmarked = new DatabaseSync(file);
+  unmarked.exec('PRAGMA user_version=0');
+  unmarked.close();
+  store = ScheduledRunStore.sqlite(file, () => initial);
+  assert.equal((await store.save(draft({ enabled: false }), undefined, 0, key)).id, saved.id);
+  await store.close();
+
+  for (const [name, damage, expected] of [
+    ['future', 'PRAGMA user_version=2', /unsupported schema version/],
+    [
+      'unrelated',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; CREATE TABLE unrelated(id TEXT)',
+      /missing tables/,
+    ],
+    [
+      'missing',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; DROP TABLE rivet_schedule_runs',
+      /missing tables/,
+    ],
+    [
+      'columns',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; ALTER TABLE rivet_schedule_runs RENAME COLUMN draft_json TO obsolete',
+      /incomplete schema/,
+    ],
+  ] as const) {
+    const damaged = path.join(root, `${name}.sqlite`);
+    await fs.copyFile(file, damaged);
+    const database = new DatabaseSync(damaged);
+    database.exec(damage);
+    const schema = database.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all();
+    const version = database.prepare('PRAGMA user_version').get();
+    database.close();
+    assert.throws(() => ScheduledRunStore.sqlite(damaged), expected);
+    const unchanged = new DatabaseSync(damaged, { readOnly: true });
+    assert.deepEqual(unchanged.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all(), schema);
+    assert.deepEqual(unchanged.prepare('PRAGMA user_version').get(), version);
+    unchanged.close();
+  }
+});
+
 test('PostgreSQL rollback failure preserves the original error and discards the uncertain connection', async () => {
   const primary = new Error('Lock failed'),
     secondary = new Error('Rollback failed');
@@ -49,6 +150,102 @@ const draft = (overrides: Partial<ScheduledRunDraft> = {}): ScheduledRunDraft =>
   timeoutMinutes: 5,
   missed: 'skip',
   ...overrides,
+});
+
+test('active runs remain discoverable and queue retirement retains exactly 1,000 terminal entries', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-history-'));
+  const file = path.join(root, 's.sqlite');
+  const store = ScheduledRunStore.sqlite(file, () => initial);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const schedule = await store.save(draft({ enabled: false }));
+  const base = await store.runNow(schedule.id, schedule.revision);
+  // Owned rows model a full history and an old catch-up run without thousands
+  // of durable API writes or waiting for wall-clock queue/lease deadlines.
+  const db = new DatabaseSync(file);
+  try {
+    db.exec('BEGIN IMMEDIATE; DELETE FROM rivet_schedule_runs');
+    const insert = db.prepare(
+      'INSERT INTO rivet_schedule_runs(id,schedule_id,status,owner,lease_until,scheduled_at,json,draft_json) VALUES(?,?,?,?,?,?,?,?)',
+    );
+    for (let index = 0; index < 1000; index++) {
+      const run = {
+        ...base,
+        id: `terminal-${index}`,
+        status: 'succeeded',
+        scheduledAt: initial - index,
+        finishedAt: initial,
+      };
+      insert.run(
+        run.id,
+        schedule.id,
+        run.status,
+        null,
+        null,
+        run.scheduledAt,
+        JSON.stringify(run),
+        JSON.stringify(schedule),
+      );
+    }
+    for (const status of ['running', 'claimed', 'queued', 'expired'] as const) {
+      const run = {
+        ...base,
+        id: status,
+        status: status === 'expired' ? 'queued' : status,
+        scheduledAt: initial - 86400_000,
+        queuedAt: status === 'expired' ? initial - 900_001 : initial,
+      };
+      insert.run(
+        run.id,
+        status,
+        run.status,
+        'worker',
+        initial + 60_000,
+        run.scheduledAt,
+        JSON.stringify(run),
+        JSON.stringify(schedule),
+      );
+    }
+    db.exec('COMMIT');
+    const before = (await store.list()).history;
+    assert.equal(before.length, 300);
+    assert.deepEqual(
+      before
+        .slice(0, 2)
+        .map((run) => run.id)
+        .sort(),
+      ['claimed', 'running'],
+    );
+    assert.ok(before.some((run) => run.id === 'queued'));
+    await store.tick('full-worker', 0);
+    assert.equal(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status NOT IN ('queued','claimed','running')")
+        .get()!.count,
+      1000,
+    );
+    assert.equal(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status IN ('queued','claimed','running')")
+        .get()!.count,
+      3,
+    );
+    const after = (await store.list()).history;
+    assert.deepEqual(
+      after
+        .slice(0, 2)
+        .map((run) => run.id)
+        .sort(),
+      ['claimed', 'running'],
+    );
+    assert.ok(after.some((run) => run.id === 'queued'));
+    // Oldest terminal entry (the expired queue row) is evicted in this tick.
+    assert.equal(db.prepare('SELECT id FROM rivet_schedule_runs WHERE id=?').get('expired'), undefined);
+  } finally {
+    db.close();
+  }
 });
 
 test('calendar preserves elapsed intervals and defines DST, month and once boundaries', () => {
@@ -101,6 +298,18 @@ test('calendar preserves elapsed intervals and defines DST, month and once bound
     validateScheduledRun(draft({ schedule: { kind: 'weekly', time: '10:00', weekdays: [2, 1, 2] } }), initial).schedule,
     { kind: 'weekly', time: '10:00', weekdays: [1, 2] },
   );
+  const once = { kind: 'once' as const, localTime: '2026-01-02T10:00' };
+  assert.equal(latestOccurrence(once, 'UTC', initial), null);
+  assert.equal(latestOccurrence(once, 'UTC', Date.parse('2026-01-02T10:00Z')), Date.parse('2026-01-02T10:00Z'));
+  // JSON objects with a toString property previously escaped validation as a
+  // TypeError (500); non-string wall-clock fields must always be a client error.
+  for (const value of [{ toString: '10:00' }, ['10:00'], null, 100]) {
+    for (const schedule of [
+      { kind: 'daily', time: value },
+      { kind: 'once', localTime: value },
+    ])
+      assert.throws(() => validateScheduledRun(draft({ schedule: schedule as never }), initial), { status: 400 });
+  }
 });
 
 test('request acknowledgements survive restart, completion and deletion without duplicating actions', async (t) => {
@@ -318,6 +527,7 @@ test('durable queue handles CAS, competing claims, overlap, cancellation and wor
   assert.equal(await a.accept(job.occurrence.id, owner, { graphId: 'g', revisionKey: 'r1' }), true);
   const duplicate = await b.runNow(s.id, s.revision);
   assert.equal(duplicate.status, 'skipped');
+  assert.equal(duplicate.finishedAt, now);
   now += 61_000;
   await a.finish(job.occurrence.id, owner, { status: 'succeeded' });
   const successor = await b.tick('new');
@@ -332,6 +542,107 @@ test('durable queue handles CAS, competing claims, overlap, cancellation and wor
   assert.equal(await a.accept(manual.id, 'old', { graphId: 'g' }), false);
   await a.delete(changed.id, changed.revision);
   await assert.rejects(() => a.retry(job.occurrence.id), /deleted/);
+});
+
+test('catch-up capacity deadlines survive restart and expired queues do not block fresh work', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-lateness-'));
+  const file = path.join(root, 's.sqlite');
+  let now = initial;
+  let store = ScheduledRunStore.sqlite(file, () => now);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const catchup = await store.save(
+    draft({
+      missed: 'latest',
+      schedule: { kind: 'once', localTime: '2026-01-01T00:01' },
+    }),
+  );
+  now += 86400_000;
+  assert.equal(await store.tick('full', 0), undefined);
+  const admitted = (await store.list()).history[0]!;
+  assert.equal(admitted.scheduleId, catchup.id);
+  assert.equal(admitted.status, 'queued');
+  assert.equal(admitted.scheduledAt, initial + 60_000);
+  assert.equal(admitted.queuedAt, now);
+  // Downtime itself does not consume the new capacity window.
+  const claim = (await store.tick('worker'))!;
+  assert.equal(claim.occurrence.id, admitted.id);
+  // Unaccepted worker loss requeues without resetting admission time.
+  now += 61_000;
+  await store.tick('full', 0);
+  for (let i = 0; i < 3; i++) {
+    const s = await store.save(draft({ enabled: false }));
+    await store.runNow(s.id, s.revision);
+  }
+  await store.close();
+  store = ScheduledRunStore.sqlite(file, () => now);
+  now += 900_001;
+  const freshSchedule = await store.save(draft({ enabled: false }));
+  const fresh = await store.runNow(freshSchedule.id, freshSchedule.revision);
+  assert.equal((await store.tick('worker'))?.occurrence.id, fresh.id);
+  const history = (await store.list()).history;
+  const expired = history.filter((r) => r.id !== fresh.id);
+  assert.equal(expired.length, 4);
+  assert.ok(expired.every((r) => r.status === 'skipped' && r.finishedAt === now));
+  assert.equal(expired.find((r) => r.id === admitted.id)?.queuedAt, admitted.queuedAt);
+});
+
+test('busy workers still reconcile due work without claiming beyond their local capacity', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-busy-'));
+  let now = initial;
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => now);
+  let complete!: () => void;
+  let executions = 0;
+  const service = new ScheduledRunService(
+    store,
+    async (job, owner) => {
+      executions++;
+      assert.equal(await store.accept(job.occurrence.id, owner, { graphId: 'g' }), true);
+      await new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+      return { status: 'succeeded' };
+    },
+    () => true,
+    1,
+  );
+  t.after(async () => {
+    complete?.();
+    await service.stop(0);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const first = await store.save(draft({ enabled: false }));
+  const second = await store.save(draft());
+  await store.runNow(first.id, first.revision);
+  await service.tick();
+  while (!complete) await new Promise((resolve) => setImmediate(resolve));
+  now += 60_000;
+  assert.equal(await store.heartbeat((await store.list()).history[0]!.id, service.owner), true);
+  await service.tick();
+  let history = (await store.list()).history;
+  assert.equal(history.find((r) => r.scheduleId === second.id)?.status, 'queued');
+  assert.equal(executions, 1);
+  now += 60_000;
+  await service.tick();
+  history = (await store.list()).history;
+  assert.equal(history.filter((r) => r.scheduleId === second.id).length, 2);
+  assert.ok(history.some((r) => r.scheduleId === second.id && r.status === 'skipped' && r.finishedAt === now));
+  assert.equal(executions, 1);
+  const queued = history.find((r) => r.scheduleId === second.id && r.status === 'queued')!;
+  now += 900_001;
+  const fresh = await store.save(draft({ enabled: false }));
+  const waiting = await store.runNow(fresh.id, fresh.revision);
+  await service.tick();
+  history = (await store.list()).history;
+  assert.equal(history.find((r) => r.id === queued.id)?.reason, 'Capacity lateness window exceeded.');
+  // The original local execution is still unwinding after its durable lease
+  // expired. Reconciliation must not use that apparent SQL vacancy to overlap it.
+  assert.equal(history.find((r) => r.id === waiting.id)?.status, 'queued');
+  assert.equal(executions, 1);
+  complete();
+  while (service.activeCount) await new Promise((resolve) => setImmediate(resolve));
 });
 
 test('downtime skips or catches up only latest; restoration pauses copied schedules', async (t) => {

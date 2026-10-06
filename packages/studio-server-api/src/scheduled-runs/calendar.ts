@@ -112,7 +112,8 @@ export function validateScheduledRun(value: unknown, now: number): ScheduledRunD
   const s = v.schedule;
   if (!s || !['once', 'interval', 'daily', 'weekly', 'monthly'].includes(s.kind)) fail('Invalid schedule type.');
   if (s.kind === 'once') {
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s.localTime)) fail('Choose a one-time date and time.');
+    if (typeof s.localTime !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s.localTime))
+      fail('Choose a one-time date and time.');
     const next = nextOccurrence(s, v.timeZone, now);
     if (v.enabled && next === null) fail('One-time schedule must be in the future.');
   } else if (s.kind === 'interval') {
@@ -131,7 +132,7 @@ export function validateScheduledRun(value: unknown, now: number): ScheduledRunD
     if (!Number.isFinite(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== s.anchor.slice(0, 10))
       fail('Interval anchor must contain a real calendar date.');
   } else {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) fail('Use a valid 24-hour time.');
+    if (typeof s.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.time)) fail('Use a valid 24-hour time.');
     if (
       s.kind === 'weekly' &&
       (!Array.isArray(s.weekdays) ||
@@ -177,7 +178,10 @@ export function latestOccurrence(schedule: RunSchedule, zone: string, now: numbe
       period = schedule.minutes * 60_000;
     return anchor > now ? null : anchor + Math.floor((now - anchor) / period) * period;
   }
-  if (schedule.kind === 'once') return nextOccurrence(schedule, zone, 0);
+  if (schedule.kind === 'once') {
+    const at = nextOccurrence(schedule, zone, -Infinity);
+    return at !== null && at <= now ? at : null;
+  }
   const format = formatter(zone),
     current = wall(now, format);
   const [hour, minute] = schedule.time.split(':').map(Number);
