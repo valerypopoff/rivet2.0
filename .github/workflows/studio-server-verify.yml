@@ -132,6 +132,10 @@ jobs:
         run: yarn check:compiled-workspace-exports
       - name: Run API test shard
         run: node deploy/studio-server/scripts/run-api-tests.mjs --shard-index ${{ matrix.shard }} --shard-count 4
+        env:
+          # Rehearsal subprocesses consume this verified same-commit tsc build,
+          # avoiding hundreds of repeated source transformations across restarts.
+          RIVET_API_TEST_RUNTIME: prebuilt
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "API tests ${{ matrix.label }}/4"
@@ -298,6 +302,9 @@ jobs:
       - name: Verify async endpoint completion with managed storage
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:async-managed
+      - name: Verify managed scheduler claims and safe schedule import
+        if: matrix.lane == 'managed'
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:scheduled-managed
       - name: Verify VM-to-managed copy, retry, and exact readback
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed

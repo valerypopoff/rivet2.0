@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-06
+
+Changes since the last release-family bump in `6f8e9e6c8`, through `a4fca0b91`
+and the current uncommitted scheduled-runs implementation:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.15.0` → `2.16.0` | Adds portable project-bundle contracts and the Node `loadProjectBundle` API, cross-project dependency/dataset resolution, LLM Chat and Classifier Evaluate failure controls, optional Temperature normalization, and classifier response handling improvements. CLI and Evaluations remain required public npm companions. |
+| App | `2.21.0` → `2.22.0` | Adds matching failure-control editors, ownership-safe node settings, project/tab activation and browser recovery hardening, numeric editing fixes, and improved workflow selection. |
+| App Executor | `2.7.0` → `2.8.0` | Adds hosted migration admission/drain leases, coordinated startup readiness, child-recording opt-in and host reference-loader wiring; fixes Code runtime-package cache replacement. |
+| Docs | `2.13.0` → `2.14.0` | Documents local bundle execution, failure controls, project/recovery behavior, recordings/sub-runs, local SQLite upgrades and scheduled runs. |
+| All five Studio Server packages | `1.20.0` → `1.21.0` | Adds dependency-aware downloads, guided browser backup/SQLite migration and automatic fresh SQLite setup, tunnel-friendly bundled development, recording hierarchy/filter improvements, and durable scheduled runs. API, web, bootstrap, executor and shared retain one product version. |
+
+These are minor increments for compatible features, not major API replacements.
+Desktop Tauri/Cargo metadata and the CLI Docker fallback are synchronized.
+Helm chart metadata is unchanged; its schema compatibility requirement remains
+independent of workspace package versions. No dependency or Yarn lockfile update
+is needed because internal dependencies use `workspace:` ranges. This records
+release metadata only: it does not publish packages or claim that the outstanding
+scheduled-run timeout, capacity-queue and active-history gaps are resolved.
+
 ## Version update: 2026-09-20
 
 Changes since `386d4ba32`, through `11a56331f`:
@@ -158,7 +179,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -198,7 +219,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -670,7 +691,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.21.0`
+- Version: `2.22.0`
 - Private: yes
 
 ### Runtime shape
@@ -735,7 +756,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.7.0`
+- Version: `2.8.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -840,7 +861,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -964,7 +985,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -996,7 +1017,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.14.0`
 - Private: yes
 
 ### Script surface

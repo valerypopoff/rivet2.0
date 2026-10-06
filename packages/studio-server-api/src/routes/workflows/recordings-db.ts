@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { readScheduledRecordingFields } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { getAppDataRoot } from '../../security.js';
 import type {
@@ -79,6 +80,7 @@ const RECORDING_RUN_COLUMNS = `
   component_type_at_execution AS componentTypeAtExecution,
   component_label_at_execution AS componentLabelAtExecution,
   correlation_id AS correlationId,
+  scheduled_identity_json AS scheduledIdentityJson,
   error_message AS errorMessage,
   bundle_path AS bundlePath,
   encoding AS encoding,
@@ -137,8 +139,9 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_compressed_bytes,
     project_uncompressed_bytes,
     dataset_compressed_bytes,
-    dataset_uncompressed_bytes
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    dataset_uncompressed_bytes,
+    scheduled_identity_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     created_at = excluded.created_at,
@@ -166,7 +169,8 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_compressed_bytes = excluded.project_compressed_bytes,
     project_uncompressed_bytes = excluded.project_uncompressed_bytes,
     dataset_compressed_bytes = excluded.dataset_compressed_bytes,
-    dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes
+    dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes,
+    scheduled_identity_json = excluded.scheduled_identity_json
 `;
 
 type RecordingStatement = ReturnType<DatabaseSync['prepare']>;
@@ -213,6 +217,7 @@ function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowR
     row.projectUncompressedBytes,
     row.datasetCompressedBytes,
     row.datasetUncompressedBytes,
+    identity?.surface === 'scheduled' ? JSON.stringify(readScheduledRecordingFields(identity)) : null,
   );
 }
 
@@ -355,6 +360,7 @@ function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
     ['component_type_at_execution', 'TEXT'],
     ['component_label_at_execution', 'TEXT'],
     ['correlation_id', 'TEXT'],
+    ['scheduled_identity_json', 'TEXT'],
   ] as const;
 
   for (const [name, type] of columns) {
@@ -879,7 +885,8 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
     surface !== 'workflow_endpoint' &&
     surface !== 'web_app_action' &&
     surface !== 'editor_local' &&
-    surface !== 'subgraph_project'
+    surface !== 'subgraph_project' &&
+    surface !== 'scheduled'
   ) {
     return undefined;
   }
@@ -887,6 +894,7 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
   const componentType = row.componentTypeAtExecution;
   return {
     surface,
+    ...readScheduledRecordingFields(row.scheduledIdentityJson),
     graphId: toOptionalString(row.graphIdAtExecution),
     graphName: toOptionalString(row.graphNameAtExecution),
     revisionKey: toOptionalString(row.revisionKeyAtExecution),

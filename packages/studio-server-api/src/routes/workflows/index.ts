@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import { scheduledRunsRouter } from '../../scheduled-runs/router.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { projectBundleRouter } from './project-bundle-router.js';
 import { z } from 'zod';
@@ -73,6 +74,7 @@ import {
 } from '@valerypopoff/rivet2-node';
 
 export const workflowsRouter = Router();
+workflowsRouter.use('/scheduled-runs', scheduledRunsRouter);
 workflowsRouter.use('/project-bundles', projectBundleRouter);
 workflowsRouter.use('/local-catalog-io', localCatalogExecutorIoRouter);
 const timing = createResponseTimingMiddleware();

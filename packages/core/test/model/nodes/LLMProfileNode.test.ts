@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { LLMChatV2NodeImpl, LLMProfileNodeImpl, type LLMChatV2Node, type LLMProfileNode } from '../../../src/index.js';
+import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
+import { LLMProfileNodeImpl, type LLMProfileNode } from '../../../src/model/nodes/LLMProfileNode.js';
+import type { LLMChatV2Node } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
 import { llmChatV2ProfileDataKeys } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
 import {
   llmProfileBooleanDataKeys,

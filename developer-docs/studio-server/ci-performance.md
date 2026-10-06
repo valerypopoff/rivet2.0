@@ -32,11 +32,35 @@ certify hosted speed, queue delays or Apple notarization latency.
 - Final Build/Studio status jobs sparsely check out only the standalone timing
   helper. Their previous full checkouts cost 22–26 seconds after all checks had
   finished. The required result aggregation and workflow timing remain intact.
-- Local-upgrade runtime scenarios run four at a time. Each owns all source and
+- Local-upgrade runtime scenarios are split across the existing four API runners,
+  with two concurrent scenarios per runner. Other files are assigned exactly once.
+  Full local runs still run all scenarios four at a time. Each owns all source and
   control roots, child environments and ephemeral HTTP ports. Restart, rollback,
   copy-fault and crash phases stay sequential within a scenario, in fresh
   processes. Other API files retain `--test-concurrency=1`; global-environment
   fixtures must not be parallelized.
+  CI uses the verified API tsc output for rehearsal children and supervised API
+  restart/provisioning, rather than repeatedly transforming the same sources.
+  `RIVET_API_TEST_RUNTIME=prebuilt` requires those compiled entries; it never
+  silently falls back to source. Omit it for ordinary source-based local tests.
+- Build dependency compilation no longer includes the desktop bundle. A separate
+  mandatory frontend/CLI job preserves all root build coverage in parallel with
+  tests. The six long Core/App lanes have their own six-job matrix; the four short
+  suites have a separate two-job matrix, avoiding matrix-slot head-of-line delays.
+- Production Docker builds install from pinned dependency inputs before copying
+  source directories. All workspace manifests are required by a guard. Changing
+  sources does not invalidate installation or recopy the Yarn cache into a second
+  layer. API/executor final stages copy only compiled runtime workspace exports
+  and bootstrap modules, excluding desktop/docs/source/test trees. Dynamic
+  third-party dependencies remain intact, including non-hoisted workspace-local
+  modules and relative links; the root node_modules alone is insufficient.
+  Existing package licenses/readmes are retained as well.
+  Image smoke and migration release gates
+  remain mandatory; cache reuse is an optimization, not their replacement.
+- Pure/isolated Core tests use narrow implementation imports where safe and load
+  the complete registry only when constructing a processor. Registry/public API
+  integration tests still exercise the public export surface. Do not bypass a
+  deliberate registration/import-order requirement to win a startup benchmark.
 - Core uses two native Node file partitions, each with four workers. Both remain
   required by the Build aggregator. Set `RIVET_CORE_TEST_SHARD=1/2` or `2/2`, then
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
@@ -67,6 +91,16 @@ certify hosted speed, queue delays or Apple notarization latency.
 
 ## Verification
 
+The first optimization was measured on successful develop runs: Studio
+verification [37355329746](https://github.com/valerypopoff/rivet2.0/actions/runs/37355329746)
+took 13m34s (previously 23m40s), desktop release
+[37355330453](https://github.com/valerypopoff/rivet2.0/actions/runs/37355330453)
+13m18s (previously 20m40s), and Build
+[37355329795](https://github.com/valerypopoff/rivet2.0/actions/runs/37355329795)
+10m06s. The next changes target the remaining 9m48s API test lane, 80-second
+desktop prerequisite and source-invalidated Docker installation/cache exports.
+Their hosted benefit must be measured after landing, not inferred from local runs.
+
 `yarn test:style` includes regressions for shallow fetches, damaged/stale desktop
 artifacts, exact-once native shard selection, prebuilt modes and macOS retry
 arguments. The workflow guard checks producer/consumer dependencies and all
@@ -86,7 +120,7 @@ Keep the bounded worker counts until hosted timings and resource use justify a
 change. Full-history migration provenance, live dependency failures, signing
 and image promotion are deliberate remaining costs, not redundant work.
 
-Local verification of this change passed both Core partitions (1,803 tests),
+Local verification of the first optimization passed both Core partitions (1,803 tests),
 Node's prebuilt lane (307 tests), all 25 runtime migration scenarios and all 48
 browser CI regressions, plus API typechecking, the desktop frontend build,
 artifact sealing/verification and both test-style guards. The Windows browser
@@ -99,3 +133,20 @@ it selected the new hook and rejected missing source-SHA evidence before sidecar
 preparation or native compilation. This verifies hook/path wiring, not a signed
 native release. Sparse/partial-clone regressions prove that unmaterialized files
 remain in the diff while missing source blobs and parent history stay unfetched.
+
+The follow-up optimization was verified separately: all 25 migration scenarios
+passed using the four compiled-runtime partitions, and a source-mode browser
+backup scenario passed. Both Core partitions, Node's prebuilt suite, API
+typechecking, desktop/CLI builds and both test-style guards passed. The API, executor and web images
+built locally, with the dependency installation reused across source changes.
+The standalone Node 20 executor loaded its runtime workspace exports. The
+headless production-image upgrade rehearsal passed all 14 evidence phases,
+including online/offline recovery, coordinated restart and live SQLite serving.
+These disposable local checks establish correctness, not GitHub runner speed.
+
+Runtime staging also has a behavioral dependency-resolution regression, run on
+Windows and Linux: a workspace-local version must win over the hoisted version,
+relative links must remain usable, and dependency-owned assets must survive API
+test pruning. The real API image confirms both dependency versions coexist
+(root minimatch 10 and API-local minimatch 9); image trimming must not change the
+API's selected major version.

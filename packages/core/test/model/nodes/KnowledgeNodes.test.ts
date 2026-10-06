@@ -1,12 +1,12 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import { BuildKnowledgeContextNodeImpl } from '../../../src/model/nodes/BuildKnowledgeContextNode.js';
+import { GetKnowledgeSourceStatusNodeImpl } from '../../../src/model/nodes/GetKnowledgeSourceStatusNode.js';
+import { KnowledgeDocumentNodeImpl } from '../../../src/model/nodes/KnowledgeDocumentNode.js';
+import { KnowledgeSourceNodeImpl } from '../../../src/model/nodes/KnowledgeSourceNode.js';
+import { SearchKnowledgeNodeImpl } from '../../../src/model/nodes/SearchKnowledgeNode.js';
+import { SyncKnowledgeSourceNodeImpl } from '../../../src/model/nodes/SyncKnowledgeSourceNode.js';
 import {
-  BuildKnowledgeContextNodeImpl,
-  GetKnowledgeSourceStatusNodeImpl,
-  KnowledgeDocumentNodeImpl,
-  KnowledgeSourceNodeImpl,
-  SearchKnowledgeNodeImpl,
-  SyncKnowledgeSourceNodeImpl,
   normalizeKnowledgeDocument,
   normalizeKnowledgeEvidence,
   normalizeKnowledgeConnectionId,
@@ -14,10 +14,10 @@ import {
   normalizeKnowledgeMetadata,
   normalizeSearchKnowledgeSourceResult,
   normalizeKnowledgeSourceStatusResult,
-  type Inputs,
-  type InternalProcessContext,
-  type RivetKnowledgeStore,
-} from '../../../src/index.js';
+} from '../../../src/integrations/KnowledgeStoreValidation.js';
+import type { Inputs } from '../../../src/model/GraphProcessor.js';
+import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
+import type { RivetKnowledgeStore } from '../../../src/integrations/KnowledgeStore.js';
 
 function createContext(store?: RivetKnowledgeStore): InternalProcessContext {
   return {

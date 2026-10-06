@@ -11,6 +11,20 @@ import {
 
 export { parseApiTestOptions, selectApiTestShard };
 
+const runtimeScenariosFile = 'src/tests/local-upgrade-runtime.test.ts';
+
+export function selectApiTestPlan(shardIndex, shardCount) {
+  const files = selectApiTestShard(defaultApiTestFiles, shardIndex, shardCount);
+  // The hosted matrix has four runners. Split the expensive scenarios across
+  // those runners without duplicating any other file. Arbitrary one-file/local
+  // partitions keep their existing semantics.
+  if (shardCount !== 4) return { files, runtimeShard: '' };
+  return {
+    files: [...files.filter((file) => file !== runtimeScenariosFile), runtimeScenariosFile],
+    runtimeShard: `${shardIndex + 1}/${shardCount}`,
+  };
+}
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
 const apiRoot = path.join(rootDir, 'packages', 'studio-server-api');
@@ -55,7 +69,7 @@ export function verifyApiTestManifest() {
 
 export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
   verifyApiTestManifest();
-  const selectedFiles = selectApiTestShard(defaultApiTestFiles, shardIndex, shardCount);
+  const { files: selectedFiles, runtimeShard } = selectApiTestPlan(shardIndex, shardCount);
   if (selectedFiles.length === 0) {
     throw new Error(`API test shard ${shardIndex + 1}/${shardCount} is empty.`);
   }
@@ -67,7 +81,7 @@ export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
       [yarnPath, 'workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test:files', ...selectedFiles],
       {
         cwd: rootDir,
-        env: process.env,
+        env: { ...process.env, RIVET_API_RUNTIME_SHARD: runtimeShard },
         shell: false,
         stdio: 'inherit',
       },
@@ -87,7 +101,7 @@ async function main() {
   const { shardIndex, shardCount, check } = parseApiTestOptions(process.argv.slice(2));
   if (check) {
     verifyApiTestManifest();
-    if (selectApiTestShard(defaultApiTestFiles, shardIndex, shardCount).length === 0) {
+    if (selectApiTestPlan(shardIndex, shardCount).files.length === 0) {
       throw new Error(`API test shard ${shardIndex + 1}/${shardCount} is empty.`);
     }
     console.log(

@@ -471,7 +471,6 @@ test('executor image and Compose contracts keep the websocket port independent f
   assert.doesNotMatch(executorEntrypoint, /executor-bundle\.cjs --port "\$\{PORT\}"/);
 
   for (const dockerfile of [executorDockerfile, composeExecutorDockerfile]) {
-    assert.match(dockerfile, /COPY \. \./);
     assert.match(dockerfile, /yarn workspace @valerypopoff\/rivet-studio-server-executor run build/);
     assert.match(dockerfile, /packages\/studio-server-executor\/dist\/executor-bundle\.cjs/);
     assert.match(dockerfile, /ENV RIVET_EXECUTOR_PORT=21889/);
@@ -537,7 +536,9 @@ test('images and local launchers build directly from the monorepo workspace', ()
   const prodDockerLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
 
   for (const dockerfile of [apiDockerfile, webDockerfile, executorDockerfile]) {
-    assert.match(dockerfile, /WORKDIR \/app[\s\S]*COPY \. \./);
+    // Source-copy layout is owned by verify-repo-structure.mjs. Production
+    // images copy dependency metadata before sources to preserve install layers;
+    // requiring COPY . . here would contradict that cache-safety contract.
     assert.match(dockerfile, /yarn install --immutable/);
     assert.doesNotMatch(
       dockerfile,

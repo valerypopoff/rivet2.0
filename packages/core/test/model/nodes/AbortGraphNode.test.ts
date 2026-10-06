@@ -1,7 +1,9 @@
 import { it, describe, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { AbortGraphNode, AbortGraphNodeImpl, InternalProcessContext, PortId } from '../../../src/index.js';
+import { type AbortGraphNode, AbortGraphNodeImpl } from '../../../src/model/nodes/AbortGraphNode.js';
+import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
+import type { PortId } from '../../../src/model/NodeBase.js';
 
 const createNode = (data: Partial<AbortGraphNode['data']>) => {
   return new AbortGraphNodeImpl({

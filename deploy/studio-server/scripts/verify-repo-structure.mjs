@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { assertImageDependencyLayout } from './lib/image-dependency-layout.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
@@ -303,8 +304,7 @@ const dockerfiles = [
 ];
 for (const dockerfilePath of dockerfiles) {
   const dockerfile = readText(dockerfilePath);
-  assert.match(dockerfile, /COPY \. \./, `${dockerfilePath} must build from the monorepo root.`);
-  assert.match(dockerfile, /yarn install --immutable/, `${dockerfilePath} must use the root Yarn lockfile.`);
+  assertImageDependencyLayout(dockerfile, workspaceManifestPaths, dockerfilePath);
   assert.doesNotMatch(dockerfile, /rivet_source|rivet_dependency_metadata|\.rivet-package-links|wrapper\//);
 }
 

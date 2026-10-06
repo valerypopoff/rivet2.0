@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ScheduledRunStore } from '../scheduled-runs/store.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getServerUiAuthMode } from '../server-ui-auth.js';
@@ -461,7 +462,7 @@ async function copyGeneration(
       throw new Error('Source changed after backup certification.');
     await onStage('operational-snapshots');
     const operational: LocalUpgradeCertificate['operational'] = {};
-    for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+    for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
       const file = path.join(source.appData, name);
       try {
         await fs.lstat(file);
@@ -476,7 +477,10 @@ async function copyGeneration(
         // Missing means a genuinely empty domain, not permission for serving
         // startup to create an uncertified database after activation.
         const destination = path.join(paths.operationalRoot, name);
-        if (name === 'evaluation-runs.sqlite') {
+        if (name === 'scheduled-runs.sqlite') {
+          const empty = ScheduledRunStore.sqlite(destination);
+          await empty.close();
+        } else if (name === 'evaluation-runs.sqlite') {
           const empty = new FilesystemRivetEvaluationStore(destination);
           try {
             await empty.getLibrarySnapshot();
@@ -495,7 +499,11 @@ async function copyGeneration(
         try {
           assertEmptyLocalOperationalDatabase(
             emptyDatabase,
-            name === 'evaluation-runs.sqlite' ? 'evaluations' : 'health',
+            name === 'evaluation-runs.sqlite'
+              ? 'evaluations'
+              : name === 'scheduled-runs.sqlite'
+                ? 'schedules'
+                : 'health',
           );
         } finally {
           emptyDatabase.close();
@@ -506,6 +514,7 @@ async function copyGeneration(
     for (const [name, domain] of [
       ['evaluation-runs.sqlite', 'evaluations'],
       ['llm-profile-health.sqlite', 'health'],
+      ['scheduled-runs.sqlite', 'schedules'],
     ] as const) {
       const database = new DatabaseSync(path.join(paths.operationalRoot, name), { readOnly: true });
       try {

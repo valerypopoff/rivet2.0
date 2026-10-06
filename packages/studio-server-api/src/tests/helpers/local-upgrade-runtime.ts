@@ -40,10 +40,10 @@ import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.j
 import { readManifest, getRootPath } from '../../runtime-libraries/manifest.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../../auth.js';
-import { assertLocalMetadataExecutorAdmission } from '../../../../app-executor/bin/localMetadataAdmission.mjs';
 import express from 'express';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { listenTestServer } from './http-server-harness.js';
+import { pathToFileURL } from 'node:url';
+import { runtimeTestEntry, runtimeTestRepo as repo } from './runtime-test-entry.js';
+import { allocateDistinctTestPorts, listenTestServer } from './http-server-harness.js';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import { enableWorkflowRecordingMigrationCopyMode } from '../../routes/workflows/recordings.js';
 import { initializeRuntimeLibrariesBackend } from '../../runtime-libraries/backend.js';
@@ -52,6 +52,9 @@ import { FilesystemRivetLLMProfileHealthStore } from '../../llm-profile-health/f
 import { format } from 'node:util';
 
 const command = process.argv[2];
+const { assertLocalMetadataExecutorAdmission } = (await import(
+  pathToFileURL(path.join(repo, 'packages/app-executor/bin/localMetadataAdmission.mts')).href
+)) as typeof import('../../../../app-executor/bin/localMetadataAdmission.mjs');
 const faultHooks = {
   checkpoint: async (checkpoint: string) => {
     if (checkpoint !== process.env.REHEARSAL_FAULT_POINT) return;
@@ -68,19 +71,10 @@ if (command === 'ui-workflow') {
 } else if (command === 'supervised') {
   // Actual container-runtime processes, not a stub health responder. All
   // authoritative paths and executor app-data belong to this temporary fixture.
-  const repo = fileURLToPath(new URL('../../../../../', import.meta.url));
   const { startBackendSupervisor } = await import(
     pathToFileURL(path.join(repo, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
   );
-  const freePort = async () => {
-    const listener = await listenTestServer(http.createServer());
-    const port = listener.port;
-    await listener.close();
-    return port;
-  };
-  const apiPort = await freePort(),
-    executorPort = await freePort(),
-    healthPort = await freePort();
+  const [apiPort, executorPort, healthPort] = await allocateDistinctTestPorts(3);
   const supervisor = await startBackendSupervisor({
     env: {
       ...process.env,
@@ -94,9 +88,7 @@ if (command === 'ui-workflow') {
       process.execPath,
       '--import',
       path.join(repo, 'packages/studio-server-bootstrap/bootstrap.mjs'),
-      '--import',
-      'tsx',
-      path.join(repo, 'packages/studio-server-api/src/server.ts'),
+      ...runtimeTestEntry('server.js'),
     ],
     executorCommand: [
       process.execPath,

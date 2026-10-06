@@ -10,6 +10,7 @@ const baseURL = `http://127.0.0.1:${Number.isFinite(port) ? port : 5174}`;
 export default defineConfig({
   testDir: './playwright-observe',
   testMatch: [
+    'scheduled-runs.spec.ts',
     'fullscreen-output-search-paging.spec.ts',
     'hosted-dashboard-contracts.spec.ts',
     'project-bundle.spec.ts',

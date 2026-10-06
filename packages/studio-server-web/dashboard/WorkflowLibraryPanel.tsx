@@ -2,6 +2,8 @@ import Button from '@atlaskit/button';
 import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
+import { useState } from 'react';
+import { ScheduledRunsModal } from './ScheduledRunsModal';
 import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
@@ -100,6 +102,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   routeConfig,
   onRouteConfigChange,
 }) => {
+  const [scheduledRunsOpen, setScheduledRunsOpen] = useState(false);
   const controller = useWorkflowLibraryController({
     onOpenProject,
     onRefreshOpenProjectFromDisk,
@@ -261,6 +264,13 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <div className="panel-bottom-actions">
+          <Button
+            appearance="subtle"
+            className="panel-bottom-button project-settings-secondary-button button-size-m"
+            onClick={() => setScheduledRunsOpen(true)}
+          >
+            <span className="panel-bottom-button-label">Scheduled runs</span>
+          </Button>
           <div className={`panel-bottom-action-with-summary${runRecordingsRetained ? ' has-summary' : ''}`}>
             <Button
               appearance="subtle"
@@ -308,10 +318,18 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
 
         <WorkflowLibraryContextMenus controller={controller} />
         <WorkflowLibraryModals
+          scheduledRunsOpen={scheduledRunsOpen}
           controller={controller}
           routeConfig={routeConfig}
           onRouteConfigChange={onRouteConfigChange}
         />
+        {scheduledRunsOpen ? (
+          <ScheduledRunsModal
+            projects={controller.allProjects}
+            onClose={() => setScheduledRunsOpen(false)}
+            onOpenRecording={onOpenRecording}
+          />
+        ) : null}
       </div>
 
       {collapsed ? (

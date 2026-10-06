@@ -1,5 +1,26 @@
 # Development
 
+## Scheduled runs regression checks
+
+See [Scheduled runs](./scheduled-runs.md) for ownership, storage schema 14 and
+restore safety. After changes, run `yarn build:runtime`, API `test:files` for
+`scheduled-runs.test.ts`, `scheduled-run-execution.test.ts` and
+`managed-workflow-schema-migrations.test.ts`, plus the affected operational
+copy/first-start/recording suites. Run headless
+`yarn studio-server:ui:observe scheduled-runs.spec.ts`; it drives the modal against
+a disposable authenticated API process, SQLite scheduler and cross-project
+recording execution, including lost Create/Run/Retry responses, real server
+restart persistence, stale edits, temporary list outages and cancelling a waiting
+HTTP node. Unit checks also cover acknowledgement budgets/rollback and an outcome
+write failure after successful execution. Use `PLAYWRIGHT_BASE_URL` for a frontend served
+directly when the ambient authenticated proxy is unavailable. No Kubernetes
+rehearsal is required for modal changes. Concurrency/clock correctness on managed
+storage also needs the real PostgreSQL integration check described in the feature
+document, rather than relying only on SQL mocks.
+The standard web suite also includes `scheduled-run-api.test.ts` for malformed
+acknowledgements and overlapping retired-response races; the browser check verifies
+that accepted-action reconnection warnings disappear when the list recovers.
+
 See [GitHub Actions performance](ci-performance.md) for measured branch-workflow
 bottlenecks, bounded API/browser concurrency, shared desktop artifacts, and the
 verification boundaries that must remain intact when optimizing CI.
@@ -766,7 +787,7 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.20.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.21.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
@@ -789,6 +810,35 @@ these pins, regenerate `yarn.lock` and the committed PnP cache, then rerun the a
 and the bootstrap build. The three `brace-expansion` resolutions follow its
 separate 1.x, 2.x, and 5.x compatibility lines for the respective `minimatch`
 consumers; do not replace them with one cross-major override.
+
+The October 2026 audit fixes also require Compression 1.8.2, Proxy-addr
+2.0.8 and Source-map-js 1.2.2. Root resolutions keep these transitive fixes
+in the zero-install graph, including Express's `~2.0.7` Proxy-addr dependency.
+The Docusaurus `tinypool@^1.0.2` edge is deliberately overridden to 2.1.2:
+both critical prototype-pollution advisories require the 2.x fix, and the
+repository's Node 22 baseline satisfies its Node 20/22 requirement. Keep this
+override scoped to that dependency edge rather than forcing arbitrary future
+Tinypool consumers onto it. Validate the Docusaurus worker-thread SSG path
+(`future.faster.ssgWorkerThreads`, with
+`future.v4.removeLegacyPostBuildHeadAttribute`, and
+`DOCUSAURUS_SSG_WORKER_THREAD_COUNT=2`) when updating it; a normal single-threaded
+docs build does not exercise Tinypool. These fixes add no audit exceptions.
+See the upstream [Compression advisory](https://github.com/advisories/GHSA-vc2v-76pw-4v95),
+[Proxy-addr advisory](https://github.com/advisories/GHSA-jqcg-44mw-7w3h),
+[Source-map-js advisory](https://github.com/advisories/GHSA-68fv-2mgg-jv7q), and
+Tinypool [worker-options](https://github.com/advisories/GHSA-5gmw-xhrv-c9v3) /
+[run-options](https://github.com/advisories/GHSA-85c8-ppgw-ccpr) advisories.
+
+`yarn test:style` also runs `dependency-security-regressions.test.mjs` against
+Express's and Docusaurus's actual transitive dependencies. These behavioral
+checks cover spoofed forwarded addresses with short mapped/zero-leading IPv6
+trust prefixes, correct IPv4/mapped subnet matching, and inherited worker
+environment, arguments, and per-run filenames. Worker checks run in bounded,
+disposable child processes and use harmless sentinels, not executable payloads.
+They protect the security fixes without adding a full docs build to every test
+run; they do not replace the worker-thread SSG compatibility build above.
+Run them alone with
+`yarn node --test scripts/checks/dependency-security-regressions.test.mjs`.
 
 The command contract is deliberate: `yarn dev` starts the Rivet desktop/editor,
 while `yarn studio-server:dev`, `yarn studio-server:prod`, and
@@ -1880,6 +1930,7 @@ Current repo-local baseline:
 - If the full API suite fails with `ERR_MODULE_NOT_FOUND`, distinguish missing dependencies from missing compiled workspace exports. For missing packages, run `yarn install --immutable` and confirm the importing workspace declares the package directly. For missing `packages/{core,node,evaluations}/dist` exports or the executor bundle, run `yarn studio-server:build:dependencies`, then `yarn check:compiled-workspace-exports` before rerunning. Source-level tests can pass without these artifacts, while API subprocess tests require them. Do not run local API suites concurrently with workspace builds (including the Core rebuild inside `yarn test:style`): cleaning `dist` during a test can produce false module-load failures. CI uses isolated jobs and restores/verifies the artifacts before each consumer starts; do not rebuild silently or weaken checks to hide a broken artifact handoff.
 - The test-suite cleanup plan previously lived in the root `tests-refactor.md` working document; after final prune, keep the lasting outcomes in `docs/refactor-history.md` and keep the public verification commands stable for future cleanup.
 - API workflow tests should reuse the shared helpers under `packages/studio-server-api/src/tests/helpers/` before adding local harness code. Workflow HTTP harnesses, JSON response handling, recording waiters, filesystem execution cache invalidation probes, temp workflow roots, root-level published-project fixtures, and the filesystem workflow suite bootstrap/cleanup live there.
+- Multi-process fixtures use `allocateDistinctTestPorts` from `http-server-harness.ts` to reserve their complete loopback port set before releasing any socket. Independently binding and closing three ephemeral listeners can return the same port more than once; the supervisor correctly rejects such configurations. Bind failures reject promptly and release earlier reservations. This prevents reuse within one set, not an atomic socket handoff to child processes; an unrelated process can still claim a released port. Keep the supervisor's distinct-port and startup checks intact rather than hiding collisions with unbounded retries. `local-upgrade-runtime.test.ts` covers immediate reuse, real bindings and partial-allocation cleanup; both supervised and UI-driven migration helpers share this allocator.
 - Filesystem hosted-save changes must exercise `filesystem-project-transactions.test.ts`. Its injected checkpoints cover each durable stage before and after the committed marker, complete project/dataset rollback or roll-forward, first saves, dataset addition/replacement/removal, validation, Unicode paths, corrupt evidence, and read/write exclusion. `workflow-filesystem-tree.test.ts` separately proves that rejected saves do not advance the tree token and that a committed save removes a stale dataset before emitting exactly one invalidation. Concurrent-create coverage must assert the storage invariant—exactly one complete project/dataset pair commits and the other request conflicts—without assuming that JavaScript call order determines which request reaches the filesystem write coordinator first. The storage capability probe runs before the API listens; a probe or recovery failure is an expected startup/readiness failure, not a warning to ignore.
 - The canonical default API file list lives in `deploy/studio-server/scripts/api-test-files.mjs`. `yarn workspace @valerypopoff/rivet-studio-server-api run test` executes that complete manifest serially. CI uses `run-api-tests.mjs --shard-index N --shard-count 4` to divide the same sorted list across isolated runners while preserving `--test-concurrency=1` inside each shard. To run only specific files, use `yarn workspace @valerypopoff/rivet-studio-server-api run test:files -- src/tests/example.test.ts`.
 - The API runner invokes the checked-in Yarn release through the current Node executable, without a shell or global/Corepack shim. App and API CLIs share the strict parser/selection in `scripts/ci/test-shard-options.mjs`; both reject unknown/repeated options, missing or non-integer values, invalid shard coordinates and empty selections, including in `--check` mode. Discovery covers nested `.test`/`.spec` files with `.ts`, `.mts`, `.cts` and `.tsx` suffixes: newly added tests must enter the manifest rather than silently escaping CI. `node --test scripts/ci/api-test-shards.test.mjs scripts/ci/app-test-shards.test.mjs` verifies exact-once coverage, discovery, both real Yarn CLI entrypoints, and a behavioral API shard invocation with a deliberately broken global Yarn on PATH.

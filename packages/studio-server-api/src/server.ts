@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { initializeScheduledRuns, stopScheduledRuns } from './scheduled-runs/runtime.js';
 import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
@@ -163,6 +164,7 @@ function disposeResources(interruptWebAppRuns: boolean): Promise<void> {
 }
 
 async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void> {
+  await stopScheduledRuns(0);
   disposeWorkflowRecordingInputExtractor();
 
   if (webAppActionWebSockets) {
@@ -221,6 +223,7 @@ async function shutdown(signal: string): Promise<void> {
   webAppActionWebSockets?.drain();
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
+  const scheduledDrain = stopScheduledRuns(shutdownGraceMs);
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
@@ -234,6 +237,7 @@ async function shutdown(signal: string): Promise<void> {
     closeHttpServer(deadline),
     waitForActiveWebAppRuns(deadline),
     waitForActiveHttpExecutions(deadline),
+    scheduledDrain,
   ]);
 
   if (!webAppRunsCompleted) {
@@ -363,6 +367,10 @@ async function startServer(): Promise<void> {
     await runtimeHealth.start();
     assertStartupActive();
     await listenHttpServer();
+    assertStartupActive();
+    // Existing schedules may be due immediately. Do not start their execution
+    // until runtime-library reconciliation and the rest of startup have finished.
+    if (isControlPlaneApiProfile(apiRuntimeProfile)) await initializeScheduledRuns();
     assertStartupActive();
   } catch (error) {
     if (error instanceof StartupCancelledError) {

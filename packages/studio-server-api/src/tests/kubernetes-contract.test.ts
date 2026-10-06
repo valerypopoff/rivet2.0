@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { readRepoFile, repoRoot } from './helpers/repo-contract-helpers.js';
+import { CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION } from '../routes/workflows/managed/schema-migrations.js';
 
 type K8sToolsModule = {
   resolveHelmBinOrThrow(rootDir: string, options?: { env?: NodeJS.ProcessEnv; launcherName?: string }): string;
@@ -333,7 +334,9 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.match(webWorkload, /readOnlyRootFilesystem: true/);
   assert.match(webWorkload, /name: node-tmp\s*\n\s*mountPath: \/tmp/);
   const unsandboxedLocalChart = await renderLocalKubernetesChartWithOverrides(['tmpVolume.enabled=false']);
-  const unsandboxedWeb = unsandboxedLocalChart.split('# Source: rivet/templates/web-deployment.yaml')[1]?.split('\n---\n')[0];
+  const unsandboxedWeb = unsandboxedLocalChart
+    .split('# Source: rivet/templates/web-deployment.yaml')[1]
+    ?.split('\n---\n')[0];
   assert.ok(unsandboxedWeb);
   assert.match(unsandboxedWeb, /readOnlyRootFilesystem: false/);
   const evaluationChart = await renderLocalKubernetesChartWithOverrides(['hostedEvaluations.enabled=true']);
@@ -635,10 +638,7 @@ test('chart owns the published execution admission policy only on execution API 
     ['tmpVolume.nodeTmpSizeLimit=0Gi'],
     /tmpVolume\.nodeTmpSizeLimit must be a positive binary Kubernetes quantity such as 1Gi/,
   );
-  await assertHelmTemplateFails(
-    ['tmpVolume.path=/tmp'],
-    /tmpVolume\.path must be \/var\/tmp/,
-  );
+  await assertHelmTemplateFails(['tmpVolume.path=/tmp'], /tmpVolume\.path must be \/var\/tmp/);
   await assertHelmTemplateFails(
     ['tmpVolume.name=node-tmp'],
     /tmpVolume\.name must differ from the reserved node-tmp volume name/,
@@ -924,11 +924,15 @@ test('chart serializes managed workflow migrations before verify-only API worklo
   assert.match(chartHelpers, /vault\.hashicorp\.com\/agent-pre-populate-only: "true"/);
   assert.match(
     renderedChart,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate; RIVET_DEPLOYMENT_STORAGE_SEED_MISSING=1 node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/import-managed-app-settings\.js; node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/project-managed-app-settings\.js/,
+    new RegExp(
+      `RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}" node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema\\.js migrate; RIVET_DEPLOYMENT_STORAGE_SEED_MISSING=1 node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/import-managed-app-settings\\.js; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings\\.js`,
+    ),
   );
   assert.match(
     renderedChartWithRollbackWindow,
-    /RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="13" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="13" node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/scripts\/migrate-managed-workflow-schema\.js migrate/,
+    new RegExp(
+      `RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}" node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema\\.js migrate`,
+    ),
     'the migration Job must use the exact candidate version even when serving pods support a lower rollback version',
   );
   assert.match(migrationJobDocument, /name: RIVET_APP_DATA_ROOT\s*\n\s*value: "\/var\/tmp\/rivet-migration-app-data"/);
@@ -1210,7 +1214,7 @@ test('production rendering requires a fully identified digest-pinned release', a
     '--set',
     `release.production.chart.contentDigest=sha256:${'f'.repeat(64)}`,
     '--set',
-    'release.production.database.managedWorkflowSchemaVersion=13',
+    `release.production.database.managedWorkflowSchemaVersion=${CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION}`,
   ];
   const renderProduction = (overrides: string[] = []) =>
     execFileSync(helmBin, [...baseArgs, ...identifiedReleaseArgs, ...overrides], {

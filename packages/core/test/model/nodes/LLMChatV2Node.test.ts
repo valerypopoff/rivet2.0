@@ -2,7 +2,9 @@ import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES, type LLMChatV2Node, LLMChatV2NodeImpl } from '../../../src/index.js';
+import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES } from '../../../src/model/chat-v2/chatV2CredentialNames.js';
+import type { LLMChatV2Node } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
+import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
   hasLLMChatV2ToolResponseFormatConflict,

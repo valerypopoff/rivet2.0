@@ -1,5 +1,12 @@
 # VM filesystem to managed PostgreSQL and S3 migration
 
+The operational importer includes legacy `scheduled-runs.sqlite` when present.
+It preserves definitions/history but disables every imported schedule and retires
+queued/claimed work as cancelled and accepted work as interrupted. Verification
+compares that deterministic safety transform; a missing table in an existing
+schedule database is an error, not an empty domain. Review schedules in the
+destination UI before enabling them. See [Scheduled runs](./scheduled-runs.md).
+
 This is the implementation and safety contract for copying a filesystem-backed
 single-host Rivet Server with legacy file metadata into a separate managed destination. The Settings ->
 Migration tab can test a destination, pause the source, run the importer,

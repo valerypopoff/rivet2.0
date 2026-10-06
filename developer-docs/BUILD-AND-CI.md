@@ -369,6 +369,14 @@ flags, non-integer values, invalid coordinates and empty selections fail even wi
 regressions exercise both actual Yarn command entrypoints, not only the parser.
 The shared coordinate-validation cases run once with assertions that both runners
 use that owner. Exact-once discovery and the existing round-robin assignment remain covered.
+In the four-runner API matrix, only `local-upgrade-runtime.test.ts` is included in
+each runner: `RIVET_API_RUNTIME_SHARD=1/4` through `4/4` partitions its registered
+scenarios exactly once. All other files keep their original single assignment.
+Each hosted runtime partition runs two isolated scenarios at a time. Full local
+runs retain all scenarios with four workers; arbitrary file partitions retain
+their existing semantics. CI sets `RIVET_API_TEST_RUNTIME=prebuilt` for migration
+subprocesses, using the restored API tsc output, including supervised restarts.
+Missing compiled entries fail explicitly; local defaults still use `tsx` source.
 Local full App runs and CI shards use that same explicit file list, including
 TSX and `.spec`/`.mts`/`.cts` tests, in batches of at most 32 files. No implicit
 Node discovery pass can omit a supported suffix or run an unrelated test twice;
@@ -850,6 +858,34 @@ or server wrappers can synchronize runtime libraries before module resolution.
 
 ## Hosted Wrapper Image Build Contract
 
+Studio Server production Dockerfiles copy all workspace manifests, pinned Yarn,
+lock/config/cache and the package-manager check before installation. Changing
+application sources therefore preserves the dependency layer. Sources are copied
+afterward without recopying the large Yarn cache. A repository guard requires
+every workspace manifest in this dependency stage. API/executor runtime staging
+includes compiled Core/Node/Evaluations exports, bootstrap modules and (for API)
+compiled API/shared code, not unrelated desktop/docs/source/test trees. Retain
+third-party node_modules for dynamic plugin/Code-node resolution, including each
+included workspace's non-hoisted node_modules and relative links. Root modules
+alone can resolve a different dependency version. Do not prune that dependency
+surface merely to reduce image size. Included workspaces also retain their
+existing package licenses and readmes. The staging regression verifies that local
+overrides still win over an otherwise loadable hoisted version.
+
+`studio-server:verify:repo-structure` owns the production source-copy contract:
+all manifests precede the immutable install, source directories follow it, and
+`COPY . .` is forbidden because it would recopy the dependency cache. The API
+`proxy-image-contract.test.ts` keeps executor ports, build targets, entrypoints
+and Compose wiring under test; it must not require the retired whole-checkout
+copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
+dependency resolution behavior rather than matching Dockerfile text.
+The shared image-layout guard checks actual instruction order, not just the
+presence of a manifest string: root inputs, Yarn cache, package-manager check
+and every workspace manifest must precede installation; packages, scripts and
+deployment sources must follow it. Synthetic fixtures in
+`scripts/ci/ci-performance.test.mjs` reject absent/late inputs, comment-only
+copies, early sources and whole-checkout copies, and accept CRLF/continuations.
+
 Wrappers that build Docker images from this source should keep the Rivet build
 surface narrow:
 
@@ -880,8 +916,8 @@ Rust/Tauri targets, desktop sidecars, browser-test artifacts, and existing build
 outputs are never image inputs. The checked-in Yarn cache, Yarn release, patches,
 workspace manifests, and package source remain available to immutable installs.
 
-For cache-safe dependency install layers, copy only dependency metadata before
-`yarn install`:
+For cache-safe PnP wrapper dependency install layers, copy only dependency
+metadata before `yarn install`:
 
 - root `package.json`
 - `yarn.lock`
@@ -895,6 +931,9 @@ For cache-safe dependency install layers, copy only dependency metadata before
 
 Copy source files only after dependency installation. This keeps Docker
 dependency layers stable when regular TypeScript/source files change.
+Studio Server's own images use the node-modules linker instead: their
+`.dockerignore` excludes host PnP loaders, and the dependency stage copies the
+checked-in Yarn cache along with the manifests, lockfile and Yarn configuration.
 
 ### CLI
 
@@ -1163,14 +1202,16 @@ work behind it is parallelized.
 
 ### Parallel job graph
 
-1. `compiled-artifacts` runs the complete `yarn build`, then uploads only the
+1. `compiled-artifacts` runs `yarn studio-server:build:dependencies`, then uploads the
    compiled Core, Node, Evaluations, and App Executor dependencies required by
    downstream package checks. GitHub Actions stores those selected paths relative
    to their shared `packages/` ancestor, so `package-tests` restores the artifact
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
-2. `package-tests` fans out two Core partitions, Node, Evaluations, App Executor, and CLI, plus
-   four deterministic App shards, into isolated jobs. The compiled-artifact job
+2. `package-tests` fans out the six longest lanes (two Core partitions and four
+   deterministic App shards). `supporting-tests` runs Node, Evaluations, App
+   Executor and CLI separately, with at most two jobs, so short lanes cannot
+   occupy the six-job long-test matrix slots. The compiled-artifact job
    verifies every declared Core, Node, and Evaluations export is present and
    loadable, and that the executor bundle is present and syntactically valid,
    before upload; each package-test job repeats that check immediately after
@@ -1181,10 +1222,13 @@ work behind it is parallelized.
    builds. Node uses the analogous `RIVET_NODE_TEST_DEPENDENCIES=prebuilt` mode.
    Core uses native Node test-runner partitions `1/2` and `2/2`, with four file
    workers per runner; local `yarn test:core` still runs the complete suite.
-   The test matrix retains a six-job
-   concurrency cap; every suite always runs, and changed-path selection is
+   Every suite always runs, and changed-path selection is
    deliberately not used for the general correctness gate.
-3. `package-lint` fans out the same six source-only workspaces immediately; it does not
+3. `frontend-build` restores verified dependencies and compiles the desktop App
+   (TypeScript and production Vite) and CLI. This mandatory gate preserves the
+   remaining root build coverage but no longer delays runtime tests by the
+   roughly 80-second desktop bundle measured in the previous hosted run.
+   `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.
 4. `static-validation` runs PnP freshness, docs typechecking, `yarn test:style`,
@@ -1198,7 +1242,7 @@ work behind it is parallelized.
    binary from a runner/architecture/version cache and compiles it only on a
    cache miss; the advisory database itself is still refreshed by the audit.
 7. The lightweight `build` aggregator fails unless compilation, every test and
-   lint shard, static validation, JavaScript audit, and Rust audit all succeeded.
+   lint shard, desktop/CLI compilation, static validation, JavaScript audit, and Rust audit all succeeded.
 
 Each substantive job records its wall time through
 [`scripts/ci/job-timing.mjs`](../scripts/ci/job-timing.mjs). The helper writes a
@@ -1215,8 +1259,8 @@ Desktop push releases share a cancellable per-branch lane, while each manual rel
 
 The artifact fan-out is an execution optimization, not a new build contract.
 `yarn build`, `yarn test`, and `yarn lint` remain the canonical complete local
-commands. Only test jobs restore compiled package exports, and only after the same commit
-has completed the full build.
+commands. Consumers restore compiled exports only after the same commit has
+completed dependency compilation; the full build remains required by aggregation.
 
 Artifact names deliberately stay stable within a workflow run: re-running only
 a failed consumer job must be able to download the previous producer artifact.

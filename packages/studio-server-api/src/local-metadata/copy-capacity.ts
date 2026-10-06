@@ -111,7 +111,7 @@ export async function inspectLocalCopyCapacity(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
     for (const suffix of ['', '-wal', '-journal']) {
       try {
         const stat = await fs.lstat(path.join(source.appData, name + suffix));

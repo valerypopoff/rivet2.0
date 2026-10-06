@@ -1,6 +1,8 @@
 import { it, describe } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { type DataValue, ExtractJsonNodeImpl, type PortId } from '../../../src/index.js';
+import type { DataValue } from '../../../src/model/DataValue.js';
+import { ExtractJsonNodeImpl } from '../../../src/model/nodes/ExtractJsonNode.js';
+import type { PortId } from '../../../src/model/NodeBase.js';
 
 const createNode = () => {
   return new ExtractJsonNodeImpl({

@@ -60,8 +60,11 @@ Authenticated API routes under `/api/workflows/project-bundles` are:
   Range/If-Range support, attachment disposition and no-store headers.
 - `DELETE /:id` requires `X-Rivet-Bundle-Intent: 1` and cancels/disposes the export.
 
-Only one export prepares at a time, including final staging cleanup after the archive
-becomes downloadable. Expiry and cancellation use one serialized removal owner;
+Only one export prepares at a time, including final staging cleanup. Terminal
+status and download acknowledgement wait for that preparation owner to settle:
+observing failure guarantees its packaging slot is released before retry, and a
+ready archive is not exposed before a later cleanup failure can revoke readiness.
+Expiry and cancellation use one serialized removal owner;
 failed deletions remain tracked for disk accounting and are retried instead of
 orphaning archives. Failed staging removal also blocks further preparation until
 cleanup succeeds, while leased downloads may finish. Cancellation denies new
@@ -167,6 +170,9 @@ workspace, and the shared modal theme. API tests cover auth,
 range resumption, redaction, cancellation, restart, coherent closure and reader
 retention, including cancelled reader capacity, held staging cleanup, retry after
 failed expiry removal and unclaimed scratch preservation.
+Held-cleanup fixtures cover both success/failure acknowledgements and prevent
+downloads from escaping a subsequent cleanup failure; they use explicit gates,
+not sleep-based race timing.
 The real ZIP execution fixture includes a valid mutual-project call through a
 different graph; an indirect cross-project cycle through a local helper is rejected.
 Node tests cover two versions of one target, repeated processor isolation,

@@ -2,16 +2,13 @@ import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import {
   DelegateFunctionCallNodeImpl,
-  findAutoDelegateGraphCandidate,
   type DelegateFunctionCallNode,
-  type GraphId,
-  type InternalProcessContext,
-  type NodeId,
-  type Outputs,
-  type PortId,
-  type ProcessId,
-  type ToolCallFinishedEvent,
-} from '../../../src/index.js';
+} from '../../../src/model/nodes/DelegateFunctionCallNode.js';
+import { findAutoDelegateGraphCandidate } from '../../../src/model/chat-v2/toolHandlerResolver.js';
+import type { GraphId } from '../../../src/model/NodeGraph.js';
+import type { InternalProcessContext, ProcessId, ToolCallFinishedEvent } from '../../../src/model/ProcessContext.js';
+import type { NodeId, PortId } from '../../../src/model/NodeBase.js';
+import type { Outputs } from '../../../src/model/GraphProcessor.js';
 import { applyStreamedFunctionCallOutputs } from '../../../src/model/chat/streamChatResponse.js';
 
 function createNode(data: Partial<DelegateFunctionCallNode['data']> = {}) {

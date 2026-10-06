@@ -111,6 +111,58 @@ The first launch waits for the bundle. Later successful builds refresh only a cl
 
 Return to hot reload with `yarn studio-server:dev`. Both commands use the same development stack and data mounts, not parallel stacks or a staging release. Save browser edits before deliberately changing modes. See the [development guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md#development) for operational details.
 
+## Schedule useful work
+
+Open **Scheduled runs** at the bottom of the project sidebar and choose **Add
+scheduled run**. Give it a name, optionally describe it, select a project and
+choose **Saved latest** or **Published**. Rivet runs that version's **Main Graph**:
+latest means its saved state at execution time, not unsaved editor changes.
+Publishing is not required for Saved latest. Project moves/renames retain the
+schedule's project identity; deleting the project or its main graph makes runs fail.
+
+Choose once, interval, daily, weekly or monthly, with an IANA time zone such as
+`Europe/London`. **Preview next runs** shows the calculated times. Intervals use
+elapsed minutes from an explicit UTC/offset anchor. Missing daylight-saving times
+and monthly dates are skipped; a repeated daylight-saving time runs once. A
+one-time date that is ambiguous or nonexistent must be changed.
+
+The optional input must be a JSON object passed to the graph's `input` port.
+Leave it blank to preserve Graph Input defaults; `{}` explicitly passes an empty
+object. Inputs can contain secrets, so protect your server and its backups. Turn
+**Record these runs** on to retain replays; the server's recording setting must
+also be enabled. Root and called-project recordings are linked in Run recordings.
+Run history remains available even when recording is off or fails.
+
+The server must stay online, but your browser can be closed. Missed runs are
+skipped by default; **Catch up latest only** starts only the newest missed run.
+Rivet avoids ordinary overlap for a schedule and defaults to one scheduled run
+at a time across the server. It limits capacity waiting to 15 minutes and supports
+an execution timeout of 1–1,440 minutes. Provider credentials, runtime libraries
+and other server execution settings still apply. Interactive User Input nodes
+cannot wait for a browser and fail in scheduled runs.
+
+Use **Pause**, **Edit**, **Delete** or **Run now** as needed. Deleting a schedule
+cancels pending work but does not stop an already-running graph; use **Cancel run**
+for that. A failed/interrupted execution is not retried automatically: external
+side effects may already have happened. Inspect it before choosing **Retry run**,
+which uses that run's input/settings snapshot and warns about repeated effects.
+Even with cancellation, external side effects cannot be undone.
+If execution finishes but its outcome cannot be stored, history eventually marks
+it interrupted, not failed. Its external work may have succeeded; check side
+effects before retrying.
+
+If an action times out or loses its response, retrying the unchanged action in
+the same page (including closing/reopening this modal) reuses its request identity
+instead of submitting another run. After a full page reload, review the refreshed
+schedules/history first. Do not retry an uncertain action more than 24 hours later.
+If the action was accepted but the list could not refresh, wait for reconnection;
+do not repeat it.
+
+Keep schedules and history in coordinated storage backups. Restoring local data
+under a different control identity pauses schedules until reviewed and enabled.
+A full clone containing the same control identity is indistinguishable from the
+original: keep test clones offline or pause their schedules before starting them.
+
 ## Publish a workflow endpoint
 
 Open a saved project in the browser editor, select its **Main Graph**, then open **Project settings → Endpoint**. Choose an endpoint name and click **Publish**. The published route, `/workflows/<name>` by default, runs the saved project version captured by that publish. Saving more changes to the project does not silently update it: use **Update** after reviewing the new draft. **Published version history** lets you inspect or restore an earlier version. **Unpublish** closes the endpoint routes without deleting the saved project.

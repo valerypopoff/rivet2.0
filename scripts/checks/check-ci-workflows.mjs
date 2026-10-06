@@ -53,6 +53,8 @@ assertIncludesAll(
   [
     'compiled-artifacts',
     'package-tests',
+    'supporting-tests',
+    'frontend-build',
     'package-lint',
     'static-validation',
     'javascript-audit',
@@ -69,7 +71,9 @@ assert.deepEqual(asArray(buildJobs['package-tests'].needs), ['compiled-artifacts
 assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
 assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
 assert.deepEqual(
-  buildJobs['package-tests'].strategy.matrix.include.map((entry) => entry.command).sort(),
+  [...buildJobs['package-tests'].strategy.matrix.include, ...buildJobs['supporting-tests'].strategy.matrix.include]
+    .map((entry) => entry.command)
+    .sort(),
   [
     'test:app --shard-index 0 --shard-count 4',
     'test:app --shard-index 1 --shard-count 4',
@@ -99,7 +103,12 @@ const compiledArtifactUpload = findStep(
 );
 const packageTestStep = findStep(buildJobs['package-tests'], 'Test ${{ matrix.label }}', 'Package-tests job');
 assert.equal(packageTestStep.env?.RIVET_CORE_TEST_SHARD, '${{ matrix.core-shard }}');
-assert.equal(packageTestStep.env?.RIVET_NODE_TEST_DEPENDENCIES, 'prebuilt');
+assert.equal(packageTestStep.env?.RIVET_APP_TEST_DEPENDENCIES, 'prebuilt');
+assert.equal(
+  findStep(buildJobs['supporting-tests'], 'Test ${{ matrix.label }}', 'Supporting-tests job').env
+    ?.RIVET_NODE_TEST_DEPENDENCIES,
+  'prebuilt',
+);
 const compiledArtifactDownload = findStep(
   buildJobs['package-tests'],
   'Download compiled dependencies',
@@ -161,10 +170,50 @@ assert.equal(
 );
 assertIncludesAll(
   asArray(buildJobs.build.needs),
-  ['compiled-artifacts', 'package-tests', 'package-lint', 'static-validation', 'javascript-audit', 'rust-audit'],
+  [
+    'compiled-artifacts',
+    'package-tests',
+    'supporting-tests',
+    'frontend-build',
+    'package-lint',
+    'static-validation',
+    'javascript-audit',
+    'rust-audit',
+  ],
   'Build aggregator',
 );
 const buildGate = findStep(buildJobs.build, 'Require every Build gate', 'Build aggregator');
+assert.equal(
+  findStep(buildJobs['compiled-artifacts'], 'Build', 'Runtime compiler').run,
+  'yarn studio-server:build:dependencies',
+);
+assert.equal(buildJobs['package-tests'].strategy.matrix.include.length, 6);
+assert.equal(buildJobs['supporting-tests'].strategy['max-parallel'], 2);
+assert.equal(buildJobs['supporting-tests'].strategy['fail-fast'], false);
+for (const id of ['supporting-tests', 'frontend-build']) {
+  const job = buildJobs[id];
+  assert.deepEqual(asArray(job.needs), ['compiled-artifacts']);
+  const download = findStep(job, 'Download compiled dependencies', id);
+  const verify = findStep(job, 'Verify restored compiled dependencies', id);
+  assert.equal(download.with.name, compiledArtifactUpload.with.name);
+  assert.equal(download.with.path, 'packages');
+  assert.equal(verify.run, 'yarn check:compiled-workspace-exports');
+  assert.ok(job.steps.indexOf(download) < job.steps.indexOf(verify));
+  const consume = findStep(
+    job,
+    id === 'frontend-build' ? 'Build desktop frontend and CLI' : 'Test ${{ matrix.label }}',
+    id,
+  );
+  assert.ok(job.steps.indexOf(verify) < job.steps.indexOf(consume), `${id} must verify exports before use.`);
+}
+assert.equal(
+  findStep(buildJobs['frontend-build'], 'Build desktop frontend and CLI', 'Frontend compiler').run,
+  'yarn workspace @valerypopoff/rivet-app run build && yarn workspace @valerypopoff/rivet2-cli run build',
+);
+assert.equal(buildGate.env?.FRONTEND_RESULT, '${{ needs.frontend-build.result }}');
+assert.equal(buildGate.env?.SUPPORTING_TEST_RESULT, '${{ needs.supporting-tests.result }}');
+assert.match(buildGate.run, /\$FRONTEND_RESULT/);
+assert.match(buildGate.run, /\$SUPPORTING_TEST_RESULT/);
 assert.equal(buildGate.env?.JAVASCRIPT_AUDIT_RESULT, '${{ needs.javascript-audit.result }}');
 assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must require the JavaScript audit result.');
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
@@ -228,6 +277,10 @@ assert.deepEqual(
 );
 assert.equal(studioJobs['api-tests'].strategy['fail-fast'], false);
 assert.equal(studioJobs['api-tests'].strategy['max-parallel'], 4);
+assert.equal(
+  findStep(studioJobs['api-tests'], 'Run API test shard', 'API tests').env?.RIVET_API_TEST_RUNTIME,
+  'prebuilt',
+);
 assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);

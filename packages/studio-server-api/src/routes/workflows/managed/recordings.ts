@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { readScheduledRecordingFields } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { serializeDatasets, serializeProject, type Project } from '@valerypopoff/rivet2-node';
 
 import type {
@@ -104,13 +105,15 @@ function getExecutionIdentity(row: RecordingRow) {
     row.execution_surface !== 'workflow_endpoint' &&
     row.execution_surface !== 'web_app_action' &&
     row.execution_surface !== 'editor_local' &&
-    row.execution_surface !== 'subgraph_project'
+    row.execution_surface !== 'subgraph_project' &&
+    row.execution_surface !== 'scheduled'
   ) {
     return undefined;
   }
 
   return {
     surface: row.execution_surface,
+    ...readScheduledRecordingFields(row.scheduled_identity_json),
     graphId: row.graph_id_at_execution ?? undefined,
     graphName: row.graph_name_at_execution ?? undefined,
     revisionKey: row.revision_key_at_execution ?? undefined,

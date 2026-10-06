@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
+import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 13;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 14;
 // A serving release may verify an additive schema created by its immediate
 // successor only when the chart deliberately supplies that compatibility
 // window. Keep this constant explicit: raising it is the release-engineering
@@ -397,6 +398,14 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_WORKFLOW_PUBLICATION_VERSION_SQL,
     checksum: '52960353c63c8783aa3962301561f77f12622789ae12dae2c58b61f7ce8f59fa',
   },
+  {
+    version: 14,
+    name: 'scheduled-runs',
+    sql:
+      SCHEDULE_SCHEMA_SQL +
+      'ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS scheduled_identity_json TEXT NULL;\n',
+    checksum: 'ea14c8409bab5bb7226a4973651a8a93ab49d4497dab0f2a70a8ef556a4884b9',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -426,6 +435,10 @@ function assertMigrationDefinitions(): void {
 assertMigrationDefinitions();
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
+  'rivet_schedules',
+  'rivet_schedule_runs',
+  'rivet_schedule_installation',
+  'rivet_schedule_requests',
   'app_settings',
   'managed_maintenance_leases',
   'managed_object_deletion_outbox',
@@ -554,6 +567,27 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['evaluation_runs', 'run_json', 'jsonb', 'NO'],
   ['evaluation_runs', 'updated_at', 'timestamptz', 'NO'],
   ['llm_profile_health', 'key', 'text', 'NO'],
+  ['rivet_schedules', 'id', 'text', 'NO'],
+  ['rivet_schedules', 'revision', 'int8', 'NO'],
+  ['rivet_schedules', 'enabled', 'int4', 'NO'],
+  ['rivet_schedules', 'next_at', 'int8', 'YES'],
+  ['rivet_schedules', 'json', 'text', 'NO'],
+  ['rivet_schedule_runs', 'id', 'text', 'NO'],
+  ['rivet_schedule_runs', 'schedule_id', 'text', 'NO'],
+  ['rivet_schedule_runs', 'status', 'text', 'NO'],
+  ['rivet_schedule_runs', 'owner', 'text', 'YES'],
+  ['rivet_schedule_runs', 'lease_until', 'int8', 'YES'],
+  ['rivet_schedule_runs', 'scheduled_at', 'int8', 'NO'],
+  ['rivet_schedule_runs', 'json', 'text', 'NO'],
+  ['rivet_schedule_runs', 'draft_json', 'text', 'NO'],
+  ['rivet_schedule_installation', 'key', 'text', 'NO'],
+  ['rivet_schedule_installation', 'value', 'text', 'NO'],
+  ['rivet_schedule_requests', 'id', 'text', 'NO'],
+  ['rivet_schedule_requests', 'fingerprint', 'text', 'NO'],
+  ['rivet_schedule_requests', 'expires_at', 'int8', 'NO'],
+  ['rivet_schedule_requests', 'resource_id', 'text', 'NO'],
+  ['rivet_schedule_requests', 'json', 'text', 'NO'],
+  ['workflow_recordings', 'scheduled_identity_json', 'text', 'YES'],
   ['llm_profile_health', 'project_id', 'text', 'YES'],
   ['llm_profile_health', 'entry_json', 'jsonb', 'YES'],
   ['llm_profile_health', 'updated_at', 'timestamptz', 'NO'],
@@ -725,6 +759,9 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  ['rivet_schedules', 'rivet_schedules_due_idx', ['enabled', 'next_at'], null, [0, 0]],
+  ['rivet_schedule_runs', 'rivet_schedule_runs_active_idx', ['status', 'lease_until'], null, [0, 0]],
+  ['rivet_schedule_runs', 'rivet_schedule_runs_history_idx', ['schedule_id', 'scheduled_at'], null, [0, 0]],
   [
     'managed_object_deletion_outbox',
     'managed_object_deletion_outbox_pending_idx',
@@ -936,6 +973,10 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['evaluation_runs', 'p', 'PRIMARY KEY (project_id, run_id)'],
   ['evaluation_runs', 'f', 'FOREIGN KEY (project_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['llm_profile_health', 'p', 'PRIMARY KEY (key)'],
+  ['rivet_schedules', 'p', 'PRIMARY KEY (id)'],
+  ['rivet_schedule_runs', 'p', 'PRIMARY KEY (id)'],
+  ['rivet_schedule_installation', 'p', 'PRIMARY KEY (key)'],
+  ['rivet_schedule_requests', 'p', 'PRIMARY KEY (id)'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((char_length(checksum) = 64))'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'p', 'PRIMARY KEY (version)'],
   [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE, 'c', 'CHECK ((version > 0))'],

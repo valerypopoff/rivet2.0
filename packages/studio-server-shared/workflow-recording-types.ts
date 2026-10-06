@@ -15,7 +15,10 @@ export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
  * after a recording is created.
  */
 export type WorkflowRecordingExecutionIdentity = {
-  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project';
+  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | 'scheduled';
+  scheduleId?: string;
+  scheduleName?: string;
+  occurrenceId?: string;
   graphId?: string;
   graphName?: string;
   revisionKey?: string;
@@ -27,6 +30,23 @@ export type WorkflowRecordingExecutionIdentity = {
   componentLabel?: string;
   correlationId?: string;
 };
+
+/** Additional scheduled identity is stored separately from endpoint identities. */
+export function readScheduledRecordingFields(
+  value: unknown,
+): Pick<WorkflowRecordingExecutionIdentity, 'scheduleId' | 'scheduleName' | 'occurrenceId'> {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const field = (name: string) => (typeof raw[name] === 'string' && raw[name].length <= 200 ? raw[name] : undefined);
+  return { scheduleId: field('scheduleId'), scheduleName: field('scheduleName'), occurrenceId: field('occurrenceId') };
+}
 
 export type WorkflowRecordingFilterStatus = 'all' | 'failed';
 export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [

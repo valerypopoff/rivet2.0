@@ -31,9 +31,10 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
+  scheduledRunsOpen?: boolean;
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
-}> = ({ controller, routeConfig, onRouteConfigChange }) => {
+}> = ({ controller, routeConfig, onRouteConfigChange, scheduledRunsOpen }) => {
   const [upgradeTabRequested, setUpgradeTabRequested] = useState(false);
   const {
     settingsModalOpen,
@@ -80,6 +81,7 @@ export const WorkflowLibraryModals: FC<{
       ) : null}
       <LocalStorageUpgradePrompt
         suppressed={
+          scheduledRunsOpen ||
           controller.bundleOpen ||
           appSettingsOpen ||
           settingsModalOpen ||

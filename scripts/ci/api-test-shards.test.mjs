@@ -12,6 +12,7 @@ import {
   listApiTestFiles,
   parseApiTestOptions,
   selectApiTestShard,
+  selectApiTestPlan,
   verifyApiTestManifest,
 } from '../../deploy/studio-server/scripts/run-api-tests.mjs';
 
@@ -28,6 +29,36 @@ test('four API shards cover every default test exactly once in manifest order', 
     );
   }
   assert.equal(new Set(shards.flat()).size, defaultApiTestFiles.length);
+});
+
+test('hosted API plan distributes runtime scenarios but never duplicates ordinary files', () => {
+  const runtime = 'src/tests/local-upgrade-runtime.test.ts';
+  const plans = Array.from({ length: 4 }, (_, index) => selectApiTestPlan(index, 4));
+  assert.deepEqual(
+    plans.map((plan) => plan.runtimeShard),
+    ['1/4', '2/4', '3/4', '4/4'],
+  );
+  assert.deepEqual(
+    plans.flatMap((plan) => plan.files.filter((file) => file !== runtime)).sort(),
+    defaultApiTestFiles.filter((file) => file !== runtime).sort(),
+  );
+  for (const plan of plans) assert.equal(plan.files.filter((file) => file === runtime).length, 1);
+  // Exercise the exact selector used by scenario registration, including new
+  // scenarios and uneven totals; every callback is assigned exactly once.
+  for (const count of [25, 26, 29]) {
+    const scenarios = Array.from({ length: count }, (_, index) => ({ index }));
+    const selected = plans.flatMap((_, index) => selectApiTestShard(scenarios, index, 4));
+    assert.deepEqual(
+      selected.map(({ index }) => index).sort((a, b) => a - b),
+      scenarios.map(({ index }) => index),
+    );
+  }
+  assert.deepEqual(selectApiTestPlan(0, 1), { files: defaultApiTestFiles, runtimeShard: '' });
+  assert.deepEqual(selectApiTestPlan(3, 10), {
+    files: selectApiTestShard(defaultApiTestFiles, 3, 10),
+    runtimeShard: '',
+  });
+  assert.throws(() => selectApiTestPlan(4, 4), /shardIndex/);
 });
 
 test('API manifest discovery includes nested test files and excludes unrelated files', () => {
