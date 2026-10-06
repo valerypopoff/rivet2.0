@@ -1,25 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import http from 'node:http';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { runtimeTestEntry, runtimeTestRepo as repo } from './runtime-test-entry.js';
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../../auth.js';
-import { listenTestServer } from './http-server-harness.js';
+import { allocateDistinctTestPorts } from './http-server-harness.js';
 
 const { runBackendSupervisor } = await import(
   pathToFileURL(path.join(repo, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
 );
-const freePort = async () => {
-  const server = await listenTestServer(http.createServer());
-  const port = server.port;
-  await server.close();
-  return port;
-};
-const apiPort = await freePort(),
-  executorPort = await freePort(),
-  healthPort = await freePort();
 const ownedRoot = path.dirname(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!);
 const volume = path.join(ownedRoot, 'ui-control');
 const executorData = path.join(ownedRoot, 'ui-executor');
@@ -33,6 +23,7 @@ for (const name of [
   'RIVET_LOCAL_METADATA_UPGRADE_ENABLED',
 ])
   delete environment[name];
+const [apiPort, executorPort, healthPort] = await allocateDistinctTestPorts(3);
 const completed = runBackendSupervisor({
   env: {
     ...environment,

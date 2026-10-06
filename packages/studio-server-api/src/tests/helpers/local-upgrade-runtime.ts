@@ -43,7 +43,7 @@ import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken, getExpectedUiS
 import express from 'express';
 import { pathToFileURL } from 'node:url';
 import { runtimeTestEntry, runtimeTestRepo as repo } from './runtime-test-entry.js';
-import { listenTestServer } from './http-server-harness.js';
+import { allocateDistinctTestPorts, listenTestServer } from './http-server-harness.js';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import { enableWorkflowRecordingMigrationCopyMode } from '../../routes/workflows/recordings.js';
 import { initializeRuntimeLibrariesBackend } from '../../runtime-libraries/backend.js';
@@ -74,15 +74,7 @@ if (command === 'ui-workflow') {
   const { startBackendSupervisor } = await import(
     pathToFileURL(path.join(repo, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
   );
-  const freePort = async () => {
-    const listener = await listenTestServer(http.createServer());
-    const port = listener.port;
-    await listener.close();
-    return port;
-  };
-  const apiPort = await freePort(),
-    executorPort = await freePort(),
-    healthPort = await freePort();
+  const [apiPort, executorPort, healthPort] = await allocateDistinctTestPorts(3);
   const supervisor = await startBackendSupervisor({
     env: {
       ...process.env,

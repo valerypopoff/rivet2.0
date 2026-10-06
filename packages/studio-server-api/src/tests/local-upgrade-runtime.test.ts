@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { describe, test } from 'node:test';
 import { selectTestShard } from '../../../../scripts/ci/test-shard-options.mjs';
@@ -14,6 +16,62 @@ import { recoverLocalMetadataToLegacy } from '../local-metadata/recover-legacy.j
 import { FilesystemRivetEvaluationStore } from '../evaluation-runs/filesystem-store.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
 import { runtimeTestEntry } from './helpers/runtime-test-entry.js';
+import { allocateDistinctTestPorts } from './helpers/http-server-harness.js';
+
+test('child-process ports stay reserved as a set even when the OS immediately reuses released ports', async (t) => {
+  const active = new Set<number>();
+  let highWater = 0;
+  const factory = t.mock.method(http, 'createServer', () => {
+    const server = new EventEmitter();
+    let port: number;
+    return Object.assign(server, {
+      listen(_port: number, _host: string, listening: () => void) {
+        port = 43000;
+        while (active.has(port)) port++;
+        active.add(port);
+        highWater = Math.max(highWater, active.size);
+        queueMicrotask(listening);
+      },
+      address: () => ({ port }),
+      close(closed: () => void) {
+        active.delete(port);
+        closed();
+      },
+    }) as unknown as http.Server;
+  });
+  assert.deepEqual(await allocateDistinctTestPorts(3), [43000, 43001, 43002]);
+  assert.equal(highWater, 3, 'no selected port may be released before the last bind');
+  assert.equal(active.size, 0, 'all reservations must be released before process startup');
+  factory.mock.restore();
+  const realPorts = await allocateDistinctTestPorts(3);
+  assert.equal(new Set(realPorts).size, 3);
+});
+
+test('a failed port bind rejects promptly and releases earlier reservations', async (t) => {
+  let attempts = 0;
+  let closed = 0;
+  t.mock.method(http, 'createServer', () => {
+    const server = new EventEmitter();
+    return Object.assign(server, {
+      listen(_port: number, _host: string, listening: () => void) {
+        if (++attempts === 2)
+          queueMicrotask(() => server.emit('error', Object.assign(new Error('Bind failed'), { code: 'EADDRINUSE' })));
+        else queueMicrotask(listening);
+      },
+      address: () => ({ port: 43000 }),
+      close(done: () => void) {
+        closed++;
+        done();
+      },
+    }) as unknown as http.Server;
+  });
+  await assert.rejects(allocateDistinctTestPorts(3), { code: 'EADDRINUSE' });
+  assert.equal(attempts, 2);
+  assert.equal(closed, 1, 'partial allocation cannot leak a listener');
+  for (const count of [0, -1, 1.5, NaN, Infinity])
+    await assert.rejects(allocateDistinctTestPorts(count), /positive integer/);
+  assert.equal(attempts, 2, 'invalid counts cannot allocate sockets');
+});
 
 test('runtime test entries preserve source mode and fail closed for invalid or missing prebuilt entries', () => {
   const source = runtimeTestEntry('tests/helpers/local-upgrade-runtime.js', 'source');
