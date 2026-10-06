@@ -522,7 +522,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       {isOpen ? (
         <ModalDialog
           testId="workflow-project-settings-modal"
-          width="medium"
           label={baseFileName}
           onClose={onClose}
           shouldCloseOnOverlayClick={canCloseModal}

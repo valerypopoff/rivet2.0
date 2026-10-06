@@ -352,7 +352,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
 
   return (
     <ModalTransition>
-      <ModalDialog testId="run-statistics-modal" width="x-large" label="Run statistics" onClose={onClose}>
+      <ModalDialog testId="run-statistics-modal" label="Run statistics" onClose={onClose}>
         <ModalBody>
           <div className="project-settings-modal-shell run-statistics-shell">
             <div className="project-settings-modal-header-row run-statistics-header-row">

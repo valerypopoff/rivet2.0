@@ -1,8 +1,52 @@
 # Scheduled runs
 
-The bottom sidebar action opens `ScheduledRunsModal.tsx`. Schedules are durable
+The calendar-icon sidebar action immediately before Settings opens
+`ScheduledRunsModal.tsx`. Schedules are durable
 control-plane work, not browser timers or public endpoint self-requests. Closing
 the browser does not stop work; the server must be online.
+
+## Dashboard controls
+
+The list and separate Add/Edit dialogs participate in the shared Studio Server
+black-backdrop/dark-surface theme. Each header and close control stays visible while content scrolls;
+the two-column form becomes one column on narrow screens. Project/details,
+timing and execution settings have separate headings. Buttons, selects and
+checkboxes use the existing Atlaskit components, not native OS controls.
+Select labels explicitly target their input IDs; the project hint is associated
+with its input. Field-box CSS applies only to direct text fields, not selects'
+internal inputs. Pending operations mark the region busy and disable editing;
+previewing never changes the Save label to claim a save is in progress. A
+successful action/list refresh immediately clears a retired polling error.
+The modal tracks the currently open select by input ID: Escape closes its menu
+without dismissing the draft; a retired menu's close event cannot retire a newer
+menu. With no menu open, normal modal Escape behavior remains. Preview and Open
+recording use the same busy/error guard but do not fetch the schedule list or
+report an acknowledged mutation after their read-only operation.
+
+Add and Edit open `scheduled-run-editor-modal` over the unchanged list/history
+dialog, using Atlaskit's modal stack. After the list focus lock reactivates,
+explicitly restore the originating Add/Edit control (or list Close if that
+control disappeared through concurrent deletion). Cancellation/Close
+discard only the draft and return to the list; Escape with a select open dismisses
+only that menu. Save/Preview disable closing until their response settles, avoiding
+late results affecting a dismissed or replacement draft. Failed/uncertain saves
+retain the draft and request-ledger semantics; acknowledged saves close the editor
+and refresh the list. Polling cannot replace an open draft.
+
+`ScheduledProjectSelect.tsx` follows the Subgraph Other projects control's
+expand-in-place folder interaction. Nested folders are indented and toggle
+without selecting a runnable target or closing the menu. Only project rows select
+a target; schedules always run its main graph, so there is no graph-selection step.
+The selected project's ancestors expand on opening. Project rows have icons and
+visible filenames. Search matches project names and paths; identical display names retain separate
+project IDs. Search reveals matching descendants of collapsed folders without
+altering persistent expansion state. The picker retains an
+unavailable saved project visibly rather than silently substituting another.
+`scheduledProjectOptions.ts` owns normalization/hierarchy/natural sorting without
+mutating the tree data. The observable scheduled-runs regression checks folder
+expansion/search/keyboard selection, separate editor/focus restoration, sidebar
+order/icon, custom controls, modal colors and narrow-screen layout
+alongside its existing real-API save/execution/restart coverage.
 
 ## Guarantees and owners
 
@@ -93,7 +137,20 @@ ticks. Shutdown tracks an in-flight claim even when it was not started by the
 poll timer, and storage errors do not skip shutdown cleanup.
 
 Local state is `scheduled-runs.sqlite` in selected operational storage or legacy
-app data. Existing authority is checked before DDL. Fresh initialization/local copy
+app data. Existing authority is checked before DDL. SQLite schema version 1 adds
+the request-receipt ledger. The exact original unversioned three-table schema
+upgrades automatically on writable startup; unmarked four-table databases are
+adopted without replacing their receipts. The DDL and `user_version=1` marker
+commit together under `BEGIN IMMEDIATE`, preserving schedules, history and the
+installation binding. Unsupported versions, unrelated tables, incomplete base
+schemas and missing tables in marked databases fail closed without repair.
+Read-only backup/copy verification recognizes the original schema without
+modifying a frozen source; upgrade happens only when normal writable serving
+opens its selected copy. Unversioned files cannot distinguish an original
+three-table database from one whose newer receipt table was removed; the version
+marker makes that distinction reliable after adoption. Never delete a scheduler
+database to fix a startup schema error.
+Fresh initialization/local copy
 create and certify this domain. Capacity/source fingerprints include existing
 schedule databases while absent databases preserve old fingerprint compatibility.
 Certificates accept the optional new domain without rewriting older certificates.

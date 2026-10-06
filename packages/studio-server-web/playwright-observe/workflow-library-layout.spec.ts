@@ -668,6 +668,7 @@ test.describe('Workflow library layout', () => {
       'Run recordings',
       'Run statistics',
       'Published',
+      'Scheduled runs',
       'Settings',
     ]);
     const recordingsButton = bottomActions.getByRole('button', { name: 'Run recordings' });
@@ -676,7 +677,7 @@ test.describe('Workflow library layout', () => {
     await expect(recordingsButton.locator('svg')).toHaveCount(1);
     await expect(publishedButton.locator('svg')).toHaveCount(0);
     await expect(settingsButton.locator('svg')).toHaveCount(1);
-    await expect(bottomActions.locator('.panel-bottom-button-label')).toHaveCount(4);
+    await expect(bottomActions.locator('.panel-bottom-button-label')).toHaveCount(5);
     const folderRow = page.locator('.workflow-library-panel .folder-row');
     const folderLabel = folderRow.locator('.label');
     await expect(folderLabel).toBeVisible();

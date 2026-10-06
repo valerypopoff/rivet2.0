@@ -150,7 +150,6 @@ export const LocalStorageUpgradePrompt: FC<{
       {prompt && !suppressed ? (
         <ModalDialog
           testId="local-storage-upgrade-prompt"
-          width="medium"
           label="Local storage upgrade"
           onClose={dismiss}
         >

@@ -12,8 +12,109 @@ import type { ScheduledRunDraft } from '../../../studio-server-shared/scheduled-
 import type { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { awaitPreparation } from '../scheduled-runs/cancellation.js';
+import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
 
 const initial = Date.parse('2026-01-01T00:00:00Z');
+test('the original three-table scheduler upgrades atomically without changing its schedules, history or binding', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-schema-'));
+  const file = path.join(root, 's.sqlite');
+  let store = ScheduledRunStore.sqlite(file, () => initial);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await store.bindInstallation('original');
+  const schedule = await store.save(draft({ enabled: false }));
+  await store.runNow(schedule.id, schedule.revision);
+  const before = await store.list();
+  await store.close();
+  const legacy = new DatabaseSync(file);
+  legacy.exec('DROP TABLE rivet_schedule_requests; PRAGMA user_version=0');
+  legacy.close();
+  const frozen = new DatabaseSync(file, { readOnly: true });
+  assertLocalOperationalSchema(frozen, 'schedules');
+  assert.equal(frozen.prepare('PRAGMA user_version').get()!.user_version, 0);
+  assert.equal(frozen.prepare("SELECT name FROM sqlite_master WHERE name='rivet_schedule_requests'").get(), undefined);
+  frozen.close();
+
+  const exec = DatabaseSync.prototype.exec;
+  const failure = t.mock.method(DatabaseSync.prototype, 'exec', function (this: DatabaseSync, sql: string) {
+    exec.call(this, sql);
+    if (sql.includes('PRAGMA user_version=1')) throw new Error('Interrupted before schema commit');
+  });
+  assert.throws(() => ScheduledRunStore.sqlite(file), /Interrupted before schema commit/);
+  failure.mock.restore();
+  const rolledBack = new DatabaseSync(file, { readOnly: true });
+  assert.equal(rolledBack.prepare('PRAGMA user_version').get()!.user_version, 0);
+  assert.equal(
+    rolledBack.prepare("SELECT name FROM sqlite_master WHERE name='rivet_schedule_requests'").get(),
+    undefined,
+  );
+  rolledBack.close();
+
+  store = ScheduledRunStore.sqlite(file, () => initial);
+  await store.bindInstallation('original');
+  assert.deepEqual(await store.list(), before);
+  await store.close();
+  const upgraded = new DatabaseSync(file);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get()!.user_version, 1);
+  assert.equal(upgraded.prepare('SELECT COUNT(*) AS count FROM rivet_schedule_requests').get()!.count, 0);
+  upgraded.exec('DROP TABLE rivet_schedule_requests');
+  upgraded.close();
+  assert.throws(() => ScheduledRunStore.sqlite(file), /missing tables/);
+});
+
+test('unmarked current scheduler databases retain receipts; unknown or incomplete schemas never receive DDL', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-schema-'));
+  const file = path.join(root, 's.sqlite');
+  let store = ScheduledRunStore.sqlite(file, () => initial);
+  t.after(async () => {
+    await store.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const key = randomUUID();
+  const saved = await store.save(draft({ enabled: false }), undefined, 0, key);
+  await store.close();
+  const unmarked = new DatabaseSync(file);
+  unmarked.exec('PRAGMA user_version=0');
+  unmarked.close();
+  store = ScheduledRunStore.sqlite(file, () => initial);
+  assert.equal((await store.save(draft({ enabled: false }), undefined, 0, key)).id, saved.id);
+  await store.close();
+
+  for (const [name, damage, expected] of [
+    ['future', 'PRAGMA user_version=2', /unsupported schema version/],
+    [
+      'unrelated',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; CREATE TABLE unrelated(id TEXT)',
+      /missing tables/,
+    ],
+    [
+      'missing',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; DROP TABLE rivet_schedule_runs',
+      /missing tables/,
+    ],
+    [
+      'columns',
+      'PRAGMA user_version=0; DROP TABLE rivet_schedule_requests; ALTER TABLE rivet_schedule_runs RENAME COLUMN draft_json TO obsolete',
+      /incomplete schema/,
+    ],
+  ] as const) {
+    const damaged = path.join(root, `${name}.sqlite`);
+    await fs.copyFile(file, damaged);
+    const database = new DatabaseSync(damaged);
+    database.exec(damage);
+    const schema = database.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all();
+    const version = database.prepare('PRAGMA user_version').get();
+    database.close();
+    assert.throws(() => ScheduledRunStore.sqlite(damaged), expected);
+    const unchanged = new DatabaseSync(damaged, { readOnly: true });
+    assert.deepEqual(unchanged.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all(), schema);
+    assert.deepEqual(unchanged.prepare('PRAGMA user_version').get(), version);
+    unchanged.close();
+  }
+});
+
 test('PostgreSQL rollback failure preserves the original error and discards the uncertain connection', async () => {
   const primary = new Error('Lock failed'),
     secondary = new Error('Rollback failed');

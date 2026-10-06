@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState, type FC } from 'react';
+import { useEffect, useRef, useState, type FC, type ReactNode, type MouseEvent } from 'react';
+import Button from '@atlaskit/button';
+import Checkbox from '@atlaskit/checkbox';
+import Select from '@atlaskit/select';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import type {
   ScheduledRun,
@@ -8,7 +11,72 @@ import type {
 } from '../../studio-server-shared/scheduled-run-types';
 import type { WorkflowProjectItem } from './types';
 import { requestScheduledRuns as request } from './scheduledRunApi';
+import { ScheduledProjectSelect } from './ScheduledProjectSelect';
 import './ScheduledRunsModal.css';
+
+function ScheduleButton({
+  disabled,
+  primary,
+  children,
+  type = 'button',
+  onClick,
+}: {
+  disabled?: boolean;
+  primary?: boolean;
+  children: ReactNode;
+  type?: 'button' | 'submit';
+  onClick?(event: MouseEvent<HTMLElement>): void;
+}) {
+  return (
+    <Button
+      onClick={onClick}
+      type={type}
+      isDisabled={disabled}
+      appearance={primary ? 'primary' : 'subtle'}
+      className={`scheduled-run-action button-size-l${primary ? ' scheduled-run-primary' : ''}`}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function ScheduleSelect({
+  id,
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+  onMenuChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  disabled: boolean;
+  onChange(value: string): void;
+  onMenuChange(id: string, open: boolean): void;
+}) {
+  return (
+    <div className="scheduled-run-field">
+      <label htmlFor={id}>{label}</label>
+      <Select
+        inputId={id}
+        onMenuOpen={() => onMenuChange(id, true)}
+        onMenuClose={() => onMenuChange(id, false)}
+        options={options}
+        value={options.find((option) => option.value === value)}
+        isDisabled={disabled}
+        isSearchable={false}
+        menuPlacement="auto"
+        classNamePrefix="scheduled-select"
+        onChange={(option) => {
+          if (option) onChange(option.value);
+        }}
+      />
+    </div>
+  );
+}
 
 const reconnectWarning =
   'The action was accepted, but the updated list could not be loaded. Wait for the list to reconnect; do not repeat the action.';
@@ -42,6 +110,10 @@ export const ScheduledRunsModal: FC<{
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const [pollError, setPollError] = useState('');
+  const [listForeground, setListForeground] = useState(true);
+  const [openSelect, setOpenSelect] = useState<string | null>(null);
+  const trackSelect = (id: string, open: boolean) =>
+    setOpenSelect((current) => (open ? id : current === id ? null : current));
   const [draft, setDraft] = useState<ScheduledRunDraft | null>(null),
     [editing, setEditing] = useState<ScheduledRun | null>(null);
   const [input, setInput] = useState(''),
@@ -49,6 +121,19 @@ export const ScheduledRunsModal: FC<{
   const mounted = useRef(true),
     epoch = useRef(0),
     working = useRef(false);
+  const editorOpener = useRef<HTMLElement | null>(null);
+  const listClose = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (draft || busy || !listForeground || !editorOpener.current) return;
+    // The list's focus lock reactivates when the editor leaves the modal stack.
+    // Restore its originating control after that reactivation, not before it.
+    const frame = requestAnimationFrame(() => {
+      const target = editorOpener.current;
+      (target?.isConnected ? target : listClose.current)?.focus();
+      editorOpener.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [draft, busy, listForeground]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -82,7 +167,7 @@ export const ScheduledRunsModal: FC<{
       clearTimeout(timer);
     };
   }, []);
-  const action = async (operation: () => Promise<unknown>) => {
+  const action = async (operation: () => Promise<unknown>, refresh = true) => {
     if (working.current) return;
     working.current = true;
     epoch.current++;
@@ -91,11 +176,13 @@ export const ScheduledRunsModal: FC<{
     let acknowledged = false;
     try {
       await operation();
+      if (!refresh) return;
       acknowledged = true;
       const result = await request<ScheduledRunList>();
       if (mounted.current) {
         setData(result);
         setLoaded(true);
+        setPollError('');
       }
     } catch (failure) {
       if (mounted.current) setError(acknowledged ? reconnectWarning : describeError(failure));
@@ -104,7 +191,9 @@ export const ScheduledRunsModal: FC<{
       if (mounted.current) setBusy(false);
     }
   };
-  const edit = (s?: ScheduledRun) => {
+  const edit = (s: ScheduledRun | undefined, opener: HTMLElement) => {
+    editorOpener.current = opener;
+    setOpenSelect(null);
     setEditing(s ?? null);
     setTimes([]);
     setError('');
@@ -132,6 +221,7 @@ export const ScheduledRunsModal: FC<{
   };
   const payload = () => {
     if (!draft) throw new Error('No schedule selected.');
+    if (!draft.projectId) throw new Error('Choose a project.');
     const { input: previous, ...rest } = draft;
     if (!input.trim()) return rest;
     let value: unknown;
@@ -160,249 +250,350 @@ export const ScheduledRunsModal: FC<{
               : { kind: 'daily', time };
     update({ schedule });
   };
+  const closeEditor = () => {
+    if (working.current) return;
+    setDraft(null);
+    setOpenSelect(null);
+    setError('');
+  };
   return (
     <ModalTransition>
-      <ModalDialog width="x-large" onClose={onClose} testId="scheduled-runs-modal">
+      <ModalDialog
+        label="Scheduled runs"
+        onClose={onClose}
+        onStackChange={(index) => setListForeground(index === 0)}
+        shouldCloseOnEscapePress={!draft}
+        testId="scheduled-runs-modal"
+      >
         <ModalBody>
-          <div className="scheduled-runs">
-            <div className="scheduled-runs-heading">
+          <div className="scheduled-runs" aria-busy={busy}>
+            <div className="scheduled-runs-heading project-settings-modal-header-row">
               <h2>Scheduled runs</h2>
-              <button type="button" onClick={onClose}>
-                Close
+              <button
+                ref={listClose}
+                type="button"
+                className="project-settings-close-button"
+                aria-label="Close"
+                onClick={onClose}
+              >
+                ×
               </button>
             </div>
-            <p>
-              Runs use the saved project’s main graph. The server must be running; this browser can be closed. Unsaved
-              editor changes are not used.
-            </p>
-            {error || pollError ? <div role="alert">{error || pollError}</div> : null}
-            {!draft ? (
-              <>
-                <button type="button" disabled={busy} onClick={() => edit()}>
-                  Add scheduled run
-                </button>
-                {!loaded ? (
-                  <p>Loading scheduled runs…</p>
-                ) : !data.schedules.length ? (
-                  <p>No scheduled runs yet.</p>
-                ) : null}
-                {data.schedules.map((s) => (
-                  <section key={s.id} className="scheduled-run-card">
-                    <h3>
-                      {s.name}{' '}
-                      <small>
-                        {s.enabled
-                          ? 'Enabled'
-                          : s.schedule.kind === 'once' && s.nextAt === null
-                            ? 'Paused or completed'
-                            : 'Paused'}
-                      </small>
-                    </h3>
-                    {s.description ? <p>{s.description}</p> : null}
-                    <p>
-                      {projects.find((p) => p.id === s.projectId)?.name ?? `Unavailable project (${s.projectId})`} ·{' '}
-                      {s.version === 'latest' ? 'Saved latest' : 'Published'}
-                    </p>
-                    <p>
-                      {description(s)} · {s.timeZone} · Next: {date(s.nextAt, s.timeZone)}
-                    </p>
-                    <p>Recordings: {s.record ? 'On (requires server recording setting)' : 'Off'}</p>
-                    <div className="scheduled-run-buttons">
-                      <button disabled={busy} onClick={() => edit(s)}>
-                        Edit
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void action(() =>
-                            request(`/${encodeURIComponent(s.id)}`, 'PUT', {
-                              revision: s.revision,
-                              draft: { ...s, enabled: !s.enabled },
-                            }),
+            <div className="scheduled-runs-content">
+              <p className="scheduled-runs-help">
+                Runs use the saved project’s main graph. The server must be running; this browser can be closed. Unsaved
+                editor changes are not used.
+              </p>
+              {!draft && (error || pollError) ? <div role="alert">{error || pollError}</div> : null}
+              <ScheduleButton primary disabled={busy} onClick={(event) => edit(undefined, event.currentTarget)}>
+                Add scheduled run
+              </ScheduleButton>
+              {!loaded ? <p>Loading scheduled runs…</p> : !data.schedules.length ? <p>No scheduled runs yet.</p> : null}
+              {data.schedules.map((s) => (
+                <section key={s.id} className="scheduled-run-card">
+                  <h3>
+                    {s.name}{' '}
+                    <small>
+                      {s.enabled
+                        ? 'Enabled'
+                        : s.schedule.kind === 'once' && s.nextAt === null
+                          ? 'Paused or completed'
+                          : 'Paused'}
+                    </small>
+                  </h3>
+                  {s.description ? <p>{s.description}</p> : null}
+                  <p>
+                    {projects.find((p) => p.id === s.projectId)?.name ?? `Unavailable project (${s.projectId})`} ·{' '}
+                    {s.version === 'latest' ? 'Saved latest' : 'Published'}
+                  </p>
+                  <p>
+                    {description(s)} · {s.timeZone} · Next: {date(s.nextAt, s.timeZone)}
+                  </p>
+                  <p>Recordings: {s.record ? 'On (requires server recording setting)' : 'Off'}</p>
+                  <div className="scheduled-run-buttons">
+                    <ScheduleButton disabled={busy} onClick={(event) => edit(s, event.currentTarget)}>
+                      Edit
+                    </ScheduleButton>
+                    <ScheduleButton
+                      disabled={busy}
+                      onClick={() =>
+                        void action(() =>
+                          request(`/${encodeURIComponent(s.id)}`, 'PUT', {
+                            revision: s.revision,
+                            draft: { ...s, enabled: !s.enabled },
+                          }),
+                        )
+                      }
+                    >
+                      {s.enabled ? 'Pause' : 'Enable'}
+                    </ScheduleButton>
+                    <ScheduleButton
+                      disabled={busy}
+                      onClick={() =>
+                        void action(() => request(`/${encodeURIComponent(s.id)}/run`, 'POST', { revision: s.revision }))
+                      }
+                    >
+                      Run now
+                    </ScheduleButton>
+                    <ScheduleButton
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            'Delete this schedule? Pending work is cancelled; an already-running graph continues.',
                           )
+                        )
+                          void action(() =>
+                            request(`/${encodeURIComponent(s.id)}`, 'DELETE', { revision: s.revision }),
+                          );
+                      }}
+                    >
+                      Delete
+                    </ScheduleButton>
+                  </div>
+                </section>
+              ))}
+              <h3>Recent runs</h3>
+              <p>
+                History is separate from recordings. Failed or interrupted runs are not automatically retried because
+                external side effects may already have happened.
+              </p>
+              {data.history.slice(0, 100).map((run) => (
+                <section className="scheduled-run-card" key={run.id}>
+                  <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
+                  {run.reason ? <p>{run.reason}</p> : null}
+                  {run.recordingStatus === 'unavailable' ? (
+                    <p>Recording unavailable. The execution result is unchanged.</p>
+                  ) : null}
+                  <div className="scheduled-run-buttons">
+                    {run.recordingId ? (
+                      <ScheduleButton
+                        disabled={busy}
+                        onClick={() => void action(() => onOpenRecording(run.recordingId!), false)}
+                      >
+                        Open recording
+                      </ScheduleButton>
+                    ) : null}
+                    {['queued', 'claimed', 'running'].includes(run.status) ? (
+                      <ScheduleButton
+                        disabled={busy || run.cancelRequested}
+                        onClick={() =>
+                          void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
                         }
                       >
-                        {s.enabled ? 'Pause' : 'Enable'}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void action(() =>
-                            request(`/${encodeURIComponent(s.id)}/run`, 'POST', { revision: s.revision }),
-                          )
-                        }
-                      >
-                        Run now
-                      </button>
-                      <button
+                        {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
+                      </ScheduleButton>
+                    ) : null}
+                    {['failed', 'interrupted'].includes(run.status) &&
+                    data.schedules.some((s) => s.id === run.scheduleId) ? (
+                      <ScheduleButton
                         disabled={busy}
                         onClick={() => {
                           if (
                             window.confirm(
-                              'Delete this schedule? Pending work is cancelled; an already-running graph continues.',
+                              'Retry may repeat external side effects. Check what happened before retrying. Continue?',
                             )
                           )
                             void action(() =>
-                              request(`/${encodeURIComponent(s.id)}`, 'DELETE', { revision: s.revision }),
+                              request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', {
+                                confirmSideEffects: true,
+                              }),
                             );
                         }}
                       >
-                        Delete
-                      </button>
-                    </div>
-                  </section>
-                ))}
-              </>
-            ) : (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void action(async () => {
-                    await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
-                      draft: payload(),
-                      ...(editing ? { revision: editing.revision } : {}),
+                        Retry run
+                      </ScheduleButton>
+                    ) : null}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </ModalBody>
+      </ModalDialog>
+      {draft && (
+        <ModalDialog
+          label={editing ? 'Edit scheduled run' : 'Add scheduled run'}
+          testId="scheduled-run-editor-modal"
+          onClose={closeEditor}
+          shouldReturnFocus={false}
+          shouldCloseOnEscapePress={!busy && openSelect === null}
+          shouldCloseOnOverlayClick={!busy}
+        >
+          <ModalBody>
+            <div
+              className="scheduled-runs"
+              aria-busy={busy}
+              onKeyDown={(event) => {
+                // Dismissing a select must not also dismiss its parent dialog.
+                if (event.key === 'Escape' && openSelect !== null) event.stopPropagation();
+              }}
+            >
+              <div className="scheduled-runs-heading project-settings-modal-header-row">
+                <h2>{editing ? 'Edit scheduled run' : 'Add scheduled run'}</h2>
+                <button
+                  type="button"
+                  className="project-settings-close-button"
+                  aria-label="Close"
+                  disabled={busy}
+                  onClick={closeEditor}
+                >
+                  ×
+                </button>
+              </div>
+              <div className="scheduled-runs-content">
+                {error ? <div role="alert">{error}</div> : null}
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void action(async () => {
+                      await request(editing ? `/${encodeURIComponent(editing.id)}` : '', editing ? 'PUT' : 'POST', {
+                        draft: payload(),
+                        ...(editing ? { revision: editing.revision } : {}),
+                      });
+                      if (mounted.current) setDraft(null);
                     });
-                    if (mounted.current) setDraft(null);
-                  });
-                }}
-              >
-                <h3>{editing ? 'Edit scheduled run' : 'Add scheduled run'}</h3>
-                <fieldset className="scheduled-run-fields" disabled={busy}>
-                  <label>
-                    Name
-                    <input
-                      required
-                      maxLength={120}
-                      value={draft.name}
-                      onChange={(e) => update({ name: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Description (optional)
-                    <textarea
-                      maxLength={2000}
-                      value={draft.description}
-                      onChange={(e) => update({ description: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Project
-                    <select required value={draft.projectId} onChange={(e) => update({ projectId: e.target.value })}>
-                      <option value="">Choose a project</option>
-                      {!projects.some((p) => p.id === draft.projectId) && draft.projectId ? (
-                        <option value={draft.projectId}>Unavailable project</option>
-                      ) : null}
-                      {projects.map((p) => (
-                        <option key={p.relativePath} value={p.id}>
-                          {p.name} ({p.relativePath})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Version
-                    <select
+                  }}
+                >
+                  <fieldset className="scheduled-run-fields" disabled={busy}>
+                    <h4 className="scheduled-run-section-title">Project and details</h4>
+                    <label>
+                      Name
+                      <input
+                        required
+                        maxLength={120}
+                        value={draft.name}
+                        onChange={(e) => update({ name: e.target.value })}
+                      />
+                    </label>
+                    <ScheduleSelect
+                      id="scheduled-run-version"
+                      onMenuChange={trackSelect}
+                      label="Version"
+                      disabled={busy}
                       value={draft.version}
-                      onChange={(e) => update({ version: e.target.value as ScheduledRunDraft['version'] })}
-                    >
-                      <option value="latest">Saved latest</option>
-                      <option value="published">Published</option>
-                    </select>
-                  </label>
-                  <label>
-                    Schedule
-                    <select
-                      value={draft.schedule.kind}
-                      onChange={(e) => changeKind(e.target.value as RunSchedule['kind'])}
-                    >
-                      <option value="once">Once</option>
-                      <option value="interval">Interval</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                    </select>
-                  </label>
-                  <label>
-                    Time zone
-                    <input
-                      required
-                      value={draft.timeZone}
-                      placeholder="Europe/London"
-                      onChange={(e) => update({ timeZone: e.target.value })}
+                      onChange={(version) => update({ version: version as ScheduledRunDraft['version'] })}
+                      options={[
+                        { value: 'latest', label: 'Saved latest' },
+                        { value: 'published', label: 'Published' },
+                      ]}
                     />
-                  </label>
-                  {draft.schedule.kind === 'once' ? (
-                    <label>
-                      Date and time
-                      <input
-                        type="datetime-local"
-                        required
-                        value={draft.schedule.localTime}
-                        onChange={(e) => update({ schedule: { kind: 'once', localTime: e.target.value } })}
+                    <label className="scheduled-run-wide">
+                      Description (optional)
+                      <textarea
+                        maxLength={2000}
+                        value={draft.description}
+                        onChange={(e) => update({ description: e.target.value })}
                       />
                     </label>
-                  ) : null}
-                  {draft.schedule.kind === 'interval' ? (
-                    <>
-                      <label>
-                        Every (minutes)
-                        <input
-                          type="number"
-                          min={1}
-                          max={525600}
-                          required
-                          value={draft.schedule.minutes}
-                          onChange={(e) =>
-                            update({
-                              schedule: {
-                                kind: 'interval',
-                                minutes: Number(e.target.value),
-                                anchor: draft.schedule.kind === 'interval' ? draft.schedule.anchor : '',
-                              },
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Anchor (UTC ISO date)
-                        <input
-                          required
-                          value={draft.schedule.anchor}
-                          onChange={(e) =>
-                            update({
-                              schedule: {
-                                kind: 'interval',
-                                minutes: draft.schedule.kind === 'interval' ? draft.schedule.minutes : 60,
-                                anchor: e.target.value,
-                              },
-                            })
-                          }
-                        />
-                      </label>
-                    </>
-                  ) : null}
-                  {'time' in draft.schedule ? (
+                    <div className="scheduled-run-field scheduled-run-wide">
+                      <label htmlFor="scheduled-run-project">Project</label>
+                      <ScheduledProjectSelect
+                        projects={projects}
+                        onMenuChange={trackSelect}
+                        value={draft.projectId}
+                        disabled={busy}
+                        onChange={(projectId) => update({ projectId })}
+                      />
+                      <span className="scheduled-runs-help" id="scheduled-run-project-help">
+                        Browse by folder, or search by project name or path. The main graph runs.
+                      </span>
+                    </div>
+                    <h4 className="scheduled-run-section-title">When to run</h4>
+                    <ScheduleSelect
+                      id="scheduled-run-kind"
+                      onMenuChange={trackSelect}
+                      label="Schedule"
+                      disabled={busy}
+                      value={draft.schedule.kind}
+                      onChange={(kind) => changeKind(kind as RunSchedule['kind'])}
+                      options={['once', 'interval', 'daily', 'weekly', 'monthly'].map((kind) => ({
+                        value: kind,
+                        label: kind[0]!.toUpperCase() + kind.slice(1),
+                      }))}
+                    />
                     <label>
-                      Time
+                      Time zone
                       <input
-                        type="time"
                         required
-                        value={draft.schedule.time}
-                        onChange={(e) => {
-                          if ('time' in draft.schedule)
-                            update({ schedule: { ...draft.schedule, time: e.target.value } });
-                        }}
+                        value={draft.timeZone}
+                        placeholder="Europe/London"
+                        onChange={(e) => update({ timeZone: e.target.value })}
                       />
                     </label>
-                  ) : null}
-                  {draft.schedule.kind === 'weekly' ? (
-                    <fieldset>
-                      <legend>Weekdays</legend>
-                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name, day) => (
-                        <label className="scheduled-run-checkbox" key={day}>
+                    {draft.schedule.kind === 'once' ? (
+                      <label>
+                        Date and time
+                        <input
+                          type="datetime-local"
+                          required
+                          value={draft.schedule.localTime}
+                          onChange={(e) => update({ schedule: { kind: 'once', localTime: e.target.value } })}
+                        />
+                      </label>
+                    ) : null}
+                    {draft.schedule.kind === 'interval' ? (
+                      <>
+                        <label>
+                          Every (minutes)
                           <input
-                            type="checkbox"
-                            checked={draft.schedule.kind === 'weekly' && draft.schedule.weekdays.includes(day)}
+                            type="number"
+                            min={1}
+                            max={525600}
+                            required
+                            value={draft.schedule.minutes}
+                            onChange={(e) =>
+                              update({
+                                schedule: {
+                                  kind: 'interval',
+                                  minutes: Number(e.target.value),
+                                  anchor: draft.schedule.kind === 'interval' ? draft.schedule.anchor : '',
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Anchor (UTC ISO date)
+                          <input
+                            required
+                            value={draft.schedule.anchor}
+                            onChange={(e) =>
+                              update({
+                                schedule: {
+                                  kind: 'interval',
+                                  minutes: draft.schedule.kind === 'interval' ? draft.schedule.minutes : 60,
+                                  anchor: e.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                      </>
+                    ) : null}
+                    {'time' in draft.schedule ? (
+                      <label>
+                        Time
+                        <input
+                          type="time"
+                          required
+                          value={draft.schedule.time}
+                          onChange={(e) => {
+                            if ('time' in draft.schedule)
+                              update({ schedule: { ...draft.schedule, time: e.target.value } });
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {draft.schedule.kind === 'weekly' ? (
+                      <fieldset className="scheduled-run-weekdays scheduled-run-wide">
+                        <legend>Weekdays</legend>
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((name, day) => (
+                          <Checkbox
+                            key={day}
+                            label={name}
+                            isDisabled={busy}
+                            isChecked={draft.schedule.kind === 'weekly' && draft.schedule.weekdays.includes(day)}
                             onChange={(e) => {
                               if (draft.schedule.kind === 'weekly')
                                 update({
@@ -415,168 +606,119 @@ export const ScheduledRunsModal: FC<{
                                 });
                             }}
                           />
-                          {name}
-                        </label>
-                      ))}
-                    </fieldset>
-                  ) : null}
-                  {draft.schedule.kind === 'monthly' ? (
-                    <label>
-                      Day of month
-                      <select
-                        value={draft.schedule.day}
-                        onChange={(e) => {
+                        ))}
+                      </fieldset>
+                    ) : null}
+                    {draft.schedule.kind === 'monthly' ? (
+                      <ScheduleSelect
+                        id="scheduled-run-month-day"
+                        onMenuChange={trackSelect}
+                        label="Day of month"
+                        disabled={busy}
+                        value={String(draft.schedule.day)}
+                        onChange={(value) => {
                           if (draft.schedule.kind === 'monthly')
                             update({
                               schedule: {
                                 ...draft.schedule,
-                                day: e.target.value === 'last' ? 'last' : Number(e.target.value),
+                                day: value === 'last' ? 'last' : Number(value),
                               },
                             });
                         }}
-                      >
-                        {Array.from({ length: 31 }, (_, i) => (
-                          <option key={i + 1}>{i + 1}</option>
-                        ))}
-                        <option value="last">Last day</option>
-                      </select>
-                    </label>
-                  ) : null}
-                  <label>
-                    Missed runs
-                    <select
+                        options={[
+                          ...Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })),
+                          { value: 'last', label: 'Last day' },
+                        ]}
+                      />
+                    ) : null}
+                    <h4 className="scheduled-run-section-title">Execution</h4>
+                    <ScheduleSelect
+                      id="scheduled-run-missed"
+                      onMenuChange={trackSelect}
+                      label="Missed runs"
+                      disabled={busy}
                       value={draft.missed}
-                      onChange={(e) => update({ missed: e.target.value as ScheduledRunDraft['missed'] })}
-                    >
-                      <option value="skip">Skip missed runs</option>
-                      <option value="latest">Catch up latest only</option>
-                    </select>
-                  </label>
-                  <label>
-                    Timeout (minutes)
-                    <input
-                      type="number"
-                      min={1}
-                      max={1440}
-                      required
-                      value={draft.timeoutMinutes}
-                      onChange={(e) => update({ timeoutMinutes: Number(e.target.value) })}
+                      onChange={(missed) => update({ missed: missed as ScheduledRunDraft['missed'] })}
+                      options={[
+                        { value: 'skip', label: 'Skip missed runs' },
+                        { value: 'latest', label: 'Catch up latest only' },
+                      ]}
                     />
-                  </label>
-                  <label>
-                    Input JSON object (optional)
-                    <textarea
-                      rows={5}
-                      value={input}
-                      placeholder="Leave blank to use Graph Input defaults; {} sends an empty object."
-                      onChange={(e) => {
-                        setInput(e.target.value);
-                        setTimes([]);
-                      }}
-                    />
-                  </label>
-                  <label className="scheduled-run-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={draft.enabled}
-                      onChange={(e) => update({ enabled: e.target.checked })}
-                    />
-                    Enabled
-                  </label>
-                  <label className="scheduled-run-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={draft.record}
-                      onChange={(e) => update({ record: e.target.checked })}
-                    />
-                    Record these runs (requires server recording setting)
-                  </label>
-                </fieldset>
-                <p>
-                  Recurring missing DST times are skipped; repeated times run once. Days absent from a month are
-                  skipped. Previous pending/running occurrences never overlap.
-                </p>
-                <div className="scheduled-run-buttons">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void action(async () => {
-                        const result = await request<{ times: number[] }>('/preview', 'POST', payload());
-                        if (mounted.current) setTimes(result.times);
-                      })
-                    }
-                  >
-                    Preview next runs
-                  </button>
-                  <button type="submit" disabled={busy}>
-                    {busy ? 'Saving…' : 'Save schedule'}
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => setDraft(null)}>
-                    Cancel editing
-                  </button>
-                </div>
-                {times.length ? (
-                  <ul aria-label="Next runs">
-                    {times.map((t) => (
-                      <li key={t}>{date(t, draft.timeZone)}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </form>
-            )}
-            <h3>Recent runs</h3>
-            <p>
-              History is separate from recordings. Failed or interrupted runs are not automatically retried because
-              external side effects may already have happened.
-            </p>
-            {data.history.slice(0, 100).map((run) => (
-              <section className="scheduled-run-card" key={run.id}>
-                <strong>{run.name}</strong> · {run.status} · {date(run.scheduledAt)}
-                {run.reason ? <p>{run.reason}</p> : null}
-                {run.recordingStatus === 'unavailable' ? (
-                  <p>Recording unavailable. The execution result is unchanged.</p>
-                ) : null}
-                <div className="scheduled-run-buttons">
-                  {run.recordingId ? (
-                    <button disabled={busy} onClick={() => void action(() => onOpenRecording(run.recordingId!))}>
-                      Open recording
-                    </button>
-                  ) : null}
-                  {['queued', 'claimed', 'running'].includes(run.status) ? (
-                    <button
-                      disabled={busy || run.cancelRequested}
+                    <label>
+                      Timeout (minutes)
+                      <input
+                        type="number"
+                        min={1}
+                        max={1440}
+                        required
+                        value={draft.timeoutMinutes}
+                        onChange={(e) => update({ timeoutMinutes: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="scheduled-run-wide">
+                      Input JSON object (optional)
+                      <textarea
+                        rows={5}
+                        value={input}
+                        placeholder="Leave blank to use Graph Input defaults; {} sends an empty object."
+                        onChange={(e) => {
+                          setInput(e.target.value);
+                          setTimes([]);
+                        }}
+                      />
+                    </label>
+                    <div className="scheduled-run-toggles scheduled-run-wide">
+                      <Checkbox
+                        label="Enabled"
+                        isDisabled={busy}
+                        isChecked={draft.enabled}
+                        onChange={(e) => update({ enabled: e.target.checked })}
+                      />
+                      <Checkbox
+                        label="Record these runs (requires server recording setting)"
+                        isDisabled={busy}
+                        isChecked={draft.record}
+                        onChange={(e) => update({ record: e.target.checked })}
+                      />
+                    </div>
+                  </fieldset>
+                  <p>
+                    Recurring missing DST times are skipped; repeated times run once. Days absent from a month are
+                    skipped. Previous pending/running occurrences never overlap.
+                  </p>
+                  <div className="scheduled-run-buttons">
+                    <ScheduleButton
+                      type="button"
+                      disabled={busy}
                       onClick={() =>
-                        void action(() => request(`/runs/${encodeURIComponent(run.id)}/cancel`, 'POST', {}))
+                        void action(async () => {
+                          const result = await request<{ times: number[] }>('/preview', 'POST', payload());
+                          if (mounted.current) setTimes(result.times);
+                        }, false)
                       }
                     >
-                      {run.cancelRequested ? 'Cancelling…' : 'Cancel run'}
-                    </button>
+                      Preview next runs
+                    </ScheduleButton>
+                    <ScheduleButton primary type="submit" disabled={busy}>
+                      Save schedule
+                    </ScheduleButton>
+                    <ScheduleButton disabled={busy} onClick={closeEditor}>
+                      Cancel editing
+                    </ScheduleButton>
+                  </div>
+                  {times.length ? (
+                    <ul aria-label="Next runs">
+                      {times.map((t) => (
+                        <li key={t}>{date(t, draft.timeZone)}</li>
+                      ))}
+                    </ul>
                   ) : null}
-                  {['failed', 'interrupted'].includes(run.status) &&
-                  data.schedules.some((s) => s.id === run.scheduleId) ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            'Retry may repeat external side effects. Check what happened before retrying. Continue?',
-                          )
-                        )
-                          void action(() =>
-                            request(`/runs/${encodeURIComponent(run.id)}/retry`, 'POST', { confirmSideEffects: true }),
-                          );
-                      }}
-                    >
-                      Retry run
-                    </button>
-                  ) : null}
-                </div>
-              </section>
-            ))}
-          </div>
-        </ModalBody>
-      </ModalDialog>
+                </form>
+              </div>
+            </div>
+          </ModalBody>
+        </ModalDialog>
+      )}
     </ModalTransition>
   );
 };

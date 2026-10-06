@@ -1,5 +1,38 @@
 # Development
 
+## Shared modal sizing
+
+`packages/studio-server-web/modal-sizing.css` owns all Studio Server modal
+dimensions, loaded by the dashboard stylesheet and the hosted editor stylesheet.
+Actual modal dialogs (`role="dialog"`, `aria-modal="true"`) use 960px width/max-width
+and 700px min-width; every dimension is capped to the owning viewport minus 32px
+(16px side gutters). The cap takes precedence over the desktop minimum on small
+screens, including the editor iframe's narrower viewport. Popovers, menus and
+non-modal input-path suggestions are not affected. Height and content scrolling
+remain each dialog's responsibility. Do not add separate dashboard width props
+or page-specific width overrides; change the shared variables instead.
+Only the immediate Atlaskit positioner (identified by its direct dialog child's
+`data-modal-stack` marker) uses the same dimensions and auto side margins;
+changing only the dialog leaves the library's smaller mobile/desktop wrapper
+constraints in effect and can move the dialog off-center.
+Do not size arbitrary dialog parents: custom JSON/response-inspector modal
+backdrops must still fill the viewport. Responsive Run Activity drawers retain
+their own full-width drawer layout even when accessibility marks them modal.
+Hosted Settings and Project Settings navigation stacks above the content at
+editor viewport widths of 700px or less. This lives in `hosted-editor.css`,
+without changing standalone desktop styles or the shared outer dimensions.
+
+Verify with headless `yarn studio-server:ui:observe modal-sizing.spec.ts
+project-info-modal-sections.spec.ts hosted-file-menu.spec.ts scheduled-runs.spec.ts`.
+The sizing helper measures actual width, min/max constraints, centering and viewport gutters
+in the dialog's own document. Dashboard coverage includes stacked schedule dialogs
+and narrow viewports; embedded Settings/Project Settings retain their behavioral
+tests while checking the same contract and stacked narrow-screen settings layout.
+The CSS integration fixture also checks full-screen custom backdrops, outside-click
+dismissal and drawer exclusion. No Kubernetes rehearsal is needed.
+The small dashboard sizing scenario is also in the production-bundle CI browser
+lane, so the stylesheet must work without Vite development style injection.
+
 ## Scheduled runs regression checks
 
 See [Scheduled runs](./scheduled-runs.md) for ownership, storage schema 14 and
@@ -20,6 +53,13 @@ document, rather than relying only on SQL mocks.
 The standard web suite also includes `scheduled-run-api.test.ts` for malformed
 acknowledgements and overlapping retired-response races; the browser check verifies
 that accepted-action reconnection warnings disappear when the list recovers.
+`scheduled-runs.test.ts` also exercises writable adoption of the original
+three-table SQLite schema and unmarked current databases, preserving history,
+installation binding and request receipts. Unknown versions and damaged schemas
+must fail without DDL; `local-operational-schema.test.ts` retains strict selected
+authority checks. If startup reports unexpected/missing scheduler tables, inspect
+only schema metadata and integrity first. The known old schema upgrades on normal
+writable startup; deleting the database or weakening all schema checks is not a fix.
 
 See [GitHub Actions performance](ci-performance.md) for measured branch-workflow
 bottlenecks, bounded API/browser concurrency, shared desktop artifacts, and the

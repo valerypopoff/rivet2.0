@@ -90,7 +90,6 @@ const OpenPublishedItemsModal: FC<{
     <ModalTransition>
       <ModalDialog
         testId="published-items-modal"
-        width="large"
         label="Published endpoints and apps"
         onClose={onClose}
         shouldScrollInViewport={false}

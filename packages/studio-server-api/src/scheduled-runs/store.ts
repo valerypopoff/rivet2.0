@@ -11,7 +11,7 @@ import type {
 } from '../../../studio-server-shared/scheduled-run-types.js';
 import { latestOccurrence, nextOccurrence, validateScheduledRun } from './calendar.js';
 import { SCHEDULE_SCHEMA_SQL } from './schema.js';
-import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
+import { assertLocalOperationalSchema, LOCAL_SCHEDULE_SCHEMA_VERSION } from '../local-metadata/operational-schema.js';
 import { createHttpError } from '../utils/httpError.js';
 import { requestId, requestFingerprint } from './requests.js';
 
@@ -38,7 +38,18 @@ export class ScheduledRunStore {
     const db = new DatabaseSync(file);
     try {
       if (existing) assertLocalOperationalSchema(db, 'schedules');
-      db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; ${SCHEDULE_SCHEMA_SQL}`);
+      db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
+      try {
+        // Recheck under the write lock: another process may have upgraded while
+        // this connection was waiting. DDL and its version marker commit together.
+        if (existing) assertLocalOperationalSchema(db, 'schedules');
+        db.exec(`${SCHEDULE_SCHEMA_SQL}\nPRAGMA user_version=${LOCAL_SCHEDULE_SCHEMA_VERSION};`);
+        assertLocalOperationalSchema(db, 'schedules');
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
       if (process.platform !== 'win32') chmodSync(file, 0o600);
     } catch (error) {
       db.close();

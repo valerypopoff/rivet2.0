@@ -35,7 +35,6 @@ export const WorkflowProjectVersionModal: FC<WorkflowProjectVersionModalProps> =
     <ModalTransition>
       <ModalDialog
         testId="workflow-project-version-modal"
-        width="medium"
         label={`${actionLabel} ${project.name}`}
         onClose={onClose}
         shouldCloseOnOverlayClick={canClose}

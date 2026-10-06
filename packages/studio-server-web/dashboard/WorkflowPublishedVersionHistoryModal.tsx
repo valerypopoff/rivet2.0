@@ -346,7 +346,6 @@ export const WorkflowPublishedVersionHistoryModal: FC<WorkflowPublishedVersionHi
       {isOpen && project ? (
         <ModalDialog
           testId="workflow-published-version-history-modal"
-          width="large"
           label="Published version history"
           onClose={onClose}
           shouldCloseOnOverlayClick={canClose}
