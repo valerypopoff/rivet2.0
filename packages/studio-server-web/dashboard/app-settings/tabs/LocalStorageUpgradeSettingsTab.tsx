@@ -7,11 +7,17 @@ import {
   LOCAL_UPGRADE_FAILURE_REASONS,
   type LocalUpgradeFailureReason,
   type LocalUpgradeOperation,
+  type LocalUpgradeInventory,
+  type LocalUpgradePreparation,
+  type LocalUpgradePreparationKind,
 } from '../../../../studio-server-shared/local-upgrade-types';
 import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
 type Status = {
+  preparationJobsAvailable?: boolean;
+  preparation?: LocalUpgradePreparation | null;
+  preparationStatusUnreadable?: boolean;
   settingsEncryptionRequired?: boolean;
   uiRestartAvailable?: boolean;
   runtimeReady?: boolean;
@@ -48,30 +54,7 @@ type Status = {
     failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
 };
-type Inventory = {
-  source: Record<string, string>;
-  capacity?: {
-    payloadBytes: number;
-    freeBytes: number;
-    requiredBytes: number;
-    maxPayloadBytes: number;
-    fits: boolean;
-    estimatedWorkingBytes?: number;
-    memoryBudgetBytes?: number;
-    measurementComplete?: boolean;
-    reasons?: string[];
-  };
-  inventory: {
-    projects: number;
-    folders: number;
-    recordingBundles: number;
-    publishedEndpoints: number;
-    publishedVersions: number;
-    publishedWebApps: number;
-    warnings: string[];
-  } | null;
-  backupRequired: string;
-};
+type Inventory = LocalUpgradeInventory;
 const base = `${RIVET_API_BASE_URL}/app-settings/local-upgrade`;
 const actionProgress = {
   prepare: 'Preparing persistent control storage, then restarting the backend…',
@@ -213,6 +196,7 @@ export function LocalStorageUpgradeSettingsTab() {
   const [keyBackedUpFor, setKeyBackedUpFor] = useState<string | null>(null);
   const [resumeAcknowledgement, setResumeAcknowledgement] = useState<string | null>(null);
   const adoptedBackup = useRef<string | null>(null);
+  const preparationRequest = useRef<string | null>(null);
   const [downloadStarted, setDownloadStarted] = useState(false);
   const mounted = useRef(false);
   const requestSequence = useRef(0);
@@ -250,6 +234,12 @@ export function LocalStorageUpgradeSettingsTab() {
       const next = await request<Status>('', undefined, AbortSignal.timeout(10_000));
       if (mounted.current && sequence === requestSequence.current) {
         setStatus(next);
+        if (next.preparation?.id === preparationRequest.current) {
+          // Reconcile only this acknowledgement. The retained job must not
+          // erase diagnostics from later, unrelated operator actions.
+          preparationRequest.current = null;
+          setError(null);
+        }
         if (next.available && !next.restartRequired) {
           restartDeadline.current = 0;
           setAwaitingRestart(false);
@@ -325,14 +315,55 @@ export function LocalStorageUpgradeSettingsTab() {
     }
   };
   const transition = status?.transition;
+  const preparation = status?.preparation;
+  useEffect(() => {
+    if (status?.preparationStatusUnreadable) {
+      setInventory(null);
+      setFrozenSource(null);
+      setBackupRestoredFor(null);
+      setKeyBackedUpFor(null);
+      return;
+    }
+    if (!preparation || preparation.revision !== transition?.revision) return;
+    if (preparation.kind === 'inspect' || preparation.kind === 'pause-backup')
+      setInventory(preparation.phase === 'running' ? null : preparation.inventory ?? null);
+    if (preparation.kind === 'fingerprint') {
+      // Another operator's retry invalidates old browser evidence too. A failed
+      // or interrupted new read must not silently revive the previous proof.
+      setBackupRestoredFor(null);
+      setKeyBackedUpFor(null);
+      setFrozenSource(
+        preparation.phase === 'ready' && preparation.fingerprint?.pausedAt === status?.maintenance?.enteredAt
+          ? { pausedAt: preparation.fingerprint.pausedAt, fingerprint: preparation.fingerprint.sourceFingerprint }
+          : null,
+      );
+    }
+  }, [
+    preparation?.id,
+    preparation?.phase,
+    transition?.revision,
+    status?.maintenance?.enteredAt,
+    status?.preparationStatusUnreadable,
+  ]);
+  const startPreparation = async (kind: LocalUpgradePreparationKind) => {
+    const id = crypto.randomUUID();
+    preparationRequest.current = id;
+    await request('/preparation', { id, kind, revision: transition?.revision }, AbortSignal.timeout(10_000));
+  };
   const guided = status?.uiRestartAvailable === true || setup?.uiRestartAvailable === true;
   const needsPreparation =
     setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
   const resumed = transition?.phase === 'sqlite-live' || transition?.phase === 'legacy-resumed';
   const activeAction =
-    pendingAction ?? (status?.operation === 'resume' && resumed ? 'finish-resume' : status?.operation);
+    pendingAction ??
+    (preparation?.phase === 'running' && preparation.kind === 'pause-backup' && preparation.stage !== 'backup'
+      ? 'pause'
+      : status?.operation === 'resume' && resumed
+        ? 'finish-resume'
+        : status?.operation);
   const copying = status?.job?.phase === 'copying';
-  const disabled = busy || awaitingRestart || !!status?.operation || copying || !status?.available;
+  const disabled =
+    busy || awaitingRestart || !!status?.operation || preparation?.phase === 'running' || copying || !status?.available;
   const quiet = !!status?.maintenance && !!status.drain?.ready;
   const initial = transition?.phase === 'legacy' || transition?.phase === 'legacy-resumed';
   const validating = transition?.phase === 'sqlite-validation' || transition?.phase === 'legacy-validation';
@@ -483,6 +514,19 @@ export function LocalStorageUpgradeSettingsTab() {
           {error}
         </p>
       )}
+      {preparation?.revision === transition?.revision &&
+        preparation?.error &&
+        ['failed', 'interrupted'].includes(preparation.phase) && (
+          <p role="alert" className="project-settings-error">
+            {preparation.error}
+          </p>
+        )}
+      {status?.preparationStatusUnreadable && (
+        <p role="alert" className="project-settings-error">
+          Preparation status could not be read. No preparation result can authorize further steps; existing storage
+          recovery remains available.
+        </p>
+      )}
       {status && (
         <p className="app-settings-field-help">
           Running backend: {status.runningBackend}. Selected phase: {transition?.phase ?? 'not configured'}.
@@ -537,13 +581,19 @@ export function LocalStorageUpgradeSettingsTab() {
         <h4 className="app-settings-section-title">{guided ? '1. Pause and back up' : '1. Inspect and pause'}</h4>
         {guided && initial && !status?.maintenance && (
           <UpgradeActionButton
-            action="pause"
+            action={
+              preparation?.phase === 'running' && preparation.kind === 'pause-backup' ? preparation.stage : 'pause'
+            }
             primary
             loading={activeAction === 'pause'}
             disabled={disabled || restartRequired}
             onClick={() =>
               void act(async () => {
                 setInventory(null);
+                if (status?.preparationJobsAvailable) {
+                  await startPreparation('pause-backup');
+                  return;
+                }
                 const checked = await request<Inventory>('/inventory');
                 if (mounted.current) setInventory(checked);
                 if (!checked.capacity?.fits)
@@ -574,6 +624,10 @@ export function LocalStorageUpgradeSettingsTab() {
               onClick={() =>
                 void act(async () => {
                   setInventory(null);
+                  if (status?.preparationJobsAvailable) {
+                    await startPreparation('inspect');
+                    return;
+                  }
                   const next = await request<Inventory>('/inventory');
                   if (mounted.current) setInventory(next);
                 }, 'inspect')
@@ -627,7 +681,8 @@ export function LocalStorageUpgradeSettingsTab() {
               disabled={disabled || !inventory || !initial || !!status?.maintenance || restartRequired}
               onClick={() =>
                 void act(async () => {
-                  await request('/pause', {});
+                  if (status?.preparationJobsAvailable) await startPreparation('pause');
+                  else await request('/pause', {});
                 }, 'pause')
               }
             >
@@ -670,7 +725,8 @@ export function LocalStorageUpgradeSettingsTab() {
               disabled={disabled || restartRequired}
               onClick={() =>
                 void act(async () => {
-                  await request('/backup', { revision: transition?.revision });
+                  if (status?.preparationJobsAvailable) await startPreparation('backup');
+                  else await request('/backup', { revision: transition?.revision });
                 }, 'backup')
               }
             >
@@ -732,6 +788,10 @@ export function LocalStorageUpgradeSettingsTab() {
                   onClick={() =>
                     void act(async () => {
                       setFrozenSource(null);
+                      if (status?.preparationJobsAvailable) {
+                        await startPreparation('fingerprint');
+                        return;
+                      }
                       const next = await request<{ sourceFingerprint: string }>('/fingerprint');
                       if (mounted.current && status?.maintenance)
                         setFrozenSource({

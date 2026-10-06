@@ -49,7 +49,11 @@ import {
 } from './upgrade-diagnostics.js';
 import { listProjectPathsRecursive } from '../routes/workflows/fs-helpers.js';
 import { createHttpError } from '../utils/httpError.js';
-import type { LocalUpgradeOperation } from '../../../studio-server-shared/local-upgrade-types.js';
+import type {
+  LocalUpgradeOperation,
+  LocalUpgradePreparation,
+} from '../../../studio-server-shared/local-upgrade-types.js';
+import { LocalUpgradePreparationJobs } from './preparation-jobs.js';
 import {
   browserBackupDirectory,
   createBrowserBackupArchive,
@@ -62,6 +66,12 @@ import {
 let activeOperation: LocalUpgradeOperation | null = null;
 let runningJob: Promise<void> | null = null;
 let runningBackup: Promise<void> | null = null;
+let preparationJobs: LocalUpgradePreparationJobs | null = null;
+function preparations() {
+  const root = localMetadataControlRoot();
+  if (!preparationJobs || preparationJobs.root !== root) preparationJobs = new LocalUpgradePreparationJobs(root);
+  return preparationJobs;
+}
 // Detect start/finish (including a complete operation between two awaits),
 // not merely whether the same worker happens to be present at both ends.
 let backupActivityRevision = 0;
@@ -130,7 +140,8 @@ export async function prepareLocalUpgradeFromUi(): Promise<void> {
     setup.sqliteSelected ||
     activeOperation ||
     runningJob ||
-    runningBackup
+    runningBackup ||
+    preparationJobs?.running
   )
     throw createHttpError(
       409,
@@ -171,7 +182,7 @@ function assertAvailable(): void {
 }
 async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Promise<T>): Promise<T> {
   assertAvailable();
-  if (activeOperation || runningJob || runningBackup)
+  if (activeOperation || runningJob || runningBackup || preparationJobs?.running)
     throw createHttpError(
       409,
       'A local storage operation is already running. Wait for it to finish and reload status.',
@@ -236,7 +247,18 @@ export async function getLocalUpgradeStatus() {
     // worker may finish while optional backup/drain IO is pending; combining
     // its later absence with this older copying row falsely reports a crash.
     const copyRunning = runningJob !== null;
-    const operation = activeOperation ?? (copyRunning ? 'copy' : runningBackup ? 'backup' : null);
+    const operationAtRead = activeOperation;
+    let preparation: LocalUpgradePreparation | null = null;
+    let preparationStatusUnreadable = false;
+    try {
+      preparation = await preparations().status();
+    } catch {
+      preparationStatusUnreadable = true;
+    }
+    const operation =
+      operationAtRead ??
+      (preparation?.phase === 'running' ? preparation.stage : preparationJobs?.stage) ??
+      (copyRunning ? 'copy' : runningBackup ? 'backup' : null);
     const maintenance = readVmMigrationMaintenance();
     let backup: BrowserBackup | null = null;
     let backupRunning = false;
@@ -255,6 +277,9 @@ export async function getLocalUpgradeStatus() {
       uiRestartAvailable: process.env.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE === '1',
       runtimeReady,
       operation,
+      preparationJobsAvailable: true,
+      preparation,
+      preparationStatusUnreadable,
       backup: backup?.phase === 'creating' && !backupRunning ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
       copyConfigurationReady: true,
@@ -294,20 +319,78 @@ export async function getLocalUpgradeStatus() {
 }
 
 export async function inspectLocalUpgradeSource() {
-  return exclusive('inspect', async () => {
-    if (getLocalMetadataServingSelection()) throw new Error('The local SQLite upgrade is already activated.');
-    const source = localMetadataSourceRoots();
-    await assertLocalControlPaths(localMetadataControlRoot(), source);
-    // Inventory decodes projects and publication history. Refuse oversized
-    // sources before that allocation, not only before the eventual copy.
-    const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
-    return {
-      source,
-      inventory: capacity.fits ? await inspectVmMigrationSource() : null,
-      capacity,
-      backupRequired:
-        'Back up all four source roots; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
-    };
+  return exclusive('inspect', inspectSource);
+}
+async function inspectSource() {
+  if (getLocalMetadataServingSelection()) throw new Error('The local SQLite upgrade is already activated.');
+  const source = localMetadataSourceRoots();
+  await assertLocalControlPaths(localMetadataControlRoot(), source);
+  // Inventory decodes projects and publication history. Refuse oversized
+  // sources before that allocation, not only before the eventual copy.
+  const capacity = await inspectLocalCopyCapacity(source, localMetadataControlRoot());
+  return {
+    source,
+    inventory: capacity.fits ? await inspectVmMigrationSource() : null,
+    capacity,
+    backupRequired:
+      'Back up all four source roots; restore a separate copy before certifying it. Retained originals are not an off-VM backup.',
+  };
+}
+/** Admission does no source traversal. The known ID and retained result make
+ * a lost HTTP acknowledgement recoverable without repeating an authorized pause. */
+export async function startLocalUpgradePreparation(input: Pick<LocalUpgradePreparation, 'id' | 'kind' | 'revision'>) {
+  assertAvailable();
+  const jobs = preparations();
+  const previous = await jobs.status();
+  if (previous?.id === input.id) {
+    if (previous.kind !== input.kind || previous.revision !== input.revision)
+      throw createHttpError(409, 'Preparation request identity differs.');
+    return previous;
+  }
+  return exclusive(input.kind === 'pause-backup' ? 'inspect' : input.kind, async () => {
+    const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
+    if (
+      state.revision !== input.revision ||
+      state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+      !['legacy', 'legacy-resumed'].includes(state.phase) ||
+      getLocalMetadataServingSelection()
+    )
+      throw createHttpError(409, 'Storage transition changed. Reload status before preparing.');
+    return jobs.start(input, async (job, stage) => {
+      const checkRevision = async () => {
+        const current = await withLocalMetadataControl(async (journal) => journal.read(), true);
+        if (
+          current.revision !== input.revision ||
+          current.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+          !['legacy', 'legacy-resumed'].includes(current.phase) ||
+          getLocalMetadataServingSelection()
+        )
+          throw new Error('Storage transition changed during preparation.');
+      };
+      await checkRevision();
+      if (input.kind === 'inspect' || input.kind === 'pause-backup') {
+        job.inventory = await inspectSource();
+        if (input.kind === 'inspect') return;
+        if (!job.inventory.capacity?.fits) throw new Error('Capacity inspection did not pass.');
+        await checkRevision();
+      }
+      if (input.kind === 'pause' || input.kind === 'pause-backup') {
+        await stage('pause');
+        await freezeLocalStorageSource();
+        if (input.kind === 'pause' || !(await localStorageDrainSnapshot()).ready) return;
+      }
+      if (input.kind === 'fingerprint') {
+        await assertDrained();
+        const pausedAt = readVmMigrationMaintenance()!.enteredAt;
+        const sourceFingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
+        await assertDrained();
+        if (readVmMigrationMaintenance()!.enteredAt !== pausedAt) throw new Error('Maintenance session changed.');
+        job.fingerprint = { pausedAt, sourceFingerprint };
+        return;
+      }
+      await stage('backup');
+      await beginBrowserBackup(input.revision);
+    });
   });
 }
 export async function pauseLocalUpgradeSource(): Promise<void> {
@@ -586,44 +669,44 @@ export async function localUpgradeBackupFingerprint(): Promise<string> {
   });
 }
 export async function startLocalUpgradeBrowserBackup(revision: number): Promise<void> {
-  return exclusive('backup', async () => {
+  return exclusive('backup', () => beginBrowserBackup(revision));
+}
+async function beginBrowserBackup(revision: number): Promise<void> {
+  backupActivityRevision++;
+  await assertDrained();
+  if (getLocalMetadataServingSelection()) throw new Error('Browser backup is only available before SQLite activation.');
+  const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
+  if (
+    state.revision !== revision ||
+    !['legacy', 'legacy-resumed'].includes(state.phase) ||
+    revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION)
+  )
+    throw new Error('Reload status and finish any required restart before backing up.');
+  const control = localMetadataControlRoot(),
+    source = localMetadataSourceRoots();
+  await assertLocalControlPaths(control, source);
+  const backup: BrowserBackup = {
+    id: randomUUID(),
+    revision,
+    pausedAt: readVmMigrationMaintenance()!.enteredAt,
+    phase: 'creating',
+    sourceFingerprint: await fingerprintVmMigrationSource(source),
+    archiveHash: null,
+    bytes: 0,
+    createdAt: new Date().toISOString(),
+  };
+  await saveBrowserBackup(control, backup);
+  runningBackup = (async () => {
+    try {
+      const ready = await createBrowserBackupArchive({ control, source, state: backup, assertFrozen: assertDrained });
+      await saveBrowserBackup(control, ready);
+    } catch {
+      // Backup files/settings contain secrets. Never persist raw error text.
+      await saveBrowserBackup(control, { ...backup, phase: 'failed' }).catch(() => undefined);
+    }
+  })().finally(() => {
+    runningBackup = null;
     backupActivityRevision++;
-    await assertDrained();
-    if (getLocalMetadataServingSelection())
-      throw new Error('Browser backup is only available before SQLite activation.');
-    const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
-    if (
-      state.revision !== revision ||
-      !['legacy', 'legacy-resumed'].includes(state.phase) ||
-      revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION)
-    )
-      throw new Error('Reload status and finish any required restart before backing up.');
-    const control = localMetadataControlRoot(),
-      source = localMetadataSourceRoots();
-    await assertLocalControlPaths(control, source);
-    const backup: BrowserBackup = {
-      id: randomUUID(),
-      revision,
-      pausedAt: readVmMigrationMaintenance()!.enteredAt,
-      phase: 'creating',
-      sourceFingerprint: await fingerprintVmMigrationSource(source),
-      archiveHash: null,
-      bytes: 0,
-      createdAt: new Date().toISOString(),
-    };
-    await saveBrowserBackup(control, backup);
-    runningBackup = (async () => {
-      try {
-        const ready = await createBrowserBackupArchive({ control, source, state: backup, assertFrozen: assertDrained });
-        await saveBrowserBackup(control, ready);
-      } catch {
-        // Backup files/settings contain secrets. Never persist raw error text.
-        await saveBrowserBackup(control, { ...backup, phase: 'failed' }).catch(() => undefined);
-      }
-    })().finally(() => {
-      runningBackup = null;
-      backupActivityRevision++;
-    });
   });
 }
 

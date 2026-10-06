@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,12 +13,156 @@ import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 import { provisionLocalMetadataControl } from '../local-metadata/runtime-control.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
+import { LocalUpgradePreparationJobs } from '../local-metadata/preparation-jobs.js';
 import { recoverLocalMetadataToLegacy } from '../local-metadata/recover-legacy.js';
 import { FilesystemRivetEvaluationStore } from '../evaluation-runs/filesystem-store.js';
 import { FilesystemRivetLLMProfileHealthStore } from '../llm-profile-health/filesystem-store.js';
 import { runtimeTestEntry } from './helpers/runtime-test-entry.js';
 import { allocateDistinctTestPorts } from './helpers/http-server-harness.js';
 
+test('preparation admission is bounded, exclusive, replayable and retained across restart', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-'));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const jobs = new LocalUpgradePreparationJobs(root);
+  const input = { id: randomUUID(), kind: 'inspect' as const, revision: 1 };
+  let executions = 0;
+  try {
+    const accepted = await jobs.start(input, async (job) => {
+      executions++;
+      await gate;
+      job.inventory = { source: {}, inventory: null, backupRequired: 'Owned fixture backup required.' };
+    });
+    assert.equal(accepted.phase, 'running');
+    assert.equal((await jobs.status())?.phase, 'running');
+    assert.equal(
+      (
+        await jobs.start(input, async () => {
+          throw new Error('Must not repeat');
+        })
+      ).id,
+      input.id,
+    );
+    await assert.rejects(
+      jobs.start({ ...input, id: randomUUID() }, async () => {}),
+      /already running/,
+    );
+    await assert.rejects(
+      jobs.start({ ...input, kind: 'pause' }, async () => {}),
+      /identity differs/,
+    );
+    assert.equal((await new LocalUpgradePreparationJobs(root).status())?.phase, 'interrupted');
+    release();
+    await jobs.settled();
+    assert.equal(executions, 1);
+    assert.equal((await jobs.status())?.phase, 'ready');
+    assert.equal(
+      (await new LocalUpgradePreparationJobs(root).status())?.inventory?.backupRequired,
+      'Owned fixture backup required.',
+    );
+    await jobs.start(input, async () => {
+      throw new Error('Must not repeat completed work');
+    });
+    assert.equal(executions, 1);
+    await fs.writeFile(
+      path.join(root, 'preparation.json'),
+      JSON.stringify({ ...(await jobs.status()), phase: 'running' }),
+    );
+    const interrupted = await jobs.start(input, async () => {
+      executions++;
+    });
+    assert.equal(interrupted.phase, 'interrupted', 'admission itself must not resurrect a stopped worker');
+    assert.equal(executions, 1);
+  } finally {
+    release();
+    await jobs.settled();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preparation status rereads completion instead of reporting an interrupted worker', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-status-'));
+  const jobs = new LocalUpgradePreparationJobs(root);
+  let finish!: () => void;
+  const work = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let releaseRead!: () => void;
+  const readGate = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  let enteredRead!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enteredRead = resolve;
+  });
+  const open = fs.open;
+  let held = false;
+  const read = t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (!held && String(args[0]) === path.join(root, 'preparation.json')) {
+      held = true;
+      const close = handle.close.bind(handle);
+      t.mock.method(handle, 'close', async () => {
+        await close();
+        enteredRead();
+        await readGate;
+      });
+    }
+    return handle;
+  });
+  try {
+    await jobs.start({ id: randomUUID(), kind: 'inspect', revision: 1 }, async () => {
+      await work;
+    });
+    const status = jobs.status();
+    await entered;
+    finish();
+    await jobs.settled();
+    releaseRead();
+    assert.equal((await status)?.phase, 'ready');
+  } finally {
+    finish();
+    releaseRead();
+    await jobs.settled();
+    read.mock.restore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preparation failure is redacted, retry uses a new identity and invalid retained files fail closed', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-failure-'));
+  const jobs = new LocalUpgradePreparationJobs(root);
+  try {
+    await jobs.start({ id: randomUUID(), kind: 'fingerprint', revision: 1 }, async (_job, stage) => {
+      await stage('fingerprint');
+      throw new Error('private fixture credential');
+    });
+    await jobs.settled();
+    const failed = await jobs.status();
+    assert.equal(failed?.phase, 'failed');
+    assert.doesNotMatch(JSON.stringify(failed), /private fixture credential/);
+    assert.doesNotMatch(await fs.readFile(path.join(root, 'preparation.json'), 'utf8'), /private fixture credential/);
+    await jobs.start({ id: randomUUID(), kind: 'pause', revision: 1 }, async () => {});
+    await jobs.settled();
+    assert.equal((await jobs.status())?.phase, 'ready');
+    await jobs.start({ id: randomUUID(), kind: 'inspect', revision: 1 }, async (job) => {
+      job.inventory = { source: {}, inventory: null, backupRequired: 'x'.repeat(1024 * 1024) };
+    });
+    await jobs.settled();
+    assert.equal((await jobs.status())?.phase, 'failed', 'oversized results must retain a bounded failure');
+    assert.equal((await jobs.status())?.inventory, undefined);
+    await fs.writeFile(path.join(root, 'preparation.json'), Buffer.alloc(1024 * 1024 + 1));
+    await assert.rejects(jobs.status(), /Invalid preparation record/);
+    await assert.rejects(
+      jobs.start({ id: randomUUID(), kind: 'inspect', revision: 1 }, async () => {}),
+      /Invalid preparation record/,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test('child-process ports stay reserved as a set even when the OS immediately reuses released ports', async (t) => {
   const active = new Set<number>();
   let highWater = 0;
@@ -203,6 +348,14 @@ const concurrency = process.env.RIVET_API_RUNTIME_SHARD ? 2 : 4;
 describe('isolated local upgrade runtime scenarios', { concurrency }, () => {
   const scenarios: { name: string; run: () => Promise<void> }[] = [];
   const scenario = (name: string, run: () => Promise<void>) => scenarios.push({ name, run });
+  scenario(
+    'background preparation accepts before inspection, recovers lost responses and keeps all safety gates',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('background-preparation');
+      });
+    },
+  );
   scenario(
     'authenticated browser backup and project export work while paused and certify an actual restored archive',
     async () => {

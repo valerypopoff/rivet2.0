@@ -18,7 +18,9 @@ import {
   transitionLocalUpgrade,
   startLocalUpgradeBrowserBackup,
   getLocalUpgradeBrowserBackupDownload,
+  startLocalUpgradePreparation,
 } from '../local-metadata/operator-service.js';
+import { LOCAL_UPGRADE_PREPARATION_KINDS } from '../../../studio-server-shared/local-upgrade-types.js';
 import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
@@ -186,6 +188,24 @@ appSettingsRouter.get(
   '/local-upgrade/inventory',
   asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await inspectLocalUpgradeSource());
+  }),
+);
+appSettingsRouter.post(
+  '/local-upgrade/preparation',
+  migrationJsonBody,
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        id: z.string().uuid(),
+        kind: z.enum(LOCAL_UPGRADE_PREPARATION_KINDS),
+        revision: z.number().int().positive(),
+      })
+      .strict()
+      .parse(req.body);
+    res
+      .set('Cache-Control', 'no-store')
+      .status(202)
+      .json(await startLocalUpgradePreparation(input));
   }),
 );
 appSettingsRouter.get(

@@ -9,11 +9,23 @@ must succeed before creating a fresh job with the selected root version. Ready
 jobs retain **Prepare another bundle** for choosing a different version. Status
 responses and polling errors are fenced by the current job ID, so late replies
 from a disposed job cannot overwrite the retry's progress or download link.
+Late start acknowledgements cannot regress packaging back to collection, or
+replace a terminal result with active progress.
+Action admission uses a synchronous in-flight guard as well as disabled buttons,
+so rapid repeated clicks cannot start competing POST/DELETE operations. Progress
+polls may reconcile a lost start acknowledgement but never erase a cancellation
+failure; only another explicit action or reopening clears that diagnostic. The
+dialog uses the shared API response parser, retaining HTTP status and gateway
+guidance without showing HTML bodies or malformed structured error values.
 
 The bundle dialog uses the shared responsive modal dimensions, black backdrop,
 dark surface and header/close styling. Project details and export progress use
-bordered cards with the shared 14px/1.5 description typography. Root-version
-selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
+bordered cards with the shared 14px/1.5 description typography.
+The progress card shows an indeterminate spinner while loading initial status,
+collecting snapshots or packaging, including after reopening an active export.
+Terminal states remove the spinner; reduced-motion preferences disable rotation.
+The existing live status text announces progress without exposing a decorative icon.
+Root-version selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
 in a non-scrolling footer; Prepare/Download are blue primary actions on the right.
 The body alone scrolls, keeping the title, close control and actions visible on
 short viewports. Download remains a real anchor with the authenticated archive

@@ -4,14 +4,10 @@ import Button from '@atlaskit/button';
 import type { ProjectBundleJobStatus } from '../../studio-server-shared/project-bundle-types';
 import type { WorkflowProjectDownloadVersion, WorkflowProjectItem } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import { parseJsonResponse } from './apiRequest';
 import './WorkflowProjectBundleModal.css';
 
 const endpoint = '/api/workflows/project-bundles';
-async function responseJson<T>(response: Response): Promise<T> {
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Bundle request failed.');
-  return data as T;
-}
 function request(url: string, options: RequestInit = {}) {
   const deadline = AbortSignal.timeout(20_000);
   return fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadline]) : deadline });
@@ -36,16 +32,23 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
   const latestJob = useRef<ProjectBundleJobStatus | null>(null);
   const acceptStatus = (status: ProjectBundleJobStatus | null) => {
     if (status && status.id !== currentJobId.current) return;
-    // A late POST acknowledgement must not regress a terminal result already read by polling.
-    if (status && latestJob.current?.id === status.id && !active(latestJob.current) && active(status)) return;
+    // A late POST acknowledgement must not regress progress already read by polling.
+    if (
+      status &&
+      latestJob.current?.id === status.id &&
+      ((!active(latestJob.current) && active(status)) ||
+        (latestJob.current.phase === 'packaging' && status.phase === 'collecting'))
+    )
+      return;
     latestJob.current = status;
     setJob(status);
   };
   const [version, setVersion] = useState<WorkflowProjectDownloadVersion>(
     project.settings.status === 'unpublished' ? 'live' : 'published',
   );
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ kind: 'progress' | 'prepare' | 'cancel'; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const actionInFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -69,16 +72,25 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const status = await responseJson<ProjectBundleJobStatus>(
+        const status = await parseJsonResponse<ProjectBundleJobStatus>(
           await request(`${endpoint}/${jobId}`, { cache: 'no-store', signal: abort.signal }),
         );
         if (abort.signal.aborted || currentJobId.current !== jobId) return;
         acceptStatus(status);
-        setError(null);
+        // Progress can reconcile a lost start acknowledgement, but cannot
+        // prove that an independently requested cancellation succeeded.
+        setError((current) => (current?.kind === 'cancel' ? current : null));
         if (active(status)) timer = setTimeout(() => void poll(), 1000);
       } catch (failure) {
         if (abort.signal.aborted || currentJobId.current !== jobId) return;
-        setError(failure instanceof Error ? failure.message : 'Could not read export progress.');
+        setError((current) =>
+          current?.kind === 'cancel'
+            ? current
+            : {
+                kind: 'progress',
+                message: failure instanceof Error ? failure.message : 'Could not read export progress.',
+              },
+        );
         timer = setTimeout(() => void poll(), 5000);
       }
     };
@@ -89,14 +101,15 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
     };
   }, [jobId, isOpen]);
   const prepare = async () => {
-    if (busy) return;
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(null);
     acceptStatus(null);
     const id = crypto.randomUUID();
     remember(id); // Known before POST, so a lost acknowledgement is recoverable by GET.
     try {
-      const status = await responseJson<ProjectBundleJobStatus>(
+      const status = await parseJsonResponse<ProjectBundleJobStatus>(
         await request(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -115,20 +128,23 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
       if (mounted.current) acceptStatus(status);
     } catch (failure) {
       if (mounted.current && !latestJob.current)
-        setError(failure instanceof Error ? failure.message : 'Could not start export.');
+        setError({ kind: 'prepare', message: failure instanceof Error ? failure.message : 'Could not start export.' });
     } finally {
+      actionInFlight.current = false;
       if (mounted.current) setBusy(false);
     }
   };
   const dispose = async () => {
-    if (!jobId || busy) return false;
+    if (!jobId || actionInFlight.current) return false;
+    actionInFlight.current = true;
     setBusy(true);
+    setError(null);
     try {
       const response = await request(`${endpoint}/${jobId}`, {
         method: 'DELETE',
         headers: { 'X-Rivet-Bundle-Intent': '1' },
       });
-      if (!response.ok && response.status !== 404) await responseJson(response);
+      if (!response.ok && response.status !== 404) await parseJsonResponse(response);
       if (mounted.current) {
         remember(null);
         acceptStatus(null);
@@ -136,8 +152,10 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
         return true;
       }
     } catch (failure) {
-      if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not cancel export.');
+      if (mounted.current)
+        setError({ kind: 'cancel', message: failure instanceof Error ? failure.message : 'Could not cancel export.' });
     } finally {
+      actionInFlight.current = false;
       if (mounted.current) setBusy(false);
     }
     return false;
@@ -145,6 +163,7 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
   const retry = async () => {
     if (await dispose()) await prepare();
   };
+  const preparing = active(job) || (!!jobId && !job && !error);
   if (!isOpen) return null;
   return (
     <ModalTransition>
@@ -194,10 +213,18 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
               </section>
               {jobId ? (
                 <section className="workflow-project-bundle-card" aria-label="Export progress">
-                  <p className="project-settings-help" role="status" aria-live="polite" aria-atomic="true">
-                    {job
-                      ? `Export: ${job.phase}. ${job.projects} project snapshots; ${(job.bytes / 1048576).toFixed(2)} MiB captured.`
-                      : 'Reading export progress…'}
+                  <p
+                    className="project-settings-help workflow-project-bundle-progress"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    {preparing ? <span className="workflow-project-bundle-spinner" aria-hidden="true" /> : null}
+                    <span>
+                      {job
+                        ? `Export: ${job.phase}. ${job.projects} project snapshots; ${(job.bytes / 1048576).toFixed(2)} MiB captured.`
+                        : 'Reading export progress…'}
+                    </span>
                   </p>
                   {job?.error ? (
                     <p className="workflow-project-bundle-error" role="alert">
@@ -214,7 +241,8 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
               ) : null}
               {error ? (
                 <p className="workflow-project-bundle-error" role="alert">
-                  {error} Progress will be checked again while this window is open.
+                  {error.message}
+                  {error.kind !== 'cancel' ? ' Progress will be checked again while this window is open.' : null}
                 </p>
               ) : null}
               <p className="project-settings-help">

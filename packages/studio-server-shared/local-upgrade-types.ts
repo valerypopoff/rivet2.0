@@ -13,6 +13,43 @@ export type LocalUpgradeOperation =
   | 'resume'
   | 'cancel';
 
+export const LOCAL_UPGRADE_PREPARATION_KINDS = ['inspect', 'pause', 'pause-backup', 'fingerprint', 'backup'] as const;
+export type LocalUpgradePreparationKind = (typeof LOCAL_UPGRADE_PREPARATION_KINDS)[number];
+export type LocalUpgradeInventory = {
+  source: Record<string, string>;
+  capacity?: {
+    payloadBytes: number;
+    freeBytes: number;
+    requiredBytes: number;
+    maxPayloadBytes: number;
+    fits: boolean;
+    estimatedWorkingBytes?: number;
+    memoryBudgetBytes?: number;
+    measurementComplete?: boolean;
+    reasons?: string[];
+  };
+  inventory: {
+    projects: number;
+    folders: number;
+    recordingBundles: number;
+    publishedEndpoints: number;
+    publishedVersions: number;
+    publishedWebApps: number;
+    warnings: string[];
+  } | null;
+  backupRequired: string;
+};
+export type LocalUpgradePreparation = {
+  id: string;
+  kind: LocalUpgradePreparationKind;
+  revision: number;
+  phase: 'running' | 'ready' | 'failed' | 'interrupted';
+  stage: 'inspect' | 'pause' | 'fingerprint' | 'backup';
+  inventory?: LocalUpgradeInventory;
+  fingerprint?: { pausedAt: string; sourceFingerprint: string };
+  error?: string;
+};
+
 /** Fixed diagnostics only. Never derive display text from a storage exception. */
 export const LOCAL_UPGRADE_FAILURE_REASONS = {
   'capacity-refused': 'Capacity checks failed. Inspect source again for disk, bundle and memory requirements.',

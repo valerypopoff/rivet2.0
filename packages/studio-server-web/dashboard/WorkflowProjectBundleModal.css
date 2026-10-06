@@ -43,6 +43,31 @@
   font-size: 18px;
   overflow-wrap: anywhere;
 }
+.workflow-project-bundle-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.workflow-project-bundle-spinner {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #579dff;
+  border-radius: 50%;
+  animation: workflow-project-bundle-spin 900ms linear infinite;
+}
+@keyframes workflow-project-bundle-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workflow-project-bundle-spinner {
+    animation: none;
+  }
+}
 .workflow-project-bundle-version {
   display: flex;
   flex-direction: column;

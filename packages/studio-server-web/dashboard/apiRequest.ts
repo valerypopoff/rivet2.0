@@ -10,6 +10,21 @@ export function createResponseError(status: number, message: string, code?: stri
   return error;
 }
 
+async function jsonResponseError(response: Response): Promise<ResponseError> {
+  const data: unknown = await response.json().catch((failure: unknown) => {
+    if (failure instanceof Error && failure.name === 'AbortError') throw failure;
+    return null;
+  });
+  const fields = data !== null && typeof data === 'object' ? (data as { error?: unknown; code?: unknown }) : null;
+  return createResponseError(
+    response.status,
+    typeof fields?.error === 'string' && fields.error
+      ? fields.error
+      : response.statusText || `API request failed (HTTP ${response.status}).`,
+    typeof fields?.code === 'string' ? fields.code : undefined,
+  );
+}
+
 export async function parseJsonResponse<T>(
   response: Response,
   options: {
@@ -17,34 +32,48 @@ export async function parseJsonResponse<T>(
   } = {},
 ): Promise<T> {
   const contentType = response.headers.get('content-type') ?? '';
+  const mediaType = contentType.split(';', 1)[0]!.trim().toLowerCase();
 
-  if (!contentType.includes('application/json')) {
-    const text = await response.text();
+  if (mediaType !== 'application/json') {
+    const html = mediaType === 'text/html';
+    // A gateway's HTML body may be large or never finish. Its header already
+    // identifies the error; do not wait for or expose that body.
+    if (html) void response.body?.cancel().catch(() => {});
+    const text = html ? '' : await response.text();
 
-    if (text.trim().startsWith('<!doctype') || text.trim().startsWith('<html')) {
-      throw new Error(
+    if (html || /^\s*<(?:!doctype|html)\b/i.test(text)) {
+      throw createResponseError(
+        response.status,
         options.nonJsonErrorMessage ??
-          'API returned HTML instead of JSON. Make sure you are accessing the app through the proxy.',
+          `API returned HTML instead of JSON (HTTP ${response.status}). A gateway timeout or sign-in page may have replaced the API response. Check connection and server status before retrying.`,
       );
     }
 
-    throw new Error(`API returned an unexpected response type (${contentType || 'unknown'}).`);
+    throw createResponseError(
+      response.status,
+      `API returned an unexpected response type (${contentType || 'unknown'}; HTTP ${response.status}).`,
+    );
   }
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({ error: response.statusText }));
-    throw createResponseError(response.status, data.error || response.statusText, data.code);
+    throw await jsonResponseError(response);
   }
 
-  return response.json() as Promise<T>;
+  try {
+    return (await response.json()) as T;
+  } catch (failure) {
+    // Preserve cancellation semantics, but never display a parser exception:
+    // modern engines can include private response bytes in its message.
+    if (failure instanceof Error && failure.name === 'AbortError') throw failure;
+    throw createResponseError(response.status, `API returned incomplete or invalid JSON (HTTP ${response.status}).`);
+  }
 }
 
 export async function parseTextResponse(response: Response): Promise<string> {
   if (!response.ok) {
     const contentType = response.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      const data = await response.json().catch(() => ({ error: response.statusText }));
-      throw createResponseError(response.status, data.error || response.statusText, data.code);
+    if (contentType.split(';', 1)[0]!.trim().toLowerCase() === 'application/json') {
+      throw await jsonResponseError(response);
     }
 
     throw createResponseError(response.status, response.statusText);
