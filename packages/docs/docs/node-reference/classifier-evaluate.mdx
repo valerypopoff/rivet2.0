@@ -57,6 +57,8 @@ The overall timeout covers preparation, retries and response receipt. Preparatio
 
 For OpenAI `gpt-6-luna` Decisions, requests with more than 272,000 input tokens use $0.20/MTok input for the whole request; smaller requests use $0.10/MTok. Output tokens remain free. Regional and account-specific premiums are not included. See [OpenAI's model pricing details](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
+Cost uses the provider's reported input tokens for the complete request, including billed image tokens and all questions. It does not multiply that total by the question count or add images again. Liquid d1 bills each question's image evidence, but already includes those tokens in Usage. OpenAI Decisions has no separate cache-read, cache-write or output charges; its pricing differs from ordinary Chat/Responses requests using the same model.
+
 ## Error behavior
 
 - **Fail on non-2XX status code** is enabled by default. Disable it to suppress failed provider HTTP statuses instead of throwing; unavailable normal outputs are excluded. Run failed and Run error appear only when **Catch all failures** is enabled. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.

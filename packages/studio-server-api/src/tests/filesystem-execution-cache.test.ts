@@ -127,6 +127,34 @@ test('published project-reference discovery retains the missing-ID cache fallbac
   assert.equal(reads.filter((file) => file === target.absolutePath).length, 2);
 });
 
+test('independent published reference loaders resolve projects when metadata cache writes are denied', async (t) => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const target = await createRootPublishedProject('Read-only reference', 'read-only-reference');
+  assert.ok(target.projectMetadataId);
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(target.absolutePath);
+  await fs.rm(cachePath);
+  const writeFile = fs.writeFile;
+  let deniedWrites = 0;
+  let code = 'EROFS';
+  t.mock.method(fs, 'writeFile', (...args: Parameters<typeof fs.writeFile>) => {
+    if (args[0] === cachePath) {
+      deniedWrites++;
+      return Promise.reject(Object.assign(new Error('Cache write denied'), { code }));
+    }
+    return Reflect.apply(writeFile, fs, args);
+  });
+
+  for (code of ['EROFS', 'EACCES']) {
+    // A new loader must not depend on another instance having populated its cache.
+    const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+    const result = await loader.loadProject(caller.absolutePath, { id: target.projectMetadataId });
+    assert.equal(result.metadata.id, target.projectMetadataId);
+    assert.equal(result.metadata.title, 'Read-only reference');
+    await assert.rejects(fs.stat(cachePath), { code: 'ENOENT' });
+  }
+  assert.equal(deniedWrites, 2);
+});
+
 test('published project-reference discovery refreshes stale metadata but still loads the published snapshot', async () => {
   const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
   const target = await createRootPublishedProject('Published Reference', 'published-reference');

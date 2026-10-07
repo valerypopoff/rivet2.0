@@ -2,6 +2,30 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-07 — classifier providers, editor commands and server performance
+
+The previous public-runtime/App Executor bump is `051b183b1`; App, Docs and
+Studio Server were last bumped in `3481798d4`. This release accounts for the
+changes since those respective baselines, through `50568e38b` and the current
+classifier/provider and deployment-compatibility fixes.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.16.0` → `2.17.0` | Adds Liquid and OpenAI classifier decision providers, multimodal classifier inputs/state, bounded preparation and diagnostics. Includes classifier credential/resource/response fixes, Object/interpolation hardening, and Node's patched MCP SDK dependency. CLI and Evaluations remain required public npm companions, not claims of package-local feature changes. |
+| App | `2.23.0` → `2.24.0` | Adds classifier provider settings/editor support; preserves selected wire midpoints when copying, pasting and duplicating nodes; unifies clipboard commands and fixes image-editor and desktop draft-check behavior. |
+| App Executor | `2.8.0` → `2.9.0` | Bundled-runtime companion for Core's new classifier providers and multimodal behavior. Its own source has not changed; rebuilding the source-bundled sidecar includes the new execution capabilities. |
+| All five Studio Server packages | `1.22.0` → `1.23.0` | Adds asynchronous local-upgrade preparation and streamed bundle archives/progress; hardens scratch/job recovery and hosted editor refresh/clipboard behavior. Eliminates redundant filesystem project parsing and unbounded recording-deletion reads; validates managed reference identity across stale hints and invalidation retries. Shared/API/Web changes are coordinated; Bootstrap and Executor are release companions. |
+| Docs | `2.15.0` → `2.16.0` | Documents classifier providers, multimodal state and failure/resource behavior, bundle execution, and asynchronous server upgrade/download behavior. |
+
+Compatible feature additions use minor increments; the accompanying fixes do not
+require separate patch releases or a breaking major bump. Desktop Tauri/Cargo
+metadata follows App, the public npm family and Studio Server remain lockstep,
+and the CLI Docker fallback follows the public npm version. Helm chart versions
+and dependency versions are unchanged by this bump. Workspace dependency ranges
+remain `workspace:`, so no Yarn lockfile refresh is required. This updates release
+metadata only; publishing, deployment, and released-artifact builds remain separate
+release steps.
+
 ## Version update: 2026-10-06 — settings, references and scheduled-run refinement
 
 Changes since the latest package bump in `051b183b1`, including the current
@@ -202,7 +226,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -242,7 +266,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -714,7 +738,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.23.0`
+- Version: `2.24.0`
 - Private: yes
 
 ### Runtime shape
@@ -779,7 +803,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.8.0`
+- Version: `2.9.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -884,7 +908,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.17.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -1008,7 +1032,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1040,7 +1064,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.16.0`
 - Private: yes
 
 ### Script surface

@@ -9,7 +9,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-test('Classifier settings is strict and provider-scoped while Automatic preserves credential precedence', () => {
+void test('Classifier settings is strict and provider-scoped while Automatic preserves credential precedence', () => {
   for (const providerId of ['jev', 'liquid', 'openai']) {
     const provider = getClassifierProvider(providerId);
     const context = {
@@ -49,7 +49,7 @@ test('Classifier settings is strict and provider-scoped while Automatic preserve
   }
 });
 
-test('Pricing recognizes exact aliases, rejects unverified model pairs and applies Decisions long-context rates', () => {
+void test('Pricing recognizes exact aliases, rejects unverified model pairs and applies Decisions long-context rates', () => {
   const usage = { input_tokens: 1_000_000, output_tokens: 999 };
   const cost = (provider: string, requestedModel: string, responseModel: string, input_tokens = usage.input_tokens) =>
     calculateClassifierUsageCost(
@@ -74,7 +74,95 @@ test('Pricing recognizes exact aliases, rejects unverified model pairs and appli
   assert.equal(calculateClassifierUsageCost(getClassifierProvider('liquid'), usage), undefined);
 });
 
-test('Strict saved credentials reject inherited fields and accessors without reading them', () => {
+void test('Decisions pricing ignores cache/output metadata and uses input tokens for the context threshold', () => {
+  const provider = getClassifierProvider('openai');
+  const models = { requestedModel: 'gpt-6-luna', responseModel: 'gpt-6-luna' };
+  for (const input_tokens of [0, 1, 271_999, 272_000, 272_001, 1_000_000]) {
+    const usage = {
+      input_tokens,
+      output_tokens: 9_999,
+      total_tokens: 2_000_000,
+      input_tokens_details: { cached_tokens: input_tokens, cache_write_tokens: input_tokens },
+    };
+    const expected = (input_tokens * (input_tokens > 272_000 ? 0.2 : 0.1)) / 1_000_000;
+    assert.equal(calculateClassifierUsageCost(provider, usage, models), expected);
+    assert.equal(
+      calculateClassifierUsageCost(provider, { input_tokens, output_tokens: 0 }, models),
+      expected,
+      'optional usage details must not add charges or discounts to Decisions',
+    );
+  }
+});
+
+void test('All providers price aggregate multi-question usage once and preserve raw usage and diagnostics', async () => {
+  const image =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+  const questions = ['first', 'second'].map((questionId) => ({
+    questionId,
+    type: 'noul',
+    instructions: 'Evaluate the shared evidence',
+  }));
+  for (const [providerId, inputRate] of [
+    ['jev', 0.042],
+    ['liquid', 0.04],
+    ['openai', 0.1],
+  ] as const) {
+    for (const outputUsage of [false, true]) {
+      const provider = getClassifierProvider(providerId);
+      // Billed input is supplied by the provider, including image work for both
+      // questions where supported. Do not estimate it from bytes or add it again.
+      const usage = {
+        input_tokens: 3_200,
+        output_tokens: 20,
+        total_tokens: 3_220,
+        input_tokens_details: { cached_tokens: 100, cache_write_tokens: 200 },
+      };
+      const responseBody = {
+        model: providerId === 'jev' ? 'jev-1.13.0' : provider.defaultModel,
+        answers:
+          providerId === 'openai'
+            ? questions.map(({ questionId }) => ({ name: questionId, type: 'predicate', probability: 0.8 }))
+            : Object.fromEntries(questions.map(({ questionId }) => [questionId, { type: 'noul', noul: 0.8 }])),
+        usage,
+      };
+      let calls = 0;
+      let sent: any;
+      globalThis.fetch = async (_url, init) => {
+        calls++;
+        sent = JSON.parse(String(init?.body));
+        return Response.json(responseBody);
+      };
+      const node = ClassifierEvaluateNodeImpl.create();
+      node.data = { ...node.data, provider: providerId, outputUsage, outputResponseBody: true };
+      const outputs = await new ClassifierEvaluateNodeImpl(node).process(
+        {
+          state: {
+            type: 'chat-message[]',
+            value: [{ type: 'user', message: providerId === 'jev' ? ['Seven', 'Three'] : ['Caption', image] }],
+          },
+          question1: { type: 'object[]', value: questions },
+        },
+        {
+          executor: 'nodejs',
+          signal: new AbortController().signal,
+          settings: { classifierProviders: { [providerId]: { apiKey: 'fixture' } } },
+        } as InternalProcessContext,
+      );
+      const expected = (3_200 * inputRate) / 1_000_000;
+      assert.equal(calls, 1);
+      assert.equal(Object.keys(sent.questions).length, 2);
+      if (providerId === 'liquid') assert.deepEqual(sent.images, [image]);
+      if (providerId === 'openai') assert.equal(sent.input[0].content[1].type, 'input_image');
+      assert.equal(outputs.cost!.type, 'number');
+      assert.equal(outputs.cost!.value, expected);
+      assert.deepEqual(outputs.usage!.value, outputUsage ? { ...usage, totalCost: expected } : usage);
+      assert.deepEqual(outputs.responseBody!.value, responseBody);
+      assert.equal(Object.hasOwn(usage, 'totalCost'), false);
+    }
+  }
+});
+
+void test('Strict saved credentials reject inherited fields and accessors without reading them', () => {
   const provider = getClassifierProvider('liquid');
   let reads = 0;
   const accessor = (key: string) =>
@@ -118,7 +206,7 @@ test('Strict saved credentials reject inherited fields and accessors without rea
   );
 });
 
-test('Invalid model-pricing metadata never produces a cost, even below an invalid tier threshold', () => {
+void test('Invalid model-pricing metadata never produces a cost, even below an invalid tier threshold', () => {
   const models = { requestedModel: 'test-model', responseModel: 'test-model' };
   for (const input_tokens of [0, 1, 1_000_000]) {
     for (const aboveInputTokens of [NaN, Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
@@ -167,7 +255,7 @@ test('Invalid model-pricing metadata never produces a cost, even below an invali
   }
 });
 
-test('Unknown pricing preserves successful Answers and raw Usage but excludes Cost and Usage.totalCost', async () => {
+void test('Unknown pricing preserves successful Answers and raw Usage but excludes Cost and Usage.totalCost', async () => {
   for (const model of ['d1:free', 'future-model']) {
     for (const outputUsage of [false, true]) {
       const node = ClassifierEvaluateNodeImpl.create();

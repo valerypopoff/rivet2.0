@@ -189,6 +189,9 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   },
 });
 
+/** Decisions-specific rates, not GPT-6 Luna's Chat/Responses cache/output rates.
+ * https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
+ */
 export const openaiClassifierProvider: ClassifierProvider = createClassifierProvider({
   id: 'openai',
   label: 'OpenAI',
@@ -315,8 +318,10 @@ export function getClassifierProviderEnvironmentVariableNames(): string[] {
 
 /**
  * Returns a USD cost only for a recognized requested/returned model pair and
- * the token counts are safe non-negative integers. Callers must not treat an
- * unpriced provider as free.
+ * the token counts are safe non-negative integers. Provider input_tokens already
+ * includes billed text/image work across questions; never multiply by question
+ * count or add image tokens again. Decisions has no separate cache charges.
+ * Callers must not treat an unpriced provider as free.
  */
 export function calculateClassifierUsageCost(
   provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> & Partial<Pick<ClassifierProvider, 'defaultModel'>>,
