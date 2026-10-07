@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { gzipSync } from 'node:zlib';
 import { loadProjectAndAttachedDataFromString, serializeProject } from '@valerypopoff/rivet2-node';
 import { SqliteWorkflowBackend } from '../local-metadata/sqlite-workflow-backend.js';
 import { LocalWorkflowCatalog } from '../local-metadata/workflow-catalog.js';
@@ -1124,6 +1125,55 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
   });
 });
 
+test('SQLite recording writes use configured compression and gzip level', async () => {
+  await fixture(async (backend, options) => {
+    const item = await createExecutable(backend);
+    const [project, attached] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(item.absolutePath)).contents,
+    );
+    const recordingSerialized = JSON.stringify({ input: 'text'.repeat(10000) });
+    await withEnvOverride('RIVET_RECORDINGS_ENABLED', 'true', async () => {
+      for (const [compression, level] of [
+        ['identity', 9],
+        ['gzip', 0],
+        ['gzip', 1],
+        ['gzip', 9],
+      ] as const) {
+        await withEnvOverride('RIVET_RECORDINGS_COMPRESS', compression, () =>
+          withEnvOverride('RIVET_RECORDINGS_GZIP_LEVEL', String(level), async () => {
+            const id = await backend.persistWorkflowExecutionRecording({
+              sourceProject: project,
+              sourceProjectPath: item.absolutePath,
+              executedProject: project,
+              executedAttachedData: attached,
+              executedDatasets: [],
+              recordingSerialized,
+              runKind: 'editor',
+              status: 'succeeded',
+              durationMs: 1,
+              endpointName: 'story',
+            });
+            assert.ok(id);
+            const catalog = new LocalWorkflowCatalog(options);
+            try {
+              catalog.initialize({ verifyOnly: true });
+              const row = catalog.listRecordingMetadata({ recordingId: id })[0]!;
+              const bytes = Buffer.from(recordingSerialized);
+              const compressed = gzipSync(bytes, { level });
+              const expected = compression === 'gzip' && compressed.length < bytes.length ? compressed : bytes;
+              const store = new ImmutableLocalArtifactStore(options.artifactRoot);
+              assert.deepEqual(await store.read(row.recordingHash, row.recordingBytes), expected);
+              assert.equal(await backend.readWorkflowRecordingArtifact(id, 'recording'), recordingSerialized);
+            } finally {
+              catalog.close();
+            }
+          }),
+        );
+      }
+    });
+  });
+});
+
 test('SQLite recordings persist before callbacks, support bounded input search, replay, statistics and deletion', async () => {
   await fixture(async (backend) => {
     const item = await createExecutable(backend),
@@ -1133,6 +1183,7 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
     for (const [index, status] of (['succeeded', 'failed', 'suspicious'] as const).entries()) {
       const recordingSerialized = JSON.stringify({
         version: 1,
+        padding: 'x'.repeat(10000),
         strings: {},
         recording: {
           events: [{ type: 'start', data: { inputs: { input: { type: 'any', value: { value: index } } } } }],
@@ -1152,6 +1203,11 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
         executionIdentity: { surface: 'workflow_endpoint' },
         onPersisted: async (id) => {
           assert.equal(await backend.readWorkflowRecordingArtifact(id, 'recording'), recordingSerialized);
+          const summary = (await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 100)).runs.find(
+            (run) => run.id === id,
+          )!;
+          assert.equal(summary.recordingUncompressedBytes, Buffer.byteLength(recordingSerialized));
+          assert.ok(summary.recordingCompressedBytes < summary.recordingUncompressedBytes / 2);
         },
       });
       assert.ok(id);

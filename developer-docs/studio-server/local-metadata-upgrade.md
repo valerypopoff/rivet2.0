@@ -460,7 +460,7 @@ The local converter and exact serving verifier consume one project/history or re
 
 Copy disk inspection exposes additive `diskEstimate` components; their sum is `requiredBytes`, meaning **additional free space on the control filesystem**, not total installation size:
 
-- `recordingArtifactsBytes`: one copy of actual decoded recording/project/dataset artifact bytes. Catalog rows reference these immutable artifacts instead of storing another payload copy in SQLite. Serial publication hard-links the staging file into its hash shard, and exact verification rereads it; neither creates an installation-wide duplicate.
+- `recordingArtifactsBytes`: one copy of the original stored recording/project/dataset artifact bytes, preserving each source file's gzip or identity encoding. Decoding for size/UTF-8 checks and exact verification is bounded in memory; no expanded artifact files are staged. Catalog rows reference these immutable artifacts instead of storing another payload copy in SQLite. Serial publication hard-links the staging file into its hash shard, and exact verification rereads it; neither creates an installation-wide duplicate.
 - `metadataAndLibrariesBytes`: four times the workflow, recording-metadata, settings and library source bytes, retaining conservative headroom for SQLite rows/indexes/journals, settings and the library archive, extraction tar and package cache.
 - `operationalSnapshotsBytes`: twice the operational SQLite main/WAL/journal bytes for coherent snapshots and working space.
 - `filesystemAllowanceBytes`: four allocation blocks (at least 4 KiB each) per visited entry plus eight times the encoded relative-path bytes, covering small-file allocation and derived metadata/path overhead.
@@ -476,6 +476,58 @@ A copy capacity refusal now settles the accepted background job as failed at `ca
 During the disk-estimator audit, the generated 64 MiB recording fixture stayed below its allowance on Windows and Linux Node 24. The Windows supervised UI fixture and four focused Playwright migration/capacity checks also passed. The broader supervised fixture timed out in Linux Docker Desktop with a Windows-mounted checkout; that run does not certify the complete Linux migration lifecycle. The audit retained its existing timeout. These samples do not replace the packaged-image gate and the actual-VM-data rehearsal.
 
 Catalog equality checks compare JSON-domain values directly, ignoring omitted optional `undefined` fields while preserving exact artifact strings and array order. They do not serialize whole project/recording payloads into additional JSON strings merely to compare them. Artifact checksum and size verification still run before returned bytes can be trusted.
+
+### Compressed local recording artifacts
+
+Catalog format 3 adds an explicit `encoding: gzip` and `decodedSize` to compressed
+recording/replay artifact references. Hash and `size` always describe the stored
+bytes. References without these fields remain identity-encoded. Migration copies
+the original validated source files byte-for-byte, including v1 mixed encodings,
+then verifies their decoded text against the frozen snapshot. It never writes
+expanded recording, replay-project or replay-dataset files. Malformed gzip, invalid
+UTF-8, incorrect declared sizes, source changes and per-bundle memory overruns
+still fail conversion; compression does not relax those checks.
+
+New local recording writes honor `RIVET_RECORDINGS_COMPRESS` (default `gzip`) and
+`RIVET_RECORDINGS_GZIP_LEVEL` (default 4). With gzip selected, each payload uses
+compression only when that is smaller than identity encoding; explicit `identity`
+skips compression. Migration always preserves the source encoding independently
+of those new-write settings, including empty gzip payloads. Playback, download,
+replay and exact verification use checksum-verified
+stored bytes and bounded decompression, returning the original text including BOM.
+Artifact reads check the catalog's stored size against the regular file and its
+opened handle before allocating its buffer, then verify the hash and stable file
+identity. A corrupt oversized object cannot bypass size admission by matching the
+name of a smaller referenced artifact.
+Summary compressed sizes and retention quotas use stored bytes; uncompressed
+sizes and input-search memory admission use decoded bytes. Physical artifact GC
+is still separate from removing catalog references.
+
+Existing format-2 catalogs remain readable without rewriting certified snapshots.
+A successful new recording insertion advances the catalog marker to format 3 in
+the same SQLite transaction. Old identity artifacts stay readable; no bulk rewrite
+is performed. Older images/backup tools that only understand format 2 must not be
+used after that boundary. The current standalone backup/restore helper accepts
+both versions, preserves compressed objects, and checks encoding, compressed hash,
+stored size and streamed decoded size before certifying a backup.
+
+Capacity continues to decode gzip in bounded chunks to validate memory limits,
+but counts only its compressed file size for candidate disk space. Diagnostic
+`payloadBytes` includes source-plus-decoded bytes and is not the required disk
+size. This change does not reduce the browser backup's independent staging/restore
+space requirement, delete earlier candidates/backups, or promise a particular
+production peak; fresh inspection and a newly certified frozen backup are required.
+
+Regression coverage belongs to the catalog, immutable-artifact, capacity, SQLite
+backend and standalone-backup suites. It checks byte-for-byte source preservation,
+format-2 identity compatibility, empty gzip artifacts, compression settings,
+corruption/size rejection and exact replay text. The bounded-copy fixture and real
+operator restart/resume test exercise conversion and serving together. Browser
+checks cover replay, downloading the original artifact and corrupt-artifact errors;
+these focused checks do not replace the complete UI suite or production-image
+rehearsal. The broader local recordings UI run also exposed a child-row Delete
+click intercepted by the run-actions container; that separate UI failure remains
+unresolved and must not be counted as a passing full-suite result.
 
 The bounded-copy regression first bundles the current converter, serving verifier and JavaScript dependencies outside the measured process, then runs that worker with a 192 MiB old-space limit and an unchanged 512 MiB peak-RSS ceiling. Inherited `NODE_OPTIONS` loader hooks are cleared, and the report verifies the child arguments and absence of those hooks. Yarn PnP/tsx compiler, ZIP caches and loader threads are test infrastructure, not serving-runtime memory: including them previously consumed about 429 MiB before conversion started on Linux Node 24.21.0 and left a flaky margin. The fixture still converts and exactly verifies 192 distinct gzip recordings exceeding 192 MiB when expanded; neither the dataset nor memory ceiling was reduced. The worker records startup and per-stage RSS, heap and external-memory checkpoints for failures and emits its peak in the test diagnostic. This isolated algorithm check is not a whole-server or production-data capacity qualification.
 

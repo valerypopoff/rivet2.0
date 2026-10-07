@@ -7,7 +7,12 @@ import { getWorkflowRecordingMetadataPath } from '../routes/workflows/fs-helpers
 import { getRecordingArtifactPath } from '../routes/workflows/recordings-artifacts.js';
 import { normalizeStoredWorkflowRecording } from '../routes/workflows/recordings-metadata.js';
 import { decodeMigrationSourceUtf8, readMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
-import type { LocalRecordingCatalogSnapshot, LocalWorkflowCatalogSnapshot } from './workflow-catalog.js';
+import type {
+  LocalRecordingCatalogSnapshot,
+  LocalWorkflowCatalogSnapshot,
+  LocalRecordingSourceArtifacts,
+  LocalRecordingSourceArtifact,
+} from './workflow-catalog.js';
 import { chargeLocalSourceBytes, remainingLocalSourceBytes, withLocalSourceBudget } from './source-budget.js';
 
 async function assertRegularFile(filePath: string): Promise<void> {
@@ -55,6 +60,13 @@ export async function* iterateSourceRecordings(
   recordingsRoot: string,
   projects: Iterable<Pick<LocalWorkflowCatalogSnapshot, 'workflowId'>>,
 ): AsyncGenerator<LocalRecordingCatalogSnapshot> {
+  for await (const entry of iterateSourceRecordingImports(recordingsRoot, projects)) yield entry.recording;
+}
+
+export async function* iterateSourceRecordingImports(
+  recordingsRoot: string,
+  projects: Iterable<Pick<LocalWorkflowCatalogSnapshot, 'workflowId'>>,
+): AsyncGenerator<{ recording: LocalRecordingCatalogSnapshot; artifacts: LocalRecordingSourceArtifacts }> {
   const byId = new Set(Array.from(projects, (project) => project.workflowId));
   const ids = new Set<string>();
   const rootStat = await fs.lstat(recordingsRoot).catch((error: unknown) => {
@@ -130,7 +142,9 @@ export async function* iterateSourceRecordings(
           );
         }
         ids.add(metadata.run.id);
-        const artifact = async (kind: 'recording' | 'replay-project' | 'replay-dataset'): Promise<string> => {
+        const artifact = async (
+          kind: 'recording' | 'replay-project' | 'replay-dataset',
+        ): Promise<{ contents: string; source: LocalRecordingSourceArtifact }> => {
           let encoding = metadata.run.encoding;
           let artifactPath = getRecordingArtifactPath(bundlePath, kind, encoding);
           if (raw.version === 1 && kind !== 'recording') {
@@ -178,23 +192,36 @@ export async function* iterateSourceRecordings(
               throw new Error(`Source recording artifact size differs from metadata: ${artifactPath}`);
             }
           }
-          return decodeMigrationSourceUtf8(uncompressed, artifactPath);
+          return {
+            contents: decodeMigrationSourceUtf8(uncompressed, artifactPath),
+            source: { path: artifactPath, encoding, decodedSize: size },
+          };
         };
+        const recording = await artifact('recording');
+        const project = await artifact('replay-project');
+        const dataset = metadata.run.hasReplayDataset ? await artifact('replay-dataset') : null;
         return {
-          recordingId: metadata.run.id,
-          workflowId: metadata.workflowId,
-          sourceProjectRelativePath: metadata.sourceProjectRelativePath,
-          sourceProjectName: metadata.sourceProjectName,
-          createdAt: metadata.run.createdAt,
-          runKind: metadata.run.runKind,
-          status: metadata.run.status,
-          durationMs: metadata.run.durationMs,
-          endpointName: metadata.run.endpointNameAtExecution,
-          errorMessage: metadata.run.errorMessage ?? null,
-          executionIdentity: metadata.run.executionIdentity,
-          recordingContents: await artifact('recording'),
-          replayProjectContents: await artifact('replay-project'),
-          replayDatasetContents: metadata.run.hasReplayDataset ? await artifact('replay-dataset') : null,
+          recording: {
+            recordingId: metadata.run.id,
+            workflowId: metadata.workflowId,
+            sourceProjectRelativePath: metadata.sourceProjectRelativePath,
+            sourceProjectName: metadata.sourceProjectName,
+            createdAt: metadata.run.createdAt,
+            runKind: metadata.run.runKind,
+            status: metadata.run.status,
+            durationMs: metadata.run.durationMs,
+            endpointName: metadata.run.endpointNameAtExecution,
+            errorMessage: metadata.run.errorMessage ?? null,
+            executionIdentity: metadata.run.executionIdentity,
+            recordingContents: recording.contents,
+            replayProjectContents: project.contents,
+            replayDatasetContents: dataset?.contents ?? null,
+          },
+          artifacts: {
+            recordingContents: recording.source,
+            replayProjectContents: project.source,
+            replayDatasetContents: dataset?.source ?? null,
+          },
         };
       });
     }

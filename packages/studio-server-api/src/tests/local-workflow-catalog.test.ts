@@ -16,7 +16,10 @@ import {
 } from '../local-metadata/workflow-catalog.js';
 import { stageFrozenRecordingCatalog, stageFrozenWorkflowCatalog } from '../local-metadata/stage-workflow-catalog.js';
 import { checkLocalWorkflowSource, collectSourceWorkflows } from '../local-metadata/filesystem-workflow-source.js';
-import { collectSourceRecordings } from '../local-metadata/filesystem-recording-source.js';
+import {
+  collectSourceRecordings,
+  iterateSourceRecordingImports,
+} from '../local-metadata/filesystem-recording-source.js';
 import {
   createBlankProjectFile,
   getWorkflowDatasetPath,
@@ -316,6 +319,129 @@ test('local recording retention is bounded, deterministic and removes references
       catalog.pruneRecordings({ ...policy, maxRunsPerEndpoint: 0, retentionDays: 1 })[0]!.recordingId,
       'run-3',
     );
+  });
+});
+
+test('recording gzip artifacts round-trip through reopen, replay and decoded metadata without expanded files', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording({
+      recordingContents: '\ufeff' + JSON.stringify({ input: 'x'.repeat(1024 * 1024) }),
+      replayProjectContents: JSON.stringify({ project: 'y'.repeat(1024 * 1024) }),
+      replayDatasetContents: JSON.stringify({ dataset: 'z'.repeat(1024 * 1024) }),
+    });
+    await catalog.importRecording(snapshot);
+    const metadata = catalog.listRecordingMetadata()[0]!;
+    assert.ok(metadata.recordingBytes < 4096);
+    assert.equal(metadata.recordingDecodedBytes, Buffer.byteLength(snapshot.recordingContents));
+    assert.equal(metadata.projectDecodedBytes, Buffer.byteLength(snapshot.replayProjectContents));
+    assert.equal(metadata.datasetDecodedBytes, Buffer.byteLength(snapshot.replayDatasetContents!));
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const bytes = await store.read(metadata.recordingHash);
+    assert.equal(bytes.length, metadata.recordingBytes);
+    assert.equal(bytes[0], 0x1f);
+    assert.equal(bytes[1], 0x8b);
+    catalog.close();
+    catalog.initialize({ verifyOnly: true, requireExisting: true });
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+    assert.equal(await catalog.readRecordingArtifact('run-1', 'replay-dataset'), snapshot.replayDatasetContents);
+    await catalog.verifyRecordingsExact([snapshot]);
+  });
+});
+
+test('v2 recording catalogs remain readable and only a new recording write advances the format', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording();
+    await catalog.importRecording(snapshot, { compression: 'identity' });
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    const db = new DatabaseSync(file);
+    db.exec('PRAGMA user_version=2');
+    db.close();
+    catalog.initialize({ verifyOnly: true });
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+    catalog.checkHealth();
+    catalog.close();
+    const before = new DatabaseSync(file, { readOnly: true });
+    assert.equal(before.prepare('PRAGMA user_version').get()!.user_version, 2);
+    before.close();
+    catalog.initialize({ requireExisting: true });
+    await catalog.importRecording(recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }));
+    const after = new DatabaseSync(file, { readOnly: true });
+    assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 3);
+    after.close();
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+  });
+});
+
+test('new recording writes honor identity encoding and the selected gzip level', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording({ recordingContents: 'recording'.repeat(10000) });
+    await catalog.importRecording(snapshot, { compression: 'identity' });
+    const plain = catalog.listRecordingMetadata({ recordingId: 'run-1' })[0]!;
+    assert.equal(plain.recordingBytes, Buffer.byteLength(snapshot.recordingContents));
+    assert.equal(plain.recordingDecodedBytes, plain.recordingBytes);
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    assert.deepEqual(await store.read(plain.recordingHash), Buffer.from(snapshot.recordingContents));
+    for (const level of [0, 1, 9]) {
+      const value = recording({ ...snapshot, recordingId: `gzip-${level}` });
+      await catalog.importRecording(value, { compression: 'gzip', gzipLevel: level });
+      const row = catalog.listRecordingMetadata({ recordingId: value.recordingId })[0]!;
+      const gzip = gzipSync(value.recordingContents, { level });
+      const expected = gzip.length < plain.recordingBytes ? gzip : Buffer.from(value.recordingContents);
+      assert.deepEqual(await store.read(row.recordingHash), expected);
+      assert.deepEqual(await catalog.readRecording(value.recordingId), value);
+    }
+  });
+});
+
+test('migrated empty gzip payloads retain their compressed bytes and zero decoded size', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const file = path.join(root, 'empty.gz');
+    const bytes = gzipSync('');
+    await fs.writeFile(file, bytes);
+    const source = { path: file, encoding: 'gzip' as const, decodedSize: 0 };
+    const snapshot = recording({ recordingContents: '', replayProjectContents: '', replayDatasetContents: '' });
+    await catalog.importRecording(snapshot, {
+      sources: { recordingContents: source, replayProjectContents: source, replayDatasetContents: source },
+    });
+    const row = catalog.listRecordingMetadata()[0]!;
+    assert.equal(row.recordingBytes, bytes.length);
+    assert.equal(row.recordingDecodedBytes, 0);
+    assert.equal(row.projectDecodedBytes, 0);
+    assert.equal(row.datasetDecodedBytes, 0);
+    assert.equal(row.hasReplayDataset, true);
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyRecordingsExact([snapshot]);
+  });
+});
+
+test('compressed recording references reject invalid encoding, corrupt gzip and incorrect decoded sizes', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording({ recordingContents: 'x'.repeat(10000) }));
+    const db = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    const original = JSON.parse(db.prepare('SELECT metadata_json FROM recordings').get()!.metadata_json as string);
+    try {
+      for (const changes of [{ encoding: 'zip' }, { decodedSize: -1 }, { decodedSize: 1 }, { decodedSize: 10001 }]) {
+        const data = structuredClone(original);
+        Object.assign(data.recordingContents, changes);
+        db.prepare('UPDATE recordings SET metadata_json=?').run(JSON.stringify(data));
+        await assert.rejects(catalog.readRecording('run-1'));
+      }
+      const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+      const corrupt = await store.putBytes(Buffer.from('not gzip'));
+      original.recordingContents = { ...corrupt, encoding: 'gzip', decodedSize: 10000 };
+      db.prepare('UPDATE recordings SET metadata_json=?').run(JSON.stringify(original));
+      await assert.rejects(catalog.readRecording('run-1'), /gzip|header/i);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -1285,10 +1411,53 @@ test('legacy recording bundles may have gzip recording bytes and an identity rep
       assert.equal(source.length, 1);
       assert.equal(source[0]?.recordingContents, '{"input":1}');
       assert.equal(source[0]?.replayProjectContents, 'legacy replay');
+      await fixture(async (catalog, catalogRoot) => {
+        await catalog.importProject(project());
+        for await (const entry of iterateSourceRecordingImports(path.join(root, 'recordings'), [project()])) {
+          await catalog.importRecording(entry.recording, { sources: entry.artifacts, compression: 'identity' });
+          await catalog.verifyRecordingsExact([entry.recording]);
+        }
+        const bytes = gzipSync('{"input":1}');
+        const hash = createHash('sha256').update(bytes).digest('hex');
+        assert.deepEqual(await fs.readFile(path.join(catalogRoot, 'objects', hash.slice(0, 2), hash)), bytes);
+        const [metadata] = catalog.listRecordingMetadata();
+        assert.equal(metadata?.recordingBytes, bytes.length);
+        assert.equal(metadata?.projectBytes, Buffer.byteLength('legacy replay'));
+      });
     });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('recording source bytes must still match the scanned contents before publication', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording();
+    const recordingPath = path.join(root, 'source-recording.gz');
+    const projectPath = path.join(root, 'source-project');
+    await fs.writeFile(recordingPath, gzipSync(snapshot.recordingContents.replace('1', '2')));
+    await fs.writeFile(projectPath, snapshot.replayProjectContents);
+    await assert.rejects(
+      catalog.importRecording(snapshot, {
+        sources: {
+          recordingContents: {
+            path: recordingPath,
+            encoding: 'gzip',
+            decodedSize: Buffer.byteLength(snapshot.recordingContents),
+          },
+          replayProjectContents: {
+            path: projectPath,
+            encoding: 'identity',
+            decodedSize: Buffer.byteLength(snapshot.replayProjectContents),
+          },
+          replayDatasetContents: null,
+        },
+      }),
+      /changed before publication/,
+    );
+    assert.deepEqual(catalog.listRecordingIds(), []);
+  });
 });
 
 test('local recording conversion rejects metadata that would silently reinterpret or omit payloads', async () => {

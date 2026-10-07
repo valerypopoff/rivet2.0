@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { isDeepStrictEqual } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
+import { gzip, gunzip } from 'node:zlib';
 import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
@@ -105,13 +106,24 @@ type ProjectRow = {
 type VersionRow = { version_id: string; workflow_id: string; metadata_json: string };
 type WebAppRow = { app_id: string; workflow_id: string; slug: string; metadata_json: string };
 type RecordingRow = { recording_id: string; workflow_id: string; metadata_json: string };
+type RecordingArtifactRef =
+  | (LocalArtifact & ({ encoding?: undefined; decodedSize?: undefined } | { encoding: 'gzip'; decodedSize: number }))
+  | null;
+/** Migration retains the validated source encoding instead of expanding files. */
+export type LocalRecordingSourceArtifact = { path: string; encoding: 'identity' | 'gzip'; decodedSize: number };
+export type LocalRecordingSourceArtifacts = {
+  recordingContents: LocalRecordingSourceArtifact;
+  replayProjectContents: LocalRecordingSourceArtifact;
+  replayDatasetContents: LocalRecordingSourceArtifact | null;
+};
+type RecordingCompressionOptions = { compression?: 'identity' | 'gzip'; gzipLevel?: number };
 type StoredRecording = Omit<
   LocalRecordingCatalogSnapshot,
   'recordingContents' | 'replayProjectContents' | 'replayDatasetContents'
 > & {
-  recordingContents: ArtifactRef;
-  replayProjectContents: ArtifactRef;
-  replayDatasetContents: ArtifactRef;
+  recordingContents: RecordingArtifactRef;
+  replayProjectContents: RecordingArtifactRef;
+  replayDatasetContents: RecordingArtifactRef;
 };
 export type LocalRecordingMetadata = Omit<
   LocalRecordingCatalogSnapshot,
@@ -121,6 +133,9 @@ export type LocalRecordingMetadata = Omit<
   recordingBytes: number;
   projectBytes: number;
   datasetBytes: number;
+  recordingDecodedBytes: number;
+  projectDecodedBytes: number;
+  datasetDecodedBytes: number;
   hasReplayDataset: boolean;
 };
 type StoredProjectBundle = { project: StoredProject; versions: StoredVersion[]; apps: StoredWebApp[] };
@@ -145,7 +160,8 @@ export type LocalCatalogChange = {
 type StoredRuntimeLibraryState = { manifest: RuntimeLibraryManifest; archive: ArtifactRef };
 
 const APPLICATION_ID = 0x52495643; // RIVC; separate candidate DB from the App Settings candidate.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+const supportedSchemaVersion = (version: number) => version === 2 || version === SCHEMA_VERSION;
 const SCHEMA = `
 CREATE TABLE folders (path TEXT PRIMARY KEY);
 CREATE TABLE projects (
@@ -356,9 +372,64 @@ async function readText(store: ImmutableLocalArtifactStore, ref: ArtifactRef): P
 async function readBytes(store: ImmutableLocalArtifactStore, ref: ArtifactRef): Promise<Buffer | null> {
   assertArtifactReference(ref);
   if (ref === null) return null;
-  const bytes = await store.read(ref.hash);
-  if (bytes.length !== ref.size) throw new Error(`Local catalog artifact ${ref.hash} has an unexpected size.`);
-  return bytes;
+  return store.read(ref.hash, ref.size);
+}
+
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
+function assertRecordingArtifactReference(ref: RecordingArtifactRef): void {
+  assertArtifactReference(ref);
+  if (ref === null) return;
+  if (
+    (ref.encoding !== undefined && ref.encoding !== 'gzip') ||
+    (ref.encoding === 'gzip'
+      ? !Number.isSafeInteger(ref.decodedSize) || ref.decodedSize < 0
+      : ref.decodedSize !== undefined)
+  )
+    throw new Error('Invalid local recording artifact encoding or decoded size.');
+}
+async function readRecordingText(
+  store: ImmutableLocalArtifactStore,
+  ref: RecordingArtifactRef,
+): Promise<string | null> {
+  assertRecordingArtifactReference(ref);
+  if (ref === null) return null;
+  const bytes = await store.read(ref.hash, ref.size);
+  const decoded =
+    ref.encoding === 'gzip' ? await gunzipAsync(bytes, { maxOutputLength: Math.max(1, ref.decodedSize) }) : bytes;
+  if (decoded.length !== (ref.decodedSize ?? ref.size))
+    throw new Error('Local recording artifact has an unexpected decoded size.');
+  return decodeMigrationSourceUtf8(decoded, `local recording artifact ${ref.hash}`);
+}
+async function putRecordingText(
+  store: ImmutableLocalArtifactStore,
+  contents: string | null,
+  source?: LocalRecordingSourceArtifact | null,
+  options: RecordingCompressionOptions = {},
+): Promise<RecordingArtifactRef> {
+  if (contents === null) {
+    if (source) throw new Error('Unexpected recording source artifact.');
+    return null;
+  }
+  const decodedSize = Buffer.byteLength(contents);
+  if (source) {
+    if (!['identity', 'gzip'].includes(source.encoding) || source.decodedSize !== decodedSize)
+      throw new Error('Recording source artifact differs from decoded contents.');
+    const stored = await store.putFile(source.path);
+    const ref = source.encoding === 'gzip' ? { ...stored, encoding: 'gzip' as const, decodedSize } : stored;
+    // Verify the bytes copied, not only the earlier source scan. The immutable
+    // store checks file identity during publication; semantic equality catches
+    // a source replacement between scan and publication, including UTF-8/BOM.
+    if ((await readRecordingText(store, ref)) !== contents)
+      throw new Error('Recording source artifact changed before publication.');
+    return ref;
+  }
+  const bytes = Buffer.from(contents);
+  if (options.compression === 'identity') return store.putBytes(bytes);
+  const compressed = await gzipAsync(bytes, { level: options.gzipLevel ?? 4 });
+  return compressed.length < bytes.length
+    ? { ...(await store.putBytes(compressed)), encoding: 'gzip', decodedSize }
+    : store.putBytes(bytes);
 }
 
 function sameArchive(left: Buffer | null, right: Buffer | null): boolean {
@@ -432,7 +503,7 @@ export class LocalWorkflowCatalog {
           db.exec('ROLLBACK');
           throw error;
         }
-      } else if (identity !== APPLICATION_ID || version !== SCHEMA_VERSION) {
+      } else if (identity !== APPLICATION_ID || !supportedSchemaVersion(version)) {
         throw new Error('Local workflow catalog has an unsupported database identity or schema version.');
       }
       if (!readOnly) db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL');
@@ -484,7 +555,7 @@ export class LocalWorkflowCatalog {
     const integrity = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
     if (
       identity !== APPLICATION_ID ||
-      version !== SCHEMA_VERSION ||
+      !supportedSchemaVersion(version) ||
       integrity.length !== 1 ||
       integrity[0]?.quick_check !== 'ok' ||
       db.prepare('PRAGMA foreign_key_check').get()
@@ -858,6 +929,9 @@ export class LocalWorkflowCatalog {
         recordingBytes: recordingContents!.size,
         projectBytes: replayProjectContents!.size,
         datasetBytes: replayDatasetContents?.size ?? 0,
+        recordingDecodedBytes: recordingContents!.decodedSize ?? recordingContents!.size,
+        projectDecodedBytes: replayProjectContents!.decodedSize ?? replayProjectContents!.size,
+        datasetDecodedBytes: replayDatasetContents?.decodedSize ?? replayDatasetContents?.size ?? 0,
         hasReplayDataset: replayDatasetContents !== null,
       };
     });
@@ -878,8 +952,7 @@ export class LocalWorkflowCatalog {
     )
       throw new Error('Local recording metadata is inconsistent.');
     for (const ref of [data.recordingContents, data.replayProjectContents, data.replayDatasetContents]) {
-      if (ref !== null && (!ref || !/^[a-f0-9]{64}$/.test(ref.hash) || !Number.isSafeInteger(ref.size) || ref.size < 0))
-        throw new Error('Invalid local recording artifact reference.');
+      assertRecordingArtifactReference(ref);
     }
     return data;
   }
@@ -899,7 +972,7 @@ export class LocalWorkflowCatalog {
         : artifact === 'replay-project'
           ? data.replayProjectContents
           : data.replayDatasetContents;
-    return readText(this.#artifacts, ref);
+    return readRecordingText(this.#artifacts, ref);
   }
 
   async importProject(snapshot: LocalWorkflowCatalogSnapshot): Promise<void> {
@@ -1169,9 +1242,14 @@ export class LocalWorkflowCatalog {
     return snapshot;
   }
 
-  async importRecording(recording: LocalRecordingCatalogSnapshot): Promise<void> {
+  async importRecording(
+    recording: LocalRecordingCatalogSnapshot,
+    options: RecordingCompressionOptions & { sources?: LocalRecordingSourceArtifacts } = {},
+  ): Promise<void> {
     if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
     recording = structuredClone(recording);
+    options = structuredClone(options);
+    const { sources } = options;
     if (!recording.recordingId || !recording.workflowId || !Number.isFinite(recording.durationMs)) {
       throw new Error('Local recording needs a stable ID, workflow ID, and duration.');
     }
@@ -1194,18 +1272,46 @@ export class LocalWorkflowCatalog {
       endpointName: recording.endpointName,
       errorMessage: recording.errorMessage,
       executionIdentity: recording.executionIdentity,
-      recordingContents: await putText(this.#artifacts, recording.recordingContents),
-      replayProjectContents: await putText(this.#artifacts, recording.replayProjectContents),
-      replayDatasetContents: await putText(this.#artifacts, recording.replayDatasetContents),
+      recordingContents: await putRecordingText(
+        this.#artifacts,
+        recording.recordingContents,
+        sources?.recordingContents,
+        options,
+      ),
+      replayProjectContents: await putRecordingText(
+        this.#artifacts,
+        recording.replayProjectContents,
+        sources?.replayProjectContents,
+        options,
+      ),
+      replayDatasetContents: await putRecordingText(
+        this.#artifacts,
+        recording.replayDatasetContents,
+        sources?.replayDatasetContents,
+        options,
+      ),
     };
     this.#storedRecording({
       recording_id: recording.recordingId,
       workflow_id: recording.workflowId,
       metadata_json: JSON.stringify(stored),
     });
-    this.#database()
-      .prepare('INSERT INTO recordings(recording_id, workflow_id, metadata_json) VALUES (?, ?, ?)')
-      .run(recording.recordingId, recording.workflowId, JSON.stringify(stored));
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      // v2 remains readable without rewriting its certified snapshot. A new
+      // write marks the encoding-aware format atomically, fencing old readers.
+      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      db.prepare('INSERT INTO recordings(recording_id, workflow_id, metadata_json) VALUES (?, ?, ?)').run(
+        recording.recordingId,
+        recording.workflowId,
+        JSON.stringify(stored),
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   async readRecording(recordingId: string): Promise<LocalRecordingCatalogSnapshot | null> {
@@ -1216,9 +1322,9 @@ export class LocalWorkflowCatalog {
     const stored = this.#storedRecording(row);
     return {
       ...stored,
-      recordingContents: (await readText(this.#artifacts, stored.recordingContents))!,
-      replayProjectContents: (await readText(this.#artifacts, stored.replayProjectContents))!,
-      replayDatasetContents: await readText(this.#artifacts, stored.replayDatasetContents),
+      recordingContents: (await readRecordingText(this.#artifacts, stored.recordingContents))!,
+      replayProjectContents: (await readRecordingText(this.#artifacts, stored.replayProjectContents))!,
+      replayDatasetContents: await readRecordingText(this.#artifacts, stored.replayDatasetContents),
     };
   }
 

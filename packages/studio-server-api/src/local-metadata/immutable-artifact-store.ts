@@ -50,9 +50,11 @@ export class ImmutableLocalArtifactStore {
     });
   }
 
-  async read(hash: string): Promise<Buffer> {
+  async read(hash: string, expectedSize?: number): Promise<Buffer> {
+    if (expectedSize !== undefined && (!Number.isSafeInteger(expectedSize) || expectedSize < 0))
+      throw new Error('Invalid local artifact expected size.');
     const filePath = this.#artifactPath(hash);
-    const bytes = await this.#withStableFile(filePath, hash, (handle) => handle.readFile());
+    const bytes = await this.#withStableFile(filePath, hash, (handle) => handle.readFile(), expectedSize);
     if (createHash('sha256').update(bytes).digest('hex') !== hash) {
       throw new Error(`Local artifact ${hash} failed its checksum.`);
     }

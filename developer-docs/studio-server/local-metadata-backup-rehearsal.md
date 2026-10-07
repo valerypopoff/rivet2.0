@@ -152,6 +152,15 @@ Production activation remains blocked until an actual restored data copy passes 
 
 ## Post-resumption coordinated backup and restore
 
+Local catalog format 3 preserves gzip recording and replay payloads as compressed
+immutable objects. Current backup/restore tools accept formats 2 and 3, copy the
+stored bytes unchanged, and validate compressed checksums plus streamed decoded
+sizes. Unknown encodings, invalid gzip and inconsistent sizes are refused. Use
+current tools after a format-3 recording write; old format-2-only images/tools
+cannot safely interpret those objects. Neither migration nor restore requires
+expanded recording files on disk; bounded in-memory decoding still validates
+content and bundle limits.
+
 Once SQLite writes have resumed, returning to stale legacy files is refused. Take a **new** backup of the current selected state, not another copy of only the four retained legacy roots. Drain and stop the whole combined backend, exclude host/other-container writers, then use a fresh destination:
 
 ```bash
