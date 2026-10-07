@@ -192,18 +192,23 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
   assert.deepEqual(
     [...requestedEnvVars].sort(),
     [
-      'CUSTOM_ENV',
-      'EXTRA_ENV',
-      'OPENAI_API_KEY',
-      'OPENAI_ENDPOINT',
-      'OPENAI_ORG_ID',
-      'PLUGIN_KEY',
-      ...getClassifierProviderEnvironmentVariableNames(),
+      ...new Set([
+        'CUSTOM_ENV',
+        'EXTRA_ENV',
+        'OPENAI_API_KEY',
+        'OPENAI_ENDPOINT',
+        'OPENAI_ORG_ID',
+        'PLUGIN_KEY',
+        ...getClassifierProviderEnvironmentVariableNames(),
+      ]),
     ].sort(),
   );
 
   const classifierEnvironmentValues = Object.fromEntries(
-    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [envVarName, `classifier-${envVarName}`]),
+    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [
+      envVarName,
+      envVarName === 'OPENAI_API_KEY' ? 'openai-key' : `classifier-${envVarName}`,
+    ]),
   );
   const environmentValues = new Map([
     ['OPENAI_API_KEY', 'openai-key'],
@@ -226,4 +231,20 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
     EXTRA_ENV: 'extra-value',
     ...classifierEnvironmentValues,
   });
+});
+
+test('hosted modern OpenAI credentials take precedence and normalize both aliases', async () => {
+  const settings = await fillMissingSettingsFromEnvironmentVariables(
+    { openAiApiKey: 'modern-key', openAiKey: 'legacy-key' },
+    [],
+    {
+      environmentProvider: {
+        async getEnvVar() {
+          return undefined;
+        },
+      },
+    },
+  );
+  assert.equal(settings.openAiApiKey, 'modern-key');
+  assert.equal(settings.openAiKey, 'modern-key');
 });

@@ -8,6 +8,8 @@ sidebar_label: Classifier Question
 
 Builds one serializable typed question for a classifier provider. It does not make a network request. **Question ID** is preserved exactly and becomes the key in Classifier Evaluate's aggregate **Answers** object.
 
+The same text questions work with **Jev**, **Liquid AI d1**, and **OpenAI Decisions**. Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type.
+
 ## Settings
 
 - **Question type**: choose **Choice**, **Score**, or **Noul**.
@@ -24,4 +26,10 @@ Choice and Score can accept their complete criteria through the **Criteria** inp
 
 **Instructions** and complete **Criteria** inputs are added only when their corresponding input mode is enabled. Noul exposes separate lowercase **true** and **false** ports when their individual input controls are enabled. Structured inputs preserve arrays as one value. Interpolation references in active text, line-list, and JSON-template fields add optional inputs.
 
+Images are not part of a question definition. Connect them to Classifier Evaluate's **State** input, directly or through an assembled User message, as shared evidence for all questions. Ordinary text interpolation such as `{{images}}` still works, but does not provide image evidence.
+
 **Question** (`object`) contains `{ questionId, type, instructions, criteria? }`. Connect it directly or through an Array node to [Classifier Evaluate](./classifier-evaluate.mdx).
+
+## Preparation limits
+
+Question construction checks cancellation and has its own 30-second preparation budget. Active templates, referenced values and resolved entries share a cumulative 32 MiB work budget. JSON depth is limited to 64, expanded values and tokens per template to 100,000. Impossible Choice/Score counts, oversized interpolation expansion and deeply nested JSON templates fail before costly construction/parsing. No content is silently truncated. These are resource safety limits, not provider capacity guarantees; the subsequent Evaluate request has a separate overall timeout.

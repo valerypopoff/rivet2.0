@@ -1,17 +1,39 @@
 import type { ClassifierCredentialNames } from './credentials.js';
-import { JEV_DEFAULT_CREDENTIAL_NAMES } from './credentials.js';
-import type {
-  ClassifierChoiceQuestionDefinition,
-  ClassifierEvaluationResponse,
-  ClassifierQuestionDefinition,
-  ClassifierScoreQuestionDefinition,
-} from './types.js';
+import {
+  JEV_DEFAULT_CREDENTIAL_NAMES,
+  LIQUID_DEFAULT_CREDENTIAL_NAMES,
+  OPENAI_DEFAULT_CREDENTIAL_NAMES,
+} from './credentials.js';
+import { assertLiquidImages } from './images.js';
+import { assertClassifierStateMessages, systemOneState, type ClassifierStateMessage } from './state.js';
+import { validateApiCompatibleClassifierResponse } from './response.js';
+import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
+import { validateClassifierQuestion } from './questions.js';
+import { assertClassifierJson, classifierArrayValues } from './json.js';
+import {
+  assertClassifierResourceLimits,
+  classifierPreparationCheck,
+  CLASSIFIER_LIMITS,
+  ClassifierResourceLimitError,
+  readClassifierResponse,
+} from './limits.js';
+import type { ClassifierEvaluationResponse, ClassifierQuestionDefinition } from './types.js';
+
+export { validateApiCompatibleClassifierResponse } from './response.js';
 
 export const JEV_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
+export const LIQUID_SYSTEM_ONE_ENDPOINT = 'https://api.liquid.ai/decisions/v1/systemone';
+export const OPENAI_DECISIONS_ENDPOINT = 'https://api.openai.com/v1/decisions';
 
 /** Jev's published USD rates. Keep this Core-owned rather than graph-authored. */
 export const JEV_TOKEN_PRICING = {
   inputPerMillionTokens: 0.042,
+  outputPerMillionTokens: 0,
+} as const;
+
+/** Liquid d1's published USD rates: https://www.liquid.ai/blog/d1-decision-model */
+export const LIQUID_TOKEN_PRICING = {
+  inputPerMillionTokens: 0.04,
   outputPerMillionTokens: 0,
 } as const;
 
@@ -29,8 +51,12 @@ export type ClassifierProvider = {
   defaultModel: string;
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
-  /** Static USD token pricing used only for optional Usage accounting. */
+  supportsImages?: (model: string) => boolean;
+  /** A stricter provider request limit also bounds preparation before encoding. */
+  maxRequestBytes?: number;
+  /** Legacy shorthand: pricing for defaultModel only, never arbitrary models. */
   pricing?: ClassifierTokenPricing;
+  modelPricing?: readonly ClassifierModelPricing[];
   /**
    * The response used by the node plus the exact JSON bodies that crossed the
    * provider boundary. Request headers deliberately do not belong here: they
@@ -42,6 +68,14 @@ export type ClassifierProvider = {
 export type ClassifierTokenPricing = {
   inputPerMillionTokens: number;
   outputPerMillionTokens: number;
+  /** The full request uses these rates above the documented context threshold. */
+  longContext?: { aboveInputTokens: number; inputPerMillionTokens: number; outputPerMillionTokens: number };
+};
+
+export type ClassifierModelPricing = {
+  /** Exact verified model IDs/aliases belonging to the same priced model. */
+  models: readonly string[];
+  pricing: ClassifierTokenPricing;
 };
 
 export type ClassifierProviderEvaluationResult = {
@@ -56,12 +90,20 @@ export type ClassifierProviderEvaluateArgs = {
   questions: readonly ClassifierQuestionDefinition[];
   signal: AbortSignal;
   state: string | Record<string, unknown> | unknown[];
+  stateMessages?: ClassifierStateMessage[];
   timeoutMs: number;
+  /** An earlier node deadline includes State normalization in the request budget. */
+  deadline?: number;
   /** Opt-in retry policy for non-authentication, non-validation HTTP errors. */
   retryOnNon200?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   fetchImplementation?: typeof fetch;
+};
+
+/** Internal adapters share the snapshot boundary's absolute deadline. */
+type ClassifierRequestProvider = Omit<ClassifierProvider, 'evaluate'> & {
+  evaluate(args: ClassifierProviderEvaluateArgs & { deadline: number }): Promise<ClassifierProviderEvaluationResult>;
 };
 
 export type ApiCompatibleClassifierProviderConfig = {
@@ -72,8 +114,11 @@ export type ApiCompatibleClassifierProviderConfig = {
   /** Static, provider-owned endpoint. It must never come from graph data. */
   endpoint: string;
   browserExecutionSupported?: boolean;
-  /** Static USD token pricing used only for optional Usage accounting. */
+  /** Static USD token pricing for Cost and optional Usage accounting. */
   pricing?: ClassifierTokenPricing;
+  modelPricing?: readonly ClassifierModelPricing[];
+  supportsImages?: (model: string) => boolean;
+  maxRequestBytes?: number;
 };
 
 /**
@@ -84,13 +129,17 @@ export type ApiCompatibleClassifierProviderConfig = {
 export function createApiCompatibleClassifierProvider(
   config: ApiCompatibleClassifierProviderConfig,
 ): ClassifierProvider {
-  return {
+  config = { ...config };
+  return withSharedState({
     id: config.id,
     label: config.label,
     defaultModel: config.defaultModel,
     credentialNames: config.credentialNames,
     browserExecutionSupported: config.browserExecutionSupported ?? false,
     pricing: config.pricing,
+    modelPricing: config.modelPricing,
+    supportsImages: config.supportsImages ?? (() => false),
+    maxRequestBytes: config.maxRequestBytes,
     async evaluate({
       apiKey,
       fetchImplementation = fetch,
@@ -102,27 +151,35 @@ export function createApiCompatibleClassifierProvider(
       signal,
       state,
       timeoutMs,
+      stateMessages,
+      deadline,
     }) {
       const request: ApiCompatibleRequest = {
-        state,
+        ...systemOneState({ state, stateMessages }),
         model,
         questions: createQuestionMap(questions),
       };
+      if (config.id === 'liquid')
+        assertLiquidImages(request.images ?? [], classifierPreparationCheck(signal, deadline, timeoutMs));
 
-      return await callApiCompatibleClassifier({
+      return await callClassifierHttp({
         apiKey,
         endpoint: config.endpoint,
         fetchImplementation,
         providerLabel: config.label,
         request,
+        questions,
+        validateResponse: validateApiCompatibleClassifierResponse,
         retryOnNon200,
         retryOnNon200CooldownMs,
         retryOnNon200RepeatTimes,
         signal,
         timeoutMs,
+        deadline,
+        maxRequestBytes: config.maxRequestBytes,
       });
     },
-  };
+  });
 }
 
 export const jevClassifierProvider = createApiCompatibleClassifierProvider({
@@ -132,10 +189,119 @@ export const jevClassifierProvider = createApiCompatibleClassifierProvider({
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
   endpoint: JEV_SYSTEM_ONE_ENDPOINT,
   pricing: JEV_TOKEN_PRICING,
+  modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0'], pricing: JEV_TOKEN_PRICING }],
+});
+
+export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
+  id: 'liquid',
+  label: 'Liquid AI',
+  defaultModel: 'd1',
+  credentialNames: LIQUID_DEFAULT_CREDENTIAL_NAMES,
+  endpoint: LIQUID_SYSTEM_ONE_ENDPOINT,
+  pricing: LIQUID_TOKEN_PRICING,
+  supportsImages: (model) => model === 'd1',
+  maxRequestBytes: 4_500_000,
+});
+
+export const openaiClassifierProvider: ClassifierProvider = withSharedState({
+  id: 'openai',
+  label: 'OpenAI',
+  defaultModel: 'gpt-6-luna',
+  credentialNames: OPENAI_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  supportsImages: (model) => model === 'gpt-6-luna',
+  modelPricing: [
+    {
+      models: ['gpt-6-luna'],
+      pricing: {
+        inputPerMillionTokens: 0.1,
+        outputPerMillionTokens: 0,
+        longContext: { aboveInputTokens: 272_000, inputPerMillionTokens: 0.2, outputPerMillionTokens: 0 },
+      },
+    },
+  ],
+  async evaluate(args) {
+    return callClassifierHttp({
+      ...args,
+      endpoint: OPENAI_DECISIONS_ENDPOINT,
+      fetchImplementation: args.fetchImplementation ?? fetch,
+      providerLabel: 'OpenAI',
+      request: createOpenAIDecisionRequest(args),
+      validateResponse: validateOpenAIDecisionResponse,
+    });
+  },
 });
 
 /** Ordered so adding later API-compatible providers does not alter authored provider IDs. */
-export const classifierProviders: readonly ClassifierProvider[] = [jevClassifierProvider];
+export const classifierProviders: readonly ClassifierProvider[] = [
+  jevClassifierProvider,
+  liquidClassifierProvider,
+  openaiClassifierProvider,
+];
+
+/** Both protocols evaluate every question against the same shared evidence. */
+function withSharedState(provider: ClassifierRequestProvider): ClassifierProvider {
+  return {
+    ...provider,
+    async evaluate(args) {
+      args = { ...args, fetchImplementation: args.fetchImplementation ?? fetch };
+      if (
+        !Number.isFinite(args.timeoutMs) ||
+        args.timeoutMs <= 0 ||
+        (args.deadline !== undefined && !Number.isFinite(args.deadline))
+      )
+        throw new Error('Classifier timeout and deadline must be finite, with a positive timeout.');
+      const deadline = Math.min(Date.now() + args.timeoutMs, args.deadline ?? Infinity);
+      const assertActive = () => {
+        throwIfAborted(args.signal, provider.label);
+        if (Date.now() >= deadline) throw new Error(`${provider.label} request timed out after ${args.timeoutMs} ms.`);
+      };
+      assertActive();
+      if ('images' in args) throw new Error('Pass image evidence through State, not a separate images field.');
+      if (!Array.isArray(args.questions) || args.questions.length === 0)
+        throw new Error('Classifier Evaluate requires at least one question.');
+      if (args.questions.length > CLASSIFIER_LIMITS.questions)
+        throw new Error('Classifier Evaluate supports at most 1000 questions.');
+      assertClassifierResourceLimits(
+        { state: args.state, questions: args.questions, stateMessages: args.stateMessages },
+        assertActive,
+        provider.maxRequestBytes,
+      );
+      const questions: ClassifierQuestionDefinition[] = [];
+      const ids = new Set<string>();
+      for (const question of classifierArrayValues(args.questions, 'Questions')) {
+        validateClassifierQuestion(question, assertActive);
+        if (ids.has(question.questionId))
+          throw new Error(`Question ID '${question.questionId}' is duplicated in this evaluation.`);
+        ids.add(question.questionId);
+        questions.push(question);
+      }
+      assertClassifierJson(args.state, 'State', false, assertActive);
+      if (args.stateMessages !== undefined) {
+        if (args.state !== '')
+          throw new Error('Structured State and multimodal State messages cannot be supplied together.');
+        assertClassifierStateMessages(args.stateMessages, assertActive);
+      }
+      // Detach evidence before IO so retries and response validation use the same snapshot.
+      assertActive();
+      const snapshot = JSON.parse(
+        JSON.stringify({ state: args.state, questions, stateMessages: args.stateMessages }),
+      ) as {
+        state: ClassifierProviderEvaluateArgs['state'];
+        questions: ClassifierQuestionDefinition[];
+        stateMessages?: ClassifierStateMessage[];
+      };
+      const hasImages = snapshot.stateMessages?.some(({ parts }) => parts.some((part) => part.type === 'image'));
+      if (hasImages && !provider.supportsImages?.(args.model)) {
+        throw new Error(`${provider.label} model '${args.model}' does not support classifier images.`);
+      }
+      assertActive();
+      const result = await provider.evaluate({ ...args, ...snapshot, deadline });
+      assertActive();
+      return result;
+    },
+  };
+}
 
 export function getClassifierProvider(id: string | undefined): ClassifierProvider {
   const provider = classifierProviders.find((candidate) => candidate.id === (id || jevClassifierProvider.id));
@@ -148,21 +314,34 @@ export function getClassifierProviderEnvironmentVariableNames(): string[] {
 }
 
 /**
- * Returns a USD cost only when the selected provider has static pricing and
+ * Returns a USD cost only for a recognized requested/returned model pair and
  * the token counts are safe non-negative integers. Callers must not treat an
  * unpriced provider as free.
  */
 export function calculateClassifierUsageCost(
-  provider: Pick<ClassifierProvider, 'pricing'>,
+  provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> & Partial<Pick<ClassifierProvider, 'defaultModel'>>,
   usage: ClassifierEvaluationResponse['usage'],
+  models?: { requestedModel: string; responseModel: string },
 ): number | undefined {
-  const pricing = provider.pricing;
+  if (!models) return undefined;
+  const entries =
+    provider.modelPricing ??
+    (provider.pricing && provider.defaultModel ? [{ models: [provider.defaultModel], pricing: provider.pricing }] : []);
+  const entry = entries.find(
+    ({ models: names }) => names.includes(models.requestedModel) && names.includes(models.responseModel),
+  );
+  const base = entry?.pricing;
+  const tier = base?.longContext;
+  const validRates = (rates: Pick<ClassifierTokenPricing, 'inputPerMillionTokens' | 'outputPerMillionTokens'>) =>
+    Number.isFinite(rates.inputPerMillionTokens) &&
+    rates.inputPerMillionTokens >= 0 &&
+    Number.isFinite(rates.outputPerMillionTokens) &&
+    rates.outputPerMillionTokens >= 0;
   if (
-    pricing == null ||
-    !Number.isFinite(pricing.inputPerMillionTokens) ||
-    pricing.inputPerMillionTokens < 0 ||
-    !Number.isFinite(pricing.outputPerMillionTokens) ||
-    pricing.outputPerMillionTokens < 0 ||
+    base == null ||
+    !validRates(base) ||
+    (tier != null &&
+      (!Number.isSafeInteger(tier.aboveInputTokens) || tier.aboveInputTokens < 0 || !validRates(tier))) ||
     !Number.isSafeInteger(usage.input_tokens) ||
     usage.input_tokens < 0 ||
     !Number.isSafeInteger(usage.output_tokens) ||
@@ -170,7 +349,7 @@ export function calculateClassifierUsageCost(
   ) {
     return undefined;
   }
-
+  const pricing = tier && usage.input_tokens > tier.aboveInputTokens ? tier : base;
   const totalCost =
     (usage.input_tokens * pricing.inputPerMillionTokens + usage.output_tokens * pricing.outputPerMillionTokens) /
     TOKENS_PER_MILLION;
@@ -181,6 +360,7 @@ type ApiCompatibleRequest = {
   state: string | Record<string, unknown> | unknown[];
   model: string;
   questions: Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
+  images?: string[];
 };
 
 function createQuestionMap(
@@ -197,30 +377,37 @@ function createQuestionMap(
   return result;
 }
 
-async function callApiCompatibleClassifier({
+async function callClassifierHttp({
   apiKey,
   endpoint,
   fetchImplementation,
   providerLabel,
   request,
+  questions,
+  validateResponse,
   retryOnNon200,
   retryOnNon200CooldownMs,
   retryOnNon200RepeatTimes,
   signal,
   timeoutMs,
+  deadline,
+  maxRequestBytes,
 }: {
   apiKey: string;
   endpoint: string;
   fetchImplementation: typeof fetch;
   providerLabel: string;
-  request: ApiCompatibleRequest;
+  request: Record<string, unknown>;
+  questions: readonly ClassifierQuestionDefinition[];
+  validateResponse: typeof validateApiCompatibleClassifierResponse;
   retryOnNon200?: boolean;
   retryOnNon200CooldownMs?: number;
   retryOnNon200RepeatTimes?: number;
   signal: AbortSignal;
   timeoutMs: number;
+  deadline: number;
+  maxRequestBytes?: number;
 }): Promise<ClassifierProviderEvaluationResult> {
-  const deadline = Date.now() + timeoutMs;
   const configuredRetryCount = retryOnNon200 ? normalizeClassifierNon200RetryCount(retryOnNon200RepeatTimes) : 0;
   const configuredCooldownMs = normalizeClassifierNon200RetryCooldownMs(retryOnNon200CooldownMs);
   let automaticRetryCount = 0;
@@ -229,14 +416,21 @@ async function callApiCompatibleClassifier({
   // every retry and a detached snapshot for the optional inspection output,
   // so concurrent graph code cannot mutate a shared State object between
   // retries and make the diagnostic disagree with the wire payload.
+  const checkPreparation = () => {
+    throwIfAborted(signal, providerLabel);
+    if (Date.now() >= deadline) throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
+  };
+  assertClassifierResourceLimits(request, checkPreparation);
   const requestJson = JSON.stringify(request);
-  const requestBody = JSON.parse(requestJson) as ApiCompatibleRequest;
-  // Validation must use the same detached contract sent on the wire, not live
-  // graph inputs that another branch may mutate while the request is pending.
-  const responseQuestions = Object.entries(requestBody.questions).map(([questionId, question]) => ({
-    ...question,
-    questionId,
-  }));
+  if (maxRequestBytes !== undefined && new TextEncoder().encode(requestJson).byteLength >= maxRequestBytes) {
+    throw new Error(
+      `${providerLabel} request must be smaller than ${maxRequestBytes / 1_000_000} MB, including State, images, and questions. Resize images or reduce input content.`,
+    );
+  }
+  const requestBody = JSON.parse(requestJson) as Record<string, unknown>;
+  checkPreparation();
+  // The snapshot boundary already detached every question before IO.
+  const responseQuestions = questions;
 
   for (;;) {
     throwIfAborted(signal, providerLabel);
@@ -263,6 +457,7 @@ async function callApiCompatibleClassifier({
       response = await waitForAttempt(
         fetchImplementation(endpoint, {
           method: 'POST',
+          redirect: 'error',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: requestJson,
           signal: controller.signal,
@@ -330,25 +525,29 @@ async function callApiCompatibleClassifier({
 
     let body: unknown;
     try {
-      body = await waitForAttempt(response.json(), controller.signal);
+      body = await waitForAttempt(
+        readClassifierResponse(response, controller.signal, assertAttemptActive),
+        controller.signal,
+      );
       assertAttemptActive();
     } catch (error) {
+      discardResponseBody(response);
       if (signal.aborted) throwAbort(signal, providerLabel);
       if (controller.signal.aborted || Date.now() >= deadline) {
         throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
       }
+      if (error instanceof ClassifierResourceLimitError) throw error;
       throw new Error(`${providerLabel} returned an invalid JSON response.`, { cause: error });
     } finally {
       cleanupAttempt();
     }
-    const validatedResponse = validateApiCompatibleClassifierResponse(body, responseQuestions, providerLabel);
+    const validatedResponse = validateResponse(body, responseQuestions, providerLabel);
     return {
       requestBody,
       response: validatedResponse,
-      // The validator only accepts an object-shaped JSON response and returns
-      // that exact parsed value; do not project it through Rivet's aggregate
-      // answer contract before exposing the optional diagnostic output.
-      responseBody: validatedResponse as unknown as Record<string, unknown>,
+      // Expose native JSON, not the adapter's Rivet answer projection. The
+      // validators accept only object-shaped provider envelopes.
+      responseBody: body as Record<string, unknown>,
     };
   }
 }
@@ -438,104 +637,4 @@ function getRetryDelayMs(retryAfter: string | null, attempt: number, deadline: n
     }
   }
   return Math.max(0, Math.min(requestedMs ?? 250 * 2 ** (attempt - 1), deadline - Date.now()));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Inherited values are not fields of the provider's JSON response. */
-function responseField(record: Record<string, unknown>, key: string): unknown {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-function requireResponseNumber(value: unknown, label: string, providerLabel: string): void {
-  // Check JSON-compatible representation only, never the provider's numeric
-  // range, normalization, precision or derived relationships.
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`${providerLabel} response has invalid ${label}.`);
-  }
-}
-
-function requireResponseMap(
-  value: unknown,
-  expectedKeys: readonly string[],
-  label: string,
-  providerLabel: string,
-): Record<string, unknown> {
-  if (!isRecord(value)) throw new Error(`${providerLabel} response has invalid ${label}.`);
-  const actualKeys = Object.keys(value);
-  if (
-    actualKeys.length !== expectedKeys.length ||
-    expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
-  ) {
-    throw new Error(`${providerLabel} response has inconsistent ${label} keys.`);
-  }
-  return value;
-}
-
-function requireProbabilityMap(value: unknown, keys: readonly string[], label: string, providerLabel: string): void {
-  const probabilities = requireResponseMap(value, keys, label, providerLabel);
-  for (const key of keys) requireResponseNumber(probabilities[key], `${label}.${key}`, providerLabel);
-}
-
-export function validateApiCompatibleClassifierResponse(
-  body: unknown,
-  questions: readonly ClassifierQuestionDefinition[],
-  providerLabel = 'Classifier provider',
-): ClassifierEvaluationResponse {
-  const model = isRecord(body) ? responseField(body, 'model') : undefined;
-  const answers = isRecord(body) ? responseField(body, 'answers') : undefined;
-  const usage = isRecord(body) ? responseField(body, 'usage') : undefined;
-  if (!isRecord(body) || typeof model !== 'string' || model.trim() === '' || !isRecord(answers) || !isRecord(usage)) {
-    throw new Error(`${providerLabel} returned an invalid response shape.`);
-  }
-  const expectedIds = questions.map((question) => question.questionId);
-  const answerIds = Object.keys(answers);
-  if (
-    answerIds.length !== expectedIds.length ||
-    expectedIds.some((id) => !Object.prototype.hasOwnProperty.call(answers, id))
-  ) {
-    throw new Error(`${providerLabel} response does not match the submitted question IDs.`);
-  }
-
-  for (const question of questions) {
-    const answer = answers[question.questionId];
-    if (!isRecord(answer) || responseField(answer, 'type') !== question.type) {
-      throw new Error(`${providerLabel} response type does not match question '${question.questionId}'.`);
-    }
-    if (question.type === 'choice') {
-      const choiceQuestion = question as ClassifierChoiceQuestionDefinition;
-      const keys = Object.keys(choiceQuestion.criteria);
-      const choice = responseField(answer, 'choice');
-      if (typeof choice !== 'string' || !Object.prototype.hasOwnProperty.call(choiceQuestion.criteria, choice)) {
-        throw new Error(`${providerLabel} response chose an unknown option for '${question.questionId}'.`);
-      }
-      requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
-      requireProbabilityMap(
-        responseField(answer, 'probabilities'),
-        keys,
-        `${question.questionId}.probabilities`,
-        providerLabel,
-      );
-    } else if (question.type === 'score') {
-      const scoreQuestion = question as ClassifierScoreQuestionDefinition;
-      requireResponseNumber(responseField(answer, 'score'), `${question.questionId}.score`, providerLabel);
-      requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
-      const keys = scoreQuestion.criteria.map((_, index) => String(index));
-      requireProbabilityMap(
-        responseField(answer, 'probabilities'),
-        keys,
-        `${question.questionId}.probabilities`,
-        providerLabel,
-      );
-      requireResponseMap(responseField(answer, 'legend'), keys, `${question.questionId}.legend`, providerLabel);
-    } else {
-      requireResponseNumber(responseField(answer, 'noul'), `${question.questionId}.noul`, providerLabel);
-    }
-  }
-
-  requireResponseNumber(responseField(usage, 'input_tokens'), 'usage.input_tokens', providerLabel);
-  requireResponseNumber(responseField(usage, 'output_tokens'), 'usage.output_tokens', providerLabel);
-  return body as ClassifierEvaluationResponse;
 }

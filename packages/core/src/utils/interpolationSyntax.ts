@@ -54,8 +54,9 @@ export function isInterpolationRegexLiteralStart(value: string, index: number): 
   return previousIndex < 0 || REGEX_LITERAL_PREFIX_CHARACTERS.has(value[previousIndex]!);
 }
 
-function getEscapedTripleTokenEnd(template: string, start: number): number | undefined {
+function getEscapedTripleTokenEnd(template: string, start: number, check?: () => void): number | undefined {
   for (let cursor = start + 3; cursor < template.length - 2; cursor += 1) {
+    if ((cursor & 4095) === 0) check?.();
     if (template[cursor] === '}' && template[cursor + 1] === '}' && template[cursor + 2] === '}') {
       return cursor + 3;
     }
@@ -67,7 +68,7 @@ function getEscapedTripleTokenEnd(template: string, start: number): number | und
 type TokenScanResult = { kind: 'closed'; end: number } | { kind: 'nested'; start: number } | { kind: 'unclosed' };
 
 /** Finds a matching `}}` while allowing JSONPath filters, quotes, and braces. */
-function scanInterpolationToken(template: string, start: number): TokenScanResult {
+function scanInterpolationToken(template: string, start: number, check?: () => void): TokenScanResult {
   let quote: '"' | "'" | '`' | undefined;
   let regex = false;
   let regexCharacterClass = false;
@@ -76,6 +77,7 @@ function scanInterpolationToken(template: string, start: number): TokenScanResul
   let braceDepth = 0;
 
   for (let cursor = start + 2; cursor < template.length; cursor += 1) {
+    if ((cursor & 4095) === 0) check?.();
     const character = template[cursor]!;
 
     if (regex) {
@@ -83,7 +85,11 @@ function scanInterpolationToken(template: string, start: number): TokenScanResul
         regexCharacterClass = true;
       } else if (character === ']' && !isInterpolationSyntaxCharacterEscaped(template, cursor)) {
         regexCharacterClass = false;
-      } else if (character === '/' && !regexCharacterClass && !isInterpolationSyntaxCharacterEscaped(template, cursor)) {
+      } else if (
+        character === '/' &&
+        !regexCharacterClass &&
+        !isInterpolationSyntaxCharacterEscaped(template, cursor)
+      ) {
         regex = false;
       }
       continue;
@@ -162,11 +168,16 @@ function scanInterpolationToken(template: string, start: number): TokenScanResul
  * the rest of the execution runtime. The returned spans are fresh data and
  * exclude escaped triple-brace tokens.
  */
-export function scanInterpolationTokenSpans(template: string): InterpolationTokenSpan[] {
+export function scanInterpolationTokenSpans(
+  template: string,
+  check?: () => void,
+  tokenLimit = Infinity,
+): InterpolationTokenSpan[] {
   const spans: InterpolationTokenSpan[] = [];
   let searchIndex = 0;
 
   while (searchIndex < template.length) {
+    check?.();
     const start = template.indexOf('{{', searchIndex);
 
     if (start === -1) {
@@ -174,14 +185,14 @@ export function scanInterpolationTokenSpans(template: string): InterpolationToke
     }
 
     if (template[start + 2] === '{') {
-      const escapedEnd = getEscapedTripleTokenEnd(template, start);
+      const escapedEnd = getEscapedTripleTokenEnd(template, start, check);
       if (escapedEnd !== undefined) {
         searchIndex = escapedEnd;
         continue;
       }
     }
 
-    const scanResult = scanInterpolationToken(template, start);
+    const scanResult = scanInterpolationToken(template, start, check);
 
     if (scanResult.kind === 'nested') {
       searchIndex = scanResult.start;
@@ -201,6 +212,7 @@ export function scanInterpolationTokenSpans(template: string): InterpolationToke
       continue;
     }
 
+    if (spans.length >= tokenLimit) throw new Error('Interpolation template has too many tokens.');
     spans.push({
       start,
       end: scanResult.end,

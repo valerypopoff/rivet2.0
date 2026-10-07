@@ -336,6 +336,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await expect(evaluate.locator('.port-label', { hasText: /^Question 1$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Answers$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Cost$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(0);
   await expect(evaluate).not.toContainText('Batch: one request');
   const evaluateBodyFields = evaluate.locator('.llm-node-body-label');
@@ -355,7 +356,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
   await modelSection.click();
@@ -369,7 +370,18 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await modelSection.click();
   await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await editor.getByRole('button', { name: 'Classifier settings', exact: true }).click();
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
+  await expect(editor.getByText(/A missing key fails without fallback/)).toBeVisible();
+  await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByRole('button', { name: 'Classifier settings', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await editor.getByRole('button', { name: 'Automatic', exact: true }).click();
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
   const outputsHeading = editor.getByText('Outputs', { exact: true });
@@ -405,7 +417,9 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
 test('Classifier nodes are available from the built-in Classifier add-node group', async ({ page }) => {
   const editor = await openFixture(page);
   const canvas = editor.locator('.node-canvas');
-  await canvas.click({ button: 'right', position: { x: 1_400, y: 500 } });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await canvas.click({ button: 'right', position: { x: bounds!.width - 40, y: Math.min(500, bounds!.height - 40) } });
 
   const addNode = editor.locator('.context-menu-label-text', { hasText: 'Add node' });
   await expect(addNode).toHaveText('Add node');
@@ -420,4 +434,72 @@ test('Classifier nodes are available from the built-in Classifier add-node group
   await expect(editor.locator('.context-menu-label-text', { hasText: 'Classifier Evaluate' })).toHaveText(
     'Classifier Evaluate',
   );
+});
+
+test('Liquid AI selection exposes d1 and independent configured credentials without changing questions', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(evaluate).toContainText('Provider: Liquid AI');
+  // This migrated legacy node pins jev-latest. Switching provider must not
+  // silently rewrite that explicit contract; clearing it selects Liquid's default.
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'd1');
+  await expect(evaluate).toContainText('Model: d1');
+  await expect(editor.locator('input[value="liquidApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toHaveCount(0);
+  await expect(choice).toContainText('Type: Choice');
+  await expect(choice).toContainText('Route {{subject}}');
+
+  const programmaticName = editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true });
+  await programmaticName.fill('myLiquidKey');
+  await programmaticName.blur();
+  await provider.fill('Jev');
+  await provider.press('Enter');
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
+  await expect(evaluate).toContainText('Model: jev-latest');
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(programmaticName).toHaveValue('myLiquidKey');
+  await expect(evaluate).toContainText('Model: d1');
+});
+
+test('OpenAI Decisions selection exposes its model, credentials and single multimodal State input', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await expect(evaluate.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await expect(evaluate.locator('.port-label', { hasText: /^State$/ })).toHaveCount(1);
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('OpenAI');
+  await provider.press('Enter');
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'gpt-6-luna');
+  await expect(evaluate).toContainText('Provider: OpenAI');
+  await expect(evaluate).toContainText('Model: gpt-6-luna');
+  await expect(editor.locator('input[value="openAiApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="OPENAI_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toHaveCount(0);
+  await choice.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByText('Question images', { exact: true })).toHaveCount(0);
+  await expect(editor.locator('input#useImagesInput')).toHaveCount(0);
+  await expect(choice).toContainText('Route {{subject}}');
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
 });

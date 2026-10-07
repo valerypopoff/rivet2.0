@@ -83,6 +83,59 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ## Model-node error behavior
 
+Classifier Evaluate's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
+Decisions (`gpt-6-luna`). The hosted
+editor uses Core's ordered registry for provider/model defaults and the shared
+Settings → Classifier credentials page; its environment shim enumerates the
+registry's default names, including `LIQUID_API_KEY` and `OPENAI_API_KEY`, before Node execution.
+Evaluate's single State port accepts text, native images, base64 image strings,
+and assembled user messages or ordered mixed arrays. There is no separate Images
+port. Question definitions remain text/JSON only; question-level image fields
+fail with guidance to use Evaluate's State. Unsupported models reject images rather than
+dropping them. OpenAI request/answer adaptation retains the existing node output
+and error contracts without image-based batching or aggregate diagnostic envelopes.
+For a message array, wire text and image Parts into each Assemble Message, then
+combine its Message outputs with Assemble Prompt and connect Prompt directly to
+State (Array's Output is also supported). Assemble Prompt accepts scalar messages
+and message arrays, preserving numeric port order and content/message boundaries;
+its optional empty-message filter retains image-only messages. Classifier State
+ignores Anthropic cache-breakpoint metadata, not the message's evidence. Static
+User Type and input-supplied `user` roles are supported. OpenAI Decisions accepts
+only User messages (not the Chat/Responses role set); unsupported assembled roles
+fail before HTTP. OpenAI retains each message boundary; System One flattens
+accepted message content without pretending it supports chat roles.
+Each evaluation captures its request configuration once and uses one absolute
+deadline across request preparation, retries and response validation.
+Credentialed classifier requests never follow redirects.
+Classifier credential UI presents Automatic (legacy `configured`), strict
+Classifier settings, and Input port. Preserve existing source values; do not
+silently change old graphs' key precedence. Strict saved-key selection must not
+fall back through the hosted environment shim or general OpenAI credentials.
+The editor shows source policy, not secret values or guesses about remote state.
+Question preparation uses its own bounded, cancellation-aware interpolation
+path before JSON parsing. Hosted wrappers use the same Core behavior.
+Estimated Cost is available only for verified requested/returned model pairs,
+including documented context-dependent rates. Unknown pricing excludes Cost
+without turning a successful evaluation into a failure or fabricating zero.
+Classifier preparation and response receipt use Core's shared resource limits;
+the wrapper must not duplicate them or bypass the bounded response stream reader.
+Evaluate exposes an always-on numeric Cost port for the normal graph accumulator,
+independent of its optional Usage details. Unknown cost is excluded, not zero.
+The hosted observer verifies this port alongside the existing migrated outputs.
+Core uses one question validator at the node and provider boundaries. Structured
+State and question entries must be plain JSON data: accessors, serialization
+hooks and sparse arrays fail before HTTP rather than changing the captured request.
+Multimodal message and native-image fields must likewise be own data properties;
+their getters are rejected without execution rather than allowing evidence to
+change between type detection and encoding.
+The same own-data rule covers active input ports and their Rivet type/value
+wrappers; unused ports are not read. Core rejects malformed UTF-8 provider JSON
+instead of replacing characters, and never retries a malformed successful body.
+Nested Question arrays are flattened by index with cycle detection, not custom iterators.
+No wrapper-specific provider adapter or TypeSafe plugin is needed. The shared
+question format, credential isolation and HTTP contract are documented in
+[Classifier nodes](../CLASSIFIER-NODES.md).
+
 LLM Chat and Classifier Evaluate expose `Fail on non-2XX status code` and
 `Catch all failures` in their Error behavior group. The node-owned fields are
 `errorOnNon200` (default true, including older nodes without this field) and

@@ -424,11 +424,19 @@ for (const phase of ['headers', 'body'] as const) {
       const response = successfulResponse('classifier');
       if (phase === 'headers') await new Promise((resolve) => setTimeout(resolve, 40));
       else {
-        const readJson = response.json.bind(response);
-        response.json = async () => {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-          return readJson();
-        };
+        return new Response(
+          new ReadableStream({
+            async start(controller) {
+              await new Promise((resolve) => setTimeout(resolve, 40));
+              try {
+                controller.enqueue(new TextEncoder().encode(await response.text()));
+                controller.close();
+              } catch {
+                /* Cancelled reader. */
+              }
+            },
+          }),
+        );
       }
       return response;
     };
@@ -512,9 +520,7 @@ for (const phase of ['headers', 'body'] as const) {
   test(`Classifier timeout settles when ${phase} ignores the abort signal`, { timeout: 1_000 }, async () => {
     globalThis.fetch = async () => {
       if (phase === 'headers') return new Promise<Response>(() => undefined);
-      const response = successfulResponse('classifier');
-      response.json = () => new Promise(() => undefined);
-      return response;
+      return new Response(new ReadableStream({ pull: () => new Promise(() => undefined) }));
     };
     const outputs = await classifier({ timeoutMs: 10, catchRequestFailed: true }).process(questions, context());
     assert.equal(get(outputs, 'runFailed')?.value, true);

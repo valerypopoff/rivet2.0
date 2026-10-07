@@ -20,6 +20,7 @@ import {
   resolveInterpolationExpressionRawValue,
   restoreEscapedInterpolationTokens,
   unwrapPotentialDataValue,
+  type InterpolationGuard,
 } from '../../utils/interpolation.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 
@@ -45,18 +46,6 @@ function isEscapedCharacter(value: string, index: number): boolean {
 
 function isUnescapedQuoteAt(value: string, index: number): boolean {
   return index >= 0 && index < value.length && value[index] === '"' && !isEscapedCharacter(value, index);
-}
-
-function isInsideJsonString(value: string, index: number): boolean {
-  let insideString = false;
-
-  for (let i = 0; i < index; i++) {
-    if (isUnescapedQuoteAt(value, i)) {
-      insideString = !insideString;
-    }
-  }
-
-  return insideString;
 }
 
 function stringifyJsonValue(value: any): string {
@@ -95,9 +84,12 @@ export function interpolateJsonTemplate(
   graphInputNodeValues?: Record<string, DataValue>,
   contextValues?: Record<string, DataValue>,
   globalValues?: Record<string, unknown>,
+  guard?: InterpolationGuard,
+  unwrapVariableDataValues = false,
 ): string {
+  guard?.check();
   const protectedBaseString = protectEscapedInterpolationTokens(baseString);
-  const parsedTemplate = parseInterpolationTemplate(protectedBaseString);
+  const parsedTemplate = parseInterpolationTemplate(protectedBaseString, guard?.check, guard?.tokenLimit);
 
   if (parsedTemplate.tokens.length === 0) {
     return restoreEscapedInterpolationTokens(protectedBaseString);
@@ -105,10 +97,26 @@ export function interpolateJsonTemplate(
 
   let result = '';
   let cursor = 0;
+  let quoteCursor = 0;
+  let insideString = false;
+  let escaped = false;
+  const append = (fragment: string) => {
+    guard?.output(fragment, result.length);
+    result += fragment;
+  };
 
   for (const token of parsedTemplate.tokens) {
     const tokenSpan = token.span;
-    const isInsideString = isInsideJsonString(protectedBaseString, tokenSpan.start);
+    guard?.check();
+    // Scan authored quotes once, including token contents, matching the old
+    // per-token scan without repeatedly walking the entire template prefix.
+    for (; quoteCursor < tokenSpan.start; quoteCursor++) {
+      if ((quoteCursor & 4095) === 0) guard?.check();
+      const character = protectedBaseString[quoteCursor];
+      if (character === '"' && !escaped) insideString = !insideString;
+      escaped = character === '\\' && !escaped;
+    }
+    const isInsideString = insideString;
     const isWholeQuotedToken =
       isInsideString &&
       isUnescapedQuoteAt(protectedBaseString, tokenSpan.start - 1) &&
@@ -121,27 +129,28 @@ export function interpolateJsonTemplate(
           graphInputValues: graphInputNodeValues,
           contextValues,
           globalValues,
-          unwrapVariableDataValues: false,
+          unwrapVariableDataValues,
+          guard,
         })
       : undefined;
 
     // Restore escaped delimiters only from the authored JSON template. An
     // interpolated string may itself contain literal interpolation syntax and
     // must not be processed again while the final JSON is assembled.
-    result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor, replacementStart));
+    append(restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor, replacementStart)));
 
     if (isInsideString && !isWholeQuotedToken) {
-      result += stringifyEmbeddedJsonStringFragment(value);
+      append(stringifyEmbeddedJsonStringFragment(value));
     } else if (isWholeQuotedToken) {
-      result += stringifyWholeQuotedJsonValue(value);
+      append(stringifyWholeQuotedJsonValue(value));
     } else {
-      result += stringifyJsonValue(value);
+      append(stringifyJsonValue(value));
     }
 
     cursor = replacementEnd;
   }
 
-  result += restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor));
+  append(restoreEscapedInterpolationTokens(protectedBaseString.slice(cursor)));
   return result;
 }
 

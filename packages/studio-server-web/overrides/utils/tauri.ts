@@ -58,7 +58,7 @@ export function getDefaultPathPolicyProvider(): PathPolicyProvider {
         throw new Error(`Failed to read relative project file: ${response.status} ${response.statusText}`);
       }
 
-      const { contents } = await response.json() as { contents: string };
+      const { contents } = (await response.json()) as { contents: string };
       return contents;
     },
   };
@@ -81,7 +81,7 @@ export async function getEnvVar(name: string): Promise<string | undefined> {
         return undefined;
       }
 
-      const data = await response.json() as { value?: unknown };
+      const data = (await response.json()) as { value?: unknown };
       if (typeof data.value !== 'string') {
         return undefined;
       }
@@ -116,7 +116,15 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     ? { extraEnvVarNames: optionsOrExtraEnvVarNames }
     : optionsOrExtraEnvVarNames;
   const environmentProvider = options.environmentProvider ?? getDefaultEnvironmentProvider();
-  const getProviderEnvVar = (name: string) => environmentProvider.getEnvVar(name);
+  const lookups = new Map<string, Promise<string | undefined>>();
+  const getProviderEnvVar = (name: string) => {
+    let value = lookups.get(name);
+    if (!value) {
+      value = environmentProvider.getEnvVar(name);
+      lookups.set(name, value);
+    }
+    return value;
+  };
   const resolveSetting = (value: string | undefined, envVarName: string) =>
     value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
   const pluginEnvVarNames = new Set<string>(getClassifierProviderEnvironmentVariableNames());
@@ -146,7 +154,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
   }
 
   const [openAiKey, openAiOrganization, openAiEndpoint, pluginEnvEntries] = await Promise.all([
-    resolveSetting(settings.openAiKey, 'OPENAI_API_KEY'),
+    resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
     resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
     resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
     Promise.all(
@@ -157,6 +165,7 @@ export async function fillMissingSettingsFromEnvironmentVariables(
   const fullSettings: Settings = {
     ...settings,
     openAiKey: openAiKey ?? '',
+    openAiApiKey: openAiKey ?? '',
     openAiOrganization: openAiOrganization ?? '',
     openAiEndpoint: openAiEndpoint ?? '',
     pluginSettings: settings.pluginSettings,
