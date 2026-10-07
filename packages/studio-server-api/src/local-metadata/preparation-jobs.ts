@@ -5,10 +5,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import {
   LOCAL_UPGRADE_PREPARATION_KINDS,
+  LOCAL_UPGRADE_FAILURE_REASONS,
   type LocalUpgradePreparation,
 } from '../../../studio-server-shared/local-upgrade-types.js';
 import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
 import { createHttpError } from '../utils/httpError.js';
+import { duplicateRepairAnalysisSchema } from './duplicate-project-repair.js';
+import { localUpgradeFailure } from './upgrade-diagnostics.js';
 
 export class LocalUpgradeDrainTimeoutError extends Error {
   constructor() {
@@ -45,7 +48,7 @@ const schema = z
     kind: z.enum(LOCAL_UPGRADE_PREPARATION_KINDS),
     revision: z.number().int().positive(),
     phase: z.enum(['running', 'ready', 'failed', 'interrupted']),
-    stage: z.enum(['inspect', 'pause', 'fingerprint', 'backup']),
+    stage: z.enum(['inspect', 'pause', 'fingerprint', 'backup', 'repair']),
     inventory: z
       .object({
         source: z.record(z.string(), z.string()),
@@ -78,6 +81,29 @@ const schema = z
       .optional(),
     fingerprint: z.object({ pausedAt: z.string(), sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
     error: z.string().max(512).optional(),
+    requestHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    repairAnalysis: duplicateRepairAnalysisSchema.optional(),
+    failure: z
+      .object({
+        reason: z
+          .enum(
+            Object.keys(LOCAL_UPGRADE_FAILURE_REASONS) as [
+              keyof typeof LOCAL_UPGRADE_FAILURE_REASONS,
+              ...(keyof typeof LOCAL_UPGRADE_FAILURE_REASONS)[],
+            ],
+          )
+          .optional(),
+        sourceReference: z
+          .string()
+          .regex(/^[a-f0-9]{16}$/)
+          .optional(),
+        code: z.string().max(64),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 const failure =
@@ -160,7 +186,7 @@ export class LocalUpgradePreparationJobs {
     }
   }
   async start(
-    input: Pick<LocalUpgradePreparation, 'id' | 'kind' | 'revision'>,
+    input: Pick<LocalUpgradePreparation, 'id' | 'kind' | 'revision' | 'requestHash'>,
     work: (
       job: LocalUpgradePreparation,
       stage: (value: LocalUpgradePreparation['stage']) => Promise<void>,
@@ -172,7 +198,11 @@ export class LocalUpgradePreparationJobs {
     try {
       const previous = await this.status();
       if (previous?.id === input.id) {
-        if (previous.kind !== input.kind || previous.revision !== input.revision)
+        if (
+          previous.kind !== input.kind ||
+          previous.revision !== input.revision ||
+          previous.requestHash !== input.requestHash
+        )
           throw createHttpError(409, 'Preparation request identity differs.');
         return previous;
       }
@@ -180,7 +210,12 @@ export class LocalUpgradePreparationJobs {
       const job: LocalUpgradePreparation = {
         ...input,
         phase: 'running',
-        stage: input.kind === 'pause-backup' ? 'inspect' : input.kind,
+        stage:
+          input.kind === 'pause-backup' || input.kind === 'repair-inspect'
+            ? 'inspect'
+            : input.kind === 'repair-recover'
+              ? 'repair'
+              : input.kind,
       };
       this.#id = job.id;
       this.#admittingId = job.id;
@@ -207,6 +242,12 @@ export class LocalUpgradePreparationJobs {
           } catch (error) {
             job.phase = 'failed';
             job.error = error instanceof LocalUpgradeDrainTimeoutError ? error.message : failure;
+            const diagnostic = localUpgradeFailure('preflight', error);
+            job.failure = {
+              code: diagnostic.code,
+              reason: diagnostic.reason,
+              sourceReference: diagnostic.sourceReference,
+            };
             delete job.fingerprint;
             // A large informational result must not prevent retaining failure.
             if (Buffer.byteLength(JSON.stringify(job)) > maxBytes) delete job.inventory;

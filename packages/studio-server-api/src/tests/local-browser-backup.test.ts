@@ -8,6 +8,7 @@ import {
   browserBackupDirectory,
   createBrowserBackupArchive,
   hashBackupArchive,
+  invalidateBrowserBackup,
   readBrowserBackup,
   restoreBrowserBackupArchive,
   saveBrowserBackup,
@@ -149,6 +150,35 @@ test('backup status rejects corrupt metadata, inconsistent readiness and archive
     await fs.writeFile(path.join(control, 'browser-backup.json'), JSON.stringify({ ...state, phase: 'ready' }));
     await assert.rejects(readBrowserBackup(control), /archive evidence/);
     await assert.rejects(saveBrowserBackup(control, { ...state, archiveHash: 'a'.repeat(64) }), /archive evidence/);
+  });
+});
+
+test('invalidating obsolete backup evidence preserves corrupt status and archives without requiring a read', async () => {
+  await fixture(async (_source, control, state) => {
+    await invalidateBrowserBackup(control);
+    const directory = browserBackupDirectory(control, state.id);
+    await fs.mkdir(directory, { recursive: true });
+    const archive = Buffer.from('retained old archive fixture');
+    await fs.writeFile(path.join(directory, 'backup.tar.gz'), archive);
+    const contents = '{obsolete corrupt private metadata';
+    await fs.writeFile(path.join(control, 'browser-backup.json'), contents);
+    await assert.rejects(readBrowserBackup(control));
+    await invalidateBrowserBackup(control);
+    assert.equal(await readBrowserBackup(control), null);
+    const retained = (await fs.readdir(control)).filter((name) => name.startsWith('browser-backup-invalidated-'));
+    assert.equal(retained.length, 1);
+    assert.equal(await fs.readFile(path.join(control, retained[0]!), 'utf8'), contents);
+    assert.deepEqual(await fs.readFile(path.join(directory, 'backup.tar.gz')), archive);
+    await invalidateBrowserBackup(control);
+    await saveBrowserBackup(control, state);
+    assert.deepEqual(
+      await readBrowserBackup(control),
+      state,
+      'new verified backup workflow can publish a fresh status',
+    );
+    await fs.rm(path.join(control, 'browser-backup.json'));
+    await fs.mkdir(path.join(control, 'browser-backup.json'));
+    await assert.rejects(invalidateBrowserBackup(control), /Invalid backup status entry/);
   });
 });
 

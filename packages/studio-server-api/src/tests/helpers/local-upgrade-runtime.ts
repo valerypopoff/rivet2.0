@@ -442,6 +442,172 @@ try {
       console.error = originalLog;
       await listener.close();
     }
+  } else if (command === 'duplicate-repair') {
+    await initializeWorkflowStorage();
+    const { createApiApp } = await import('../../app.js');
+    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+      'Content-Type': 'application/json',
+      'X-Rivet-Migration-Intent': '1',
+      Origin: listener.baseUrl,
+    };
+    const url = `${listener.baseUrl}/api/app-settings/local-upgrade`;
+    const source = localMetadataSourceRoots();
+    const status = () => fetch(url, { headers }).then((response) => response.json());
+    const waitFor = async (predicate: (value: Awaited<ReturnType<typeof status>>) => boolean) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const value = await status();
+        if (predicate(value)) return value;
+        if (Date.now() > deadline) throw new Error('Repair fixture deadline exceeded.');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+    const post = (suffix: string, body: object, auth = true) =>
+      fetch(`${url}${suffix}`, {
+        method: 'POST',
+        headers: auth ? headers : { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    try {
+      const original = await fs.readFile(path.join(source.workflows, 'story.rivet-project'), 'utf8');
+      await fs.writeFile(path.join(source.workflows, 'Copy.rivet-project'), original);
+      const revision = (await status()).transition.revision;
+      const inspect = { id: randomUUID(), kind: 'pause-backup', revision };
+      assert.equal((await post('/preparation', inspect, false)).status, 403);
+      assert.equal((await post('/preparation', inspect)).status, 202);
+      const failed = await waitFor((value) => value.preparation?.phase === 'failed');
+      assert.equal(failed.preparation.failure.reason, 'project-id-duplicate');
+      assert.equal(failed.maintenance, null);
+      const preview = failed.preparation.repairAnalysis;
+      assert.equal(preview.groups.length, 1);
+      const input = {
+        id: randomUUID(),
+        kind: 'repair',
+        revision,
+        repairChoices: {
+          token: preview.token,
+          retainReferences: true,
+          groups: [{ projectId: preview.groups[0].projectId, keeperPath: 'story.rivet-project', historyOwners: {} }],
+        },
+      };
+      const controlRoot = process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!;
+      await fs.writeFile(path.join(controlRoot, 'browser-backup.json'), '{corrupt obsolete backup status');
+      assert.equal((await post('/preparation', input)).status, 202);
+      const done = await waitFor((value) => value.preparation?.id === input.id && value.preparation.phase === 'ready');
+      assert.equal(done.repair.phase, 'complete');
+      assert.equal(done.backup, null);
+      assert.equal(done.backupStatusUnreadable, false);
+      assert.equal(done.preparation.stage, 'inspect');
+      const invalidated = (await fs.readdir(controlRoot)).filter((name) =>
+        name.startsWith('browser-backup-invalidated-'),
+      );
+      assert.equal(invalidated.length, 1);
+      assert.equal(
+        await fs.readFile(path.join(controlRoot, invalidated[0]!), 'utf8'),
+        '{corrupt obsolete backup status',
+      );
+      assert.ok(done.maintenance && done.drain.ready);
+      assert.equal(done.preparation.inventory.inventory.projects, 2);
+      assert.equal(done.preparation.repairAnalysis.groups.length, 0);
+      assert.equal(await fs.readFile(path.join(source.workflows, 'story.rivet-project'), 'utf8'), original);
+      assert.equal(
+        (await post('/preparation', input)).status,
+        202,
+        'lost acknowledgement must not allocate different IDs',
+      );
+      assert.equal(
+        (await post('/preparation', { ...input, repairChoices: { ...input.repairChoices, token: 'f'.repeat(64) } }))
+          .status,
+        409,
+      );
+      assert.equal((await fetch(`${url}/repair/download?id=${done.repair.id}`)).status, 403);
+      assert.equal(
+        (
+          await fetch(`${url}/repair/download?id=${done.repair.id}`, {
+            headers: { ...headers, 'Sec-Fetch-Site': 'cross-site' },
+          })
+        ).status,
+        403,
+      );
+      const download = await fetch(`${url}/repair/download?id=${done.repair.id}`, { headers });
+      assert.equal(download.status, 200);
+      assert.match(download.headers.get('content-disposition')!, /attachment/);
+      assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
+      await download.arrayBuffer();
+      const file = path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'duplicate-project-repair.json');
+      const journal = JSON.parse(await fs.readFile(file, 'utf8'));
+      await fs.writeFile(file, JSON.stringify({ ...journal, phase: 'applying' }));
+      const marker = path.join(source.appData, 'vm-migration-maintenance.json');
+      const markerContents = await fs.readFile(marker);
+      await fs.rm(marker);
+      try {
+        assert.throws(assertLocalMetadataWritesAllowed, /Finish the interrupted/);
+        await fs.writeFile(file, '{}');
+        assert.throws(assertLocalMetadataWritesAllowed, /phase|Required/);
+      } finally {
+        await fs.writeFile(file, JSON.stringify({ ...journal, phase: 'applying' }));
+        await fs.writeFile(marker, markerContents);
+      }
+      const { leaveVmMigrationMaintenance } = await import('../../vm-migration-maintenance.js');
+      await assert.rejects(leaveVmMigrationMaintenance(), /Finish the interrupted/);
+      assert.equal(isVmMigrationMaintenanceActive(), true, 'general maintenance recovery cannot bypass repair');
+      assert.equal((await post('/action', { action: 'cancel', revision })).status, 409);
+      assert.equal((await post('/preparation', { id: randomUUID(), kind: 'backup', revision })).status, 409);
+      // Hold a status read after it has captured obsolete ready evidence. The
+      // repair can complete across this await; that evidence must not reappear.
+      const backupFile = path.join(controlRoot, 'browser-backup.json');
+      await fs.writeFile(
+        backupFile,
+        JSON.stringify({
+          id: randomUUID(),
+          revision,
+          pausedAt: done.maintenance.enteredAt,
+          phase: 'ready',
+          sourceFingerprint: 'a'.repeat(64),
+          archiveHash: 'b'.repeat(64),
+          bytes: 1,
+          createdAt: '2026-10-08T00:00:00Z',
+        }),
+      );
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const captured = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let held = false;
+      const originalRead = fs.readFile;
+      const reader = mock.method(fs, 'readFile', async (...args: Parameters<typeof fs.readFile>) => {
+        const result = await originalRead(...args);
+        if (String(args[0]) === backupFile && !held) {
+          held = true;
+          entered();
+          await gate;
+        }
+        return result;
+      });
+      const staleStatus = status();
+      try {
+        await captured;
+        const recover = { id: randomUUID(), kind: 'repair-recover', revision };
+        assert.equal((await post('/preparation', recover)).status, 202);
+        assert.equal(
+          (await waitFor((value) => value.preparation?.id === recover.id && value.preparation.phase === 'ready')).repair
+            .phase,
+          'complete',
+        );
+      } finally {
+        release();
+        reader.mock.restore();
+      }
+      assert.equal((await staleStatus).backup, null, 'a status read crossing invalidation cannot revive old evidence');
+    } finally {
+      await listener.close();
+    }
   } else if (command === 'background-preparation') {
     await initializeWorkflowStorage();
     const { createApiApp } = await import('../../app.js');

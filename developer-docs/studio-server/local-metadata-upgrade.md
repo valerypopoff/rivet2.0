@@ -230,6 +230,113 @@ available for deployments whose gateway cannot accommodate those checks.
 
 ## Deployment preparation
 
+### Guided duplicate project-ID repair
+
+The authenticated **Local storage upgrade** panel can repair conflicting project
+IDs before a candidate has been certified. A duplicate found during source
+inspection exposes a preview automatically; **Inspect conflicting IDs** can also
+start read-only discovery. These scans and repairs use the existing retained
+preparation worker and return HTTP 202 before traversing source data. Fixed
+preparation failure reasons are retained, rather than only a generic error.
+VM inventory now uses the same bounded project/publication reader as conversion.
+
+For every conflicting group the operator chooses the file retaining the original
+ID and confirms an owner for every archived publication. Exact paths or a unique
+basename after a move provide suggestions, not ownership proof. Active publication
+ownership is constrained; projects receiving new IDs must first be unpublished.
+All current files and archived versions are retained. The official project
+serializer preserves parsed project fields and attached data, with a semantic
+round-trip check. Reassigned snapshot metadata and publication hashes are updated
+using unchanged dataset contents; historical paths, comments, stars and timestamps
+remain intact. Datasets, recording payloads and project settings/stats are not
+rewritten or deleted.
+
+Existing ID-only references, recordings, schedules, evaluations and LLM health
+history remain attached to the operator-selected original-ID owner. The UI shows
+discovered referring projects and recording/operational row counts and requires
+explicit acknowledgement of this policy. This is not an automatic redistribution
+of ambiguous operational history. LLM-health counts also recognize older JSON
+identities when the scalar project-ID column is absent or null, without backfilling
+or mutating the operational database. Discovery scans current drafts and active
+published endpoint/web-app snapshots, including authored graphs and prefab
+source nodes, without invoking strict bundle resolution. Active snapshot hashes
+participate in preview freshness even when the caller itself has a unique ID.
+Missing active snapshots and missing prefab definitions are visible warnings
+that reference discovery is incomplete; they are not silently discarded or repaired.
+Preview output is capped at 512 KiB, discovery at 10,000 entries per collection,
+and retained changed-document payloads at 128 MiB.
+Preparation admission bodies are capped at 1 MiB to accommodate ownership choices
+without using the smaller generic migration-command limit. Ownership selects use
+the same dark control/option treatment as other Studio Server modals.
+
+Repair repeats discovery against the preview token after pausing and draining all
+writers, then again immediately before publishing its journal. It retains a private
+before/after patch plus manifest in `project-id-repairs/<uuid>/`, creates
+`repair-backup.tar.gz`, extracts it and verifies every file hash before the first
+source mutation. Only changed project/history documents are included; no recording
+expansion is involved. Failed preparation removes its own unreferenced patch only.
+The authenticated `/local-upgrade/repair/download?id=<uuid>` route rechecks the
+archive checksum and enforces the same download-origin guard and `nosniff`
+attachment handling as full backups; this backup contains private project/attached data.
+
+`duplicate-project-repair.json` is atomically replaced and fsynced before file
+replacement. Its `applying` phase fences copy, backup and normal legacy recovery,
+including the general maintenance-resume helper. Synchronous write admission
+also checks the journal independently of the maintenance marker, so losing the
+marker cannot revive normal writes during an unfinished repair. The small leaf
+journal reader is bounded at 1 MiB, validates UTF-8/schema and rejects read drift;
+it does not import the discovery, project parser or storage repositories into write
+admission. Corrupt/unreadable journal state fails closed. The reload reminder
+directs pending repairs to recovery instead of offering unchanged legacy cancellation.
+Completed ID repairs are retained when resuming legacy; the recovery button names
+this explicitly. Each source replacement
+checks expected bytes and uses same-directory atomic rename plus directory sync.
+Recovery removes only its exact journal-owned incomplete staging file. Restart
+does not silently resume the worker:
+**Finish interrupted project-ID repair** explicitly replays the saved patch, after
+checking the identity of all four original source roots, transition revision,
+maintenance session, archive and all source/patch hashes. Unexpected foreign edits
+cannot be overwritten. Once all replacements finish, the journal becomes `complete`;
+subsequent source inventory
+may still expose unrelated defects without undoing a completed repair. The worker
+then switches to the `inspect` stage, so a separate inventory failure is not
+reported as failure to apply the repair.
+
+Pre-repair browser backup evidence is invalidated before writes by atomically
+renaming the old status to a private `browser-backup-invalidated-<uuid>.json`.
+The record is not parsed: corrupt obsolete status cannot block repair/recovery.
+Unexpected filesystem entry types still fail closed. Original status bytes and
+archive directories are preserved; no previous backup is certified for the repaired
+source. The UI clears old attestations, and a fresh full verified migration
+backup/download remains required before copying. A repair backup is not a complete
+installation backup and does not
+replace off-VM disaster recovery. Retained completed repair directories are not
+automatically deleted. Recovery requires preserving the control volume and source
+mounts; do not remove the maintenance marker or repair journal manually.
+
+Generated-fixture tests cover history/attached-data preservation, stale choices,
+active publication ownership, published-only references and snapshot freshness,
+unresolved library warnings, retained ID-keyed references/payloads, partial
+application/staging recovery, unexpected edits, archive damage, malformed metadata
+and corrupt/oversized journals. Recovery with
+changed source roots is rejected. The API fixture removes the maintenance marker
+and verifies that pending or unreadable repair journals still block normal writes.
+Tests also cover a crash after the final replacement (unique IDs do not imply
+durable completion), read-only legacy health counting, and obsolete corrupt backup
+status preservation/invalidation.
+Backup status reads crossing invalidation recheck the activity revision; a held
+read of obsolete ready evidence cannot republish it after repair completes.
+Isolated API rehearsal covers authentication, idempotency and recovery fences;
+Playwright covers ownership confirmation, reopening an interrupted repair and
+disabled controls for unreadable status. Repair ownership and consent are reset
+when the preview becomes stale/hidden and later current again; the panel key
+follows the usable preview, not an ineligible retained result.
+Progress remains attached to the repair controls across its pause/repair/inspection
+stages instead of also spinning the independent source-inspection button.
+Browser coverage checks that a subsequent inspection failure retains the completed
+repair result and legacy recovery option while copying still requires fresh backup
+evidence.
+
 ### UI-owned preparation (normal single-host Compose path)
 
 The current production/staging and dev Compose definitions reserve the existing

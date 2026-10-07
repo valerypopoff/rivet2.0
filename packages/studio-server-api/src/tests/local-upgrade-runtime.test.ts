@@ -349,6 +349,14 @@ describe('isolated local upgrade runtime scenarios', { concurrency }, () => {
   const scenarios: { name: string; run: () => Promise<void> }[] = [];
   const scenario = (name: string, run: () => Promise<void>) => scenarios.push({ name, run });
   scenario(
+    'guided duplicate identity repair is authenticated, replayable and cannot bypass recovery fences',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('duplicate-repair');
+      });
+    },
+  );
+  scenario(
     'background preparation accepts before inspection, recovers lost responses and keeps all safety gates',
     async () => {
       await fixture(async (_source, _control, command) => {
