@@ -146,6 +146,31 @@ test('recordings catalog reuses cached project IDs without reopening unpublished
   assert.equal(reads.filter((file) => file === published.absolutePath).length, 2);
 });
 
+test('recordings catalog resolves project identity when metadata cache writes are denied', async (t) => {
+  const published = await workflowMutations.createWorkflowProjectItem('', 'Read-only catalog');
+  await workflowMutations.publishWorkflowProjectItem(published.relativePath, { endpointName: 'read-only-catalog' });
+  assert.ok(published.projectMetadataId);
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(published.absolutePath);
+  await fs.rm(cachePath);
+  const writeFile = fs.writeFile;
+  let deniedWrites = 0;
+  let code = 'EROFS';
+  t.mock.method(fs, 'writeFile', (...args: Parameters<typeof fs.writeFile>) => {
+    if (args[0] === cachePath) {
+      deniedWrites++;
+      return Promise.reject(Object.assign(new Error('Cache write denied'), { code }));
+    }
+    return Reflect.apply(writeFile, fs, args);
+  });
+
+  for (code of ['EROFS', 'EACCES']) {
+    const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+    assert.deepEqual(catalog.workflows.map((workflow) => workflow.workflowId), [published.projectMetadataId]);
+    await assert.rejects(fs.stat(cachePath), { code: 'ENOENT' });
+  }
+  assert.equal(deniedWrites, 2);
+});
+
 test('recordings catalog matches a moved unpublished project by its cached ID', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'MovedCachedProject');
   assert.ok(created.projectMetadataId);

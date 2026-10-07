@@ -1,16 +1,23 @@
 import { performance } from 'node:perf_hooks';
-import { NodeDatasetProvider, deserializeDatasets, loadProjectAndAttachedDataFromString, loadProjectFromString, type Project } from '@valerypopoff/rivet2-node';
+import {
+  NodeDatasetProvider,
+  deserializeDatasets,
+  loadProjectAndAttachedDataFromString,
+  loadProjectFromString,
+  type Project,
+  type ResolvedSubgraphProject,
+  type SubgraphProjectTarget,
+} from '@valerypopoff/rivet2-node';
 import type { Pool } from 'pg';
-import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
 
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import { getManagedWorkflowProjectVirtualPath, resolveManagedWorkflowRelativeReference } from '../virtual-paths.js';
 import {
-  ManagedWorkflowExecutionInvalidationController,
+  type ManagedWorkflowExecutionInvalidationController,
   MANAGED_WORKFLOW_EXECUTION_INVALIDATION_RETRY_LIMIT,
 } from './execution-invalidation.js';
-import { ManagedWorkflowExecutionCache, type ManagedRevisionMaterializationCacheEntry, type ManagedWorkflowRunKind } from './execution-cache.js';
+import type { ManagedWorkflowExecutionCache, ManagedRevisionMaterializationCacheEntry, ManagedWorkflowRunKind } from './execution-cache.js';
 import type {
   ManagedExecutionProjectResult,
   ManagedExecutionPointerLookupResult,
@@ -120,7 +127,7 @@ export class ManagedWorkflowExecutionService {
             continue;
           }
 
-          const project = await service.#loadExecutionReferencedProjectByRelativePath(relativePath);
+          const project = await service.#loadExecutionReferencedProjectByRelativePath(relativePath, reference.id);
           if (project) {
             return project;
           }
@@ -415,30 +422,24 @@ export class ManagedWorkflowExecutionService {
 
   async #loadExecutionReferencedProjectByRelativePath(
     relativePath: string,
-    options: {
-      remainingInvalidationRetries?: number;
-    } = {},
+    expectedWorkflowId: string,
   ): Promise<Project | null> {
     return this.#loadExecutionReferencedProject(
       () => this.#getWorkflowByRelativePath(this.#pool, relativePath),
-      options,
+      expectedWorkflowId,
     );
   }
 
-  async #loadExecutionReferencedProjectById(
-    workflowId: string,
-    options: {
-      remainingInvalidationRetries?: number;
-    } = {},
-  ): Promise<Project | null> {
+  async #loadExecutionReferencedProjectById(workflowId: string): Promise<Project | null> {
     return this.#loadExecutionReferencedProject(
       () => this.#getWorkflowById(this.#pool, workflowId),
-      options,
+      workflowId,
     );
   }
 
   async #loadExecutionReferencedProject(
     loadWorkflow: () => Promise<ManagedExecutionWorkflowRecord | null>,
+    expectedWorkflowId: string,
     options: {
       remainingInvalidationRetries?: number;
     } = {},
@@ -452,12 +453,18 @@ export class ManagedWorkflowExecutionService {
 
     if (this.#invalidationController.shouldRetryAfterResolve(resolveSnapshot, workflow.workflow_id)) {
       if (remainingInvalidationRetries > 0) {
-        return this.#loadExecutionReferencedProject(loadWorkflow, {
+        return this.#loadExecutionReferencedProject(loadWorkflow, expectedWorkflowId, {
           remainingInvalidationRetries: remainingInvalidationRetries - 1,
         });
       }
 
       throw createHttpError(503, 'Referenced workflow changed while loading. Retry the request.');
+    }
+
+    // A hint may now name another project after a move or path reuse. It is
+    // discovery only; do not read that project's revision or bypass ID lookup.
+    if (workflow.workflow_id !== expectedWorkflowId) {
+      return null;
     }
 
     const revisionId = workflow.published_revision_id ?? workflow.current_draft_revision_id;
@@ -474,7 +481,7 @@ export class ManagedWorkflowExecutionService {
         workflow.workflow_id,
         workflowSnapshot,
         remainingInvalidationRetries,
-        (nextRetries) => this.#loadExecutionReferencedProject(loadWorkflow, {
+        (nextRetries) => this.#loadExecutionReferencedProject(loadWorkflow, expectedWorkflowId, {
           remainingInvalidationRetries: nextRetries,
         }),
         'Referenced workflow changed while loading. Retry the request.',
@@ -489,13 +496,17 @@ export class ManagedWorkflowExecutionService {
         workflow.workflow_id,
         workflowSnapshot,
         remainingInvalidationRetries,
-        (nextRetries) => this.#loadExecutionReferencedProject(loadWorkflow, {
+        (nextRetries) => this.#loadExecutionReferencedProject(loadWorkflow, expectedWorkflowId, {
           remainingInvalidationRetries: nextRetries,
         }),
         'Referenced workflow changed while loading. Retry the request.',
       );
       if (retryAfterProjectLoad) {
         return retryAfterProjectLoad;
+      }
+
+      if (project.metadata.id !== expectedWorkflowId) {
+        throw createHttpError(500, `Referenced project ${expectedWorkflowId} has a mismatched saved identity.`);
       }
 
       return project;

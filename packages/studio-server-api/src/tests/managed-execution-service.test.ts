@@ -52,7 +52,9 @@ function createExecutionServiceFixture(options: {
 }) {
   const cache = new ManagedWorkflowExecutionCache();
   const { controller, listener } = createControllerFixture();
-  const projectContents = createBlankProjectFile('Managed Cache');
+  const [project] = loadProjectAndAttachedDataFromString(createBlankProjectFile('Managed Cache'));
+  project.metadata.id = 'workflow-a' as ProjectId;
+  const projectContents = serializeProject(project) as string;
   const workflow: ManagedExecutionWorkflowRecord = {
     workflow_id: 'workflow-a',
     relative_path: 'Managed Cache.rivet-project',
@@ -532,6 +534,94 @@ test('reference loading reuses revision materialization cache once the revision 
   assert.equal(fixture.readRevisionContentsCount, 1);
   assert.equal(fixture.getWorkflowByRelativePathCount, 2);
 });
+
+test('reference loading skips a stale path hint for another workflow without reading its artifact', async () => {
+  const fixture = createExecutionServiceFixture({
+    getWorkflowByRelativePath: async (relativePath) => ({
+      workflow_id: 'unrelated-workflow',
+      relative_path: relativePath,
+      current_draft_revision_id: 'unrelated-revision',
+      published_revision_id: 'unrelated-revision',
+    }),
+  });
+  await fixture.controller.initialize();
+  try {
+    const result = await fixture.service.createProjectReferenceLoader().loadProject(
+      getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
+      { id: fixture.workflow.workflow_id, hintPaths: ['./Old Location.rivet-project'] },
+    );
+    assert.equal(result.metadata.id, fixture.workflow.workflow_id);
+    assert.equal(fixture.getWorkflowByIdCount, 1);
+    assert.equal(fixture.readRevisionContentsCount, 1);
+  } finally {
+    await fixture.controller.dispose();
+  }
+});
+
+test('reference loading rejects a materialized project with a foreign identity', async () => {
+  const fixture = createExecutionServiceFixture({
+    readRevisionContents: async () => ({
+      contents: createBlankProjectFile('Foreign Project'),
+      datasetsContents: null,
+    }),
+  });
+  await fixture.controller.initialize();
+  try {
+    await assert.rejects(
+      fixture.service.createProjectReferenceLoader().loadProject(
+        getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
+        { id: fixture.workflow.workflow_id },
+      ),
+      /mismatched saved identity/,
+    );
+  } finally {
+    await fixture.controller.dispose();
+  }
+});
+
+for (const stage of ['resolve', 'materialize'] as const) {
+  test(`reference retries preserve identity when a hinted path is reused during ${stage}`, async () => {
+    let pathLookups = 0;
+    let invalidated = false;
+    const fixture = createExecutionServiceFixture({
+      getWorkflowByRelativePath: async (relativePath) => {
+        pathLookups++;
+        if (pathLookups > 1) {
+          return {
+            workflow_id: 'unrelated-workflow',
+            relative_path: relativePath,
+            current_draft_revision_id: 'unrelated-revision',
+            published_revision_id: 'unrelated-revision',
+          };
+        }
+        if (stage === 'resolve') {
+          fixture.controller.markWorkflowChanged('workflow-a');
+        }
+        return fixture.workflow;
+      },
+      readRevisionContents: async () => {
+        if (stage === 'materialize' && !invalidated) {
+          invalidated = true;
+          fixture.controller.markWorkflowChanged('workflow-a');
+        }
+        return { contents: fixture.projectContents, datasetsContents: null };
+      },
+    });
+    await fixture.controller.initialize();
+    try {
+      const result = await fixture.service.createProjectReferenceLoader().loadProject(
+        getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
+        { id: fixture.workflow.workflow_id, hintPaths: ['./Old Location.rivet-project'] },
+      );
+      assert.equal(result.metadata.id, fixture.workflow.workflow_id);
+      assert.equal(pathLookups, 2);
+      assert.equal(fixture.getWorkflowByIdCount, 1);
+      assert.equal(fixture.readRevisionContentsCount, 1);
+    } finally {
+      await fixture.controller.dispose();
+    }
+  });
+}
 
 test('reference loading propagates real operational failures after a hint resolves to a real workflow', async () => {
   const fixture = createExecutionServiceFixture({
