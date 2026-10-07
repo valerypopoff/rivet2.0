@@ -437,14 +437,20 @@ test('JSON object drafts stay with their owner and formatting acknowledgements p
   await frame.locator('.node[data-nodeid="shared-node"] .edit-button').dispatchEvent('click');
   await expect(view).toContainText('original');
   await edit('{"marker":');
-  const draft = await view.innerText();
+  // Monaco renders model edits asynchronously. Capture the draft only after
+  // both its visible text and validation settle, never during the empty render
+  // between select-all/delete and insertion (especially on hosted CI runners).
+  await expect(view).toContainText('{"marker":');
   const error = frame.locator('.row.jsonObject .node-editor-code-helper-after');
   await expect(error).toBeVisible();
+  const draft = await view.innerText();
   const errorText = await error.innerText();
   await row('B').dblclick();
   await frame.locator('.node[data-nodeid="shared-node"] .edit-button').dispatchEvent('click');
   await expect(view).toContainText('original');
   await edit('{"marker":"B"}');
+  await expect(view).toHaveText('{"marker":"B"}');
+  await expect(error).toHaveCount(0);
   await tab('A').click();
   await expect(view).toHaveText(draft);
   await expect(error).toHaveText(errorText);
