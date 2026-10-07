@@ -218,7 +218,7 @@ test('trusted provider numbers survive every output and failure-control combinat
     assert.deepEqual(outputs.answers!.value, body.answers);
     // Unsafe accounting inputs omit calculated cost, never rewrite Usage or fail.
     assert.deepEqual(outputs.usage!.value, body.usage);
-    const hasFailureOutputs = data.catchRequestFailed || !data.errorOnNon200;
+    const hasFailureOutputs = data.catchRequestFailed;
     assert.equal(outputs.runFailed?.value, hasFailureOutputs ? false : undefined);
     assert.equal(outputs.runError?.type, hasFailureOutputs ? 'control-flow-excluded' : undefined);
     assert.equal(outputs.requestBody !== undefined, data.outputRequestBody);

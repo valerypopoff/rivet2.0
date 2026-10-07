@@ -388,8 +388,16 @@ Status travels over authenticated, unbuffered `/__rivet_dev/events` SSE. Connect
 loss reconnects without reloading or discarding the workspace.
 Initial connection failure is visible even before the first status arrives.
 
-The development notice shows building/failure/update status. Automatic refresh
-requires all project tabs to be clean with known baselines, no active saves,
+The development notice shows building/failure/update status, horizontally centered
+at the bottom of the full browser viewport. Build errors, reconnect notices,
+checkpoint status and the safe-refresh action share that position. Keep 16px side
+gutters, wrap long messages/actions on narrow screens, and bound the notice to
+the viewport height with internal scrolling for tall errors. Center with auto margins
+rather than a transform: transforming this parent would constrain its fixed
+full-viewport refresh shield to the banner. The tunnel browser fixture measures
+centering at desktop/mobile widths, short-screen vertical gutters/scrolling,
+and the shield's viewport coverage and hit testing outside the notice.
+Automatic refresh requires all project tabs to be clean with known baselines, no active saves,
 loads, bridge commands, graph/Evaluation runs or editor modal work, and a freshly
 committed, reloadable browser checkpoint. The iframe is briefly input-locked;
 the parent rechecks permission synchronously immediately before navigation.
@@ -1704,6 +1712,10 @@ The background filesystem scan stats recording metadata in bounded batches rathe
 During a rebuild, workflow display metadata is selected from the newest completed bundle for that workflow. Filesystem directory order must not let an older recording overwrite a newer project name or path in the rebuilt index.
 
 `GET /api/workflows/recordings/workflows` and ordinary run pages read indexed metadata only; they do not decompress recording/replay bundles. The workflow list also skips graph/node project statistics and aggregate web-app publication comparisons because the Run recordings UI does not use them. If this endpoint approaches an outer-proxy timeout, inspect SQLite health and API logs first: the number or compressed size of recording payloads should no longer be part of its synchronous request cost.
+
+For the filesystem workflow list, project IDs come from the existing recording-index path mapping or the validated project metadata already returned by `getWorkflowProject`. Never re-deserialize every project without recordings solely to retrieve its cached ID; that includes unpublished projects later excluded from the picker. A cold/stale project cache can still require one source parse, and endpoint publication-status checks still hash source files. Diagnose those stages separately from the recording-count SQL and from main-thread contention; timing a separate SQLite or filesystem probe does not measure in-process deserialization or API event-loop delay. This catalog route does not currently attach the optional `x-duration-ms` middleware.
+
+Apply that discovery boundary to filesystem published-project references too: fallback ID search uses validated project-index metadata, then materializes and checks the selected live/published project. `filesystem-execution-cache.test.ts` covers unrelated-source read avoidance, missing-ID fallback, stale-cache refresh without executing an unpublished draft, and rejection of a cache claiming the wrong identity. Do not reuse this shortcut for authoritative save reconciliation. Single-recording deletion uses `hasWorkflowRecordingRuns` as an indexed existence probe including failed and child runs, not a complete row-list read; `filesystem-recordings-root.test.ts` verifies final-recording cleanup and bounded deletion reads after draining fixture-triggered background retention.
 
 Recording persistence is intentionally backgrounded after an HTTP or WebSocket action result is ready. On `SIGTERM`/`SIGINT`, the API first marks readiness as draining, stops accepting new web-app actions, and closes HTTP acceptance. Existing HTTP connections and accepted web-app runs may finish within `RIVET_SHUTDOWN_GRACE_SECONDS` (default `120s`). At the deadline, Rivet aborts tracked HTTP graph processors before forcing their client connections closed; it closes upgraded WebSocket clients without interrupting their accepted durable action processors, which can reconnect to another execution replica. Terminal WebSocket hooks can therefore enqueue their final recorders before the recording queue is flushed and managed Postgres connections are disposed. A hard kill, host failure, exhausted drain deadline, or exhausted recording queue can still prevent a recording from being stored; workflow execution results remain independent and queue drops/errors are logged under `[workflow-recordings]`.
 

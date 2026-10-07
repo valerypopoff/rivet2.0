@@ -371,6 +371,45 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
   assert.doesNotMatch(body.text, /Batch: one request/);
 });
 
+test('Classifier failure ports depend only on Catch all failures for every provider and HTTP policy', async () => {
+  for (const provider of classifierProviders) {
+    for (const catchRequestFailed of [undefined, false, true]) {
+      for (const errorOnNon200 of [undefined, false, true]) {
+        const node = evaluateNode({ provider: provider.id, catchRequestFailed, errorOnNon200 });
+        const ids = node.getOutputDefinitions().map(({ id }) => id);
+        assert.deepEqual(ids, [
+          'answers',
+          'usage',
+          'cost',
+          ...(catchRequestFailed === true ? ['runFailed', 'runError'] : []),
+        ]);
+        let requests = 0;
+        globalThis.fetch = async () => {
+          requests++;
+          return new Response('Rejected test request', { status: 400 });
+        };
+        const execution = node.process(
+          { question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Question?' } } },
+          context({ settings: { classifierProviders: { [provider.id]: { apiKey: 'test-key' } } } }),
+        );
+        if (catchRequestFailed === true || errorOnNon200 === false) {
+          const outputs = await execution;
+          assert.deepEqual(Object.keys(outputs), ids);
+          for (const id of ['answers', 'usage', 'cost'])
+            assert.equal(outputs[id as PortId]?.type, 'control-flow-excluded');
+          if (catchRequestFailed === true) {
+            assert.equal(outputs.runFailed?.value, true);
+            assert.match(String(outputs.runError?.value), /400/);
+          }
+        } else {
+          await assert.rejects(execution, /400/);
+        }
+        assert.equal(requests, 1);
+      }
+    }
+  }
+});
+
 test('Classifier Evaluate sends an empty string when optional State is omitted', async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_url, init) => {
@@ -469,7 +508,7 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
     requestNode.getOutputDefinitions().find((output) => output.id === 'requestBody'),
     {
       id: 'requestBody',
-      title: 'Classifier request body',
+      title: 'Request body',
       dataType: 'object',
     },
   );
@@ -477,7 +516,7 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
     responseNode.getOutputDefinitions().find((output) => output.id === 'responseBody'),
     {
       id: 'responseBody',
-      title: 'Classifier response body',
+      title: 'Response body',
       dataType: 'object',
     },
   );

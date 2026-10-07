@@ -83,6 +83,17 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ## Model-node error behavior
 
+The shared Image file picker (`ImageBrowserEditor.tsx`) receives bytes and the
+selected filename from the IO provider. Infer its Media Type from that filename,
+not the editor's data-field key; `.jpg`/`.jpeg` files must be labeled `image/jpeg`.
+This applies to hosted and desktop editors and leaves the selected bytes unchanged.
+Unknown extensions retain the existing PNG fallback, and binary/base64 inputs
+still use the authored Media Type. Existing saved images are not relabeled:
+reselect the file or correct Media Type manually if an older import used PNG.
+Classifier validation must continue rejecting mismatched headers/media types.
+The headless classifier observer covers JPEG (including uppercase `.JPG`), PNG
+and GIF selections through the real Image editor and browser file-input path.
+
 Classifier Evaluate's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
 Decisions (`gpt-6-luna`). The hosted
 editor uses Core's ordered registry for provider/model defaults and the shared

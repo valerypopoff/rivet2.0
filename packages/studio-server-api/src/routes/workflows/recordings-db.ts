@@ -651,6 +651,12 @@ export async function getWorkflowRecordingRunRow(recordingId: string): Promise<W
   return row ? normalizeWorkflowRecordingRunRow(row) : null;
 }
 
+/** Include all statuses and child runs; cleanup only needs to know whether any row remains. */
+export async function hasWorkflowRecordingRuns(workflowId: string): Promise<boolean> {
+  const db = await getDatabase();
+  return Boolean(db.prepare('SELECT 1 FROM recording_runs WHERE workflow_id = ? LIMIT 1').get(workflowId));
+}
+
 export async function listWorkflowRecordingRunRowsForWorkflow(workflowId: string): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
   const rows = db

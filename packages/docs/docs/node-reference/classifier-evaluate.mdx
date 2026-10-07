@@ -35,9 +35,9 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 - **Answers** (`object`): aggregate answer map keyed by Question ID.
 - **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled and pricing is known, includes `totalCost` in USD using the matched model's rate and context tier; output tokens contribute $0 for the currently priced models.
 - **Cost** (`number`): estimated USD cost, included in automatic graph-cost accounting regardless of the Usage-details setting. Excluded when the cost cannot be calculated.
-- **Classifier request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
-- **Classifier response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
-- **Run failed** (`boolean`) and **Run error** (`string`): available when **Fail on non-2XX status code** is disabled or **Catch all failures** is enabled. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
+- **Request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
+- **Response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
+- **Run failed** (`boolean`) and **Run error** (`string`): available only when **Catch all failures** is enabled, independently of **Fail on non-2XX status code**. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
 
 For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a numeric `score` (which can be fractional), `legend`, `probabilities`, and `confidence`; Noul answers contain a numeric `noul` probability. These values come from the provider; Rivet does not enforce their numerical ranges.
 
@@ -59,7 +59,7 @@ For OpenAI `gpt-6-luna` Decisions, requests with more than 272,000 input tokens 
 
 ## Error behavior
 
-- **Fail on non-2XX status code** is enabled by default. Disable it to route a failed provider HTTP status to Run failed and Run error instead of throwing. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.
+- **Fail on non-2XX status code** is enabled by default. Disable it to suppress failed provider HTTP statuses instead of throwing; unavailable normal outputs are excluded. Run failed and Run error appear only when **Catch all failures** is enabled. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.
 - **Catch all failures** is off by default. Enable it to route node failures, including invalid inputs, missing credentials, transport errors, request timeouts and malformed responses, to the failure outputs. Explicit graph cancellation remains cancellation, not a caught node failure.
 - **Retry on non-200** retries non-authentication, non-validation HTTP failures. **Repeat times** is the number of retries after the initial request; **Cooldown, ms** is the fixed wait between them. Despite the setting's name, a valid response with any successful 2XX status is accepted. Malformed 2XX responses are not retried.
 

@@ -473,6 +473,59 @@ test('Evaluate rejects a legacy custom provider result returned after the origin
   }
 });
 
+test('Suppressed HTTP failures exclude only declared outputs without formatting discarded diagnostics', async () => {
+  let stackReads = 0;
+  const error = Object.assign(new Error('Rejected request'), { status: 400 });
+  Object.defineProperty(error, 'stack', {
+    get: () => {
+      stackReads++;
+      return 'Provider error stack';
+    },
+  });
+  const provider: ClassifierProvider = {
+    id: 'suppressed-http',
+    label: 'Suppressed HTTP',
+    defaultModel: 'test',
+    browserExecutionSupported: false,
+    credentialNames: { programmaticName: 'testKey', environmentVariableName: 'TEST_KEY' },
+    evaluate: async () => {
+      throw error;
+    },
+  };
+  const registry = classifierProviders as ClassifierProvider[];
+  registry.push(provider);
+  try {
+    const node = ClassifierEvaluateNodeImpl.create();
+    const implementation = new ClassifierEvaluateNodeImpl({
+      ...node,
+      data: {
+        ...node.data,
+        provider: provider.id,
+        errorOnNon200: false,
+        catchRequestFailed: false,
+        retryOnNon200: false,
+        outputRequestBody: true,
+        outputResponseBody: true,
+      },
+    });
+    const outputs = await implementation.process(
+      { question1: { type: 'object', value: question } },
+      { ...context(), settings: { testKey: 'test' } },
+    );
+    assert.equal(stackReads, 0);
+    assert.deepEqual(
+      Object.keys(outputs).sort(),
+      implementation
+        .getOutputDefinitions()
+        .map(({ id }) => id)
+        .sort(),
+    );
+    assert.ok(Object.values(outputs).every((output) => output?.type === 'control-flow-excluded'));
+  } finally {
+    registry.splice(registry.indexOf(provider), 1);
+  }
+});
+
 test('Legacy pricing is normalized per call without caching mutable caller metadata', () => {
   const provider = {
     defaultModel: 'custom',

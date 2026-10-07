@@ -184,9 +184,22 @@ This rule also applies to the shared **Instructions type** control. The common M
 
 Noul uses paired `noulTrueCriteria` and `noulFalseCriteria` fields with independent `useNoulTrueCriteriaInput` and `useNoulFalseCriteriaInput` ports. Both descriptions must be present when either is present; both blank omits the optional provider `criteria`. Continue reading `yesMeans`, `noMeans`, and the complete legacy `useCriteriaInput` object so old graphs and their existing `criteria` wires remain executable, but never expose the old **Yes means**/**No means** UI on new editors.
 
-`Classifier Evaluate` follows LLM Chat's opt-in `Outputs` contract: `outputUsage` adds a calculated `totalCost` field to its existing Usage object when the selected provider has static pricing; `outputRequestBody` adds `Classifier request body`, and `outputResponseBody` adds `Classifier response body`. For Jev, `totalCost` is USD input tokens × `$0.042 / 1,000,000` plus free output tokens. Keep that accounting projection separate from the response-body diagnostic: the adapter must return the exact post-serialization request JSON it sends and the complete parsed JSON response it validates; it must never return headers, resolved Rivet-managed API keys, or a Rivet-projected substitute for either body. Authored State or question content remains visible by design and must be treated as sensitive when appropriate. The API-compatible adapter serializes once before retrying so every retry sends the same immutable payload and the diagnostic cannot disagree with the wire request. The response-body output represents the successful response, without Rivet's calculated `totalCost`; transport and validation failures remain ordinary node failures rather than manufacturing a successful output.
+`Classifier Evaluate` follows LLM Chat's opt-in `Outputs` contract: `outputUsage` adds a calculated `totalCost` field to its existing Usage object when the selected provider has static pricing; `outputRequestBody` adds `Request body`, and `outputResponseBody` adds `Response body`. Only the display labels are shortened: port IDs remain `requestBody` and `responseBody`, preserving existing graph connections. For Jev, `totalCost` is USD input tokens × `$0.042 / 1,000,000` plus free output tokens. Keep that accounting projection separate from the response-body diagnostic: the adapter must return the exact post-serialization request JSON it sends and the complete parsed JSON response it validates; it must never return headers, resolved Rivet-managed API keys, or a Rivet-projected substitute for either body. Authored State or question content remains visible by design and must be treated as sensitive when appropriate. The API-compatible adapter serializes once before retrying so every retry sends the same immutable payload and the diagnostic cannot disagree with the wire request. The response-body output represents the successful response, without Rivet's calculated `totalCost`; transport and validation failures remain ordinary node failures rather than manufacturing a successful output.
 
 The final **Error behavior** group mirrors LLM Chat's serialized fields and editor layout: `retryOnNon200`, `retryOnNon200RepeatTimes` (default `1`), and `retryOnNon200CooldownMs` (default `0`). Its opt-in policy retries other non-authentication, non-validation HTTP statuses after the requested fixed cooldown. It does not retry authentication (`401`/`403`) or validation (`400`/`422`) failures. Transport failures and `429`/`529` share an independent budget of two automatic retries; configured retries for other statuses do not replenish it. Mixed error sequences may exceed three requests, but both budgets remain bounded by one Evaluate timeout. Preserve the one serialized request payload across every retry.
+
+Classifier Evaluate exposes **Run failed** and **Run error** only when
+`catchRequestFailed` (**Catch all failures**) is explicitly enabled, independently
+of `errorOnNon200` (**Fail on non-2XX status code**). Disabling the HTTP-status
+failure setting suppresses rejected HTTP requests after retries and excludes
+unavailable normal outputs through the standard node-exclusion helper; it does
+not create failure ports or format diagnostics that will be discarded. With Catch all
+failures enabled, success emits `Run failed: false` and an excluded Run error;
+caught failures emit `Run failed: true` and the error text. Explicit graph
+cancellation remains uncaught. Keep this classifier-specific port policy separate
+from the shared legacy LLM Chat helper defaults. Core tests cover all three
+providers and legacy/missing settings; the headless observer toggles both controls
+and verifies the live canvas ports.
 
 ## Credentials and execution hosts
 

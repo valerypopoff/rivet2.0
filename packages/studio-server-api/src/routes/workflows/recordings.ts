@@ -35,6 +35,7 @@ import {
   getWorkflowRecordingRunRow,
   getWorkflowRecordingStorageState,
   getWorkflowRecordingScopeCounts,
+  hasWorkflowRecordingRuns,
   getWorkflowRecordingWorkflowRowsBySourceProjectPath,
   listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
@@ -424,7 +425,9 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
       includeStats: false,
     });
     const workflowByPath = recordingWorkflowByPath.get(projectPath);
-    let workflowId = workflowByPath?.workflowId ?? '';
+    // getWorkflowProject already resolves the ID through the validated index
+    // cache. Do not deserialize every unrecorded project just to read it again.
+    let workflowId = workflowByPath?.workflowId || project.projectMetadataId || '';
 
     if (!workflowId) {
       try {
@@ -686,8 +689,7 @@ export async function deleteWorkflowRecording(root: string, recordingId: string)
 
   await deleteRecordingRun(row);
 
-  const remainingRuns = await listWorkflowRecordingRunRowsForWorkflow(row.workflowId);
-  if (remainingRuns.length === 0) {
+  if (!(await hasWorkflowRecordingRuns(row.workflowId))) {
     await deleteWorkflowRecordingWorkflowRow(row.workflowId);
     await removeEmptyWorkflowProjectRecordingsRoot(recordingsRoot, row.workflowId);
     return;

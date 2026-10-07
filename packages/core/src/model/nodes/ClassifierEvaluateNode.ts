@@ -12,6 +12,7 @@ import type {
 } from '../NodeBase.js';
 import { nodeDefinition } from '../NodeDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { createExcludedNodeOutputs } from '../NodeExclusionPolicy.js';
 import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownSeparator } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import {
@@ -140,12 +141,12 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       },
     ];
     if (this.data.outputRequestBody === true) {
-      outputs.push({ id: 'requestBody' as PortId, title: 'Classifier request body', dataType: 'object' });
+      outputs.push({ id: 'requestBody' as PortId, title: 'Request body', dataType: 'object' });
     }
     if (this.data.outputResponseBody === true) {
-      outputs.push({ id: 'responseBody' as PortId, title: 'Classifier response body', dataType: 'object' });
+      outputs.push({ id: 'responseBody' as PortId, title: 'Response body', dataType: 'object' });
     }
-    return [...outputs, ...getRunFailureOutputDefinitions(this.data)];
+    return [...outputs, ...getRunFailureOutputDefinitions({ catchRequestFailed: this.data.catchRequestFailed })];
   }
 
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
@@ -243,7 +244,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             dataKey: 'errorOnNon200',
             defaultValue: true,
             helperMessage:
-              'After retries, throw on a rejected HTTP request. When disabled, return Run failed and Run error; unavailable answer outputs are excluded.',
+              'After retries, throw on a rejected HTTP request. When disabled, unavailable outputs are excluded. Run failed and Run error are available only when Catch all failures is enabled.',
           },
           {
             type: 'toggle',
@@ -315,10 +316,12 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       context.signal.throwIfAborted();
       const outputs = await this.processRun(inputs, context);
       context.signal.throwIfAborted();
-      return withRunSuccessOutputs(this.data, outputs);
+      return withRunSuccessOutputs({ catchRequestFailed: this.data.catchRequestFailed }, outputs);
     } catch (error) {
       if (!shouldCatchRunFailure(this.data, error, context.signal)) throw error;
-      return createCaughtRunFailureOutputs(this.getOutputDefinitions(), error);
+      return this.data.catchRequestFailed === true
+        ? createCaughtRunFailureOutputs(this.getOutputDefinitions(), error)
+        : createExcludedNodeOutputs(this.chartNode, this.getOutputDefinitions());
     }
   }
 

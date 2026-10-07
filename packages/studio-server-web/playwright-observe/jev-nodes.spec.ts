@@ -37,6 +37,13 @@ data:
             timeoutMs: 30000
           visualData: 600/180/280/null//
           outgoingConnections: []
+        '[image]:image "Image"':
+          data:
+            useDataInput: false
+            mediaType: image/png
+            useMediaTypeInput: false
+          visualData: 160/500/250/null//
+          outgoingConnections: []
   plugins:
     - type: built-in
       id: typesafe
@@ -396,9 +403,9 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await editor.getByText('Output usage details', { exact: true }).click();
   await expect(editor.locator('input#outputUsage')).toBeChecked();
   await editor.getByText('Output request body', { exact: true }).click();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier request body$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Request body$/ })).toHaveCount(1);
   await editor.getByText('Output response body', { exact: true }).click();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier response body$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Response body$/ })).toHaveCount(1);
   await expect(editor.getByText('Error behavior', { exact: true })).toBeVisible();
   const errorHeading = editor.getByText('Error behavior', { exact: true });
   if ((await errorHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false') {
@@ -502,4 +509,70 @@ test('OpenAI Decisions selection exposes its model, credentials and single multi
   await expect(editor.locator('input#useImagesInput')).toHaveCount(0);
   await expect(choice).toContainText('Route {{subject}}');
   await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+});
+
+test('Classifier failure ports follow Catch all failures independently of the HTTP status toggle', async ({ page }) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await editor.getByText('Error behavior', { exact: true }).click();
+  const catchFailures = editor.locator('input#catchRequestFailed');
+  const failHttp = editor.locator('input#errorOnNon200');
+  const failurePorts = evaluate.locator('.port-label', { hasText: /^(Run failed|Run error)$/ });
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await failHttp.locator('..').click();
+  await expect(failHttp).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+});
+
+test('Image file selection infers Media Type from the selected filename, including JPEG extensions', async ({
+  page,
+}) => {
+  // Exercise the ordinary browser file-input fallback rather than the OS picker.
+  await page.addInitScript(() => {
+    delete (window as any).showOpenFilePicker;
+  });
+  const editor = await openFixture(page);
+  const image = editor.locator('.node[data-nodeid="image"]');
+  await image.locator('button.edit-button').dispatchEvent('click');
+  const imageBytes = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    return {
+      jpeg: canvas.toDataURL('image/jpeg').split(',')[1]!,
+      png: canvas.toDataURL('image/png').split(',')[1]!,
+    };
+  });
+
+  for (const file of [
+    { name: 'photo.JPG', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.jpeg', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.png', mimeType: 'image/png', encoded: imageBytes.png, label: 'PNG' },
+    {
+      name: 'photo.gif',
+      mimeType: 'image/gif',
+      encoded: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      label: 'GIF',
+    },
+  ]) {
+    const chooser = page.waitForEvent('filechooser');
+    await editor.getByRole('button', { name: 'Pick Image', exact: true }).click();
+    await (
+      await chooser
+    ).setFiles({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.encoded, 'base64') });
+    await expect(image).toContainText(`Media Type: ${file.label}`);
+    await expect(editor.getByText('Image selected', { exact: true })).toBeVisible();
+  }
 });
