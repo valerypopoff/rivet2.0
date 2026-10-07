@@ -89,7 +89,6 @@ function bringNodesToFront(nodes: ChartNode[], nodeIdsToFront: NodeId[]): ChartN
 export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
   const selectedNodeIds = useAtomValue(selectedNodesState);
   const selectedBends = useAtomValue(selectedConnectionBendsState);
-  const setSelectedBends = useSetAtom(selectedConnectionBendsState);
   const connections = useAtomValue(connectionsState);
   const selectionScope = useAtomValue(connectionBendSelectionScopeState);
   const isReadOnly = useAtomValue(isReadOnlyGraphState);
@@ -499,7 +498,6 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
             nodeIds: sourceNodeIds,
             delta: actualDelta,
           });
-          setSelectedBends([]);
 
           return;
         }
@@ -558,7 +556,6 @@ export const useDraggingNode = (options: UseDraggingNodeOptions = {}) => {
       canvasPosition.zoom,
       selectionScope,
       isReadOnly,
-      setSelectedBends,
       controlledOnNodesChanged,
       duplicateNodes,
       graphCommandsEnabled,

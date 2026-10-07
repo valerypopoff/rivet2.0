@@ -18,6 +18,15 @@ import { getDefaultNodeColorForType } from './defaultNodeColors.js';
 
 const SINGLE_NODE_DUPLICATE_OFFSET = { x: 80, y: 200 };
 
+function copyConnectionWithOffset(connection: NodeConnection, delta: { x: number; y: number }): NodeConnection {
+  return {
+    ...connection,
+    ...(connection.bendPoint
+      ? { bendPoint: { x: connection.bendPoint.x + delta.x, y: connection.bendPoint.y + delta.y } }
+      : {}),
+  };
+}
+
 export function createAddedNode(options: {
   nodeType: string;
   position: { x: number; y: number };
@@ -153,7 +162,7 @@ export function duplicateNodesWithConnections(options: {
 
     return [
       {
-        ...connection,
+        ...copyConnectionWithOffset(connection, delta),
         inputNodeId: duplicatedInputNodeId,
         outputNodeId: duplicatedNodeIds.get(connection.outputNodeId) ?? connection.outputNodeId,
       },
@@ -205,38 +214,36 @@ export function createPastedNodes(options: {
   connections: NodeConnection[];
   position: { x: number; y: number };
 }) {
+  if (options.nodes.length === 0) return { newNodes: [], newConnections: [] };
   const boundingBox = options.nodes.reduce(
     (accumulator, node) => ({
       minX: Math.min(accumulator.minX, node.visualData.x),
       minY: Math.min(accumulator.minY, node.visualData.y),
-      maxX: Math.max(accumulator.maxX, node.visualData.x + (node.visualData.width ?? 200)),
-      maxY: Math.max(accumulator.maxY, node.visualData.y + 200),
     }),
     {
       minX: Number.MAX_SAFE_INTEGER,
       minY: Number.MAX_SAFE_INTEGER,
-      maxX: Number.MIN_SAFE_INTEGER,
-      maxY: Number.MIN_SAFE_INTEGER,
     },
   );
 
-  const oldNewNodeIdMap: Record<NodeId, NodeId> = {};
+  const oldNewNodeIdMap = new Map<NodeId, NodeId>();
+  const delta = { x: options.position.x - boundingBox.minX, y: options.position.y - boundingBox.minY };
 
   const newNodes = options.nodes.map((node) => {
     const duplicatedNode = cloneDeep(node);
     const newNodeId = newId<NodeId>();
-    oldNewNodeIdMap[node.id] = newNodeId;
+    oldNewNodeIdMap.set(node.id, newNodeId);
 
     duplicatedNode.id = newNodeId;
-    duplicatedNode.visualData.x = options.position.x + (node.visualData.x - boundingBox.minX);
-    duplicatedNode.visualData.y = options.position.y + (node.visualData.y - boundingBox.minY);
+    duplicatedNode.visualData.x = node.visualData.x + delta.x;
+    duplicatedNode.visualData.y = node.visualData.y + delta.y;
 
     return duplicatedNode;
   });
 
   const newConnections = options.connections.flatMap((connection) => {
-    const inputNodeId = oldNewNodeIdMap[connection.inputNodeId];
-    const outputNodeId = oldNewNodeIdMap[connection.outputNodeId];
+    const inputNodeId = oldNewNodeIdMap.get(connection.inputNodeId);
+    const outputNodeId = oldNewNodeIdMap.get(connection.outputNodeId);
 
     if (!inputNodeId || !outputNodeId) {
       return [];
@@ -244,7 +251,7 @@ export function createPastedNodes(options: {
 
     return [
       {
-        ...connection,
+        ...copyConnectionWithOffset(connection, delta),
         inputNodeId,
         outputNodeId,
       },

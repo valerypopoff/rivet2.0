@@ -5,6 +5,7 @@ import {
   type ChartNode,
   type GraphId,
   type NodeId,
+  type NodeConnection,
   type NodePrefabId,
   type Project,
   type ProjectId,
@@ -116,6 +117,104 @@ test('createAddedNode applies configured default colors to supported node types'
   assert.deepEqual(textNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
   assert.deepEqual(promptNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
   assert.deepEqual(objectNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
+});
+
+test('paste and duplicate translate copied bends with their nodes without changing source bends', () => {
+  const registry = createBuiltInRegistry();
+  const source = registry.createDynamic('text');
+  const target = registry.createDynamic('graphOutput');
+  const external = registry.createDynamic('text');
+  source.visualData.x = -100;
+  source.visualData.y = 50;
+  target.visualData.x = 200;
+  target.visualData.y = 150;
+  const internal = {
+    outputNodeId: source.id,
+    outputId: 'output',
+    inputNodeId: target.id,
+    inputId: 'value',
+    bendPoint: { x: 40, y: -60 },
+  } as NodeConnection;
+  const incoming = { ...internal, outputNodeId: external.id, inputNodeId: source.id, bendPoint: { x: -200, y: 75 } };
+  const outgoing = { ...internal, inputNodeId: external.id };
+  const connections = [internal, incoming, outgoing];
+  const original = structuredClone(connections);
+
+  for (const delta of [
+    { x: 500, y: 600 },
+    { x: -300, y: -400 },
+    { x: 0, y: 0 },
+  ]) {
+    const pasted = createPastedNodes({
+      nodes: [source, target],
+      connections,
+      position: { x: source.visualData.x + delta.x, y: source.visualData.y + delta.y },
+    });
+    assert.equal(pasted.newConnections.length, 1, 'paste excludes external links, including across graphs');
+    const duplicated = duplicateNodesWithConnections({
+      nodes: [source, target, external],
+      nodeIds: [source.id, target.id],
+      connections,
+      delta,
+    });
+    assert.equal(
+      duplicated.duplicatedConnections.length,
+      2,
+      'duplicate retains incoming but not outgoing external links',
+    );
+    for (const [copies, originals] of [
+      [pasted.newConnections, [internal]],
+      [duplicated.duplicatedConnections, [internal, incoming]],
+    ] as const) {
+      copies.forEach((copy, index) => {
+        const point = originals[index]!.bendPoint!;
+        assert.deepEqual(copy.bendPoint, { x: point.x + delta.x, y: point.y + delta.y });
+        assert.notEqual(copy.bendPoint, point);
+        copy.bendPoint!.x++;
+      });
+    }
+    assert.deepEqual(connections, original);
+  }
+});
+
+test('pasting an empty cohort is harmless and straight connections stay straight', () => {
+  assert.deepEqual(createPastedNodes({ nodes: [], connections: [], position: { x: 0, y: 0 } }), {
+    newNodes: [],
+    newConnections: [],
+  });
+  const node = createBuiltInRegistry().createDynamic('text');
+  const connection = {
+    outputNodeId: node.id,
+    outputId: 'output',
+    inputNodeId: node.id,
+    inputId: 'input',
+  } as NodeConnection;
+  const pasted = createPastedNodes({ nodes: [node], connections: [connection], position: { x: 100, y: 200 } });
+  assert.equal(pasted.newConnections[0]!.bendPoint, undefined);
+  assert.equal(Object.hasOwn(pasted.newConnections[0]!, 'bendPoint'), false);
+});
+
+test('paste remaps prototype-like node IDs and never mistakes inherited properties for copied nodes', () => {
+  const registry = createBuiltInRegistry();
+  const source = registry.createDynamic('text');
+  const target = registry.createDynamic('graphOutput');
+  source.id = '__proto__' as NodeId;
+  target.id = 'constructor' as NodeId;
+  const internal = {
+    outputNodeId: source.id,
+    outputId: 'output',
+    inputNodeId: target.id,
+    inputId: 'value',
+    bendPoint: { x: 10, y: 20 },
+  } as NodeConnection;
+  const pasted = createPastedNodes({
+    nodes: [source, target],
+    connections: [internal, { ...internal, inputNodeId: 'toString' as NodeId }],
+    position: { x: 0, y: 0 },
+  });
+  assert.equal(pasted.newConnections.length, 1);
+  assert.equal(pasted.newConnections[0]!.outputNodeId, pasted.newNodes[0]!.id);
+  assert.equal(pasted.newConnections[0]!.inputNodeId, pasted.newNodes[1]!.id);
 });
 
 test('createAddedNode leaves node colors untouched when default node colors are disabled or unsupported', () => {
