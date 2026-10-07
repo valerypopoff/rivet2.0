@@ -25,6 +25,7 @@ type UseEditorBridgeEventsOptions = {
   onActiveWorkflowProjectPathChange: (path: string) => void;
   onActiveProjectUnsavedChangesChange: (path: string, hasUnsavedChanges: boolean) => void;
   onEditorReady: (editorInstanceId: string) => void;
+  onEditorInitializationFailed: () => void;
   onProjectConflicts: (snapshot: HostedProjectConflictSnapshot) => void;
   onReconciliationCaptured: (context: HostedProjectReconciliationContext, requestId: string) => void;
   onOpenProjectCountChange: (count: number) => void;
@@ -47,6 +48,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onActiveWorkflowProjectPathChange,
     onActiveProjectUnsavedChangesChange,
     onEditorReady,
+    onEditorInitializationFailed,
     onProjectConflicts,
     onReconciliationCaptured,
     onOpenProjectCountChange,
@@ -154,6 +156,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
       }
 
       switch (event.data.type) {
+        case 'editor-initialization-failed':
+          onEditorInitializationFailed();
+          break;
         case 'editor-ready':
           onEditorReady(event.data.editorInstanceId);
           break;
@@ -213,6 +218,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     onActiveProjectUnsavedChangesChange,
     onActiveWorkflowProjectPathChange,
     onEditorReady,
+    onEditorInitializationFailed,
     onOpenSubgraphTarget,
     onProjectConflicts,
     onReconciliationCaptured,

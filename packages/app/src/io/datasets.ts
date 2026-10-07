@@ -10,10 +10,10 @@ export async function saveDatasetsFile(
   datasetProvider: AppDatasetProvider,
   pathPolicy?: PathPolicyProvider,
 ) {
+  const datasets = await datasetProvider.exportDatasetsForProject(project.metadata.id);
   await (pathPolicy?.allowDataFileNeighbor ?? allowDataFileNeighbor)(projectFilePath);
 
   const dataPath = projectFilePath.replace('.rivet-project', '.rivet-data');
-  const datasets = await datasetProvider.exportDatasetsForProject(project.metadata.id);
 
   if (datasets.length > 0 || (await nativeExists(dataPath))) {
     const serializedDatasets = JSON.parse(serializeDatasets(datasets)) as { datasets: unknown };
@@ -34,6 +34,17 @@ export async function loadDatasetsFile(
   datasetProvider: AppDatasetProvider,
   pathPolicy?: PathPolicyProvider,
 ): Promise<EvaluationDataset[]> {
+  const { datasets, evaluationDatasets } = await readDatasetsFile(projectFilePath, project, pathPolicy);
+  await datasetProvider.importDatasetsForProject?.(project.metadata.id, datasets);
+  return evaluationDatasets;
+}
+
+/** Parse the sidecar without changing the selected project's dataset state. */
+export async function readDatasetsFile(
+  projectFilePath: string,
+  project: Project,
+  pathPolicy?: PathPolicyProvider,
+): Promise<{ datasets: ReturnType<typeof deserializeDatasets>; evaluationDatasets: EvaluationDataset[] }> {
   await (pathPolicy?.allowDataFileNeighbor ?? allowDataFileNeighbor)(projectFilePath);
 
   const datasetsFilePath = projectFilePath.replace('.rivet-project', '.rivet-data');
@@ -42,8 +53,7 @@ export async function loadDatasetsFile(
 
   // No data file, so just no datasets
   if (!datasetsFileExists) {
-    await datasetProvider.importDatasetsForProject?.(project.metadata.id, []);
-    return [];
+    return { datasets: [], evaluationDatasets: [] };
   }
 
   const fileContents = await nativeReadTextFile(datasetsFilePath);
@@ -53,15 +63,17 @@ export async function loadDatasetsFile(
   const evaluationDatasets = Array.isArray(parsed.evaluationDatasets)
     ? (parsed.evaluationDatasets as EvaluationDataset[])
     : [];
-  await datasetProvider.importDatasetsForProject?.(project.metadata.id, datasets);
-  return evaluationDatasets.flatMap((dataset) => {
-    try {
-      const validated = validateEvaluationDataset(dataset);
-      return validated.projectId === undefined || validated.projectId === project.metadata.id ? [validated] : [];
-    } catch {
-      // Evaluation datasets are a legacy migration input. Ignore an invalid
-      // entry rather than preventing the unrelated project data from loading.
-      return [];
-    }
-  });
+  return {
+    datasets,
+    evaluationDatasets: evaluationDatasets.flatMap((dataset) => {
+      try {
+        const validated = validateEvaluationDataset(dataset);
+        return validated.projectId === undefined || validated.projectId === project.metadata.id ? [validated] : [];
+      } catch {
+        // Evaluation datasets are a legacy migration input. Ignore an invalid
+        // entry rather than preventing the unrelated project data from loading.
+        return [];
+      }
+    }),
+  };
 }

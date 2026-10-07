@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { getActiveScheduledRunCount } from './scheduled-runs/activity.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
@@ -241,6 +242,7 @@ async function editorLeaseCount(): Promise<number> {
 export async function localStorageDrainSnapshot(): Promise<{ ready: boolean; blockers: string[] }> {
   const blockers: string[] = [];
   if (getVmMigrationActiveRequestCount() > 0) blockers.push('HTTP requests');
+  if (getActiveScheduledRunCount() > 0) blockers.push('Scheduled runs');
   if (getActiveHttpExecutionCount() > 0) blockers.push('HTTP graph runs');
   if ((getWebAppActionWebSocketRuntime()?.getActiveRunCount() ?? 0) > 0) blockers.push('web-app actions');
   if ((await editorLeaseCount()) > 0) blockers.push('editor graph runs');

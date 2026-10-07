@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { LocalUpgradePreparation } from '../../studio-server-shared/local-upgrade-types';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 test.beforeEach(async ({ page }) => {
@@ -90,6 +91,451 @@ const inventoryFixture = {
   capacity: { payloadBytes: 1024, requiredBytes: 1024, fits: true },
   backupRequired: 'Restore a separate backup.',
 };
+
+test('background preparation survives a gateway error and reopening without repeating inspection or pause', async ({
+  page,
+}) => {
+  let preparation: LocalUpgradePreparation | null = null;
+  let pausedAt: string | null = null;
+  let starts = 0;
+  let legacyCalls = 0;
+  let statusReads = 0;
+  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    const suffix = new URL(route.request().url()).pathname.split('/local-upgrade')[1];
+    if (suffix === '/setup')
+      return route.fulfill({
+        json: {
+          eligible: true,
+          upgradeEnabled: true,
+          controlRootConfigured: true,
+          encryptionKeyReady: true,
+          uiRestartAvailable: true,
+          sqliteSelected: false,
+          liveSqlite: false,
+        },
+      });
+    if (suffix === '/preparation') {
+      starts++;
+      const body = route.request().postDataJSON();
+      expect(body.kind).toBe('pause-backup');
+      preparation = { ...body, phase: 'running', stage: 'inspect' };
+      // The job was accepted, but an edge gateway replaced its acknowledgement.
+      return route.fulfill({
+        status: 524,
+        contentType: 'text/html; charset=UTF-8',
+        body: '<!DOCTYPE html><html>Gateway timeout</html>',
+      });
+    }
+    if (['/inventory', '/fingerprint', '/pause', '/backup'].includes(suffix!)) legacyCalls++;
+    if (suffix === '/action') return route.fulfill({ status: 409, json: { error: 'Owned legacy recovery rejected.' } });
+    statusReads++;
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({ pausedAt, operation: preparation?.phase === 'running' ? preparation.stage : null }),
+        drain: pausedAt
+          ? {
+              ready: preparation?.stage !== 'pause',
+              blockers: preparation?.stage === 'pause' ? ['editor graph runs'] : [],
+            }
+          : null,
+        uiRestartAvailable: true,
+        runtimeReady: true,
+        settingsEncryptionRequired: false,
+        preparationJobsAvailable: true,
+        preparation,
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  const begin = panel.getByRole('button', { name: 'Pause writes and create verified backup', exact: true });
+  await begin.click();
+  await expect(begin).toHaveAttribute('aria-busy', 'true');
+  await expect(panel.getByText('Inspecting source data and checking capacity…', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  const modal = page.getByTestId('app-settings-modal');
+  await modal.getByRole('button', { name: 'Close app settings', exact: true }).click();
+  await openSettings(page);
+  await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  await expect(begin).toHaveAttribute('aria-busy', 'true');
+  expect(starts).toBe(1);
+  pausedAt = '2026-10-07T00:00:00Z';
+  preparation = { ...preparation!, stage: 'pause' };
+  await expect(panel.getByRole('region', { name: 'Source inspection and maintenance' }).getByRole('status')).toHaveText(
+    'Waiting for: editor graph runs.',
+  );
+  await expect(panel.getByRole('button', { name: 'Create verified backup', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  expect(starts).toBe(1);
+  preparation = {
+    ...preparation!,
+    stage: 'backup',
+    inventory: {
+      ...inventoryFixture,
+      inventory: { ...inventoryFixture.inventory, publishedEndpoints: 0 },
+      capacity: { ...inventoryFixture.capacity, freeBytes: 4096, maxPayloadBytes: 8192 },
+    },
+  };
+  await expect(
+    panel.getByText('Creating the backup archive and checking an isolated restore. Writes remain paused…', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  preparation = { ...preparation, phase: 'failed', error: 'Owned preparation failed. Writes remain paused.' };
+  await expect(panel.getByRole('alert')).toContainText('Owned preparation failed. Writes remain paused.');
+  await panel.getByText('Advanced', { exact: true }).click();
+  await expect(panel.getByText(/2 projects, 1 folders/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Create verified backup', exact: true })).toBeEnabled();
+  expect(starts).toBe(1);
+  expect(legacyCalls).toBe(0);
+  await panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true }).click();
+  const recoveryError = panel.getByRole('alert').filter({ hasText: 'Owned legacy recovery rejected.' });
+  await expect(recoveryError).toBeVisible();
+  // The retained preparation still appears in subsequent successful polls.
+  const settledReads = statusReads;
+  await expect.poll(() => statusReads).toBeGreaterThan(settledReads);
+  await expect(recoveryError).toBeVisible();
+});
+
+test('a background fingerprint retry clears other operators old proofs and hides obsolete failures', async ({
+  page,
+}) => {
+  const pausedAt = '2026-10-07T00:00:00Z';
+  const fingerprint = 'a'.repeat(64);
+  let revision = 1;
+  let unreadable = false;
+  let preparation: LocalUpgradePreparation = {
+    id: '42bfd0bf-a606-4af4-a8cd-a0bb94e39c10',
+    kind: 'fingerprint',
+    revision,
+    phase: 'ready',
+    stage: 'fingerprint',
+    fingerprint: { pausedAt, sourceFingerprint: fingerprint },
+  };
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          pausedAt,
+          revision,
+          operation: preparation.phase === 'running' ? 'fingerprint' : null,
+        }),
+        preparationJobsAvailable: true,
+        preparation: unreadable ? null : preparation,
+        preparationStatusUnreadable: unreadable,
+        settingsEncryptionRequired: false,
+      },
+    }),
+  );
+  const panel = await openLocalUpgrade(page);
+  const proof = panel.locator('.local-upgrade-fingerprint');
+  await expect(proof).toContainText(fingerprint);
+  await panel.getByLabel('Backup reference', { exact: true }).fill('owned-independent-backup');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  const restored = panel.getByLabel('I restored a separate backup of all four source roots.');
+  await restored.check();
+  const copy = panel.getByRole('button', { name: 'Copy and verify', exact: true });
+  await expect(copy).toBeEnabled();
+  preparation = {
+    ...preparation,
+    id: 'a2ae9ad3-cdcc-4e88-9d8b-fdb1cfe343f0',
+    phase: 'running',
+    fingerprint: undefined,
+  };
+  await expect(proof).toHaveCount(0);
+  await expect(restored).not.toBeChecked();
+  preparation = { ...preparation, phase: 'failed', error: 'Owned fingerprint attempt failed.' };
+  await expect(panel.getByRole('alert')).toContainText('Owned fingerprint attempt failed.');
+  await expect(copy).toBeDisabled();
+  await expect(restored).toBeDisabled();
+  revision++;
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(copy).toBeDisabled();
+  preparation = { ...preparation, revision, phase: 'ready', fingerprint: { pausedAt, sourceFingerprint: fingerprint } };
+  await expect(proof).toContainText(fingerprint);
+  await restored.check();
+  await expect(copy).toBeEnabled();
+  unreadable = true;
+  await expect(panel.getByRole('alert')).toContainText('Preparation status could not be read.');
+  await expect(proof).toHaveCount(0);
+  await expect(restored).not.toBeChecked();
+  await expect(copy).toBeDisabled();
+  unreadable = false;
+  await expect(proof).toContainText(fingerprint);
+  await expect(restored).not.toBeChecked();
+  await expect(copy).toBeDisabled();
+});
+
+test('guided migration prepares from UI, consolidates backup and waits for both processes before automatic validation', async ({
+  page,
+  context,
+}) => {
+  let prepared = false,
+    pausedAt: string | null = null,
+    phase = 'legacy',
+    revision = 1,
+    backend = 'legacy',
+    runningBackend = 'legacy';
+  let restartRequired = false,
+    runtimeReady = true,
+    validated = false,
+    reconnectFailures = 0;
+  let backup: Record<string, unknown> | null = null;
+  const calls: string[] = [],
+    downloads: string[] = [];
+  const id = '42bfd0bf-a606-4af4-a8cd-a0bb94e39c10';
+  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split('/local-upgrade')[1];
+    if (endpoint === '/setup')
+      return route.fulfill({
+        json: {
+          eligible: true,
+          uiPreparationAvailable: !prepared,
+          upgradeEnabled: prepared,
+          controlRootConfigured: prepared,
+          encryptionKeyReady: prepared,
+          sqliteSelected: backend === 'sqlite',
+          liveSqlite: phase === 'sqlite-live' && !restartRequired,
+        },
+      });
+    if (endpoint === '/prepare') {
+      calls.push('prepare');
+      prepared = true;
+      return route.fulfill({ status: 202, json: { restarting: true } });
+    }
+    if (endpoint === '/inventory') {
+      calls.push('inspect');
+      return route.fulfill({ json: inventoryFixture });
+    }
+    if (endpoint === '/pause') {
+      calls.push('pause');
+      pausedAt = '2026-10-04T00:00:00Z';
+      return route.fulfill({ status: 204 });
+    }
+    if (endpoint === '/backup') {
+      calls.push('backup');
+      backup = {
+        id,
+        revision,
+        pausedAt,
+        phase: 'ready',
+        sourceFingerprint: 'a'.repeat(64),
+        archiveHash: 'b'.repeat(64),
+        bytes: 4096,
+      };
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    if (endpoint === '/copy') {
+      calls.push('copy');
+      expect(route.request().postDataJSON()).not.toHaveProperty('encryptionKeyBackedUp');
+      phase = 'verified';
+      revision++;
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    if (endpoint === '/action') {
+      const body = route.request().postDataJSON();
+      expect(body.revision).toBe(revision);
+      calls.push(body.action);
+      if (body.action === 'activate') {
+        backend = 'sqlite';
+        phase = 'sqlite-validation';
+        restartRequired = true;
+        revision++;
+      } else if (body.action === 'validate') {
+        expect(runtimeReady).toBe(true);
+        expect(restartRequired).toBe(false);
+        validated = true;
+        revision++;
+      } else if (body.action === 'resume') {
+        expect(validated).toBe(true);
+        phase = 'sqlite-live';
+        pausedAt = null;
+        restartRequired = true;
+        revision++;
+      }
+      return route.fulfill({ status: 204 });
+    }
+    if (endpoint === '/restart') {
+      expect(route.request().postDataJSON()).toEqual({ revision });
+      calls.push('restart');
+      restartRequired = false;
+      runningBackend = backend;
+      if (phase === 'sqlite-validation') {
+        runtimeReady = false;
+        reconnectFailures = 1;
+      }
+      return route.fulfill({ status: 202, json: { restarting: true } });
+    }
+    if (reconnectFailures > 0) {
+      reconnectFailures--;
+      return route.fulfill({ status: 503, json: { error: 'restarting' } });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({ phase, backend, runningBackend, pausedAt, revision, validated, restartRequired }),
+        available: prepared,
+        settingsEncryptionRequired: false,
+        uiRestartAvailable: true,
+        runtimeReady,
+        backup,
+      },
+    });
+  });
+  await context.route('**/api/app-settings/local-upgrade/backup/*?id=*', (route) => {
+    const key = new URL(route.request().url()).pathname.endsWith('/key');
+    downloads.push(key ? 'key' : 'archive');
+    return route.fulfill({
+      headers: { 'content-disposition': `attachment; filename="${key ? 'key.txt' : 'backup.tar.gz'}"` },
+      body: 'owned-fixture',
+    });
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const prompt = page.getByTestId('local-storage-upgrade-prompt');
+  await expect(prompt.getByText(/No encryption key, console commands or .env entries/)).toBeVisible();
+  await prompt.getByRole('button', { name: 'Review upgrade steps' }).click();
+  const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+  await panel.getByRole('button', { name: 'Prepare server for migration' }).click();
+  await expect(panel.getByRole('button', { name: 'Pause writes and create verified backup' })).toBeEnabled();
+  await panel.getByRole('button', { name: 'Pause writes and create verified backup' }).click();
+  await expect.poll(() => calls).toEqual(['prepare', 'inspect', 'pause', 'backup']);
+  await expect(panel.getByRole('button', { name: 'Download verified backup' })).toBeEnabled();
+  await expect(panel.getByLabel('Backup reference', { exact: true })).not.toBeVisible();
+  await expect(panel.getByLabel('Restored backup fingerprint', { exact: true })).not.toBeVisible();
+  await panel.getByRole('button', { name: 'Download verified backup' }).click();
+  await expect(panel.getByRole('button', { name: 'Download encryption key separately' })).toHaveCount(0);
+  await expect.poll(() => downloads).toEqual(['archive']);
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await panel.getByLabel('I saved the verified backup download securely outside this VM.').check();
+  await expect(panel.getByLabel('I backed up the local settings encryption key separately.')).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
+  await panel.getByRole('button', { name: 'Activate SQLite while paused', exact: true }).click();
+  await expect.poll(() => calls.filter((c) => c === 'restart').length).toBe(1);
+  await expect(panel.getByRole('button', { name: 'Resume writes', exact: true })).toBeDisabled();
+  expect(calls.filter((c) => c === 'validate')).toHaveLength(0);
+  runtimeReady = true;
+  await expect(panel.getByText(/SQLite runtime validation passed/)).toBeVisible();
+  await expect.poll(() => calls.filter((c) => c === 'validate').length).toBe(1);
+  await panel.getByLabel('I reviewed the selected backend and its write-resumption recovery boundary.').check();
+  await panel.getByRole('button', { name: 'Resume writes', exact: true }).click();
+  await expect.poll(() => calls.filter((c) => c === 'restart').length).toBe(2);
+  await expect(panel.getByText('Running backend: sqlite. Selected phase: sqlite-live.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
+});
+
+test('browser backup survives reload, downloads archive and key separately and requires explicit attestations', async ({
+  page,
+  context,
+}) => {
+  const pausedAt = '2026-09-29T00:00:00Z';
+  const fingerprint = 'a'.repeat(64);
+  const archiveHash = 'b'.repeat(64);
+  const id = '42bfd0bf-a606-4af4-a8cd-a0bb94e39c10';
+  let backup: Record<string, unknown> | null = null;
+  let backupStatusUnreadable = true;
+  let operation: string | null = null;
+  const downloads: string[] = [];
+  let downloadFailure = false;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/setup')) return route.fallback();
+    if (pathname.endsWith('/backup')) {
+      expect(route.request().postDataJSON()).toEqual({ revision: 1 });
+      backupStatusUnreadable = false;
+      operation = 'backup';
+      backup = {
+        id,
+        revision: 1,
+        pausedAt,
+        phase: 'creating',
+        sourceFingerprint: fingerprint,
+        archiveHash: null,
+        bytes: 0,
+      };
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+    return route.fulfill({
+      json: { ...upgradeStatusFixture({ pausedAt, operation }), backup, backupStatusUnreadable },
+    });
+  });
+  // Native attachment navigation is a new document, not a page fetch/Blob.
+  await context.route('**/api/app-settings/local-upgrade/backup/*?id=*', async (route) => {
+    expect(new URL(route.request().url()).searchParams.get('id')).toBe(id);
+    const key = new URL(route.request().url()).pathname.endsWith('/key');
+    downloads.push(key ? 'key' : 'archive');
+    if (downloadFailure)
+      return route.fulfill({ status: 409, json: { error: 'This backup is not ready. Reload status.' } });
+    return route.fulfill({
+      headers: {
+        'content-disposition': `attachment; filename="${key ? 'key.txt' : 'backup.tar.gz'}"`,
+        'cache-control': 'no-store',
+      },
+      contentType: key ? 'text/plain' : 'application/gzip',
+      body: key ? 'test-only-key' : 'test-only-archive',
+    });
+  });
+  let panel = await openLocalUpgrade(page);
+  await expect(panel.getByText(/The previous backup status could not be read/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeEnabled();
+  await panel.getByRole('button', { name: 'Create verified backup', exact: true }).click();
+  await expect(panel.getByText(/The previous backup status could not be read/)).toHaveCount(0);
+  await expect(panel.getByText(/Creating the backup archive and checking an isolated restore/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForDashboardReady(page);
+  await openSettings(page);
+  await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+  await expect(panel.getByText(/Creating the backup archive and checking an isolated restore/)).toBeVisible();
+  operation = null;
+  backup = { ...backup, phase: 'ready', archiveHash, bytes: 4096 };
+  await expect(panel.getByRole('button', { name: 'Download verified backup', exact: true })).toBeEnabled();
+  await expect(panel.getByLabel('Backup reference', { exact: true })).toHaveValue(
+    `browser-backup:${id}:${archiveHash}`,
+  );
+  await expect(panel.getByLabel('Restored backup fingerprint', { exact: true })).toHaveValue(fingerprint);
+  const workspaceUrl = page.url();
+  await panel.getByRole('button', { name: 'Download verified backup', exact: true }).click();
+  await expect.poll(() => downloads).toEqual(['archive']);
+  await panel.getByRole('button', { name: 'Download encryption key separately', exact: true }).click();
+  await expect.poll(() => downloads).toEqual(['archive', 'key']);
+  expect(page.url()).toBe(workspaceUrl);
+  downloadFailure = true;
+  // Successful attachment navigations can emit a late temporary blank page.
+  // Wait for the actual error document, not an earlier download's popup.
+  const failurePage = context.waitForEvent('page', {
+    predicate: (popup) => popup.url().includes('/local-upgrade/backup/download'),
+  });
+  await panel.getByRole('button', { name: 'Download verified backup', exact: true }).click();
+  const popup = await failurePage;
+  await expect(popup.locator('body')).toContainText('This backup is not ready. Reload status.');
+  await popup.close();
+  expect(page.url()).toBe(workspaceUrl);
+  await expect(panel).toBeVisible();
+  const saved = panel.getByLabel('I saved the verified backup download securely outside this VM.');
+  const keySaved = panel.getByLabel('I backed up the local settings encryption key separately.');
+  await expect(saved).not.toBeChecked();
+  await expect(keySaved).not.toBeChecked();
+  await saved.check();
+  await keySaved.check();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeEnabled();
+  // A newer job must revoke the old receipt even if fields remain filled.
+  operation = 'backup';
+  backup = { ...backup, id: 'a2ae9ad3-cdcc-4e88-9d8b-fdb1cfe343f0', phase: 'creating', archiveHash: null };
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  operation = null;
+  backup = { ...backup, phase: 'failed' };
+  await expect(panel.getByText(/Backup creation or restore verification did not finish/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  backup = null;
+  backupStatusUnreadable = true;
+  await expect(panel.getByText(/The previous backup status could not be read/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeEnabled();
+});
 
 const loadingActions = [
   {
@@ -238,7 +684,7 @@ for (const navigation of ['tab', 'modal'] as const) {
     let operation: string | null = null;
     let releaseInspection: (() => void) | undefined;
     let inspections = 0;
-    await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
       if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
         inspections++;
         operation = 'inspect';
@@ -276,7 +722,7 @@ for (const navigation of ['tab', 'modal'] as const) {
 test('editing backup evidence or advancing the transition requires fresh backup attestations', async ({ page }) => {
   let revision = 1;
   const fingerprint = 'c'.repeat(64);
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/fingerprint'))
       return route.fulfill({ json: { sourceFingerprint: fingerprint } });
     return route.fulfill({ json: upgradeStatusFixture({ pausedAt: '2026-09-29T00:00:00Z', revision }) });
@@ -357,7 +803,7 @@ test('a failed post-copy status refresh stays locked and reconnect restores the 
     failStatus = false,
     complete = false;
   let copyRequests = 0;
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
     if (pathname.endsWith('/copy')) {
@@ -410,7 +856,7 @@ for (const scenario of loadingActions) {
     let release: (() => void) | undefined;
     let targetRequests = 0;
     const fingerprint = 'a'.repeat(64);
-    await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       const basePath = '/api/app-settings/local-upgrade';
       if (pathname === `${basePath}/setup`) return route.fallback();
@@ -573,7 +1019,7 @@ test('action settlement keeps controls busy until its fresh status returns and s
   let settling = false;
   let statusRequests = 0;
   let releaseStatus: (() => void) | undefined;
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/inventory')) {
       settling = true;
       return route.fulfill({ json: inventoryFixture });
@@ -609,7 +1055,7 @@ test('a lost pause response is reconciled before controls unlock and its diagnos
   let statusRequests = 0;
   let pauseRequests = 0;
   let releaseStatus: (() => void) | undefined;
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
     if (pathname.endsWith('/pause')) {
@@ -651,7 +1097,7 @@ test('frozen fingerprints belong to one maintenance session and failed reads inv
   let pausedAt = '2026-09-28T01:00:00Z';
   let failFingerprint = false;
   const fingerprint = 'b'.repeat(64);
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/fingerprint'))
       return failFingerprint
         ? route.fulfill({ status: 409, json: { error: 'Frozen source could not be checked.' } })
@@ -686,7 +1132,7 @@ test('frozen fingerprints belong to one maintenance session and failed reads inv
 
 test('a failed repeat inspection does not leave stale inventory eligible for pausing', async ({ page }) => {
   let failInspection = false;
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/inventory'))
       return failInspection
         ? route.fulfill({ status: 409, json: { error: 'Source inventory needs repair.' } })
@@ -714,7 +1160,7 @@ test('validation and resumption share runtime readiness and restart completion c
   let restartRequired = false;
   let validated = true;
   let revision = 1;
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/action')) {
       const { action } = route.request().postDataJSON();
       if (action === 'activate') {
@@ -778,13 +1224,63 @@ test('validation and resumption share runtime readiness and restart completion c
   await expect(resume).toBeEnabled();
 });
 
+for (const guided of [true, false]) {
+  test(`Advanced source controls explain their effects in ${guided ? 'guided' : 'manual'} upgrades`, async ({
+    page,
+  }) => {
+    let paused = false;
+    const writes: string[] = [];
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (route.request().method() === 'POST') {
+        writes.push(pathname);
+        if (pathname.endsWith('/pause')) paused = true;
+        return route.fulfill({ status: 204 });
+      }
+      if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+      return route.fulfill({
+        json: {
+          ...upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T00:00:00Z' : null }),
+          uiRestartAvailable: guided,
+        },
+      });
+    });
+    const panel = await openLocalUpgrade(page);
+    const source = panel.getByRole('region', { name: 'Source inspection and maintenance' });
+    const advanced = source.locator('details');
+    await expect(source.locator('summary')).toHaveText('Advanced');
+    await expect(advanced).toHaveJSProperty('open', !guided);
+    if (guided) {
+      await expect(source.getByRole('button', { name: 'Pause writes and create verified backup' })).toBeEnabled();
+      await source.locator('summary').click();
+      await expect(source.getByText(/Optional individual controls/)).toBeVisible();
+    }
+    expect(writes).toEqual([]);
+    const inspect = advanced.getByRole('button', { name: 'Inspect source', exact: true });
+    const pause = advanced.getByRole('button', { name: 'Pause writes and drain', exact: true });
+    await expect(inspect).toHaveAccessibleDescription(
+      'Checks source folders, inventory, warnings and disk/memory capacity without changing data or pausing writes.',
+    );
+    await expect(pause).toHaveAccessibleDescription(
+      'Blocks new writes and runs, then waits for active work to finish. Does not create a backup.',
+    );
+    await expect(pause).toBeDisabled();
+    await inspect.click();
+    await expect(pause).toBeEnabled();
+    expect(writes).toEqual([]);
+    await pause.click();
+    await expect(pause).toBeDisabled();
+    expect(writes).toEqual(['/api/app-settings/local-upgrade/pause']);
+  });
+}
+
 test('local upgrade actions and backup fields have separate readable rows at desktop and narrow widths', async ({
   page,
 }, testInfo) => {
   const fingerprint = 'a'.repeat(64);
   const writes: string[] = [];
   let fingerprintReads = 0;
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (route.request().method() === 'POST') {
       writes.push(pathname);
@@ -834,7 +1330,7 @@ test('local upgrade actions and backup fields have separate readable rows at des
   await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
   for (const width of [1100, 800, 600, 360]) {
     await page.setViewportSize({ width, height: 900 });
-    await expect(panel.getByRole('group', { name: 'Certify a restored backup' })).toBeVisible();
+    await expect(panel.getByRole('group', { name: 'Create and download a verified backup' })).toBeVisible();
     for (const name of [
       'Source inspection and maintenance',
       'Backup certification and copy',
@@ -900,7 +1396,7 @@ test('local storage upgrade requires backup certification and coordinated restar
   let copyRequests = 0;
   const actions: string[] = [];
   const fingerprint = 'a'.repeat(64);
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (route.request().method() === 'POST') expect(route.request().headers()['x-rivet-migration-intent']).toBe('1');
     if (pathname.endsWith('/inventory'))
@@ -1060,7 +1556,7 @@ for (const backend of ['sqlite', 'legacy'] as const) {
       validationSucceeds = false;
     let releaseValidation: (() => void) | undefined;
     const actions: string[] = [];
-    await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
       if (!authorized) return route.fulfill({ status: 403, json: { error: 'Forbidden' } });
       if (new URL(route.request().url()).pathname.endsWith('/action')) {
         const action = route.request().postDataJSON();
@@ -1192,7 +1688,7 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
     failure: { stage: 'settings', code: 'disk-full' },
   };
   let paused = false;
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/inventory'))
       return route.fulfill({
@@ -1263,6 +1759,106 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
 });
 
+test('older-server synchronous copy capacity refusal remains actionable without implying a failed copy job', async ({
+  page,
+}) => {
+  const message =
+    'Local copy capacity preflight failed (disk-space). Available disk: 0 MiB; estimated additional disk required: 64 MiB. Reload source inspection for disk, bundle and memory details. No copy was started.';
+  const fingerprint = 'a'.repeat(64);
+  let paused = false;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+    if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+    if (pathname.endsWith('/copy'))
+      return route.fulfill({ status: 409, json: { code: 'local-copy-capacity', error: message } });
+    if (pathname.endsWith('/pause')) {
+      paused = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ json: upgradeStatusFixture({ pausedAt: paused ? '2026-09-28T00:00:00Z' : null }) });
+  });
+  const panel = await openLocalUpgrade(page);
+  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+  await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
+  await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
+  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+  await panel.getByLabel('I backed up the local settings encryption key separately.').check();
+  await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
+  await expect(panel.getByRole('alert').filter({ hasText: message })).toBeVisible();
+  await expect(panel.getByText('Source is quiet. Take and restore your backup before copying.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Download verification report' })).toBeDisabled();
+});
+
+test('background copy preparation stays busy after acceptance and shows a specific failed-project diagnostic', async ({
+  page,
+}) => {
+  const fingerprint = 'a'.repeat(64),
+    reference = '0123456789abcdef';
+  let paused = false,
+    started = false,
+    failed = false;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/inventory')) return route.fulfill({ json: inventoryFixture });
+    if (pathname.endsWith('/fingerprint')) return route.fulfill({ json: { sourceFingerprint: fingerprint } });
+    if (pathname.endsWith('/project-reference'))
+      return route.fulfill({ json: { reference, paths: ['Test/problem.rivet-project'] } });
+    if (pathname.endsWith('/pause')) {
+      paused = true;
+      return route.fulfill({ status: 204 });
+    }
+    if (pathname.endsWith('/copy')) {
+      started = true;
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          pausedAt: paused ? '2026-09-28T00:00:00Z' : null,
+          operation: started && !failed ? 'copy' : null,
+        }),
+        job: started
+          ? {
+              id: 'background-fixture',
+              phase: failed ? 'failed' : 'copying',
+              stage: failed ? 'workflows' : 'capacity',
+              message: 'Legacy source is untouched and writes remain paused.',
+              failure: failed
+                ? {
+                    stage: 'workflows',
+                    code: 'invalid-data',
+                    reason: 'project-id-duplicate',
+                    sourceReference: reference,
+                  }
+                : null,
+            }
+          : null,
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
+  await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
+  await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
+  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
+  await panel.getByLabel('I restored a separate backup of all four source roots.').check();
+  await panel.getByLabel('I backed up the local settings encryption key separately.').check();
+  await panel.getByRole('button', { name: 'Copy and verify', exact: true }).click();
+  await expect(panel.getByText(/Copy status: copying. Stage: capacity/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  failed = true;
+  await expect(panel.getByText(/Two source projects have the same project ID/)).toBeVisible();
+  await expect(panel.getByText(/Affected project: Test\/problem.rivet-project/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Retry copy and verification', exact: true })).toBeEnabled();
+});
+
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {
   await page.route('**/?editor', (route) =>
     route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor fixture</body></html>' }),
@@ -1284,7 +1880,7 @@ test('expired operator status locks previously enabled controls and reconnect cl
   page,
 }) => {
   let authorized = true;
-  await page.route('**/api/app-settings/local-upgrade**', async (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/inventory'))
       return route.fulfill({ status: 409, json: { error: 'Inspect fixture requires repair.' } });
     if (!authorized) return route.fulfill({ status: 403, json: { error: 'Forbidden' } });
@@ -1328,7 +1924,7 @@ test('expired operator status locks previously enabled controls and reconnect cl
 
 test('a stalled status poll locks controls and recovery preserves a rejected pause error', async ({ page }) => {
   let stallStatus = false;
-  await page.route('**/api/app-settings/local-upgrade**', (route) => {
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/inventory'))
       return route.fulfill({

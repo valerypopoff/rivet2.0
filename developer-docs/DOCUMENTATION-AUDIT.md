@@ -4,6 +4,44 @@ Baseline: `6dd9466af`. Scope: the 41 Markdown files then present under
 `developer-docs/`, including Studio Server and its audits. The new
 [Refactor Baseline](./REFACTOR-BASELINE.md) and this report are additions.
 
+## Recent-change reconciliation — 2026-10-04
+
+Reviewed the 17 local commits from `d5f460da6` through `44abedd35` (the changes after `b7f02d85f`), plus the current staging launcher guidance. This is a documentation/source audit, not a new runtime or production certification.
+
+- Recording capture/families: [Development](./studio-server/development.md), [Workflow publication](./studio-server/workflow-publication.md), [Search performance](./studio-server/recording-search-performance.md) and the [user recordings guide](../packages/docs/docs/user-guide/recordings.md) distinguish direct ownership, ordinary child-inclusive pages and root-only input searches. The user guide now covers parent Browser/internal-Node capture, independent outcomes, collapsed families, unfiltered child discovery, saved paths, two-decimal display and modal-session retention. Removed stale child-input-search and every-row-key claims. The completed [UI cleanup plan](./studio-server/recordings-ui-cleanup-plan.md) remains scoped to presentation.
+- LLM settings/failures: [LLM Chat contract](./LLM-CHAT-V2-CONTRACT.md) and the [LLM Chat](../packages/docs/docs/node-reference/llm-chat.mdx)/[LLM Profile](../packages/docs/docs/node-reference/llm-profile.mdx) user pages now describe optional Temperature, preserved fractional/zero values, shared failure-port conditions, catch scope, cancellation and diagnostic evidence. Removed the stale unconditional-throw/attempt-output claim.
+- Classifier/HTTP settings: checked the current [Classifier guide](./CLASSIFIER-NODES.md), [Classifier Evaluate](../packages/docs/docs/node-reference/classifier-evaluate.mdx) and [HTTP Call](../packages/docs/docs/node-reference/http-call.mdx) pages against shape-only provider validation and their Model/Error behavior groups; those pages already reflected the recent changes.
+- Workspace/tree/node ownership: existing [workspace](./EDITOR-WORKSPACE-STATE.md), [Monaco](./MONACO-EDITOR-SURFACES.md), Studio architecture and bridge guides retain the owning contracts. Added concise [user project guidance](../packages/docs/docs/user-guide/working-with-projects.md) for existing-tab activation, preview promotion, selection retention, dirty state and actionable recovery failures without routine healthy/pending popups. Footer alignment remains documented in Studio architecture.
+- Tunnel/staging: existing [Development](./studio-server/development.md) and [deployment README](../deploy/studio-server/README.md) own immutable generations, guarded refresh, authentication, resource limits and digest/mount preflights. The [user deployment page](../packages/docs/docs/studio-server.mdx) now links these operational paths and distinguishes source-development tunnel mode from a staging release.
+
+Verification for this documentation-only pass: local developer-document link validation and a Docusaurus site build are the completion checks. No application behavior changed; prior runtime/browser evidence remains attached to its source commits. Actual authenticated-tunnel and production-data rehearsals remain separate gates.
+
+## Earlier source reconciliation — 2026-10-03
+
+The September audit below retains its original baseline and evidence limits.
+The latest source review through `6fff1e3bf` reconciled the editor ownership fix,
+workspace recovery/activation changes in `d5f460da6`, and staging launch/CI work
+in `5e0ec3ddc` with their owning guides:
+
+- [Workspace state](./EDITOR-WORKSPACE-STATE.md): cancellable preparation,
+  unchanged-content activation, coherent per-document recovery, truthful Save
+  acknowledgement and derived static-data cache ownership.
+- [Monaco/editor surfaces](./MONACO-EDITOR-SURFACES.md): full node/library owner
+  identity, irreversible callback lifetime, synchronous canonical writes,
+  authoritative refresh and bounded warm-model drafts.
+- [Hosted contracts](./HOSTED-WEB-APP-CONTRACTS.md) and
+  [Editor Bridge](./studio-server/editor-bridge.md): deferred guarded imports,
+  current commands/events and the separate ordered dashboard command lane.
+- [Build/CI](./BUILD-AND-CI.md): Evaluations plus TSX test discovery, branch-specific
+  gates, and digest/mount-verified staging VM deployment.
+
+App/Studio architecture summaries now point to those canonical owners instead
+of duplicating the editor-session contract. The index exposes local SQLite
+upgrade/backup and managed-migration runbooks. This is documentation/source
+reconciliation, not a new production rehearsal or a claim that the selected-SQLite
+to managed-storage adapter exists; the [migration runbook](./studio-server/vm-to-managed-migration.md#source-and-destination)
+still explicitly excludes that unsupported source.
+
 ## Method and confidence
 
 The whole collection was inventoried for navigation, document purpose, local

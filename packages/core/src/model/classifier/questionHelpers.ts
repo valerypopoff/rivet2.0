@@ -1,11 +1,18 @@
-import type { DataValue } from '../DataValue.js';
 import type { Inputs } from '../GraphProcessor.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import type { NodeInputDefinition, PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
-import { extractInterpolationVariableReferences, getInterpolationGlobalValues, interpolate } from '../../utils/interpolation.js';
+import {
+  extractInterpolationVariableReferences,
+  getInterpolationGlobalValues,
+  interpolate,
+} from '../../utils/interpolation.js';
 import { interpolateJsonTemplate } from '../nodes/ObjectNode.js';
 import type { ClassifierEntry, ClassifierEntryEditorType } from './types.js';
+import { assertClassifierEntry, classifierDataProperty } from './json.js';
+import type { ClassifierQuestionPreparation } from './preparation.js';
+import { checkClassifierJsonWork } from './limits.js';
+export { assertClassifierEntry, assertClassifierInstructions } from './json.js';
 
 export type ClassifierQuestionBaseData = {
   questionId: string;
@@ -61,16 +68,24 @@ export function getInterpolationInputDefinitions(
   );
 }
 
-function inputValues(inputs: Inputs): Record<string, DataValue | undefined> {
-  const values = Object.create(null) as Record<string, DataValue | undefined>;
-  for (const [key, value] of Object.entries(inputs)) values[key] = value;
-  return values;
-}
-
-export function interpolateQuestionText(template: string, inputs: Inputs, context: InternalProcessContext): string {
-  return interpolate(template, inputValues(inputs), context.graphInputNodeValues, context.contextValues, {
-    globalValues: getInterpolationGlobalValues(template, context.getGlobal),
+export function interpolateQuestionText(
+  template: string,
+  inputs: Inputs,
+  context: InternalProcessContext,
+  preparation?: ClassifierQuestionPreparation,
+): string {
+  preparation?.capture(template);
+  const result = interpolate(template, inputs, context.graphInputNodeValues, context.contextValues, {
+    globalValues: getInterpolationGlobalValues(
+      template,
+      context.getGlobal,
+      preparation?.check,
+      preparation?.tokenLimit,
+    ),
+    guard: preparation,
   });
+  preparation?.capture(result);
+  return result;
 }
 
 export function resolveAuthoredClassifierEntry({
@@ -81,6 +96,7 @@ export function resolveAuthoredClassifierEntry({
   inputs,
   context,
   label,
+  preparation,
 }: {
   type: ClassifierEntryEditorType | undefined;
   text: string | undefined;
@@ -89,26 +105,35 @@ export function resolveAuthoredClassifierEntry({
   inputs: Inputs;
   context: InternalProcessContext;
   label: string;
+  preparation?: ClassifierQuestionPreparation;
 }): Exclude<ClassifierEntry, null> {
   if (type === 'lines') {
-    const resolved = (lines ?? []).map((line) => interpolateQuestionText(line, inputs, context));
+    preparation?.capture(lines ?? []);
+    const resolved: string[] = [];
+    for (let index = 0; index < (lines?.length ?? 0); index++) {
+      resolved.push(interpolateQuestionText(lines![index]!, inputs, context, preparation));
+    }
     if (resolved.length === 0) throw new Error(`${label} require at least one line.`);
     return resolved;
   }
 
   if (type === 'object') {
+    preparation?.capture(objectTemplate ?? '{}');
     const template = objectTemplate?.trim() ? objectTemplate : '{}';
     let parsed: unknown;
     try {
-      parsed = JSON.parse(
-        interpolateJsonTemplate(
-          template,
-          Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, value?.value])),
-          context.graphInputNodeValues,
-          context.contextValues,
-          getInterpolationGlobalValues(template, context.getGlobal),
-        ),
+      const json = interpolateJsonTemplate(
+        template,
+        inputs,
+        context.graphInputNodeValues,
+        context.contextValues,
+        getInterpolationGlobalValues(template, context.getGlobal, preparation?.check, preparation?.tokenLimit),
+        preparation,
+        true,
       );
+      preparation?.capture(json);
+      checkClassifierJsonWork(json, preparation?.check ?? (() => {}), 'question template');
+      parsed = JSON.parse(json);
     } catch (error) {
       throw new Error(`${label} JSON template is invalid: ${(error as Error).message}`);
     }
@@ -119,11 +144,16 @@ export function resolveAuthoredClassifierEntry({
     return parsed;
   }
 
-  return interpolateQuestionText(text ?? '', inputs, context);
+  return interpolateQuestionText(text ?? '', inputs, context, preparation);
+}
+
+export function getQuestionInputValue(inputs: Inputs, portId: string, label: string): unknown {
+  const input = classifierDataProperty(inputs, portId, label);
+  return input && typeof input === 'object' ? classifierDataProperty(input, 'value', label) : undefined;
 }
 
 export function getStringInput(inputs: Inputs, portId: string, label: string): string {
-  const value = inputs[portId as PortId]?.value;
+  const value = getQuestionInputValue(inputs, portId, label);
   if (typeof value !== 'string') throw new Error(`${label} input must be a string.`);
   return value;
 }
@@ -134,40 +164,10 @@ export function requireQuestionId(questionId: string): string {
 }
 
 export function getStructuredInput(inputs: Inputs, portId: string, label: string): ClassifierEntry {
-  const value = inputs[portId as PortId]?.value;
+  const value = getQuestionInputValue(inputs, portId, label);
   if (value === undefined) throw new Error(`${label} input is required.`);
   assertClassifierEntry(value, label);
   return value;
-}
-
-export function assertClassifierEntry(value: unknown, label: string): asserts value is ClassifierEntry {
-  assertClassifierEntryValue(value, label, new Set<object>(), false);
-}
-
-export function assertClassifierInstructions(
-  value: unknown,
-  label = 'Instructions',
-): asserts value is Exclude<ClassifierEntry, null> {
-  assertClassifierEntry(value, label);
-  if (value === null || (typeof value === 'string' && value.trim() === '')) {
-    throw new Error(`${label} are required.`);
-  }
-}
-
-function assertClassifierEntryValue(value: unknown, label: string, seen: Set<object>, nested: boolean): void {
-  if (value === null || typeof value === 'string') return;
-  if (nested && (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))) return;
-  if (typeof value !== 'object') throw new Error(`${label} must contain only strings, null, objects, and arrays.`);
-  if (seen.has(value)) throw new Error(`${label} must not contain circular references.`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => assertClassifierEntryValue(item, `${label}[${index}]`, seen, true));
-  } else {
-    for (const [key, item] of Object.entries(value)) {
-      assertClassifierEntryValue(item, `${label}.${key}`, seen, true);
-    }
-  }
-  seen.delete(value);
 }
 
 export function abbreviate(value: string, maximum = 72): string {

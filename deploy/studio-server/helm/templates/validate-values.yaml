@@ -180,10 +180,13 @@
 {{- end -}}
 
 {{- $writableVolumeLimits := .Values.writableVolumeLimits -}}
+{{- if hasKey .Values.env "RIVET_PROJECT_BUNDLE_SCRATCH_ROOT" -}}
+{{- fail "env.RIVET_PROJECT_BUNDLE_SCRATCH_ROOT is deployment-owned; tune writableVolumeLimits.projectBundles instead" -}}
+{{- end -}}
 {{- if not (kindIs "map" $writableVolumeLimits) -}}
 {{- fail "writableVolumeLimits must be a map" -}}
 {{- end -}}
-{{- range $volume := list "workspace" "workflows" "appData" "runtimeLibraries" -}}
+{{- range $volume := list "projectBundles" "workspace" "workflows" "appData" "runtimeLibraries" -}}
 {{- $sizeLimit := default "" (index $writableVolumeLimits $volume) -}}
 {{- if or (not (kindIs "string" $sizeLimit)) (not (regexMatch "^[1-9][0-9]*(Ki|Mi|Gi|Ti|Pi|Ei)$" $sizeLimit)) -}}
 {{- fail (printf "writableVolumeLimits.%s must be a positive binary Kubernetes quantity such as 2Gi" $volume) -}}

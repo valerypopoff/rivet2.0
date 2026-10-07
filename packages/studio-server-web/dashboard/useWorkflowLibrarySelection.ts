@@ -142,8 +142,11 @@ export function useWorkflowLibrarySelection({
     });
   }, [activeAncestorFolderIds, activePath, setExpandedFolders]);
 
+  // Navigation in unrelated folders must not steal the user's scroll position.
+  // Reveal the row only when selection changes or its own ancestors reopen.
+  const activeAncestorsExpanded = activeAncestorFolderIds.every((folderId) => expandedFolders[folderId]);
   useEffect(() => {
-    if (!activePath || loading) {
+    if (!activePath || loading || !activeAncestorsExpanded) {
       return;
     }
     const activeRow = projectRowRefs.current[activePath];
@@ -152,12 +155,11 @@ export function useWorkflowLibrarySelection({
     }
     const frameId = window.requestAnimationFrame(() => activeRow.scrollIntoView({ block: 'nearest' }));
     return () => window.cancelAnimationFrame(frameId);
-  }, [activePath, expandedFolders, loading]);
+  }, [activePath, activeAncestorsExpanded, loading]);
 
   const setProjectRowRef = useCallback((projectPath: string, node: HTMLElement | null) => {
     projectRowRefs.current[projectPath] = node;
   }, []);
-  const clearSelection = useCallback(() => setSelectedProjectPath(''), []);
   const remapSelectedPath = useCallback((moves: Array<{ fromAbsolutePath: string; toAbsolutePath: string }>) => {
     setSelectedProjectPath((previous) => (
       moves.find((move) => move.fromAbsolutePath === previous)?.toAbsolutePath ?? previous
@@ -214,7 +216,6 @@ export function useWorkflowLibrarySelection({
     activePath,
     activeProject,
     cancelPendingPreviewOpen,
-    clearSelection,
     isActiveProjectOpen: activeProject != null && activeProject.absolutePath === openedProjectPath,
     openedWorkflowProject,
     openedWorkflowProjectRef,

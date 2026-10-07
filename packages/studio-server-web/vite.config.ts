@@ -503,6 +503,9 @@ export default defineConfig({
     },
 
     define: {
+      'import.meta.env.VITE_TUNNEL_DEV': JSON.stringify(
+        process.env.RIVET_DEV_FRONTEND_MODE === 'tunnel' ? 'true' : 'false',
+      ),
       'import.meta.env.VITE_HOSTED_MODE': JSON.stringify('true'),
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(hostedAppVersion),
     },

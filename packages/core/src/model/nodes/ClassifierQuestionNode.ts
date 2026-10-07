@@ -11,6 +11,8 @@ import {
   formatNodeBodyMarkdownTextRow,
 } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import { ClassifierQuestionPreparation } from '../classifier/preparation.js';
+import { assertClassifierJson } from '../classifier/json.js';
 import {
   abbreviate,
   assertClassifierEntry,
@@ -18,6 +20,7 @@ import {
   getCriteriaInputDefinition,
   getInstructionsInputDefinition,
   getInterpolationInputDefinitions,
+  getQuestionInputValue,
   getStringInput,
   getStructuredInput,
   interpolateQuestionText,
@@ -69,7 +72,10 @@ export type ClassifierQuestionBodySection = Readonly<{
   summary?: string | undefined;
 }>;
 
-const defaultOptions = () => [{ key: '', value: '' }, { key: '', value: '' }];
+const defaultOptions = () => [
+  { key: '', value: '' },
+  { key: '', value: '' },
+];
 const defaultLevels = () => ['', ''];
 const defaultScoreCriteria = (): ClassifierScoreCriterionData[] => [createScoreCriterion(), createScoreCriterion()];
 const entryTypeOptions = [
@@ -122,26 +128,31 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
       inputs.push(getCriteriaInputDefinition(getCriteriaInputTypes(data.questionType)));
     } else if (data.questionType === 'noul') {
       const criteriaType = getCriteriaType(data);
-      if (data.useNoulTrueCriteriaInput) inputs.push(getNoulCriteriaInputDefinition('criteriaTrue', 'true', criteriaType));
-      if (data.useNoulFalseCriteriaInput) inputs.push(getNoulCriteriaInputDefinition('criteriaFalse', 'false', criteriaType));
+      if (data.useNoulTrueCriteriaInput)
+        inputs.push(getNoulCriteriaInputDefinition('criteriaTrue', 'true', criteriaType));
+      if (data.useNoulFalseCriteriaInput)
+        inputs.push(getNoulCriteriaInputDefinition('criteriaFalse', 'false', criteriaType));
     }
 
-    const templates = data.useInstructionsInput ? [] : getEntryTemplates(
-      data.instructionsType,
-      data.instructions,
-      data.instructionsLines,
-      data.instructionsObjectTemplate,
-    );
+    const templates = data.useInstructionsInput
+      ? []
+      : getEntryTemplates(
+          data.instructionsType,
+          data.instructions,
+          data.instructionsLines,
+          data.instructionsObjectTemplate,
+        );
     if (!data.useCriteriaInput) {
       if (data.questionType === 'choice') {
         if (getCriteriaType(data) === 'text') templates.push(...(data.options ?? []).map((option) => option.value));
         else {
           for (const criterion of getChoiceCriteria(data)) {
-            templates.push(...getEntryTemplates(getCriteriaType(data), criterion.text, criterion.lines, criterion.objectTemplate));
+            templates.push(
+              ...getEntryTemplates(getCriteriaType(data), criterion.text, criterion.lines, criterion.objectTemplate),
+            );
           }
         }
-      }
-      else if (data.questionType === 'score') {
+      } else if (data.questionType === 'score') {
         for (const criterion of getScoreCriteria(data)) {
           templates.push(
             ...getEntryTemplates(
@@ -378,7 +389,30 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    const preparation = new ClassifierQuestionPreparation(context);
     const data = this.data;
+    preparation.capture(data.questionId);
+    // Reject impossible cardinalities before resolving even Instructions.
+    const criteria = data.useCriteriaInput ? getQuestionInputValue(inputs, 'criteria', 'Criteria') : undefined;
+    if (data.questionType === 'score') {
+      const count = data.useCriteriaInput
+        ? Array.isArray(criteria)
+          ? criteria.length
+          : 0
+        : (data.scoreCriteria ?? data.levels ?? defaultLevels()).length;
+      if (count < 2 || count > 10) throw new Error('Score questions require 2 to 10 levels.');
+    } else if (data.questionType === 'choice') {
+      const count = data.useCriteriaInput
+        ? criteria && typeof criteria === 'object' && !Array.isArray(criteria)
+          ? Object.keys(criteria).length
+          : 0
+        : (getCriteriaType(data) === 'text'
+            ? data.options ?? defaultOptions()
+            : data.choiceCriteria ?? data.options ?? defaultOptions()
+          ).length;
+      if (count < 2 || count > 255) throw new Error('Choice questions require 2 to 255 options.');
+    }
+    if (data.useInstructionsInput) preparation.capture(getQuestionInputValue(inputs, 'instructions', 'Instructions'));
     const questionId = requireQuestionId(data.questionId);
     const instructions = data.useInstructionsInput
       ? getStructuredInput(inputs, 'instructions', 'Instructions')
@@ -390,10 +424,13 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           inputs,
           context,
           label: 'Instructions',
+          preparation,
         });
     assertClassifierInstructions(instructions);
 
-    const question = createQuestionDefinition(data, inputs, context, questionId, instructions);
+    const question = createQuestionDefinition(data, inputs, context, questionId, instructions, preparation);
+    assertClassifierJson(question, 'Question', false, preparation.check);
+    preparation.check();
     return { ['question' as PortId]: { type: 'object', value: question } };
   }
 }
@@ -465,7 +502,8 @@ function getInstructionsBodySection(data: ClassifierQuestionNodeData): Classifie
       fields: [{ label: 'Instructions', value: `${Math.max(1, data.instructionsLines?.length ?? 0)} lines` }],
     };
   }
-  if (data.instructionsType === 'object') return { id: 'instructions', fields: [{ label: 'Instructions', value: 'object' }] };
+  if (data.instructionsType === 'object')
+    return { id: 'instructions', fields: [{ label: 'Instructions', value: 'object' }] };
   return { id: 'instructions', fields: [], summary: abbreviate(data.instructions) || '(required)' };
 }
 
@@ -475,14 +513,15 @@ function createQuestionDefinition(
   context: InternalProcessContext,
   questionId: string,
   instructions: ClassifierEntry,
+  preparation: ClassifierQuestionPreparation,
 ): ClassifierChoiceQuestionDefinition | ClassifierScoreQuestionDefinition | ClassifierNoulQuestionDefinition {
   if (data.questionType === 'choice') {
-    return createChoiceQuestion(data, inputs, context, questionId, instructions);
+    return createChoiceQuestion(data, inputs, context, questionId, instructions, preparation);
   }
   if (data.questionType === 'score') {
-    return createScoreQuestion(data, inputs, context, questionId, instructions);
+    return createScoreQuestion(data, inputs, context, questionId, instructions, preparation);
   }
-  return createNoulQuestion(data, inputs, context, questionId, instructions);
+  return createNoulQuestion(data, inputs, context, questionId, instructions, preparation);
 }
 
 function createChoiceQuestion(
@@ -491,9 +530,11 @@ function createChoiceQuestion(
   context: InternalProcessContext,
   questionId: string,
   instructions: ClassifierEntry,
+  preparation: ClassifierQuestionPreparation,
 ): ClassifierChoiceQuestionDefinition {
   let criteria: Record<string, ClassifierEntry>;
   if (data.useCriteriaInput) {
+    preparation.capture(getQuestionInputValue(inputs, 'criteria', 'Criteria'));
     const value = getStructuredInput(inputs, 'criteria', 'Criteria');
     if (value === null || Array.isArray(value) || typeof value !== 'object') {
       throw new Error('Choice criteria must be an object.');
@@ -508,6 +549,7 @@ function createChoiceQuestion(
     if (options.length < 2 || options.length > 255) throw new Error('Choice questions require 2 to 255 options.');
     criteria = Object.create(null) as Record<string, ClassifierEntry>;
     for (const option of options) {
+      preparation.capture(option.key);
       if (option.key.trim() === '') throw new Error('Choice criterion names must not be empty.');
       if (Object.prototype.hasOwnProperty.call(criteria, option.key)) {
         throw new Error(`Choice criterion name '${option.key}' is duplicated.`);
@@ -516,7 +558,7 @@ function createChoiceQuestion(
         enumerable: true,
         value:
           criteriaType === 'text'
-            ? interpolateQuestionText((option as { value: string }).value, inputs, context) || null
+            ? interpolateQuestionText((option as { value: string }).value, inputs, context, preparation) || null
             : resolveAuthoredClassifierEntry({
                 type: criteriaType,
                 text: (option as ClassifierChoiceCriterionData).text,
@@ -525,6 +567,7 @@ function createChoiceQuestion(
                 inputs,
                 context,
                 label: `Criteria.${option.key}`,
+                preparation,
               }),
       });
     }
@@ -541,9 +584,11 @@ function createScoreQuestion(
   context: InternalProcessContext,
   questionId: string,
   instructions: ClassifierEntry,
+  preparation: ClassifierQuestionPreparation,
 ): ClassifierScoreQuestionDefinition {
   let criteria: ClassifierEntry[];
   if (data.useCriteriaInput) {
+    preparation.capture(getQuestionInputValue(inputs, 'criteria', 'Criteria'));
     const value = getStructuredInput(inputs, 'criteria', 'Criteria');
     if (!Array.isArray(value)) throw new Error('Score criteria must be an array.');
     criteria = value as ClassifierEntry[];
@@ -557,6 +602,7 @@ function createScoreQuestion(
         inputs,
         context,
         label: `Criteria[${index}]`,
+        preparation,
       }),
     );
   }
@@ -571,9 +617,11 @@ function createNoulQuestion(
   context: InternalProcessContext,
   questionId: string,
   instructions: ClassifierEntry,
+  preparation: ClassifierQuestionPreparation,
 ): ClassifierNoulQuestionDefinition {
   let criteria: { true: ClassifierEntry; false: ClassifierEntry } | undefined;
   if (data.useCriteriaInput) {
+    preparation.capture(getQuestionInputValue(inputs, 'criteria', 'Criteria'));
     const value = getStructuredInput(inputs, 'criteria', 'Criteria');
     if (
       value === null ||
@@ -586,8 +634,8 @@ function createNoulQuestion(
     }
     criteria = { true: value.true as ClassifierEntry, false: value.false as ClassifierEntry };
   } else {
-    const trueCriteria = resolveNoulCriteria(data, 'true', inputs, context);
-    const falseCriteria = resolveNoulCriteria(data, 'false', inputs, context);
+    const trueCriteria = resolveNoulCriteria(data, 'true', inputs, context, preparation);
+    const falseCriteria = resolveNoulCriteria(data, 'false', inputs, context, preparation);
     if (hasClassifierCriteriaValue(trueCriteria) || hasClassifierCriteriaValue(falseCriteria)) {
       if (!hasClassifierCriteriaValue(trueCriteria) || !hasClassifierCriteriaValue(falseCriteria)) {
         throw new Error('Provide both true and false criteria, or neither.');
@@ -672,10 +720,12 @@ function resolveNoulCriteria(
   truthValue: 'true' | 'false',
   inputs: Inputs,
   context: InternalProcessContext,
+  preparation: ClassifierQuestionPreparation,
 ): ClassifierEntry {
   const useInput = truthValue === 'true' ? data.useNoulTrueCriteriaInput : data.useNoulFalseCriteriaInput;
   const label = `${truthValue} criteria`;
   if (useInput) {
+    preparation.capture(getQuestionInputValue(inputs, `criteria${truthValue === 'true' ? 'True' : 'False'}`, label));
     return getCriteriaType(data) === 'text'
       ? getStringInput(inputs, `criteria${truthValue === 'true' ? 'True' : 'False'}`, label)
       : getStructuredInput(inputs, `criteria${truthValue === 'true' ? 'True' : 'False'}`, label);
@@ -688,6 +738,7 @@ function resolveNoulCriteria(
     inputs,
     context,
     label,
+    preparation,
   });
 }
 

@@ -1,0 +1,7 @@
+/* Atlaskit adds an inset left-edge shadow to focused and selected options.
+   Studio Server uses the existing option backgrounds instead. Target options
+   only so input focus rings, menu shadows and keyboard behavior remain intact. */
+[role='option'],
+[id^='react-select-'][id*='-option-'] {
+  box-shadow: none !important;
+}

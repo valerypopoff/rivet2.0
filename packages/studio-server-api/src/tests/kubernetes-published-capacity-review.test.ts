@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+// test-style: fixture-read: reads only the temporary calibration report produced by the test.
+
 import {
   createCapacityCalibrationReview,
   writeCapacityCalibrationReview,

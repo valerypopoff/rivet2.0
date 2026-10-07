@@ -9,6 +9,7 @@ import { produce } from 'immer';
 import { handleError } from '../../utils/errorHandling.js';
 import { getCodeEditorDataKey, getEditorListKey, getEditorRenderRows } from './editorUtils';
 import { CodeEditorAiAssistBridge, GenericCodeEditorAiAssist } from './CodeEditorAiAssist';
+import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext.js';
 
 const AI_ASSIST_TARGET_DATA_KEYS: Record<string, string> = {
   CodeNodeAIAssist: 'code',
@@ -637,6 +638,7 @@ export const DefaultNodeEditor: FC<
     onClose?: () => void;
   }
 > = ({ node, onChange, isReadonly, onClose }) => {
+  const session = useNodeEditorSessionContext();
   const editorLoadKey = `${node.id}:${node.type}`;
   const [editorState, setEditorState] = useState<{
     editorLoadKey: string;
@@ -675,11 +677,11 @@ export const DefaultNodeEditor: FC<
           }
         });
 
-        if (!cancelled) {
+        if (!cancelled && (!session || session.isCurrent())) {
           setEditorState({ editorLoadKey, editors: loadedEditors });
         }
       } catch (err) {
-        if (cancelled) {
+        if (cancelled || (session && !session.isCurrent())) {
           return;
         }
 
@@ -695,7 +697,7 @@ export const DefaultNodeEditor: FC<
     return () => {
       cancelled = true;
     };
-  }, [editorLoadKey, editorRefreshNonce, getUIContext, node, projectNodeRegistry]);
+  }, [editorLoadKey, editorRefreshNonce, getUIContext, node, projectNodeRegistry, session]);
 
   const editors = editorState?.editorLoadKey === editorLoadKey ? editorState.editors : [];
   const aiAssistByTargetDataKey = new Map<string, { editor: EditorDefinition<ChartNode>; index: number }>();
@@ -740,7 +742,13 @@ export const DefaultNodeEditor: FC<
   return (
     <div
       css={defaultEditorContainerStyles}
-      className={node.type === 'comment' ? 'comment-node-editor' : node.type === 'matchCase' ? 'match-case-node-editor' : undefined}
+      className={
+        node.type === 'comment'
+          ? 'comment-node-editor'
+          : node.type === 'matchCase'
+            ? 'match-case-node-editor'
+            : undefined
+      }
     >
       {getEditorRenderRows(editors).map((row) => {
         if (row.type === 'inline') {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -14,6 +15,9 @@ import {
   normalizeWebAppPublicationDrafts,
 } from '../routes/workflows/web-app-publication-drafts.js';
 import { listSavedLatestSubgraphProjectIds } from '../routes/workflows/subgraph-publication-dependencies.js';
+import { getExpectedProxyAuthToken } from '../auth.js';
+import { withEnvOverride } from './helpers/workflow-api-harness.js';
+import type { WorkflowProjectReferencesResponse } from '../../../studio-server-shared/workflow-types.js';
 
 const {
   workflowsRoot,
@@ -32,6 +36,46 @@ type StoredWorkflowProjectSettings = Awaited<ReturnType<typeof workflowPublicati
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+test('authenticated filesystem reference check preserves references in serving publications after draft removal', async () => {
+  const target = await workflowMutations.createWorkflowProjectItem('', 'Target');
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const targetProject = rivetNode.loadProjectFromString(await fs.readFile(target.absolutePath, 'utf8'));
+  const draft = await fs.readFile(caller.absolutePath, 'utf8');
+  const callerProject = rivetNode.loadProjectFromString(draft);
+  const node = rivetNode.SubGraphNodeImpl.create();
+  node.data.targetProjectId = targetProject.metadata.id;
+  node.data.targetVersion = 'latest';
+  node.data.graphId = targetProject.metadata.mainGraphId!;
+  callerProject.graphs[callerProject.metadata.mainGraphId!]!.nodes.push(node);
+  await fs.writeFile(caller.absolutePath, rivetNode.serializeProject(callerProject) as string);
+  await workflowMutations.publishWorkflowProjectItem(caller.relativePath, { endpointName: 'caller' });
+  await fs.writeFile(caller.absolutePath, draft);
+  // Dataset bytes are irrelevant to the reference scan.
+  await fs.writeFile(workflowFs.getWorkflowDatasetPath(caller.absolutePath), 'invalid dataset');
+  await withEnvOverride('RIVET_KEY', 'reference-test-key', async () => {
+    await withWorkflowApiServer(async (baseUrl) => {
+      const url = `${baseUrl}/projects/references?${new URLSearchParams({ relativePath: target.relativePath, projectId: targetProject.metadata.id })}`;
+      assert.equal((await fetch(url)).status, 403);
+      const response = await fetch(url, { headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() } });
+      assert.match(response.headers.get('cache-control')!, /private, no-store/);
+      const result = await readJson<WorkflowProjectReferencesResponse>(response);
+      assert.equal(result.complete, true);
+      assert.deepEqual(
+        result.references.map((item) => [item.name, item.sources]),
+        [['Caller', [{ kind: 'published-endpoint', label: 'caller', targetVersions: ['latest'] }]]],
+      );
+      const settingsPath = workflowFs.getWorkflowProjectSettingsPath(caller.absolutePath);
+      const settings = await fs.readFile(settingsPath, 'utf8');
+      await fs.writeFile(settingsPath, 'malformed private settings');
+      const failed = await fetch(url, { headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() } });
+      assert.equal(failed.status, 503);
+      assert.equal((await failed.text()).includes('malformed private settings'), false);
+      await fs.writeFile(settingsPath, settings);
+      assert.equal((await fetch(url, { headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() } })).status, 200);
+    });
+  });
+});
 
 test('publication review lists only dynamic saved-latest project calls', () => {
   const project = {

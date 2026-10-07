@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { NodeGraph, Project } from '../../src/index.js';
@@ -21,6 +21,18 @@ import {
   packVisualDataV3,
   packVisualDataV4,
 } from '../../src/utils/serialization/serializationHelpers.js';
+
+it('project deserialization can suppress parser logging without suppressing failure or changing the default', () => {
+  const warning = mock.method(console, 'warn', () => undefined);
+  try {
+    assert.throws(() => deserializeProject('{}', null, { logErrors: false }));
+    assert.equal(warning.mock.callCount(), 0);
+    assert.throws(() => deserializeProject('{}'));
+    assert.equal(warning.mock.callCount(), 1);
+  } finally {
+    warning.mock.restore();
+  }
+});
 
 const baseGraph: NodeGraph = {
   metadata: {
@@ -405,6 +417,34 @@ describe('serialization compatibility', () => {
     assert.equal(node.isSplitRun, true);
     assert.equal(node.splitRunMax, 7);
     assert.equal(node.splitRunConcurrency, undefined);
+  });
+
+  it('round-trips static file/image payloads without confusing them with plugin attachments', () => {
+    const project = {
+      ...baseProject,
+      data: Object.fromEntries([
+        ['image', 'aW1hZ2U='],
+        ['empty', ''],
+        ['__proto__', 'own-data-key'],
+      ]),
+    } as Project;
+    const [restored, attached] = deserializeProject(serializeProject(project, { plugin: 'attachment' }));
+    assert.deepEqual(restored.data, project.data);
+    assert.deepEqual(attached, { plugin: 'attachment' });
+    assert.equal(deserializeProject(serializeProject(baseProject))[0].data, undefined);
+    assert.deepEqual(deserializeProject(serializeProject({ ...baseProject, data: {} }))[0].data, {});
+  });
+
+  it('rejects malformed static-data records on both serialization and deserialization', () => {
+    for (const data of [null, ['payload'], { payload: 42 }, { payload: { nested: 'value' } }]) {
+      assert.throws(() => serializeProject({ ...baseProject, data } as Project), /static-data strings/);
+      const envelope = prepareSerializedInput(serializeProject(baseProject)).deserializerInput as {
+        version: number;
+        data: Record<string, unknown>;
+      };
+      envelope.data.data = data;
+      assert.throws(() => projectV4Deserializer(envelope), /static-data strings/);
+    }
   });
 
   it('round-trips project through V4 serialize/deserialize', () => {

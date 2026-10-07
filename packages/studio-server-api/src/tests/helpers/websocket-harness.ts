@@ -16,12 +16,20 @@ export function closeWebSocket(socket: WebSocket): void {
     return;
   }
 
+  // terminate() on a pending handshake emits an error asynchronously. Keep
+  // waiters/observers intact so they can settle, but consume teardown errors
+  // even when the caller has already removed its own error listener.
+  const consumeTeardownError = () => {};
+  const cleanup = () => {
+    socket.off('error', consumeTeardownError);
+    socket.off('close', cleanup);
+  };
+  socket.once('error', consumeTeardownError);
+  socket.once('close', cleanup);
   try {
-    if (socket.readyState === WebSocket.CONNECTING) {
-      socket.removeAllListeners();
-    }
     socket.terminate();
   } catch {
+    cleanup();
     // The failure path helpers may close sockets before the handshake finishes.
   }
 }
@@ -32,41 +40,43 @@ export async function connectWebSocket(
 ): Promise<WebSocket> {
   const socket = new WebSocket(url, { headers: options.headers ?? {} });
 
-  const connection = await new Promise<{ socket?: WebSocket; failure?: WebSocketConnectionFailure }>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      closeWebSocket(socket);
-      reject(new Error(`Timed out connecting to ${url}`));
-    }, 3000);
-    timeout.unref?.();
+  const connection = await new Promise<{ socket?: WebSocket; failure?: WebSocketConnectionFailure }>(
+    (resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        closeWebSocket(socket);
+        reject(new Error(`Timed out connecting to ${url}`));
+      }, 3000);
+      timeout.unref?.();
 
-    const cleanup = () => {
-      clearTimeout(timeout);
-      socket.off('open', handleOpen);
-      socket.off('unexpected-response', handleUnexpectedResponse);
-      socket.off('error', handleError);
-    };
+      const cleanup = () => {
+        clearTimeout(timeout);
+        socket.off('open', handleOpen);
+        socket.off('unexpected-response', handleUnexpectedResponse);
+        socket.off('error', handleError);
+      };
 
-    const handleOpen = () => {
-      cleanup();
-      resolve({ socket });
-    };
+      const handleOpen = () => {
+        cleanup();
+        resolve({ socket });
+      };
 
-    const handleUnexpectedResponse = (_request: http.ClientRequest, response: http.IncomingMessage) => {
-      cleanup();
-      response.resume();
-      resolve({ failure: { statusCode: response.statusCode } });
-    };
+      const handleUnexpectedResponse = (_request: http.ClientRequest, response: http.IncomingMessage) => {
+        cleanup();
+        response.resume();
+        resolve({ failure: { statusCode: response.statusCode } });
+      };
 
-    const handleError = (error: Error) => {
-      cleanup();
-      resolve({ failure: { error } });
-    };
+      const handleError = (error: Error) => {
+        cleanup();
+        resolve({ failure: { error } });
+      };
 
-    socket.once('open', handleOpen);
-    socket.once('unexpected-response', handleUnexpectedResponse);
-    socket.once('error', handleError);
-  });
+      socket.once('open', handleOpen);
+      socket.once('unexpected-response', handleUnexpectedResponse);
+      socket.once('error', handleError);
+    },
+  );
 
   if (!connection.socket) {
     throw new Error(`Expected websocket to connect, got ${JSON.stringify(connection.failure)}`);
@@ -150,6 +160,7 @@ export async function waitForWebSocketMessages(
 ): Promise<WebSocketMessage[]> {
   const timeoutMs = options.timeoutMs ?? 5000;
   const parseMessage = options.parser ?? parseJsonWebSocketMessage;
+  if (expectedMessages.length === 0) return [];
   const seen = new Set<string>();
   const messages: WebSocketMessage[] = [];
 
@@ -168,7 +179,14 @@ export async function waitForWebSocketMessages(
     };
 
     const handleMessage = (raw: WebSocket.RawData) => {
-      const message = parseMessage(raw);
+      let message: WebSocketMessage;
+      try {
+        message = parseMessage(raw);
+      } catch (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
       messages.push(message);
       seen.add(message.message);
 

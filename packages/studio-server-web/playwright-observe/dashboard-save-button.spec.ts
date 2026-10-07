@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 const projectName = 'Dashboard Save Button';
 const projectId = 'dashboard-save-button-project';
@@ -70,6 +70,7 @@ async function dragNode(page: Page, deltaX: number): Promise<void> {
 }
 
 test('dashboard Save sends a data-only command and remains explicit in Evaluations', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
   test.slow();
 
   const pageErrors: string[] = [];

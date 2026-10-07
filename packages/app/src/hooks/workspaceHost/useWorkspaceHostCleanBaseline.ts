@@ -1,9 +1,11 @@
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { graphState } from '../../state/graph.js';
+import { isEqual } from 'lodash-es';
 import {
   openedProjectSnapshotsState,
   projectDataUnsavedChangesState,
+  projectDataState,
   projectState,
   projectUnsavedChangesState,
   projectsState,
@@ -13,6 +15,7 @@ import {
   buildCurrentProjectContentSnapshot,
   markProjectClean as markProjectContentClean,
   markProjectDirtyFlag,
+  getProjectContentDigest,
   type ProjectContentForDigest,
 } from '../../utils/projectUnsavedChanges.js';
 import { useStableCallback } from '../useStableCallback.js';
@@ -20,10 +23,7 @@ import { normalizeProjectSnapshot } from './projectSnapshot.js';
 import type { RivetProjectCleanBaselineSnapshotInput } from './types.js';
 
 export function useWorkspaceHostCleanBaseline() {
-  const projects = useAtomValue(projectsState);
-  const currentProject = useAtomValue(projectState);
-  const currentGraph = useAtomValue(graphState);
-  const openedProjectSnapshots = useAtomValue(openedProjectSnapshotsState);
+  const store = useStore();
   const setSavedProjectContentDigests = useSetAtom(savedProjectContentDigestsState);
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
@@ -31,10 +31,7 @@ export function useWorkspaceHostCleanBaseline() {
   const getProjectCleanBaseline = useStableCallback(
     (projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput): ProjectContentForDigest | undefined => {
       if (snapshot?.project) {
-        const normalized = normalizeProjectSnapshot({
-          project: snapshot.project,
-          data: snapshot.data,
-        });
+        const normalized = normalizeProjectSnapshot(snapshot);
         const snapshotProjectId = normalized.project.metadata.id as ProjectId | undefined;
 
         return snapshotProjectId === projectId
@@ -44,14 +41,15 @@ export function useWorkspaceHostCleanBaseline() {
           : undefined;
       }
 
+      const currentProject = store.get(projectState);
       if (currentProject.metadata.id === projectId) {
         return buildCurrentProjectContentSnapshot({
           project: currentProject,
-          graph: currentGraph,
+          graph: store.get(graphState),
         });
       }
 
-      const inactiveSnapshot = openedProjectSnapshots[projectId];
+      const inactiveSnapshot = store.get(openedProjectSnapshotsState)[projectId];
       return inactiveSnapshot
         ? {
             project: inactiveSnapshot.project,
@@ -62,7 +60,7 @@ export function useWorkspaceHostCleanBaseline() {
 
   const markProjectClean = useStableCallback(
     async (projectId: ProjectId, snapshot?: RivetProjectCleanBaselineSnapshotInput) => {
-      if (!projects.openedProjects[projectId] && currentProject.metadata.id !== projectId) {
+      if (!store.get(projectsState).openedProjects[projectId]) {
         return false;
       }
 
@@ -72,15 +70,23 @@ export function useWorkspaceHostCleanBaseline() {
       }
 
       setSavedProjectContentDigests((previousDigests) => markProjectContentClean(previousDigests, cleanBaseline));
-      setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
-      setProjectDataUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, false));
+      const liveContent = getProjectCleanBaseline(projectId);
+      const liveData =
+        store.get(projectState).metadata.id === projectId
+          ? store.get(projectDataState)
+          : store.get(openedProjectSnapshotsState)[projectId]?.data;
+      const newerContent =
+        liveContent != null && getProjectContentDigest(liveContent) !== getProjectContentDigest(cleanBaseline);
+      const newerData = snapshot != null && !isEqual(liveData ?? {}, normalizeProjectSnapshot(snapshot).data ?? {});
+      setProjectUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, newerContent));
+      setProjectDataUnsavedChanges((previousFlags) => markProjectDirtyFlag(previousFlags, projectId, newerData));
 
       return true;
     },
   );
 
   const markCurrentProjectClean = useStableCallback(async (snapshot?: RivetProjectCleanBaselineSnapshotInput) => {
-    const currentProjectId = currentProject.metadata.id as ProjectId | undefined;
+    const currentProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
     if (!currentProjectId) {
       return false;
     }

@@ -78,6 +78,10 @@ export const HostedEditorApp: FC = () => {
   const handleOpenError = useCallback((event: RivetAppHostOpenErrorEvent) => {
     console.error('Rivet host open operation failed:', event);
   }, []);
+  const handleInitializationError = useCallback(() => {
+    // No raw storage/authentication diagnostics cross the iframe boundary.
+    postMessageToDashboard({ type: 'editor-initialization-failed' });
+  }, []);
 
   const handleWorkspaceHostReady = useCallback((host: RivetWorkspaceHost) => {
     setWorkspaceHost(host);
@@ -94,6 +98,7 @@ export const HostedEditorApp: FC = () => {
       ui={HOSTED_RIVET_UI}
       onActiveProjectChanged={handleActiveProjectChanged}
       onOpenError={handleOpenError}
+      onInitializationError={handleInitializationError}
       onOpenProjectCountChanged={handleOpenProjectCountChanged}
       onProjectSaved={handleProjectSaved}
       onWorkspaceHostDisposed={handleWorkspaceHostDisposed}

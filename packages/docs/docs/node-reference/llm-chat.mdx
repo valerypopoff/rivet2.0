@@ -74,6 +74,8 @@ Provider and model support still applies; a Custom provider that rejects
 | LLM response body   | `object`, `object[]`, `string`, `string[]`, `any`, or `any[]`             | Available when Output response body is enabled. Shows the complete raw provider HTTP response body captured without consuming the model stream. JSON is parsed for inspection; other bodies remain text. Multiple captured responses are returned in provider-call order. Failed runs retain provider responses received before the error.                                         |
 | LLM Attempts        | `object[]`                                                                | Available when Output LLM attempts is enabled. Chronological configuration, provider-request, and parsed-response-validation facts for this invocation. It includes profile indexes when From profile mode is used.                                                                                                                                                                |
 | LLM Profile Summary | `string`                                                                  | Available in From profile mode. Human-readable outcome for every configured profile: succeeded, failed, or not attempted.                                                                                                                                                                                                                                                          |
+| Run failed | `boolean` | Available when Fail on non-2XX status code is disabled or Catch all failures is enabled. `false` on success; `true` on a caught node failure. |
+| Run error | `string` | Available with Run failed. Excluded on success; readable failure text on a caught failure. |
 
 </TabItem>
 
@@ -130,6 +132,10 @@ This section is available in Inline configuration mode.
 ### Parameters
 
 Inline LLM Chat supports common generation parameters such as Temperature, Max output tokens, Top P, Top K, presence penalty, frequency penalty, stop sequences, and seed. In From profile mode these settings and their optional input ports belong to LLM Profile. New nodes leave Top P unset unless you fill it in or drive it from an input port. Provider support varies; unsupported settings may be ignored by the provider or model.
+
+Leave **Temperature** blank to use the provider default: Rivet omits the generated temperature option instead of sending `null`. A valid `0` remains an explicit zero, and fractional values such as `0.5` are preserved. This also applies to LLM Profile and historical empty/null/NaN editor values. An explicitly authored `temperature` field in **Extra provider options** still overrides the generated request.
+
+A supplied Temperature input must resolve to a finite number; a blank, excluded or malformed input fails rather than silently using the node default. An absent input value falls back to the configured Temperature.
 
 ### Reasoning
 
@@ -282,8 +288,12 @@ Provider Advanced contains optional Headers and Extra provider options. Headers 
 
 ### Error Behavior
 
+Expand the collapsible **Error behavior** section to configure these controls. Folding it does not change their values.
+
 | Setting          | Description                                                                                                                                                                                                                                                                         |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fail on non-2XX status code | On by default. Disable it to return a rejected provider HTTP status through Run failed and Run error after retries and profile fallback, rather than throwing. This does not accept a malformed successful response or catch failures without a rejected HTTP status. |
+| Catch all failures | Off by default. Routes node execution failures—including input/configuration, credential, transport, response-validation and invoked-tool failures—to Run failed and Run error. Explicit graph cancellation still cancels the run. |
 | Retry on non-200 | Retries provider requests when the Vercel AI SDK reports a non-200 HTTP status. When this is off, Rivet disables the SDK's built-in retry layer and makes one provider attempt. With an LLM Profile fallback chain, Rivet exhausts these repeats before moving to the next profile. |
 | Repeat times     | Number of repeats after the initial request.                                                                                                                                                                                                                                        |
 | Cooldown, ms     | Delay between retry attempts.                                                                                                                                                                                                                                                       |
@@ -325,6 +335,8 @@ OpenAI, Anthropic, Google, and custom-provider configured keys are set in Settin
 
 LLM Chat normalizes common provider failures into readable errors. For example, an invalid API key should produce a provider request error that includes the HTTP status, provider, model, endpoint, and a hint to check the API key source.
 
+On a caught failure, normal answer, message, tool, reasoning and Usage outputs are excluded rather than forwarding a partial response as success. Enabled request/response bodies, LLM Attempts and profile summary can retain captured diagnostic evidence. Catching applies to this node's execution, not unrelated downstream nodes. With **Run per item**, failure outputs follow the normal per-item aggregation. The card shows **Throw on non-2XX** while enabled and **Catch all failures** when enabled.
+
 In the Rivet editor, use **Inspect response** beside the normal output controls or
 in the full-output toolbar to inspect how the currently selected LLM Chat
 invocation ran. The inspector follows the selected graph run and process page,
@@ -337,7 +349,7 @@ retrieved documents, credentials, headers, or raw provider bodies. Frozen
 outputs, cache replay, and older recordings may show a partial or unavailable
 trace when no physical-call metadata exists.
 
-Enable **Output LLM attempts** for one stable, machine-readable chronological record of every configuration, request, retry, and response-validation attempt. `profileIndex` is present for From profile candidates; inline runs omit it. Custom attempts also include `customProviderApi`, so Completions and Responses candidates using the same model name remain distinguishable. LLM Chat itself still fails if every active configuration fails—attempt output is returned only by completed or recovered invocations. Enable **Output request body** to inspect the provider body Rivet sent and **Output response body** to inspect the provider body Rivet received. Both body outputs preserve physical provider-call order, including fallback candidates and auto-continued tool rounds. The response-body diagnostic clones the provider response without changing the stream, and records the complete body; a request that fails before returning an HTTP response has no response-body entry. `LLM Profile Summary` gives an immediately readable succeeded/failed/not-attempted outcome for every configured profile. Request headers and Rivet-managed API key headers are not included in the request body, but prompts and request options in the actual provider body are visible. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
+Enable **Output LLM attempts** for one stable, machine-readable chronological record of every configuration, request, retry, and response-validation attempt. `profileIndex` is present for From profile candidates; inline runs omit it. Custom attempts also include `customProviderApi`, so Completions and Responses candidates using the same model name remain distinguishable. If every active configuration fails, LLM Chat throws unless its Error behavior catches the final failure; enabled attempt diagnostics can remain available on that caught result. Enable **Output request body** to inspect the provider body Rivet sent and **Output response body** to inspect the provider body Rivet received. Both body outputs preserve physical provider-call order, including fallback candidates and auto-continued tool rounds. The response-body diagnostic clones the provider response without changing the stream, and records the complete body; a request that fails before returning an HTTP response has no response-body entry. `LLM Profile Summary` gives an immediately readable succeeded/failed/not-attempted outcome for every configured profile. Request headers and Rivet-managed API key headers are not included in the request body, but prompts and request options in the actual provider body are visible. Rivet disables the Vercel AI SDK's hidden default retries, so the Retry on non-200 switch is the only retry policy for LLM Chat provider requests.
 
 ## See Also
 

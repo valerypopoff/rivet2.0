@@ -39,7 +39,8 @@
 .run-recordings-help {
   margin-top: 2px;
   color: var(--grey-light);
-  font-size: 15px;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
   max-width: 620px;
 }
 
@@ -78,6 +79,10 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+}
+
+.run-recordings-details-any {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .run-recordings-workflow-summary,
@@ -391,6 +396,56 @@
   border-color: rgba(126, 226, 148, 0.36);
 }
 
+.run-recordings-input-path-field {
+  position: relative;
+}
+
+.run-recordings-input-path-history {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin-top: 4px;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: #25262b;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.run-recordings-input-path-history-row {
+  display: flex;
+}
+
+.run-recordings-input-path-history-row button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--grey-lightest);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.run-recordings-input-path-history-row button:hover,
+.run-recordings-input-path-history-row button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.run-recordings-input-path-select {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-recordings-input-path-history-row .run-recordings-input-path-delete {
+  flex: 0 0 32px;
+  text-align: center;
+}
+
 .run-recordings-input-filter-operator .run-recordings-select__control {
   min-height: 34px !important;
   border-radius: 8px !important;
@@ -536,6 +591,54 @@
 .run-recordings-list-viewport {
   height: 100%;
   min-height: 0;
+}
+
+.run-recordings-child-row {
+  margin-left: 24px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(126, 226, 148, 0.3);
+}
+
+.run-recordings-sub-run-label {
+  color: var(--grey-light);
+  font-weight: 500;
+}
+
+.run-recordings-family-context {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: var(--grey-light);
+  font-size: 12px;
+}
+
+.run-recordings-family-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--grey-lightest);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.run-recordings-family-toggle:hover,
+.run-recordings-family-toggle:focus-visible {
+  border-color: rgba(126, 226, 148, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.run-recordings-family-toggle:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .run-recordings-pagination-footer {
@@ -772,17 +875,36 @@
     max-height: calc(100vh - 20px);
   }
 
+  [data-testid='run-recordings-modal--body'] {
+    overflow-y: auto;
+  }
+
   .run-recordings-help {
     max-width: none;
   }
 
   .run-recordings-shell {
-    max-height: 100%;
+    flex: 0 0 auto;
+    max-height: none;
+  }
+
+  .run-recordings-content {
+    flex: 0 0 auto;
+  }
+
+  .run-recordings-content,
+  .run-recordings-layout,
+  .run-recordings-details {
+    overflow: visible;
   }
 
   .run-recordings-layout,
   .run-recordings-details {
     grid-template-rows: auto auto;
+  }
+
+  .run-recordings-details-any {
+    grid-template-rows: auto;
   }
 
   .run-recordings-workflow-fields {

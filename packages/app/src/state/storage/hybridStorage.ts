@@ -1,14 +1,45 @@
 import { getError } from '@valerypopoff/rivet2-core';
-import { createJSONStorage } from 'jotai/utils';
 import type { SyncStorage } from 'jotai/vanilla/utils/atomWithStorage';
 import { debounce, type DebouncedFunc } from 'lodash-es';
 import { createDefaultAsyncStorage, type AsyncStorageBackend } from './indexedDB';
 import { handleError } from '../../utils/errorHandling.js';
 import { initializeHybridStorage, memoryStorage } from './migrations';
+import { WorkspaceRecoveryStorage, workspaceRecoveryGroups, validateRecoveryGroups } from './workspaceRecovery.js';
 
-export const allInitializeStoreFns = new Set<() => Promise<void>>();
+export const allInitializeStoreFns = new Set<(isCurrent?: () => boolean) => Promise<void>>();
 const builtInAsyncStorage = createDefaultAsyncStorage();
-let defaultAsyncStorage = builtInAsyncStorage;
+const recoveryBackends = new WeakMap<AsyncStorageBackend, WorkspaceRecoveryStorage>();
+function withWorkspaceRecovery(backend: AsyncStorageBackend): WorkspaceRecoveryStorage {
+  if (backend instanceof WorkspaceRecoveryStorage) return backend;
+  let recovery = recoveryBackends.get(backend);
+  if (!recovery) {
+    let session: Storage | undefined;
+    let sessionUnavailable = false;
+    try {
+      session = typeof sessionStorage === 'undefined' ? undefined : sessionStorage;
+    } catch {
+      sessionUnavailable = true;
+    }
+    recovery = new WorkspaceRecoveryStorage(
+      backend,
+      () =>
+        Object.fromEntries(
+          [...workspaceRecoveryGroups].flatMap((key) =>
+            memoryStorage.has(key) ? [[key, memoryStorage.get(key)]] : [],
+          ),
+        ),
+      {
+        session,
+        sessionUnavailable,
+        resolveSession: () => (typeof sessionStorage === 'undefined' ? undefined : sessionStorage),
+      },
+    );
+    recoveryBackends.set(backend, recovery);
+  }
+  return recovery;
+}
+let defaultAsyncStorage = withWorkspaceRecovery(builtInAsyncStorage);
+export const getWorkspaceRecoveryStorage = (): WorkspaceRecoveryStorage => defaultAsyncStorage;
 
 type HybridStorageOptions = {
   debounceMs?: number;
@@ -28,7 +59,7 @@ const groupedInitializeControllers = new Map<
   string,
   {
     asyncStorage: AsyncStorageBackend;
-    initialize: () => Promise<void>;
+    initialize: (isCurrent?: () => boolean) => Promise<void>;
   }
 >();
 
@@ -41,7 +72,7 @@ function createDebouncedSave(
   }
 
   return debounce(async (value: any) => {
-    await controller.saveNow(value);
+    await controller.saveNow(value).catch(() => undefined);
   }, debounceMs);
 }
 
@@ -49,7 +80,7 @@ function persistGroupedSnapshot(controller: GroupedStorageController, value: any
   if (controller.debouncedSave) {
     controller.debouncedSave(value);
   } else {
-    void controller.saveNow(value);
+    void controller.saveNow(value).catch(() => undefined);
   }
 }
 
@@ -74,20 +105,37 @@ function getOrCreateGroupedStorageController(
     debounceMs,
     pendingSave: Promise.resolve(),
     queueSave: async (value: any) => {
-      const serializedValue = JSON.stringify(value);
+      const backend = controller.asyncStorage;
+      let serializedValue: string;
+      try {
+        serializedValue = JSON.stringify(value);
+      } catch (error) {
+        if (backend instanceof WorkspaceRecoveryStorage) backend.failed();
+        handleError(error, 'Failed to serialize browser recovery', {
+          toastError: !workspaceRecoveryGroups.has(mainKey),
+        });
+        throw error;
+      }
       const saveOperation = async () => {
         try {
-          await controller.asyncStorage.setItem(mainKey, serializedValue);
+          await backend.setItem(mainKey, serializedValue);
         } catch (error) {
           handleError(error, 'Failed to save persistent storage item', {
+            toastError: !workspaceRecoveryGroups.has(mainKey),
             metadata: {
               key: mainKey,
             },
           });
+          throw error;
         }
       };
 
-      controller.pendingSave = controller.pendingSave.then(saveOperation, saveOperation);
+      // Recovery owns an envelope-wide queue. Invoke it now to capture this
+      // workspace/backend generation, not later after another group's IO.
+      controller.pendingSave =
+        backend instanceof WorkspaceRecoveryStorage && workspaceRecoveryGroups.has(mainKey)
+          ? saveOperation()
+          : controller.pendingSave.then(saveOperation, saveOperation);
       await controller.pendingSave;
     },
     saveNow: async (value: any) => {
@@ -117,9 +165,26 @@ export async function flushHybridStorageGroup(mainKey: string): Promise<void> {
   await controller.saveNow(value);
 }
 
+export async function flushWorkspaceRecovery(): Promise<void> {
+  for (const key of workspaceRecoveryGroups) groupedStorageControllers.get(key)?.debouncedSave?.cancel();
+  // One envelope includes all workspace groups, regardless of which changed.
+  await defaultAsyncStorage.setItem('project', '{}');
+}
+
+export async function initializeWorkspaceRecovery(isCurrent: () => boolean = () => true): Promise<void> {
+  if (!isCurrent()) return;
+  const groups = Object.fromEntries(
+    [...workspaceRecoveryGroups].flatMap((key) => (memoryStorage.has(key) ? [[key, memoryStorage.get(key)]] : [])),
+  );
+  validateRecoveryGroups(groups);
+  // Legacy import must commit and read back the complete envelope before the
+  // editor mounts. Interrupted imports retain all original records for retry.
+  if (!defaultAsyncStorage.hasSelectedCheckpoint && Object.keys(groups).length > 0) await flushWorkspaceRecovery();
+}
+
 function registerInitializeStoreFn(mainKey: string | undefined, asyncStorage: AsyncStorageBackend): void {
   if (!mainKey) {
-    allInitializeStoreFns.add(async () => initializeHybridStorage(mainKey, asyncStorage));
+    allInitializeStoreFns.add(async (isCurrent) => initializeHybridStorage(mainKey, asyncStorage, isCurrent));
     return;
   }
 
@@ -131,7 +196,10 @@ function registerInitializeStoreFn(mainKey: string | undefined, asyncStorage: As
 
   const controller = {
     asyncStorage,
-    initialize: async () => initializeHybridStorage(mainKey, controller.asyncStorage),
+    initialize: async (isCurrent: () => boolean = () => true) => {
+      const backend = controller.asyncStorage;
+      await initializeHybridStorage(mainKey, backend, () => isCurrent() && controller.asyncStorage === backend);
+    },
   };
 
   groupedInitializeControllers.set(mainKey, controller);
@@ -140,15 +208,18 @@ function registerInitializeStoreFn(mainKey: string | undefined, asyncStorage: As
 
 export function configureHybridStorageBackend(asyncStorage: AsyncStorageBackend | undefined): AsyncStorageBackend {
   const previousAsyncStorage = defaultAsyncStorage;
-  const nextAsyncStorage = asyncStorage ?? builtInAsyncStorage;
+  const nextAsyncStorage = withWorkspaceRecovery(asyncStorage ?? builtInAsyncStorage);
 
   if (nextAsyncStorage === defaultAsyncStorage) {
     return previousAsyncStorage;
   }
 
+  previousAsyncStorage.setSelected(false);
+  nextAsyncStorage.setSelected(true);
   defaultAsyncStorage = nextAsyncStorage;
 
   for (const controller of groupedStorageControllers.values()) {
+    controller.debouncedSave?.cancel();
     controller.asyncStorage = nextAsyncStorage;
   }
 
@@ -166,7 +237,6 @@ export const createHybridStorage = (
 ): {
   storage: SyncStorage<any>;
 } => {
-  const jsonStorage = createJSONStorage<any>(() => localStorage);
   const groupedController = mainKey
     ? getOrCreateGroupedStorageController(mainKey, asyncStorage, options.debounceMs ?? 1000)
     : undefined;
@@ -197,6 +267,12 @@ export const createHybridStorage = (
         const mainObject = memoryStorage.get(mainKey) ?? {};
         mainObject[key] = value;
         memoryStorage.set(mainKey, mainObject);
+        if (
+          workspaceRecoveryGroups.has(mainKey) &&
+          groupedController!.asyncStorage instanceof WorkspaceRecoveryStorage
+        ) {
+          groupedController!.asyncStorage.changed();
+        }
         persistGroupedSnapshot(groupedController!, mainObject);
       } catch (error) {
         handleError(error, 'Failed to update in-memory storage item', {
@@ -225,12 +301,14 @@ export const createHybridStorage = (
       const mainObject = memoryStorage.get(mainKey) ?? {};
       delete mainObject[key];
       memoryStorage.set(mainKey, mainObject);
+      if (workspaceRecoveryGroups.has(mainKey) && groupedController!.asyncStorage instanceof WorkspaceRecoveryStorage) {
+        groupedController!.asyncStorage.changed();
+      }
       persistGroupedSnapshot(groupedController!, mainObject);
     },
   };
 
   registerInitializeStoreFn(mainKey, asyncStorage);
-  void jsonStorage;
 
   return { storage };
 };

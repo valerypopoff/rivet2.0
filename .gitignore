@@ -79,6 +79,7 @@ packages/app-executor/bin/executor-bundle.cjs
 Thumbs.db
 
 packages/app/stats.html
+packages/app/desktop-web-artifact.json
 packages/app/tmp-icon-test/
 packages/docs/.promo-dev/
 tmp-macos-signing-test/

@@ -83,6 +83,7 @@ import {
 import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
+import { createHostedProcessor } from './hosted-processor.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -1641,32 +1642,18 @@ async function executeWorkflowEndpoint(
   },
 ): Promise<void> {
   const { project, datasetProvider, projectVirtualPath } = executionProject;
-  const projectReferenceLoader = await createExecutionProjectReferenceLoader(projectVirtualPath);
   const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
-  const executionEnvironment = await readExecutionEnvironmentVariables();
   const codeRunnerTelemetry = shouldCollectCodeRunnerTelemetry() ? createManagedCodeRunnerTelemetry() : null;
   const executionIdentity = createWorkflowEndpointRecordingIdentity(executionProject, getRequestCorrelationId(req));
-  const processor = createProcessor(project, {
-    returnWhenGraphOutputsReady: true,
-    abortSignal: options.abortSignal,
-    codeRunner: new ManagedCodeRunner(getRootPath(), {
-      ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
-      executionEnvironment,
-    }) as any,
-    projectPath: projectVirtualPath,
-    nativeApi: createLocalCatalogNativeApi(),
+  const processor = await createHostedProcessor({
+    project,
     datasetProvider,
-    projectReferenceLoader,
-    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
-    ...(isWorkflowRecordingEnabled()
-      ? {
-          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
-          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
-        }
-      : {}),
-    llmProfileHealthStore: await getLLMProfileHealthStore(),
-    llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
-    executionEnvironment,
+    projectPath: projectVirtualPath,
+    earlyOutputs: true,
+    abortSignal: options.abortSignal,
+    telemetry: codeRunnerTelemetry,
+    recording: isWorkflowRecordingEnabled(),
+    correlationId: executionIdentity.correlationId!,
     remoteDebugger,
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),

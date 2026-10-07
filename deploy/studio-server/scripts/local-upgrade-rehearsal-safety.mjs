@@ -4,6 +4,14 @@ import path from 'node:path';
 
 export const REHEARSAL_PROJECT = /^rivet-local-upgrade-rehearsal-[a-f0-9-]{36}$/;
 
+// Preserve the deployment layout: the backup tool imports both its sibling
+// snapshot planner and the UI-managed key/layout helper under images/api.
+export const REHEARSAL_TOOLS = Object.freeze([
+  'scripts/local-upgrade-backup.mjs',
+  'scripts/local-upgrade-snapshot-plan.mjs',
+  'images/api/local-upgrade-ui.mjs',
+]);
+
 export const REHEARSAL_PHASES = Object.freeze([
   'online-recovery',
   'offline-recovery',
@@ -159,13 +167,9 @@ export function assertOwnedRehearsalCompose(config, model) {
           assert.equal(mount.target, '/fixture-registry.mjs');
         } else {
           assert.equal(name, 'api', 'Foreign bind mount.');
-          const file = path.posix.basename(mount.target);
-          assert.ok(
-            ['local-upgrade-backup.mjs', 'local-upgrade-snapshot-plan.mjs'].includes(file),
-            'Foreign fixture tool.',
-          );
-          assert.equal(mount.target, '/fixture-tools/' + file);
-          assert.equal(mount.source, path.join(path.dirname(config.registryScript), file));
+          const file = REHEARSAL_TOOLS.find((file) => mount.target === '/fixture-tools/' + file);
+          assert.ok(file, 'Foreign fixture tool.');
+          assert.equal(mount.source, path.join(path.dirname(config.registryScript), 'fixture-tools', file));
         }
         assert.equal(mount.read_only, true);
       } else assert.equal(mount.type, 'tmpfs');

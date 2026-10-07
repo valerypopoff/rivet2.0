@@ -37,20 +37,25 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
   assert.deepEqual(
     [...requestedEnvVars].sort(),
     [
-      'ANTHROPIC_API_KEY',
-      'CUSTOM_ENV',
-      'CUSTOM_PROVIDER_API_KEY',
-      'EXTRA_ENV',
-      'GOOGLE_GENERATIVE_AI_API_KEY',
-      'OPENAI_API_KEY',
-      'OPENAI_ORG_ID',
-      'PLUGIN_KEY',
-      ...getClassifierProviderEnvironmentVariableNames(),
+      ...new Set([
+        'ANTHROPIC_API_KEY',
+        'CUSTOM_ENV',
+        'CUSTOM_PROVIDER_API_KEY',
+        'EXTRA_ENV',
+        'GOOGLE_GENERATIVE_AI_API_KEY',
+        'OPENAI_API_KEY',
+        'OPENAI_ORG_ID',
+        'PLUGIN_KEY',
+        ...getClassifierProviderEnvironmentVariableNames(),
+      ]),
     ].sort(),
   );
 
   const classifierEnvironmentValues = Object.fromEntries(
-    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [envVarName, `classifier-${envVarName}`]),
+    getClassifierProviderEnvironmentVariableNames().map((envVarName) => [
+      envVarName,
+      envVarName === 'OPENAI_API_KEY' ? 'openai-key' : `classifier-${envVarName}`,
+    ]),
   );
   const environmentValues = new Map([
     ['OPENAI_API_KEY', 'openai-key'],
@@ -107,13 +112,17 @@ test('fillMissingSettingsFromEnvironmentVariables preserves the legacy custom pr
 });
 
 test('fillMissingSettingsFromEnvironmentVariables preserves legacy OpenAI app settings', async () => {
-  const settings = await fillMissingSettingsFromEnvironmentVariables({ openAiApiKey: '', openAiKey: 'legacy-key' }, [], {
-    environmentProvider: {
-      async getEnvVar() {
-        return undefined;
+  const settings = await fillMissingSettingsFromEnvironmentVariables(
+    { openAiApiKey: '', openAiKey: 'legacy-key' },
+    [],
+    {
+      environmentProvider: {
+        async getEnvVar() {
+          return undefined;
+        },
       },
     },
-  });
+  );
 
   assert.equal(settings.openAiApiKey, 'legacy-key');
   assert.equal(settings.openAiKey, 'legacy-key');

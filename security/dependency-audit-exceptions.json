@@ -2,6 +2,30 @@
   "version": 1,
   "exceptions": [
     {
+      "advisoryIds": [1240991],
+      "packages": ["http-cache-semantics"],
+      "dependents": ["cacheable-request@npm:10.2.14"],
+      "workspaceOwners": ["docs@workspace:packages/docs"],
+      "scope": "Docusaurus update-notifier's public npm version lookup only; this dependency path is not a Rivet runtime or shared authenticated-response cache.",
+      "reason": "GHSA-ch52-4w7c-c8xp has no confirmed fixed release. Published 4.3.0 was inspected and still reproduced shared Set-Cookie/proxy-revalidate reuse with max-stale, so it is not accepted as remediation. The current path is docs -> update-notifier -> latest-version -> package-json -> got -> cacheable-request. No cross-user response cache is configured there. Replace or upgrade the owning documentation tool when a verified fix is available; new runtime dependents remain blocked.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
+      "advisoryIds": [1240992],
+      "packages": ["braces"],
+      "dependents": ["chokidar@npm:3.5.3"],
+      "workspaceOwners": [
+        "@valerypopoff/rivet-app-executor@workspace:packages/app-executor",
+        "@valerypopoff/rivet-studio-server-executor@workspace:packages/studio-server-executor",
+        "docs@workspace:packages/docs"
+      ],
+      "scope": "Repository-controlled documentation and executor build watchers only; no request-time or user-project pattern processing uses this dependency path.",
+      "reason": "braces 3.0.3 remains the latest release and GHSA-vfj7-8cjw-p6xm has no patched version. This Chokidar path comes from Docusaurus and esbuild-plugin-copy build tooling. Only reviewed repository watch patterns are accepted, not untrusted remote globs. Replace or upgrade the owning watcher when a compatible fix is available; this does not waive new runtime dependents.",
+      "owner": "Rivet maintainers",
+      "expires": "2026-10-10"
+    },
+    {
       "advisoryIds": [1120258],
       "packages": ["@babel/plugin-transform-modules-systemjs"],
       "dependents": ["@babel/preset-env@npm:7.22.5"],

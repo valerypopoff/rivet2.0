@@ -1,12 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import {
-  GetStoredValueNodeImpl,
-  RivetStoredValueController,
-  SetStoredValueNodeImpl,
-  type Inputs,
-  type InternalProcessContext,
-} from '../../../src/index.js';
+import { GetStoredValueNodeImpl } from '../../../src/model/nodes/GetStoredValueNode.js';
+import { RivetStoredValueController } from '../../../src/model/StoredValueStore.js';
+import { SetStoredValueNodeImpl } from '../../../src/model/nodes/SetStoredValueNode.js';
+import type { Inputs } from '../../../src/model/GraphProcessor.js';
+import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
 
 function createContext(
   controller = new RivetStoredValueController(),

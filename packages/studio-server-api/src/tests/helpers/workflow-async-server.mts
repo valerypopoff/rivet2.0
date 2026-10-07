@@ -19,10 +19,14 @@ const rivet = await import('@valerypopoff/rivet2-node');
 await storage.initializeWorkflowStorage();
 const { writeWorkflowEndpointAuthSettings } = await import('../../workflow-endpoint-auth-settings.js');
 await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
-const created = await storage.createWorkflowProjectItemWithBackend(
-  '',
-  process.env.RIVET_ASYNC_TEST_PROJECT_NAME || 'Async acceptance',
-);
+const resume = process.env.RIVET_ASYNC_TEST_RESUME === '1';
+const fixtureFile = path.join(root, 'async-fixture.json');
+const created = resume
+  ? JSON.parse(await fs.readFile(fixtureFile, 'utf8'))
+  : await storage.createWorkflowProjectItemWithBackend(
+      '',
+      process.env.RIVET_ASYNC_TEST_PROJECT_NAME || 'Async acceptance',
+    );
 const project = rivet.loadProjectFromString((await storage.loadHostedProject(created.absolutePath)).contents);
 const graph = project.graphs[project.metadata.mainGraphId!]!;
 const input = rivet.graphInputNode.impl.create();
@@ -42,33 +46,36 @@ const connect = (from: ChartNode, outputId: string, to: ChartNode, inputId: stri
   inputNodeId: to.id,
   inputId: inputId as PortId,
 });
-graph.nodes = [input, output, trigger, tail, result];
-graph.connections = [
-  connect(input, 'data', output, 'value'),
-  connect(input, 'data', trigger, 'input1'),
-  connect(trigger, 'output1', tail, 'url'),
-  connect(tail, 'res_body', result, 'value'),
-];
-if (process.env.RIVET_ASYNC_TEST_FAILURE === 'foreground') {
-  const failure = rivet.codeNode.impl.create();
-  failure.data.code = "throw new Error('foreground fixture failure');";
-  graph.nodes = [failure];
-  graph.connections = [];
+if (!resume) {
+  graph.nodes = [input, output, trigger, tail, result];
+  graph.connections = [
+    connect(input, 'data', output, 'value'),
+    connect(input, 'data', trigger, 'input1'),
+    connect(trigger, 'output1', tail, 'url'),
+    connect(tail, 'res_body', result, 'value'),
+  ];
+  if (process.env.RIVET_ASYNC_TEST_FAILURE === 'foreground') {
+    const failure = rivet.codeNode.impl.create();
+    failure.data.code = "throw new Error('foreground fixture failure');";
+    graph.nodes = [failure];
+    graph.connections = [];
+  }
+  const contents = rivet.serializeProject(project);
+  if (typeof contents !== 'string') throw new Error('Expected serialized project');
+  await storage.saveHostedProject({ projectPath: created.absolutePath, contents, datasetsContents: null });
+  const reviewed = await storage.listWorkflowProjectWebAppsWithBackend(created.relativePath);
+  await storage.executeWorkflowPublicationCommandWithBackend({
+    kind: 'publish-endpoint',
+    relativePath: created.relativePath,
+    endpointName,
+    preconditions: {
+      expectedProjectId: reviewed.projectId,
+      expectedPublicationVersion: reviewed.publicationVersion,
+      expectedDraftRevisionId: reviewed.draftRevisionId,
+    },
+  });
+  await fs.writeFile(fixtureFile, JSON.stringify(created));
 }
-const contents = rivet.serializeProject(project);
-if (typeof contents !== 'string') throw new Error('Expected serialized project');
-await storage.saveHostedProject({ projectPath: created.absolutePath, contents, datasetsContents: null });
-const reviewed = await storage.listWorkflowProjectWebAppsWithBackend(created.relativePath);
-await storage.executeWorkflowPublicationCommandWithBackend({
-  kind: 'publish-endpoint',
-  relativePath: created.relativePath,
-  endpointName,
-  preconditions: {
-    expectedProjectId: reviewed.projectId,
-    expectedPublicationVersion: reviewed.publicationVersion,
-    expectedDraftRevisionId: reviewed.draftRevisionId,
-  },
-});
 if (process.env.RIVET_ASYNC_TEST_FAILURE === 'serialization') {
   const { default: express } = await import('express');
   const json = express.response.json;
@@ -96,7 +103,14 @@ process.on('message', async (message: { id: number; command: string }) => {
       process.send?.({ id: message.id, result: true });
       return;
     }
-    if (message.command === 'snapshot') {
+    if (message.command === 'scheduled-recordings') {
+      const { flushWorkflowExecutionRecordingPersistence } = await import('../../routes/workflows/recordings.js');
+      await flushWorkflowExecutionRecordingPersistence();
+      process.send?.({
+        id: message.id,
+        result: await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all'),
+      });
+    } else if (message.command === 'snapshot') {
       const { getActiveHttpExecutionCount } = await import('../../active-http-executions.js');
       const { getHttpBodyAdmissionSnapshot } = await import('../../middleware/body-admission.js');
       process.send?.({

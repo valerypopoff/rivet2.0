@@ -11,6 +11,7 @@ services:
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
       - RIVET_APP_DATA_ROOT=/data/rivet-app
+      - RIVET_PROXY_SETTINGS_URL=http://api:80/internal/app-settings/proxy-config
       - RIVET_PUBLISHED_APPS_BASE_PATH=${RIVET_PUBLISHED_APPS_BASE_PATH:-}
       - RIVET_LATEST_APPS_BASE_PATH=${RIVET_LATEST_APPS_BASE_PATH:-}
       - RIVET_WEB_APPS_BASE_PATH=${RIVET_WEB_APPS_BASE_PATH:-/apps}
@@ -39,10 +40,9 @@ services:
     depends_on:
       web:
         condition: service_healthy
-        # Compose restarts the proxy when it recreates this upstream. The dev
-        # launcher also reloads nginx after each normal bring-up so ordinary
-        # service restarts cannot retain an old bridge-network address.
-        restart: true
+        # Frontend mode changes must not restart nginx and disconnect executor
+        # sockets. The dev launcher gracefully reloads nginx after readiness to
+        # resolve this upstream's new bridge address without retiring sessions.
       api:
         condition: service_healthy
         restart: true
@@ -51,6 +51,7 @@ services:
   web:
     labels: *dev-stack-labels
     image: node:20-alpine
+    init: true
     working_dir: /workspace/packages/studio-server-web
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}
@@ -68,6 +69,8 @@ services:
       - YARN_CHECKSUM_BEHAVIOR=ignore
       - YARN_INSTALL_STATE_PATH=/workspace/node_modules/.yarn-install-state.gz
       - HOSTED_VITE_CACHE_DIR=/home/rivet/.cache/vite
+      - RIVET_DEV_FRONTEND_MODE=${RIVET_DEV_FRONTEND_MODE:-live}
+      - RIVET_DEV_BUNDLE_ROOT=/home/rivet/.cache/tunnel
       - VITE_RIVET_DEBUG_LOGS=${VITE_RIVET_DEBUG_LOGS:-false}
       - RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}
       - RIVET_LATEST_WORKFLOWS_BASE_PATH=${RIVET_LATEST_WORKFLOWS_BASE_PATH:-/workflows-latest}
@@ -84,6 +87,7 @@ services:
       - npm_cache:/home/rivet/.npm
       - yarn_cache:/home/rivet/.cache/yarn
       - vite_cache:/home/rivet/.cache/vite
+      - tunnel_cache:/home/rivet/.cache/tunnel
       - ./docker/preserve-host-pnp-during-command.sh:/tmp/preserve-host-pnp-during-command.sh:ro
     command: >
       sh -lc "
@@ -95,7 +99,12 @@ services:
           touch node_modules/.studio-server-yarn-install-ok;
         fi &&
         yarn build:hosted-web-deps &&
-        yarn workspace @valerypopoff/rivet-studio-server-web run dev --host 0.0.0.0 --strictPort
+        if [ $$RIVET_DEV_FRONTEND_MODE = tunnel ]; then
+          yarn workspace @valerypopoff/rivet-studio-server-web run check:google-hosted-override &&
+          yarn workspace @valerypopoff/rivet-studio-server-web exec node dev/tunnel.mjs;
+        else
+          yarn workspace @valerypopoff/rivet-studio-server-web run dev --host 0.0.0.0 --strictPort;
+        fi
       "
     healthcheck:
       test:
@@ -105,7 +114,7 @@ services:
           '-e',
           "require('node:http').get('http://127.0.0.1:5174/', (res) => process.exit(res.statusCode && res.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))",
         ]
-      start_period: 180s
+      start_period: ${RIVET_DEV_WEB_START_PERIOD:-180s}
       interval: 10s
       timeout: 5s
       retries: 12
@@ -118,17 +127,19 @@ services:
     entrypoint: ['/bin/sh', '-ec']
     command:
       - |
-        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata; do
+        for directory in /workflows /workflow-recordings /data/runtime-libraries /data/rivet-app /data/local-metadata /data/project-bundles; do
           mkdir -p "$$directory"
           if [ "$$(stat -c '%u:%g' "$$directory")" != "10001:10001" ]; then
             find "$$directory" -xdev -exec chown -h 10001:10001 {} +
           fi
         done
+        chmod 700 /data/project-bundles
     volumes:
       - ${RIVET_WORKFLOWS_HOST_PATH:-../../../.data/workflows}:/workflows
       - ${RIVET_WORKFLOW_RECORDINGS_HOST_PATH:-../../../.data/workflow-recordings}:/workflow-recordings
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
       - rivet_local_metadata:/data/local-metadata
+      - rivet_project_bundles:/data/project-bundles
       - type: volume
         source: rivet_data
         target: /data/rivet-app
@@ -187,6 +198,10 @@ services:
       - RIVET_WORKFLOWS_ROOT=/workflows
       - RIVET_WORKFLOW_RECORDINGS_ROOT=/workflow-recordings
       - RIVET_APP_DATA_ROOT=/data/rivet-app
+      - RIVET_PROJECT_BUNDLE_SCRATCH_ROOT=/data/project-bundles
+      - RIVET_PROJECT_BUNDLE_MAX_BYTES=${RIVET_PROJECT_BUNDLE_MAX_BYTES:-536870912}
+      - RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES=${RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES:-2147483648}
+      - RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES=${RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES:-33554432}
       - RIVET_RUNTIME_LIBRARIES_ROOT=/data/runtime-libraries
       - RIVET_RUNTIME_PROCESS_ROLE=api
       # Pull-only metrics stay on this direct internal API service; proxy does not route /metrics.
@@ -201,6 +216,7 @@ services:
       - RIVET_VM_MIGRATION_ENABLED=${RIVET_VM_MIGRATION_ENABLED:-0}
       - RIVET_LOCAL_METADATA_UPGRADE_ENABLED=${RIVET_LOCAL_METADATA_UPGRADE_ENABLED:-0}
       - RIVET_LOCAL_METADATA_CONTROL_ROOT=${RIVET_LOCAL_METADATA_CONTROL_ROOT:-}
+      - RIVET_LOCAL_METADATA_UI_ROOT=/data/local-metadata
       - RIVET_LOCAL_METADATA_ENCRYPTION_KEY=${RIVET_LOCAL_METADATA_ENCRYPTION_KEY:-}
       - RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB=${RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB:-32}
       - RIVET_ENABLE_DEVELOPMENT_AUTH=${RIVET_ENABLE_DEVELOPMENT_AUTH:-false}
@@ -246,6 +262,7 @@ services:
           nocopy: true
       - ${RIVET_RUNTIME_LIBS_HOST_PATH:-../../../.data/runtime-libraries}:/data/runtime-libraries
       - rivet_local_metadata:/data/local-metadata
+      - rivet_project_bundles:/data/project-bundles
     command: >
       sh -lc "
         corepack enable &&
@@ -275,6 +292,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  rivet_project_bundles:
+    driver: local
   rivet_local_metadata:
     driver: local
   web_node_modules:
@@ -290,6 +309,8 @@ volumes:
   yarn_cache:
     driver: local
   vite_cache:
+    driver: local
+  tunnel_cache:
     driver: local
   rivet_data:
     driver: local

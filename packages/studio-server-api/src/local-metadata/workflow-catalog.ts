@@ -3,12 +3,15 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
+import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
 import type { RuntimeLibraryManifest } from '../runtime-libraries/manifest.js';
 import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
+import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
+import type { WorkflowProjectReferenceSnapshot } from '../routes/workflows/project-reference-snapshots.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -504,7 +507,12 @@ export class LocalWorkflowCatalog {
         const key = name.toLowerCase(),
           owner = endpoints.get(key);
         if (owner && owner !== row.workflow_id)
-          throw new Error('Local catalog endpoint already exists (case-insensitive route collision).');
+          throw new LocalUpgradeDiagnosticError(
+            'publication-route-conflict',
+            undefined,
+            undefined,
+            'Local catalog endpoint already exists (case-insensitive route collision).',
+          );
         endpoints.set(key, row.workflow_id);
       }
     }
@@ -512,7 +520,12 @@ export class LocalWorkflowCatalog {
     for (const row of db.prepare('SELECT slug FROM web_apps').all() as WebAppRow[]) {
       const key = row.slug.toLowerCase();
       if (slugs.has(key))
-        throw new Error('Local catalog web-app slug already exists (case-insensitive route collision).');
+        throw new LocalUpgradeDiagnosticError(
+          'publication-route-conflict',
+          undefined,
+          undefined,
+          'Local catalog web-app slug already exists (case-insensitive route collision).',
+        );
       slugs.add(key);
     }
   }
@@ -765,16 +778,29 @@ export class LocalWorkflowCatalog {
   countRecordings(workflowId: string, failedOnly = false): number {
     const row = this.#database()
       .prepare(
-        `SELECT COUNT(*) AS count FROM recordings WHERE workflow_id = ? ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
+        `SELECT COUNT(*) AS count FROM recordings WHERE ${workflowId ? 'workflow_id = ?' : '1 = 1'} ${failedOnly ? "AND json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')" : ''}`,
       )
-      .get(workflowId) as { count: number };
+      .get(...(workflowId ? [workflowId] : [])) as { count: number };
     return row.count;
+  }
+
+  recordingScopeCounts(workflowId: string, runScope: 'all' | 'roots' | 'children' = 'all') {
+    return this.#database()
+      .prepare(
+        `SELECT COUNT(*) AS totalRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'failed'), 0) AS failedRuns,
+      COALESCE(SUM(json_extract(metadata_json, '$.status') = 'suspicious'), 0) AS suspiciousRuns
+      FROM recordings WHERE ${recordingWorkflowScopeClause(workflowId, true, 'sqlite', 1, runScope)}`,
+      )
+      .get(...(workflowId ? [workflowId] : [])) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
   }
 
   listRecordingMetadata(
     options: {
       recordingId?: string;
       workflowId?: string;
+      includeSubgraphRuns?: boolean;
+      runScope?: 'all' | 'roots' | 'children';
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -789,9 +815,17 @@ export class LocalWorkflowCatalog {
       conditions.push('recording_id = ?');
       values.push(options.recordingId);
     }
-    if (options.workflowId) {
-      conditions.push('workflow_id = ?');
-      values.push(options.workflowId);
+    if (options.workflowId || options.runScope === 'roots') {
+      conditions.push(
+        recordingWorkflowScopeClause(
+          options.workflowId ?? '',
+          options.includeSubgraphRuns ?? false,
+          'sqlite',
+          values.length + 1,
+          options.runScope,
+        ),
+      );
+      if (options.workflowId) values.push(options.workflowId);
     }
     if (options.failedOnly) conditions.push("json_extract(metadata_json, '$.status') IN ('failed', 'suspicious')");
     const created = "json_extract(metadata_json, '$.createdAt')";
@@ -874,8 +908,7 @@ export class LocalWorkflowCatalog {
     assertProjectSnapshot(snapshot);
     const existing = await this.readProject(snapshot.relativePath);
     if (existing) {
-      if (!sameJson(existing, snapshot))
-        throw new Error(`Local catalog project differs on retry: ${snapshot.relativePath}`);
+      if (!sameJson(existing, snapshot)) throw new LocalUpgradeDiagnosticError('candidate-retry-mismatch');
       return;
     }
     const { project, versions, apps } = await this.#encodeProject(snapshot, true);
@@ -1063,6 +1096,42 @@ export class LocalWorkflowCatalog {
       db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  listProjectReferenceCatalog() {
+    return this.listProjectPaths().map((relativePath) => {
+      const bundle = this.#readStoredProjectBundle(this.#database(), relativePath)!;
+      return {
+        name: bundle.project.name,
+        relativePath,
+        projectMetadataId: bundle.project.workflowId,
+        identity: JSON.stringify(bundle),
+      };
+    });
+  }
+
+  async readProjectReferenceSnapshots(relativePath: string): Promise<WorkflowProjectReferenceSnapshot[] | null> {
+    const bundle = this.#readStoredProjectBundle(this.#database(), relativePath);
+    if (!bundle) return null;
+    const snapshots: WorkflowProjectReferenceSnapshot[] = [];
+    const cache = new Map<string, string>();
+    const read = async (ref: ArtifactRef) => {
+      if (!ref) throw new Error('Project artifact is missing.');
+      const key = JSON.stringify(ref);
+      if (!cache.has(key)) cache.set(key, (await readText(this.#artifacts, ref))!);
+      return cache.get(key)!;
+    };
+    snapshots.push({ source: { kind: 'saved-latest' }, contents: await read(bundle.project.contents) });
+    if (bundle.project.publishedContents)
+      snapshots.push({
+        source: { kind: 'published-endpoint', label: bundle.project.publishedEndpointName },
+        contents: await read(bundle.project.publishedContents),
+      });
+    for (const app of bundle.apps)
+      snapshots.push({ source: { kind: 'published-web-app', label: app.slug }, contents: await read(app.contents) });
+    if (!sameJson(this.#readStoredProjectBundle(this.#database(), relativePath), bundle))
+      throw new Error('Project changed while checking references.');
+    return snapshots;
   }
 
   async readProject(relativePath: string): Promise<LocalWorkflowCatalogSnapshot | null> {

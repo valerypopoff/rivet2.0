@@ -2,6 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseEnvFile } from './env.mjs';
 
+export function developmentFrontendEnv(mode = 'live') {
+  if (!['live', 'tunnel'].includes(mode)) throw new Error('Frontend mode must be live or tunnel.');
+  return {
+    RIVET_DEV_FRONTEND_MODE: mode,
+    // Bundled cold starts and superseded first builds can exceed five minutes.
+    // A successful health check still makes the service ready immediately.
+    RIVET_DEV_WEB_START_PERIOD: mode === 'tunnel' ? '900s' : '180s',
+  };
+}
+
 export function loadDevEnv(rootDir) {
   const explicitEnvFile = String(process.env.RIVET_ENV_FILE ?? '').trim();
   const envCandidates = explicitEnvFile

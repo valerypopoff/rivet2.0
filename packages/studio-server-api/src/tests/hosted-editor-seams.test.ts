@@ -1,19 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  expectRepoFileMissing,
-  readRepoFile,
-} from './helpers/repo-contract-helpers.js';
+import { expectRepoFileMissing, readRepoFile } from './helpers/repo-contract-helpers.js';
 
 test('hosted editor shell mounts RivetAppHost with wrapper providers, executor URL, UI policy, and workspace bridge', () => {
   const entry = readRepoFile('packages/studio-server-web/entry.tsx');
+  const bootstrapApp = readRepoFile('packages/studio-server-web/bootstrapApp.tsx');
   const hostedEditorApp = readRepoFile('packages/studio-server-web/dashboard/HostedEditorApp.tsx');
   const hostedProviders = readRepoFile('packages/studio-server-web/dashboard/hostedRivetProviders.ts');
   const editorMessageBridge = readRepoFile('packages/studio-server-web/dashboard/EditorMessageBridge.tsx');
 
-  assert.match(entry, /\.\.\/app\/src\/host\.css/);
-  assert.doesNotMatch(entry, /index\.css|colors\.css/);
+  assert.match(entry, /await import\('\.\/bootstrapApp'\)/);
+  assert.match(entry, /await bootstrapApp\(\)/);
+  assert.match(entry, /window\.__rivetShowBootstrapFailure\(\)/);
+  assert.doesNotMatch(entry, /import[^\n]*(?:react|\.css)/);
+  assert.match(bootstrapApp, /await import\('\.\.\/app\/src\/host\.css'\)/);
+  assert.match(bootstrapApp, /await import\('\.\/hosted-editor\.css'\)/);
+  assert.match(bootstrapApp, /await import\('\.\/dashboard\/HostedEditorApp'\)/);
+  assert.doesNotMatch(bootstrapApp, /index\.css|colors\.css/);
   assert.match(hostedEditorApp, /<RivetAppHost/);
   assert.match(hostedEditorApp, /executor=\{\{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL \}\}/);
   assert.match(hostedEditorApp, /providers=\{hostedRivetProviders\}/);
@@ -58,12 +62,18 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   const editorMessageBridge = readRepoFile('packages/studio-server-web/dashboard/EditorMessageBridge.tsx');
   const editorCommandBridge = readRepoFile('packages/studio-server-web/dashboard/useEditorCommandBridge.ts');
   const editorProjectOpenCommands = readRepoFile('packages/studio-server-web/dashboard/editorProjectOpenCommands.ts');
-  const editorProjectLifecycleCommands = readRepoFile('packages/studio-server-web/dashboard/editorProjectLifecycleCommands.ts');
+  const editorProjectLifecycleCommands = readRepoFile(
+    'packages/studio-server-web/dashboard/editorProjectLifecycleCommands.ts',
+  );
   const openWorkflowProject = readRepoFile('packages/studio-server-web/dashboard/useOpenWorkflowProject.ts');
-  const titleAfterSaveReconciler = readRepoFile('packages/studio-server-web/dashboard/useReconcileHostedProjectTitleAfterSave.ts');
+  const titleAfterSaveReconciler = readRepoFile(
+    'packages/studio-server-web/dashboard/useReconcileHostedProjectTitleAfterSave.ts',
+  );
   const savedGraphsOverride = readRepoFile('packages/studio-server-web/overrides/state/savedGraphs.ts');
   const loadProjectOverride = readRepoFile('packages/studio-server-web/overrides/hooks/useLoadProject.ts');
-  const syncOpenedProjectsOverride = readRepoFile('packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts');
+  const syncOpenedProjectsOverride = readRepoFile(
+    'packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
+  );
   const hostedIOProvider = readRepoFile('packages/studio-server-web/io/HostedIOProvider.ts');
   const hostedDatasetProvider = readRepoFile('packages/studio-server-web/io/HostedDatasetProvider.ts');
 
@@ -77,7 +87,10 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.doesNotMatch(editorCommandBridge, /setOpenedProjectSnapshots/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.closeProject\(deletedProjectId\)/);
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.moveProjectPaths/);
-  assert.match(editorProjectLifecycleCommands, /resolveHostedProjectMetadataUpdatesForPathMoves\(context\.getProjects\(\), moves\)/);
+  assert.match(
+    editorProjectLifecycleCommands,
+    /resolveHostedProjectMetadataUpdatesForPathMoves\(context\.getProjects\(\), moves\)/,
+  );
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.updateProjectMetadata/);
   assert.match(editorProjectLifecycleCommands, /persistedExternally: true/);
   assert.match(editorProjectLifecycleCommands, /changeSource: 'external-wrapper-rename'/);
@@ -88,38 +101,52 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorMessageBridge, /selectedExecutorState/);
   assert.doesNotMatch(editorMessageBridge, /defaultExecutorState|setProjects|setOpenedProjects/);
 
-  assert.match(openWorkflowProject, /openedProjectSnapshotsState/);
+  assert.match(openWorkflowProject, /workspace\.activateProject/);
   assert.match(openWorkflowProject, /workspace\.openProjectSnapshot/);
   assert.match(openWorkflowProject, /workspace\.replaceCurrent/);
   assert.match(openWorkflowProject, /reloadFromDisk/);
   assert.match(openWorkflowProject, /canLoadProjectByPath\(ioProvider\)/);
-  assert.match(openWorkflowProject, /retainOnlyOpenedProject/);
+  assert.match(openWorkflowProject, /workspace\.finishOpeningProjectTab/);
+  assert.doesNotMatch(
+    openWorkflowProject,
+    /openedProjectSnapshotsState|savedProjectContentDigestsState|retainOnlyOpenedProject/,
+  );
   assert.doesNotMatch(openWorkflowProject, /await loadProject|useRivetWorkspaceHost|useLoadProject/);
 
   assert.match(titleAfterSaveReconciler, /workspaceHost\.updateProjectMetadata/);
   assert.match(titleAfterSaveReconciler, /persistedExternally: true/);
-  assert.doesNotMatch(titleAfterSaveReconciler, /projectsState|projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/);
+  assert.doesNotMatch(
+    titleAfterSaveReconciler,
+    /projectsState|projectState|openedProjectSnapshotsState|savedProjectContentDigestsState|projectUnsavedChangesState|projectDataUnsavedChangesState/,
+  );
   assert.match(editorMessageBridge, /projectUnsavedChangesState/);
   assert.match(editorMessageBridge, /projectDataUnsavedChangesState/);
   assert.match(editorMessageBridge, /graphRunningState/);
   assert.doesNotMatch(editorMessageBridge, /savedProjectContentDigestsState/);
-  assert.doesNotMatch(editorMessageBridge, /useSetAtom\(\s*(projectUnsavedChangesState|projectDataUnsavedChangesState)/);
+  assert.doesNotMatch(
+    editorMessageBridge,
+    /useSetAtom\(\s*(projectUnsavedChangesState|projectDataUnsavedChangesState)/,
+  );
   assert.doesNotMatch(editorMessageBridge, /markProjectDirtyFlag|markProjectClean/);
 
-  assert.match(loadProjectOverride, /openedProjectSnapshotsState/);
-  assert.match(loadProjectOverride, /useWorkspaceTransitions/);
-  assert.match(loadProjectOverride, /providedSnapshot/);
-  assert.doesNotMatch(loadProjectOverride, /setProject\(projectInfo\.project\)/);
+  assert.match(loadProjectOverride, /return useActivateOpenedProject\(/);
+  assert.match(loadProjectOverride, /getEvaluation:/);
+  assert.match(loadProjectOverride, /cacheEvaluation:/);
+  assert.match(loadProjectOverride, /normalizeExecutorMode: normalizeHostedProjectExecutorMode/);
+  assert.doesNotMatch(
+    loadProjectOverride,
+    /openedProjectSnapshotsState|useWorkspaceTransitions|savedProjectContentDigestsState/,
+  );
   assert.match(syncOpenedProjectsOverride, /normalizeHostedOpenedProjects/);
   assert.match(syncOpenedProjectsOverride, /openedProjectSnapshotsState/);
-  assert.match(syncOpenedProjectsOverride, /savedProjectContentDigestsState/);
-  assert.match(syncOpenedProjectsOverride, /projectUnsavedChangesState/);
-  assert.match(syncOpenedProjectsOverride, /resolveProjectContentDirtyState/);
-  assert.match(syncOpenedProjectsOverride, /markProjectClean/);
-  assert.match(syncOpenedProjectsOverride, /markProjectDirtyFlag/);
+  assert.match(syncOpenedProjectsOverride, /useSyncProjectDirtyState\(enabled\)/);
+  assert.doesNotMatch(
+    syncOpenedProjectsOverride,
+    /savedProjectContentDigestsState|projectUnsavedChangesState|resolveProjectContentDirtyState|markProjectClean|markProjectDirtyFlag/,
+  );
   assert.doesNotMatch(syncOpenedProjectsOverride, /evaluationsState|primeOpenedProjectSession/);
-  assert.match(loadProjectOverride, /primeOpenedProjectSession\(projectInfo\.projectId/);
-  assert.match(loadProjectOverride, /evaluation: cachedEvaluation/);
+  assert.match(loadProjectOverride, /primeOpenedProjectSession\(info\.projectId/);
+  assert.match(loadProjectOverride, /fsPath: info\.fsPath, evaluation/);
   assert.match(savedGraphsOverride, /createHybridStorage\('project'\)/);
   assert.match(
     savedGraphsOverride,
@@ -156,7 +183,10 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   const packageJson = readRepoFile('package.json');
 
   assert.match(hostedEditorApp, /executor=\{\{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL \}\}/);
-  assert.doesNotMatch(viteAliases, /useExecutorSession|useRemoteDebugger|useGraphExecutor|useRemoteExecutor|useSaveProject|useMenuCommands/);
+  assert.doesNotMatch(
+    viteAliases,
+    /useExecutorSession|useRemoteDebugger|useGraphExecutor|useRemoteExecutor|useSaveProject|useMenuCommands/,
+  );
   assert.match(editorMessageBridge, /useExecutorSessionRuntime\(\)/);
   assert.match(editorMessageBridge, /executorSessionRevisionState/);
   assert.match(previewProjectLifecycle, /executorTargetType === 'external-debugger'/);
@@ -204,5 +234,8 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
     expectRepoFileMissing(stalePath);
   }
 
-  assert.doesNotMatch(packageJson, /remote-execution-session\.test|remote-executor-protocol\.test|hosted-executor-session\.test/);
+  assert.doesNotMatch(
+    packageJson,
+    /remote-execution-session\.test|remote-executor-protocol\.test|hosted-executor-session\.test/,
+  );
 });

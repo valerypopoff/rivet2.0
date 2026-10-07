@@ -34,7 +34,11 @@ export function serializeProject(project: Project, attachedData?: AttachedData):
 
 const errMessage = (err: unknown) => `${getError(err).message}\n${getError(err).stack}`;
 
-export function deserializeProject(serializedProject: unknown, path: string | null = null): [Project, AttachedData] {
+export function deserializeProject(
+  serializedProject: unknown,
+  path: string | null = null,
+  options: { logErrors?: boolean } = {},
+): [Project, AttachedData] {
   const { deserializerInput, version } = prepareSerializedInput(serializedProject);
 
   try {
@@ -48,7 +52,7 @@ export function deserializeProject(serializedProject: unknown, path: string | nu
     if (err instanceof yaml.YAMLError) {
       yamlProblem(err);
     }
-    console.warn(`Failed to deserialize project v${version}: ${errMessage(err)}`);
+    if (options.logErrors !== false) console.warn(`Failed to deserialize project v${version}: ${errMessage(err)}`);
     if (err instanceof UiGraphNormalizationError) {
       throw new Error(`Could not deserialize project: ${err.message}`, { cause: err });
     }

@@ -19,7 +19,9 @@ import {
   assertRestoredSourceFingerprint,
   resumeRestoredLegacyFenced,
   RESTORED_REHEARSAL_PHASES,
+  RESTORED_REHEARSAL_STEPS,
   assertRestoredRehearsalResult,
+  redactedRestoredFailureStep,
   withRestoredRehearsalInterruptions,
   restoredReadinessProbeScript,
 } from './local-upgrade-restored-rehearsal.mjs';
@@ -113,6 +115,20 @@ test('restored gate refuses malformed or credential-bearing phase entries before
     assert.throws(() => assertRestoredRehearsalResult(result, { ...expected, ...change }));
 });
 
+test('failed restored gate reports only a receipt-bound fixed operation name', () => {
+  const { result, expected } = restoredReceipt();
+  const failed = { ...result, passed: false, failureStep: 'initial-restart', rawError: 'secret value' };
+  assert.equal(redactedRestoredFailureStep(failed, expected), 'initial-restart');
+  for (const change of [
+    { passed: true },
+    { imageId: 'sha256:' + 'd'.repeat(64) },
+    { backupReceipt: 'e'.repeat(64) },
+    { failureStep: 'secret value' },
+  ])
+    assert.equal(redactedRestoredFailureStep({ ...failed, ...change }, expected), null);
+  assert.ok(RESTORED_REHEARSAL_STEPS.includes(failed.failureStep));
+});
+
 test('interruptions abort foreground launches but still stop owned clones and remove signal handlers', async () => {
   for (const event of ['SIGINT', 'SIGTERM']) {
     const events = new EventEmitter();
@@ -133,7 +149,11 @@ test('interruptions abort foreground launches but still stop owned clones and re
             cleaned.push(args);
             return {
               stdout: JSON.stringify([
-                { Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: true } },
+                {
+                  Id: 'a'.repeat(64),
+                  Config: { Labels: { 'rivet.local-upgrade.restored': owner } },
+                  State: { Running: true },
+                },
               ]),
             };
           },
@@ -148,7 +168,7 @@ test('interruptions abort foreground launches but still stop owned clones and re
     );
     assert.deepEqual(cleaned, [
       ['inspect', owner],
-      ['stop', '--time', '150', owner],
+      ['stop', '--time', '150', 'a'.repeat(64)],
     ]);
     assert.equal(events.listenerCount('SIGINT'), 0);
     assert.equal(events.listenerCount('SIGTERM'), 0);
@@ -184,7 +204,7 @@ test(
           });
         },owner,async args=>{
           console.log(JSON.stringify(args));
-          return {stdout:JSON.stringify([{Config:{Labels:{'rivet.local-upgrade.restored':owner}},State:{Running:true}}])};
+          return {stdout:JSON.stringify([{Id:'a'.repeat(64),Config:{Labels:{'rivet.local-upgrade.restored':owner}},State:{Running:true}}])};
         });
         try {await tracker.start(['generated-image']);}
         finally {console.log(JSON.stringify(await tracker.cleanup(false)));}
@@ -223,7 +243,7 @@ test(
         }
         assert.deepEqual(ended, { code: 1, signal: null });
         assert.ok(output.includes('["inspect","generated-signal-fixture"]'));
-        assert.ok(output.includes('["stop","--time","150","generated-signal-fixture"]'));
+        assert.ok(output.includes(`["stop","--time","150","${'a'.repeat(64)}"]`));
         assert.ok(output.includes('{"failed":false,"retained":["generated-signal-fixture"]}'));
         assert.ok(!output.includes('["rm"'));
       } finally {
@@ -388,7 +408,7 @@ async function sqliteFixture(options) {
       appData: '/data/rivet-app',
       runtimeLibraries: '/data/runtime-libraries',
     },
-    encryptionKeyId: 'a'.repeat(64),
+    ...(options.plaintext ? {} : { encryptionKeyId: options.uiEncryptionKeyId || 'a'.repeat(64) }),
   };
   const journal = new DatabaseSync(path.join(control, 'transition.sqlite'));
   journal.exec(
@@ -421,9 +441,26 @@ async function sqliteFixture(options) {
   );
   catalog.close();
   const settings = new DatabaseSync(path.join(generation, 'settings.sqlite'));
-  settings.exec('PRAGMA application_id=0x52495654; PRAGMA user_version=1;');
-  settings.exec('CREATE TABLE encrypted_settings(value TEXT)');
-  settings.prepare('INSERT INTO encrypted_settings VALUES (?)').run('new encrypted value');
+  settings.exec(`PRAGMA application_id=0x52495654; PRAGMA user_version=${options.plaintext ? 2 : 1};`);
+  settings.exec(`CREATE TABLE app_settings (
+    setting_key TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
+    ${
+      options.plaintext
+        ? 'value_json TEXT NOT NULL,'
+        : `ciphertext BLOB NOT NULL,
+    iv BLOB NOT NULL CHECK (length(iv) = 12),
+    auth_tag BLOB NOT NULL CHECK (length(auth_tag) = 16),
+    key_id TEXT NOT NULL,`
+    }
+    source_hash TEXT,
+    updated_at TEXT NOT NULL
+  )`);
+  if (options.plaintext)
+    settings
+      .prepare('INSERT INTO app_settings VALUES (?,?,?,?,?,?)')
+      .run('general', 9, 1, JSON.stringify({ fixture: 'post-resumption' }), null, '2026-10-05T00:00:00.000Z');
   settings.close();
   for (const [name, tables] of Object.entries(operationalSchemas)) {
     const db = new DatabaseSync(path.join(generation, 'operational', name));
@@ -437,42 +474,173 @@ async function sqliteFixture(options) {
   }
   return { ...options, roots: { ...options.roots, control }, sqlite: true, generation, hash };
 }
-test('selected backup restores post-resumption metadata, artifacts and control as one verified snapshot', async () => {
-  await fixture(async (options) => {
-    const selected = await sqliteFixture(options);
-    const copied = await createLocalUpgradeBackup(selected);
-    const manifest = await verifyLocalUpgradeBackup(options.destination, copied.receipt);
-    assert.equal(manifest.version, 2);
-    assert.equal(manifest.selection.phase, 'sqlite-live');
-    const restored = path.join(options.root, 'selected-restore');
-    await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
-    const db = new DatabaseSync(
-      path.join(restored, 'control', 'generations', 'selected-generation', 'catalog.sqlite'),
-      { readOnly: true },
-    );
-    assert.equal(
-      JSON.parse(db.prepare('SELECT metadata_json FROM projects').get().metadata_json).marker,
-      'post-resumption',
-    );
-    db.close();
-    assert.equal(
-      await fs.readFile(
-        path.join(
-          restored,
-          'control',
-          'generations',
-          'selected-generation',
-          'objects',
-          selected.hash.slice(0, 2),
-          selected.hash,
+for (const plaintext of [false, true])
+  test(`selected ${plaintext ? 'plaintext' : 'legacy'} backup restores post-resumption metadata, artifacts and control as one verified snapshot`, async () => {
+    await fixture(async (options) => {
+      const selected = await sqliteFixture({ ...options, plaintext });
+      const copied = await createLocalUpgradeBackup(selected);
+      const manifest = await verifyLocalUpgradeBackup(options.destination, copied.receipt);
+      assert.equal(manifest.version, 2);
+      assert.equal(manifest.selection.phase, 'sqlite-live');
+      const restored = path.join(options.root, 'selected-restore');
+      await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
+      const db = new DatabaseSync(
+        path.join(restored, 'control', 'generations', 'selected-generation', 'catalog.sqlite'),
+        { readOnly: true },
+      );
+      assert.equal(
+        JSON.parse(db.prepare('SELECT metadata_json FROM projects').get().metadata_json).marker,
+        'post-resumption',
+      );
+      db.close();
+      const settings = new DatabaseSync(
+        path.join(restored, 'control', 'generations', 'selected-generation', 'settings.sqlite'),
+        { readOnly: true },
+      );
+      try {
+        assert.equal(settings.prepare('PRAGMA user_version').get().user_version, plaintext ? 2 : 1);
+        if (plaintext) {
+          const row = settings.prepare('SELECT revision,value_json FROM app_settings').get();
+          assert.equal(row.revision, 9);
+          assert.deepEqual(JSON.parse(row.value_json), { fixture: 'post-resumption' });
+        }
+      } finally {
+        settings.close();
+      }
+      assert.equal(
+        await fs.readFile(
+          path.join(
+            restored,
+            'control',
+            'generations',
+            'selected-generation',
+            'objects',
+            selected.hash.slice(0, 2),
+            selected.hash,
+          ),
+          'utf8',
         ),
-        'utf8',
-      ),
-      'new writes after SQLite resumption',
-    );
-    await assert.rejects(inspectRestoredRehearsal({ restored, receipt: copied.receipt, memoryMiB: 1024, cpus: 1 }));
+        'new writes after SQLite resumption',
+      );
+      await assert.rejects(inspectRestoredRehearsal({ restored, receipt: copied.receipt, memoryMiB: 1024, cpus: 1 }));
+    });
   });
+
+test('selected settings backups reject unsupported schemas and invalid plaintext without exposing contents', async () => {
+  for (const mutation of ['version', 'missing', 'extra', 'columns', 'json', 'array'])
+    await fixture(async (options) => {
+      const selected = await sqliteFixture({ ...options, plaintext: true });
+      const db = new DatabaseSync(path.join(selected.generation, 'settings.sqlite'));
+      try {
+        if (mutation === 'version') db.exec('PRAGMA user_version=3');
+        else if (mutation === 'missing') db.exec('DROP TABLE app_settings');
+        else if (mutation === 'extra') db.exec('CREATE TABLE unrelated (value TEXT)');
+        else if (mutation === 'columns')
+          db.exec('DROP TABLE app_settings; CREATE TABLE app_settings (value_json TEXT)');
+        else
+          db.prepare('UPDATE app_settings SET value_json=?').run(
+            mutation === 'json' ? 'private-password-broken-json' : '[]',
+          );
+      } finally {
+        db.close();
+      }
+      await assert.rejects(createLocalUpgradeBackup(selected), (error) => {
+        assert.match(error.message, /settings/i);
+        assert.ok(!error.message.includes('private-password'));
+        return true;
+      });
+      await assert.rejects(fs.stat(options.destination), { code: 'ENOENT' });
+    });
 });
+
+test('remembered manual control backups preserve both bindings and reject either missing or mismatched identity', async () => {
+  for (const mutation of [null, 'pointer-missing', 'binding-missing', 'binding-wrong', 'pointer-wrong'])
+    await fixture(async (options) => {
+      const selected = await sqliteFixture({ ...options, plaintext: true });
+      const pointer = path.join(selected.roots.control, 'manual-control.json');
+      const binding = path.join(selected.roots.appData, 'local-metadata-manual-control.json');
+      const contents = JSON.stringify({ version: 1, root: '/data/local-metadata' });
+      await fs.writeFile(pointer, contents, { mode: 0o600 });
+      await fs.writeFile(binding, contents, { mode: 0o600 });
+      if (mutation) {
+        if (mutation === 'pointer-missing') await fs.unlink(pointer);
+        else if (mutation === 'binding-missing') await fs.unlink(binding);
+        else
+          await fs.writeFile(
+            mutation === 'binding-wrong' ? binding : pointer,
+            JSON.stringify({ version: 1, root: '/other-root' }),
+          );
+        await assert.rejects(createLocalUpgradeBackup(selected), /control|binding/i);
+        await assert.rejects(fs.stat(options.destination), { code: 'ENOENT' });
+      } else {
+        const copied = await createLocalUpgradeBackup(selected);
+        const restored = path.join(options.root, 'manual-restore');
+        await restoreLocalUpgradeBackup({
+          backup: options.destination,
+          receipt: copied.receipt,
+          destination: restored,
+        });
+        assert.equal(await fs.readFile(path.join(restored, 'control', 'manual-control.json'), 'utf8'), contents);
+        assert.equal(
+          await fs.readFile(path.join(restored, 'appData', 'local-metadata-manual-control.json'), 'utf8'),
+          contents,
+        );
+      }
+    });
+});
+for (const layout of ['legacy-encrypted', 'legacy-plaintext', 'plaintext'])
+  test(`UI-owned ${layout} backup preserves the complete volume and binding, not just nested databases`, async () => {
+    await fixture(async (options) => {
+      const key = 'b'.repeat(64);
+      const selected = await sqliteFixture({
+        ...options,
+        plaintext: layout !== 'legacy-encrypted',
+        uiEncryptionKeyId: createHash('sha256').update(JSON.stringify(key)).digest('hex'),
+      });
+      const volume = path.join(options.root, 'ui-control-volume');
+      await fs.mkdir(volume);
+      await fs.rename(selected.roots.control, path.join(volume, 'ui-managed'));
+      const installationId = '60da98a1-4300-4b4d-828c-b2e5839a72cf';
+      const configuration = JSON.stringify(
+        layout === 'plaintext' ? { version: 2, phase: 'ready', installationId } : { version: 1, phase: 'ready', key },
+      );
+      await fs.writeFile(path.join(volume, 'ui-managed', 'ui-configuration.json'), configuration, { mode: 0o600 });
+      const binding = path.join(selected.roots.appData, 'local-metadata-ui-control.json');
+      await fs.writeFile(
+        binding,
+        JSON.stringify({
+          version: layout === 'plaintext' ? 2 : 1,
+          root: '/data/local-metadata/ui-managed',
+          ...(layout === 'plaintext' ? { installationId } : { keyId: createHash('sha256').update(key).digest('hex') }),
+        }),
+      );
+      selected.roots.control = volume;
+      if (process.platform !== 'win32') {
+        const cache = path.join(volume, 'ui-managed', 'generations', 'selected-generation', 'runtime-cache');
+        await fs.mkdir(cache);
+        await fs.writeFile(path.join(cache, 'content'), 'fixture runtime cache');
+        await fs.symlink('content', path.join(cache, 'link'));
+      }
+      const copied = await createLocalUpgradeBackup(selected);
+      await verifyLocalUpgradeBackup(options.destination, copied.receipt);
+      const restored = path.join(options.root, 'ui-selected-restore');
+      await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
+      assert.equal(
+        await fs.readFile(path.join(restored, 'control', 'ui-managed', 'ui-configuration.json'), 'utf8'),
+        configuration,
+      );
+      assert.equal(
+        await fs.readFile(path.join(restored, 'appData', 'local-metadata-ui-control.json'), 'utf8'),
+        await fs.readFile(binding, 'utf8'),
+      );
+      await fs.unlink(binding);
+      await assert.rejects(
+        createLocalUpgradeBackup({ ...selected, destination: path.join(options.root, 'missing-binding') }),
+        /binding/,
+      );
+    });
+  });
+
 test('selected backup refuses missing control, pre-resumption selection, corrupt references and wrong certificate', async () => {
   for (const mutation of ['phase', 'artifact', 'certificate'])
     await fixture(async (options) => {
@@ -671,10 +839,21 @@ test('failed Docker launches are still cleaned up by verified ownership, includi
   const tracker = createRestoredContainerTracker(async (args) => {
     calls.push(args);
     if (args[0] === 'run') throw Error('CLI failed after container creation');
+    if (args[0] === 'ps')
+      return {
+        stdout: calls
+          .filter((call) => call[0] === 'run')
+          .map((call) => call[call.indexOf('--name') + 1])
+          .join('\n'),
+      };
     if (args[0] === 'inspect')
       return {
         stdout: JSON.stringify([
-          { Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: true } },
+          {
+            Id: 'a'.repeat(64),
+            Config: { Labels: { 'rivet.local-upgrade.restored': owner } },
+            State: { Running: true },
+          },
         ]),
       };
     return { stdout: '' };
@@ -686,8 +865,43 @@ test('failed Docker launches are still cleaned up by verified ownership, includi
   assert.equal(result.failed, false);
   assert.equal(result.retained.length, 2);
   assert.equal(calls.filter((args) => args[0] === 'stop').length, 2);
+  assert.ok(calls.filter((args) => args[0] === 'stop').every((args) => args.at(-1) === 'a'.repeat(64)));
   assert.equal(calls.filter((args) => args[0] === 'rm').length, 0);
   assert.ok(result.retained.some((name) => name.startsWith(owner + '-tool-')));
+});
+test('cleanup accepts a verified auto-removed failed helper but never assumes the backend disappeared safely', async () => {
+  const owner = 'rivet-restored-rehearsal-test';
+  const tracker = createRestoredContainerTracker(async (args) => {
+    if (args[0] === 'run') throw Error('CLI failed');
+    if (args[0] === 'inspect') throw Error('No such container');
+    if (args[0] === 'ps') return { stdout: '' };
+    throw Error('Unexpected Docker operation');
+  }, owner);
+  await assert.rejects(tracker.runTool(['image']), /CLI failed/);
+  assert.deepEqual(await tracker.cleanup(false), { failed: false, retained: [] });
+  await assert.rejects(tracker.start(['image']), /CLI failed/);
+  assert.deepEqual(await tracker.cleanup(false), { failed: true, retained: [owner] });
+});
+test('owned backend cleanup removes the inspected container ID instead of its reusable name', async () => {
+  const owner = 'rivet-restored-rehearsal-test';
+  const id = 'a'.repeat(64);
+  const calls = [];
+  const tracker = createRestoredContainerTracker(async (args) => {
+    calls.push(args);
+    if (args[0] === 'inspect')
+      return {
+        stdout: JSON.stringify([
+          { Id: id, Config: { Labels: { 'rivet.local-upgrade.restored': owner } }, State: { Running: false } },
+        ]),
+      };
+    return { stdout: '' };
+  }, owner);
+  await tracker.start(['image']);
+  assert.deepEqual(await tracker.cleanup(true), { failed: false, retained: [] });
+  assert.deepEqual(
+    calls.find((args) => args[0] === 'rm'),
+    ['rm', id],
+  );
 });
 test('legacy rehearsal resumption is refenced before restart and cannot accept a new source fingerprint', async () => {
   const events = [];
@@ -722,6 +936,7 @@ test('rehearsal cleanup never stops a mismatched container and reports inability
         return {
           stdout: JSON.stringify([
             {
+              Id: 'a'.repeat(64),
               Config: { Labels: { 'rivet.local-upgrade.restored': mismatched ? 'another-owner' : owner } },
               State: { Running: true },
             },

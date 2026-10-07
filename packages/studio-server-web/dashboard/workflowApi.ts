@@ -5,6 +5,7 @@ import {
 } from '../../studio-server-shared/hosted-env';
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
+  type WorkflowProjectReferencesResponse,
   type WorkflowTreeChangeEvent,
   type WorkflowTreeSyncState,
 } from '../../studio-server-shared/workflow-types';
@@ -214,6 +215,7 @@ export async function fetchWorkflowRecordingRuns(
     inputFilter?: WorkflowRecordingInputFilter | null;
     inputCursor?: number;
     inputAfter?: string;
+    includeSubgraphRuns?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
@@ -222,6 +224,7 @@ export async function fetchWorkflowRecordingRuns(
     pageSize: String(options.pageSize),
     status: options.status,
   });
+  if (workflowId && options.includeSubgraphRuns) query.set('includeSubgraphRuns', 'true');
   if (options.inputFilter) {
     query.set('inputPath', options.inputFilter.path);
     query.set('inputOperator', options.inputFilter.operator);
@@ -234,11 +237,23 @@ export async function fetchWorkflowRecordingRuns(
     }
   }
   const response = await fetch(
-    `${API}/workflows/recordings/workflows/${encodeURIComponent(workflowId)}/runs?${query}`,
+    `${API}/workflows/recordings/${workflowId ? `workflows/${encodeURIComponent(workflowId)}/runs` : 'runs'}?${query}`,
     {
       cache: 'no-store',
       signal: options.signal,
     },
+  );
+  return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
+}
+
+export async function fetchRecordingSubRuns(
+  recordingId: string,
+  page: number,
+  signal: AbortSignal,
+): Promise<WorkflowRecordingRunsPageResponse> {
+  const response = await fetch(
+    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?page=${page}&pageSize=100`,
+    { cache: 'no-store', signal },
   );
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);
 }
@@ -272,9 +287,11 @@ export async function fetchWorkflowRunStatistics(
 export async function fetchWorkflowRecordingArtifactText(
   recordingId: string,
   artifact: 'recording' | 'replay-project' | 'replay-dataset',
+  options: { signal?: AbortSignal } = {},
 ): Promise<string> {
   const response = await fetch(`${API}/workflows/recordings/${encodeURIComponent(recordingId)}/${artifact}`, {
     cache: 'no-store',
+    signal: options.signal,
   });
   return parseTextResponse(response);
 }
@@ -433,11 +450,13 @@ export async function downloadWorkflowPublishedVersion(relativePath: string, ver
 export async function fetchWorkflowPublishedVersionPreview(
   relativePath: string,
   versionId: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<WorkflowPublishedVersionPreviewResponse> {
   const response = await fetch(`${API}/workflows/projects/published-versions/preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ relativePath, versionId }),
+    signal: options.signal,
   });
 
   return workflowJsonResponse<WorkflowPublishedVersionPreviewResponse>(response);
@@ -504,6 +523,17 @@ export async function fetchWorkflowProjectWebApps(relativePath: string): Promise
     cache: 'no-store',
   });
   return workflowJsonResponse<WorkflowProjectWebAppsResponse>(response);
+}
+
+export async function fetchWorkflowProjectReferences(
+  relativePath: string,
+  projectId: string | undefined,
+  signal: AbortSignal,
+): Promise<WorkflowProjectReferencesResponse> {
+  const query = new URLSearchParams({ relativePath });
+  if (projectId) query.set('projectId', projectId);
+  const response = await fetch(`${API}/workflows/projects/references?${query}`, { cache: 'no-store', signal });
+  return workflowJsonResponse<WorkflowProjectReferencesResponse>(response);
 }
 
 export async function publishWorkflowProjectWebApps(
@@ -584,7 +614,10 @@ export async function publishWorkflowProject(
   return data.project;
 }
 
-export async function unpublishWorkflowProject(relativePath: string, preconditions: WorkflowPublicationPreconditions): Promise<WorkflowProjectItem> {
+export async function unpublishWorkflowProject(
+  relativePath: string,
+  preconditions: WorkflowPublicationPreconditions,
+): Promise<WorkflowProjectItem> {
   const response = await fetch(`${API}/workflows/projects/unpublish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },

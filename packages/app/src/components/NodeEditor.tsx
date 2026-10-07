@@ -2,13 +2,16 @@ import {
   type CSSProperties,
   type FC,
   useLayoutEffect,
+  useCallback,
   useMemo,
   type RefObject,
   useState,
   type MouseEvent,
+  type ReactNode,
 } from 'react';
-import { editingNodeState } from '../state/graphBuilder.js';
-import { nodesByIdState } from '../state/graph.js';
+import { editingNodeState, nodeEditorSessionRevisionState } from '../state/graphBuilder.js';
+import { nodesByIdState, graphMetadataState, isReadOnlyGraphState } from '../state/graph.js';
+import { projectState } from '../state/savedGraphs.js';
 import styled from '@emotion/styled';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
@@ -39,6 +42,12 @@ import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-
 import Button from '@atlaskit/button';
 import { AppModalHeader } from './AppModalHeader';
 import { getBuiltInNodeDocumentationUrl } from '../utils/nodeDocumentation.js';
+import {
+  NodeEditorSessionContext,
+  useNodeEditorSession,
+  useNodeEditorSessionCallback,
+} from './nodeEditor/NodeEditorSessionContext.js';
+import { mergeNodeEditorChange } from '../utils/nodeEditorSession.js';
 
 export const NodeEditorRenderer: FC = () => {
   const nodesById = useAtomValue(nodesByIdState);
@@ -64,11 +73,7 @@ export const NodeEditorRenderer: FC = () => {
     return null;
   }
 
-  return (
-    <ErrorBoundary key={selectedNode.id} fallback={null}>
-      <NodeEditor selectedNode={selectedNode} onDeselect={deselect} />
-    </ErrorBoundary>
-  );
+  return <NodeEditor selectedNode={selectedNode} onDeselect={deselect} />;
 };
 
 const Container = styled.div`
@@ -235,6 +240,7 @@ const Container = styled.div`
 
   .section-global-controls {
     display: flex;
+    flex-shrink: 0;
     flex-direction: column;
     gap: 12px;
     margin: -16px -24px 18px;
@@ -665,7 +671,7 @@ type NodeEditorProps = {
   onDeleteNode?: () => void;
 };
 
-export type NodeChanged = (changed: ChartNode, newData?: Record<DataId, string>) => void;
+export type NodeChanged = (changed: ChartNode, newData?: Record<DataId, string>, before?: ChartNode) => void;
 
 const NODE_EDITOR_ACTION_BAR_GAP_PX = 16;
 const NODE_EDITOR_ACTION_BAR_VERTICAL_GAP_PX = 12;
@@ -772,7 +778,29 @@ function useNodeEditorActionBarAvoidance(containerRef: RefObject<HTMLDivElement 
   return avoidance;
 }
 
-export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUpdateNode, onDeleteNode }) => {
+export const NodeEditor: FC<NodeEditorProps> = (props) => {
+  const projectId = useAtomValue(projectState).metadata.id;
+  const graphId = useAtomValue(graphMetadataState)?.id;
+  const revision = useAtomValue(nodeEditorSessionRevisionState);
+  const readOnly = useAtomValue(isReadOnlyGraphState);
+  const ownerKey = JSON.stringify([
+    projectId,
+    graphId,
+    props.selectedNode.id,
+    props.selectedNode.type,
+    revision,
+    readOnly,
+    props.onUpdateNode != null,
+  ]);
+  return (
+    <ErrorBoundary key={ownerKey} fallback={null}>
+      <OwnedNodeEditor {...props} />
+    </ErrorBoundary>
+  );
+};
+
+const OwnedNodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUpdateNode, onDeleteNode }) => {
+  const session = useNodeEditorSession(selectedNode, onUpdateNode != null);
   const [selectedVariant, setSelectedVariant] = useState<string | undefined>();
   const [addVariantPopupOpen, setAddVariantPopupOpen] = useState(false);
   const [llmChatFeatureConflictOpen, setLlmChatFeatureConflictOpen] = useState(false);
@@ -782,36 +810,46 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
   const editNode = useEditNodeCommand();
   const deleteNodes = useDeleteNodesCommand();
 
-  const updateNode = useStableCallback((node: ChartNode, newData?: Record<DataId, string>) => {
-    // Otherwise the editor "changes" and causes deleted nodes to reappear...
-    if (isEqual(node, selectedNode)) {
-      return;
-    }
+  // Keep this render's baseline with its callback. A custom editor can retain
+  // onChange across an await; a latest-callback ref would mistake its old
+  // sibling fields for intentional changes against a newer render.
+  const updateNode = useCallback(
+    (node: ChartNode, newData?: Record<DataId, string>, before?: ChartNode) => {
+      if (!session.canWrite() || node.id !== selectedNode.id || node.type !== selectedNode.type) return;
+      const current = session.getNode();
+      if (!current) return;
+      node = mergeNodeEditorChange(current, before ?? selectedNode, node);
+      // Otherwise the editor "changes" and causes deleted nodes to reappear...
+      if (isEqual(node, current)) {
+        return;
+      }
 
-    const llmChatConflict =
-      selectedNode.type === 'llmChatV2' && node.type === 'llmChatV2'
-        ? createsLLMChatV2ToolResponseFormatConflictForEdit(
-            selectedNode.data as LLMChatV2Node['data'],
-            node.data as LLMChatV2Node['data'],
-          )
-        : false;
+      const llmChatConflict =
+        current.type === 'llmChatV2' && node.type === 'llmChatV2'
+          ? createsLLMChatV2ToolResponseFormatConflictForEdit(
+              current.data as LLMChatV2Node['data'],
+              node.data as LLMChatV2Node['data'],
+            )
+          : false;
 
-    if (llmChatConflict) {
-      setLlmChatFeatureConflictOpen(true);
-      return;
-    }
+      if (llmChatConflict) {
+        setLlmChatFeatureConflictOpen(true);
+        return;
+      }
 
-    if (onUpdateNode) {
-      onUpdateNode(node, newData);
-      return;
-    }
+      if (onUpdateNode) {
+        onUpdateNode(node, newData);
+        return;
+      }
 
-    editNode({ nodeId: node.id, newNode: node });
+      editNode({ nodeId: node.id, newNode: node });
 
-    if (newData) {
-      setStaticData(newData);
-    }
-  });
+      if (newData) {
+        setStaticData(newData);
+      }
+    },
+    [session, selectedNode, onUpdateNode, editNode, setStaticData],
+  );
 
   const isVariant = selectedVariant !== undefined;
   const { Editor } = useUnknownNodeComponentDescriptorFor(selectedNode);
@@ -831,7 +869,7 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
     [isVariant, selectedNode, selectedVariantData],
   );
 
-  const handleEscape = useStableCallback(() => {
+  const handleEscape = useNodeEditorSessionCallback(session, () => {
     if (llmChatFeatureConflictOpen) {
       setLlmChatFeatureConflictOpen(false);
       return;
@@ -840,25 +878,34 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
     onDeselect();
   });
 
+  const closeEditor = useNodeEditorSessionCallback(session, onDeselect);
+
   useHotkeys('esc', handleEscape, { ignoreEventWhen: (event) => event.defaultPrevented }, [handleEscape]);
 
-  const nodeDescriptionChanged = useStableCallback((description: string) => {
-    updateNode({ ...selectedNode, description });
+  const nodeDescriptionChanged = useNodeEditorSessionCallback(session, (description: string | undefined) => {
+    const current = session.getNode();
+    // The edit command accepts partial nodes: an omitted field means "keep",
+    // while explicit undefined clears an optional value.
+    if (current) updateNode({ ...current, description }, undefined, current);
   });
 
-  const nodeTitleChanged = useStableCallback((title: string) => {
-    updateNode({ ...selectedNode, title });
+  const nodeTitleChanged = useNodeEditorSessionCallback(session, (title: string) => {
+    const current = session.getNode();
+    if (current) updateNode({ ...current, title }, undefined, current);
   });
 
-  const nodeColorChanged = useStableCallback((color: NodeColor | undefined) => {
-    updateNode({ ...selectedNode, visualData: { ...selectedNode.visualData, color } });
+  const nodeColorChanged = useNodeEditorSessionCallback(session, (color: NodeColor | undefined) => {
+    const current = session.getNode();
+    if (current) updateNode({ ...current, visualData: { ...current.visualData, color } }, undefined, current);
   });
 
-  const nodeDisabledChanged = useStableCallback((disabled: boolean) => {
-    updateNode({ ...selectedNode, disabled });
+  const nodeDisabledChanged = useNodeEditorSessionCallback(session, (disabled: boolean) => {
+    const current = session.getNode();
+    if (current) updateNode({ ...current, disabled }, undefined, current);
   });
 
-  const deleteSelectedNode = useStableCallback(() => {
+  const deleteSelectedNode = useNodeEditorSessionCallback(session, () => {
+    if (!session.canWrite()) return;
     if (onDeleteNode) {
       onDeleteNode();
       return;
@@ -953,22 +1000,29 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
 
             <div className="section section-node">
               <div className="section-node-content">
-                {selectedNode.type === 'dataBus' ? (
-                  <div className="node-type-action data-bus-settings-actions">
-                    <Button appearance="danger" onClick={deleteSelectedNode}>
-                      Delete Data Bus
-                    </Button>
-                  </div>
-                ) : Editor ? (
-                  <Editor node={nodeForEditor} onChange={isVariant ? () => {} : updateNode} />
-                ) : (
-                  <DefaultNodeEditor
-                    node={nodeForEditor}
-                    isReadonly={isVariant}
-                    onChange={isVariant ? () => {} : updateNode}
-                    onClose={onDeselect}
-                  />
-                )}
+                <NodeEditorFieldSession
+                  key={selectedVariant ?? 'current'}
+                  node={selectedNode}
+                  library={onUpdateNode != null}
+                  variant={selectedVariant}
+                >
+                  {selectedNode.type === 'dataBus' ? (
+                    <div className="node-type-action data-bus-settings-actions">
+                      <Button appearance="danger" onClick={deleteSelectedNode}>
+                        Delete Data Bus
+                      </Button>
+                    </div>
+                  ) : Editor ? (
+                    <Editor node={nodeForEditor} onChange={isVariant ? () => {} : updateNode} />
+                  ) : (
+                    <DefaultNodeEditor
+                      node={nodeForEditor}
+                      isReadonly={isVariant}
+                      onChange={isVariant ? () => {} : updateNode}
+                      onClose={closeEditor}
+                    />
+                  )}
+                </NodeEditorFieldSession>
               </div>
               <div className="bottom-spacer" />
             </div>
@@ -991,6 +1045,16 @@ export const NodeEditor: FC<NodeEditorProps> = ({ selectedNode, onDeselect, onUp
       </Container>
     </NodeEditorResizeContext.Provider>
   );
+};
+
+const NodeEditorFieldSession: FC<{
+  node: ChartNode;
+  library: boolean;
+  variant?: string;
+  children: ReactNode;
+}> = ({ node, library, variant, children }) => {
+  const session = useNodeEditorSession(node, library, variant);
+  return <NodeEditorSessionContext.Provider value={session}>{children}</NodeEditorSessionContext.Provider>;
 };
 
 const LLMChatFeatureConflictModal: FC<{

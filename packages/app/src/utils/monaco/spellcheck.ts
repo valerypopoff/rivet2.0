@@ -261,7 +261,11 @@ export function clearCodeEditorSpellcheckMarkers(editor: SpellcheckCapableCodeEd
   editor?.__rivetSpellcheckMarkers?.clear();
 }
 
-export async function runCodeEditorSpellcheck(editor: SpellcheckCapableCodeEditor): Promise<SpellcheckResult> {
+export async function runCodeEditorSpellcheck(
+  editor: SpellcheckCapableCodeEditor,
+  isCurrent: () => boolean = () => true,
+): Promise<SpellcheckResult> {
+  if (!isCurrent()) return { issueCount: 0, markerCount: 0, reachedLimit: false };
   const model = editor.getModel();
 
   if (!model) {
@@ -271,6 +275,7 @@ export async function runCodeEditorSpellcheck(editor: SpellcheckCapableCodeEdito
   clearCodeEditorSpellcheckMarkers(editor);
 
   const { spellchecker, supplementalWords } = await loadSpellcheckResources();
+  if (!isCurrent() || model.isDisposed()) return { issueCount: 0, markerCount: 0, reachedLimit: false };
   const issues: SpellcheckWordRange[] = [];
   let reachedLimit = false;
 

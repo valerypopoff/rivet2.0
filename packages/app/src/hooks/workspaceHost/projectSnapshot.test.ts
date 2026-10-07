@@ -34,6 +34,12 @@ void describe('hosted project snapshot normalization', () => {
     assert.equal(normalized.data, project.data);
   });
 
+  void it('does not resurrect embedded data when an explicit payload is undefined', () => {
+    const project = makeProject();
+    project.data = { stale: 'removed' } as never;
+    assert.equal(normalizeProjectSnapshot({ project, data: undefined }).data, undefined);
+  });
+
   void it('migrates legacy Jev nodes and the removed built-in plugin without mutating a host snapshot', () => {
     const graphId = 'main' as GraphId;
     const project = makeProject();

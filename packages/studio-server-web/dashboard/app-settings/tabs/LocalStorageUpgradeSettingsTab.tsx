@@ -1,13 +1,36 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { LoadingButton } from '@atlaskit/button';
 import TextField from '@atlaskit/textfield';
 import { RIVET_API_BASE_URL } from '../../../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from '../../apiRequest';
-import type { LocalUpgradeOperation } from '../../../../studio-server-shared/local-upgrade-types';
+import {
+  LOCAL_UPGRADE_FAILURE_REASONS,
+  type LocalUpgradeFailureReason,
+  type LocalUpgradeOperation,
+  type LocalUpgradeInventory,
+  type LocalUpgradePreparation,
+  type LocalUpgradePreparationKind,
+} from '../../../../studio-server-shared/local-upgrade-types';
 import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
 type Status = {
+  preparationJobsAvailable?: boolean;
+  preparation?: LocalUpgradePreparation | null;
+  preparationStatusUnreadable?: boolean;
+  settingsEncryptionRequired?: boolean;
+  uiRestartAvailable?: boolean;
+  runtimeReady?: boolean;
+  backupStatusUnreadable?: boolean;
+  backup?: {
+    id: string;
+    revision: number;
+    pausedAt: string;
+    phase: 'creating' | 'ready' | 'failed' | 'interrupted';
+    sourceFingerprint: string;
+    archiveHash: string | null;
+    bytes: number;
+  } | null;
   available: boolean;
   operation?: LocalUpgradeOperation | null;
   copyConfigurationReady?: boolean;
@@ -28,38 +51,18 @@ type Status = {
     phase: string;
     message: string | null;
     stage?: string;
-    failure?: { stage: string; code: string } | null;
+    failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
 };
-type Inventory = {
-  source: Record<string, string>;
-  capacity?: {
-    payloadBytes: number;
-    freeBytes: number;
-    requiredBytes: number;
-    maxPayloadBytes: number;
-    fits: boolean;
-    estimatedWorkingBytes?: number;
-    memoryBudgetBytes?: number;
-    measurementComplete?: boolean;
-    reasons?: string[];
-  };
-  inventory: {
-    projects: number;
-    folders: number;
-    recordingBundles: number;
-    publishedEndpoints: number;
-    publishedVersions: number;
-    publishedWebApps: number;
-    warnings: string[];
-  } | null;
-  backupRequired: string;
-};
+type Inventory = LocalUpgradeInventory;
 const base = `${RIVET_API_BASE_URL}/app-settings/local-upgrade`;
 const actionProgress = {
+  prepare: 'Preparing persistent control storage, then restarting the backend…',
+  restart: 'Restarting both backend processes. This panel reconnects automatically; writes stay fenced…',
   inspect: 'Inspecting source data and checking capacity…',
   pause: 'Pausing new writes and waiting for active work to drain…',
   fingerprint: 'Reading the frozen source fingerprint…',
+  backup: 'Creating the backup archive and checking an isolated restore. Writes remain paused…',
   copy: 'Copy and verification are in progress. Original data remains unchanged.',
   activate: 'Checking the certified candidate and selecting SQLite for paused validation…',
   'return-to-legacy': 'Checking the retained source and selecting the legacy backend…',
@@ -70,13 +73,17 @@ const actionProgress = {
   report: 'Preparing the verification report download…',
 } as const satisfies Record<LocalUpgradeOperation | 'finish-resume' | 'report', string>;
 type UpgradeAction = keyof typeof actionProgress;
-type UpgradeTransitionAction = Exclude<LocalUpgradeOperation, 'inspect' | 'pause' | 'fingerprint' | 'copy'>;
+type UpgradeTransitionAction = Exclude<
+  LocalUpgradeOperation,
+  'prepare' | 'restart' | 'inspect' | 'pause' | 'fingerprint' | 'copy' | 'backup'
+>;
 
 function UpgradeActionButton({
   action,
   loading,
   disabled,
   primary = false,
+  description,
   onClick,
   children,
 }: {
@@ -84,9 +91,11 @@ function UpgradeActionButton({
   loading: boolean;
   disabled: boolean;
   primary?: boolean;
+  description?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
+  const descriptionId = useId();
   return (
     <>
       <LoadingButton
@@ -94,11 +103,17 @@ function UpgradeActionButton({
         className="local-upgrade-action button-size-l"
         isLoading={loading}
         aria-busy={loading}
+        aria-describedby={description ? descriptionId : undefined}
         isDisabled={disabled}
         onClick={onClick}
       >
         {children}
       </LoadingButton>
+      {description && (
+        <p id={descriptionId} className="app-settings-field-help">
+          {description}
+        </p>
+      )}
       {loading && (
         <p role="status" className="app-settings-field-help">
           {actionProgress[action]}
@@ -125,9 +140,50 @@ async function request<T>(suffix = '', body?: unknown, signal?: AbortSignal): Pr
 }
 
 export function LocalStorageUpgradeSettingsTab() {
+  const [setup, setSetup] = useState<{
+    eligible: boolean;
+    sqliteSelected?: boolean;
+    uiPreparationAvailable?: boolean;
+    uiRestartAvailable?: boolean;
+    upgradeEnabled: boolean;
+    controlRootConfigured: boolean;
+    encryptionKeyReady: boolean;
+  } | null>(null);
+  const setupSnapshot = useRef(setup);
   const [status, setStatus] = useState<Status | null>(null);
+  const [projectDiagnostic, setProjectDiagnostic] = useState<{ token: string; paths: string[] } | null>(null);
+  const diagnosticReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
+  const diagnosticToken = diagnosticReference ? `${status?.job?.id}:${diagnosticReference}` : null;
+  useEffect(() => {
+    if (!diagnosticToken || !diagnosticReference || !/^[a-f0-9]{16}$/.test(diagnosticReference)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
+    void request<{ reference: string; paths: string[] }>(
+      `/project-reference?reference=${diagnosticReference}`,
+      undefined,
+      controller.signal,
+    )
+      .then((result) => {
+        if (
+          !controller.signal.aborted &&
+          result.reference === diagnosticReference &&
+          Array.isArray(result.paths) &&
+          result.paths.every((value) => typeof value === 'string')
+        )
+          setProjectDiagnostic({ token: diagnosticToken, paths: result.paths });
+      })
+      .catch(() => {
+        /* Optional name lookup cannot unlock controls or conceal the durable failure. */
+      });
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [diagnosticToken, diagnosticReference]);
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [pendingAction, setPendingAction] = useState<UpgradeAction | null>(null);
+  const [awaitingRestart, setAwaitingRestart] = useState(false);
+  const restartDeadline = useRef(0);
   const busy = pendingAction !== null;
   const actionInFlight = useRef(false);
   const [validationFailure, setValidationFailure] = useState<{ token: string | null; message: string } | null>(null);
@@ -139,6 +195,9 @@ export function LocalStorageUpgradeSettingsTab() {
   const [backupRestoredFor, setBackupRestoredFor] = useState<string | null>(null);
   const [keyBackedUpFor, setKeyBackedUpFor] = useState<string | null>(null);
   const [resumeAcknowledgement, setResumeAcknowledgement] = useState<string | null>(null);
+  const adoptedBackup = useRef<string | null>(null);
+  const preparationRequest = useRef<string | null>(null);
+  const [downloadStarted, setDownloadStarted] = useState(false);
   const mounted = useRef(false);
   const requestSequence = useRef(0);
   const refresh = async () => {
@@ -146,9 +205,45 @@ export function LocalStorageUpgradeSettingsTab() {
     try {
       // A stalled connection must not leave stale operator controls enabled.
       // Only status reads are bounded; conversion actions can take much longer.
+      // Setup is stable for a running backend. Re-read it only while first-time
+      // preparation is pending; ordinary action settlement needs one status read.
+      let configuration = setupSnapshot.current;
+      if (
+        !configuration ||
+        (configuration.uiPreparationAvailable &&
+          !configuration.sqliteSelected &&
+          (!configuration.upgradeEnabled || !configuration.controlRootConfigured || !configuration.encryptionKeyReady))
+      ) {
+        configuration = await request<NonNullable<typeof setup>>('/setup', undefined, AbortSignal.timeout(10_000));
+        if (mounted.current && sequence === requestSequence.current) {
+          setupSnapshot.current = configuration;
+          setSetup(configuration);
+        }
+      }
+      if (
+        configuration.uiPreparationAvailable &&
+        !configuration.sqliteSelected &&
+        (!configuration.upgradeEnabled || !configuration.controlRootConfigured || !configuration.encryptionKeyReady)
+      ) {
+        if (mounted.current && sequence === requestSequence.current) {
+          setStatus(null);
+          setStatusError(null);
+        }
+        return;
+      }
       const next = await request<Status>('', undefined, AbortSignal.timeout(10_000));
       if (mounted.current && sequence === requestSequence.current) {
         setStatus(next);
+        if (next.preparation?.id === preparationRequest.current) {
+          // Reconcile only this acknowledgement. The retained job must not
+          // erase diagnostics from later, unrelated operator actions.
+          preparationRequest.current = null;
+          setError(null);
+        }
+        if (next.available && !next.restartRequired) {
+          restartDeadline.current = 0;
+          setAwaitingRestart(false);
+        }
         if (!next.available) setResumeAcknowledgement(null);
         setStatusError(null);
       }
@@ -156,8 +251,12 @@ export function LocalStorageUpgradeSettingsTab() {
       if (mounted.current && sequence === requestSequence.current) {
         setStatus(null);
         setResumeAcknowledgement(null);
+        const restarting = restartDeadline.current > Date.now();
+        if (!restarting) setAwaitingRestart(false);
         setStatusError(
-          'Local storage upgrade is unavailable. Check the connection and sign in as an operator; controls stay locked until status is refreshed.',
+          restarting
+            ? null
+            : 'Local storage upgrade is unavailable. Check the connection and sign in as an operator; controls stay locked until status is refreshed.',
         );
       }
       throw failure;
@@ -216,16 +315,96 @@ export function LocalStorageUpgradeSettingsTab() {
     }
   };
   const transition = status?.transition;
+  const preparation = status?.preparation;
+  useEffect(() => {
+    if (status?.preparationStatusUnreadable) {
+      setInventory(null);
+      setFrozenSource(null);
+      setBackupRestoredFor(null);
+      setKeyBackedUpFor(null);
+      return;
+    }
+    if (!preparation || preparation.revision !== transition?.revision) return;
+    if (preparation.kind === 'inspect' || preparation.kind === 'pause-backup')
+      setInventory(preparation.phase === 'running' ? null : preparation.inventory ?? null);
+    if (preparation.kind === 'fingerprint') {
+      // Another operator's retry invalidates old browser evidence too. A failed
+      // or interrupted new read must not silently revive the previous proof.
+      setBackupRestoredFor(null);
+      setKeyBackedUpFor(null);
+      setFrozenSource(
+        preparation.phase === 'ready' && preparation.fingerprint?.pausedAt === status?.maintenance?.enteredAt
+          ? { pausedAt: preparation.fingerprint.pausedAt, fingerprint: preparation.fingerprint.sourceFingerprint }
+          : null,
+      );
+    }
+  }, [
+    preparation?.id,
+    preparation?.phase,
+    transition?.revision,
+    status?.maintenance?.enteredAt,
+    status?.preparationStatusUnreadable,
+  ]);
+  const startPreparation = async (kind: LocalUpgradePreparationKind) => {
+    const id = crypto.randomUUID();
+    preparationRequest.current = id;
+    await request('/preparation', { id, kind, revision: transition?.revision }, AbortSignal.timeout(10_000));
+  };
+  const guided = status?.uiRestartAvailable === true || setup?.uiRestartAvailable === true;
+  const needsPreparation =
+    setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
   const resumed = transition?.phase === 'sqlite-live' || transition?.phase === 'legacy-resumed';
   const activeAction =
-    pendingAction ?? (status?.operation === 'resume' && resumed ? 'finish-resume' : status?.operation);
+    pendingAction ??
+    (preparation?.phase === 'running' && preparation.kind === 'pause-backup' && preparation.stage !== 'backup'
+      ? 'pause'
+      : status?.operation === 'resume' && resumed
+        ? 'finish-resume'
+        : status?.operation);
   const copying = status?.job?.phase === 'copying';
-  const disabled = busy || !!status?.operation || copying || !status?.available;
+  const disabled =
+    busy || awaitingRestart || !!status?.operation || preparation?.phase === 'running' || copying || !status?.available;
   const quiet = !!status?.maintenance && !!status.drain?.ready;
   const initial = transition?.phase === 'legacy' || transition?.phase === 'legacy-resumed';
   const validating = transition?.phase === 'sqlite-validation' || transition?.phase === 'legacy-validation';
   const restartRequired = !!status?.restartRequired || (!!transition && status?.runningBackend !== transition.backend);
-  const selectedRuntimeReady = status?.available && !!transition && !restartRequired;
+  const selectedRuntimeReady =
+    status?.available && !!transition && !restartRequired && (!guided || status.runtimeReady === true);
+  const automatedBackup =
+    status?.backup?.phase === 'ready' &&
+    initial &&
+    quiet &&
+    !restartRequired &&
+    status.backup.revision === transition?.revision &&
+    status.backup.pausedAt === status.maintenance?.enteredAt
+      ? status.backup
+      : null;
+  useEffect(() => {
+    if (!automatedBackup || adoptedBackup.current === automatedBackup.id) return;
+    adoptedBackup.current = automatedBackup.id;
+    setFrozenSource({ pausedAt: automatedBackup.pausedAt, fingerprint: automatedBackup.sourceFingerprint });
+    setBackupReference(`browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`);
+    setBackupFingerprint(automatedBackup.sourceFingerprint);
+    setBackupRestoredFor(null);
+    setKeyBackedUpFor(null);
+    setDownloadStarted(false);
+  }, [automatedBackup?.id]);
+  const usesAutomatedBackup =
+    !!automatedBackup && backupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
+  const downloadBackup = (key = false) => {
+    if (!automatedBackup) return;
+    const anchor = document.createElement('a');
+    anchor.href = `${base}/backup/${key ? 'key' : 'download'}?id=${encodeURIComponent(automatedBackup.id)}`;
+    // Only the server's successful attachment response should download. A
+    // forced download attribute would disguise a JSON auth/integrity error as
+    // a backup. Keep error navigation away from the editor's unsaved workspace.
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setDownloadStarted(true);
+  };
   const sourceFingerprint =
     frozenSource?.pausedAt === status?.maintenance?.enteredAt ? frozenSource?.fingerprint ?? '' : '';
   const backupToken =
@@ -238,7 +417,9 @@ export function LocalStorageUpgradeSettingsTab() {
         ])
       : null;
   const backupRestored = backupToken !== null && backupRestoredFor === backupToken;
-  const keyBackedUp = backupToken !== null && keyBackedUpFor === backupToken;
+  // Older servers still require key attestation; new plaintext servers do not.
+  const settingsEncryptionRequired = status?.settingsEncryptionRequired !== false;
+  const keyBackedUp = !settingsEncryptionRequired || (backupToken !== null && keyBackedUpFor === backupToken);
   const resumeToken =
     validating && transition?.generationId
       ? `${transition.generationId}:${transition.phase}:${transition.revision}:${status?.maintenance?.enteredAt}`
@@ -247,6 +428,21 @@ export function LocalStorageUpgradeSettingsTab() {
   const currentValidationFailure =
     resumeToken !== null && validationFailure?.token === resumeToken ? validationFailure.message : null;
   const runtimeValidationPassed = selectedRuntimeReady && validating && transition?.validated && quiet;
+  const requestRestart = async (suffix: '/prepare' | '/restart', body: unknown) => {
+    restartDeadline.current = Date.now() + 300_000;
+    setAwaitingRestart(true);
+    try {
+      await request(suffix, body);
+    } catch (failure) {
+      restartDeadline.current = 0;
+      setAwaitingRestart(false);
+      throw failure;
+    }
+  };
+  const restartBackend = async (current: Status) => {
+    if (current.uiRestartAvailable && current.restartRequired)
+      await requestRestart('/restart', { revision: current.transition?.revision });
+  };
   const action = (name: UpgradeTransitionAction, actionName: UpgradeAction = name) =>
     act(async () => {
       if (name === 'validate') {
@@ -255,6 +451,7 @@ export function LocalStorageUpgradeSettingsTab() {
       }
       try {
         await request('/action', { action: name, revision: transition?.revision });
+        if (name !== 'validate' && guided) await restartBackend(await request<Status>());
       } catch (failure) {
         if (name === 'validate' && mounted.current)
           setValidationFailure({
@@ -264,6 +461,22 @@ export function LocalStorageUpgradeSettingsTab() {
         throw failure;
       }
     }, actionName);
+  const validationAttempt = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !guided ||
+      disabled ||
+      !validating ||
+      !selectedRuntimeReady ||
+      !quiet ||
+      transition?.validated ||
+      !resumeToken ||
+      validationAttempt.current === resumeToken
+    )
+      return;
+    validationAttempt.current = resumeToken;
+    void action('validate');
+  }, [guided, disabled, validating, selectedRuntimeReady, quiet, transition?.validated, resumeToken]);
   const readyToCopy =
     quiet &&
     initial &&
@@ -272,6 +485,7 @@ export function LocalStorageUpgradeSettingsTab() {
     backupRestored &&
     keyBackedUp &&
     !!backupReference.trim() &&
+    (!backupReference.trim().startsWith('browser-backup:') || usesAutomatedBackup) &&
     /^[a-f0-9]{64}$/.test(backupFingerprint) &&
     backupFingerprint === sourceFingerprint;
   return (
@@ -290,9 +504,27 @@ export function LocalStorageUpgradeSettingsTab() {
           {statusError}
         </p>
       )}
+      {awaitingRestart && (
+        <p role="status" className="app-settings-field-help">
+          Backend restart is in progress. This panel reconnects automatically; do not refresh or run console commands.
+        </p>
+      )}
       {error && error !== currentValidationFailure && (
         <p role="alert" className="project-settings-error">
           {error}
+        </p>
+      )}
+      {preparation?.revision === transition?.revision &&
+        preparation?.error &&
+        ['failed', 'interrupted'].includes(preparation.phase) && (
+          <p role="alert" className="project-settings-error">
+            {preparation.error}
+          </p>
+        )}
+      {status?.preparationStatusUnreadable && (
+        <p role="alert" className="project-settings-error">
+          Preparation status could not be read. No preparation result can authorize further steps; existing storage
+          recovery remains available.
         </p>
       )}
       {status && (
@@ -305,7 +537,7 @@ export function LocalStorageUpgradeSettingsTab() {
           A local storage operation is still running on the server. Other actions stay locked until it finishes.
         </p>
       )}
-      {status?.available && status.copyConfigurationReady === false && (
+      {settingsEncryptionRequired && status?.available && status.copyConfigurationReady === false && (
         <p role="alert" className="app-settings-field-help app-settings-inline-note">
           Copying is blocked: configure RIVET_LOCAL_METADATA_ENCRYPTION_KEY with at least 32 securely generated
           characters, recreate the backend and back up the key separately. If this upgrade already has a candidate,
@@ -313,165 +545,327 @@ export function LocalStorageUpgradeSettingsTab() {
           environment values. Recovery and legacy controls remain available.
         </p>
       )}
-      {!status?.available && !statusError && !error && (
+      {needsPreparation && (
+        <section className="app-settings-section" aria-label="Server preparation">
+          <h4 className="app-settings-section-title">Prepare this server</h4>
+          <p className="app-settings-field-help">
+            The server prepares private, persistent control storage automatically. Both backend processes restart. This
+            does not migrate data or pause writes. Local settings are stored without encryption; no encryption key or
+            .env configuration is needed.
+          </p>
+          <UpgradeActionButton
+            action="prepare"
+            loading={activeAction === 'prepare'}
+            disabled={busy || awaitingRestart}
+            onClick={() =>
+              void act(async () => {
+                await requestRestart('/prepare', {});
+              }, 'prepare')
+            }
+          >
+            Prepare server for migration
+          </UpgradeActionButton>
+        </section>
+      )}
+      {!status?.available && !needsPreparation && !statusError && !error && (
         <p className="app-settings-field-help">
           This feature is disabled by default and requires a provisioned persistent control volume and operator
           authentication.
         </p>
       )}
-      <section className="app-settings-section" aria-label="Source inspection and maintenance">
-        <h4 className="app-settings-section-title">1. Inspect and pause</h4>
-        <UpgradeActionButton
-          action="inspect"
-          loading={activeAction === 'inspect'}
-          disabled={disabled || !initial || !!status?.maintenance || restartRequired}
-          onClick={() =>
-            void act(async () => {
-              setInventory(null);
-              const next = await request<Inventory>('/inventory');
-              if (mounted.current) setInventory(next);
-            }, 'inspect')
-          }
-        >
-          Inspect source
-        </UpgradeActionButton>
-        {inventory && (
-          <div className="local-upgrade-inventory app-settings-field-help">
-            {inventory.inventory ? (
-              <p>
-                {inventory.inventory.projects} projects, {inventory.inventory.folders} folders,{' '}
-                {inventory.inventory.recordingBundles} recordings, {inventory.inventory.publishedVersions} published
-                versions, {inventory.inventory.publishedWebApps} web apps.
-              </p>
-            ) : (
-              <p>Source inventory was not loaded because capacity preflight failed.</p>
+      <section
+        className="app-settings-section"
+        aria-label="Source inspection and maintenance"
+        hidden={!!needsPreparation}
+      >
+        <h4 className="app-settings-section-title">{guided ? '1. Pause and back up' : '1. Inspect and pause'}</h4>
+        {guided && initial && !status?.maintenance && (
+          <UpgradeActionButton
+            action={
+              preparation?.phase === 'running' && preparation.kind === 'pause-backup' ? preparation.stage : 'pause'
+            }
+            primary
+            loading={activeAction === 'pause'}
+            disabled={disabled || restartRequired}
+            onClick={() =>
+              void act(async () => {
+                setInventory(null);
+                if (status?.preparationJobsAvailable) {
+                  await startPreparation('pause-backup');
+                  return;
+                }
+                const checked = await request<Inventory>('/inventory');
+                if (mounted.current) setInventory(checked);
+                if (!checked.capacity?.fits)
+                  throw new Error('Capacity inspection did not pass. No writes were paused. Review source details.');
+                await request('/pause', {});
+                const paused = await request<Status>();
+                if (paused.maintenance && paused.drain?.ready && !paused.restartRequired)
+                  await request('/backup', { revision: paused.transition?.revision });
+              }, 'pause')
+            }
+          >
+            Pause writes and create verified backup
+          </UpgradeActionButton>
+        )}
+        <details open={!guided}>
+          <summary>Advanced</summary>
+          <div className="local-upgrade-details-body">
+            <p className="app-settings-field-help">
+              {guided
+                ? 'Optional individual controls. The main pause-and-backup button performs these steps and starts backup creation for you.'
+                : 'Use these individual controls to inspect and pause the source before creating a backup.'}
+            </p>
+            <UpgradeActionButton
+              action="inspect"
+              description="Checks source folders, inventory, warnings and disk/memory capacity without changing data or pausing writes."
+              loading={activeAction === 'inspect'}
+              disabled={disabled || !initial || !!status?.maintenance || restartRequired}
+              onClick={() =>
+                void act(async () => {
+                  setInventory(null);
+                  if (status?.preparationJobsAvailable) {
+                    await startPreparation('inspect');
+                    return;
+                  }
+                  const next = await request<Inventory>('/inventory');
+                  if (mounted.current) setInventory(next);
+                }, 'inspect')
+              }
+            >
+              Inspect source
+            </UpgradeActionButton>
+            {inventory && (
+              <div className="local-upgrade-inventory app-settings-field-help">
+                {inventory.inventory ? (
+                  <p>
+                    {inventory.inventory.projects} projects, {inventory.inventory.folders} folders,{' '}
+                    {inventory.inventory.recordingBundles} recordings, {inventory.inventory.publishedVersions} published
+                    versions, {inventory.inventory.publishedWebApps} web apps.
+                  </p>
+                ) : (
+                  <p>Source inventory was not loaded because capacity preflight failed.</p>
+                )}
+                <dl className="local-upgrade-source-roots">
+                  {Object.entries(inventory.source).map(([name, value]) => (
+                    <div key={name}>
+                      <dt>{name}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {inventory.inventory?.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                <p>{inventory.backupRequired}</p>
+                {inventory.capacity && (
+                  <p>
+                    Copy payload estimate: {Math.ceil(inventory.capacity.payloadBytes / 1048576)} MiB. Required
+                    candidate disk space: {Math.ceil(inventory.capacity.requiredBytes / 1048576)} MiB.{' '}
+                    {inventory.capacity.measurementComplete === false &&
+                      'Payload size is a lower bound; measurement stopped at an oversized bundle. '}
+                    {inventory.capacity.estimatedWorkingBytes !== undefined &&
+                      `Estimated extra working memory: ${Math.ceil(inventory.capacity.estimatedWorkingBytes / 1048576)} MiB. `}
+                    {inventory.capacity.fits
+                      ? 'Capacity preflight passed.'
+                      : 'Capacity preflight failed; copying is blocked. Each decoded project/history or recording bundle has a memory budget.'}
+                    {inventory.capacity.reasons?.length
+                      ? ` Blocking checks: ${inventory.capacity.reasons.join(', ')}.`
+                      : ''}
+                  </p>
+                )}
+              </div>
             )}
-            <dl className="local-upgrade-source-roots">
-              {Object.entries(inventory.source).map(([name, value]) => (
-                <div key={name}>
-                  <dt>{name}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-            {inventory.inventory?.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-            <p>{inventory.backupRequired}</p>
-            {inventory.capacity && (
-              <p>
-                Copy payload estimate: {Math.ceil(inventory.capacity.payloadBytes / 1048576)} MiB. Required candidate
-                disk space: {Math.ceil(inventory.capacity.requiredBytes / 1048576)} MiB.{' '}
-                {inventory.capacity.measurementComplete === false &&
-                  'Payload size is a lower bound; measurement stopped at an oversized bundle. '}
-                {inventory.capacity.estimatedWorkingBytes !== undefined &&
-                  `Estimated extra working memory: ${Math.ceil(inventory.capacity.estimatedWorkingBytes / 1048576)} MiB. `}
-                {inventory.capacity.fits
-                  ? 'Capacity preflight passed.'
-                  : 'Capacity preflight failed; copying is blocked. Each decoded project/history or recording bundle has a memory budget.'}
-                {inventory.capacity.reasons?.length
-                  ? ` Blocking checks: ${inventory.capacity.reasons.join(', ')}.`
-                  : ''}
+            <UpgradeActionButton
+              action="pause"
+              description="Blocks new writes and runs, then waits for active work to finish. Does not create a backup."
+              loading={activeAction === 'pause' || (initial && !!status?.maintenance && status.drain?.ready === false)}
+              disabled={disabled || !inventory || !initial || !!status?.maintenance || restartRequired}
+              onClick={() =>
+                void act(async () => {
+                  if (status?.preparationJobsAvailable) await startPreparation('pause');
+                  else await request('/pause', {});
+                }, 'pause')
+              }
+            >
+              Pause writes and drain
+            </UpgradeActionButton>
+            {status?.maintenance && (
+              <p className="app-settings-field-help">
+                {status.drain?.ready
+                  ? initial
+                    ? 'Source is quiet. Take and restore your backup before copying.'
+                    : 'Writes are paused. Continue with the selected backend’s activation, validation or recovery below.'
+                  : `Waiting for: ${status.drain?.blockers.join(', ') || 'active work'}.`}
               </p>
             )}
           </div>
-        )}
-        <UpgradeActionButton
-          action="pause"
-          loading={activeAction === 'pause' || (initial && !!status?.maintenance && status.drain?.ready === false)}
-          disabled={disabled || !inventory || !initial || !!status?.maintenance || restartRequired}
-          onClick={() =>
-            void act(async () => {
-              await request('/pause', {});
-            }, 'pause')
-          }
-        >
-          Pause writes and drain
-        </UpgradeActionButton>
-        {status?.maintenance && (
-          <p className="app-settings-field-help">
-            {status.drain?.ready
-              ? initial
-                ? 'Source is quiet. Take and restore your backup before copying.'
-                : 'Writes are paused. Continue with the selected backend’s activation, validation or recovery below.'
+        </details>
+        {guided && status?.maintenance && (
+          <p role="status" className="app-settings-field-help">
+            {quiet
+              ? 'Source is quiet. Create or download the verified backup below.'
               : `Waiting for: ${status.drain?.blockers.join(', ') || 'active work'}.`}
           </p>
         )}
       </section>
-      <section className="app-settings-section" aria-label="Backup certification and copy">
-        <h4 className="app-settings-section-title">2. Back up and copy</h4>
+      <section className="app-settings-section" aria-label="Backup certification and copy" hidden={!!needsPreparation}>
+        <h4 className="app-settings-section-title">{guided ? '2. Download and copy' : '2. Back up and copy'}</h4>
         {quiet && initial && (
           <fieldset disabled={disabled} className="local-upgrade-backup-form">
-            <legend className="app-settings-field-label">Certify a restored backup</legend>
+            <legend className="app-settings-field-label">Create and download a verified backup</legend>
             <p className="app-settings-field-help">
-              Back up all four roots while paused, restore them elsewhere, and use the offline fingerprint command on
-              that restored copy. Save the encryption key separately. Never paste the key here.
+              Create a backup of all four roots while paused. The server restores the archive into a separate scratch
+              directory and checks that it matches the frozen source. Download and save it outside this VM before
+              copying. The archive contains unencrypted private settings and credentials: store it securely.
+              {settingsEncryptionRequired &&
+                ' This older server also requires a separate encryption-key backup. Never paste the key here.'}
             </p>
             <UpgradeActionButton
-              action="fingerprint"
-              loading={activeAction === 'fingerprint'}
+              action="backup"
+              loading={activeAction === 'backup'}
               disabled={disabled || restartRequired}
               onClick={() =>
                 void act(async () => {
-                  setFrozenSource(null);
-                  const next = await request<{ sourceFingerprint: string }>('/fingerprint');
-                  if (mounted.current && status?.maintenance)
-                    setFrozenSource({ pausedAt: status.maintenance.enteredAt, fingerprint: next.sourceFingerprint });
-                }, 'fingerprint')
+                  if (status?.preparationJobsAvailable) await startPreparation('backup');
+                  else await request('/backup', { revision: transition?.revision });
+                }, 'backup')
               }
             >
-              Read frozen source fingerprint
+              {status?.backup ? 'Create a new verified backup' : 'Create verified backup'}
             </UpgradeActionButton>
-            {sourceFingerprint && (
-              <div className="app-settings-field local-upgrade-fingerprint">
-                <span className="app-settings-field-label">Frozen source:</span>
-                <code>{sourceFingerprint}</code>
-              </div>
+            {status?.backupStatusUnreadable && (
+              <p role="alert" className="project-settings-error">
+                The previous backup status could not be read. It cannot certify copying. Create a new verified backup or
+                supply independently restored backup evidence; legacy recovery remains available.
+              </p>
             )}
+            {['failed', 'interrupted'].includes(status?.backup?.phase ?? '') && (
+              <p role="alert" className="project-settings-error">
+                Backup creation or restore verification did not finish. No backup has been certified. Check available
+                disk space and source integrity, then create a new backup; writes remain paused.
+              </p>
+            )}
+            {automatedBackup && (
+              <>
+                <p role="status" className="app-settings-field-help">
+                  Backup archive restored and verified on this server ({Math.ceil(automatedBackup.bytes / 1048576)}{' '}
+                  MiB). This is not yet confirmation of an off-VM backup.
+                </p>
+                <LoadingButton
+                  className="local-upgrade-action button-size-l"
+                  isDisabled={disabled}
+                  onClick={() => downloadBackup()}
+                >
+                  Download verified backup
+                </LoadingButton>
+                {settingsEncryptionRequired && (
+                  <LoadingButton
+                    className="local-upgrade-action button-size-l"
+                    isDisabled={disabled || status?.copyConfigurationReady === false}
+                    onClick={() => downloadBackup(true)}
+                  >
+                    Download encryption key separately
+                  </LoadingButton>
+                )}
+                {downloadStarted && (
+                  <p role="status" className="app-settings-field-help">
+                    Check your browser downloads. Only confirm below after the files have finished downloading and are
+                    stored securely outside the VM.
+                  </p>
+                )}
+              </>
+            )}
+            <details open={!guided}>
+              <summary>Advanced: independently restored backup evidence</summary>
+              <div className="local-upgrade-details-body">
+                <p className="app-settings-field-help">
+                  The evidence below is filled automatically for a verified browser backup. If you already restored a
+                  backup elsewhere, you can instead enter its reference and independently computed fingerprint.
+                </p>
+                <UpgradeActionButton
+                  action="fingerprint"
+                  loading={activeAction === 'fingerprint'}
+                  disabled={disabled || restartRequired}
+                  onClick={() =>
+                    void act(async () => {
+                      setFrozenSource(null);
+                      if (status?.preparationJobsAvailable) {
+                        await startPreparation('fingerprint');
+                        return;
+                      }
+                      const next = await request<{ sourceFingerprint: string }>('/fingerprint');
+                      if (mounted.current && status?.maintenance)
+                        setFrozenSource({
+                          pausedAt: status.maintenance.enteredAt,
+                          fingerprint: next.sourceFingerprint,
+                        });
+                    }, 'fingerprint')
+                  }
+                >
+                  Read frozen source fingerprint
+                </UpgradeActionButton>
+                {sourceFingerprint && (
+                  <div className="app-settings-field local-upgrade-fingerprint">
+                    <span className="app-settings-field-label">Frozen source:</span>
+                    <code>{sourceFingerprint}</code>
+                  </div>
+                )}
+                <div className="app-settings-field-grid">
+                  <label className="app-settings-field">
+                    <span className="app-settings-field-label">Backup reference</span>
+                    <TextField
+                      aria-label="Backup reference"
+                      value={backupReference}
+                      isDisabled={disabled}
+                      onChange={(event) => {
+                        setBackupReference(event.currentTarget.value);
+                        setBackupRestoredFor(null);
+                        setKeyBackedUpFor(null);
+                      }}
+                      maxLength={512}
+                    />
+                  </label>
+                  <label className="app-settings-field">
+                    <span className="app-settings-field-label">Restored backup fingerprint</span>
+                    <TextField
+                      aria-label="Restored backup fingerprint"
+                      value={backupFingerprint}
+                      isDisabled={disabled}
+                      onChange={(event) => {
+                        setBackupFingerprint(event.currentTarget.value.trim());
+                        setBackupRestoredFor(null);
+                        setKeyBackedUpFor(null);
+                      }}
+                      maxLength={64}
+                    />
+                  </label>
+                </div>
+              </div>
+            </details>
             <div className="app-settings-field-grid">
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Backup reference</span>
-                <TextField
-                  aria-label="Backup reference"
-                  value={backupReference}
-                  isDisabled={disabled}
-                  onChange={(event) => {
-                    setBackupReference(event.currentTarget.value);
-                    setBackupRestoredFor(null);
-                    setKeyBackedUpFor(null);
-                  }}
-                  maxLength={512}
-                />
-              </label>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Restored backup fingerprint</span>
-                <TextField
-                  aria-label="Restored backup fingerprint"
-                  value={backupFingerprint}
-                  isDisabled={disabled}
-                  onChange={(event) => {
-                    setBackupFingerprint(event.currentTarget.value.trim());
-                    setBackupRestoredFor(null);
-                    setKeyBackedUpFor(null);
-                  }}
-                  maxLength={64}
-                />
-              </label>
               <BooleanSetting
                 checked={backupRestored}
                 disabled={disabled || backupToken === null}
                 onChange={(checked) => setBackupRestoredFor(checked ? backupToken : null)}
-                label="I restored a separate backup of all four source roots."
+                label={
+                  usesAutomatedBackup
+                    ? 'I saved the verified backup download securely outside this VM.'
+                    : 'I restored a separate backup of all four source roots.'
+                }
               />
-              <BooleanSetting
-                checked={keyBackedUp}
-                disabled={disabled || backupToken === null}
-                onChange={(checked) => setKeyBackedUpFor(checked ? backupToken : null)}
-                label="I backed up the local settings encryption key separately."
-              />
+              {settingsEncryptionRequired && (
+                <BooleanSetting
+                  checked={keyBackedUp}
+                  disabled={disabled || backupToken === null}
+                  onChange={(checked) => setKeyBackedUpFor(checked ? backupToken : null)}
+                  label="I backed up the local settings encryption key separately."
+                />
+              )}
             </div>
             {backupToken === null && (
               <p className="app-settings-field-help">
-                Read the current frozen fingerprint and enter a backup reference and matching restored fingerprint
-                before certifying the backup.
+                {guided
+                  ? 'Create a verified backup above. Its verification evidence is filled automatically; no fingerprint needs to be typed.'
+                  : 'Read the current frozen fingerprint and enter a backup reference and matching restored fingerprint before certifying the backup.'}
               </p>
             )}
           </fieldset>
@@ -488,7 +882,7 @@ export function LocalStorageUpgradeSettingsTab() {
                 backupReference,
                 backupSourceFingerprint: backupFingerprint,
                 backupRestored,
-                encryptionKeyBackedUp: keyBackedUp,
+                ...(settingsEncryptionRequired ? { encryptionKeyBackedUp: keyBackedUp } : {}),
                 ...(['interrupted', 'failed'].includes(status?.job?.phase ?? '')
                   ? { retryJobId: status!.job!.id }
                   : {}),
@@ -506,10 +900,23 @@ export function LocalStorageUpgradeSettingsTab() {
             {status.job.message}
             {status.job.failure &&
               ` Failure: ${status.job.failure.code} at ${status.job.failure.stage}. Download the diagnostic report; no exception contents or secrets are included.`}
+            {status.job.failure?.reason &&
+              Object.hasOwn(LOCAL_UPGRADE_FAILURE_REASONS, status.job.failure.reason) &&
+              ` ${LOCAL_UPGRADE_FAILURE_REASONS[status.job.failure.reason]}`}
+            {status.job.failure?.sourceReference &&
+              /^[a-f0-9]{16}$/.test(status.job.failure.sourceReference) &&
+              ` Project reference: ${status.job.failure.sourceReference}.`}
+            {projectDiagnostic?.token === diagnosticToken &&
+              projectDiagnostic.paths.length > 0 &&
+              ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
         )}
       </section>
-      <section className="app-settings-section" aria-label="Activation and runtime validation">
+      <section
+        className="app-settings-section"
+        aria-label="Activation and runtime validation"
+        hidden={!!needsPreparation}
+      >
         <h4 className="app-settings-section-title">3. Activate and validate</h4>
         <UpgradeActionButton
           action="activate"
@@ -522,18 +929,41 @@ export function LocalStorageUpgradeSettingsTab() {
         </UpgradeActionButton>
         {restartRequired && (
           <p role="status" className="app-settings-field-help app-settings-inline-note">
-            Restart the combined API/executor container, then reopen this panel. Both processes must load the selected
-            generation before validation or new work.
+            {guided
+              ? 'The backend must restart to load this selection. Use Restart backend below; this panel reconnects and validates automatically.'
+              : 'Restart the combined API/executor container, then reopen this panel. Both processes must load the selected generation before validation or new work.'}
           </p>
         )}
-        <UpgradeActionButton
-          action="validate"
-          loading={activeAction === 'validate'}
-          disabled={disabled || !validating || !quiet || !selectedRuntimeReady}
-          onClick={() => void action('validate')}
-        >
-          Validate selected runtime
-        </UpgradeActionButton>
+        {guided && restartRequired && (
+          <UpgradeActionButton
+            action="restart"
+            loading={activeAction === 'restart'}
+            disabled={disabled}
+            onClick={() =>
+              void act(async () => {
+                await restartBackend(status!);
+              }, 'restart')
+            }
+          >
+            Restart backend
+          </UpgradeActionButton>
+        )}
+        {guided && (
+          <p className="app-settings-field-help">
+            Activation restarts both backend processes and validates automatically while writes stay paused. If
+            validation fails, retry it below or return to legacy. Resuming writes also restarts automatically.
+          </p>
+        )}
+        {(!guided || !transition?.validated) && (
+          <UpgradeActionButton
+            action="validate"
+            loading={activeAction === 'validate'}
+            disabled={disabled || !validating || !quiet || !selectedRuntimeReady}
+            onClick={() => void action('validate')}
+          >
+            Validate selected runtime
+          </UpgradeActionButton>
+        )}
         {activeAction !== 'validate' &&
           (currentValidationFailure ? (
             <p role="alert" className="project-settings-error">
@@ -552,7 +982,7 @@ export function LocalStorageUpgradeSettingsTab() {
             </p>
           ) : null)}
       </section>
-      <section className="app-settings-section" aria-label="Write resumption">
+      <section className="app-settings-section" aria-label="Write resumption" hidden={!!needsPreparation}>
         <h4 className="app-settings-section-title">4. Resume writes</h4>
         {validating && (
           <BooleanSetting
@@ -589,7 +1019,11 @@ export function LocalStorageUpgradeSettingsTab() {
           </UpgradeActionButton>
         )}
       </section>
-      <section className="app-settings-section" aria-label="Recovery and verification report">
+      <section
+        className="app-settings-section"
+        aria-label="Recovery and verification report"
+        hidden={!!needsPreparation}
+      >
         <h4 className="app-settings-section-title">Recovery and report</h4>
         {transition?.phase !== 'sqlite-live' && (
           <>

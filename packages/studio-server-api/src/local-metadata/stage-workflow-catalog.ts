@@ -1,6 +1,7 @@
 import { collectSourceFolderPaths, iterateSourceWorkflows } from './filesystem-workflow-source.js';
 import { iterateSourceRecordings } from './filesystem-recording-source.js';
 import { LocalWorkflowCatalog } from './workflow-catalog.js';
+import { localUpgradeSourceError } from './upgrade-diagnostics.js';
 
 /**
  * Candidate-only copy of a frozen workflow tree. The caller must own a
@@ -23,7 +24,11 @@ export async function stageFrozenWorkflowCatalog(options: {
     }
     for await (const project of iterateSourceWorkflows(options.sourceRoot)) {
       await options.assertFrozen();
-      await options.catalog.importProject(project);
+      try {
+        await options.catalog.importProject(project);
+      } catch (error) {
+        throw localUpgradeSourceError(error, project.relativePath, 'catalog-import-failed');
+      }
     }
   }
   await options.assertFrozen();

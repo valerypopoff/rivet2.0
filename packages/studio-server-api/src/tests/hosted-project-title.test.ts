@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';

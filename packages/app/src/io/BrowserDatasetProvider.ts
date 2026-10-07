@@ -25,6 +25,7 @@ interface DatasetDatabase extends DBSchema {
 export class BrowserDatasetProvider implements DatasetProvider {
   currentProjectId: ProjectId | undefined;
   #currentProjectDatasets: CombinedDataset[] = [];
+  #selectionRevision = 0;
   #getDatasetDatabase = createRecoverableIndexedDbConnection(openDatasetDatabase);
 
   async getDatasetDatabase(): Promise<IDBDatabase> {
@@ -32,10 +33,19 @@ export class BrowserDatasetProvider implements DatasetProvider {
   }
 
   async loadDatasets(projectId: ProjectId): Promise<void> {
+    const revision = ++this.#selectionRevision;
+    const datasets = await this.#readProjectDatasets(projectId);
+    if (revision !== this.#selectionRevision) return;
+
+    this.currentProjectId = projectId;
+    this.#currentProjectDatasets = datasets;
+  }
+
+  async #readProjectDatasets(projectId: ProjectId): Promise<CombinedDataset[]> {
     const db = await this.#getDatasetDatabase();
 
-    const metadataTransaction = preserveIndexedDbRequestTiming(db.transaction('datasets', 'readonly'));
-    const store = metadataTransaction.store;
+    const transaction = preserveIndexedDbRequestTiming(db.transaction(['datasets', 'data'], 'readonly'));
+    const store = transaction.objectStore('datasets');
 
     const metadata: DatasetMetadata[] = [];
 
@@ -47,13 +57,11 @@ export class BrowserDatasetProvider implements DatasetProvider {
       cursor = await cursor.continue();
     }
 
-    const dataTransaction = preserveIndexedDbRequestTiming(db.transaction('data', 'readonly'));
-    const dataStore = dataTransaction.store;
+    const dataStore = transaction.objectStore('data');
 
     const data = await Promise.all(metadata.map((meta) => dataStore.get(meta.id)));
-
-    this.currentProjectId = projectId;
-    this.#currentProjectDatasets = metadata.map(
+    await transaction.done;
+    return metadata.map(
       (meta, i): CombinedDataset => ({
         meta,
         data: data[i] ?? {
@@ -199,28 +207,68 @@ export class BrowserDatasetProvider implements DatasetProvider {
     return sorted.slice(0, k).map((r) => ({ ...r.row, distance: r.similarity }));
   }
 
-  async exportDatasetsForProject(_projectId: ProjectId): Promise<CombinedDataset[]> {
-    return cloneDeep(this.#currentProjectDatasets);
+  async exportDatasetsForProject(projectId: ProjectId): Promise<CombinedDataset[]> {
+    // Capture live edits synchronously, before the caller's first await. An
+    // inactive project is read without selecting it or borrowing another tab's
+    // in-memory datasets.
+    if (this.currentProjectId === projectId) return cloneDeep(this.#currentProjectDatasets);
+    return this.#readProjectDatasets(projectId);
   }
 
-  async importDatasetsForProject(projectId: ProjectId, datasets: CombinedDataset[]) {
-    this.#currentProjectDatasets = datasets;
-    this.currentProjectId = projectId;
-
+  async importDatasetsForProject(
+    projectId: ProjectId,
+    datasets: CombinedDataset[],
+    options: { isCurrent?: () => boolean; signal?: AbortSignal; replace?: boolean; activate?: boolean } = {},
+  ): Promise<void> {
+    const activate = options.activate !== false;
+    const revision = activate ? ++this.#selectionRevision : this.#selectionRevision;
+    const isCurrent = () =>
+      (!activate || revision === this.#selectionRevision) &&
+      !options.signal?.aborted &&
+      options.isCurrent?.() !== false;
     const db = await this.#getDatasetDatabase();
+    if (!isCurrent()) throw new DOMException('Project load cancelled', 'AbortError');
     const transaction = preserveIndexedDbRequestTiming(db.transaction(['datasets', 'data'], 'readwrite'));
-
     const metadataStore = transaction.objectStore('datasets');
     const dataStore = transaction.objectStore('data');
-
-    await Promise.all(
-      datasets.map(async (dataset) => {
-        await Promise.all([
-          metadataStore.put(dataset.meta, dataset.meta.id),
-          dataStore.put(dataset.data, dataset.data.id),
-        ]);
-      }),
-    );
+    const abort = () => {
+      try {
+        transaction.abort();
+      } catch {
+        /* already settled */
+      }
+    };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      if (options.replace) {
+        let cursor = await metadataStore.openCursor();
+        while (cursor) {
+          if (cursor.value.projectId === projectId) {
+            await dataStore.delete(cursor.value.id);
+            await cursor.delete();
+          }
+          cursor = await cursor.continue();
+        }
+      }
+      for (const dataset of datasets) {
+        // Await each issued request before issuing the next. A synchronous
+        // clone/quota error must not orphan the preceding request's rejection
+        // when the enclosing transaction is rolled back.
+        await metadataStore.put(dataset.meta, dataset.meta.id);
+        await dataStore.put(dataset.data, dataset.data.id);
+      }
+      await transaction.done;
+      if (!isCurrent()) throw new DOMException('Project load cancelled', 'AbortError');
+      if (activate) {
+        this.#currentProjectDatasets = cloneDeep(datasets);
+        this.currentProjectId = projectId;
+      }
+    } catch (error) {
+      abort();
+      throw error;
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
+    }
   }
 }
 
@@ -230,6 +278,11 @@ const dotProductSimilarity = (a: number[], b: number[]): number => {
 };
 
 function openDatasetDatabase(onUnavailable?: () => void): Promise<IDBPDatabase<DatasetDatabase>> {
+  if (typeof indexedDB === 'undefined') {
+    return Promise.reject(
+      new Error('Browser IndexedDB storage is unavailable. Enable browser storage and retry opening the project.'),
+    );
+  }
   let database: IDBPDatabase<DatasetDatabase> | undefined;
 
   return openDB<DatasetDatabase>('datasets', 2, {

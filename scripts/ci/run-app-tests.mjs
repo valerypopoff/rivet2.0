@@ -2,35 +2,17 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  parseTestShardOptions as parseAppTestOptions,
+  selectTestShard as selectAppTestShard,
+} from './test-shard-options.mjs';
+
+export { parseAppTestOptions, selectAppTestShard };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..');
 const appRoot = path.join(rootDir, 'packages', 'app');
 const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
-
-function parseIntegerFlag(args, name, fallback) {
-  const index = args.indexOf(name);
-  if (index < 0) {
-    return fallback;
-  }
-
-  const value = Number(args[index + 1]);
-  if (!Number.isInteger(value)) {
-    throw new Error(`${name} must be an integer.`);
-  }
-  return value;
-}
-
-export function selectAppTestShard(files, shardIndex, shardCount) {
-  if (!Number.isInteger(shardCount) || shardCount < 1) {
-    throw new Error('shardCount must be a positive integer.');
-  }
-  if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount) {
-    throw new Error(`shardIndex must be between 0 and ${shardCount - 1}.`);
-  }
-
-  return files.filter((_file, index) => index % shardCount === shardIndex);
-}
 
 export function listAppTestFiles(testsDirectory, relativeDirectory = 'src') {
   return fs
@@ -68,40 +50,63 @@ function run(commandArgs) {
   });
 }
 
-export async function runAppTests({ shardIndex = 0, shardCount = 1 } = {}) {
-  const files = listDiscoveredAppTests();
+export function createAppTestCommands(files, shardIndex = 0, shardCount = 1) {
   const selectedFiles = selectAppTestShard(files, shardIndex, shardCount);
   if (selectedFiles.length === 0) {
     throw new Error(`App test shard ${shardIndex + 1}/${shardCount} is empty.`);
   }
 
+  const workspace = ['workspace', '@valerypopoff/rivet-app', 'run'];
+  // Use the same explicit discovery for local and CI runs. Node's implicit
+  // discovery varies by runtime and omits supported TSX/spec suffixes. Bound
+  // every invocation, including shards, to avoid Windows command-line limits.
+  const commands = [];
+  for (let index = 0; index < selectedFiles.length; index += 32) {
+    commands.push([...workspace, 'test:files', '--', ...selectedFiles.slice(index, index + 32)]);
+  }
+  return commands;
+}
+
+export function appTestPrerequisite(dependencies = 'build') {
+  if (dependencies === 'prebuilt') return ['check:compiled-workspace-exports'];
+  if (dependencies === 'build') return ['workspace', '@valerypopoff/rivet2-core', 'run', 'build:esm'];
+  throw new Error('RIVET_APP_TEST_DEPENDENCIES must be build or prebuilt.');
+}
+
+export async function runAppTests(
+  { shardIndex = 0, shardCount = 1, dependencies = process.env.RIVET_APP_TEST_DEPENDENCIES ?? 'build' } = {},
+  execute = run,
+) {
+  const prerequisite = appTestPrerequisite(dependencies);
+  const files = listDiscoveredAppTests();
+  const commands = createAppTestCommands(files, shardIndex, shardCount);
+
   // App tests import Core through its published ESM export. Build that
   // prerequisite here so local full and sharded App-test runs are self-contained;
-  // CI independently verifies the restored artifact before this runner starts.
-  await run(['workspace', '@valerypopoff/rivet2-core', 'run', 'build:esm']);
+  // CI opts into its same-commit artifact, but must still fail before running
+  // tests if that artifact is incomplete or unloadable. Local runs build Core.
+  await execute(prerequisite);
 
-  if (shardCount === 1) {
-    // Keep the full local suite on tsx discovery. Expanding every App test path
-    // would exceed Windows' command-line limit before the test runner starts.
-    await run(['workspace', '@valerypopoff/rivet-app', 'run', 'test']);
-    return;
+  if (shardCount !== 1) {
+    const selectedCount = commands.reduce((count, command) => count + command.length - 5, 0);
+    console.log(`[app-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedCount} files.`);
   }
-
-  console.log(`[app-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedFiles.length} files.`);
-  await run(['workspace', '@valerypopoff/rivet-app', 'run', 'test:files', '--', ...selectedFiles]);
+  for (const command of commands) {
+    await execute(command);
+  }
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const shardIndex = parseIntegerFlag(args, '--shard-index', 0);
-  const shardCount = parseIntegerFlag(args, '--shard-count', 1);
-  if (args.includes('--check')) {
+  const { shardIndex, shardCount, check } = parseAppTestOptions(process.argv.slice(2));
+  const dependencies = process.env.RIVET_APP_TEST_DEPENDENCIES ?? 'build';
+  appTestPrerequisite(dependencies);
+  if (check) {
     const files = listDiscoveredAppTests();
-    selectAppTestShard(files, shardIndex, shardCount);
+    createAppTestCommands(files, shardIndex, shardCount);
     console.log(`[app-tests] Discovered ${files.length} tests; shard ${shardIndex + 1}/${shardCount} is valid.`);
     return;
   }
-  await runAppTests({ shardIndex, shardCount });
+  await runAppTests({ shardIndex, shardCount, dependencies });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

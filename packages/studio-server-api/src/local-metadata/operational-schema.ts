@@ -1,6 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 
+export const LOCAL_SCHEDULE_SCHEMA_VERSION = 1;
+
 const schemas = {
+  schedules: {
+    rivet_schedules: ['id', 'revision', 'enabled', 'next_at', 'json'],
+    rivet_schedule_runs: ['id', 'schedule_id', 'status', 'owner', 'lease_until', 'scheduled_at', 'json', 'draft_json'],
+    rivet_schedule_installation: ['key', 'value'],
+    rivet_schedule_requests: ['id', 'fingerprint', 'expires_at', 'resource_id', 'json'],
+  },
   evaluations: {
     evaluation_library: ['singleton_key', 'revision', 'library_json', 'updated_at_ms'],
     evaluation_library_imports: ['source_fingerprint', 'imported_at_ms'],
@@ -25,9 +33,19 @@ export function assertLocalOperationalSchema(database: DatabaseSync, domain: key
   const tables = database
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
     .all<{ name: string }>();
-  if (tables.length !== Object.keys(schemas[domain]).length)
+  let expected: Record<string, readonly string[]> = schemas[domain];
+  if (domain === 'schedules') {
+    const version = database.prepare('PRAGMA user_version').get<{ user_version: number }>()!.user_version;
+    if (version !== 0 && version !== LOCAL_SCHEDULE_SCHEMA_VERSION)
+      throw new Error('Selected scheduled run database has an unsupported schema version.');
+    // The original unversioned schema had no request receipts. Only that exact
+    // three-table shape is an upgrade candidate; marked databases must be complete.
+    if (version === 0 && tables.length === 3 && !tables.some((table) => table.name === 'rivet_schedule_requests'))
+      expected = Object.fromEntries(Object.entries(expected).filter(([name]) => name !== 'rivet_schedule_requests'));
+  }
+  if (tables.length !== Object.keys(expected).length || tables.some((table) => !Object.hasOwn(expected, table.name)))
     throw new Error('Selected operational database has unexpected or missing tables.');
-  for (const [table, required] of Object.entries(schemas[domain])) {
+  for (const [table, required] of Object.entries(expected)) {
     const columns = database.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
     if (required.some((column: string) => !columns.some((actual) => actual.name === column)))
       throw new Error('Selected operational database has an incomplete schema; restore its coordinated backup.');

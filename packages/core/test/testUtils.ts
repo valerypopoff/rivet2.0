@@ -1,11 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import {
-  deserializeProject,
-  globalRivetNodeRegistry,
-  GraphProcessor,
-  type ProcessContext,
-  type Project,
-} from '../src/index.js';
+import { deserializeProject } from '../src/utils/serialization/serialization.js';
+import type { ProcessContext } from '../src/model/ProcessContext.js';
+import type { Project } from '../src/model/Project.js';
 import { GptTokenizerTokenizer } from '../src/integrations/GptTokenizerTokenizer.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +13,10 @@ export async function loadTestGraphs(): Promise<Project> {
 }
 
 export async function loadTestGraphInProcessor(graphName: string) {
+  // Serialization and isolated node tests must not boot every SDK/plugin merely
+  // to obtain fixture text or a process context. Registry tests still exercise
+  // the complete public registry when they actually construct a processor.
+  const { GraphProcessor, globalRivetNodeRegistry } = await import('../src/index.js');
   const project = await loadTestGraphs();
   const graph = Object.values(project.graphs).find((g) => g.metadata!.name === graphName);
 

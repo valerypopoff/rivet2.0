@@ -10,7 +10,7 @@ export function usePasteNodes() {
   const pasteNodesCommand = usePasteNodesCommand();
 
   const pasteNodes = (mousePosition: { x: number; y: number }) => {
-    if (clipboard?.type !== 'nodes') {
+    if (clipboard?.type !== 'nodes' || clipboard.nodes.length === 0) {
       return;
     }
 

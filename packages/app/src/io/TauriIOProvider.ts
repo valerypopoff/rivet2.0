@@ -9,11 +9,12 @@ import {
 } from '@valerypopoff/rivet2-core';
 import {
   deserializeLegacyEvaluationProjectData,
-  type EvaluationProjectFileData,
   type PathBasedIOProvider,
+  type LoadedProjectData,
+  type ProjectLoadOptions,
 } from './IOProvider.js';
 import { getDefaultPathPolicyProvider, isInTauri } from '../utils/tauri.js';
-import { saveDatasetsFile, loadDatasetsFile } from './datasets.js';
+import { saveDatasetsFile, readDatasetsFile } from './datasets.js';
 import { type AppDatasetProvider, type PathPolicyProvider } from '../providers/ProvidersContext.js';
 import { openDialog, saveDialog } from '../utils/platform/dialog.js';
 import { nativeReadBinaryFile, nativeReadTextFile, nativeWriteFile } from '../utils/platform/fs.js';
@@ -113,7 +114,10 @@ export class TauriIOProvider implements PathBasedIOProvider {
     }
   }
 
-  async loadProjectData(callback: (data: { project: Project; evaluation: EvaluationProjectFileData; path: string }) => void) {
+  async loadProjectData(
+    callback: (data: LoadedProjectData & { path: string }) => void | Promise<void>,
+    options?: ProjectLoadOptions,
+  ) {
     const path = (await openDialog({
       filters: [
         {
@@ -128,20 +132,34 @@ export class TauriIOProvider implements PathBasedIOProvider {
     })) as string | undefined;
 
     if (path) {
-      const projectData = await this.loadProjectDataNoPrompt(path);
-      callback({ ...projectData, path });
+      const projectData = await this.loadProjectDataNoPrompt(path, options);
+      await callback({ ...projectData, path });
     }
   }
 
-  async loadProjectDataNoPrompt(path: string): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
+  async loadProjectDataNoPrompt(path: string, options: ProjectLoadOptions = {}): Promise<LoadedProjectData> {
+    options.signal?.throwIfAborted();
     const data = await nativeReadTextFile(path);
+    options.signal?.throwIfAborted();
     const [projectData, attachedData] = deserializeProject(data, path);
 
     const evaluationData = deserializeLegacyEvaluationProjectData(attachedData.evaluations);
 
-    const evaluationDatasets = await loadDatasetsFile(path, projectData, this.#datasetProvider, this.#pathPolicy);
-
-    return { project: projectData, evaluation: { evaluationData, evaluationDatasets } };
+    const { datasets, evaluationDatasets } = await readDatasetsFile(path, projectData, this.#pathPolicy);
+    options.signal?.throwIfAborted();
+    const commit = async (isCurrent: () => boolean) => {
+      if (!isCurrent() || options.signal?.aborted) return false;
+      await this.#datasetProvider.importDatasetsForProject?.(projectData.metadata.id, datasets, {
+        isCurrent,
+        signal: options.signal,
+        activate: options.activateDatasets !== false,
+      });
+      return isCurrent() && !options.signal?.aborted;
+    };
+    const result = { project: projectData, evaluation: { evaluationData, evaluationDatasets } };
+    if (options.deferCommit) return { ...result, commit };
+    if (!(await commit(() => !options.signal?.aborted))) throw new DOMException('Project load cancelled', 'AbortError');
+    return result;
   }
 
   async loadRecordingData(callback: (data: { recorder: ExecutionRecorder; path: string }) => void) {

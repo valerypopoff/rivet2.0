@@ -1,17 +1,15 @@
-import type { ChartNode } from './NodeBase.js';
-
-export function findStronglyConnectedComponents(
-  nodes: ChartNode[],
-  getAdjacentNodes: (node: ChartNode) => ChartNode[],
-): ChartNode[][] {
-  const stack: ChartNode[] = [];
-  const indices = new Map<ChartNode, number>();
-  const lowLinks = new Map<ChartNode, number>();
-  const onStack = new Set<ChartNode>();
-  const stronglyConnectedComponents: ChartNode[][] = [];
+export function findStronglyConnectedComponents<T extends object>(
+  nodes: T[],
+  getAdjacentNodes: (node: T) => T[],
+): T[][] {
+  const stack: T[] = [];
+  const indices = new Map<T, number>();
+  const lowLinks = new Map<T, number>();
+  const onStack = new Set<T>();
+  const stronglyConnectedComponents: T[][] = [];
   let index = 0;
 
-  const strongConnect = (node: ChartNode): void => {
+  const strongConnect = (node: T): void => {
     indices.set(node, index);
     lowLinks.set(node, index);
     index++;
@@ -28,8 +26,8 @@ export function findStronglyConnectedComponents(
     }
 
     if (lowLinks.get(node) === indices.get(node)) {
-      const component: ChartNode[] = [];
-      let currentNode: ChartNode | undefined;
+      const component: T[] = [];
+      let currentNode: T | undefined;
 
       do {
         currentNode = stack.pop();

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAppDataRoot, getWorkflowRecordingsRoot, getWorkflowsRoot } from '../security.js';
@@ -93,13 +94,13 @@ export async function localCandidateFingerprint(controlRoot: string, generationI
   const hashes: Array<[string, string]> = [];
   for (const name of ['catalog.sqlite', 'settings.sqlite'])
     hashes.push([name, (await inspectLocalSqliteSnapshot(path.join(paths.root, name))).logicalHash]);
-  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+  for (const name of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
     const file = path.join(paths.operationalRoot, name);
     try {
       hashes.push([name, (await inspectLocalSqliteSnapshot(file)).logicalHash]);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      hashes.push([name, 'absent']);
+      if (name !== 'scheduled-runs.sqlite') hashes.push([name, 'absent']);
     }
   }
   const hash = createHash('sha256');
@@ -210,8 +211,22 @@ export async function initializeLocalMetadataServing(): Promise<void> {
     await assertLocalGenerationDirectories(
       localMetadataGenerationPaths(localMetadataControlRoot(), state.generation!.id),
     );
-    if (certificate.encryptionKeyId !== hashLocalUpgradeValue(process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || ''))
-      throw new Error('Local settings encryption key is missing or differs from the verified generation.');
+    if (certificate.encryptionKeyId) {
+      const settings = new DatabaseSync(
+        localMetadataGenerationPaths(localMetadataControlRoot(), certificate.generationId).settingsDatabasePath,
+        { readOnly: true },
+      );
+      try {
+        const version = settings.prepare('PRAGMA user_version').get() as { user_version: number };
+        if (
+          version.user_version === 1 &&
+          certificate.encryptionKeyId !== hashLocalUpgradeValue(process.env.RIVET_LOCAL_METADATA_ENCRYPTION_KEY || '')
+        )
+          throw new Error('Legacy encrypted settings require the original key for plaintext conversion.');
+      } finally {
+        settings.close();
+      }
+    }
     if (state.phase === 'sqlite-validation') {
       const fresh = await freshLocalGenerationProof(certificate);
       if (

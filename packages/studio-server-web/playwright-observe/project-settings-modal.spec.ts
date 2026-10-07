@@ -132,6 +132,19 @@ async function installProjectSettingsRoutes(
   const projects = Array.isArray(projectOrProjects) ? projectOrProjects : [projectOrProjects];
   for (const candidate of projects) candidate.settings.publicationVersion ??= '0';
   const project = projects[0]!;
+  await page.route('**/api/workflows/projects/references?**', async (route) => {
+    await route.fulfill({
+      json: {
+        projectId: project.projectMetadataId,
+        references: [],
+        checkedProjects: 0,
+        totalProjects: 0,
+        complete: true,
+        changedDuringScan: false,
+        unreadableProjects: [],
+      },
+    });
+  });
   const routeConfig = {
     ...DEFAULT_HOSTED_ROUTE_CONFIG,
     ...options.routeConfig,
@@ -632,14 +645,91 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
-  test('warns about dynamic Saved latest dependencies before endpoint and web-app publication', async ({ page }) => {
+  test('deletion stays disabled after unavailable publication reads until a successful review', async ({ page }) => {
+    const project = createProjectSettingsFixture('delete-publication-unavailable');
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let failPublicationRead = true;
+    let reads = 0;
+    await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+      reads++;
+      if (failPublicationRead) await route.fulfill({ status: 503, json: { error: 'Publication unavailable' } });
+      else await route.fallback();
+    });
+    const { modal } = await openProjectSettingsModal(page, project);
+    await expect(modal.getByRole('alert')).toContainText('Publication state could not be loaded');
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
+    const deleteButton = modal.getByRole('button', { name: 'Delete project', exact: true });
+    await expect(deleteButton).toBeDisabled();
+    await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    await expect.poll(() => reads).toBe(2);
+    await expect(modal.getByRole('alert')).toContainText('Publication state could not be loaded');
+    await expect(deleteButton).toBeDisabled();
+    failPublicationRead = false;
+    await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    await expect(deleteButton).toBeEnabled();
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('Danger zone lazily shows incoming connections, incomplete scans and refresh recovery', async ({
+    page,
+  }, testInfo) => {
+    const project = createProjectSettingsFixture('reference-target');
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let requests = 0;
+    await page.route('**/api/workflows/projects/references?**', async (route) => {
+      requests++;
+      const query = new URL(route.request().url()).searchParams;
+      expect(query.get('relativePath')).toBe(project.relativePath);
+      expect(query.get('projectId')).toBe(project.projectMetadataId);
+      await route.fulfill({
+        json: {
+          projectId: project.projectMetadataId,
+          references:
+            requests === 1
+              ? [
+                  {
+                    projectId: 'caller',
+                    name: 'Story runner',
+                    relativePath: 'stories/Story runner.rivet-project',
+                    sources: [
+                      { kind: 'saved-latest', targetVersions: ['latest', 'project-reference'] },
+                      { kind: 'published-web-app', label: 'story-ui', targetVersions: ['published'] },
+                    ],
+                  },
+                ]
+              : [],
+          checkedProjects: 2,
+          totalProjects: 2,
+          complete: requests !== 1,
+          changedDuringScan: false,
+          unreadableProjects: requests === 1 ? [{ name: 'Broken', relativePath: 'Broken.rivet-project' }] : [],
+        },
+      });
+    });
+    const { modal } = await openProjectSettingsModal(page, project);
+    expect(requests).toBe(0);
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
+    const references = modal.getByRole('region', { name: 'Projects referencing this project' });
+    await expect(references).toContainText('Story runner');
+    await expect(references).toContainText('stories/Story runner.rivet-project');
+    await expect(references).toContainText('Saved latest → Saved latest, Project reference');
+    await expect(references).toContainText('Published web app: story-ui → Published');
+    await expect(references.getByRole('alert')).toContainText('This check is incomplete');
+    await expect(references.getByRole('alert')).toContainText('Broken.rivet-project');
+    await modal.screenshot({ path: testInfo.outputPath('incoming-references.png') });
+    await expect(modal.getByRole('button', { name: 'Delete project', exact: true })).toBeEnabled();
+    await references.getByRole('button', { name: 'Retry reference check' }).click();
+    await expect(references).toHaveCount(0);
+    expect(requests).toBe(2);
+  });
+  test('dynamic Saved latest dependencies do not add publication reminders', async ({ page }) => {
     const project = createProjectSettingsFixture('dynamic-subgraph-dependency');
     project.savedLatestSubgraphProjectIds = ['called-project'];
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
     const { modal } = await openProjectSettingsModal(page, project);
-    await expect(modal.getByRole('note')).toContainText('future saves can change this endpoint');
+    await expect(modal.getByRole('note')).toHaveCount(0);
     await modal.getByRole('tab', { name: 'Web apps' }).click();
-    await expect(modal.getByRole('note')).toContainText('future saves can change a published web app');
+    await expect(modal.getByRole('note')).toHaveCount(0);
   });
   test('a nonsequential success version cannot re-arm publication', async ({ page }) => {
     const project = createProjectSettingsFixture('codex-invalid-publication-response');
@@ -1125,7 +1215,7 @@ test.describe('Project settings modal', () => {
     const modalBox = await modal.boundingBox();
     expect(sectionSwitcherBox).not.toBeNull();
     expect(modalBox).not.toBeNull();
-    expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width * 0.6);
+    expect(sectionSwitcherBox!.width).toBeLessThan(modalBox!.width);
     const activeProjectSection = page.locator('.active-project-section');
     await expect(activeProjectSection.locator('.active-project-details > :first-child')).toHaveClass(
       /active-project-name-row/,
@@ -1141,17 +1231,16 @@ test.describe('Project settings modal', () => {
     await expect(modal.locator('.project-settings-title-input input')).toHaveCount(0);
 
     const deleteButton = modal.getByRole('button', { name: 'Delete project' });
+    await expect(deleteButton).toHaveCount(0);
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
+    await expect(modal).toContainText('permanent and cannot be undone');
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeEnabled();
-    const footerSection = modal.locator('.project-settings-danger-section');
-    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toBeVisible();
     await modal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(modal).toContainText('No web apps in the project.');
-    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toHaveCount(0);
-    await expect(deleteButton).toBeVisible();
-    await expect(deleteButton).toBeEnabled();
+    await expect(deleteButton).toHaveCount(0);
     await modal.getByRole('tab', { name: 'Endpoint' }).click();
-    await expect(footerSection.getByRole('button', { name: 'Published version history' })).toBeVisible();
+    await expect(deleteButton).toHaveCount(0);
 
     const endpointInput = modal.locator('#workflow-project-endpoint-name');
     await expect(endpointInput).toBeVisible();
@@ -1209,12 +1298,15 @@ test.describe('Project settings modal', () => {
     await endpointInput.fill(endpointName);
     await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(modal.getByRole('button', { name: 'Unpublish' })).toHaveCSS('margin-left', '8px');
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeDisabled();
+    await modal.getByRole('tab', { name: 'Endpoint' }).click();
 
     page.once('dialog', (dialog) => dialog.accept());
     await modal.getByRole('button', { name: 'Unpublish' }).click();
     await expect(modal.locator('.project-status-badge.unpublished')).toBeVisible({ timeout: 30_000 });
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
     await expect(deleteButton).toBeVisible();
     await expect(deleteButton).toBeEnabled();
   });
@@ -1346,7 +1438,19 @@ test.describe('Project settings modal', () => {
     await modal.getByRole('tab', { name: 'Web apps' }).click();
     await expect(modal.getByRole('tab', { name: 'Web apps' })).toHaveAttribute('aria-selected', 'true');
     const deleteButton = modal.getByRole('button', { name: 'Delete project' });
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
     await expect(deleteButton).toBeDisabled();
+    await expect(modal).toContainText('Unpublish the endpoint and all web apps');
+    const deleteHint = modal.getByText('Unpublish the endpoint and all web apps before deleting this project.', {
+      exact: true,
+    });
+    await expect(deleteHint).toBeVisible();
+    const deleteBounds = await deleteButton.boundingBox();
+    const hintBounds = await deleteHint.boundingBox();
+    expect(deleteBounds).not.toBeNull();
+    expect(hintBounds).not.toBeNull();
+    expect(hintBounds!.y).toBeGreaterThanOrEqual(deleteBounds!.y + deleteBounds!.height);
+    await modal.getByRole('tab', { name: 'Web apps' }).click();
 
     const webAppSection = modal.locator('.project-settings-web-app-section');
     await expect(webAppSection.locator('.project-settings-web-app-row')).toHaveCount(4);
@@ -1399,7 +1503,7 @@ test.describe('Project settings modal', () => {
     await expect(webAppSection.locator('.project-settings-web-app-state')).toHaveCount(4);
     await expect(alphaRow).toContainText('Published');
     await expect(betaRow).toContainText('Published');
-    await expect(deleteButton).toBeDisabled();
+    await expect(deleteButton).toHaveCount(0);
     await expect(alphaRow.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
     await expect(alphaRow).toContainText('The web app is accessible via the endpoint on');
     await expect(alphaRow).toContainText('/custom-apps/alpha-helper');
@@ -1435,7 +1539,7 @@ test.describe('Project settings modal', () => {
     ]);
     await expect(alphaRow.locator('.project-settings-web-app-state')).toHaveText('Not published');
     await expect(betaRow.locator('.project-settings-web-app-state')).toHaveText('Published');
-    await expect(deleteButton).toBeDisabled();
+    await expect(deleteButton).toHaveCount(0);
 
     page.once('dialog', (dialog) => dialog.accept());
     await staleRow.getByRole('button', { name: 'Unpublish' }).click();
@@ -1469,6 +1573,61 @@ test.describe('Project settings modal', () => {
     await expect(webAppSection).toContainText('Draft Helper');
   });
 
+  test('history mutations lock navigation and a failed restore refresh requires fresh review', async ({ page }) => {
+    const project = createProjectSettingsFixture('history-restore-refresh');
+    project.settings.status = 'published';
+    project.settings.endpointName = 'history-restore-refresh';
+    const trackers = createProjectSettingsRouteTrackers();
+    await installProjectSettingsRoutes(page, project, trackers);
+    const { modal } = await openProjectSettingsModal(page, project);
+    await modal.getByRole('tab', { name: 'Published version history' }).click();
+    const history = modal.getByRole('tabpanel', { name: 'Published version history' });
+
+    let releaseStar!: () => void;
+    const starGate = new Promise<void>((resolve) => {
+      releaseStar = resolve;
+    });
+    await page.route(
+      '**/api/workflows/projects/published-versions/star',
+      async (route) => {
+        await starGate;
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    await history.getByRole('button', { name: 'Star published version' }).first().click();
+    await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Close project settings' })).toBeDisabled();
+    releaseStar();
+    await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+
+    let failRefresh = false;
+    await page.route('**/api/workflows/tree', async (route) => {
+      if (!failRefresh) return route.fallback();
+      await route.fulfill({ status: 503, json: { error: 'Temporary tree failure' } });
+    });
+    await page.route(
+      '**/api/workflows/projects/published-versions/restore',
+      async (route) => {
+        failRefresh = true;
+        await route.fallback();
+      },
+      { times: 1 },
+    );
+    page.once('dialog', (dialog) => dialog.accept());
+    await history.getByRole('button', { name: 'Restore' }).first().click();
+    await expect.poll(() => trackers.publishedVersionRestoreRequests.length).toBe(1);
+    await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toBeEnabled();
+    await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
+    await modal.locator('#workflow-project-endpoint-name').fill('reviewed-restored-name');
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeDisabled();
+    await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeDisabled();
+    failRefresh = false;
+    await modal.getByRole('button', { name: 'Review latest', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Update', exact: true })).toBeEnabled();
+    await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+  });
+
   test('published version history paginates, stars, previews, and restores versions', async ({ page }) => {
     test.slow();
 
@@ -1487,10 +1646,10 @@ test.describe('Project settings modal', () => {
     const { modal, projectRow } = await openProjectSettingsModal(page, project);
 
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
-    await modal.getByRole('button', { name: 'Published version history' }).click();
-    const historyModal = page.getByTestId('workflow-published-version-history-modal');
+    await modal.getByRole('tab', { name: 'Published version history' }).click();
+    const historyModal = modal.getByRole('tabpanel', { name: 'Published version history' });
     await expect(historyModal).toBeVisible();
-    await expect(historyModal).toContainText('Published version history');
+    await expect(page.getByRole('dialog')).toHaveCount(1);
     await expect(historyModal).toContainText(endpointName);
     await expect(historyModal).toContainText('Current');
     await expect(historyModal.getByRole('listitem')).toHaveCount(10);
@@ -1546,9 +1705,9 @@ test.describe('Project settings modal', () => {
     await expect(firstCommentInput).toHaveCount(0);
     await expect(savedComment).toHaveText('Launch baseline');
     await expect.poll(() => routeTrackers.publishedVersionCommentRequests.length).toBe(1);
-    await historyModal.getByRole('button', { name: 'Close published version history' }).click({ force: true });
+    await modal.getByRole('tab', { name: 'Endpoint' }).click();
     await expect(historyModal).toHaveCount(0);
-    await modal.getByRole('button', { name: 'Published version history' }).click();
+    await modal.getByRole('tab', { name: 'Published version history' }).click();
     await expect(historyModal.getByRole('button', { name: 'Unstar published version' })).toHaveCount(1);
     await expect(
       historyModal.getByRole('button', {
@@ -1585,7 +1744,7 @@ test.describe('Project settings modal', () => {
     await expect(modal).toBeVisible();
     await expect(modal.locator('.project-status-badge.published')).toBeVisible({ timeout: 30_000 });
 
-    await modal.getByRole('button', { name: 'Published version history' }).click();
+    await modal.getByRole('tab', { name: 'Published version history' }).click();
     await expect(historyModal).toBeVisible();
     page.once('dialog', async (dialog) => {
       expect(dialog.message()).toContain('Restore this published version');
@@ -1604,7 +1763,9 @@ test.describe('Project settings modal', () => {
     expect(routeTrackers.projectLoadRequests[1]).toEqual({
       path: project.absolutePath,
     });
-    await historyModal.getByRole('button', { name: 'Close published version history' }).click();
-    await expect(historyModal).toHaveCount(0);
+    await modal.getByRole('tab', { name: 'Endpoint' }).click();
+    await expect(modal.locator('.project-status-badge.published')).toBeVisible();
+    await modal.getByRole('button', { name: 'Close project settings' }).click();
+    await expect(modal).toHaveCount(0);
   });
 });

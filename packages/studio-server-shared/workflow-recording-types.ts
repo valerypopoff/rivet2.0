@@ -15,7 +15,10 @@ export type WorkflowRecordingStatus = 'succeeded' | 'failed' | 'suspicious';
  * after a recording is created.
  */
 export type WorkflowRecordingExecutionIdentity = {
-  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project';
+  surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | 'scheduled';
+  scheduleId?: string;
+  scheduleName?: string;
+  occurrenceId?: string;
   graphId?: string;
   graphName?: string;
   revisionKey?: string;
@@ -27,6 +30,23 @@ export type WorkflowRecordingExecutionIdentity = {
   componentLabel?: string;
   correlationId?: string;
 };
+
+/** Additional scheduled identity is stored separately from endpoint identities. */
+export function readScheduledRecordingFields(
+  value: unknown,
+): Pick<WorkflowRecordingExecutionIdentity, 'scheduleId' | 'scheduleName' | 'occurrenceId'> {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const raw = value as Record<string, unknown>;
+  const field = (name: string) => (typeof raw[name] === 'string' && raw[name].length <= 200 ? raw[name] : undefined);
+  return { scheduleId: field('scheduleId'), scheduleName: field('scheduleName'), occurrenceId: field('occurrenceId') };
+}
 
 export type WorkflowRecordingFilterStatus = 'all' | 'failed';
 export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [
@@ -40,8 +60,7 @@ export const WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS = [
   'exists',
   'not_exists',
 ] as const;
-export type WorkflowRecordingInputFilterOperator =
-  typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS[number];
+export type WorkflowRecordingInputFilterOperator = (typeof WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS)[number];
 
 export type WorkflowRecordingInputFilter = {
   path: string;
@@ -54,6 +73,8 @@ export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
 export type WorkflowRecordingRunSummary = {
   id: string;
   workflowId: string;
+  sourceProjectName?: string;
+  sourceProjectRelativePath?: string;
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
@@ -81,10 +102,31 @@ export type WorkflowRecordingWorkflowSummary = {
 
 export type WorkflowRecordingWorkflowListResponse = {
   workflows: WorkflowRecordingWorkflowSummary[];
+  /** Includes retained recordings even when their source project is no longer in the catalog. */
+  totals?: WorkflowRecordingCounts;
 };
 
+export type WorkflowRecordingCounts = Pick<
+  WorkflowRecordingWorkflowSummary,
+  'totalRuns' | 'failedRuns' | 'suspiciousRuns'
+>;
+
+export function sumWorkflowRecordingCounts(rows: readonly WorkflowRecordingCounts[]): WorkflowRecordingCounts {
+  return rows.reduce(
+    (counts, row) => ({
+      totalRuns: counts.totalRuns + row.totalRuns,
+      failedRuns: counts.failedRuns + row.failedRuns,
+      suspiciousRuns: counts.suspiciousRuns + row.suspiciousRuns,
+    }),
+    { totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
+  );
+}
+
 export type WorkflowRecordingRunsPageResponse = {
+  /** Empty for Any; sub-runs pages identify the primary recording. Each run retains its actual workflowId. */
   workflowId: string;
+  /** Counts before predicates; input searches count only root candidates, never child context rows. */
+  scopeCounts?: WorkflowRecordingCounts;
   page: number;
   pageSize: number;
   totalRuns: number;
@@ -185,7 +227,7 @@ export type WorkflowRunStatisticsQuery = {
   /**
    * Controls only the chart grouping. Omitting it preserves the adaptive
    * grouping used by clients created before this field existed.
-  */
+   */
   aggregation?: WorkflowRunStatisticsAggregation;
 };
 

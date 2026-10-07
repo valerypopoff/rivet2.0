@@ -152,7 +152,8 @@ Runs the default runtime/package test matrix:
 
 - `yarn workspace @valerypopoff/rivet2-core run test`
 - `yarn workspace @valerypopoff/rivet2-node run test`
-- `yarn workspace @valerypopoff/rivet-app run test`
+- `yarn workspace @valerypopoff/rivet2-evaluations run test`
+- `yarn test:app` (Core ESM prerequisite, explicit bounded TS/TSX test batches)
 - `yarn workspace @valerypopoff/rivet-app-executor run test`
 - `yarn workspace @valerypopoff/rivet2-cli run test`
 
@@ -188,7 +189,8 @@ Focused root scripts cover workspace test suites plus repository-level checks:
 
 - `yarn test:core`: `@valerypopoff/rivet2-core`
 - `yarn test:node`: `@valerypopoff/rivet2-node`
-- `yarn test:app`: `@valerypopoff/rivet-app`
+- `yarn test:evaluations`: `@valerypopoff/rivet2-evaluations`
+- `yarn test:app`: App suite through `scripts/ci/run-app-tests.mjs`, including TSX component tests
 - `yarn test:app-executor`: `@valerypopoff/rivet-app-executor`
 - `yarn test:cli`: `@valerypopoff/rivet2-cli`
 - `yarn test:docs`: docs workspace typecheck (`tsc --noEmit`)
@@ -270,16 +272,17 @@ fixture changes require the full Kubernetes gate. The Studio Server aggregate
 accepts a skip only after successful classification explicitly returns `false`;
 a failed classifier or missing decision fails verification.
 
-The App test script lets the Node/tsx test runner discover its test files
-instead of expanding `src/**/*.test.ts` in the shell. Keep discovery internal to
-the runner: expanding the app's full test list exceeds the Windows command-line
-limit before tests can start. `yarn test:app` preserves that full-suite discovery
-locally. CI passes `--shard-index <zero-based-index> --shard-count 4` to the
-root script, which sorts discovered tests and launches only the selected subset
-through a direct Node child process. Do not replace this with shell globbing or
-one expanded full-suite command; every shard must stay deterministic and every
-test must belong to exactly one shard. The explicit shards include `.tsx` tests
-that Node/tsx discovery historically missed. Both App test commands preload
+The root App runner builds Core's ESM prerequisite locally (or validates the
+same-commit artifact in CI), then explicitly executes every discovered TS/TSX
+test in batches of at most 32 files. Calling the App workspace's `test` directly
+relies on runtime-dependent implicit discovery instead. Keep discovery internal
+to the runner: expanding the app's full test list exceeds the Windows command-line
+limit before tests can start. CI passes `--shard-index <zero-based-index>
+--shard-count 4` to the root script, which sorts all supported test suffixes and
+launches only that subset, in the same bounded batches, through direct Node child
+processes. Every test belongs to exactly one deterministic shard. Use
+the App workspace's `test:files` for a small explicit set, not one expanded
+full-suite shell glob. Both App test commands preload
 `packages/app/scripts/register-test-browser-assets.mjs`, which supplies Node-only
 stand-ins for Vite-managed asset imports and the browser-oriented component
 entry points whose CommonJS shape Node exposes differently from Vite. Its
@@ -319,6 +322,95 @@ that output pruning is parked: Skip unused outputs has active per-node coverage.
 The Studio Server monorepo import added its existing source-contract tests to this
 same shrinking baseline. They are migration debt, not precedent for new static tests;
 remove each entry when its contract moves behind an observable owner seam.
+
+### CI test ownership and reliability
+
+Keep one behavioral owner for each invariant, with a small number of integration
+checks proving that owners are wired together. The package unit suites own engine,
+editor-state, protocol and persistence behavior; Studio Server API shards own route
+and storage integration; the headless editor lane owns rendered interactions.
+Deployment/image rehearsals and desktop packaging cover different runtime/platform
+boundaries and are not substitutes for, or duplicates of, those unit suites.
+Do not remove security, migration fault injection, rollback, restored-copy or
+same-commit image promotion gates merely to reduce the assertion count.
+
+The October 2026 cleanup replaces font/CSS/TSX source assertions with one isolated
+dashboard browser contract in `hosted-dashboard-contracts.spec.ts`. It renders all
+seven dashboard dialogs, checks their shared theme and editor font registration,
+and exercises the project-health tab using the project's metadata identity.
+The four node-editor ownership scenarios now exercise focused and unfocused
+switches in the same workspace, using distinct edit markers; library ownership,
+invalid drafts and lifecycle races remain separate. This removes repeated app
+startup without losing those boundaries.
+The migration ledger retains the original imported test blobs and records the
+new browser contract as their reviewed current successor. Retiring an imported
+test must not leave a missing destination in repository verification.
+
+The editor CI lane previews the built frontend already restored from its
+same-commit build artifact. It does not launch an HMR source server or rebuild
+the app in each consumer job. Besides checking the shipped bundle, this bounds
+browser module requests and avoids local socket exhaustion from many isolated
+contexts fetching thousands of development modules. For a local CI-equivalent
+run, build the web workspace first; interactive observations can still use Vite
+development mode. No automatic retry hides a failed asset request.
+
+Web-app mounting and reconnect tests use a bounded state waiter for actual DOM
+and protocol state, rather than fixed iteration counts or sleeps for presumed
+completion. Negative reconnect and backoff deadlines use Node's mock
+timers after initial DOM mounting; they advance to both sides of each deadline.
+Sidebar icon/label alignment is sampled atomically in one browser turn and polled
+against the same half-line tolerance; separate geometry calls can straddle font
+loading or folder layout and falsely report a permanent misalignment.
+Always register fixture cleanup before assertions. A bounded state waiter is a
+diagnostic timeout, not a promise that every CI runner completes at a fixed speed.
+
+App and API shard CLIs share `scripts/ci/test-shard-options.mjs`. Unknown/repeated
+flags, non-integer values, invalid coordinates and empty selections fail even with `--check`;
+regressions exercise both actual Yarn command entrypoints, not only the parser.
+The shared coordinate-validation cases run once with assertions that both runners
+use that owner. Exact-once discovery and the existing round-robin assignment remain covered.
+In the four-runner API matrix, only `local-upgrade-runtime.test.ts` is included in
+each runner: `RIVET_API_RUNTIME_SHARD=1/4` through `4/4` partitions its registered
+scenarios exactly once. All other files keep their original single assignment.
+Each hosted runtime partition runs two isolated scenarios at a time. Full local
+runs retain all scenarios with four workers; arbitrary file partitions retain
+their existing semantics. CI sets `RIVET_API_TEST_RUNTIME=prebuilt` for migration
+subprocesses, using the restored API tsc output, including supervised restarts.
+Missing compiled entries fail explicitly; local defaults still use `tsx` source.
+Local full App runs and CI shards use that same explicit file list, including
+TSX and `.spec`/`.mts`/`.cts` tests, in batches of at most 32 files. No implicit
+Node discovery pass can omit a supported suffix or run an unrelated test twice;
+the batch limit also applies to growing CI shards on Windows.
+App shards opt into `RIVET_APP_TEST_DEPENDENCIES=prebuilt` in CI. The runner
+validates compiled exports before testing and never rebuilds Core in that mode;
+a missing or unloadable artifact stops the shard before any tests start. Local
+runs default to `build` and still build Core automatically. Unknown mode values
+fail closed. This avoids four redundant builds without trusting stale local output.
+
+Hosted Vite spellcheck contracts load the real build configuration once and
+execute its dictionary plugins. They import the emitted browser modules and check
+real dictionary contents, deduplication, unrelated-module passthrough and optimizer
+exclusions, instead of matching plugin implementation text. Provider subpaths
+are checked against the effective aliases and existing resolved files.
+The API WebSocket harness now rejects malformed frames through its waiter and
+always removes its own listeners while preserving other subscribers. Its compact
+regressions cover successful completion, parser failures, close/error, empty
+expectations and both sides of the timeout using mock timers, not sleeps.
+Socket teardown preserves waiters and other observers, consumes expected
+handshake-termination errors, and removes its own temporary listeners on close.
+Policy recheck tests advance exact interval/deadline boundaries and prove departed
+subscribers stop while remaining ones continue. Evaluation metrics tests hold a
+read open while advancing three real scheduler cycles, verifying claims keep
+running without overlapping aggregates. Authorization-revocation reconnect tests
+advance beyond the maximum backoff rather than sleeping for a presumed delay.
+Keep source-reading exceptions as a shrinking migration queue. Fixture-only reads
+in storage/crash-recovery tests are explicitly classified and still executed;
+they are not implementation-source contracts or permission to suppress such tests.
+
+After changes to this infrastructure, run `yarn test:style`, the App/API shard
+runner tests, affected package suites, and `yarn studio-server:ui:ci` for browser
+coverage. Run `test:style` before runtime suites because it rebuilds Core. Inspect
+failure artifacts rather than adding retries or increasing sleeps to hide failures.
 
 `check-ai-runtime-boundaries.mjs` prevents Generate using AI and the graph builder
 from regaining legacy Chat/Azure endpoint seams. It also keeps the selectable
@@ -571,7 +663,7 @@ ESM-only packages that cannot be aliased (e.g. `mdast-util-to-markdown`, `@googl
 
 - `build`: `build:esm` then `build:cjs`
 - CJS bundle reuses core's esbuild bundler script (same alias strategy applies)
-- `pretest`: builds `@valerypopoff/rivet2-core` ESM output first, because the node tests import the workspace package through its published-style export surface
+- `pretest`: builds Core and Node in both ESM and CJS formats locally. CI uses `RIVET_NODE_TEST_DEPENDENCIES=prebuilt` to validate the same-commit compiled exports instead of building them again. Unknown modes fail closed.
 
 Wrappers that embed this checkout but consume `@valerypopoff/rivet2-core` and
 `@valerypopoff/rivet2-node` as built packages should not create symlinks inside the
@@ -662,12 +754,12 @@ Keep this section as institutional memory. In September 2026, Apple Silicon
 support failed in several distinct layers. Fixing only the first visible error
 would not have produced a trustworthy release:
 
-| Stage                                           | Observed failure                                                                                               | Root cause                                                                                                                                                                                                            | Durable fix                                                                                                                                                                                                                                                            |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                     | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                           |
-| Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                          | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                               |
-| Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                            | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                   | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                              |
-| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy` or `A timestamp was expected but was not found.`                      | Either the local DMG helper was temporarily busy or Apple's online secure-timestamp service failed during Developer ID signing. Neither error establishes a source, certificate, entitlement, or architecture defect. | `build-macos-dmg.mjs` retries only those exact failures twice, cleans only the current target's `rw.*.dmg` scratch image, and preserves every other failure. The full Tauri bundle step is retried so a partially signed app is rebuilt rather than repaired in place. |
+| Stage                                           | Observed failure                                                                                                                                | Root cause                                                                                                                                                                                                                          | Durable fix                                                                                                                                                                                                                                                     |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installed app starts Node executor              | `Bad CPU type in executable (os error 86)`                                                                                                      | An Apple Silicon app contained an Intel `app-executor` binary. The package label and app architecture did not make the sidecar native.                                                                                              | `build-executor.cjs` now maps `aarch64-apple-darwin` to `node18-macos-arm64` and `x86_64-apple-darwin` to `node18-macos-x64`, writes a target-suffixed build artifact, and rejects unsupported or falsely universal targets.                                    |
+| Finished-DMG architecture verification          | `lipo` could not open `app-executor-aarch64-apple-darwin` or `app-executor-x86_64-apple-darwin` inside the app                                  | The verifier confused Tauri's target-suffixed **build input** with the canonical **installed runtime name**.                                                                                                                        | The verifier resolves `Contents/MacOS/app-executor` and `Contents/MacOS/pnpm`, while still validating each binary against the matrix target with `lipo`.                                                                                                        |
+| Packaged executor smoke test                    | Expected `{ type: 'string', ... }`, received `{ type: 'any', ... }`                                                                             | The smoke assertion had drifted from the current Code node whole-output contract. The executor was correct; the test graph was not.                                                                                                 | The smoke graph declares an `any` Graph Output and asserts `{ type: 'any', value: 'native sidecar' }`, matching real execution semantics.                                                                                                                       |
+| macOS bundle creation on GitHub's hosted runner | `hdiutil: create failed - Resource busy`, `hdiutil: couldn't eject "disk<N>" - Resource busy`, or `A timestamp was expected but was not found.` | The DMG helper can be busy during creation or unmount, or Apple's online secure-timestamp service can fail. The October 5 Intel failure occurred after successful app notarization and stapling, while detaching the scratch image. | `build-macos-dmg.mjs` retries these specific failures twice. It identifies mounted target-local scratch images through the system inventory, detaches them safely before deletion, and rebuilds through the full Tauri path. All other failures remain visible. |
 
 The resulting Apple Silicon DMG was subsequently installed and its Node
 executor was confirmed working on Apple Silicon hardware. That real-device
@@ -697,10 +789,15 @@ The following invariants are non-negotiable:
 - Keep the smoke graph synchronized with the actual Code-node DataValue
   contract. If that contract intentionally changes, update the graph and the
   assertion together and retain an end-to-end returned-value assertion.
-- Keep the DMG retry narrow and bounded. The retry classifier must continue to
-  require the exact nonzero `hdiutil: create failed - Resource busy` failure.
-  Cleanup must stay confined to `rw.*.dmg` files in the current target's
-  `release/bundle/macos` directory.
+- Keep the DMG retry narrow and bounded: only nonzero image-creation resource-busy,
+  `hdiutil: couldn't eject "disk<N>" - Resource busy`, and missing secure-timestamp
+  failures qualify. Cleanup stays confined to regular `rw.*.dmg` files in the
+  current target's `release/bundle/macos` directory. Inspect `hdiutil info -plist`
+  and match the complete image path before detaching its whole-disk device.
+  Try normal detach first; force detach only that disposable scratch image after
+  exit code 16. Other detach failures, malformed image inventory, or an unknown
+  device stop cleanup and retry. Never delete a still-mounted image or detach by
+  volume name, a device copied from build output, or a broad disk sweep.
 
 Never “fix” this pipeline by doing any of the following:
 
@@ -761,6 +858,34 @@ or server wrappers can synchronize runtime libraries before module resolution.
 
 ## Hosted Wrapper Image Build Contract
 
+Studio Server production Dockerfiles copy all workspace manifests, pinned Yarn,
+lock/config/cache and the package-manager check before installation. Changing
+application sources therefore preserves the dependency layer. Sources are copied
+afterward without recopying the large Yarn cache. A repository guard requires
+every workspace manifest in this dependency stage. API/executor runtime staging
+includes compiled Core/Node/Evaluations exports, bootstrap modules and (for API)
+compiled API/shared code, not unrelated desktop/docs/source/test trees. Retain
+third-party node_modules for dynamic plugin/Code-node resolution, including each
+included workspace's non-hoisted node_modules and relative links. Root modules
+alone can resolve a different dependency version. Do not prune that dependency
+surface merely to reduce image size. Included workspaces also retain their
+existing package licenses and readmes. The staging regression verifies that local
+overrides still win over an otherwise loadable hoisted version.
+
+`studio-server:verify:repo-structure` owns the production source-copy contract:
+all manifests precede the immutable install, source directories follow it, and
+`COPY . .` is forbidden because it would recopy the dependency cache. The API
+`proxy-image-contract.test.ts` keeps executor ports, build targets, entrypoints
+and Compose wiring under test; it must not require the retired whole-checkout
+copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
+dependency resolution behavior rather than matching Dockerfile text.
+The shared image-layout guard checks actual instruction order, not just the
+presence of a manifest string: root inputs, Yarn cache, package-manager check
+and every workspace manifest must precede installation; packages, scripts and
+deployment sources must follow it. Synthetic fixtures in
+`scripts/ci/ci-performance.test.mjs` reject absent/late inputs, comment-only
+copies, early sources and whole-checkout copies, and accept CRLF/continuations.
+
 Wrappers that build Docker images from this source should keep the Rivet build
 surface narrow:
 
@@ -791,8 +916,8 @@ Rust/Tauri targets, desktop sidecars, browser-test artifacts, and existing build
 outputs are never image inputs. The checked-in Yarn cache, Yarn release, patches,
 workspace manifests, and package source remain available to immutable installs.
 
-For cache-safe dependency install layers, copy only dependency metadata before
-`yarn install`:
+For cache-safe PnP wrapper dependency install layers, copy only dependency
+metadata before `yarn install`:
 
 - root `package.json`
 - `yarn.lock`
@@ -806,6 +931,9 @@ For cache-safe dependency install layers, copy only dependency metadata before
 
 Copy source files only after dependency installation. This keeps Docker
 dependency layers stable when regular TypeScript/source files change.
+Studio Server's own images use the node-modules linker instead: their
+`.dockerignore` excludes host PnP loaders, and the dependency stage copies the
+checked-in Yarn cache along with the manifests, lockfile and Yarn configuration.
 
 ### CLI
 
@@ -842,6 +970,33 @@ contracts, Code-family runtime-permission changes, and wrapper/embedder seams.
 ## CI Workflows
 
 Workflows live under [`.github/workflows/`](../.github/workflows/).
+
+### Develop, staging and main
+
+| Event                      | Workflows and scope                                                                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push to `develop`          | Repository-wide **Build** plus changed-path **Verify Studio Server**                                                                                |
+| PR into `staging`          | **Verify Studio Server** against the proposed merge; no general Build/desktop/Rust matrix                                                           |
+| Relevant push to `staging` | **Build Images**, including one reusable Studio Server verifier, four candidate images, Compose smoke and local-upgrade image/Linux-host rehearsals |
+| Push to `main`             | Repository-wide **Build**; relevant image changes also run **Build Images** and its applicable release gates                                        |
+
+The PR's displayed source branch can be `develop` while its post-merge image run
+shows `staging`; these are different events and revisions. A staging push does not
+launch a duplicate standalone verifier or desktop application build. It skips the
+managed Kubernetes Kind gate; protected provider/capacity/Evaluation gates are
+explicit manual dispatches, not ordinary staging VM trials. Main image releases
+still apply changed-path Kubernetes classification; tags, schedules and forced
+manual release options have their own gate requirements.
+
+Promotion is gated by verification and candidate rehearsals. Staging publishes
+the staging branch and short-SHA aliases, never `latest` or the durable production
+release pointer. Alias retags are not atomic and are not evidence that a run passed.
+Wait for the intended **Build Images** run to succeed, then use
+`yarn studio-server:staging` from the clean matching staging checkout. It checks
+existing data mounts/volumes, commit labels and immutable digests before recreating
+the current VM stack; it does not start a storage conversion. See
+[the VM procedure](./studio-server/development.md#deploying-a-verified-staging-build-to-a-vm)
+for environment/TLS handling and production-data risks.
 
 ### Shared setup and cache behavior
 
@@ -944,6 +1099,14 @@ fixed release (rather than a floating caret), then run `yarn install` and the
 audit. This keeps the zero-install lockfile deterministic while the owning
 upstream packages catch up.
 
+The root `shell-quote` resolution pins 1.11.0 across the `concurrently` development
+launcher and other consumers. This fixes GHSA-pqg4-j6r4-53mv: a line terminator in
+a string after a shell comment could end that comment and inject a command. No
+audit exception is used. `dependency-security-regressions.test.mjs` resolves the
+library through `concurrently`, verifies rejection of all four affected line
+terminators (including parse/quote composition), and preserves ordinary quoting.
+Keep its lockfile, PnP mapping and cache archive aligned with the root pin.
+
 The root `js-yaml` resolutions keep `gray-matter`'s js-yaml 3.x path on 3.15.2
 and ESLint's js-yaml 4.x path on 4.3.2, the patched releases for merge-source
 CPU exhaustion. The root `svgo` resolutions keep both the SVGR and PostCSS
@@ -1032,6 +1195,10 @@ imports it.
 
 ## `build.yml`
 
+See [GitHub Actions performance](studio-server/ci-performance.md) for the measured
+hosted baseline and the shallow-checkout, test-partition and desktop artifact
+optimizations. These change execution placement, not the required coverage.
+
 ### Trigger conditions
 
 - pushes to `develop` and `main`
@@ -1043,24 +1210,33 @@ work behind it is parallelized.
 
 ### Parallel job graph
 
-1. `compiled-artifacts` runs the complete `yarn build`, then uploads only the
+1. `compiled-artifacts` runs `yarn studio-server:build:dependencies`, then uploads the
    compiled Core, Node, Evaluations, and App Executor dependencies required by
    downstream package checks. GitHub Actions stores those selected paths relative
    to their shared `packages/` ancestor, so `package-tests` restores the artifact
    beneath `packages/`; this preserves each workspace package's declared
    `packages/<name>/dist` export path.
-2. `package-tests` fans out Core, Node, Evaluations, App Executor, and CLI, plus
-   four deterministic App shards, into isolated jobs. The compiled-artifact job
+2. `package-tests` fans out the six longest lanes (two Core partitions and four
+   deterministic App shards). `supporting-tests` runs Node, Evaluations, App
+   Executor and CLI separately, with at most two jobs, so short lanes cannot
+   occupy the six-job long-test matrix slots. The compiled-artifact job
    verifies every declared Core, Node, and Evaluations export is present and
    loadable, and that the executor bundle is present and syntactically valid,
    before upload; each package-test job repeats that check immediately after
    restore. This turns an incomplete artifact into a clear dependency error
    before package tests instead of unrelated `ENOENT` fanout. Each App shard
-   also rebuilds Core's ESM output before launching because App tests consume
-   Core's published-style ESM export. The test matrix retains a six-job
-   concurrency cap; every suite always runs, and changed-path selection is
+   selects `RIVET_APP_TEST_DEPENDENCIES=prebuilt`, validating and consuming that
+   artifact instead of rebuilding Core. Local App runs retain automatic Core
+   builds. Node uses the analogous `RIVET_NODE_TEST_DEPENDENCIES=prebuilt` mode.
+   Core uses native Node test-runner partitions `1/2` and `2/2`, with four file
+   workers per runner; local `yarn test:core` still runs the complete suite.
+   Every suite always runs, and changed-path selection is
    deliberately not used for the general correctness gate.
-3. `package-lint` fans out the same six source-only workspaces immediately; it does not
+3. `frontend-build` restores verified dependencies and compiles the desktop App
+   (TypeScript and production Vite) and CLI. This mandatory gate preserves the
+   remaining root build coverage but no longer delays runtime tests by the
+   roughly 80-second desktop bundle measured in the previous hosted run.
+   `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.
 4. `static-validation` runs PnP freshness, docs typechecking, `yarn test:style`,
@@ -1074,7 +1250,7 @@ work behind it is parallelized.
    binary from a runner/architecture/version cache and compiles it only on a
    cache miss; the advisory database itself is still refreshed by the audit.
 7. The lightweight `build` aggregator fails unless compilation, every test and
-   lint shard, static validation, JavaScript audit, and Rust audit all succeeded.
+   lint shard, desktop/CLI compilation, static validation, JavaScript audit, and Rust audit all succeeded.
 
 Each substantive job records its wall time through
 [`scripts/ci/job-timing.mjs`](../scripts/ci/job-timing.mjs). The helper writes a
@@ -1082,20 +1258,24 @@ compact duration to `GITHUB_STEP_SUMMARY`. The final `build` aggregator also
 reads the Actions run start time and reports the complete Build critical path.
 Use the per-job durations to distinguish runner work from orchestration or
 runner queueing when evaluating the optimization target.
+The final Build and Studio Server aggregators check out only that standalone
+timing helper. Sparse checkout must not be used in test/build consumer jobs;
+classification separately uses complete Git commit trees, not the working tree,
+to find changed paths.
 
 Desktop push releases share a cancellable per-branch lane, while each manual release has its own lane. A later push therefore cancels only an older push release, never a manual release. The final Pages transaction remains separately serialized across channels.
 
 The artifact fan-out is an execution optimization, not a new build contract.
 `yarn build`, `yarn test`, and `yarn lint` remain the canonical complete local
-commands. Only test jobs restore compiled package exports, and only after the same commit
-has completed the full build.
+commands. Consumers restore compiled exports only after the same commit has
+completed dependency compilation; the full build remains required by aggregation.
 
 Artifact names deliberately stay stable within a workflow run: re-running only
 a failed consumer job must be able to download the previous producer artifact.
 Because `upload-artifact@v7` artifacts are immutable, each of these fan-outs
 has exactly one producer and that producer sets `overwrite: true`; a re-run of
 the producer then replaces its own stale artifact instead of failing. The same
-rule applies to the three desktop-release build artifacts. Diagnostic Kubernetes
+rule applies to the shared frontend and three native desktop-release artifacts. Diagnostic Kubernetes
 gate artifacts instead include `github.run_attempt`, preserving evidence from
 each retry rather than replacing it.
 
@@ -1106,6 +1286,12 @@ the repository root. `upload-artifact` preserves paths relative to their common
 ancestor, so restoring at the root would move `packages/core/dist` to
 `core/dist` and make consumers fail module resolution even though the build job
 succeeded. `check-ci-workflows.mjs` guards both fan-outs.
+
+Studio Server deployment contracts fan out into two isolated lanes after that
+build: managed storage/schema checks and gateway/proxy checks. The final `verify`
+job still requires the complete matrix to succeed. Fixtures stay ordered within
+each lane, including the proxy's real DNS-cache expiry and outage/recovery waits;
+the optimization removes serialization between independent hosts, not coverage.
 
 ## `release.yml`
 
@@ -1195,8 +1381,15 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, Windows packaging, both native macOS packages, and
-documentation building start concurrently. The Windows job produces MSI and
+Graph Builder validation, the shared desktop frontend build, and documentation
+building start concurrently. A Linux job typechecks and bundles the desktop
+frontend once, seals every output file with a SHA-256 inventory and the source
+commit, and uploads the same-commit artifact. Windows and both native macOS
+packaging jobs depend on that producer. Their explicit Tauri configuration
+override verifies the complete restored inventory before preparing the native
+sidecars; it does not repeat the frontend build. Missing, changed, extra or
+non-regular files fail closed. Local Tauri builds keep their ordinary frontend
+build hook. The Windows job produces MSI and
 NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
 verifies separate Apple Silicon and Intel DMGs. The verifier requires exactly
 one DMG and one app bundle for each target before mounting it, requires the app
@@ -1210,10 +1403,18 @@ assertion verifies both that type and the returned value.
 
 The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
 because the Tauri v1 DMG helper can occasionally receive
-`hdiutil: create failed - Resource busy` on a hosted macOS runner. Only that
-exact transient failure is retried, after removing target-local `rw.*.dmg`
-scratch images, with 5-second and 15-second delays. Compilation, signing,
-permission, and every other bundling failure remain single-attempt failures.
+`hdiutil: create failed - Resource busy` or fail to eject its temporary image
+with `Resource busy` on a hosted macOS runner. Those errors and Apple's
+`A timestamp was expected but was not found.` signing error receive at most two
+retries with 5-second and 15-second delays. Before retrying, detach any mounted
+target-local `rw.*.dmg` scratch images by their inventory-confirmed device, then
+remove them. The complete Tauri build is retried; notarization and finished-DMG
+verification remain required. Compilation, other signing failures, permissions,
+and all unrecognized bundling failures remain single-attempt failures.
+The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounded
+retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
+They run on every host; actual `hdiutil`/`plutil` execution and finished-package
+verification require the native macOS release jobs.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
@@ -1236,7 +1437,8 @@ before writing its own metadata, and aborts rather than silently dropping valid
 published metadata.
 
 The platform jobs continue using the pinned Yarn install, `pkg` cache, Rust
-cache, `yarn sync:desktop-version`, and `yarn build:hosted-web-deps`. macOS
+cache, and `yarn sync:desktop-version`. `yarn build:hosted-web-deps` now runs
+once in the shared frontend producer rather than in each native consumer. macOS
 signing requires `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, and
 `APPLE_API_PRIVATE_KEY`. Installer-only workflows do not require Tauri updater

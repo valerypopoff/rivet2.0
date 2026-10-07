@@ -2,7 +2,7 @@
   "name": "@valerypopoff/rivet2-node",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.15.0",
+  "version": "2.17.0",
   "main": "dist/cjs/bundle.cjs",
   "module": "dist/esm/index.js",
   "src": "src/index.ts",
@@ -41,11 +41,11 @@
     "bench:runtime-speed": "yarn workspace @valerypopoff/rivet2-core run build:esm && tsx bench/runtimeSpeed.bench.ts",
     "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",
     "lint": "eslint ./src ./bench",
-    "pretest": "yarn workspace @valerypopoff/rivet2-core run build:esm",
-    "test": "tsx --test test/**/*.test.ts"
+    "pretest": "node scripts/prepare-tests.mjs",
+    "test": "yarn pretest && tsx --test test/**/*.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@valerypopoff/rivet2-core": "workspace:^",
     "dompurify": "^3.4.11",
     "emittery": "^1.0.1",

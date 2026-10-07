@@ -2,7 +2,9 @@ import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES, type LLMChatV2Node, LLMChatV2NodeImpl } from '../../../src/index.js';
+import { CHAT_V2_DEFAULT_CREDENTIAL_NAMES } from '../../../src/model/chat-v2/chatV2CredentialNames.js';
+import type { LLMChatV2Node } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
+import { LLMChatV2NodeImpl } from '../../../src/model/nodes/LLMChatV2Node.js';
 import {
   createsLLMChatV2ToolResponseFormatConflictForEdit,
   hasLLMChatV2ToolResponseFormatConflict,
@@ -359,6 +361,7 @@ describe('LLMChatV2NodeImpl', () => {
           '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Temperature:</span> <span class="rivet-node-body-field-value">0.5</span></div>',
           '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Max output tokens:</span> <span class="rivet-node-body-field-value">1024</span></div>',
         ].join('\n'),
+        '<div class="rivet-node-body-field-row"><span class="rivet-node-body-field-label">Throw on non-2XX:</span> <span class="rivet-node-body-field-value">Enabled</span></div>',
       ].join('\n\n'),
     );
   });
@@ -372,7 +375,10 @@ describe('LLMChatV2NodeImpl', () => {
     );
 
     assert.equal(body.disableLinks, true);
-    assert.match(body.text, /Base URL:<\/span> <span class="rivet-node-body-field-value">https:\/\/api\.cerebras\.ai\/v1<\/span>/);
+    assert.match(
+      body.text,
+      /Base URL:<\/span> <span class="rivet-node-body-field-value">https:\/\/api\.cerebras\.ai\/v1<\/span>/,
+    );
   });
 
   it('labels provider and model in the node body', () => {
@@ -403,10 +409,7 @@ describe('LLMChatV2NodeImpl', () => {
     });
 
     const body = getMarkdownBodyText(node);
-    assert.match(
-      body,
-      /Base URL:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/,
-    );
+    assert.match(body, /Base URL:<\/span> <span class="rivet-node-body-field-value">\(Using Input\)<\/span>/);
     assert.doesNotMatch(body, /api\.cerebras/);
   });
 
@@ -426,7 +429,10 @@ describe('LLMChatV2NodeImpl', () => {
     assert.match(body, /Top K:<\/span> <span class="rivet-node-body-field-value">40<\/span>/);
     assert.match(body, /Presence penalty:<\/span> <span class="rivet-node-body-field-value">0\.2<\/span>/);
     assert.match(body, /Frequency penalty:<\/span> <span class="rivet-node-body-field-value">-0\.1<\/span>/);
-    assert.match(body, /Stop sequences:<\/span> <span class="rivet-node-body-field-value">&quot;END&quot;, &quot;STOP&quot;<\/span>/);
+    assert.match(
+      body,
+      /Stop sequences:<\/span> <span class="rivet-node-body-field-value">&quot;END&quot;, &quot;STOP&quot;<\/span>/,
+    );
     assert.match(body, /Seed:<\/span> <span class="rivet-node-body-field-value">1234<\/span>/);
   });
 
@@ -454,7 +460,10 @@ describe('LLMChatV2NodeImpl', () => {
   });
 
   it('shows built-in provider reasoning effort in the node body', () => {
-    assert.match(getMarkdownBodyText(createNode()), /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">Default<\/span>/);
+    assert.match(
+      getMarkdownBodyText(createNode()),
+      /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">Default<\/span>/,
+    );
     assert.match(
       getMarkdownBodyText(createNode({ provider: 'openai', openAIReasoningEffort: 'high' })),
       /Reasoning effort:<\/span> <span class="rivet-node-body-field-value">High<\/span>/,
@@ -515,6 +524,7 @@ describe('LLMChatV2NodeImpl', () => {
         ['Schema description', 'A strict response.'],
         ['Stream response', 'Enabled'],
         ['Editor cache (legacy)', 'Enabled'],
+        ['Throw on non-2XX', 'Enabled'],
         ['Retry on non-200', 'Enabled'],
         ['Repeat times', '2'],
         ['Cooldown, ms', '250'],
@@ -549,7 +559,10 @@ describe('LLMChatV2NodeImpl', () => {
       maxToolRounds: 5,
     }).flatMap((section) => section.fields);
     assert.deepEqual(
-      toolFields.slice(-5).map((field) => [field.label, field.value]),
+      toolFields
+        .filter((field) => field.label !== 'Throw on non-2XX')
+        .slice(-5)
+        .map((field) => [field.label, field.value]),
       [
         ['Tool use', 'Enabled'],
         ['Tool choice', 'Specific tool (searchBook)'],
@@ -588,11 +601,14 @@ describe('LLMChatV2NodeImpl', () => {
       fields.filter((field) => field.label === 'Reasoning effort'),
       [{ label: 'Reasoning effort', value: 'High' }],
     );
-    assert.deepEqual(fields.filter((field) => field.label !== 'Reasoning effort').slice(-3), [
-      { label: 'Reasoning summary', value: 'concise' },
-      { label: 'Web search', value: 'Enabled (Medium)' },
-      { label: 'Code interpreter', value: 'Enabled' },
-    ]);
+    assert.deepEqual(
+      fields.filter((field) => field.label !== 'Reasoning effort' && field.label !== 'Throw on non-2XX').slice(-3),
+      [
+        { label: 'Reasoning summary', value: 'concise' },
+        { label: 'Web search', value: 'Enabled (Medium)' },
+        { label: 'Code interpreter', value: 'Enabled' },
+      ],
+    );
   });
 
   it('shows every enabled Anthropic and Google provider-native setting in the node body projection', () => {
@@ -675,12 +691,14 @@ describe('LLMChatV2NodeImpl', () => {
       'Error behavior',
     ]);
     assert.equal(errorBehaviorGroup.label, 'Error behavior');
-    assert.equal(errorBehaviorGroup.editors[0]?.dataKey, 'retryOnNon200');
-    assert.equal(errorBehaviorGroup.editors[1]?.dataKey, 'retryOnNon200RepeatTimes');
-    assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: false }), true);
-    assert.equal(errorBehaviorGroup.editors[1]?.hideIf({ retryOnNon200: true }), false);
-    assert.equal(errorBehaviorGroup.editors[2]?.dataKey, 'retryOnNon200CooldownMs');
-    assert.equal(errorBehaviorGroup.editors.length, 3);
+    assert.equal(errorBehaviorGroup.editors[0]?.dataKey, 'errorOnNon200');
+    assert.equal(errorBehaviorGroup.editors[1]?.dataKey, 'catchRequestFailed');
+    assert.equal(errorBehaviorGroup.editors[2]?.dataKey, 'retryOnNon200');
+    assert.equal(errorBehaviorGroup.editors[3]?.dataKey, 'retryOnNon200RepeatTimes');
+    assert.equal(errorBehaviorGroup.editors[3]?.hideIf({ retryOnNon200: false }), true);
+    assert.equal(errorBehaviorGroup.editors[3]?.hideIf({ retryOnNon200: true }), false);
+    assert.equal(errorBehaviorGroup.editors[4]?.dataKey, 'retryOnNon200CooldownMs');
+    assert.equal(errorBehaviorGroup.editors.length, 5);
     assert.equal(
       outputsGroup.editors.some((editor: any) => editor.dataKey === 'outputLLMAttempts'),
       true,
@@ -1942,8 +1960,14 @@ describe('LLMChatV2NodeImpl', () => {
     );
 
     assert.doesNotMatch(defaultBody, /Programmatic API key name/);
-    assert.match(overrideBody, /Programmatic API key name:<\/span> <span class="rivet-node-body-field-value">billingOpenAiKey<\/span>/);
-    assert.match(overrideBody, /API key environment variable:<\/span> <span class="rivet-node-body-field-value">BILLING_OPENAI_KEY<\/span>/);
+    assert.match(
+      overrideBody,
+      /Programmatic API key name:<\/span> <span class="rivet-node-body-field-value">billingOpenAiKey<\/span>/,
+    );
+    assert.match(
+      overrideBody,
+      /API key environment variable:<\/span> <span class="rivet-node-body-field-value">BILLING_OPENAI_KEY<\/span>/,
+    );
   });
 
   it('keeps malformed built-in credential aliases out of display paths while execution stays strict', async () => {

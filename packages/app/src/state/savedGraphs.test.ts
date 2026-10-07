@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { createStore } from 'jotai/vanilla';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { projectContextState, releaseProjectContextState } from './savedGraphs';
-import { configureHybridStorageBackend, flushHybridStorageGroup, memoryStorage } from './storage.js';
+import {
+  configureHybridStorageBackend,
+  flushHybridStorageGroup,
+  getWorkspaceRecoveryStorage,
+  memoryStorage,
+} from './storage.js';
 
 describe('project context storage', () => {
   test('projectContextState writes values into grouped app project storage', async () => {
@@ -18,11 +23,13 @@ describe('project context storage', () => {
       },
     } as const;
     const writes: Array<{ key: string; value: string }> = [];
+    const persisted = new Map<string, string>();
     const previousProjectStorage = memoryStorage.get('project');
     const previousBackend = configureHybridStorageBackend({
-      getItem: async () => null,
+      getItem: async (key) => persisted.get(key) ?? null,
       setItem: async (key, value) => {
         writes.push({ key, value });
+        persisted.set(key, value);
       },
       removeItem: async () => {},
     });
@@ -39,8 +46,8 @@ describe('project context storage', () => {
 
       await flushHybridStorageGroup('project');
 
-      assert.equal(writes.at(-1)?.key, 'project');
-      assert.deepEqual(JSON.parse(writes.at(-1)!.value), {
+      assert.equal(writes.at(-1)?.key, getWorkspaceRecoveryStorage().key);
+      assert.deepEqual(JSON.parse(writes.at(-1)!.value).groups.project, {
         [storageKey]: contextValue,
       });
     } finally {

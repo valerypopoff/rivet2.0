@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   authenticateIfNeeded,
+  mockHostedEditorBootstrap,
   findBlankCanvasPoint,
   getVisibleNodeCenters,
   saveStepScreenshot,
@@ -53,6 +54,7 @@ function createClipboardProjectFile(projectName: string): string {
 test.describe('Observable hosted editor flow', () => {
   test('shows focus handoff and clipboard recovery in real time', async ({ page }, testInfo) => {
     test.slow();
+    await mockHostedEditorBootstrap(page);
 
     const projectName = 'codex-clipboard-fixture';
     const projectPath = `/workflows/${projectName}.rivet-project`;

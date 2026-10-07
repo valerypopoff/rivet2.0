@@ -32,6 +32,76 @@ function createDataRefStore(): DataRefStore {
   };
 }
 
+test('inactive callers retain child activity but not colliding called-project node or graph state', () => {
+  const execution = {
+    graphId: 'same-graph' as GraphId,
+    graphRunId: 'child-run' as GraphRunId,
+    rootRunId: 'caller-root' as RootRunId,
+    projectScope: '\u0000rivet-subgraph:latest:called',
+  };
+  const node = { id: 'same-node' as NodeId };
+  let snapshot = createEmptyProjectExecutionSnapshot();
+  const refStore = createDataRefStore();
+  for (const message of ['graphStart', 'nodeStart', 'nodeOutputsCleared', 'llmChatOutputSnapshot'] as const) {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      data: {
+        execution,
+        node,
+        graph: { metadata: { id: execution.graphId } },
+        inputs: {},
+        processId: 'child-process',
+      } as never,
+      message,
+      projectId: 'caller' as ProjectId,
+      refStore,
+      snapshot,
+    }).snapshot;
+  }
+  assert.deepEqual(snapshot.lastRunDataByNode, {});
+  assert.deepEqual(snapshot.graphRunHistoryByView, {});
+  assert.deepEqual(snapshot.runningGraphs, []);
+  assert.ok(snapshot.runActivityJournal.rootsById[execution.rootRunId]);
+  snapshot = { ...snapshot, selectedProcessPageNodes: { ...snapshot.selectedProcessPageNodes, [node.id]: 2 } };
+  snapshot = applyProcessEventToProjectExecutionSnapshot({
+    data: { execution, node, processId: 'child-process', inputStrings: ['Child?'], inputs: {} } as never,
+    message: 'userInput',
+    projectId: 'caller' as ProjectId,
+    refStore,
+    snapshot,
+  }).snapshot;
+  assert.equal(snapshot.selectedProcessPageNodes[node.id], 2);
+  assert.equal(snapshot.userInputQuestions[node.id]?.[0]?.questions[0], 'Child?');
+  snapshot = {
+    ...snapshot,
+    userInputQuestions: {
+      [node.id]: [
+        { nodeId: node.id, processId: 'child-process' as ProcessId, questions: ['Child?'] },
+        { nodeId: node.id, processId: 'caller-process' as ProcessId, questions: ['Caller?'] },
+      ],
+    },
+  };
+  snapshot = applyProcessEventToProjectExecutionSnapshot({
+    data: { execution, node, processId: 'child-process', error: 'cancelled' } as never,
+    message: 'nodeError',
+    projectId: 'caller' as ProjectId,
+    refStore,
+    snapshot,
+  }).snapshot;
+  assert.deepEqual(
+    snapshot.userInputQuestions[node.id]?.map((question) => question.processId),
+    ['caller-process'],
+  );
+  assert.deepEqual(snapshot.lastRunDataByNode, {});
+  const replay = applyProcessEventToProjectExecutionSnapshot({
+    data: { execution, node, inputs: {}, processId: 'child-process', replayRecordedAt: 1 } as never,
+    message: 'nodeStart',
+    projectId: 'called' as ProjectId,
+    refStore,
+    snapshot: undefined,
+  }).snapshot;
+  assert.equal(replay.lastRunDataByNode[node.id]?.[0]?.data.status?.type, 'running');
+});
+
 test('inactive project snapshots retain a Watch child run parent identity', () => {
   const graphId = 'graph-a' as GraphId;
   const snapshot = applyProcessEventToProjectExecutionSnapshot({
@@ -52,10 +122,7 @@ test('inactive project snapshots retain a Watch child run parent identity', () =
     snapshot: undefined,
   }).snapshot;
 
-  assert.equal(
-    snapshot.lastRunDataByNode['watch-branch-node' as NodeId]?.[0]?.parentGraphRunId,
-    'root-graph-run',
-  );
+  assert.equal(snapshot.lastRunDataByNode['watch-branch-node' as NodeId]?.[0]?.parentGraphRunId, 'root-graph-run');
 });
 
 test('inactive project snapshots mark only the settled Watch terminal child run', () => {
@@ -385,9 +452,8 @@ test('inactive project snapshots retain the latest large split partial when its 
     refStore,
     snapshot: createEmptyProjectExecutionSnapshot(),
   }).snapshot;
-  const firstStoredOutput = firstSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
-    'output' as PortId
-  ];
+  const firstStoredOutput =
+    firstSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.['output' as PortId];
   assert.equal(firstStoredOutput?.storage, 'ref');
   const refId = firstStoredOutput?.storage === 'ref' ? firstStoredOutput.refId : assert.fail('expected a stored ref');
   assert.equal(refStore.get(refId)?.value, firstValue);
@@ -405,9 +471,8 @@ test('inactive project snapshots retain the latest large split partial when its 
     refStore,
     snapshot: firstSnapshot,
   }).snapshot;
-  const secondStoredOutput = secondSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.[
-    'output' as PortId
-  ];
+  const secondStoredOutput =
+    secondSnapshot.lastRunDataByNode[nodeId]?.[0]?.data.splitOutputData?.[0]?.['output' as PortId];
 
   assert.equal(secondStoredOutput?.storage, 'ref');
   assert.equal(secondStoredOutput?.storage === 'ref' ? secondStoredOutput.refId : undefined, refId);

@@ -1,4 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
+import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getLocalMetadataServingSelection } from '../../local-metadata/serving-selection.js';
@@ -86,6 +87,10 @@ import {
   updateWorkflowProjectWebAppAccess,
 } from './web-app-publication.js';
 import { readWorkflowProjectDownload } from './workflow-download.js';
+import {
+  listFilesystemProjectReferenceCatalog,
+  readFilesystemProjectReferenceSnapshots,
+} from './project-reference-snapshots.js';
 import {
   listWorkflowPublishedVersions,
   readWorkflowPublishedVersionDownload,
@@ -609,14 +614,16 @@ export async function initializeWorkflowStorage(): Promise<void> {
 }
 
 export async function getWorkflowTree() {
-  return delegateWithWorkflowsRoot(
+  return delegate(
     async (backend) => backend.getTree(),
-    async (root) =>
-      withFilesystemWorkflowStorageRead(async () => ({
+    async () => {
+      const root = isVmMigrationMaintenanceActive() ? getWorkflowsRoot() : await ensureWorkflowsRoot();
+      return withFilesystemWorkflowStorageRead(async () => ({
         root,
         folders: await listWorkflowFolders(root),
         projects: await listWorkflowProjects(root),
-      })),
+      }));
+    },
   );
 }
 
@@ -820,6 +827,8 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   inputCursor = 0,
   signal?: AbortSignal,
   inputAfter?: string,
+  includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   return delegateWithWorkflowsRoot(
     async (backend) =>
@@ -832,6 +841,8 @@ export async function listWorkflowRecordingRunsPageWithBackend(
         inputCursor,
         signal,
         inputAfter,
+        includeSubgraphRuns,
+        runScope,
       ),
     async (root) =>
       listWorkflowRecordingRunsPage(
@@ -844,6 +855,8 @@ export async function listWorkflowRecordingRunsPageWithBackend(
         inputCursor,
         signal,
         inputAfter,
+        includeSubgraphRuns,
+        runScope,
       ),
   );
 }
@@ -1054,6 +1067,20 @@ export async function readWorkflowProjectDownloadWithBackend(
   return delegate(
     async (backend) => backend.readWorkflowProjectDownload(relativePath, version),
     async () => withFilesystemWorkflowStorageRead(() => readWorkflowProjectDownload(relativePath, version)),
+  );
+}
+
+export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativePath: unknown) {
+  return delegate(
+    async (backend) => backend.readWorkflowProjectReferenceSnapshots(relativePath),
+    async () => withFilesystemWorkflowStorageRead(() => readFilesystemProjectReferenceSnapshots(relativePath)),
+  );
+}
+
+export async function listWorkflowProjectReferenceCatalogWithBackend() {
+  return delegate(
+    async (backend) => backend.listWorkflowProjectReferenceCatalog(),
+    async () => withFilesystemWorkflowStorageRead(listFilesystemProjectReferenceCatalog),
   );
 }
 

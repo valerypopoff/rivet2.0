@@ -72,6 +72,46 @@ test('HTTP Call keeps headers for every non-200 retry visible beside its termina
   await expect(node).toBeVisible({ timeout: 60_000 });
   await node.hover();
   await node.locator('.edit-button').click();
+  const errorSection = editor
+    .getByRole('button', { name: 'Error behavior', exact: true })
+    .and(editor.locator('button'));
+  const errorContent = errorSection
+    .locator('xpath=ancestor::div[@class="Collapsible"][1]')
+    .locator(':scope > .Collapsible__contentOuter');
+  await expect(errorSection).toHaveAttribute('aria-expanded', 'false');
+  await errorSection.click();
+  await expect(errorSection).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => errorContent.evaluate((element) => (element as HTMLElement).style.height)).toBe('auto');
+  const repeatTimes = editor.getByRole('spinbutton', { name: 'Repeat times', exact: true });
+  const cooldown = editor.getByRole('spinbutton', { name: 'Cooldown, ms', exact: true });
+  await expect(repeatTimes).toHaveValue('2');
+  await cooldown.fill('25');
+  const retryLabel = errorContent.getByText('Retry on non-200', { exact: true });
+  await retryLabel.click();
+  await expect(repeatTimes).toHaveCount(0);
+  await expect(cooldown).toHaveCount(0);
+  await expect(node).not.toContainText('Retry on non-200');
+  await expect(errorContent.getByText('Fail on non-2XX status code', { exact: true })).toBeVisible();
+  await expect(errorContent.getByText('Catch all request failures', { exact: true })).toBeVisible();
+  await retryLabel.click();
+  await expect(repeatTimes).toHaveValue('2');
+  await expect(cooldown).toHaveValue('25');
+  await expect(node).toContainText('Retry on non-200 (2 repeats, 25ms cooldown)');
+  await errorContent.getByText('Catch all request failures', { exact: true }).click();
+  await expect(node).toContainText('Catch all request failures');
+  await errorContent.getByText('Catch all request failures', { exact: true }).click();
+  await expect(node).not.toContainText('Catch all request failures');
+  await errorContent.getByText('Fail on non-2XX status code', { exact: true }).click();
+  await expect(node).not.toContainText('Throw on non-2XX');
+  await errorContent.getByText('Fail on non-2XX status code', { exact: true }).click();
+  await expect(node).toContainText('Throw on non-2XX');
+  await errorSection.click();
+  await expect(errorContent).toHaveCSS('height', '0px');
+  await errorSection.click();
+  await expect(errorSection).toHaveAttribute('aria-expanded', 'true');
+  await expect(repeatTimes).toHaveValue('2');
+  await expect(cooldown).toHaveValue('25');
+  await expect(editor.getByRole('checkbox', { name: /^Retry on non-200/ })).toBeChecked();
   await expect(
     editor.getByText('With Retry on non-200 enabled, only the final response after all retries is checked.', {
       exact: true,

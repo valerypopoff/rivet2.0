@@ -120,6 +120,7 @@ const sidebars = {
         'api-reference/node/createGraphRunner',
         'api-reference/node/createRivetWebAppHandler',
         'api-reference/node/loadProjectFromFile',
+        'api-reference/node/loadProjectBundle',
         'api-reference/node/loadProjectFromString',
         'api-reference/node/runGraph',
         'api-reference/node/runGraphInFile',

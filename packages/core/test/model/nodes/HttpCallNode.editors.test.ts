@@ -1,5 +1,6 @@
 import test from 'node:test';
 import { strict as assert } from 'node:assert';
+import type { PortId } from '../../../src/index.js';
 import {
   HttpCallNodeImpl,
   getHttpCallBodyPreviewSections,
@@ -24,7 +25,7 @@ void test('creates with catchRequestFailed disabled by default', () => {
 });
 void test('includes the Catch all request failures toggle in the editor config', () => {
   const node = new HttpCallNodeImpl(HttpCallNodeImpl.create());
-  const editors = node.getEditors();
+  const editors = flattenEditors(node.getEditors());
 
   assert.ok(
     editors.some(
@@ -44,11 +45,19 @@ void test('includes retry-on-non-200 editors and hides retry details until enabl
   const binaryOutputIndex = editors.findIndex(
     (editor) => editor.type === 'toggle' && editor.dataKey === 'isBinaryOutput',
   );
-  const retryGroupIndex = editors.findIndex((editor) => editor.type === 'group' && editor.label === 'Retry on non-200');
-  const retryGroup = editors[retryGroupIndex];
+  const errorGroupIndex = editors.findIndex((editor) => editor.type === 'group' && editor.label === 'Error behavior');
+  const errorGroup = editors[errorGroupIndex];
+  assert.ok(errorGroup?.type === 'group');
+  assert.deepEqual(
+    errorGroup.editors.map((editor) => editor.label),
+    ['Retry on non-200', 'Fail on non-2XX status code', 'Catch all request failures'],
+  );
+  assert.equal(errorGroup.toggleDataKey, undefined);
+  assert.notEqual(errorGroup.defaultOpen, true);
+  const retryGroup = errorGroup.editors[0];
 
-  assert.equal(retryGroupIndex, bodyEditorIndex + 1);
-  assert.equal(binaryOutputIndex, retryGroupIndex + 1);
+  assert.equal(binaryOutputIndex, bodyEditorIndex + 1);
+  assert.equal(errorGroupIndex, binaryOutputIndex + 1);
   assert.equal(retryGroup?.type, 'group');
   assert.equal(retryGroup?.toggleDataKey, 'retryOnNon200');
 
@@ -71,9 +80,30 @@ void test('includes retry-on-non-200 editors and hides retry details until enabl
   assert.equal(cooldownEditor?.layout, 'inline');
   assert.equal(cooldownEditor?.helperMessage, 'Milliseconds to wait between repeats');
 });
+void test('constructing Error behavior editors leaves existing settings and ports unchanged', () => {
+  for (const retryOnNon200 of [false, true]) {
+    for (const catchRequestFailed of [false, true]) {
+      const node = createNode({
+        retryOnNon200,
+        catchRequestFailed,
+        retryOnNon200RepeatTimes: 4,
+        retryOnNon200CooldownMs: 75,
+      });
+      const before = structuredClone(node.data);
+      const inputs = node.getInputDefinitions();
+      const outputs = node.getOutputDefinitions();
+      node.getEditors();
+      node.getEditors();
+      assert.deepEqual(node.data, before);
+      assert.deepEqual(node.getInputDefinitions(), inputs);
+      assert.deepEqual(node.getOutputDefinitions(), outputs);
+    }
+  }
+});
+
 void test('explains that fail-on-non-2XX checks only the final response when retry is enabled', () => {
   const node = new HttpCallNodeImpl(HttpCallNodeImpl.create());
-  const failOnNon2xxEditor = node.getEditors().find(
+  const failOnNon2xxEditor = flattenEditors(node.getEditors()).find(
     (editor) => editor.type === 'toggle' && editor.dataKey === 'errorOnNon200',
   );
   const helperMessage = failOnNon2xxEditor?.helperMessage;

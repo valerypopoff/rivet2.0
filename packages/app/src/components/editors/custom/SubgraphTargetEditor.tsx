@@ -16,6 +16,7 @@ import { referencedProjectsState } from '../../../state/savedGraphs';
 import type { SharedEditorProps } from '../SharedEditorProps';
 import { SegmentedEditor } from '../SegmentedEditor';
 import { SubgraphTargetControl } from '../../nodes/SubgraphTargetControl';
+import { useNodeEditorSessionContext } from '../../nodeEditor/NodeEditorSessionContext.js';
 
 const versionWarningCss = css`
   color: var(--warning);
@@ -25,6 +26,7 @@ const versionWarningCss = css`
 
 export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onChange, isReadonly, isDisabled }) => {
   const node = chartNode as SubGraphNode;
+  const session = useNodeEditorSessionContext();
   const catalog = useSubgraphProjectCatalog();
   const otherProjects = !!catalog && (node.data.targetScope === 'other-projects' || !!node.data.targetProjectId);
   const [publishedAvailable, setPublishedAvailable] = useState<boolean | null>(null);
@@ -38,12 +40,17 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
   latestNode.current = node;
   const disabled = isReadonly || isDisabled;
 
-  useEffect(
-    () => () => {
-      versionRequest.current++;
-    },
-    [],
-  );
+  useEffect(() => {
+    const requests = versionRequest;
+    // A renewed same-ID session may keep this component mounted. Its retired
+    // request can no longer clear loading, so release the incoming owner's UI.
+    setVersionLoading(false);
+    setVersionError(undefined);
+    setVersionWarning(undefined);
+    return () => {
+      requests.current++;
+    };
+  }, [session]);
 
   useEffect(() => {
     if (!catalog || !otherProjects || !node.data.targetProjectId) {
@@ -56,10 +63,10 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     setPublishedError(undefined);
     void catalog.preview({ projectId: node.data.targetProjectId, version: 'published' }).then(
       () => {
-        if (active) setPublishedAvailable(true);
+        if (active && (!session || session.isCurrent())) setPublishedAvailable(true);
       },
       (error: { status?: number }) => {
-        if (!active) return;
+        if (!active || (session && !session.isCurrent())) return;
         setPublishedAvailable(false);
         if (error.status !== 409) setPublishedError('Could not check this project’s published version.');
       },
@@ -67,9 +74,10 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     return () => {
       active = false;
     };
-  }, [catalog, otherProjects, node.data.targetProjectId]);
+  }, [catalog, otherProjects, node.data.targetProjectId, session]);
 
   const changeScope = (scope: string | boolean) => {
+    if (disabled || (session && !session.canWrite())) return;
     const other = scope === 'other-projects';
     if (other === otherProjects) return;
     versionRequest.current++;
@@ -90,6 +98,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
   };
 
   const changeVersion = async (value: string | boolean) => {
+    if (disabled || (session && !session.canWrite())) return;
     const nextVersion = value as SubgraphProjectVersion;
     const projectId = node.data.targetProjectId;
     const graphId = node.data.graphId;
@@ -102,8 +111,8 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     setVersionWarning(undefined);
     try {
       const project = await catalog.preview({ projectId, version: nextVersion });
-      if (versionRequest.current !== request) return;
-      const current = latestNode.current;
+      if (versionRequest.current !== request || (session && !session.canWrite())) return;
+      const current = (session?.getNode() ?? latestNode.current) as SubGraphNode;
       if (
         current.data.targetProjectId !== projectId ||
         current.data.graphId !== graphId ||
@@ -122,25 +131,29 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
         ...projects,
         [getSubgraphProjectKey({ projectId, version: nextVersion })]: project,
       }));
-      onChange({
-        ...current,
-        data: {
-          ...current.data,
-          targetVersion: nextVersion,
-          targetBoundary: change ? boundary : reconcileSubgraphTargetBoundary(current.data.targetBoundary, boundary),
+      onChange(
+        {
+          ...current,
+          data: {
+            ...current.data,
+            targetVersion: nextVersion,
+            targetBoundary: change ? boundary : reconcileSubgraphTargetBoundary(current.data.targetBoundary, boundary),
+          },
         },
-      });
+        undefined,
+        current,
+      );
       if (change) {
         setVersionWarning(
           `The selected project's graph changed its ${change.side} "${change.id}". The graph selection was updated automatically; review its connections.`,
         );
       }
     } catch {
-      if (versionRequest.current === request) {
+      if (versionRequest.current === request && (!session || session.isCurrent())) {
         setVersionError('Could not load the selected project version. The current version was kept.');
       }
     } finally {
-      if (versionRequest.current === request) setVersionLoading(false);
+      if (versionRequest.current === request && (!session || session.isCurrent())) setVersionLoading(false);
     }
   };
 
@@ -166,6 +179,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
             node={node}
             isReadonly={disabled || versionLoading}
             onChange={(next) => {
+              if (disabled || (session && !session.canWrite())) return;
               versionRequest.current++;
               setVersionLoading(false);
               setVersionError(undefined);

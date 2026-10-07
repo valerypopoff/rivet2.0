@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 
 const runtimeLibrariesRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-'));
 const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-libraries-app-data-'));
@@ -14,7 +15,6 @@ const manifest = await import('../runtime-libraries/manifest.js');
 const startup = await import('../runtime-libraries/startup.js');
 const filesystemBackend = await import('../runtime-libraries/filesystem-backend.js');
 const runtimeLibrariesConfig = await import('../runtime-libraries/config.js');
-const deploymentStorageSettings = await import('../deployment-storage-settings.js');
 const { jobRunner } = await import('../runtime-libraries/job-runner.js');
 
 async function resetRuntimeLibrariesRoot() {
@@ -254,7 +254,7 @@ test('runtime-library mode follows deployment storage app settings', async () =>
     process.env.RIVET_STORAGE_MODE = 'managed';
     assert.equal(runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), 'filesystem');
 
-    await deploymentStorageSettings.writeDeploymentStorageSettings({
+    await seedDeploymentStorageSettings({
       storageMode: 'managed',
       databaseMode: 'managed',
       databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',

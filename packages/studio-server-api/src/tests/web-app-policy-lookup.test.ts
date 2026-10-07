@@ -31,10 +31,7 @@ test('web-app socket policy lookups share background reads but never reuse them 
   });
 
   assert.strictEqual(shared, background);
-  await assert.rejects(
-    () => lookups.read('app', async () => 'fresh', { fresh: true }),
-    /capacity is exhausted/,
-  );
+  await assert.rejects(() => lookups.read('app', async () => 'fresh', { fresh: true }), /capacity is exhausted/);
   assert.equal(reads, 1);
 
   first.resolve('current');
@@ -43,16 +40,17 @@ test('web-app socket policy lookups share background reads but never reuse them 
   lookups.dispose();
 });
 
-test('timed-out policy lookups retain their slot until the underlying read settles', async () => {
+test('timed-out policy lookups retain their slot until the underlying read settles', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const lookups = createWebAppSocketPolicyLookupCoordinator(1, 10);
+  t.after(() => lookups.dispose());
   const first = deferred<string>();
   const pending = lookups.read('app', () => first.promise);
 
-  // The production deadline is intentionally unref'ed; retain the test event
-  // loop while asserting that deadline rather than making the runtime timer
-  // artificially keep a production process alive.
   const timedOut = assert.rejects(() => pending, /timed out/);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  t.mock.timers.tick(9);
+  await assert.rejects(() => lookups.read('other-app', async () => 'unexpected'), /capacity is exhausted/);
+  t.mock.timers.tick(1);
   await timedOut;
   await assert.rejects(
     () => lookups.read('other-app', async () => 'unexpected', { fresh: true }),
@@ -65,27 +63,41 @@ test('timed-out policy lookups retain their slot until the underlying read settl
   lookups.dispose();
 });
 
-test('one recheck scheduler serves every subscribed socket and stops when they leave', async () => {
+test('one recheck scheduler serves every subscribed socket and stops when they leave', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const scheduler = createWebAppSocketPolicyRecheckScheduler(5);
   let first = 0;
   let second = 0;
-  const unsubscribeFirst = scheduler.subscribe(() => { first += 1; });
-  const unsubscribeSecond = scheduler.subscribe(() => { second += 1; });
+  const unsubscribeFirst = scheduler.subscribe(() => {
+    first += 1;
+  });
+  const unsubscribeSecond = scheduler.subscribe(() => {
+    second += 1;
+  });
+  t.after(unsubscribeFirst);
+  t.after(unsubscribeSecond);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(first > 0);
-  assert.ok(second > 0);
+  t.mock.timers.tick(4);
+  assert.equal(first, 0);
+  assert.equal(second, 0);
+  t.mock.timers.tick(1);
+  assert.equal(first, 1);
+  assert.equal(second, 1);
 
   unsubscribeFirst();
+  t.mock.timers.tick(5);
+  assert.equal(first, 1, 'The departed subscriber is not rechecked.');
+  assert.equal(second, 2, 'Remaining subscribers still share the next tick.');
   unsubscribeSecond();
   const settledFirst = first;
   const settledSecond = second;
-  await new Promise((resolve) => setTimeout(resolve, 15));
+  t.mock.timers.tick(10_000);
   assert.equal(first, settledFirst);
   assert.equal(second, settledSecond);
 });
 
-test('one failing recheck subscriber does not prevent the remaining sockets from being checked', async () => {
+test('one failing recheck subscriber does not prevent the remaining sockets from being checked', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const scheduler = createWebAppSocketPolicyRecheckScheduler(5);
   let healthyChecks = 0;
   const stopFailing = scheduler.subscribe(() => {
@@ -94,9 +106,13 @@ test('one failing recheck subscriber does not prevent the remaining sockets from
   const stopHealthy = scheduler.subscribe(() => {
     healthyChecks += 1;
   });
+  t.after(stopFailing);
+  t.after(stopHealthy);
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(healthyChecks > 0);
+  t.mock.timers.tick(5);
+  assert.equal(healthyChecks, 1);
+  t.mock.timers.tick(5);
+  assert.equal(healthyChecks, 2, 'A failed subscriber cannot stop later ticks either.');
 
   stopFailing();
   stopHealthy();

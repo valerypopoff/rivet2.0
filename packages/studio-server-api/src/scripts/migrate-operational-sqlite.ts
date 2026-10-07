@@ -73,6 +73,59 @@ const evaluationTables: Table[] = [
   },
 ];
 
+const scheduleTables: Table[] = [
+  {
+    name: 'rivet_schedule_requests',
+    sourceSql: 'SELECT id,fingerprint,expires_at,resource_id,json FROM rivet_schedule_requests',
+    targetSql: 'SELECT id,fingerprint,expires_at,resource_id,json FROM rivet_schedule_requests',
+    insertSql:
+      'INSERT INTO rivet_schedule_requests(id,fingerprint,expires_at,resource_id,json) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+    parameters: (r) => [r.id, r.fingerprint, r.expires_at, r.resource_id, r.json],
+    required: true,
+  },
+  {
+    name: 'rivet_schedules',
+    sourceSql: 'SELECT id,revision,enabled,next_at,json FROM rivet_schedules',
+    targetSql: 'SELECT id,revision,enabled,next_at,json FROM rivet_schedules',
+    insertSql:
+      'INSERT INTO rivet_schedules(id,revision,enabled,next_at,json) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+    parameters: (r) => [r.id, r.revision, r.enabled, r.next_at, r.json],
+    required: true,
+  },
+  {
+    name: 'rivet_schedule_runs',
+    sourceSql: 'SELECT id,schedule_id,status,owner,lease_until,scheduled_at,json,draft_json FROM rivet_schedule_runs',
+    targetSql: 'SELECT id,schedule_id,status,owner,lease_until,scheduled_at,json,draft_json FROM rivet_schedule_runs',
+    insertSql:
+      'INSERT INTO rivet_schedule_runs(id,schedule_id,status,owner,lease_until,scheduled_at,json,draft_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING',
+    parameters: (r) => [r.id, r.schedule_id, r.status, r.owner, r.lease_until, r.scheduled_at, r.json, r.draft_json],
+    required: true,
+  },
+];
+
+/** Operational import deliberately disables schedules and retires in-flight
+ * work. Verification compares this documented safe transform, not live leases. */
+function pauseImportedSchedules(rows: Map<string, Row[]>): void {
+  for (const row of rows.get('rivet_schedules') ?? []) {
+    const s = JSON.parse(String(row.json));
+    s.enabled = false;
+    s.nextAt = null;
+    row.enabled = 0;
+    row.next_at = null;
+    row.json = JSON.stringify(s);
+  }
+  for (const row of rows.get('rivet_schedule_runs') ?? []) {
+    if (!['queued', 'claimed', 'running'].includes(String(row.status))) continue;
+    const run = JSON.parse(String(row.json));
+    run.status = row.status === 'running' ? 'interrupted' : 'cancelled';
+    run.reason = 'Imported installation; enable schedules explicitly after review.';
+    row.status = run.status;
+    row.owner = null;
+    row.lease_until = null;
+    row.json = JSON.stringify(run);
+  }
+}
+
 const healthTable: Table = {
   name: 'llm_profile_health',
   sourceSql: 'SELECT key, project_id, entry_json AS json, updated_at_ms AS timestamp_ms FROM llm_profile_health',
@@ -117,7 +170,8 @@ function canonicalRow(row: Row): string {
         key,
         key === 'json' && typeof value === 'string'
           ? JSON.parse(value)
-          : key === 'timestamp_ms' || key === 'revision'
+          : ['timestamp_ms', 'revision', 'next_at', 'lease_until', 'scheduled_at', 'expires_at'].includes(key) &&
+              value !== null
             ? String(value)
             : key === 'started_at'
               ? new Date(String(value)).toISOString()
@@ -228,10 +282,12 @@ export async function migrateOperationalSqlite(options: {
   target: ManagedWorkflowStorageConfig;
   verifyOnly?: boolean;
 }): Promise<number> {
-  const [evaluation, health] = await Promise.all([
+  const [evaluation, health, schedules] = await Promise.all([
     readSourceRows(path.join(options.sourceAppDataRoot, 'evaluation-runs.sqlite'), evaluationTables),
     readSourceRows(path.join(options.sourceAppDataRoot, 'llm-profile-health.sqlite'), [healthTable]),
+    readSourceRows(path.join(options.sourceAppDataRoot, 'scheduled-runs.sqlite'), scheduleTables),
   ]);
+  pauseImportedSchedules(schedules);
   const pool = new Pool(getManagedDbPoolConfig(options.target));
   try {
     const client = await pool.connect();
@@ -243,7 +299,8 @@ export async function migrateOperationalSqlite(options: {
       }
       const rowCount =
         (await copyAndVerify(client, evaluationTables, evaluation, options.verifyOnly === true)) +
-        (await copyAndVerify(client, [healthTable], health, options.verifyOnly === true));
+        (await copyAndVerify(client, [healthTable], health, options.verifyOnly === true)) +
+        (await copyAndVerify(client, scheduleTables, schedules, options.verifyOnly === true));
       await client.query('COMMIT');
       return rowCount;
     } catch (error) {

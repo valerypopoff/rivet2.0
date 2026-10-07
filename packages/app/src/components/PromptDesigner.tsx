@@ -114,6 +114,12 @@ const styles = css`
     justify-content: flex-end;
   }
 
+  .prompt-preview-run-controls {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
   .message-editor {
     width: 100%;
     font-size: var(--ui-font-size-base);
@@ -181,10 +187,11 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
   const project = useAtomValue(projectState);
   const setEvaluations = useSetAtom(evaluationsState);
   const { messages, setMessages, messageChanged, deleteMessage, addMessage } = usePromptDesignerMessages();
-  const { attachedNode, config, setConfig } = usePromptDesignerAttachedNode({ setMessages });
-  const { response, tryRunSingle } = usePromptDesignerRunActions({
+  const { attachedNode, attachmentKey, config, setConfig } = usePromptDesignerAttachedNode({ setMessages });
+  const { response, tryRunSingle, inProgress } = usePromptDesignerRunActions({
     configData: config.data,
     messages,
+    attachmentKey,
   });
 
   const openInEvaluations = () => {
@@ -270,9 +277,11 @@ export const PromptDesigner: FC<PromptDesignerProps> = ({ onClose }) => {
         </div>
         <div className="controls-area">
           <PromptDesignerConfigPanel
+            key={attachmentKey}
             config={config}
             setConfig={setConfig}
             onRun={wrapAsync(tryRunSingle, 'Run prompt designer chat')}
+            inProgress={inProgress}
           />
           <div className="controls-buttons">
             <Button appearance="subtle" onClick={openInEvaluations}>

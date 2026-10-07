@@ -1,12 +1,10 @@
 import { type CSSProperties, type FC, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 import styled from '@emotion/styled';
-import { produce } from 'immer';
 import { toast } from 'react-toastify';
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import {
   type ChartNode,
   type DataId,
-  type GraphId,
   type NodeId,
   type NodePrefab,
   type NodePrefabId,
@@ -25,6 +23,7 @@ import { graphState } from '../state/graph.js';
 import {
   canvasPositionState,
   lastMousePositionState,
+  nodeEditorSessionRevisionState,
   selectedNodesState,
   sidebarOpenState,
 } from '../state/graphBuilder.js';
@@ -50,14 +49,11 @@ import { isNotNull } from '../utils/genericUtilFunctions.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useSetStaticData } from '../hooks/useSetStaticData.js';
 import type { ContextMenuContext } from './ContextMenu.js';
-import {
-  recoverableNodeConnectionsStatePerGraph,
-  setRecoverableNodeConnectionsForGraph,
-} from '../state/recoverableNodeConnections.js';
-import { reconcileNodePrefabInstanceConnectionsInGraph } from '../domain/nodeLibrary/nodePrefabConnectionRecovery.js';
+import { updateNodeLibraryState } from '../state/nodeLibrary.js';
 import { clipboardState } from '../state/clipboard.js';
 import { NodeLibraryReferencesContext } from './visualNode/NodeLibraryReferences.js';
 import { useGoToNode } from '../hooks/useGoToNode.js';
+import { mergeNodeEditorChange } from '../utils/nodeEditorSession.js';
 
 const Container = styled.div`
   position: relative;
@@ -97,13 +93,18 @@ function getPrefabSourceId(prefab: NodePrefab): NodeId {
 
 export const NodeLibraryBuilder: FC = () => {
   const store = useStore();
-  const [project, setProject] = useAtom(projectState);
-  const [currentGraph, setCurrentGraph] = useAtom(graphState);
-  const referencedProjects = useAtomValue(referencedProjectsState);
+  const project = useAtomValue(projectState);
+  const currentGraph = useAtomValue(graphState);
+  const revision = useAtomValue(nodeEditorSessionRevisionState);
   const [selectedNodeIds, setSelectedNodeIds] = useAtom(selectedNodesState);
   const workspaceTarget = useAtomValue(projectWorkspaceTargetsState)[project.metadata.id];
   const editingPrefabId = workspaceTarget?.type === 'nodeLibrary' ? workspaceTarget.editingPrefabId : undefined;
+  const isCurrent = () =>
+    store.get(projectState).metadata.id === project.metadata.id &&
+    store.get(nodeEditorSessionRevisionState) === revision &&
+    store.get(projectWorkspaceTargetsState)[project.metadata.id]?.type === 'nodeLibrary';
   const setEditingPrefabId = useStableCallback((update: SetStateAction<NodePrefabId | undefined>) => {
+    if (!isCurrent()) return;
     const currentTarget = store.get(projectWorkspaceTargetsState)[project.metadata.id];
     const currentEditingPrefabId = currentTarget?.type === 'nodeLibrary' ? currentTarget.editingPrefabId : undefined;
     const nextEditingPrefabId = typeof update === 'function' ? update(currentEditingPrefabId) : update;
@@ -199,70 +200,15 @@ export const NodeLibraryBuilder: FC = () => {
     [project.metadata.id, setNodeLibraryCanvasPositions],
   );
 
-  const updateProjectNodePrefabs = useStableCallback((update: (prefabs: Record<NodePrefabId, NodePrefab>) => void) => {
-    const baseProject = produce(project, (draft) => {
-      draft.nodePrefabs ??= {};
-      update(draft.nodePrefabs as Record<NodePrefabId, NodePrefab>);
-      if (Object.keys(draft.nodePrefabs).length === 0) {
-        delete draft.nodePrefabs;
-      }
-    });
-    let nextRecoverableConnectionsByGraph = store.get(recoverableNodeConnectionsStatePerGraph);
-    const nextGraphs = { ...baseProject.graphs };
-
-    for (const [graphId, graph] of Object.entries(baseProject.graphs)) {
-      const graphMetadataId = (graph.metadata?.id ?? graphId) as GraphId;
-      const result = reconcileNodePrefabInstanceConnectionsInGraph({
-        graph,
-        project: baseProject,
-        projectNodeRegistry,
-        recoverableConnections: nextRecoverableConnectionsByGraph[graphMetadataId] ?? {},
-        referencedProjects,
-      });
-
-      nextGraphs[graphId as GraphId] = result.graph;
-      nextRecoverableConnectionsByGraph = setRecoverableNodeConnectionsForGraph(
-        nextRecoverableConnectionsByGraph,
-        graphMetadataId,
-        result.recoverableConnections,
-      );
-    }
-
-    const nextProject = {
-      ...baseProject,
-      graphs: nextGraphs,
-    };
-    const liveGraph = store.get(graphState);
-    const liveGraphId = liveGraph.metadata?.id;
-    const liveGraphResult = reconcileNodePrefabInstanceConnectionsInGraph({
-      graph: liveGraph,
-      project: nextProject,
-      projectNodeRegistry,
-      recoverableConnections: liveGraphId ? nextRecoverableConnectionsByGraph[liveGraphId] ?? {} : {},
-      referencedProjects,
-    });
-
-    nextRecoverableConnectionsByGraph = setRecoverableNodeConnectionsForGraph(
-      nextRecoverableConnectionsByGraph,
-      liveGraphId,
-      liveGraphResult.recoverableConnections,
-    );
-
-    const finalProject =
-      liveGraphId && liveGraphId in nextProject.graphs
-        ? {
-            ...nextProject,
-            graphs: {
-              ...nextProject.graphs,
-              [liveGraphId]: liveGraphResult.graph,
-            },
-          }
-        : nextProject;
-
-    setProject(finalProject);
-    setCurrentGraph(liveGraphResult.graph);
-    store.set(recoverableNodeConnectionsStatePerGraph, nextRecoverableConnectionsByGraph);
-  });
+  const updateProjectNodePrefabs = useStableCallback(
+    (update: (prefabs: Record<NodePrefabId, NodePrefab>) => void | false) =>
+      store.set(updateNodeLibraryState, {
+        projectId: project.metadata.id,
+        revision,
+        registry: projectNodeRegistry,
+        update,
+      }),
+  );
 
   const updatePrefabSource = useStableCallback(
     (prefabId: NodePrefabId, nextNode: ChartNode, newData?: Record<DataId, string>) => {
@@ -271,31 +217,32 @@ export const NodeLibraryBuilder: FC = () => {
         return;
       }
 
-      updateProjectNodePrefabs((draftPrefabs) => {
+      const updated = updateProjectNodePrefabs((draftPrefabs) => {
         const prefab = draftPrefabs[prefabId];
-        if (prefab) {
-          prefab.sourceNode =
-            nextNode.type === 'codeNew' && prefab.sourceNode.type === 'codeNew'
-              ? {
-                  ...nextNode,
-                  data: prepareCodeOutputEdit((prefab.sourceNode as CodeNewNode).data, (nextNode as CodeNewNode).data),
-                }
-              : nextNode;
-        }
+        if (!prefab || prefab.sourceNode.id !== nextNode.id) return false;
+        prefab.sourceNode =
+          nextNode.type === 'codeNew' && prefab.sourceNode.type === 'codeNew'
+            ? {
+                ...nextNode,
+                data: prepareCodeOutputEdit((prefab.sourceNode as CodeNewNode).data, (nextNode as CodeNewNode).data),
+              }
+            : nextNode;
       });
 
-      if (newData) {
+      if (updated && newData) {
         setStaticData(newData);
       }
+      return updated;
     },
   );
 
   const handleNodesChanged = useStableCallback((nextNodes: ChartNode[]) => {
     updateProjectNodePrefabs((draftPrefabs) => {
       for (const nextNode of nextNodes) {
-        const prefab = prefabsBySourceNodeId.get(nextNode.id);
-        if (prefab && draftPrefabs[prefab.id]) {
-          draftPrefabs[prefab.id]!.sourceNode = nextNode;
+        const prefab = Object.values(draftPrefabs).find((entry) => entry.sourceNode.id === nextNode.id);
+        if (prefab) {
+          const rendered = nodes.find((entry) => entry.id === nextNode.id);
+          prefab.sourceNode = rendered ? mergeNodeEditorChange(prefab.sourceNode, rendered, nextNode) : nextNode;
         } else if (canUseNodeAsPrefabSource(nextNode)) {
           const nextPrefab = buildNodePrefab(nextNode);
           draftPrefabs[nextPrefab.id] = nextPrefab;
@@ -305,6 +252,7 @@ export const NodeLibraryBuilder: FC = () => {
   });
 
   const handleNodeSelected = useStableCallback((node: ChartNode, multi: boolean) => {
+    if (!isCurrent()) return;
     setSelectedNodeIds((current) => {
       if (!multi) {
         return [node.id];
@@ -315,12 +263,13 @@ export const NodeLibraryBuilder: FC = () => {
   });
 
   const addPrefabSource = useStableCallback((nodeType: string, position: { x: number; y: number }) => {
+    if (!isCurrent()) return;
     const newNode = createAddedNode({
       nodeType,
       position,
       registry: projectNodeRegistry,
-      project,
-      referencedProjects,
+      project: store.get(projectState),
+      referencedProjects: store.get(referencedProjectsState),
       applyDefaultColor: editorPreferences.applyDefaultNodeColors,
     });
 
@@ -330,25 +279,29 @@ export const NodeLibraryBuilder: FC = () => {
     }
 
     const prefab = buildNodePrefab(newNode);
-    updateProjectNodePrefabs((draftPrefabs) => {
+    const updated = updateProjectNodePrefabs((draftPrefabs) => {
       draftPrefabs[prefab.id] = prefab;
     });
+    if (!updated) return;
     setSelectedNodeIds([prefab.sourceNode.id]);
     setEditingPrefabId(editorPreferences.openNodeSettingsOnCreate ? prefab.id : undefined);
   });
 
   const deletePrefabSources = useStableCallback((sourceNodeIds: readonly NodeId[]) => {
+    if (!isCurrent()) return;
+    const liveProject = store.get(projectState);
+    const liveGraph = store.get(graphState);
     const prefabIdsToDelete: NodePrefabId[] = [];
     const sourceNodeIdsToDelete = new Set<NodeId>();
     const blockedUsageLabels: string[] = [];
 
     for (const sourceNodeId of sourceNodeIds) {
-      const prefab = prefabsBySourceNodeId.get(sourceNodeId);
+      const prefab = Object.values(liveProject.nodePrefabs ?? {}).find((entry) => entry.sourceNode.id === sourceNodeId);
       if (!prefab) {
         continue;
       }
 
-      const usages = getNodePrefabUsage(project, prefab.id, [currentGraph]);
+      const usages = getNodePrefabUsage(liveProject, prefab.id, [liveGraph]);
       if (usages.length > 0) {
         blockedUsageLabels.push(...usages.map(getNodePrefabUsageLabel));
         continue;
@@ -366,11 +319,12 @@ export const NodeLibraryBuilder: FC = () => {
       return;
     }
 
-    updateProjectNodePrefabs((draftPrefabs) => {
+    const updated = updateProjectNodePrefabs((draftPrefabs) => {
       for (const prefabId of prefabIdsToDelete) {
         delete draftPrefabs[prefabId];
       }
     });
+    if (!updated) return;
     setSelectedNodeIds((current) => current.filter((nodeId) => !sourceNodeIdsToDelete.has(nodeId)));
     setEditingPrefabId((current) => (current && prefabIdsToDelete.includes(current) ? undefined : current));
   });
@@ -380,7 +334,10 @@ export const NodeLibraryBuilder: FC = () => {
   });
 
   const duplicatePrefabSource = useStableCallback((sourceNodeId: NodeId) => {
-    const prefab = prefabsBySourceNodeId.get(sourceNodeId);
+    if (!isCurrent()) return;
+    const prefab = Object.values(store.get(projectState).nodePrefabs ?? {}).find(
+      (entry) => entry.sourceNode.id === sourceNodeId,
+    );
     if (!prefab) {
       return;
     }
@@ -396,9 +353,10 @@ export const NodeLibraryBuilder: FC = () => {
       connections: [],
     });
     const duplicate = buildNodePrefab(newNodes[0]!);
-    updateProjectNodePrefabs((draftPrefabs) => {
+    const updated = updateProjectNodePrefabs((draftPrefabs) => {
       draftPrefabs[duplicate.id] = duplicate;
     });
+    if (!updated) return;
     setSelectedNodeIds([duplicate.sourceNode.id]);
   });
 
@@ -419,11 +377,12 @@ export const NodeLibraryBuilder: FC = () => {
       return;
     }
 
-    updateProjectNodePrefabs((draftPrefabs) => {
+    const updated = updateProjectNodePrefabs((draftPrefabs) => {
       for (const prefab of pastedPrefabs) {
         draftPrefabs[prefab.id] = prefab;
       }
     });
+    if (!updated) return;
     setSelectedNodeIds(pastedPrefabs.map((prefab) => prefab.sourceNode.id));
 
     if (skippedNodeCount > 0) {
@@ -501,17 +460,18 @@ export const NodeLibraryBuilder: FC = () => {
   });
 
   const editPrefabSourceNode: EditNodeCommand = useStableCallback((params) => {
-    const prefab = prefabsBySourceNodeId.get(params.nodeId);
+    if (!isCurrent()) return false;
+    const prefab = Object.values(store.get(projectState).nodePrefabs ?? {}).find(
+      (entry) => entry.sourceNode.id === params.nodeId,
+    );
     if (!prefab) {
       return false;
     }
 
-    updatePrefabSource(prefab.id, {
+    return updatePrefabSource(prefab.id, {
       ...prefab.sourceNode,
       ...structuredClone(params.newNode),
     } as ChartNode);
-
-    return true;
   });
 
   const updateEditingPrefab: NodeChanged = useStableCallback((node, newData) => {

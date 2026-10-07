@@ -4,32 +4,31 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultApiTestFiles, kubernetesApiTestFiles } from './api-test-files.mjs';
+import {
+  parseTestShardOptions as parseApiTestOptions,
+  selectTestShard as selectApiTestShard,
+} from '../../../scripts/ci/test-shard-options.mjs';
+
+export { parseApiTestOptions, selectApiTestShard };
+
+const runtimeScenariosFile = 'src/tests/local-upgrade-runtime.test.ts';
+
+export function selectApiTestPlan(shardIndex, shardCount) {
+  const files = selectApiTestShard(defaultApiTestFiles, shardIndex, shardCount);
+  // The hosted matrix has four runners. Split the expensive scenarios across
+  // those runners without duplicating any other file. Arbitrary one-file/local
+  // partitions keep their existing semantics.
+  if (shardCount !== 4) return { files, runtimeShard: '' };
+  return {
+    files: [...files.filter((file) => file !== runtimeScenariosFile), runtimeScenariosFile],
+    runtimeShard: `${shardIndex + 1}/${shardCount}`,
+  };
+}
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
 const apiRoot = path.join(rootDir, 'packages', 'studio-server-api');
-
-function parseIntegerFlag(args, name, fallback) {
-  const index = args.indexOf(name);
-  if (index < 0) {
-    return fallback;
-  }
-  const value = Number(args[index + 1]);
-  if (!Number.isInteger(value)) {
-    throw new Error(`${name} must be an integer.`);
-  }
-  return value;
-}
-
-export function selectApiTestShard(files, shardIndex, shardCount) {
-  if (!Number.isInteger(shardCount) || shardCount < 1) {
-    throw new Error('shardCount must be a positive integer.');
-  }
-  if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount) {
-    throw new Error(`shardIndex must be between 0 and ${shardCount - 1}.`);
-  }
-  return files.filter((_file, index) => index % shardCount === shardIndex);
-}
+const yarnPath = path.join(rootDir, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 
 export function listApiTestFiles(testsDirectory, relativeDirectory = 'src/tests') {
   return fs
@@ -39,7 +38,7 @@ export function listApiTestFiles(testsDirectory, relativeDirectory = 'src/tests'
       if (entry.isDirectory()) {
         return listApiTestFiles(path.join(testsDirectory, entry.name), relativePath);
       }
-      return entry.isFile() && /\.test\.(?:ts|mts)$/.test(entry.name) ? [relativePath] : [];
+      return entry.isFile() && /\.(?:test|spec)\.(?:[cm]?ts|tsx)$/.test(entry.name) ? [relativePath] : [];
     })
     .sort();
 }
@@ -70,7 +69,7 @@ export function verifyApiTestManifest() {
 
 export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
   verifyApiTestManifest();
-  const selectedFiles = selectApiTestShard(defaultApiTestFiles, shardIndex, shardCount);
+  const { files: selectedFiles, runtimeShard } = selectApiTestPlan(shardIndex, shardCount);
   if (selectedFiles.length === 0) {
     throw new Error(`API test shard ${shardIndex + 1}/${shardCount} is empty.`);
   }
@@ -78,12 +77,12 @@ export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
   console.log(`[api-tests] Running shard ${shardIndex + 1}/${shardCount}: ${selectedFiles.length} files.`);
   await new Promise((resolve, reject) => {
     const child = spawn(
-      'yarn',
-      ['workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test:files', ...selectedFiles],
+      process.execPath,
+      [yarnPath, 'workspace', '@valerypopoff/rivet-studio-server-api', 'run', 'test:files', ...selectedFiles],
       {
         cwd: rootDir,
-        env: process.env,
-        shell: process.platform === 'win32',
+        env: { ...process.env, RIVET_API_RUNTIME_SHARD: runtimeShard },
+        shell: false,
         stdio: 'inherit',
       },
     );
@@ -99,11 +98,12 @@ export async function runApiTests({ shardIndex = 0, shardCount = 1 } = {}) {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  const shardIndex = parseIntegerFlag(args, '--shard-index', 0);
-  const shardCount = parseIntegerFlag(args, '--shard-count', 1);
-  if (args.includes('--check')) {
+  const { shardIndex, shardCount, check } = parseApiTestOptions(process.argv.slice(2));
+  if (check) {
     verifyApiTestManifest();
+    if (selectApiTestPlan(shardIndex, shardCount).files.length === 0) {
+      throw new Error(`API test shard ${shardIndex + 1}/${shardCount} is empty.`);
+    }
     console.log(
       `[api-tests] Manifest covers ${defaultApiTestFiles.length} default and ${kubernetesApiTestFiles.length} Kubernetes tests.`,
     );

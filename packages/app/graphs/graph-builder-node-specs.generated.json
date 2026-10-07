@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:9f24ba5643c52a7e",
+  "catalogFingerprint": "fnv1a64:3af82c89b65fcd16",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -230,7 +230,7 @@
       "authoringChoiceId": "registered:classifierEvaluate",
       "nodeType": "classifierEvaluate",
       "displayName": "Classifier Evaluate",
-      "description": "Evaluates one shared state against a batch of independent typed questions in exactly one provider request. It is not an LLM Chat node and does not stream tokens.",
+      "description": "Evaluates one shared state and optional images against a batch of independent typed questions in one provider request, apart from retries. Every question sees the same state and images. It is not an LLM Chat node and does not stream tokens.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -245,7 +245,7 @@
       "authoringChoiceId": "registered:classifierQuestion",
       "nodeType": "classifierQuestion",
       "displayName": "Classifier Question",
-      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object.",
+      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object. The same text questions work with Jev , Liquid AI d1 , and OpenAI Decisions . Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

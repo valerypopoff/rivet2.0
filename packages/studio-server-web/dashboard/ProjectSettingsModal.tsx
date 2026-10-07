@@ -8,10 +8,18 @@ import {
   getWorkflowProjectStatusLabel,
   isWorkflowProjectFullyUnpublished,
 } from './projectSettingsForm';
-import type { HostedRouteConfig, WorkflowProjectItem, WorkflowProjectStatus, WorkflowTreeResponse } from './types';
+import type {
+  HostedRouteConfig,
+  WorkflowProjectItem,
+  WorkflowProjectStatus,
+  WorkflowPublishedVersionRestoreResponse,
+  WorkflowTreeResponse,
+} from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { LLMProfileHealthSettings } from './LLMProfileHealthSettings';
 import { useProjectSettingsActions } from './useProjectSettingsActions';
+import { WorkflowPublishedVersionHistoryPanel } from './WorkflowPublishedVersionHistoryModal';
+import { ProjectIncomingReferences } from './ProjectIncomingReferences';
 
 const renderWorkflowEndpointHelp = (
   routeConfig: HostedRouteConfig,
@@ -109,7 +117,7 @@ function normalizeAllowedEmailDraft(value: string): string[] {
   return emails;
 }
 
-type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health';
+type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'history' | 'danger';
 
 type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
@@ -118,7 +126,8 @@ type ProjectSettingsModalProps = {
   onClose: () => void;
   onRefresh: () => Promise<WorkflowTreeResponse | null>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
-  onOpenPublishedHistory: (project: WorkflowProjectItem) => void;
+  onPreviewPublishedVersion: (relativePath: string, versionId: string) => void;
+  onPublishedVersionRestored: (response: WorkflowPublishedVersionRestoreResponse) => void | Promise<void>;
   onOpenRecording: (recordingId: string) => void;
   routeConfig: HostedRouteConfig;
 };
@@ -130,11 +139,13 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   onClose,
   onRefresh,
   onDeleteProject,
-  onOpenPublishedHistory,
+  onPreviewPublishedVersion,
+  onPublishedVersionRestored,
   onOpenRecording,
   routeConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>('workflow');
+  const [historyBusy, setHistoryBusy] = useState(false);
   useEffect(() => {
     if (isOpen) {
       setActiveTab('workflow');
@@ -152,7 +163,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     webAppAccessValidationErrors,
     loadingWebApps,
     reviewedPublication,
-    savedLatestSubgraphProjectIds,
     publicationConflict,
     reviewLatestPublication,
     savingWebApps,
@@ -198,7 +208,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     () => formatLastPublishedAtLabel(displayedProjectStatus, displayProject.settings.lastPublishedAt),
     [displayProject.settings.lastPublishedAt, displayedProjectStatus],
   );
-  const canCloseModal = !savingSettings && !savingEndpointAccess && !savingWebApps && !deletingProject;
+  const canCloseModal = !savingSettings && !savingEndpointAccess && !savingWebApps && !deletingProject && !historyBusy;
   const disablePublishAction =
     savingSettings ||
     savingEndpointAccess ||
@@ -208,7 +218,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     endpointValidationError != null ||
     (!isUnpublishedProject && !hasWorkflowChangesToPublish && !hasWorkflowEndpointDraftChange);
   const disableUnpublishAction = savingSettings || savingEndpointAccess || deletingProject || !reviewedPublication;
-  const disableDeleteProjectAction = savingSettings || savingWebApps || deletingProject || !canDeleteProject;
+  const disableDeleteProjectAction = !canCloseModal || !reviewedPublication || !canDeleteProject;
   const disableWebAppActions =
     savingSettings || savingWebApps || deletingProject || loadingWebApps || !reviewedPublication;
   const workflowPublishButtonLabel = isUnpublishedProject ? 'Publish' : 'Update';
@@ -219,6 +229,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         selected={activeTab === 'workflow'}
         role="tab"
         aria-selected={activeTab === 'workflow'}
+        disabled={!canCloseModal}
         onClick={() => setActiveTab('workflow')}
       >
         Endpoint
@@ -227,6 +238,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         selected={activeTab === 'web-apps'}
         role="tab"
         aria-selected={activeTab === 'web-apps'}
+        disabled={!canCloseModal}
         onClick={() => setActiveTab('web-apps')}
       >
         Web apps
@@ -235,21 +247,30 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         selected={activeTab === 'llm-health'}
         role="tab"
         aria-selected={activeTab === 'llm-health'}
+        disabled={!canCloseModal}
         onClick={() => setActiveTab('llm-health')}
       >
         LLM profile suspension
       </SegmentedControlButton>
+      <SegmentedControlButton
+        selected={activeTab === 'history'}
+        role="tab"
+        aria-selected={activeTab === 'history'}
+        disabled={!canCloseModal}
+        onClick={() => setActiveTab('history')}
+      >
+        Published version history
+      </SegmentedControlButton>
+      <SegmentedControlButton
+        selected={activeTab === 'danger'}
+        role="tab"
+        aria-selected={activeTab === 'danger'}
+        disabled={!canCloseModal}
+        onClick={() => setActiveTab('danger')}
+      >
+        Danger zone
+      </SegmentedControlButton>
     </SegmentedControl>
-  );
-  const renderPublishedHistoryButton = () => (
-    <Button
-      appearance="subtle"
-      className="project-settings-secondary-button button-size-l published-version-history-button"
-      onClick={() => onOpenPublishedHistory(displayProject)}
-      isDisabled={savingSettings || deletingProject}
-    >
-      Published version history
-    </Button>
   );
   const renderWorkflowSettings = () => (
     <div className="project-settings-tab-panel" role="tabpanel">
@@ -268,13 +289,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       </div>
 
       <div className="project-settings-field">
-        {savedLatestSubgraphProjectIds.length > 0 && reviewedPublication && (
-          <div className="project-settings-help" role="note">
-            This project calls {savedLatestSubgraphProjectIds.length} other project
-            {savedLatestSubgraphProjectIds.length === 1 ? '' : 's'} using Saved latest. Their future saves can change
-            this endpoint without updating its published version.
-          </div>
-        )}
         <div className="project-settings-input-row project-settings-prefixed-input-row">
           <span className="project-settings-url-prefix">{`${routeConfig.publishedWorkflowsBasePath}/`}</span>
           <TextField
@@ -351,8 +365,22 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   );
 
   const renderDangerSection = () => (
-    <div className={`project-settings-danger-section${activeTab === 'workflow' ? ' has-history-action' : ''}`}>
-      {activeTab === 'workflow' ? renderPublishedHistoryButton() : null}
+    <div
+      className="project-settings-tab-panel project-settings-danger-section"
+      role="tabpanel"
+      aria-label="Danger zone"
+    >
+      <h3>Delete project</h3>
+      <p className="project-settings-help">
+        Deleting this project is permanent and cannot be undone. Its saved datasets, published version history, and run
+        recordings are also deleted. Other projects and scheduled runs that use it may stop working. Download a backup
+        before deleting it.
+      </p>
+      <ProjectIncomingReferences
+        key={`${displayProject.relativePath}:${displayProject.projectMetadataId ?? ''}`}
+        relativePath={displayProject.relativePath}
+        projectId={displayProject.projectMetadataId}
+      />
       <Button
         appearance="subtle"
         className="project-settings-delete-button button-size-l"
@@ -361,18 +389,14 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       >
         {deletingProject ? 'Deleting...' : 'Delete project'}
       </Button>
+      {!canDeleteProject ? (
+        <p className="project-settings-help">Unpublish the endpoint and all web apps before deleting this project.</p>
+      ) : null}
     </div>
   );
 
   const renderWebAppsSettings = () => (
     <div className="project-settings-tab-panel project-settings-web-app-section" role="tabpanel">
-      {savedLatestSubgraphProjectIds.length > 0 && reviewedPublication && (
-        <div className="project-settings-help" role="note">
-          This project calls {savedLatestSubgraphProjectIds.length} other project
-          {savedLatestSubgraphProjectIds.length === 1 ? '' : 's'} using Saved latest. Their future saves can change a
-          published web app without updating it.
-        </div>
-      )}
       {loadingWebApps ? <div className="project-settings-help">Loading project web apps...</div> : null}
 
       {!loadingWebApps && !hasWebApps ? <div className="project-settings-help">No web apps in the project.</div> : null}
@@ -522,7 +546,6 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
       {isOpen ? (
         <ModalDialog
           testId="workflow-project-settings-modal"
-          width="medium"
           label={baseFileName}
           onClose={onClose}
           shouldCloseOnOverlayClick={canCloseModal}
@@ -574,7 +597,27 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                     }}
                   />
                 ) : null}
-                {renderDangerSection()}
+                {activeTab === 'history' ? (
+                  <div className="project-settings-tab-panel" role="tabpanel" aria-label="Published version history">
+                    <WorkflowPublishedVersionHistoryPanel
+                      project={displayProject}
+                      isOpen={isOpen}
+                      onBusyChange={setHistoryBusy}
+                      onPreviewVersion={(relativePath, versionId) => {
+                        onClose();
+                        onPreviewPublishedVersion(relativePath, versionId);
+                      }}
+                      onRestored={async (response) => {
+                        try {
+                          await onPublishedVersionRestored(response);
+                        } finally {
+                          await reviewLatestPublication();
+                        }
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {activeTab === 'danger' ? renderDangerSection() : null}
               </div>
             </div>
           </ModalBody>

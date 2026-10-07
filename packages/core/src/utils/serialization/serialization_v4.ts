@@ -1,4 +1,5 @@
 import { mapValues } from 'lodash-es';
+import { normalizeSerializedLLMTemperatureData } from '../../model/chat-v2/llmChatV2NodeMigration.js';
 import type {
   NodeGraph,
   Project,
@@ -9,8 +10,9 @@ import type {
   ProjectId,
   ChartNodeVariant,
   NodePrefabId,
+  DataId,
 } from '../../index.js';
-import { type AttachedData, doubleCheckProject } from './serializationUtils.js';
+import { type AttachedData, doubleCheckProject, isValidProjectStaticData } from './serializationUtils.js';
 import { entries } from '../typeSafety.js';
 import type { PluginLoadSpec } from '../../model/PluginLoadSpec.js';
 import type { CombinedDataset } from './serialization.js';
@@ -37,6 +39,7 @@ type SerializedProject = {
   attachedData?: AttachedData;
   plugins?: PluginLoadSpec[];
   references?: SerializedProjectReference[];
+  data?: Record<DataId, string>;
 };
 
 type SerializedProjectReference = {
@@ -95,6 +98,9 @@ export function graphV4Deserializer(data: unknown): NodeGraph {
 }
 
 export function projectV4Serializer(project: Project, attachedData?: AttachedData): unknown {
+  if (!isValidProjectStaticData(project.data)) {
+    throw new Error('Project data must be a record of static-data strings');
+  }
   // Project Settings canonicalizes these values, but integrations and callers
   // can author Project objects directly. Never write a project file that will
   // later fail its own project-global validation at load or execution time.
@@ -132,6 +138,7 @@ function toSerializedProject(project: Project, attachedData?: AttachedData): Ser
     attachedData,
     plugins: project.plugins ?? [],
     references: project.references ?? [],
+    data: project.data,
   };
 }
 
@@ -150,6 +157,7 @@ function fromSerializedProject(serializedProject: SerializedProject): [Project, 
       uiGraphs: Object.keys(uiGraphs).length > 0 ? uiGraphs : undefined,
       plugins: serializedProject.plugins ?? [],
       references: serializedProject.references ?? [],
+      ...(serializedProject.data !== undefined ? { data: serializedProject.data } : {}),
     },
     serializedProject.attachedData ?? {},
   ];
@@ -244,6 +252,7 @@ function fromSerializedGraph(serializedGraph: SerializedGraph): NodeGraph {
 }
 
 function toSerializedNode(node: ChartNode, allNodes: ChartNode[], allConnections: NodeConnection[]): SerializedNode {
+  const data = normalizeSerializedLLMTemperatureData(node.type, node.data);
   const outgoingConnections = allConnections
     .filter((connection) => connection.outputNodeId === node.id)
     .map((connection) => serializeConnection(connection, allNodes))
@@ -255,9 +264,15 @@ function toSerializedNode(node: ChartNode, allNodes: ChartNode[], allConnections
     splitRunMax: node.isSplitRun ? node.splitRunMax : undefined,
     splitRunConcurrency: node.isSplitRun ? node.splitRunConcurrency : undefined,
     isSplitSequential: node.isSplitSequential ? true : undefined,
-    data: Object.keys(node.data ?? {}).length > 0 ? node.data : undefined,
+    data: Object.keys(data ?? {}).length > 0 ? data : undefined,
     outgoingConnections: outgoingConnections.length > 0 ? outgoingConnections : undefined,
-    variants: (node.variants?.length ?? 0) > 0 ? node.variants : undefined,
+    variants:
+      (node.variants?.length ?? 0) > 0
+        ? node.variants!.map((variant) => ({
+            ...variant,
+            data: normalizeSerializedLLMTemperatureData(node.type, variant.data),
+          }))
+        : undefined,
     disabled: node.disabled ? true : undefined,
     isConditional: node.isConditional,
   };

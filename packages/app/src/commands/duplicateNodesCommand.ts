@@ -1,15 +1,20 @@
 import { type ChartNode, type NodeConnection, type NodeId } from '@valerypopoff/rivet2-core';
-import { useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import { connectionsState, nodesState } from '../state/graph';
-import { selectedNodesState } from '../state/graphBuilder';
+import { hoveringNodeState, selectedNodesState } from '../state/graphBuilder';
 import { useCommand } from './Command';
 import { duplicateNodesWithConnections } from '../domain/graphEditing/nodeActions.js';
 import { removeMatchingConnection } from '../domain/graphEditing/connectionActions.js';
+import { selectedConnectionBendsState } from '../state/connectionBends.js';
+import { getConnectionBendKeys } from '../domain/graphEditing/connectionBendSelection.js';
 
 export function useDuplicateNodesCommand() {
+  const store = useStore();
   const setNodes = useSetAtom(nodesState);
   const setConnections = useSetAtom(connectionsState);
   const setSelectedNodeIds = useSetAtom(selectedNodesState);
+  const setSelectedBends = useSetAtom(selectedConnectionBendsState);
+  const setHoveringNode = useSetAtom(hoveringNodeState);
 
   return useCommand<
     {
@@ -19,38 +24,38 @@ export function useDuplicateNodesCommand() {
     {
       duplicatedNodes: ChartNode[];
       duplicatedConnections: NodeConnection[];
-      duplicatedNodeIds: NodeId[];
+      previousSelectedNodeIds: NodeId[];
+      previousSelectedBends: string[];
     }
   >({
     type: 'duplicateNodes',
     apply({ nodeIds, delta }, appliedData, currentState) {
-      if (appliedData) {
-        setNodes((prev) => [...prev, ...appliedData.duplicatedNodes]);
-        setConnections((prev) => [...prev, ...appliedData.duplicatedConnections]);
-        setSelectedNodeIds(appliedData.duplicatedNodeIds);
-
-        return appliedData;
+      if (!appliedData) {
+        const { newNodes, duplicatedConnections } = duplicateNodesWithConnections({
+          nodes: currentState.nodes,
+          nodeIds,
+          connections: currentState.connections,
+          delta,
+        });
+        appliedData = {
+          duplicatedNodes: newNodes,
+          duplicatedConnections,
+          previousSelectedNodeIds: store.get(selectedNodesState),
+          previousSelectedBends: store.get(selectedConnectionBendsState),
+        };
       }
-
-      const { newNodes, duplicatedConnections } = duplicateNodesWithConnections({
-        nodes: currentState.nodes,
-        nodeIds,
-        connections: currentState.connections,
-        delta,
-      });
-
-      setNodes((prev) => [...prev, ...newNodes]);
+      const { duplicatedNodes, duplicatedConnections } = appliedData;
+      setHoveringNode(undefined);
+      setNodes((prev) => [...prev, ...duplicatedNodes]);
       setConnections((prev) => [...prev, ...duplicatedConnections]);
-      setSelectedNodeIds(newNodes.map((node) => node.id));
-
-      return {
-        duplicatedNodes: newNodes,
-        duplicatedConnections,
-        duplicatedNodeIds: newNodes.map((node) => node.id),
-      };
+      setSelectedNodeIds(duplicatedNodes.map((node) => node.id));
+      setSelectedBends(getConnectionBendKeys(duplicatedConnections));
+      return appliedData;
     },
     undo(_data, appliedData, currentState) {
-      setNodes(currentState.nodes.filter((node) => !appliedData.duplicatedNodeIds.includes(node.id)));
+      setHoveringNode(undefined);
+      const duplicatedNodeIds = new Set(appliedData.duplicatedNodes.map((node) => node.id));
+      setNodes(currentState.nodes.filter((node) => !duplicatedNodeIds.has(node.id)));
 
       const nextConnections = appliedData.duplicatedConnections.reduce(
         (connections, connection) => removeMatchingConnection(connections, connection),
@@ -58,7 +63,8 @@ export function useDuplicateNodesCommand() {
       );
 
       setConnections(nextConnections);
-      setSelectedNodeIds((current) => current.filter((nodeId) => !appliedData.duplicatedNodeIds.includes(nodeId)));
+      setSelectedNodeIds(appliedData.previousSelectedNodeIds);
+      setSelectedBends(appliedData.previousSelectedBends);
     },
   });
 }

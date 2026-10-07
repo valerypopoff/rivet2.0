@@ -2,7 +2,7 @@ import { css } from '@emotion/react';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
-import { useAtomValue } from 'jotai';
+import { useAtomValue, useStore } from 'jotai';
 import { type FC, useEffect, useState } from 'react';
 
 import { useRivetWorkspaceHost } from '../../hooks/useRivetWorkspaceHost.js';
@@ -10,8 +10,16 @@ import {
   openedProjectsState,
   projectDataUnsavedChangesState,
   projectUnsavedChangesState,
+  projectState,
+  openedProjectSnapshotsState,
+  savedProjectContentDigestsState,
 } from '../../state/savedGraphs.js';
-import { hasProjectUnsavedChanges } from '../../utils/projectUnsavedChanges.js';
+import {
+  hasProjectUnsavedChanges,
+  buildCurrentProjectContentSnapshot,
+  hasProjectContentChangedFromCleanDigest,
+} from '../../utils/projectUnsavedChanges.js';
+import { graphState } from '../../state/graph.js';
 import { AppModalHeader } from '../AppModalHeader.js';
 
 const unsavedProjectCloseModalBody = css`
@@ -29,13 +37,26 @@ export function useProjectCloseConfirmation(): {
   requestCloseProject: (projectId: ProjectId) => void;
 } {
   const openedProjects = useAtomValue(openedProjectsState);
-  const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
-  const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
+  const store = useStore();
   const { closeProject } = useRivetWorkspaceHost();
   const [projectPendingClose, setProjectPendingClose] = useState<ProjectId | null>(null);
 
   const requestCloseProject = (projectId: ProjectId) => {
-    if (hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId)) {
+    const active = store.get(projectState);
+    const content =
+      active.metadata.id === projectId
+        ? buildCurrentProjectContentSnapshot({ project: active, graph: store.get(graphState) })
+        : store.get(openedProjectSnapshotsState)[projectId];
+    const digests = store.get(savedProjectContentDigestsState);
+    if (
+      (store.get(openedProjectsState)[projectId] != null && digests[projectId] == null) ||
+      hasProjectUnsavedChanges(
+        store.get(projectUnsavedChangesState),
+        store.get(projectDataUnsavedChangesState),
+        projectId,
+      ) ||
+      hasProjectContentChangedFromCleanDigest(digests, content)
+    ) {
       setProjectPendingClose(projectId);
       return;
     }

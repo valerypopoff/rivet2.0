@@ -63,7 +63,7 @@ async function resolveThroughExistingParent(input: string): Promise<string> {
 export async function stageLocalMetadataCandidate(options: {
   source: SourceRoots;
   candidate: { catalogDatabasePath: string; settingsDatabasePath: string; artifactRoot: string };
-  settingsEncryptionKey: string;
+  settingsEncryptionKey?: string;
   verifyOnly?: boolean;
   assertFrozen: () => Promise<void>;
   onStage?: (stage: LocalUpgradeStage) => Promise<void>;

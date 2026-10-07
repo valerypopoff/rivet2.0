@@ -240,3 +240,36 @@
 .dashboard-toast-error {
   border-color: rgba(255, 107, 122, 0.45);
 }
+.development-update {
+  position: fixed;
+  z-index: 10000;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  margin-inline: auto;
+  padding: 12px 16px;
+  border: 1px solid #5b606a;
+  border-radius: 8px;
+  background: #25262b;
+  color: #eee;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.development-update button {
+  padding: 8px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.development-update-shield {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  cursor: wait;
+}

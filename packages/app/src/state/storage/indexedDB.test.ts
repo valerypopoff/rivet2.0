@@ -2,9 +2,9 @@ import 'fake-indexeddb/auto';
 import { strict as assert } from 'node:assert';
 import { beforeEach, describe, it } from 'node:test';
 import { type DataId } from '@valerypopoff/rivet2-core';
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBObjectStore, IDBDatabase } from 'fake-indexeddb';
 import { openStaticDataDatabase } from '../../hooks/useStaticDataDatabase.js';
-import { MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
+import { BrowserStaticDataStore, MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
 import { createRecoverableIndexedDbConnection } from '../../utils/indexedDb.js';
 import { IndexedDBStorage, MemoryAsyncStorage, createDefaultAsyncStorage } from './indexedDB.js';
 
@@ -17,6 +17,45 @@ beforeEach(() => {
 });
 
 void describe('browser IndexedDB storage', () => {
+  void it('reopens a silently closed cached connection without losing committed records', async () => {
+    const storage = new IndexedDBStorage();
+    await storage.setItem('key', 'before');
+    const transaction = IDBDatabase.prototype.transaction;
+    let closed: IDBDatabase | undefined;
+    IDBDatabase.prototype.transaction = function (...args) {
+      if (this.name === 'jotai-store' && !closed) {
+        closed = this;
+        this.close();
+      }
+      return transaction.apply(this, args);
+    };
+    try {
+      assert.equal(await storage.getItem('key'), 'before');
+      assert.ok(closed);
+      await storage.setItem('key', 'after');
+      assert.equal(await storage.getItem('key'), 'after');
+      assert.deepEqual(await storage.listKeys('k'), ['key']);
+      await storage.removeItem('key');
+      assert.equal(await storage.getItem('key'), null);
+    } finally {
+      IDBDatabase.prototype.transaction = transaction;
+    }
+  });
+  void it('does not acknowledge a request whose transaction aborts after put succeeds', async () => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = put.apply(this, args);
+      request.addEventListener('success', () => this.transaction.abort());
+      return request;
+    };
+    try {
+      const storage = new IndexedDBStorage();
+      await assert.rejects(storage.setItem('key', 'not-committed'), /AbortError/);
+      assert.equal(await storage.getItem('key'), null);
+    } finally {
+      IDBObjectStore.prototype.put = put;
+    }
+  });
   void it('opens and mutates the legacy Jotai schema without losing existing values', async () => {
     const legacyDatabase = await openNativeDatabase('jotai-store', 1, (database) => {
       database.createObjectStore('state');
@@ -26,6 +65,7 @@ void describe('browser IndexedDB storage', () => {
 
     const storage = new IndexedDBStorage();
 
+    assert.equal(storage.persistsAcrossReload, true);
     assert.equal(await storage.getItem('key'), 'before');
     assert.equal(await storage.getItem('missing'), null);
     await storage.setItem('key', 'after');
@@ -50,6 +90,7 @@ void describe('browser IndexedDB storage', () => {
     try {
       const storage = createDefaultAsyncStorage();
       assert.ok(storage instanceof MemoryAsyncStorage);
+      assert.equal(storage.persistsAcrossReload, false);
       assert.equal(await storage.getItem('missing'), null);
       await storage.setItem('key', 'value');
       assert.equal(await storage.getItem('key'), 'value');
@@ -104,6 +145,23 @@ void describe('browser IndexedDB storage', () => {
     await assert.rejects(database.insert(id, 'duplicate'), /already exists/);
     await database.clear();
     assert.deepEqual(await database.getAll(), []);
+  });
+
+  void it('isolates document caches and never mutates the retained legacy cache', async () => {
+    const id = 'legacy-asset' as DataId;
+    const legacy = await openStaticDataDatabase();
+    await legacy.put('data', { id, data: 'legacy' }, id);
+    const first = new BrowserStaticDataStore();
+    const second = new BrowserStaticDataStore();
+    assert.deepEqual(await first.getAll(), [{ id, data: 'legacy' }]);
+    await first.clear();
+    await first.insert(id, 'first');
+    await second.clear();
+    await second.insert(id, 'second');
+    assert.deepEqual(await first.getAll(), [{ id, data: 'first' }]);
+    assert.deepEqual(await second.getAll(), [{ id, data: 'second' }]);
+    assert.deepEqual(await legacy.getAll('data'), [{ id, data: 'legacy' }]);
+    legacy.close();
   });
 
   void it('closes static-data connections that block a future schema upgrade', async () => {

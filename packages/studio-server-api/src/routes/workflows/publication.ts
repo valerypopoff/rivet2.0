@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import type * as RivetNode from '@valerypopoff/rivet2-node';
 
 import { getAggregateWorkflowProjectStatus } from '../../../../studio-server-shared/workflow-types.js';
 import { validatePath } from '../../security.js';
@@ -29,10 +30,17 @@ import type {
 import type { PublicationFileChange } from './filesystem-publication-transactions.js';
 import { nextPublicationVersion, normalizePublicationVersion } from './publication-preconditions.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
+import { getWorkflowProjectIndexDataFromFileCached } from './project-stats.js';
 
 export { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
 
-let rivetNodeImport: Promise<typeof import('@valerypopoff/rivet2-node')> | null = null;
+let rivetNodeImport: Promise<typeof RivetNode> | null = null;
+
+/** Already checked migration bytes; ordinary serving callers keep filesystem reads. */
+export type WorkflowPublicationSourceSnapshot = {
+  contents: string;
+  datasetsContents: string | null;
+};
 
 function getRivetNode() {
   rivetNodeImport ??= import('@valerypopoff/rivet2-node');
@@ -56,11 +64,19 @@ export async function getWorkflowProjectSettings(
   options: {
     includeAggregatePublicationStatus?: boolean;
     root?: string;
+    sourceSnapshot?: WorkflowPublicationSourceSnapshot & { settings: StoredWorkflowProjectSettings };
   } = {},
 ): Promise<WorkflowProjectSettings> {
-  const storedSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
+  const storedSettings =
+    options.sourceSnapshot?.settings ?? (await readStoredWorkflowProjectSettings(projectPath, projectName));
   const currentStateHash = storedSettings.publishedStateHash
-    ? await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName)
+    ? options.sourceSnapshot
+      ? createWorkflowPublicationStateHashFromContents(
+          options.sourceSnapshot.contents,
+          options.sourceSnapshot.datasetsContents,
+          storedSettings.endpointName,
+        )
+      : await createWorkflowPublicationStateHash(projectPath, storedSettings.endpointName)
     : '';
   const status = getDerivedWorkflowProjectStatus(storedSettings, currentStateHash);
   const includeAggregatePublicationStatus = options.includeAggregatePublicationStatus !== false;
@@ -132,11 +148,16 @@ async function getPublishedWebAppPublicationStatuses(
   }));
 }
 
-export async function readStoredWorkflowProjectSettings(projectPath: string, _projectName: string): Promise<StoredWorkflowProjectSettings> {
+export async function readStoredWorkflowProjectSettings(
+  projectPath: string,
+  _projectName: string,
+  checkedText?: string | null,
+): Promise<StoredWorkflowProjectSettings> {
+  if (checkedText === null) return createDefaultStoredWorkflowProjectSettings();
   const settingsPath = getWorkflowProjectSettingsPath(projectPath);
   let settingsText: string;
   try {
-    settingsText = await fs.readFile(settingsPath, 'utf8');
+    settingsText = checkedText ?? (await fs.readFile(settingsPath, 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return createDefaultStoredWorkflowProjectSettings();
@@ -532,6 +553,7 @@ export async function resolvePublishedWorkflowProjectPath(
   root: string,
   projectPath: string,
   settings: StoredWorkflowProjectSettings,
+  sourceSnapshot?: WorkflowPublicationSourceSnapshot,
 ): Promise<string | null> {
   if (settings.publishedSnapshotId) {
     const publishedProjectPath = getPublishedWorkflowSnapshotPath(root, settings.publishedSnapshotId);
@@ -552,7 +574,13 @@ export async function resolvePublishedWorkflowProjectPath(
     return null;
   }
 
-  const currentStateHash = await createWorkflowPublicationStateHash(projectPath, settings.publishedEndpointName);
+  const currentStateHash = sourceSnapshot
+    ? createWorkflowPublicationStateHashFromContents(
+        sourceSnapshot.contents,
+        sourceSnapshot.datasetsContents,
+        settings.publishedEndpointName,
+      )
+    : await createWorkflowPublicationStateHash(projectPath, settings.publishedEndpointName);
   return currentStateHash === settings.publishedStateHash ? projectPath : null;
 }
 
@@ -702,8 +730,12 @@ export function createPublishedWorkflowProjectReferenceLoader(root: string, root
 
         for (const candidateProjectPath of projectPaths) {
           try {
-            const candidateProject = await loadProjectFromFile(candidateProjectPath);
-            if (candidateProject.metadata.id === projectId) {
+            const indexData = await getWorkflowProjectIndexDataFromFileCached(candidateProjectPath);
+            // This only discovers a candidate; loadProject below still verifies
+            // the actual live/published project's identity before returning it.
+            const candidateId =
+              indexData.projectMetadataId ?? (await loadProjectFromFile(candidateProjectPath)).metadata.id;
+            if (candidateId === projectId) {
               return candidateProjectPath;
             }
           } catch {

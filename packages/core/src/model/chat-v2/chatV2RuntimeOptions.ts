@@ -16,6 +16,7 @@ import type {
 } from './chatV2Types.js';
 import { applyLLMChatV2ParallelToolCallProviderOptions } from './parallelToolCalls.js';
 import type { LLMChatV2NodeData } from './llmChatV2NodeData.js';
+import { normalizeTemperature } from './temperature.js';
 
 export type LLMChatV2GenerationParameters = Pick<
   RunChatV2PipelineOptions,
@@ -229,9 +230,26 @@ export function resolveLLMChatV2GenerationParameters(
   data: LLMChatV2NodeData,
   inputs: Inputs,
 ): LLMChatV2GenerationParameters {
+  const temperatureInput = data.useTemperatureInput ? inputs['temperature' as PortId] : undefined;
+  let temperature: number | undefined;
+  if (temperatureInput != null) {
+    const resolved =
+      temperatureInput.type === 'string'
+        ? temperatureInput.value.trim() === ''
+          ? undefined
+          : Number(temperatureInput.value)
+        : coerceTypeOptional(temperatureInput, 'number');
+    // A connected malformed input must not silently fall back to node data.
+    if (typeof resolved !== 'number' || !Number.isFinite(resolved)) {
+      throw new Error('Temperature input must be a finite number.');
+    }
+    temperature = resolved;
+  } else {
+    temperature = normalizeTemperature(data.temperature);
+  }
   return {
     maxTokens: getInputOrData(data, inputs, 'maxTokens', 'number'),
-    temperature: getInputOrData(data, inputs, 'temperature', 'number'),
+    temperature,
     topP: getInputOrData(data, inputs, 'topP', 'number'),
     topK: getInputOrData(data, inputs, 'topK', 'number'),
     presencePenalty: getInputOrData(data, inputs, 'presencePenalty', 'number'),

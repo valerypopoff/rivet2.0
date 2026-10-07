@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - develop
+      - staging
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -34,7 +35,9 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          sparse-checkout: scripts/ci/ci-change-policy.mjs
+          sparse-checkout-cone-mode: false
       - name: Set Up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -129,6 +132,10 @@ jobs:
         run: yarn check:compiled-workspace-exports
       - name: Run API test shard
         run: node deploy/studio-server/scripts/run-api-tests.mjs --shard-index ${{ matrix.shard }} --shard-count 4
+        env:
+          # Rehearsal subprocesses consume this verified same-commit tsc build,
+          # avoiding hundreds of repeated source transformations across restarts.
+          RIVET_API_TEST_RUNTIME: prebuilt
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "API tests ${{ matrix.label }}/4"
@@ -257,20 +264,25 @@ jobs:
         run: node scripts/ci/job-timing.mjs finish "Studio Server repository contracts"
 
   deployment-contracts:
-    name: Studio Server deployment contracts
+    name: Studio Server deployment contracts (${{ matrix.lane }})
     if: needs.changes.outputs.relevant == 'true'
     needs:
       - changes
       - build-studio-server
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        lane: [managed, gateway]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn
         with:
           node-version: 24
       - name: Start timing
-        run: node scripts/ci/job-timing.mjs start "Studio Server deployment contracts"
+        run: node scripts/ci/job-timing.mjs start "Studio Server deployment contracts (${{ matrix.lane }})"
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Download compiled Studio Server dependencies
@@ -282,24 +294,35 @@ jobs:
       - name: Verify restored compiled workspace dependencies
         run: yarn check:compiled-workspace-exports
       - name: Set Up Kubernetes Tools
+        if: matrix.lane == 'managed'
         run: yarn studio-server:setup:k8s-tools
       - name: Verify compiled migrations on PostgreSQL
+        if: matrix.lane == 'managed'
         run: yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs
       - name: Verify async endpoint completion with managed storage
+        if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:async-managed
+      - name: Verify managed scheduler claims and safe schedule import
+        if: matrix.lane == 'managed'
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:scheduled-managed
       - name: Verify VM-to-managed copy, retry, and exact readback
+        if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
       - name: Verify Kubernetes and deployment contracts
+        if: matrix.lane == 'managed'
         run: yarn studio-server:verify:kubernetes
       - name: Verify proxy recovery after container address changes
+        if: matrix.lane == 'gateway'
         run: node deploy/studio-server/scripts/verify-proxy-dns.mjs
       - name: Verify single-VM nginx TLS gateway
+        if: matrix.lane == 'gateway'
         run: node deploy/studio-server/scripts/verify-vm-nginx-tls.mjs
       - name: Verify trusted-client proxy templates and executor upgrades
+        if: matrix.lane == 'gateway'
         run: node deploy/studio-server/scripts/verify-trusted-client-proxy.mjs
       - name: Report timing
         if: always()
-        run: node scripts/ci/job-timing.mjs finish "Studio Server deployment contracts"
+        run: node scripts/ci/job-timing.mjs finish "Studio Server deployment contracts (${{ matrix.lane }})"
 
   verify:
     if: always()
@@ -340,6 +363,9 @@ jobs:
           done
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         if: always()
+        with:
+          sparse-checkout: scripts/ci/job-timing.mjs
+          sparse-checkout-cone-mode: false
       - name: Report Studio Server verification critical path
         if: always()
         continue-on-error: true

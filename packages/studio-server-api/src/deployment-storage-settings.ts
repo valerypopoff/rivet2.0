@@ -25,7 +25,10 @@ export const DEPLOYMENT_STORAGE_SETTINGS_RELATIVE_PATH = path.join('settings', '
 
 export type DeploymentStorageRuntimeSettings = Omit<
   DeploymentStorageSettings,
-  'databaseConnectionStringConfigured' | 'storageAccessKeyConfigured' | 'deploymentManaged'
+  | 'databaseConnectionStringConfigured'
+  | 'storageAccessKeyConfigured'
+  | 'deploymentManaged'
+  | 'storageModeChangeBlockedReason'
 > & {
   databaseConnectionString: string;
   storageAccessKey: string;
@@ -312,6 +315,14 @@ function normalizeSettings(
   return settings;
 }
 
+function storageModeChangeBlockedReason(settings: DeploymentStorageRuntimeSettings): string {
+  if (getLocalMetadataServingSelection())
+    return 'This installation uses local SQLite metadata. Changing backend requires a separate verified managed migration, not a Storage-tab toggle.';
+  return settings.storageMode === 'filesystem'
+    ? 'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab first. Switching to S3 + PostgreSQL requires a separate verified operator migration; a Storage-tab toggle does not transfer data.'
+    : 'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration; a Storage-tab toggle does not transfer data.';
+}
+
 function toPublicSettings(settings: DeploymentStorageRuntimeSettings): DeploymentStorageSettings {
   return {
     storageMode: settings.storageMode,
@@ -326,6 +337,7 @@ function toPublicSettings(settings: DeploymentStorageRuntimeSettings): Deploymen
     objectStoragePrefix: settings.objectStoragePrefix,
     objectStorageForcePathStyle: settings.objectStorageForcePathStyle,
     deploymentManaged: process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated',
+    storageModeChangeBlockedReason: storageModeChangeBlockedReason(settings),
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKeyConfigured: Boolean(settings.storageAccessKey),
     updatedAt: settings.updatedAt,
@@ -416,11 +428,10 @@ export async function writeDeploymentStorageSettings(
     );
   }
   const saved = await deploymentStorageSettingsRepository.update((previous) => {
+    const requestedMode = normalizeStorageMode(toSettingsRecord(draft).storageMode, previous.storageMode);
+    const blockedReason = storageModeChangeBlockedReason(previous);
+    if (requestedMode !== previous.storageMode) throw badRequest(blockedReason);
     const next = normalizeSettings(draft, previous, 'app-settings');
-    if (getLocalMetadataServingSelection() && next.storageMode !== 'filesystem')
-      throw badRequest(
-        'This installation uses local SQLite metadata. Changing backend requires a separate verified managed migration, not a Storage-tab toggle.',
-      );
     if (
       previous.objectStorageBucket &&
       (previous.objectStorageBucket !== next.objectStorageBucket ||

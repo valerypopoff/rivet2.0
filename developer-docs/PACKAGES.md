@@ -2,6 +2,74 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-07 — classifier providers, editor commands and server performance
+
+The previous public-runtime/App Executor bump is `051b183b1`; App, Docs and
+Studio Server were last bumped in `3481798d4`. This release accounts for the
+changes since those respective baselines, through `50568e38b` and the current
+classifier/provider and deployment-compatibility fixes.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.16.0` → `2.17.0` | Adds Liquid and OpenAI classifier decision providers, multimodal classifier inputs/state, bounded preparation and diagnostics. Includes classifier credential/resource/response fixes, Object/interpolation hardening, and Node's patched MCP SDK dependency. CLI and Evaluations remain required public npm companions, not claims of package-local feature changes. |
+| App | `2.23.0` → `2.24.0` | Adds classifier provider settings/editor support; preserves selected wire midpoints when copying, pasting and duplicating nodes; unifies clipboard commands and fixes image-editor and desktop draft-check behavior. |
+| App Executor | `2.8.0` → `2.9.0` | Bundled-runtime companion for Core's new classifier providers and multimodal behavior. Its own source has not changed; rebuilding the source-bundled sidecar includes the new execution capabilities. |
+| All five Studio Server packages | `1.22.0` → `1.23.0` | Adds asynchronous local-upgrade preparation and streamed bundle archives/progress; hardens scratch/job recovery and hosted editor refresh/clipboard behavior. Eliminates redundant filesystem project parsing and unbounded recording-deletion reads; validates managed reference identity across stale hints and invalidation retries. Shared/API/Web changes are coordinated; Bootstrap and Executor are release companions. |
+| Docs | `2.15.0` → `2.16.0` | Documents classifier providers, multimodal state and failure/resource behavior, bundle execution, and asynchronous server upgrade/download behavior. |
+
+Compatible feature additions use minor increments; the accompanying fixes do not
+require separate patch releases or a breaking major bump. Desktop Tauri/Cargo
+metadata follows App, the public npm family and Studio Server remain lockstep,
+and the CLI Docker fallback follows the public npm version. Helm chart versions
+and dependency versions are unchanged by this bump. Workspace dependency ranges
+remain `workspace:`, so no Yarn lockfile refresh is required. This updates release
+metadata only; publishing, deployment, and released-artifact builds remain separate
+release steps.
+
+## Version update: 2026-10-06 — settings, references and scheduled-run refinement
+
+Changes since the latest package bump in `051b183b1`, including the current
+settings, comparison, scheduled-run and dependency-download changes:
+
+| Packages                        | Version              | Changes                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.22.0` → `2.23.0`  | Adds optional line wrapping and horizontal scrolling to node comparison diffs; fixes comparison-banner layering beneath node settings and simplifies comparison-modal state handling.                                                                                                                                                                                                       |
+| All five Studio Server packages | `1.21.0` → `1.22.0`  | Adds authenticated direct incoming-project reference checks across filesystem, SQLite and managed storage, settings-integrated publication history and Danger zone, enabled-schedule counts and paginated history. Includes coordinated settings UI, queue-lifecycle, restart and request-acknowledgement hardening since the previous bump. Bootstrap and executor are release companions. |
+| Docs                            | `2.14.0` → `2.15.0`  | Documents scheduled-run controls/history, project publication/history tabs, deletion impact and incoming-reference checks.                                                                                                                                                                                                                                                                  |
+| Core, Node, CLI, Evaluations    | `2.16.0` (unchanged) | No package-local changes since `051b183b1`; the public npm release family remains aligned.                                                                                                                                                                                                                                                                                                  |
+| App Executor                    | `2.8.0` (unchanged)  | No package-local changes since the latest bump.                                                                                                                                                                                                                                                                                                                                             |
+
+Compatible feature additions use minor increments. Desktop Tauri/Cargo metadata
+is synchronized to App. Studio Server remains lockstep; Helm chart versions and
+the unchanged public npm/CLI Docker fallback are independent. Internal dependencies
+use `workspace:` ranges, so no dependency lockfile changes are required. These
+versions are release metadata only, not a package publication or deployment.
+
+Studio Server's bundle preparation/download modal also adopts the shared modal
+dimensions, typography, segmented version selector and fixed action footer.
+Native resumable downloads and background export-job behavior are unchanged.
+
+## Version update: 2026-10-06 — bundles and initial scheduled runs
+
+Changes since the last release-family bump in `6f8e9e6c8`, through `a4fca0b91`
+and the current uncommitted scheduled-runs implementation:
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.15.0` → `2.16.0` | Adds portable project-bundle contracts and the Node `loadProjectBundle` API, cross-project dependency/dataset resolution, LLM Chat and Classifier Evaluate failure controls, optional Temperature normalization, and classifier response handling improvements. CLI and Evaluations remain required public npm companions. |
+| App | `2.21.0` → `2.22.0` | Adds matching failure-control editors, ownership-safe node settings, project/tab activation and browser recovery hardening, numeric editing fixes, and improved workflow selection. |
+| App Executor | `2.7.0` → `2.8.0` | Adds hosted migration admission/drain leases, coordinated startup readiness, child-recording opt-in and host reference-loader wiring; fixes Code runtime-package cache replacement. |
+| Docs | `2.13.0` → `2.14.0` | Documents local bundle execution, failure controls, project/recovery behavior, recordings/sub-runs, local SQLite upgrades and scheduled runs. |
+| All five Studio Server packages | `1.20.0` → `1.21.0` | Adds dependency-aware downloads, guided browser backup/SQLite migration and automatic fresh SQLite setup, tunnel-friendly bundled development, recording hierarchy/filter improvements, and durable scheduled runs. API, web, bootstrap, executor and shared retain one product version. |
+
+These are minor increments for compatible features, not major API replacements.
+Desktop Tauri/Cargo metadata and the CLI Docker fallback are synchronized.
+Helm chart metadata is unchanged; its schema compatibility requirement remains
+independent of workspace package versions. No dependency or Yarn lockfile update
+is needed because internal dependencies use `workspace:` ranges. This records
+release metadata only: it does not publish packages or claim that the outstanding
+scheduled-run timeout, capacity-queue and active-history gaps are resolved.
+
 ## Version update: 2026-09-20
 
 Changes since `386d4ba32`, through `11a56331f`:
@@ -158,7 +226,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -198,7 +266,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -670,7 +738,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.21.0`
+- Version: `2.24.0`
 - Private: yes
 
 ### Runtime shape
@@ -735,7 +803,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.7.0`
+- Version: `2.9.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -840,7 +908,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.17.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -964,7 +1032,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.15.0`
+- Version: `2.17.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -996,7 +1064,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.13.0`
+- Version: `2.16.0`
 - Private: yes
 
 ### Script surface

@@ -47,12 +47,8 @@ const styles = css`
     opacity: 0.85;
   }
 
-  .monaco-scrollable-element > .scrollbar.vertical {
+  .monaco-scrollable-element > .scrollbar {
     opacity: 0.8;
-  }
-
-  .monaco-scrollable-element > .scrollbar.horizontal {
-    display: none !important;
   }
 
   .original-in-monaco-diff-editor .decorationsOverviewRuler,
@@ -64,9 +60,14 @@ const styles = css`
 type ProjectComparisonDiffEditorProps = {
   currentText: string;
   previousText: string;
+  wrapLines?: boolean;
 };
 
-export const ProjectComparisonDiffEditor: FC<ProjectComparisonDiffEditorProps> = ({ currentText, previousText }) => {
+export const ProjectComparisonDiffEditor: FC<ProjectComparisonDiffEditorProps> = ({
+  currentText,
+  previousText,
+  wrapLines = false,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor>();
   const previousModelRef = useRef<monaco.editor.ITextModel>();
@@ -118,8 +119,8 @@ export const ProjectComparisonDiffEditor: FC<ProjectComparisonDiffEditorProps> =
       renderIndicators: true,
       scrollbar: {
         alwaysConsumeMouseWheel: false,
-        horizontal: 'hidden',
-        horizontalScrollbarSize: 0,
+        horizontal: 'auto',
+        horizontalScrollbarSize: 12,
       },
     });
     editorRef.current = editor;
@@ -158,6 +159,14 @@ export const ProjectComparisonDiffEditor: FC<ProjectComparisonDiffEditorProps> =
   useEffect(() => {
     monaco.editor.setTheme(resolvedTheme);
   }, [resolvedTheme]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.updateOptions({ wordWrap: wrapLines ? 'on' : 'off', diffWordWrap: wrapLines ? 'on' : 'off' });
+    editor.layout();
+    updateEditorHeight();
+  }, [wrapLines, updateEditorHeight]);
 
   useEffect(() => {
     if (previousModelRef.current && previousModelRef.current.getValue() !== previousText) {

@@ -1,0 +1,30 @@
+/* Loaded in both dashboard and editor documents. Keep dimensions in one owner;
+   individual Atlaskit width props and inline defaults must not override them. */
+:root {
+  --studio-modal-width: 960px;
+  --studio-modal-min-width: 700px;
+  --studio-modal-max-width: 960px;
+  --studio-modal-gutter: 16px;
+  --studio-modal-description-font-size: 14px;
+  --studio-modal-description-line-height: 1.5;
+}
+
+/* Popovers and responsive activity drawers are not ordinary modal windows.
+   Only Atlaskit's marked positioner shares the dialog dimensions: a custom
+   dialog's parent may instead be its full-viewport backdrop. */
+[role='dialog'][aria-modal='true']:not(.run-activity-drawer),
+div:has(> [role='dialog'][aria-modal='true'][data-modal-stack]) {
+  box-sizing: border-box;
+  width: min(var(--studio-modal-width), calc(100vw - 2 * var(--studio-modal-gutter))) !important;
+  min-width: min(var(--studio-modal-min-width), calc(100vw - 2 * var(--studio-modal-gutter))) !important;
+  max-width: min(var(--studio-modal-max-width), calc(100vw - 2 * var(--studio-modal-gutter))) !important;
+}
+
+/* Atlaskit's immediate positioner otherwise keeps its own desktop max-width
+   and uses a left-aligned fullscreen layout on mobile. Preserve vertical and
+   stack behavior, but center the same horizontal box at every breakpoint. */
+div:has(> [role='dialog'][aria-modal='true'][data-modal-stack]) {
+  left: 0 !important;
+  right: 0 !important;
+  margin-inline: auto !important;
+}

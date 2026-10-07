@@ -60,6 +60,12 @@ export type ClassifierNoulQuestionDefinition = ClassifierQuestionDefinition & {
   criteria?: { true: ClassifierEntry; false: ClassifierEntry };
 };
 
+/** Internal contract after the untrusted public definition has been validated. */
+export type PreparedClassifierQuestion =
+  | ClassifierChoiceQuestionDefinition
+  | ClassifierScoreQuestionDefinition
+  | ClassifierNoulQuestionDefinition;
+
 export type ClassifierEvaluationResponse = {
   model: string;
   answers: Record<string, unknown>;

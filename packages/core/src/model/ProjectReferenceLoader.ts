@@ -1,8 +1,11 @@
 import type { Project, ProjectId, ProjectReference } from './Project.js';
+import type { DatasetProvider } from '../integrations/DatasetProvider.js';
 
 export type ProjectReferenceLoader = {
   /** Loads a project based on the given reference. */
   loadProject: (currentProjectPath: string | undefined, reference: ProjectReference) => Promise<Project>;
+  /** Optional snapshot-owned datasets; older loaders retain the caller's provider. */
+  getDatasetProvider?: (project: Project) => DatasetProvider | undefined;
 };
 
 /** The root information needed to load its complete referenced-project closure. */
@@ -33,7 +36,9 @@ export async function loadProjectReferenceTree(
 
     const project = await loader.loadProject(rootProjectPath, reference);
     if (project.metadata.id !== reference.id) {
-      throw new Error(`Referenced project "${reference.id}" loaded a project with ID "${project.metadata.id}" instead.`);
+      throw new Error(
+        `Referenced project "${reference.id}" loaded a project with ID "${project.metadata.id}" instead.`,
+      );
     }
 
     // Project IDs are user-controlled strings. Define an own property so IDs

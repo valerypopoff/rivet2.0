@@ -64,7 +64,7 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 13,
+    version: 14,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -433,7 +433,7 @@ test('only promoted manifests can produce production Helm values', () => {
   assert.equal(values.release.production.enabled, true);
   assert.match(values.release.production.manifestDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 13, maximumVersion: 13 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 14, maximumVersion: 14 });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 
@@ -456,7 +456,7 @@ test('forward rollback retains the migrated schema and restores only a compatibl
       chart: { ...rollbackRelease.chart, contentDigest: digest('f') },
       database: {
         managedWorkflowSchema: {
-          version: 13,
+          version: 15,
           minimumRollbackCompatibleVersion: 8,
         },
       },
@@ -467,8 +467,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
   assert.equal(values.compatibility.legacyStartupSettingsFiles, true);
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 13 });
-  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 13);
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 15 });
+  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 15);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));
   assert.equal(values.images.api.repository, 'example.test/rivet/api');
 });

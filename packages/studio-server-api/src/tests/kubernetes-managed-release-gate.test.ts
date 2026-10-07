@@ -9,6 +9,7 @@ import {
   imageReference,
   renderManagedReleaseGateValues,
 } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-release-gate-config.mjs';
+import { assertCandidateManifestImages } from '../../../../deploy/studio-server/scripts/lib/kubernetes-candidate-manifest-images.mjs';
 import { buildManagedProviderGateConfig } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-provider-gate-config.mjs';
 import { summarizePodStartupState } from '../../../../deploy/studio-server/scripts/lib/kubernetes-workload-diagnostics.mjs';
 
@@ -209,7 +210,7 @@ test('managed release gate accepts an exact prior API image only as a complete d
   });
   assert.equal(imageReference(config.previousApiImage!), `example.test/rivet/api@${digest('e')}`);
   assert.deepEqual(config.managedWorkflowSchema, {
-    version: 13,
+    version: 14,
     minimumRollbackCompatibleVersion: 2,
   });
 });
@@ -228,8 +229,38 @@ test('managed release gate renders managed storage and digest-pinned image value
   assert.equal(values.postgres.host, 'release-gate-postgres');
   assert.equal(values.objectStorage.endpoint, 'http://release-gate-minio:9000');
   assert.equal(values.objectStorage.bucket, 'rivet-release-gate');
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 13, maximumVersion: 13 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 14, maximumVersion: 14 });
   assert.equal(imageReference(config.images.executor), `example.test/rivet/executor@${digest('d')}`);
+});
+
+test('combined backend does not require a standalone executor image in the Helm manifest', () => {
+  const images = buildManagedReleaseGateConfig({ rootDir, env: createEnvironment() }).images;
+  const combinedManifest = (['proxy', 'web', 'api'] as const)
+    .map((component) => `image: ${imageReference(images[component])}`)
+    .join('\n');
+
+  assert.doesNotThrow(() => assertCandidateManifestImages(combinedManifest, images, 'release-gate'));
+  assert.throws(
+    () =>
+      assertCandidateManifestImages(combinedManifest.replace(images.api.digest, digest('f')), images, 'release-gate'),
+    /api manifest did not use the immutable candidate digest/,
+  );
+  assert.throws(
+    () =>
+      assertCandidateManifestImages(
+        `${combinedManifest}\nimage: ${images.executor.repository}@${digest('f')}`,
+        images,
+        'release-gate',
+      ),
+    /executor manifest did not use the immutable candidate digest/,
+  );
+  assert.doesNotThrow(() =>
+    assertCandidateManifestImages(
+      `${combinedManifest}\nimage: ${imageReference(images.executor)}`,
+      images,
+      'release-gate',
+    ),
+  );
 });
 
 test('managed release gate allows preloaded local images without weakening the default pull policy', () => {
@@ -414,6 +445,17 @@ test('provider staging gate is explicitly confirmed, HTTPS-only, and scoped to a
     assert.equal(providerConfig.namespace, 'rivet-staging-release');
     assert.equal(providerConfig.gatewayMode, 'external');
     assert.deepEqual(Object.keys(providerConfig.images).sort(), ['api', 'executor', 'web']);
+    const externalManifest = `image: ${imageReference(providerConfig.images.api)}\nimage: ${imageReference(providerConfig.images.web)}`;
+    assert.doesNotThrow(() => assertCandidateManifestImages(externalManifest, providerConfig.images, 'provider-gate'));
+    assert.throws(
+      () =>
+        assertCandidateManifestImages(
+          externalManifest.replace(providerConfig.images.web.digest, digest('f')),
+          providerConfig.images,
+          'provider-gate',
+        ),
+      /web manifest did not use the immutable candidate digest/,
+    );
     assert.equal(providerConfig.baseUrl, 'https://rivet-staging.example.test');
     assert.equal(providerConfig.interruptionManifests[0]?.restoreAction, 'delete');
     assert.equal(providerConfig.keyRotation?.nextSecretName, 'rivet-settings-new');

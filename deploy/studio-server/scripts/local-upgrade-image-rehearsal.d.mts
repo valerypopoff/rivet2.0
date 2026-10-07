@@ -23,3 +23,14 @@ export function controlLocalUpgradeRehearsal(
 ): Promise<string | void>;
 export function loadLocalUpgradeRehearsal(file: string): Promise<{ sourceRecordingId: string }>;
 export function recordLocalUpgradeRehearsalPhase(file: string, phase: string): Promise<void>;
+export function readOnlyRehearsalSqliteScript(
+  body: string,
+  options?: { module?: boolean; busyTimeoutMs?: number },
+): string;
+export function webAppBindingProbeScript(controlRoot?: string, busyTimeoutMs?: number): string;
+export function waitForRehearsalCondition(
+  probe: (budgetMs: number) => Promise<boolean>,
+  timeoutMs: number,
+  failureMessage: string,
+): Promise<void>;
+export function readRehearsalSourceFingerprint(output: string): string;

@@ -1,3 +1,36 @@
+@import './modal-sizing.css';
+@import './dropdown-styles.css';
+
+/* Width is shared with the dashboard, but upstream desktop settings still use
+   fixed navigation columns. Stack these within a narrow editor iframe so the
+   panel does not collapse to a sliver. Standalone desktop styling is untouched. */
+@media (max-width: 700px) {
+  :is([data-testid='settings-modal--body'], [data-testid='project-settings-modal--body']) > div {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  :is([data-testid='settings-modal'], [data-testid='project-settings-modal']) .settings-modal-sidebar {
+    max-height: 160px;
+    border-right: 0;
+    border-bottom: 1px solid var(--modal-border);
+  }
+
+  :is([data-testid='settings-modal'], [data-testid='project-settings-modal']) .settings-modal-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  :is([data-testid='settings-modal'], [data-testid='project-settings-modal']) .settings-modal-nav > button {
+    width: auto;
+    max-width: 100%;
+  }
+
+  :is([data-testid='settings-modal--body'], [data-testid='project-settings-modal--body']) > div > main {
+    padding: 12px 16px 20px;
+  }
+}
+
 .node-canvas:focus,
 .node-canvas:focus-visible {
   outline: none;

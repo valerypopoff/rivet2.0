@@ -72,12 +72,16 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     inputFilterError,
     deletingRecordingId,
     overallRunsCount,
+    allWorkflowsRunsCount,
     badRunsCount,
     filteredRunsCount,
     totalPages,
     inputSearchStatus,
     inputSearchProgress,
     visibleRuns,
+    childLoadStates,
+    childLoadErrors,
+    handleLoadSubRuns,
     setSelectedWorkflowId,
     setRunsPerPage,
     setPage,
@@ -91,6 +95,41 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleStopInputSearch,
     handleDeleteRecording,
   } = useRunRecordingsController(isOpen, resetToken);
+
+  const hierarchyScope = JSON.stringify([
+    resetToken,
+    selectedWorkflowId,
+    page,
+    runsPerPage,
+    statusFilter,
+    appliedInputFilter,
+  ]);
+  const [familyExpansion, setFamilyExpansion] = useState(() => ({ scope: hierarchyScope, keys: new Set<string>() }));
+  const expandedFamilyKeys = useMemo(
+    () => (familyExpansion.scope === hierarchyScope ? familyExpansion.keys : new Set<string>()),
+    [familyExpansion, hierarchyScope],
+  );
+  useEffect(() => {
+    setFamilyExpansion((current) =>
+      current.scope === hierarchyScope ? current : { scope: hierarchyScope, keys: new Set<string>() },
+    );
+  }, [hierarchyScope]);
+  const handleToggleFamily = useCallback(
+    (key: string) => {
+      void handleLoadSubRuns(key);
+      setFamilyExpansion((current) => {
+        const keys = new Set(current.scope === hierarchyScope ? current.keys : []);
+        const retrying = visibleRuns.some(
+          (run) =>
+            `correlation:${run.executionIdentity?.correlationId}` === key && childLoadStates?.[run.id] === 'failed',
+        );
+        if (keys.has(key) && !retrying) keys.delete(key);
+        else keys.add(key);
+        return { scope: hierarchyScope, keys };
+      });
+    },
+    [hierarchyScope, handleLoadSubRuns, visibleRuns, childLoadStates],
+  );
 
   useEffect(() => {
     onFoundCountChange(filteredRunsCount);
@@ -107,8 +146,16 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   }, [isOpen, resetToken]);
 
   const workflowOptions = useMemo<RecordingWorkflowOption[]>(
-    () =>
-      workflows.map((workflow) => {
+    () => [
+      {
+        label: 'Any',
+        value: '',
+        description: 'Runs across all workflows',
+        endpoint: '',
+        statusLabel: '',
+        recordingCount: allWorkflowsRunsCount,
+      },
+      ...workflows.map((workflow) => {
         const endpoint = getWorkflowEndpoint(workflow);
         const statusLabel = getWorkflowProjectStatusLabel(workflow.project.settings.status);
 
@@ -123,7 +170,8 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
           statusLabel,
         };
       }),
-    [workflows],
+    ],
+    [allWorkflowsRunsCount, workflows],
   );
 
   const selectedWorkflowEndpoint = selectedWorkflow ? getWorkflowEndpoint(selectedWorkflow) : '';
@@ -168,7 +216,6 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     <ModalTransition>
       <ModalDialog
         testId="run-recordings-modal"
-        width="large"
         height="calc(100vh - 40px)"
         label="Run recordings"
         onClose={onDismiss}
@@ -179,7 +226,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
               <div className="project-settings-modal-heading run-recordings-heading">
                 <div className="project-settings-modal-title run-recordings-title">Run recordings</div>
                 <div className="run-recordings-help">
-                  Choose a workflow, inspect its published run history, and open any recording in the editor.
+                  Choose Any or a workflow, filter its run history, and open any recording in the editor.
                 </div>
               </div>
               <button
@@ -198,14 +245,15 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                   {openingError ?? error}
                 </div>
               ) : null}
+              {Object.entries(childLoadErrors).map(([recordingId, message]) => (
+                <div key={recordingId} className="project-settings-error run-recordings-error" role="alert">
+                  {message}
+                </div>
+              ))}
 
               {workflowsLoading ? <div className="run-recordings-empty-state">Loading recordings...</div> : null}
 
-              {!workflowsLoading && workflows.length === 0 ? (
-                <div className="run-recordings-empty-state">No published or previously published workflows yet.</div>
-              ) : null}
-
-              {!workflowsLoading && workflows.length > 0 ? (
+              {!workflowsLoading ? (
                 <div className="run-recordings-layout">
                   <RecordingWorkflowSelect
                     workflowOptions={workflowOptions}
@@ -216,8 +264,11 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                     }}
                   />
 
-                  {selectedWorkflow ? (
+                  {selectedWorkflow || !selectedWorkflowId ? (
                     <RecordingRunsTable
+                      expandedFamilyKeys={expandedFamilyKeys}
+                      onToggleFamily={handleToggleFamily}
+                      childLoadStates={childLoadStates}
                       selectedWorkflow={selectedWorkflow}
                       selectedWorkflowEndpoint={selectedWorkflowEndpoint}
                       selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}

@@ -224,25 +224,38 @@ test('dragging a project into a folder sends the move and follows the new projec
     folder.projects = [movedProject];
     state.projects = [];
     state.revision += 1;
-    await route.fulfill({ status: 200, json: {
-      project: movedProject,
-      movedProjectPaths: [{ fromAbsolutePath: project.absolutePath, toAbsolutePath: movedProject.absolutePath }],
-    } });
+    await route.fulfill({
+      status: 200,
+      json: {
+        project: movedProject,
+        movedProjectPaths: [{ fromAbsolutePath: project.absolutePath, toAbsolutePath: movedProject.absolutePath }],
+      },
+    });
   });
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.locator('.project-row', { hasText: project.name }).dragTo(page.locator('.folder-row', { hasText: folder.name }));
+  await page
+    .locator('.project-row', { hasText: project.name })
+    .dragTo(page.locator('.folder-row', { hasText: folder.name }));
 
-  await expect.poll(() => moveRequests).toEqual([{
-    itemType: 'project',
-    sourceRelativePath: project.relativePath,
-    destinationFolderRelativePath: folder.relativePath,
-  }]);
+  await expect
+    .poll(() => moveRequests)
+    .toEqual([
+      {
+        itemType: 'project',
+        sourceRelativePath: project.relativePath,
+        destinationFolderRelativePath: folder.relativePath,
+      },
+    ]);
   await page.locator('.folder-row', { hasText: folder.name }).click();
   await expect(page.locator('.folder-row', { hasText: folder.name })).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('.folder', { has: page.locator('.folder-row', { hasText: folder.name }) }).locator('.project-row', { hasText: project.name })).toBeVisible();
+  await expect(
+    page
+      .locator('.folder', { has: page.locator('.folder-row', { hasText: folder.name }) })
+      .locator('.project-row', { hasText: project.name }),
+  ).toBeVisible();
 });
 
 test('folder context menu creates a nested folder inside the selected folder', async ({ page }) => {
@@ -412,6 +425,7 @@ test('a tab opened by another dashboard still receives that dashboard’s tree c
     await route.fulfill({ status: 201, json: { folder } });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   page.once('dialog', (dialog) => void dialog.accept('First folder'));
   await page.getByRole('button', { name: '+ New folder' }).click();
@@ -427,6 +441,7 @@ test('a tab opened by another dashboard still receives that dashboard’s tree c
   await installTreeRoute(secondPage, state, secondPageTreeReads);
   const initialTree = secondPage.waitForResponse((response) => response.url().endsWith('/api/workflows/tree'));
   await secondPage.goto('/');
+  await authenticateIfNeeded(secondPage);
   await (await initialTree).finished();
   await waitForDashboardReady(secondPage);
   await expect(secondPage.locator('.folder-row', { hasText: 'First folder' })).toBeVisible();
@@ -540,7 +555,9 @@ test('a page reload restores the latest graph canvas position', async ({ page })
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await expect(editor.locator('.projects-container .project.active', { hasText: projectName })).toBeVisible();
-  await expect.poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform)).toBe(movedTransform);
+  await expect
+    .poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform))
+    .toBe(movedTransform);
 });
 
 test('closing a preview project before reload preserves its canvas position when reopened', async ({ page }) => {
@@ -574,22 +591,26 @@ test('closing a preview project before reload preserves its canvas position when
 
   // Match a normal editing session: startup hydrates the last loaded graph
   // separately from the project-scoped editor state.
-  await expect.poll(() => page.evaluate(async () => {
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('jotai-store');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    try {
-      return await new Promise<string | undefined>((resolve, reject) => {
-        const request = database.transaction('state').objectStore('state').get('graph');
-        request.onsuccess = () => resolve(JSON.parse(request.result ?? '{}').graphState?.metadata?.id);
-        request.onerror = () => reject(request.error);
-      });
-    } finally {
-      database.close();
-    }
-  })).toBe(`${projectName}-graph-id`);
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('jotai-store');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        try {
+          return await new Promise<string | undefined>((resolve, reject) => {
+            const request = database.transaction('state').objectStore('state').get('graph');
+            request.onsuccess = () => resolve(JSON.parse(request.result ?? '{}').graphState?.metadata?.id);
+            request.onerror = () => reject(request.error);
+          });
+        } finally {
+          database.close();
+        }
+      }),
+    )
+    .toBe(`${projectName}-graph-id`);
   const activeProjectTab = editor.locator('.projects-container .project.active', { hasText: projectName });
   await activeProjectTab.hover();
   await activeProjectTab.getByRole('button', { name: `Close ${projectName}` }).click();
@@ -602,7 +623,9 @@ test('closing a preview project before reload preserves its canvas position when
   await page.locator('.project-row', { hasText: projectName }).click();
 
   await expect(editor.locator('.projects-container .project.active.preview', { hasText: projectName })).toBeVisible();
-  await expect.poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform)).toBe(movedTransform);
+  await expect
+    .poll(() => canvasContents.evaluate((element) => (element as HTMLElement).style.transform))
+    .toBe(movedTransform);
 });
 
 test('a remote tree change does not misidentify an open recording replay as a removed project', async ({ page }) => {
@@ -993,6 +1016,7 @@ test('a matching observation clears an obsolete warning, but failed fetches and 
     return route.fulfill({ json: { path: project.absolutePath, revisionId: 'accepted' } });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(name);
@@ -1042,6 +1066,7 @@ test('a move with a newer saved revision rebinds the tab but blocks overwriting 
     return route.fulfill({ json: { path: movedPath, revisionId: 'saved-after-choice' } });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(name);
@@ -1081,6 +1106,7 @@ test('a renamed pending project updates its warning and fences the old resolutio
     }),
   );
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: originalName }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(originalName);
@@ -1182,6 +1208,7 @@ test('a rejected save requests fresh conflict controls even without a tree event
     return route.fulfill({ json: { path: project.absolutePath, revisionId: 'remote' } });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row', { hasText: name }).dblclick();
   await expect(page.locator('.active-project-name')).toHaveText(name);
@@ -1209,6 +1236,7 @@ test('inactive conflicts survive bridge timeouts and reconnects, but not closing
     });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   for (const project of [a, b]) {
     await page.locator('.project-row', { hasText: project.name }).dblclick();

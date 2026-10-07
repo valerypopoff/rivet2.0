@@ -15,7 +15,7 @@ import {
   type ProjectExecutionSnapshot,
 } from '../state/dataFlow.js';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
-import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
+import { buildGraphViewKeyFromExecution, isLiveCalledProjectExecutionEvent } from '../utils/executionIdentity.js';
 import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization.js';
 import { getEventOccurredAt, getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 import {
@@ -117,6 +117,19 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
   options: ProjectExecutionSnapshotEventOptions<K>,
 ): ProjectExecutionSnapshotEventResult {
   const snapshot = options.snapshot ?? createEmptyProjectExecutionSnapshot();
+
+  // Match active-workspace dispatch: called-project observations remain in
+  // Run Activity without colliding with an inactive caller's graph/node IDs.
+  if (options.message !== 'userInput' && isLiveCalledProjectExecutionEvent(options.data)) {
+    if (options.message === 'nodeFinish' || options.message === 'nodeError' || options.message === 'nodeExcluded') {
+      const { node, processId } = options.data as ProcessEvents['nodeFinish'];
+      const userInputQuestions = removeUserInputQuestionsForProcess(snapshot.userInputQuestions, node.id, processId);
+      if (userInputQuestions !== snapshot.userInputQuestions) {
+        return { changed: true, snapshot: { ...snapshot, userInputQuestions } };
+      }
+    }
+    return { changed: false, snapshot };
+  }
 
   switch (options.message) {
     case 'start':
@@ -222,11 +235,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
     case 'llmChatOutputSnapshot':
       return {
         changed: true,
-        snapshot: applyLLMChatOutputSnapshot(
-          snapshot,
-          options.data as ProcessEvents['llmChatOutputSnapshot'],
-          options,
-        ),
+        snapshot: applyLLMChatOutputSnapshot(snapshot, options.data as ProcessEvents['llmChatOutputSnapshot'], options),
       };
     case 'llmProfileAttempt': {
       const data = options.data as ProcessEvents['llmProfileAttempt'];
@@ -437,7 +446,7 @@ function applyUserInput(
       processId: data.processId,
       questions: data.inputStrings,
     });
-    draft.selectedProcessPageNodes[data.node.id] = 'latest';
+    if (!isLiveCalledProjectExecutionEvent(data)) draft.selectedProcessPageNodes[data.node.id] = 'latest';
   });
 }
 
@@ -578,9 +587,7 @@ function applyPartialOutput(
         ...existingProcess.data.splitOutputData,
         [data.index]: storedOutputs!,
       };
-      refIdsToDelete.push(
-        ...collectReplacedRefIds(existingProcess.data, { splitOutputData: nextSplitOutputData }),
-      );
+      refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, { splitOutputData: nextSplitOutputData }));
       existingProcess.data.splitOutputData = nextSplitOutputData;
     } else {
       draft.lastRunDataByNode[data.node.id]!.push({

@@ -1,4 +1,4 @@
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { nanoid } from 'nanoid/non-secure';
 import {
@@ -10,6 +10,7 @@ import {
 import { projectsState, projectState } from '../../state/savedGraphs.js';
 import { removeOpeningProjectTabId } from '../../utils/openingProjectTabs.js';
 import { useStableCallback } from '../useStableCallback.js';
+import { supersedeProjectActivation } from '../../utils/projectActivationCoordinator.js';
 import type {
   RivetOpeningProjectTabHandle,
   RivetOpeningProjectTabInput,
@@ -20,11 +21,10 @@ import type {
 } from './types.js';
 
 export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOpenProjectSnapshot) {
-  const [openingProjectTabs, setOpeningProjectTabs] = useAtom(openingProjectTabsState);
+  const store = useStore();
+  const setOpeningProjectTabs = useSetAtom(openingProjectTabsState);
   const setOpeningProjectTabIds = useSetAtom(openingProjectTabsSortedIdsState);
   const setSelectedOpeningProjectTabId = useSetAtom(selectedOpeningProjectTabIdState);
-  const currentProject = useAtomValue(projectState);
-  const projects = useAtomValue(projectsState);
 
   const startOpeningProjectTab = useStableCallback(
     async (
@@ -36,6 +36,9 @@ export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOp
       }
 
       const openingTabId = `opening-project-${nanoid()}` as OpeningProjectTabId;
+      const projects = store.get(projectsState);
+      const currentProject = store.get(projectState);
+      const openingProjectTabs = store.get(openingProjectTabsState);
       const replaceTargetProjectId =
         options.replaceCurrent && projects.openedProjects[currentProject.metadata.id as ProjectId]
           ? (currentProject.metadata.id as ProjectId)
@@ -63,6 +66,7 @@ export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOp
         return nextTabs;
       });
       setOpeningProjectTabIds((ids) => [...ids.filter((id) => !replacedOpeningTabIds.includes(id)), openingTabId]);
+      supersedeProjectActivation(store);
       setSelectedOpeningProjectTabId(openingTabId);
 
       return { openingTabId };
@@ -71,7 +75,7 @@ export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOp
 
   const cancelOpeningProjectTab = useStableCallback(async (openingTabId: string) => {
     const typedOpeningTabId = openingTabId as OpeningProjectTabId;
-    if (!openingProjectTabs[typedOpeningTabId]) {
+    if (!store.get(openingProjectTabsState)[typedOpeningTabId]) {
       return false;
     }
 
@@ -89,7 +93,7 @@ export function useWorkspaceHostOpeningTabs(openProjectSnapshot: WorkspaceHostOp
   const finishOpeningProjectTab = useStableCallback(
     async (openingTabId: string, snapshot: RivetProjectSnapshotInput, options: RivetProjectOpenOptions = {}) => {
       const typedOpeningTabId = openingTabId as OpeningProjectTabId;
-      const openingTab = openingProjectTabs[typedOpeningTabId];
+      const openingTab = store.get(openingProjectTabsState)[typedOpeningTabId];
       if (!openingTab) {
         return false;
       }

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 
 import { getExpectedExecutorAuthToken, getExpectedProxyAuthToken } from '../auth.js';
 import { createApiApp } from '../app.js';
@@ -627,7 +629,7 @@ test('App settings files are written with owner-only permissions', async () => {
     await writeWorkflowEndpointAuthSettings({
       requireBearerAuth: true,
     });
-    await writeDeploymentStorageSettings({
+    await seedDeploymentStorageSettings({
       storageMode: 'managed',
       databaseMode: 'managed',
       databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
@@ -1101,7 +1103,7 @@ test('Deployment storage settings ignore storage and database environment variab
     assert.equal(defaultSettings.storageUrl, '');
     assert.equal(getWorkflowStorageBackendMode(), 'filesystem');
 
-    const savedSettings = await writeDeploymentStorageSettings({
+    const savedSettings = await seedDeploymentStorageSettings({
       storageMode: 'managed',
       artifactsHostPath: '../saved-artifacts',
       databaseMode: 'managed',
@@ -1128,7 +1130,7 @@ test('Deployment storage settings ignore storage and database environment variab
 
 test('Deployment storage settings ignore retired storage aliases after they are saved', async () => {
   await withAppSettingsEnv(async () => {
-    await writeDeploymentStorageSettings({
+    await seedDeploymentStorageSettings({
       storageMode: 'managed',
       databaseMode: 'managed',
       databaseSslMode: 'verify-full',
@@ -1151,8 +1153,42 @@ test('Deployment storage settings ignore retired storage aliases after they are 
   });
 });
 
-test('Deployment storage settings API saves managed config and hides secrets', async () => {
+test('Deployment storage settings API refuses an unmigrated local switch without changing saved settings', async () => {
   await withAppSettingsEnv(async () => {
+    const before = await readDeploymentStorageSettings();
+    assert.match(before.storageModeChangeBlockedReason!, /files-to-SQLite/);
+    assert.match(before.storageModeChangeBlockedReason!, /in the "Local storage upgrade" tab/);
+    const server = await startServer();
+    try {
+      const response = await fetch(`${server.baseUrl}/api/app-settings/deployment-storage`, {
+        method: 'PUT',
+        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({
+          storageMode: 'managed', databaseMode: 'managed',
+          databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+          storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+          storageAccessKeyId: 'saved-key-id', storageAccessKey: 'saved-secret',
+          storageModeChangeBlockedReason: null,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.match(await response.text(), /files-to-SQLite/);
+      assert.deepEqual(await readDeploymentStorageSettings(), before);
+      assert.equal(fs.existsSync(getDeploymentStorageSettingsPath()), false);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+test('Deployment storage settings API updates existing managed config and hides secrets', async () => {
+  await withAppSettingsEnv(async () => {
+    await seedDeploymentStorageSettings({
+      storageMode: 'managed', databaseMode: 'managed',
+      databaseConnectionString: 'postgresql://db-user:db-pass@example-db:5432/rivet',
+      storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
+      storageAccessKeyId: 'saved-key-id', storageAccessKey: 'saved-secret',
+    });
     let server: Awaited<ReturnType<typeof startServer>> | undefined;
     try {
       server = await startServer();
@@ -1178,6 +1214,7 @@ test('Deployment storage settings API saves managed config and hides secrets', a
       const saved = await saveResponse.json() as Record<string, unknown>;
       assert.equal(saved.source, 'app-settings');
       assert.equal(saved.storageMode, 'managed');
+      assert.match(String(saved.storageModeChangeBlockedReason), /separate verified operator migration/);
       assert.equal(saved.databaseConnectionStringConfigured, true);
       assert.equal(saved.storageAccessKeyConfigured, true);
       assert.equal(saved.databaseConnectionString, undefined);
@@ -1215,6 +1252,15 @@ test('Deployment storage settings API saves managed config and hides secrets', a
       assert.equal(rotated.storageAccessKeyConfigured, true);
       assert.equal(getManagedWorkflowStorageConfig().objectStorageAccessKeyId, 'saved-key-id-2');
       assert.equal(getManagedWorkflowStorageConfig().objectStorageSecretAccessKey, 'saved-secret');
+      const beforeSwitch = await readDeploymentStorageSettings();
+      const switchResponse = await fetch(`${server.baseUrl}/api/app-settings/deployment-storage`, {
+        method: 'PUT',
+        headers: { ...trustedProxyHeaders(), 'content-type': 'application/json' },
+        body: JSON.stringify({ storageMode: 'filesystem', storageModeChangeBlockedReason: null }),
+      });
+      assert.equal(switchResponse.status, 400);
+      assert.match(await switchResponse.text(), /separate verified operator migration/);
+      assert.deepEqual(await readDeploymentStorageSettings(), beforeSwitch);
     } finally {
       await server?.close();
     }
@@ -1223,7 +1269,7 @@ test('Deployment storage settings API saves managed config and hides secrets', a
 
 test('Deployment storage settings preserve managed SSL mode on partial saves', async () => {
   await withAppSettingsEnv(async () => {
-    await writeDeploymentStorageSettings({
+    await seedDeploymentStorageSettings({
       storageMode: 'managed',
       artifactsHostPath: '../artifacts',
       databaseMode: 'managed',
@@ -1248,9 +1294,9 @@ test('Deployment storage settings preserve managed SSL mode on partial saves', a
   });
 });
 
-test('Deployment storage settings preserve prepared managed secrets across storage mode switches', async () => {
+test('Deployment storage settings preserve secrets and reject an unverified managed-to-local switch', async () => {
   await withAppSettingsEnv(async () => {
-    await writeDeploymentStorageSettings({
+    await seedDeploymentStorageSettings({
       storageMode: 'managed',
       artifactsHostPath: '../artifacts',
       databaseMode: 'managed',
@@ -1261,7 +1307,8 @@ test('Deployment storage settings preserve prepared managed secrets across stora
       storageAccessKey: 'saved-secret',
     });
 
-    await writeDeploymentStorageSettings({
+    const before = await readDeploymentStorageSettings();
+    await assert.rejects(writeDeploymentStorageSettings({
       storageMode: 'filesystem',
       artifactsHostPath: '../artifacts',
       databaseMode: 'managed',
@@ -1269,7 +1316,8 @@ test('Deployment storage settings preserve prepared managed secrets across stora
       storageUrl: 'https://saved-bucket.sfo3.digitaloceanspaces.com',
       storageAccessKeyId: 'saved-key-id',
       storageAccessKey: '',
-    });
+    }), /separate verified operator migration/);
+    assert.deepEqual(await readDeploymentStorageSettings(), before);
 
     await writeDeploymentStorageSettings({
       storageMode: 'managed',
@@ -1281,9 +1329,10 @@ test('Deployment storage settings preserve prepared managed secrets across stora
       storageAccessKey: '',
     });
 
-    const config = getManagedWorkflowStorageConfig();
-    assert.equal(config.databaseUrl, 'postgresql://saved-user:saved-pass@example-db:5432/rivet');
-    assert.equal(config.objectStorageSecretAccessKey, 'saved-secret');
+    const settings = await readDeploymentStorageSettings();
+    assert.equal(settings.storageMode, 'managed');
+    assert.equal(settings.databaseConnectionStringConfigured, true);
+    assert.equal(settings.storageAccessKeyConfigured, true);
   });
 });
 
@@ -1305,7 +1354,7 @@ test('Deployment storage settings keep database and object storage sections inde
         storageMode: 'managed',
         databaseMode: 'local-docker',
       }),
-      /object storage URL/,
+      /files-to-SQLite/,
     );
   });
 });
@@ -1321,7 +1370,7 @@ test('Deployment storage settings fail loudly when the saved settings file is in
   });
 });
 
-test('Deployment storage settings reject incomplete managed config', async () => {
+test('Deployment storage settings refuse local activation even with an incomplete managed draft', async () => {
   await withAppSettingsEnv(async () => {
     await assert.rejects(
       writeDeploymentStorageSettings({
@@ -1331,7 +1380,7 @@ test('Deployment storage settings reject incomplete managed config', async () =>
         storageAccessKeyId: 'storage-key-id',
         storageAccessKey: 'storage-secret',
       }),
-      /PostgreSQL connection string/,
+      /files-to-SQLite/,
     );
   });
 });

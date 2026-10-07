@@ -1,5 +1,39 @@
 # Local metadata upgrade: completion and production qualification plan
 
+## Browser backup follow-up
+
+Fresh supported Compose installations now initialize the same SQLite/file layout
+before serving children start; only existing file-backed installations use the
+wizard. First-run initialization requires four empty roots, an independent UUID
+binding and verified empty schemas. Interrupted initialization retries the same
+generation and never falls back to legacy. Fresh/completed SQLite and managed
+deployments hide the local upgrade tab/reminder; incomplete legacy or paused
+upgrades retain guided controls. This is separate from the production-data and
+exact-image qualification gates below.
+
+Current storage contract: new local App Settings use plaintext SQLite schema version 2.
+The supported Compose wizard automatically selects its persistent control root and
+does not require the enable flag or an encryption key in `.env`. New backup/copy flows
+have one archive download/attestation, not separate key steps. Existing encrypted
+version-1 settings convert atomically only after write resumption; original keys must
+remain available until then (UI-owned keys are retained automatically). Lost keys or
+control bindings must fail closed. Historical encrypted-storage evidence below
+describes the older releases, not a current key requirement. See the updated runbook
+for custom-root adoption and compatibility limitations.
+
+The normal supervised Compose wizard now also owns initial preparation and necessary
+backend restarts. The primary flow groups inspection/pause/backup, off-VM downloads
+and exact copy, paused activation/automatic validation, and explicit final resumption.
+Manual fingerprint entry remains an advanced alternative. Tests must cover private
+setup, retained identity/binding and old-key compatibility, lost-volume refusal, graceful restart timer cleanup,
+API/executor readiness, stale/unauthorized restart requests and browser reconnect.
+This does not turn offline disaster recovery, independent actual-data rehearsal or
+post-resumption restore qualification into automatic browser operations.
+
+The paused legacy wizard now creates/downloads an archive and verifies its actual isolated scratch restore in the API. Archive evidence is bound to the current pause/revision/source and rehashed before copy; completed off-VM download and separate key protection still require explicit operator confirmation. Authenticated read-only project/tree/history downloads remain available during maintenance without writing stats caches. Unit, authenticated process/API and Playwright coverage belong to this follow-up; they do not replace native-host, independent actual-data recovery or release qualification below. See [archive ownership and format](./local-metadata-backup-rehearsal.md#browser-backup-before-activation).
+
+Follow-up verified locally on 2026-10-04: Windows/Linux archive and barrier regressions, archive and authenticated backup/copy flow under production UID/GID 10001:10001, interrupted/stale/corrupt evidence refusal, headless operator browser checks, API typecheck, test-style/shard/repository contracts and the live dependency audit. Read-only scratch cleanup and separate per-phase test deadlines are covered. This is local evidence, not a passing GitHub candidate-image run or approval to convert production data.
+
 Status: repository implementation has passed fresh local review and verification on 2026-09-29, and the full fourteen-phase packaged fixture passed on 2026-09-28; exact-commit release gates and production qualification remain pending. The exact-image fixture guard, offline registry, per-phase assertion evidence and read-only snapshot discovery are implemented. Local conversion/verification process bounded bundles incrementally. Backup/restore tooling covers both legacy roots and post-resumption SQLite generation/control state in the [operator procedure](./local-metadata-backup-rehearsal.md). The real browser/API test passed web-app policy, operational writes, Node editor package execution/removal and post-write restore into fresh volumes, with cleanup completed before the PASS receipt. A direct Linux-host orchestration gate is wired into candidate-image CI but has not run successfully on this Windows/Docker Desktop host. The intended commit must pass that native gate and the other release gates. The actual production backup, off-VM verification and real-data/resource rehearsal still require operator execution. Do not use fixture success as production approval.
 
 ## Scope and completion levels
@@ -63,7 +97,7 @@ An initial host-source API run was invalidated by running the style guard concur
 
 Finish and qualify the existing supervised single-host files-to-SQLite upgrade. Keep artifact bytes as local files; move only the metadata domains defined in [the ownership contract](./local-metadata-upgrade.md). This does not change the Storage tab to S3/PostgreSQL or redesign Kubernetes.
 
-The conversion service, maintenance fence, encrypted settings backend, selected serving, restart coordination, exact verifier, UI and pre-resumption recovery already exist. Build on those owners rather than creating a second conversion engine.
+The conversion service, maintenance fence, plaintext settings backend with legacy encrypted reads, selected serving, restart coordination, exact verifier, UI and pre-resumption recovery already exist. Build on those owners rather than creating a second conversion engine.
 
 Use two distinct completion levels:
 
@@ -191,7 +225,7 @@ This is operational evidence, not something a repository patch can fabricate. Ac
 Production changes require a separately approved maintenance window.
 
 1. Deploy the qualified image/Compose version with upgrade disabled and confirm legacy serving. Verify source paths, permissions, owner lease, available resources and the preserved recovery image/configuration.
-2. Provision control storage/key securely. Freeze/drain and take a new independently verified production backup. Earlier clone evidence does not certify files changed since that snapshot.
+2. Prepare persistent control storage through the supported wizard. Preserve any original key needed by an older encrypted database. Freeze/drain and take a new independently verified production backup. Earlier clone evidence does not certify files changed since that snapshot.
 3. Copy/verify, activate while paused, restart and validate. If any requirement fails, stay paused and recover to legacy using the tested UI/CLI procedure. Do not resume SQLite writes to investigate a failed validation.
 4. Review comparison results and recovery evidence. Only then acknowledge and resume writes, restart, and run the approved controlled production smoke checks.
 5. Take a coordinated SQLite-generation-plus-artifacts/control backup. Monitor saves, publications, recording completion, library jobs, readiness, disk/RAM and integrity during an agreed observation window. Keep retained legacy sources and the pre-upgrade backup through the agreed recovery period; this plan does not add automatic deletion.

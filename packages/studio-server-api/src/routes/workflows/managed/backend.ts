@@ -228,6 +228,13 @@ export class ManagedWorkflowBackend {
     return this.#catalog.readWorkflowProjectDownload(relativePath, version);
   }
 
+  async readWorkflowProjectReferenceSnapshots(relativePath: unknown) {
+    return this.#catalog.readWorkflowProjectReferenceSnapshots(relativePath);
+  }
+  async listWorkflowProjectReferenceCatalog() {
+    return this.#catalog.listWorkflowProjectReferenceCatalog();
+  }
+
   async getLLMProfileHealthStore(): Promise<PostgresRivetLLMProfileHealthStore> {
     await this.initialize();
     return this.#llmProfileHealthStore;
@@ -414,6 +421,8 @@ export class ManagedWorkflowBackend {
     inputCursor = 0,
     signal?: AbortSignal,
     inputAfter?: string,
+    includeSubgraphRuns = false,
+    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
   ): Promise<WorkflowRecordingRunsPageResponse> {
     return this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
@@ -424,6 +433,8 @@ export class ManagedWorkflowBackend {
       inputCursor,
       signal,
       inputAfter,
+      includeSubgraphRuns,
+      runScope,
     );
   }
 

@@ -1,9 +1,20 @@
 import { type ChartNode, type JsonObjectEditorDefinition } from '@valerypopoff/rivet2-core';
-import { useEffect, useMemo, useState, type FC } from 'react';
+import { useMemo, type FC } from 'react';
 import { type SharedEditorProps } from './SharedEditorProps';
 import { CodeEditor } from './CodeEditor';
 import { getHelperMessage } from './editorUtils';
 import { formatJsonObjectEditorValue, parseJsonObjectEditorValue } from './jsonObjectEditorValue';
+import { useNodeEditorDataChange } from '../nodeEditor/NodeEditorSessionContext.js';
+import { isEqual } from 'lodash-es';
+
+function isEquivalentJson(text: string, source: string): boolean {
+  const parsed = parseJsonObjectEditorValue(text);
+  return !parsed.error && isEqual(parsed.value, parseJsonObjectEditorValue(source).value);
+}
+
+function validateJson(text: string): string | undefined {
+  return parseJsonObjectEditorValue(text).error;
+}
 
 export const JsonObjectEditor: FC<
   SharedEditorProps & {
@@ -14,32 +25,20 @@ export const JsonObjectEditor: FC<
   const value = data[editor.dataKey];
   const formattedValue = useMemo(() => formatJsonObjectEditorValue(value), [value]);
   const helperMessage = getHelperMessage(editor, node.data);
-  const [validationError, setValidationError] = useState<string>();
-
-  useEffect(() => {
-    setValidationError(undefined);
-  }, [editor.dataKey, formattedValue, node.id]);
+  const changeData = useNodeEditorDataChange(node, onChange);
 
   const handleChange = (text: string) => {
+    if (isReadonly || isDisabled) return;
     const result = parseJsonObjectEditorValue(text);
-    if (result.error) {
-      setValidationError(result.error);
-      return;
-    }
-
-    setValidationError(undefined);
-    onChange({
-      ...node,
-      data: {
-        ...data,
-        [editor.dataKey]: result.value,
-      },
-    });
+    if (result.error) return;
+    changeData(String(editor.dataKey), result.value);
   };
 
   return (
     <CodeEditor
       value={formattedValue}
+      isEquivalentValue={isEquivalentJson}
+      preserveUncommittedDraft
       onChange={handleChange}
       isReadonly={isReadonly}
       isDisabled={isDisabled}
@@ -47,7 +46,7 @@ export const JsonObjectEditor: FC<
       label={editor.label}
       name={String(editor.dataKey)}
       helperMessage={helperMessage}
-      postEditorHelperMessage={validationError}
+      validateValue={validateJson}
       onClose={onClose}
       language="json"
       enableFolding

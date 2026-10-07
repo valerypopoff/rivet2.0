@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { readScheduledRecordingFields } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { getAppDataRoot } from '../../security.js';
 import type {
@@ -13,6 +14,7 @@ import type {
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
+import { recordingWorkflowScopeClause } from './recording-workflow-scope.js';
 
 export type WorkflowRecordingWorkflowRow = {
   workflowId: string;
@@ -26,6 +28,8 @@ export type WorkflowRecordingWorkflowRow = {
 export type WorkflowRecordingRunRow = {
   id: string;
   workflowId: string;
+  sourceProjectName?: string;
+  sourceProjectRelativePath?: string;
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
@@ -58,6 +62,8 @@ export type WorkflowRecordingStatisticsRow = WorkflowRecordingRunRow & {
 const RECORDING_RUN_COLUMNS = `
   id AS id,
   workflow_id AS workflowId,
+  (SELECT source_project_name FROM recording_workflows WHERE workflow_id = recording_runs.workflow_id) AS sourceProjectName,
+  (SELECT source_project_relative_path FROM recording_workflows WHERE workflow_id = recording_runs.workflow_id) AS sourceProjectRelativePath,
   created_at AS createdAt,
   run_kind AS runKind,
   status AS status,
@@ -74,6 +80,7 @@ const RECORDING_RUN_COLUMNS = `
   component_type_at_execution AS componentTypeAtExecution,
   component_label_at_execution AS componentLabelAtExecution,
   correlation_id AS correlationId,
+  scheduled_identity_json AS scheduledIdentityJson,
   error_message AS errorMessage,
   bundle_path AS bundlePath,
   encoding AS encoding,
@@ -132,8 +139,9 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_compressed_bytes,
     project_uncompressed_bytes,
     dataset_compressed_bytes,
-    dataset_uncompressed_bytes
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    dataset_uncompressed_bytes,
+    scheduled_identity_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     created_at = excluded.created_at,
@@ -161,7 +169,8 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_compressed_bytes = excluded.project_compressed_bytes,
     project_uncompressed_bytes = excluded.project_uncompressed_bytes,
     dataset_compressed_bytes = excluded.dataset_compressed_bytes,
-    dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes
+    dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes,
+    scheduled_identity_json = excluded.scheduled_identity_json
 `;
 
 type RecordingStatement = ReturnType<DatabaseSync['prepare']>;
@@ -208,6 +217,7 @@ function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowR
     row.projectUncompressedBytes,
     row.datasetCompressedBytes,
     row.datasetUncompressedBytes,
+    identity?.surface === 'scheduled' ? JSON.stringify(readScheduledRecordingFields(identity)) : null,
   );
 }
 
@@ -350,6 +360,7 @@ function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
     ['component_type_at_execution', 'TEXT'],
     ['component_label_at_execution', 'TEXT'],
     ['correlation_id', 'TEXT'],
+    ['scheduled_identity_json', 'TEXT'],
   ] as const;
 
   for (const [name, type] of columns) {
@@ -509,12 +520,20 @@ export async function listWorkflowRecordingWorkflowStatsRows(): Promise<Workflow
 
 export async function listWorkflowRecordingRunRowsByWorkflowId(
   workflowId: string,
-  options: { page: number; pageSize: number; statusFilter: WorkflowRecordingFilterStatus },
+  options: {
+    page: number;
+    pageSize: number;
+    statusFilter: WorkflowRecordingFilterStatus;
+    includeSubgraphRuns?: boolean;
+    runScope?: 'all' | 'roots' | 'children';
+  },
 ): Promise<WorkflowRecordingRunRow[]> {
   return listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
     statusFilter: options.statusFilter,
     limit: options.pageSize,
     offset: (options.page - 1) * options.pageSize,
+    includeSubgraphRuns: options.includeSubgraphRuns,
+    runScope: options.runScope,
   });
 }
 
@@ -529,6 +548,8 @@ export async function listWorkflowRecordingRunRowsForWorkflowWindow(
     offset: number;
     statusFilter: WorkflowRecordingFilterStatus;
     after?: { createdAt: string; recordingId: string };
+    includeSubgraphRuns?: boolean;
+    runScope?: 'all' | 'roots' | 'children';
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
@@ -555,9 +576,14 @@ function buildRecordingWindowQuery(
   workflowId: string,
   options: Parameters<typeof listWorkflowRecordingRunRowsForWorkflowWindow>[1],
 ) {
-  const whereClause = buildRunFilterClause(options.statusFilter);
+  const whereClause = buildRunFilterClause(
+    workflowId,
+    options.statusFilter,
+    options.includeSubgraphRuns,
+    options.runScope,
+  );
   const afterClause = options.after ? 'AND (created_at, id) < (?, ?)' : '';
-  const parameters: Array<string | number> = [workflowId];
+  const parameters: Array<string | number> = workflowId ? [workflowId] : [];
   if (options.after) {
     parameters.push(options.after.createdAt, options.after.recordingId);
   }
@@ -577,14 +603,36 @@ function buildRecordingWindowQuery(
 export async function countWorkflowRecordingRuns(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
+  includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = 'all',
 ): Promise<number> {
   const db = await getDatabase();
-  const whereClause = buildRunFilterClause(statusFilter);
+  const whereClause = buildRunFilterClause(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const row = db
     .prepare(`SELECT COUNT(id) AS count FROM recording_runs ${whereClause}`)
-    .get<{ count: number | bigint }>(workflowId);
+    .get<{ count: number | bigint }>(...(workflowId ? [workflowId] : []));
 
   return toNumber(row?.count ?? 0);
+}
+
+export async function getWorkflowRecordingScopeCounts(
+  workflowId: string,
+  runScope: 'all' | 'roots' | 'children' = 'all',
+) {
+  const db = await getDatabase();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS totalRuns,
+    COALESCE(SUM(status = 'failed'), 0) AS failedRuns,
+    COALESCE(SUM(status = 'suspicious'), 0) AS suspiciousRuns
+    FROM recording_runs WHERE ${recordingWorkflowScopeClause(workflowId, true, 'filesystem', 1, runScope)}`,
+    )
+    .get<{ totalRuns: number; failedRuns: number; suspiciousRuns: number }>(...(workflowId ? [workflowId] : []))!;
+  return {
+    totalRuns: toNumber(row.totalRuns),
+    failedRuns: toNumber(row.failedRuns),
+    suspiciousRuns: toNumber(row.suspiciousRuns),
+  };
 }
 
 export async function getWorkflowRecordingRunRow(recordingId: string): Promise<WorkflowRecordingRunRow | null> {
@@ -601,6 +649,12 @@ export async function getWorkflowRecordingRunRow(recordingId: string): Promise<W
     .get<Record<string, unknown>>(recordingId);
 
   return row ? normalizeWorkflowRecordingRunRow(row) : null;
+}
+
+/** Include all statuses and child runs; cleanup only needs to know whether any row remains. */
+export async function hasWorkflowRecordingRuns(workflowId: string): Promise<boolean> {
+  const db = await getDatabase();
+  return Boolean(db.prepare('SELECT 1 FROM recording_runs WHERE workflow_id = ? LIMIT 1').get(workflowId));
 }
 
 export async function listWorkflowRecordingRunRowsForWorkflow(workflowId: string): Promise<WorkflowRecordingRunRow[]> {
@@ -810,6 +864,8 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
   return {
     id: String(row.id ?? ''),
     workflowId: String(row.workflowId ?? ''),
+    sourceProjectName: toOptionalString(row.sourceProjectName),
+    sourceProjectRelativePath: toOptionalString(row.sourceProjectRelativePath),
     createdAt: String(row.createdAt ?? ''),
     runKind: row.runKind === 'published' || row.runKind === 'editor' ? row.runKind : 'latest',
     status,
@@ -835,7 +891,8 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
     surface !== 'workflow_endpoint' &&
     surface !== 'web_app_action' &&
     surface !== 'editor_local' &&
-    surface !== 'subgraph_project'
+    surface !== 'subgraph_project' &&
+    surface !== 'scheduled'
   ) {
     return undefined;
   }
@@ -843,6 +900,7 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
   const componentType = row.componentTypeAtExecution;
   return {
     surface,
+    ...readScheduledRecordingFields(row.scheduledIdentityJson),
     graphId: toOptionalString(row.graphIdAtExecution),
     graphName: toOptionalString(row.graphNameAtExecution),
     revisionKey: toOptionalString(row.revisionKeyAtExecution),
@@ -856,10 +914,13 @@ function getExecutionIdentity(row: Record<string, unknown>): WorkflowRecordingEx
   };
 }
 
-function buildRunFilterClause(statusFilter: WorkflowRecordingFilterStatus): string {
-  return statusFilter === 'failed'
-    ? `WHERE workflow_id = ? AND status IN ('failed', 'suspicious')`
-    : 'WHERE workflow_id = ?';
+function buildRunFilterClause(
+  workflowId: string,
+  statusFilter: WorkflowRecordingFilterStatus,
+  includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = 'all',
+): string {
+  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
 }
 
 function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {

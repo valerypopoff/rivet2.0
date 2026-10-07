@@ -24,7 +24,7 @@ cp deploy/studio-server/.env.example .env
 
 Edit `.env` before starting. Set `RIVET_ARTIFACTS_HOST_PATH` to a writable host folder that you will keep between upgrades. Set `RIVET_PORT` if port 8080 is unavailable. Configure the UI authentication mode and `RIVET_KEY` for access to the server; do not expose an unprotected editor to the public internet. The example intentionally contains only these starting settings. Internal service ports and image names are supplied by Docker Compose; storage and endpoint policies are configured in the editor's App Settings.
 
-In **App Settings → Storage**, **Local folders** keeps project data in the mounted folders. To use managed storage, select **Object storage + PostgreSQL**; only then does the **Metadata database** choice appear. Changing storage mode does not migrate existing data. Use the migration workflow below before switching an existing server.
+In **App Settings → Storage**, **Local folders** keeps project data on the VM. **Object storage + PostgreSQL** is disabled for local installations: complete the files-to-SQLite upgrade first. Switching storage is not a data transfer. A later SQLite-to-S3/PostgreSQL migration still requires a separate verified migration path, which is not available yet. Existing managed installations can continue configuring their database and object storage, but cannot switch blindly to Local folders either; fresh managed deployments use deployment configuration.
 
 ```bash
 yarn studio-server:prod
@@ -53,15 +53,59 @@ In Kubernetes, this VM TLS configuration does not apply. The cluster operator su
 
 For existing installations, keep the same `.env`, artifact folder, and Docker volumes when updating. See the [Studio Server deployment guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md) for upgrade precautions, troubleshooting commands, and the custom-image and Kubernetes options.
 
+### Trial a verified staging release
+
+For an existing VM, wait for the staging commit's **Build Images** workflow to succeed, use a clean checkout of that `staging` commit, and run `yarn studio-server:staging`. The launcher checks that staging image revisions match the checkout, pins their immutable digests, and compares data mounts/volumes with the existing API container before recreation. A mismatch stops deployment; investigate it rather than starting against an empty replacement data directory. This uses the existing stack and data, not an isolated test copy, and does not migrate storage. Keep a consistent backup and use an agreed maintenance window. See the [staging VM procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
+
 ### Upgrade local metadata to SQLite
 
+New single-host installations start with SQLite automatically. Project and
+recording metadata, App Settings and operational data go into SQLite; large
+project, dataset, recording and runtime-library payloads remain local files.
+There is nothing to migrate and no **Local storage upgrade** tab or reminder.
+Keep the persistent data/control volumes and back them up together.
+
+The following steps apply only to older installations with file-backed metadata.
+
 The operator-only **App Settings → Local storage upgrade** workflow keeps project, snapshot and recording payloads as local artifact files while moving their authoritative metadata and App Settings to SQLite. It is a separate operation from S3/PostgreSQL migration; changing the Storage selector does not perform it.
+
+On the updated single-host Compose stack, the normal migration can be completed from the UI:
+
+For signed-in administrators using local storage, the migration suggestion returns
+on every page reload until migration is complete. **Postpone** only dismisses it for
+the current page. Once started, it offers continuation/recovery instead. After
+SQLite is live and the final restart is complete, it stops appearing. Managed
+S3/PostgreSQL deployments never receive this local migration suggestion.
+
+1. If offered, choose **Prepare server for migration**. Rivet prepares persistent control storage and restarts both backend processes. New local settings are unencrypted: no encryption key, console commands or migration entries in `.env` are needed.
+2. Choose **Pause writes and create verified backup**. Rivet checks capacity, stops new changes, waits for active work and creates a backup of the four original data folders. It restores the actual archive into separate scratch storage and checks it. If active work is still draining, wait and choose **Create verified backup** when the source is quiet.
+3. Use **Download verified backup**. Wait for the download to finish, save it in a protected location outside the VM, confirm that check, then **Copy and verify**. You do not need to type a fingerprint; manual backup evidence is an advanced alternative. There is no key download or key-backup checkbox on a new server.
+4. Choose **Activate SQLite while paused**. Rivet restarts both backend processes, reconnects and validates automatically. Writes remain paused. If validation fails, retry it or choose **Return to legacy while paused**.
+5. Review successful validation, acknowledge that resuming closes one-click rollback, and **Resume writes**. Rivet performs the final restart automatically. Completion shows SQLite live with no pending restart.
+
+Source inspection and backup preparation also run in the background on updated
+servers. The panel shows the current stage and restores progress/results when
+reopened; closing it does not cancel an accepted pause-and-backup sequence. A lost
+connection does not mean the operation failed, so check current status before
+retrying. After a backend restart, interrupted preparation is reported explicitly
+and needs a new operator attempt. Update both API and web images to use this flow.
+If a fingerprint read is retried by another operator or its preparation status
+becomes unreadable, old browser evidence is cleared. Review the current result
+and certify the backup again; reconnecting never checks those confirmations for you.
+
+**Copy and verify** starts a background job. Its status shows preparation (capacity, source fingerprint and backup verification) before conversion begins; accepting the request does not mean the copy passed. You can reload or reopen Settings to check progress. If the connection drops, check current status before retrying. A failed copy keeps the original files selected and writes paused, and shows a specific reason and affected project when available. Download the diagnostic report; do not delete source data or bypass a capacity/integrity refusal. Older failed jobs may only have a generic reason.
+
+The archive and SQLite settings contain private settings and credentials in plaintext; do not share them publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage.
+
+On the supported updated Compose stack, you can omit `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`, `RIVET_LOCAL_METADATA_CONTROL_ROOT` and `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` from `.env`. Exception: an older manually configured encrypted SQLite installation must retain its original key until conversion finishes after writes resume. UI-generated original keys are retained automatically for that compatibility step. Custom control roots must boot the updated launcher once with their original root to remember it. Never delete persistent volumes or historical backup keys to remove environment configuration.
+
+The browser backup is for the original legacy data before SQLite activation. A same-server test restore cannot prove recovery after VM/disk loss, so keep the independent restored-copy rehearsal below. After SQLite resumes writes, use the coordinated full backup procedure that also includes local-metadata control storage; the pre-upgrade download does not contain subsequent SQLite changes.
 
 The S3/PostgreSQL migration tool below currently supports legacy file metadata, not an upgraded SQLite generation. It stays unavailable while local-metadata control is configured. Support for migrating the selected SQLite data is a separate future feature; retained old files must not be exported as if they contained your new writes.
 
 Do not activate this on a production server before an isolated restored copy of its data has passed conversion, restart, controlled writes and recovery. Conversion processes bounded bundles rather than loading the whole installation into memory. An oversized individual project/history or recording is refused; a multi-gigabyte collection must still pass measured RAM/disk checks on its actual data. Keep serving from the existing files until the installation is within a tested capacity envelope. The [local upgrade runbook](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-upgrade.md) documents configuration, backup and recovery requirements.
 
-Before writes resume, a failed paused activation can return to the intact old files. After SQLite accepts new writes, those files are stale: recovery requires a coordinated SQLite-plus-artifact backup, not switching back to the old mode. The [backup/restore procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-backup-rehearsal.md) provides separate legacy and post-upgrade formats; the latter includes persistent control storage and the selected generation. Preserve the encryption key separately. On older deployments with a separate executor container, stop both API and executor before taking a consistent filesystem backup. Restoration is tested on a fresh isolated stack before any production routing change.
+Before writes resume, a failed paused activation can return to the intact old files. After SQLite accepts new writes, those files are stale: recovery requires a coordinated SQLite-plus-artifact backup, not switching back to the old mode. The [backup/restore procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-backup-rehearsal.md) provides separate legacy and post-upgrade formats; the latter includes persistent control storage and the selected generation. Original keys are needed only for historical encrypted backups, not new plaintext settings. On older deployments with a separate executor container, stop both API and executor before taking a consistent filesystem backup. Restoration is tested on a fresh isolated stack before any production routing change.
 
 ### Move an existing VM to managed storage
 
@@ -69,9 +113,111 @@ If this server currently keeps projects in local folders, an operator can enable
 
 Test the S3 and PostgreSQL connections separately; both must pass before pre-copy. The verified result lists the compared domains and their item counts. It checks stored content and route resolution, but does not execute your production graphs; rehearse those with controlled inputs before moving traffic. The final review records your deployment checks and repeats the exact comparison; it is not a guarantee about external dependencies or a substitute for a rollback plan.
 
+## Develop through a VS Code tunnel
+
+For source development on your own machine, use `yarn studio-server:dev:tunnel` instead of `yarn studio-server:dev` when accessing the app through a tunnel. Forward only the proxy port printed by the launcher and keep both tunnel sign-in and Rivet's UI authentication enabled. Backend edits retain the normal API/executor watchers; frontend edits trigger a complete bundle rebuild rather than thousands of source-module requests.
+
+The first launch waits for the bundle. Later successful builds refresh only a clean, idle workspace with confirmed browser recovery; unsaved edits or active work leave an update notice with **Refresh when safe**. Save your projects and finish active work first. Failed builds keep the last working frontend available; inspect `yarn studio-server:dev:docker:logs`. A rebuild is slower and needs more memory than Vite hot reload, so this is not a builder for a small production VM. An actual tunnel outage or expired sign-in still needs your attention; **Retry loading** reloads the failed document without clearing recovery records.
+
+Return to hot reload with `yarn studio-server:dev`. Both commands use the same development stack and data mounts, not parallel stacks or a staging release. Save browser edits before deliberately changing modes. See the [development guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md#development) for operational details.
+
+## Schedule useful work
+
+Open **Scheduled runs** (calendar icon, just above **Settings**) at the bottom of
+the project sidebar and choose **+ Add scheduled run** to open its separate editor.
+The sidebar shows how many schedules are enabled; paused or completed one-time
+schedules are not counted, and no badge is shown when none are enabled.
+Give it a name, optionally describe it, select a project and
+choose **Saved latest** or **Published**. Rivet runs that version's **Main Graph**:
+latest means its saved state at execution time, not unsaved editor changes.
+Publishing is not required for Saved latest. Project moves/renames retain the
+schedule's project identity; deleting the project or its main graph makes runs fail.
+The project picker works like the Subgraph node's **Other projects** picker:
+expand folders to browse nested projects, or type a project name or folder path
+to find projects even in collapsed folders. Dropdown project rows show their paths;
+the selected field shows the project name on one line, with its path on hover.
+Select a project with the mouse or arrow keys and Enter. Folder rows only expand
+or collapse and cannot become a run target. The details section places Name beside
+Project and Description beside Version; these fields stack on narrow screens.
+The footer stays visible while the form scrolls: Preview is on the left and the
+blue **Save** button on the right. Use the header's close button to discard changes.
+**Save** becomes available only after you change the form; reverting all edits
+disables it again. Previewing does not count as a change.
+Saving or closing returns to the run list; editing an existing schedule also
+opens the separate editor.
+New schedules start enabled. Use **Pause** or **Unpause** in the scheduled runs
+list to control automatic execution; editing a paused schedule does not enable it.
+Paused schedules have a darker, dashed-border card and a status pill; enabled
+schedules have no status pill. The non-overlap hint appears under Execution.
+If an older schedule shows **Unavailable project** despite the project still
+existing, edit the schedule and reselect its project before saving.
+
+Choose once, interval, daily, weekly or monthly, with an IANA time zone such as
+`Europe/London`. **Preview next runs** shows the calculated times. Intervals use
+elapsed minutes from an explicit UTC/offset anchor. Missing daylight-saving times
+and monthly dates are skipped; a repeated daylight-saving time runs once. A
+one-time date that is ambiguous or nonexistent must be changed.
+
+The optional input must be a JSON object passed to the graph's `input` port.
+Leave it blank to preserve Graph Input defaults; `{}` explicitly passes an empty
+object. Inputs can contain secrets, so protect your server and its backups. Turn
+**Record these runs** on to retain replays; the server's recording setting must
+also be enabled. Root and called-project recordings are linked in Run recordings.
+Run history remains available even when recording is off or fails.
+
+The server must stay online, but your browser can be closed. Missed runs are
+skipped by default; **Catch up latest only** starts only the newest missed run.
+Rivet avoids ordinary overlap for a schedule and defaults to one scheduled run
+at a time across the server. A run waiting for capacity is skipped after 15 minutes
+in the queue, including catch-up runs; downtime before catch-up is queued does
+not count toward that limit. Scheduling continues to track due work while other
+runs are busy. Rivet supports a **Maximum run duration (minutes)** of 1–1,440
+minutes, including preparation.
+At that limit, the server cancels the run; it cannot undo external side effects.
+Provider credentials, runtime libraries and other server execution settings
+still apply. Interactive User Input nodes
+cannot wait for a browser and fail in scheduled runs.
+
+Use **Pause**, **Edit**, **Run now** or the trash icon in the card's top right
+as needed. **Recent runs** shows the available history count and starts collapsed;
+expand it to inspect runs and use the **Open recording** link for a replay.
+Choose **10**, **20**, **50** or **100** runs per page and use **Previous** / **Next**
+to browse the available history (up to 300 runs).
+Active runs appear before completed history, so long-delayed work remains easy
+to find and cancel.
+Deleting a schedule cancels pending work but does not stop an already-running
+graph; use **Cancel run**
+for that. A failed/interrupted execution is not retried automatically: external
+side effects may already have happened. Inspect it before choosing **Retry run**,
+which uses that run's input/settings snapshot and warns about repeated effects.
+Even with cancellation, external side effects cannot be undone.
+If execution finishes but its outcome cannot be stored, history eventually marks
+it interrupted, not failed. Its external work may have succeeded; check side
+effects before retrying.
+
+If an action times out or loses its response, retrying the unchanged action in
+the same page (including closing/reopening this modal) reuses its request identity
+instead of submitting another run. After a full page reload, review the refreshed
+schedules/history first. Do not retry an uncertain action more than 24 hours later.
+If the action was accepted but the list could not refresh, wait for reconnection;
+do not repeat it.
+
+Keep schedules and history in coordinated storage backups. Restoring local data
+under a different control identity pauses schedules until reviewed and enabled.
+A full clone containing the same control identity is indistinguishable from the
+original: keep test clones offline or pause their schedules before starting them.
+
 ## Publish a workflow endpoint
 
-Open a saved project in the browser editor, select its **Main Graph**, then open **Project settings → Endpoint**. Choose an endpoint name and click **Publish**. The published route, `/workflows/<name>` by default, runs the saved project version captured by that publish. Saving more changes to the project does not silently update it: use **Update** after reviewing the new draft. **Published version history** lets you inspect or restore an earlier version. **Unpublish** closes the endpoint routes without deleting the saved project.
+Open a saved project in the browser editor, select its **Main Graph**, then open **Project settings → Endpoint**. Choose an endpoint name and click **Publish**. The published route, `/workflows/<name>` by default, runs the saved project version captured by that publish. Saving more changes to the project does not silently update it: use **Update** after reviewing the new draft. The **Published version history** tab lets you inspect or restore an earlier version. **Unpublish** closes the endpoint routes without deleting the saved project.
+
+To delete a project, open **Project settings → Danger zone**. Unpublish its endpoint and all web apps first. Deletion is permanent and also removes its saved datasets, published version history, and run recordings, so download a backup before confirming. Other projects or schedules that use it may stop working.
+
+Danger zone checks which other projects directly reference this project. When connections exist, it shows the
+project names and folder paths, whether each connection belongs to a saved draft, published endpoint, or published
+web app, and whether it uses this project's **Saved latest**, **Published**, or a legacy project reference.
+An incomplete check is clearly marked and can be retried. This is a read-only warning, not a deletion block;
+it excludes unsaved edits, archived version history, indirect dependencies, and scheduled runs.
 
 While the project is published, `/workflows-latest/<draft-name>` runs the latest _saved_ draft. The draft name can differ from the published endpoint name until you click **Update**. The settings dialog shows the latest route when there are unpublished changes. It is useful for testing, but it can change whenever the project is saved; use the published route for clients that need a reviewed version. The route prefixes can be changed in **App Settings → Workflow endpoints → Routes**, so use the paths displayed by your server.
 

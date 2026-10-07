@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
+import { observeFileReads } from './helpers/file-reads.js';
 
 import {
   createRootPublishedProjectFactory,
@@ -93,6 +95,98 @@ function createDeferred<T = void>() {
 
 test.beforeEach(async () => {
   await resetFilesystemRoots();
+});
+
+test('published project-reference discovery reads cached IDs without parsing unrelated projects', async (t) => {
+  const neighbor = await workflowMutations.createWorkflowProjectItem('', 'AUnrelated');
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'BCaller');
+  const target = await workflowMutations.createWorkflowProjectItem('', 'ZTarget');
+  assert.ok(target.projectMetadataId);
+  const reads = observeFileReads(t);
+  const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+  const result = await loader.loadProject(caller.absolutePath, { id: target.projectMetadataId });
+  assert.equal(result.metadata.id, target.projectMetadataId);
+  assert.equal(reads.filter((file) => file === neighbor.absolutePath).length, 0);
+  assert.equal(reads.filter((file) => file === caller.absolutePath).length, 0);
+  assert.equal(reads.filter((file) => file === target.absolutePath).length, 1);
+});
+
+test('published project-reference discovery retains the missing-ID cache fallback', async (t) => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const target = await workflowMutations.createWorkflowProjectItem('', 'Target');
+  assert.ok(target.projectMetadataId);
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(target.absolutePath);
+  const cache = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+  cache.projectMetadataId = null;
+  await fs.writeFile(cachePath, JSON.stringify(cache), 'utf8');
+  const reads = observeFileReads(t);
+  const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+  const result = await loader.loadProject(caller.absolutePath, { id: target.projectMetadataId });
+  assert.equal(result.metadata.id, target.projectMetadataId);
+  assert.equal(reads.filter((file) => file === caller.absolutePath).length, 0);
+  assert.equal(reads.filter((file) => file === target.absolutePath).length, 2);
+});
+
+test('independent published reference loaders resolve projects when metadata cache writes are denied', async (t) => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const target = await createRootPublishedProject('Read-only reference', 'read-only-reference');
+  assert.ok(target.projectMetadataId);
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(target.absolutePath);
+  await fs.rm(cachePath);
+  const writeFile = fs.writeFile;
+  let deniedWrites = 0;
+  let code = 'EROFS';
+  t.mock.method(fs, 'writeFile', (...args: Parameters<typeof fs.writeFile>) => {
+    if (args[0] === cachePath) {
+      deniedWrites++;
+      return Promise.reject(Object.assign(new Error('Cache write denied'), { code }));
+    }
+    return Reflect.apply(writeFile, fs, args);
+  });
+
+  for (code of ['EROFS', 'EACCES']) {
+    // A new loader must not depend on another instance having populated its cache.
+    const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+    const result = await loader.loadProject(caller.absolutePath, { id: target.projectMetadataId });
+    assert.equal(result.metadata.id, target.projectMetadataId);
+    assert.equal(result.metadata.title, 'Read-only reference');
+    await assert.rejects(fs.stat(cachePath), { code: 'ENOENT' });
+  }
+  assert.equal(deniedWrites, 2);
+});
+
+test('published project-reference discovery refreshes stale metadata but still loads the published snapshot', async () => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const target = await createRootPublishedProject('Published Reference', 'published-reference');
+  const project = await rivetNode.loadProjectFromFile(target.absolutePath);
+  assert.ok(project.metadata.id);
+  project.metadata.title = 'Changed draft reference';
+  const contents = rivetNode.serializeProject(project);
+  assert.equal(typeof contents, 'string');
+  await fs.writeFile(target.absolutePath, contents as string, 'utf8');
+
+  const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+  const result = await loader.loadProject(caller.absolutePath, { id: project.metadata.id });
+  assert.equal(result.metadata.id, project.metadata.id);
+  assert.equal(result.metadata.title, 'Published Reference');
+  const cache = JSON.parse(await fs.readFile(workflowFs.getWorkflowProjectStatsPath(target.absolutePath), 'utf8'));
+  const stat = await fs.stat(target.absolutePath);
+  assert.equal(cache.fileSize, stat.size);
+  assert.equal(cache.fileMtimeMs, stat.mtimeMs);
+});
+
+test('published project-reference discovery rechecks loaded identity instead of trusting a cache claim', async () => {
+  const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');
+  const neighbor = await workflowMutations.createWorkflowProjectItem('', 'Neighbor');
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(neighbor.absolutePath);
+  const cache = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+  cache.projectMetadataId = 'nonexistent-reference-id';
+  await fs.writeFile(cachePath, JSON.stringify(cache), 'utf8');
+  const loader = workflowPublication.createPublishedWorkflowProjectReferenceLoader(workflowsRoot, caller.absolutePath);
+  await assert.rejects(
+    loader.loadProject(caller.absolutePath, { id: 'nonexistent-reference-id' }),
+    /Could not load project/,
+  );
 });
 
 test.after(async () => {

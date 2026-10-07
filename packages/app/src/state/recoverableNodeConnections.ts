@@ -1,10 +1,10 @@
-import { atom } from 'jotai';
+import { projectScopedAtom } from './projectScopedAtom.js';
 import { type GraphId, type NodeConnection, type NodeId } from '@valerypopoff/rivet2-core';
 
 export type RecoverableNodeConnectionsByNode = Record<NodeId, NodeConnection[]>;
 export type RecoverableNodeConnectionsByGraph = Record<GraphId, RecoverableNodeConnectionsByNode>;
 
-export const recoverableNodeConnectionsStatePerGraph = atom<RecoverableNodeConnectionsByGraph>({});
+export const recoverableNodeConnectionsStatePerGraph = projectScopedAtom<RecoverableNodeConnectionsByGraph>({});
 
 function cloneConnections(connections: readonly NodeConnection[]): NodeConnection[] {
   return structuredClone([...connections]);

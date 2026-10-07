@@ -103,6 +103,8 @@ The HTTP call node only has inputs when the [Editor Settings](#editor-settings) 
 
 ## Error Handling
 
+The settings modal groups **Retry on non-200**, **Fail on non-2XX status code**, and **Catch all request failures** inside the collapsible **Error behavior** section. Expand it to configure these controls. Retry's repeat count and cooldown appear when retry is enabled. Folding the section does not change any settings.
+
 The HTTP Call Node errors when the request throws, the URL is invalid, or the final response violates `Fail on non-2XX status code`.
 
 `Fail on non-2XX status code` changes how HTTP error responses are handled. When it is off, a response such as `403` or `500` is still treated as a completed HTTP response, so the node finishes and outputs the response Body, Parsed JSON when available, Status Code, and Headers. When it is on, a non-2XX response is treated as a node error instead; the graph stops on that node and the normal response outputs for that failed response are not produced.

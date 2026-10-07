@@ -1,7 +1,7 @@
 .published-items-help {
   color: var(--grey-light);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
 }
 
 .published-items-header-content {

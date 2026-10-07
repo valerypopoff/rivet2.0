@@ -12,7 +12,7 @@ test('local App Settings candidate import is idempotent and verifies every domai
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-local-settings-import-'));
   const sourceRoot = path.join(root, 'source');
   const databasePath = path.join(root, 'candidate', 'metadata.sqlite');
-  const options = { sourceRoot, databasePath, encryptionKey: 'candidate-secret' };
+  const options = { sourceRoot, databasePath };
   try {
     await fs.mkdir(sourceRoot);
     const imported = await migrateLocalAppSettings(options);
@@ -27,7 +27,7 @@ test('local App Settings candidate import is idempotent and verifies every domai
     assert.equal(await migrateLocalAppSettings(options), imported);
     await assert.rejects(fs.stat(path.join(sourceRoot, 'settings')), { code: 'ENOENT' });
 
-    const candidate = new SqliteAppSettingsBackend({ databasePath, encryptionSecret: options.encryptionKey });
+    const candidate = new SqliteAppSettingsBackend({ databasePath });
     try {
       await candidate.initialize();
       const record = await candidate.read('environment variable');

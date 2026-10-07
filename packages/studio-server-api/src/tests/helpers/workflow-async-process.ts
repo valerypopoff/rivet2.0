@@ -6,16 +6,36 @@ import path from 'node:path';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
-export async function startAsyncWorkflowProcess(
-  options: {
-    endpointName?: string;
-    projectName?: string;
-    graceSeconds?: number;
-    storage?: Record<string, unknown>;
-    failure?: 'foreground' | 'serialization';
-  } = {},
-) {
+type AsyncWorkflowOptions = {
+  endpointName?: string;
+  projectName?: string;
+  graceSeconds?: number;
+  storage?: Record<string, unknown>;
+  failure?: 'foreground' | 'serialization';
+};
+type AsyncWorkflowProcess = {
+  baseUrl: string;
+  projectId: string;
+  projectPath: string;
+  root: string;
+  command<T = unknown>(name: string): Promise<T>;
+  exited: Promise<number | null>;
+  logs: string;
+  restart(): Promise<AsyncWorkflowProcess>;
+  persistedMetadata(): Promise<Record<string, any>[]>;
+  close(): Promise<void>;
+};
+export async function startAsyncWorkflowProcess(options: AsyncWorkflowOptions = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-async-acceptance-'));
+  return startOwnedProcess(root, options, false);
+}
+
+/** Restart only a root created by this harness; never accept arbitrary host paths. */
+async function startOwnedProcess(
+  root: string,
+  options: AsyncWorkflowOptions,
+  resume: boolean,
+): Promise<AsyncWorkflowProcess> {
   const reservation = net.createServer();
   await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve));
   const port = (reservation.address() as net.AddressInfo).port;
@@ -25,11 +45,13 @@ export async function startAsyncWorkflowProcess(
     PORT: String(port),
     DOTENV_CONFIG_PATH: path.join(root, 'absent.env'),
     RIVET_ASYNC_TEST_ROOT: root,
+    ...(resume ? { RIVET_ASYNC_TEST_RESUME: '1' } : {}),
     RIVET_APP_DATA_ROOT: path.join(root, 'app'),
     RIVET_WORKSPACE_ROOT: root,
     RIVET_WORKFLOWS_ROOT: path.join(root, 'workflows'),
     RIVET_WORKFLOW_RECORDINGS_ROOT: path.join(root, 'recordings'),
     RIVET_RUNTIME_LIBRARIES_ROOT: path.join(root, 'libraries'),
+    RIVET_PROJECT_BUNDLE_SCRATCH_ROOT: path.join(root, 'exports'),
     RIVET_KEY: 'async-fixture-key',
     RIVET_REQUIRE_UI_GATE_KEY: 'false',
     RIVET_API_PROFILE: 'combined',
@@ -88,6 +110,17 @@ export async function startAsyncWorkflowProcess(
       child.send({ id, command: name });
     });
   };
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      await command('shutdown').catch(() => undefined);
+      const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  };
   try {
     const info = await new Promise<{ baseUrl: string; projectId: string; projectPath: string }>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`API startup timeout\n${logs}`)), 45_000);
@@ -111,6 +144,10 @@ export async function startAsyncWorkflowProcess(
       root,
       command,
       exited,
+      async restart() {
+        await stop();
+        return startOwnedProcess(root, options, true);
+      },
       get logs() {
         return logs;
       },
@@ -125,15 +162,7 @@ export async function startAsyncWorkflowProcess(
         return metadata;
       },
       async close() {
-        if (child.exitCode === null && child.signalCode === null) {
-          await command('shutdown').catch(() => undefined);
-          const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
-          try {
-            await exited;
-          } finally {
-            clearTimeout(timeout);
-          }
-        }
+        await stop();
         await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       },
     };

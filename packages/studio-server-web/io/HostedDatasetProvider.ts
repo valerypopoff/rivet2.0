@@ -24,11 +24,8 @@ export class HostedDatasetProvider extends BrowserDatasetProvider {
 
         const metadata = cursor.value as Partial<DatasetMetadata>;
         if (metadata.projectId === projectId) {
-          const datasetId = typeof metadata.id === 'string'
-            ? metadata.id
-            : typeof cursor.key === 'string'
-              ? cursor.key
-              : undefined;
+          const datasetId =
+            typeof metadata.id === 'string' ? metadata.id : typeof cursor.key === 'string' ? cursor.key : undefined;
 
           cursor.delete();
           if (datasetId) {
@@ -49,8 +46,13 @@ export class HostedDatasetProvider extends BrowserDatasetProvider {
     }
   }
 
-  override async importDatasetsForProject(projectId: ProjectId, datasets: CombinedDataset[]): Promise<void> {
-    await this.clearStoredDatasetsForProject(projectId);
-    await super.importDatasetsForProject(projectId, datasets);
+  override async importDatasetsForProject(
+    projectId: ProjectId,
+    datasets: CombinedDataset[],
+    options: { isCurrent?: () => boolean; signal?: AbortSignal; activate?: boolean } = {},
+  ): Promise<void> {
+    // Replace in one abortable transaction; never clear the source and then
+    // leave an empty database when a cancelled import fails halfway through.
+    await super.importDatasetsForProject(projectId, datasets, { ...options, replace: true });
   }
 }

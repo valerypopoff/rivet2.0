@@ -76,7 +76,17 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     ? { extraEnvVarNames: optionsOrExtraEnvVarNames }
     : optionsOrExtraEnvVarNames;
   const environmentProvider = options.environmentProvider ?? getDefaultEnvironmentProvider();
-  const getProviderEnvVar = (name: string) => environmentProvider.getEnvVar(name);
+  // A key can be shared by chat, classifiers and plugins. Resolve it once per
+  // settings snapshot even when the injected provider has no cache of its own.
+  const lookups = new Map<string, Promise<string | undefined>>();
+  const getProviderEnvVar = (name: string) => {
+    let value = lookups.get(name);
+    if (!value) {
+      value = environmentProvider.getEnvVar(name);
+      lookups.set(name, value);
+    }
+    return value;
+  };
   const resolveSetting = (value: string | undefined, envVarName: string) =>
     value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
   const resolveSettingFromAnyEnv = async (value: string | undefined, envVarNames: string[]) => {
@@ -119,14 +129,8 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     pluginEnvVarNames.add(envVarName);
   }
 
-  const [
-    openAiApiKey,
-    anthropicApiKey,
-    googleApiKey,
-    customAiApiKey,
-    openAiOrganization,
-    pluginEnvEntries,
-  ] = await Promise.all([
+  const [openAiApiKey, anthropicApiKey, googleApiKey, customAiApiKey, openAiOrganization, pluginEnvEntries] =
+    await Promise.all([
       resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
       resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
       resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),

@@ -42,11 +42,19 @@ function findActionStep(job, uses, label) {
 
 const build = parseWorkflow('.github/workflows/build.yml');
 const buildJobs = build.workflow.jobs;
+assert.deepEqual(build.workflow.on.push.branches, ['develop', 'main'], 'Build pushes must skip VM-only staging.');
+assert.deepEqual(
+  build.workflow.on.pull_request.branches,
+  ['develop', 'main'],
+  'Staging PRs use Studio Server verification, not the repository-wide Build matrix.',
+);
 assertIncludesAll(
   Object.keys(buildJobs),
   [
     'compiled-artifacts',
     'package-tests',
+    'supporting-tests',
+    'frontend-build',
     'package-lint',
     'static-validation',
     'javascript-audit',
@@ -63,7 +71,9 @@ assert.deepEqual(asArray(buildJobs['package-tests'].needs), ['compiled-artifacts
 assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
 assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
 assert.deepEqual(
-  buildJobs['package-tests'].strategy.matrix.include.map((entry) => entry.command).sort(),
+  [...buildJobs['package-tests'].strategy.matrix.include, ...buildJobs['supporting-tests'].strategy.matrix.include]
+    .map((entry) => entry.command)
+    .sort(),
   [
     'test:app --shard-index 0 --shard-count 4',
     'test:app --shard-index 1 --shard-count 4',
@@ -71,16 +81,33 @@ assert.deepEqual(
     'test:app --shard-index 3 --shard-count 4',
     'test:app-executor',
     'test:cli',
-    'test:core',
     'test:evaluations',
     'test:node',
+    'workspace @valerypopoff/rivet2-core run test:shard',
+    'workspace @valerypopoff/rivet2-core run test:shard',
   ],
-  'Build test matrix must retain every package suite and all four deterministic App shards.',
+  'Build test matrix must retain every package suite, two Core shards and all four App shards.',
+);
+assert.deepEqual(
+  buildJobs['package-tests'].strategy.matrix.include
+    .filter((entry) => entry['core-shard'])
+    .map((entry) => entry['core-shard'])
+    .sort(),
+  ['1/2', '2/2'],
+  'Both native Node test-runner Core partitions must run exactly once.',
 );
 const compiledArtifactUpload = findStep(
   buildJobs['compiled-artifacts'],
   'Upload compiled dependencies',
   'Compiled-artifacts job',
+);
+const packageTestStep = findStep(buildJobs['package-tests'], 'Test ${{ matrix.label }}', 'Package-tests job');
+assert.equal(packageTestStep.env?.RIVET_CORE_TEST_SHARD, '${{ matrix.core-shard }}');
+assert.equal(packageTestStep.env?.RIVET_APP_TEST_DEPENDENCIES, 'prebuilt');
+assert.equal(
+  findStep(buildJobs['supporting-tests'], 'Test ${{ matrix.label }}', 'Supporting-tests job').env
+    ?.RIVET_NODE_TEST_DEPENDENCIES,
+  'prebuilt',
 );
 const compiledArtifactDownload = findStep(
   buildJobs['package-tests'],
@@ -143,16 +170,81 @@ assert.equal(
 );
 assertIncludesAll(
   asArray(buildJobs.build.needs),
-  ['compiled-artifacts', 'package-tests', 'package-lint', 'static-validation', 'javascript-audit', 'rust-audit'],
+  [
+    'compiled-artifacts',
+    'package-tests',
+    'supporting-tests',
+    'frontend-build',
+    'package-lint',
+    'static-validation',
+    'javascript-audit',
+    'rust-audit',
+  ],
   'Build aggregator',
 );
 const buildGate = findStep(buildJobs.build, 'Require every Build gate', 'Build aggregator');
+assert.equal(
+  findStep(buildJobs['compiled-artifacts'], 'Build', 'Runtime compiler').run,
+  'yarn studio-server:build:dependencies',
+);
+assert.equal(buildJobs['package-tests'].strategy.matrix.include.length, 6);
+assert.equal(buildJobs['supporting-tests'].strategy['max-parallel'], 2);
+assert.equal(buildJobs['supporting-tests'].strategy['fail-fast'], false);
+for (const id of ['supporting-tests', 'frontend-build']) {
+  const job = buildJobs[id];
+  assert.deepEqual(asArray(job.needs), ['compiled-artifacts']);
+  const download = findStep(job, 'Download compiled dependencies', id);
+  const verify = findStep(job, 'Verify restored compiled dependencies', id);
+  assert.equal(download.with.name, compiledArtifactUpload.with.name);
+  assert.equal(download.with.path, 'packages');
+  assert.equal(verify.run, 'yarn check:compiled-workspace-exports');
+  assert.ok(job.steps.indexOf(download) < job.steps.indexOf(verify));
+  const consume = findStep(
+    job,
+    id === 'frontend-build' ? 'Build desktop frontend and CLI' : 'Test ${{ matrix.label }}',
+    id,
+  );
+  assert.ok(job.steps.indexOf(verify) < job.steps.indexOf(consume), `${id} must verify exports before use.`);
+}
+assert.equal(
+  findStep(buildJobs['frontend-build'], 'Build desktop frontend and CLI', 'Frontend compiler').run,
+  'yarn workspace @valerypopoff/rivet-app run build && yarn workspace @valerypopoff/rivet2-cli run build',
+);
+assert.equal(buildGate.env?.FRONTEND_RESULT, '${{ needs.frontend-build.result }}');
+assert.equal(buildGate.env?.SUPPORTING_TEST_RESULT, '${{ needs.supporting-tests.result }}');
+assert.match(buildGate.run, /\$FRONTEND_RESULT/);
+assert.match(buildGate.run, /\$SUPPORTING_TEST_RESULT/);
 assert.equal(buildGate.env?.JAVASCRIPT_AUDIT_RESULT, '${{ needs.javascript-audit.result }}');
 assert.match(buildGate.run, /\$JAVASCRIPT_AUDIT_RESULT/, 'Build aggregator must require the JavaScript audit result.');
 assert.match(build.source, /job-timing\.mjs finish-at/, 'Build must report the complete workflow critical path.');
+const buildTimingCheckout = findActionStep(buildJobs.build, 'actions/checkout@v6', 'Build timing');
+assert.equal(buildTimingCheckout.with?.['sparse-checkout'], 'scripts/ci/job-timing.mjs');
+assert.equal(buildTimingCheckout.with?.['sparse-checkout-cone-mode'], false);
 
 const studio = parseWorkflow('.github/workflows/studio-server-verify.yml');
+assert.deepEqual(
+  studio.workflow.on.push.branches,
+  ['develop'],
+  'Staging pushes use reusable Studio Server verification inside Build Images, not a duplicate standalone run.',
+);
+assertIncludesAll(studio.workflow.on.pull_request.branches, ['develop', 'staging'], 'Studio Server PR branches');
 const studioJobs = studio.workflow.jobs;
+assert.equal(findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['fetch-depth'], 1);
+assert.equal(
+  findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['sparse-checkout'],
+  'scripts/ci/ci-change-policy.mjs',
+);
+assert.equal(
+  findStep(studioJobs.changes, 'Check Out Repository', 'Studio classification').with?.['sparse-checkout-cone-mode'],
+  false,
+);
+const studioTimingCheckout = findActionStep(
+  studioJobs.verify,
+  'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5',
+  'Studio timing',
+);
+assert.equal(studioTimingCheckout.with?.['sparse-checkout'], 'scripts/ci/job-timing.mjs');
+assert.equal(studioTimingCheckout.with?.['sparse-checkout-cone-mode'], false);
 assert.ok(studio.workflow.on.workflow_call, 'Studio Server verification must remain reusable by the image pipeline.');
 assert.equal(
   studio.workflow.permissions.actions,
@@ -185,6 +277,10 @@ assert.deepEqual(
 );
 assert.equal(studioJobs['api-tests'].strategy['fail-fast'], false);
 assert.equal(studioJobs['api-tests'].strategy['max-parallel'], 4);
+assert.equal(
+  findStep(studioJobs['api-tests'], 'Run API test shard', 'API tests').env?.RIVET_API_TEST_RUNTIME,
+  'prebuilt',
+);
 assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
@@ -192,6 +288,34 @@ assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'bu
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
+const deploymentContracts = studioJobs['deployment-contracts'];
+assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'gateway']);
+assert.equal(deploymentContracts.strategy['fail-fast'], false);
+assert.equal(deploymentContracts.strategy['max-parallel'], 2);
+for (const [lane, names] of [
+  [
+    'managed',
+    [
+      'Set Up Kubernetes Tools',
+      'Verify compiled migrations on PostgreSQL',
+      'Verify async endpoint completion with managed storage',
+      'Verify VM-to-managed copy, retry, and exact readback',
+      'Verify Kubernetes and deployment contracts',
+    ],
+  ],
+  [
+    'gateway',
+    [
+      'Verify proxy recovery after container address changes',
+      'Verify single-VM nginx TLS gateway',
+      'Verify trusted-client proxy templates and executor upgrades',
+    ],
+  ],
+]) {
+  for (const name of names) {
+    assert.equal(findStep(deploymentContracts, name, 'Deployment contracts').if, `matrix.lane == '${lane}'`);
+  }
+}
 assert.equal(
   findStep(studioJobs['deployment-contracts'], 'Verify compiled migrations on PostgreSQL', 'Deployment contracts').run,
   'yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs',
@@ -271,6 +395,16 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+assert.equal(findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['fetch-depth'], 1);
+assert.equal(
+  findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout'],
+  'scripts/ci/ci-change-policy.mjs',
+);
+assert.equal(
+  findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout-cone-mode'],
+  false,
+);
+assertIncludesAll(images.workflow.on.push.branches, ['staging', 'main'], 'Image push branches');
 const capacityDispatchInput = images.workflow.on.workflow_dispatch?.inputs?.run_managed_kubernetes_capacity_gate;
 assert.equal(
   capacityDispatchInput?.type,
@@ -338,7 +472,16 @@ assertIncludesAll(
   ],
   'Image jobs',
 );
-assert.match(String(imageJobs['managed-kubernetes-release-gate'].if), /full_kubernetes/);
+assert.equal(
+  imageJobs.changes.outputs.require_kind,
+  "${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}",
+  'Only automatic staging pushes may skip a required Kind gate.',
+);
+assert.equal(
+  imageJobs['managed-kubernetes-release-gate'].if,
+  "needs.changes.outputs.require_kind == 'true'",
+  'The Kind job must follow the single release classification decision.',
+);
 const promotionCondition = String(imageJobs['promote-images'].if);
 for (const requiredGate of [
   'verify-repository',
@@ -355,13 +498,13 @@ for (const requiredGate of [
 }
 assert.match(
   promotionCondition,
-  /full_kubernetes == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
-  'A full-Kubernetes release may be promoted only after the Kind gate succeeds.',
+  /require_kind == 'true'.*managed-kubernetes-release-gate\.result == 'success'/,
+  'A release requiring Kind may be promoted only after that gate succeeds.',
 );
 assert.match(
   promotionCondition,
-  /full_kubernetes != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
-  'A skipped Kind gate is acceptable only when classification selected the fast path.',
+  /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
+  'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
 assert.deepEqual(
@@ -383,21 +526,26 @@ assertIncludesAll(
   ],
   'Image promotion dependencies',
 );
-const mainFreshness = findStep(
+const branchFreshness = findStep(
   imageJobs['promote-images'],
-  'Confirm main still points to this release',
+  'Confirm branch still points to this release',
   'Image promotion job',
 );
-assert.equal(mainFreshness.id, 'main_freshness');
+assert.equal(branchFreshness.id, 'branch_freshness');
 assert.match(
-  String(mainFreshness.if),
-  /github\.ref == 'refs\/heads\/main'/,
-  'Image promotion freshness applies to mutable main aliases only.',
+  String(branchFreshness.if),
+  /github\.ref_type == 'branch'/,
+  'Image promotion freshness must protect every mutable branch alias.',
 );
 assert.match(
-  mainFreshness.run,
-  /git ls-remote origin refs\/heads\/main/,
-  'Image promotion must re-read the current main head immediately before alias publication.',
+  branchFreshness.run,
+  /git ls-remote origin "\$GITHUB_REF"/,
+  'Image promotion must re-read the current branch head immediately before alias publication.',
+);
+assert.match(
+  branchFreshness.run,
+  /"\$GITHUB_REF" == 'refs\/heads\/staging'[\s\S]*?exit 1/,
+  'A superseded staging run must fail instead of looking like a successful VM candidate.',
 );
 for (const stepName of [
   'Promote Complete Image Set',
@@ -407,16 +555,35 @@ for (const stepName of [
 ]) {
   assert.match(
     String(findStep(imageJobs['promote-images'], stepName, 'Image promotion job').if),
-    /steps\.main_freshness\.outputs\.current == 'true'/,
-    `${stepName} must not run for a stale main release.`,
+    /steps\.branch_freshness\.outputs\.current == 'true'/,
+    `${stepName} must not run for a stale branch release.`,
   );
 }
+assert.match(
+  String(findStep(imageJobs['promote-images'], 'Advance durable production release pointer', 'Image promotion job').if),
+  /github\.ref == 'refs\/heads\/main'.*steps\.branch_freshness\.outputs\.current == 'true'/,
+  'Staging promotion must never advance the durable production pointer.',
+);
+assert.match(
+  findActionStep(
+    imageJobs['promote-images'],
+    'docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051',
+    'Image promotion job',
+  ).with.tags,
+  /type=raw,value=latest,enable=\$\{\{ github\.ref == 'refs\/heads\/main' \}\}/,
+  'Staging promotion must never retag production latest images.',
+);
 const candidatePredecessor = findStep(
   imageJobs['release-manifest'],
   'Resolve exact production predecessor',
   'Candidate release-manifest job',
 );
 assert.match(candidatePredecessor.run, /release-manifest-oci\.mjs pull/);
+assert.match(
+  candidatePredecessor.run,
+  /"\$GITHUB_REF" == refs\/heads\/\* && "\$GITHUB_REF" != 'refs\/heads\/main'/,
+  'A staging push must not repair or bootstrap the durable production lineage.',
+);
 assert.match(candidatePredecessor.run, /allow_release_lineage_bootstrap/i);
 assert.match(
   findStep(
@@ -711,13 +878,40 @@ assert.match(
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;
-for (const buildJob of ['build-windows', 'build-macos', 'build-docs']) {
+for (const buildJob of ['build-desktop-web', 'build-docs']) {
   assert.equal(
     reusableJobs[buildJob].needs,
     undefined,
     `${buildJob} must run concurrently with graph asset verification.`,
   );
 }
+const desktopWebUpload = findStep(
+  reusableJobs['build-desktop-web'],
+  'Upload desktop frontend',
+  'Desktop frontend producer',
+);
+assert.equal(desktopWebUpload.with?.name, 'rivet-${{ inputs.channel }}-desktop-web-${{ github.sha }}');
+assert.equal(desktopWebUpload.with?.overwrite, true);
+assert.equal(desktopWebUpload.with?.['if-no-files-found'], 'error');
+assert.ok(
+  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Seal desktop frontend artifact') <
+    reusableJobs['build-desktop-web'].steps.indexOf(desktopWebUpload),
+);
+for (const nativeJob of ['build-windows', 'build-macos']) {
+  assert.deepEqual(asArray(reusableJobs[nativeJob].needs), ['build-desktop-web']);
+  const download = findStep(reusableJobs[nativeJob], 'Download shared desktop frontend', nativeJob);
+  assert.equal(download.with?.name, desktopWebUpload.with.name);
+  assert.equal(download.with?.path, 'packages/app');
+}
+assert.match(
+  findStep(reusableJobs['build-windows'], 'Build Tauri Windows bundle', 'Windows release').run,
+  /--config .*desktop-prebuilt\.conf\.json/,
+);
+assert.match(findStep(reusableJobs['build-macos'], 'Build Tauri macOS bundle', 'macOS release').run, /--prebuilt-web/);
+assert.match(
+  JSON.parse(read('.github/desktop-prebuilt.conf.json')).build.beforeBuildCommand,
+  /^node .*desktop-web-artifact\.mjs verify && .*prepare:tauri$/,
+);
 assert.equal(reusableJobs['publish-pages'].concurrency.group, 'rivet-docs-pages');
 assertIncludesAll(
   asArray(reusableJobs['publish-pages'].needs),

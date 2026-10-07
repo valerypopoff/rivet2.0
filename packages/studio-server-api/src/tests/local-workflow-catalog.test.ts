@@ -1,3 +1,4 @@
+// test-style: fixture-read: reads only generated project fixtures to verify read-only diagnosis preserves source bytes.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -14,13 +15,23 @@ import {
   type LocalWorkflowCatalogSnapshot,
 } from '../local-metadata/workflow-catalog.js';
 import { stageFrozenRecordingCatalog, stageFrozenWorkflowCatalog } from '../local-metadata/stage-workflow-catalog.js';
-import { collectSourceWorkflows } from '../local-metadata/filesystem-workflow-source.js';
+import { checkLocalWorkflowSource, collectSourceWorkflows } from '../local-metadata/filesystem-workflow-source.js';
 import { collectSourceRecordings } from '../local-metadata/filesystem-recording-source.js';
-import { createBlankProjectFile, getWorkflowDatasetPath } from '../routes/workflows/fs-helpers.js';
+import {
+  createBlankProjectFile,
+  getWorkflowDatasetPath,
+  getWorkflowProjectSettingsPath,
+} from '../routes/workflows/fs-helpers.js';
+import {
+  readFilesystemPublishedVersionsForMigration,
+  validateFilesystemPublishedVersionArchiveForMigration,
+} from '../routes/workflows/published-versions.js';
+import { createWorkflowPublicationStateHashFromContents } from '../routes/workflows/publication.js';
 import { getRecordingArtifactPath } from '../routes/workflows/recordings-artifacts.js';
 import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import { ImmutableLocalArtifactStore } from '../local-metadata/immutable-artifact-store.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
+import { localUpgradeFailure, localUpgradeSourceReference } from '../local-metadata/upgrade-diagnostics.js';
 
 function project(overrides: Partial<LocalWorkflowCatalogSnapshot> = {}): LocalWorkflowCatalogSnapshot {
   const relativePath = overrides.relativePath ?? 'folder/story.rivet-project';
@@ -111,6 +122,29 @@ async function fixture(run: (catalog: LocalWorkflowCatalog, root: string) => Pro
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test('reference scans read only current draft and active publications, not datasets or archived history', async () => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    const catalogBefore = catalog.listProjectReferenceCatalog();
+    // Removing unrelated payloads proves this read does not materialize them.
+    for (const contents of [
+      source.datasetsContents!,
+      source.publishedWebApps[0]!.datasetsContents!,
+      source.publishedVersions[0]!.contents,
+    ]) {
+      const hash = createHash('sha256').update(contents).digest('hex');
+      await fs.rm(path.join(root, 'objects', hash.slice(0, 2), hash), { force: true });
+    }
+    assert.deepEqual(await catalog.readProjectReferenceSnapshots(source.relativePath), [
+      { source: { kind: 'saved-latest' }, contents: source.contents },
+      { source: { kind: 'published-endpoint', label: 'story' }, contents: source.publishedContents },
+      { source: { kind: 'published-web-app', label: 'story-ui' }, contents: source.publishedWebApps[0]!.contents },
+    ]);
+    assert.deepEqual(catalog.listProjectReferenceCatalog(), catalogBefore);
+  });
+});
 
 test('local catalog moves preserve recording rows and reject structural phantom writes', async () => {
   await fixture(async (catalog) => {
@@ -372,6 +406,249 @@ test('migration UTF-8 decoding preserves BOM bytes and rejects lossy replacement
   const source = Buffer.from([0xef, 0xbb, 0xbf, 0x41]);
   assert.deepEqual(Buffer.from(decodeMigrationSourceUtf8(source, 'fixture')), source);
   assert.throws(() => decodeMigrationSourceUtf8(Buffer.from([0xff]), 'fixture'), /not valid UTF-8/);
+});
+
+test('workflow diagnostics identify malformed projects and duplicate IDs without changing source bytes', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-workflow-diagnostic-'));
+  try {
+    const first = path.join(root, 'a.rivet-project');
+    const second = path.join(root, 'b.rivet-project');
+    const contents = createBlankProjectFile('fixture');
+    await fs.writeFile(first, contents);
+    await fs.writeFile(second, contents);
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      await assert.rejects(collectSourceWorkflows(root), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'project-id-duplicate');
+        assert.ok(
+          ['a.rivet-project', 'b.rivet-project'].map(localUpgradeSourceReference).includes(failure.sourceReference!),
+        );
+        return true;
+      });
+      assert.equal(await fs.readFile(first, 'utf8'), contents);
+      assert.equal(await fs.readFile(second, 'utf8'), contents);
+      await fs.writeFile(second, 'password=never-serialize-this-invalid-project');
+      await assert.rejects(collectSourceWorkflows(root), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'project-parse-failed');
+        assert.equal(failure.sourceReference, localUpgradeSourceReference('b.rivet-project'));
+        assert.equal(JSON.stringify(failure).includes('password'), false);
+        return true;
+      });
+      assert.equal(await fs.readFile(second, 'utf8'), 'password=never-serialize-this-invalid-project');
+      await assert.rejects(checkLocalWorkflowSource(root), (error) => {
+        assert.equal(localUpgradeFailure('workflows', error).reason, 'project-parse-failed');
+        return true;
+      });
+      const otherContents = createBlankProjectFile('other');
+      await fs.writeFile(second, otherContents);
+      await fs.mkdir(path.join(root, 'empty-folder'));
+      assert.deepEqual(await checkLocalWorkflowSource(root), { projects: 2, folders: 1 });
+      assert.equal(await fs.readFile(first, 'utf8'), contents);
+      assert.equal(await fs.readFile(second, 'utf8'), otherContents);
+      assert.deepEqual((await fs.readdir(root)).sort(), ['a.rivet-project', 'b.rivet-project', 'empty-folder']);
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('migration archive parses bounded snapshot and metadata bytes without reopening them', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-archive-checked-'));
+  try {
+    const published = path.join(root, '.published');
+    await fs.mkdir(published);
+    const contents = createBlankProjectFile('fixture');
+    let workflowId = '';
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      await fs.writeFile(path.join(root, 'fixture.rivet-project'), contents);
+      const [source] = await collectSourceWorkflows(root);
+      assert.ok(source);
+      workflowId = source.workflowId;
+    });
+    const snapshot = path.join(published, 'snapshot.rivet-project');
+    const metadata = path.join(published, 'snapshot.json');
+    await fs.writeFile(snapshot, contents);
+    await fs.writeFile(
+      metadata,
+      JSON.stringify({
+        version: 1,
+        id: 'snapshot',
+        projectId: workflowId,
+        projectName: 'fixture',
+        relativePath: 'fixture.rivet-project',
+        endpointName: 'fixture',
+        publishedAt: '2026-01-01T00:00:00.000Z',
+        stateHash: 'fixture',
+      }),
+    );
+    const readFile = fs.readFile;
+    const guard = t.mock.method(fs, 'readFile', (...args: Parameters<typeof fs.readFile>) => {
+      assert.ok(args[0] !== snapshot && args[0] !== metadata, 'Checked archive bytes must not be reopened');
+      return Reflect.apply(readFile, fs, args);
+    });
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      assert.deepEqual(await validateFilesystemPublishedVersionArchiveForMigration(root), new Set([workflowId]));
+      const records = await readFilesystemPublishedVersionsForMigration(root, path.join(root, 'fixture.rivet-project'));
+      assert.equal(records.length, 1);
+      assert.equal(records[0]?.contents, contents);
+      guard.mock.restore();
+      const lstat = fs.lstat;
+      const permission = t.mock.method(fs, 'lstat', (...args: Parameters<typeof fs.lstat>) => {
+        if (args[0] === snapshot) throw Object.assign(new Error('private permission detail'), { code: 'EACCES' });
+        return Reflect.apply(lstat, fs, args);
+      });
+      await assert.rejects(
+        readFilesystemPublishedVersionsForMigration(root, path.join(root, 'fixture.rivet-project')),
+        (error) => {
+          const failure = localUpgradeFailure('workflows', error);
+          assert.equal(failure.code, 'permission-denied');
+          assert.equal(failure.reason, undefined);
+          return true;
+        },
+      );
+      permission.mock.restore();
+      await withEnvOverride('RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB', '1', async () => {
+        await fs.writeFile(snapshot, 'x'.repeat(1048577));
+        await assert.rejects(
+          readFilesystemPublishedVersionsForMigration(root, path.join(root, 'fixture.rivet-project')),
+          (error) => {
+            assert.equal(localUpgradeFailure('workflows', error).reason, 'source-bundle-limit');
+            return true;
+          },
+        );
+      });
+      await fs.rm(snapshot);
+      await assert.rejects(
+        readFilesystemPublishedVersionsForMigration(root, path.join(root, 'fixture.rivet-project')),
+        (error) => {
+          assert.equal(localUpgradeFailure('workflows', error).reason, 'publication-snapshot-missing');
+          return true;
+        },
+      );
+      await withEnvOverride('RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB', '1', async () => {
+        await fs.writeFile(metadata, ' '.repeat(1048577));
+        await assert.rejects(validateFilesystemPublishedVersionArchiveForMigration(root), (error) => {
+          assert.equal(localUpgradeFailure('workflows', error).reason, 'source-bundle-limit');
+          return true;
+        });
+      });
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('migration legacy publication fallback refuses missing and foreign snapshots without parser warnings', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-legacy-history-'));
+  const warnings = t.mock.method(console, 'warn', () => {});
+  try {
+    const projectPath = path.join(root, 'fixture.rivet-project');
+    const snapshot = path.join(root, '.published', 'legacy.rivet-project');
+    await fs.mkdir(path.dirname(snapshot));
+    await fs.writeFile(projectPath, createBlankProjectFile('fixture'));
+    await fs.writeFile(
+      getWorkflowProjectSettingsPath(projectPath),
+      JSON.stringify({
+        endpointName: 'fixture',
+        publishedSnapshotId: 'legacy',
+      }),
+    );
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      const rejectsWith = async (reason: string) => {
+        await assert.rejects(collectSourceWorkflows(root), (error) => {
+          const failure = localUpgradeFailure('workflows', error);
+          assert.equal(failure.reason, reason);
+          assert.equal(failure.sourceReference, localUpgradeSourceReference('fixture.rivet-project'));
+          return true;
+        });
+      };
+      await rejectsWith('publication-snapshot-missing');
+      await assert.rejects(readFilesystemPublishedVersionsForMigration(root, projectPath), (error) => {
+        assert.equal(localUpgradeFailure('workflows', error).reason, 'publication-snapshot-missing');
+        return true;
+      });
+      await fs.writeFile(snapshot, createBlankProjectFile('another-project'));
+      await rejectsWith('publication-owner-mismatch');
+      await assert.rejects(readFilesystemPublishedVersionsForMigration(root, projectPath), (error) => {
+        assert.equal(localUpgradeFailure('workflows', error).reason, 'publication-owner-mismatch');
+        return true;
+      });
+      await fs.writeFile(snapshot, 'private malformed project contents');
+      await rejectsWith('project-parse-failed');
+      await assert.rejects(readFilesystemPublishedVersionsForMigration(root, projectPath));
+      assert.equal(warnings.mock.callCount(), 0);
+      await fs.writeFile(snapshot, await fs.readFile(projectPath));
+      const [source] = await collectSourceWorkflows(root);
+      assert.equal(source?.publishedVersions.length, 1);
+      assert.equal(source?.publishedVersions[0]?.versionId, 'legacy');
+      await fs.writeFile(
+        getWorkflowProjectSettingsPath(projectPath),
+        JSON.stringify({ publishedSnapshotId: 'legacy' }),
+      );
+      await rejectsWith('publication-history-invalid');
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('migration publication status and legacy resolution reuse checked project, settings and dataset bytes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-checked-publication-'));
+  try {
+    const projectPath = path.join(root, 'fixture.rivet-project');
+    const datasetPath = getWorkflowDatasetPath(projectPath);
+    const settingsPath = getWorkflowProjectSettingsPath(projectPath);
+    const contents = createBlankProjectFile('fixture');
+    const datasetsContents = '{"dataset":"preserve checked bytes"}';
+    await fs.writeFile(projectPath, contents);
+    await fs.writeFile(datasetPath, datasetsContents);
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({
+        endpointName: 'fixture',
+        publishedEndpointName: 'fixture',
+        publishedStateHash: createWorkflowPublicationStateHashFromContents(contents, datasetsContents, 'fixture'),
+        lastPublishedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+    const readFile = fs.readFile;
+    const guard = t.mock.method(fs, 'readFile', (...args: Parameters<typeof fs.readFile>) => {
+      assert.ok(
+        ![projectPath, datasetPath, settingsPath].includes(args[0] as string),
+        'Migration must not reopen checked source through unbounded readers',
+      );
+      return Reflect.apply(readFile, fs, args);
+    });
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      const [source] = await collectSourceWorkflows(root);
+      assert.ok(source);
+      assert.equal(source.endpointStatus, 'published');
+      assert.equal(source.contents, contents);
+      assert.equal(source.datasetsContents, datasetsContents);
+      assert.equal(source.publishedContents, contents);
+      assert.equal(source.publishedDatasetsContents, datasetsContents);
+      assert.equal(source.lastPublishedAt, '2026-01-01T00:00:00.000Z');
+      await fs.writeFile(datasetPath, '{"dataset":"changed"}');
+      await assert.rejects(collectSourceWorkflows(root), (error) => {
+        // Changed draft cannot stand in for a missing legacy published snapshot.
+        assert.equal(localUpgradeFailure('workflows', error).reason, 'publication-snapshot-missing');
+        return true;
+      });
+      await withEnvOverride('RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB', '1', async () => {
+        await fs.writeFile(datasetPath, 'x'.repeat(1048576));
+        await assert.rejects(collectSourceWorkflows(root), (error) => {
+          const failure = localUpgradeFailure('workflows', error);
+          assert.equal(failure.reason, 'source-bundle-limit');
+          assert.equal(failure.sourceReference, localUpgradeSourceReference('fixture.rivet-project'));
+          return true;
+        });
+      });
+    });
+    guard.mock.restore();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test('local workflow candidate rejects invalid UTF-8 dataset bytes rather than changing them', async () => {

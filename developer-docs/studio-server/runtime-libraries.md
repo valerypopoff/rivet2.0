@@ -6,7 +6,7 @@ The dashboard exposes this through `Settings` -> `Runtime libraries`.
 
 ## Backend modes
 
-Runtime libraries follow the same storage mode as workflow storage. Operators set it in `Settings` -> `Storage`. Single-host deployments persist `settings/deployment-storage.json` under app data; Kubernetes stores the same typed domain in encrypted PostgreSQL settings. APIs start synchronization from the loaded row, and the co-located editor executor receives its startup configuration over authenticated loopback without a pod-local settings file.
+Runtime libraries follow the same storage mode as workflow storage. Operators set it in `Settings` -> `Storage`. Fresh/upgraded single-host deployments persist the domain in SQLite; legacy file mode uses `settings/deployment-storage.json` under app data; Kubernetes stores the same typed domain in encrypted PostgreSQL settings. APIs start synchronization from the loaded row, and the co-located editor executor receives its startup configuration over authenticated loopback without a pod-local settings file.
 
 - `filesystem`
 - `managed`

@@ -170,14 +170,31 @@ recreate the backend. A full scratch mount causes a visible write failure for
 these standard temp paths. The graph-capable backend root is still writable,
 so this is not a blanket disk-write prohibition for arbitrary workflow code.
 
+Project dependency exports use a separate private **disk-backed** named volume,
+`rivet_project_bundles`, mounted at `/data/project-bundles` in both production
+and development Compose. No `.env` setting is required. Export accounting retains
+the 2 GiB scratch budget and a 32 MiB free-space reserve; optional
+`RIVET_PROJECT_BUNDLE_MAX_BYTES` / `RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES` tune
+payload and scratch budgets, not the underlying disk size.
+`RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` tunes reserve headroom (1 MiB to
+1 GiB). Files feed directly into the ZIP without raw staging; accounting follows
+actual compressed output and retained archives, not preallocated limits. Finished exports expire
+after 24 hours and cleanup protects active downloads. Keep ordinary tmpfs sizes
+unchanged: disk-backed exports avoid competing with workflow memory in tmpfs.
+Update the Compose files as well as the images, then recreate the stack through
+the normal launcher so the initializer creates and owns the new volume. Updating
+only an image does not install the mount. See the
+[bundle deployment checks](../../developer-docs/studio-server/project-bundles.md#deployment-scratch-capacity).
+
 Useful variants:
 
-| Command                           | Behavior                                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `yarn studio-server:prod`         | Pull and run the published images                                                                                  |
-| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                     |
-| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                              |
-| `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources |
+| Command                           | Behavior                                                                                                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `yarn studio-server:prod`         | Pull and run the published images                                                                                                                                           |
+| `yarn studio-server:staging`      | On a clean staging checkout with an existing API container, verify matching staging images and all existing data mounts, then run digest-pinned images in the same VM stack |
+| `yarn studio-server:prod:restart` | Recreate containers from already-local images after an environment-only change                                                                                              |
+| `yarn studio-server:prod:custom`  | Build production images from the current monorepo commit and run them                                                                                                       |
+| `yarn studio-server:clean`        | Show a host-wide Docker cleanup preflight, then require explicit authorization before pruning non-volume resources                                                          |
 
 `yarn studio-server:clean` is a recovery tool for the whole selected Docker host, not only this Compose project. Start with:
 
@@ -203,7 +220,25 @@ credentials with `docker logout ghcr.io` and retry. Pin a release with
 processes inside the API image; the standalone executor image is retained for
 predecessor rollback and explicit standalone use, not pulled by the production launcher.
 
+For a staging VM trial, first confirm that the staging commit's **Build Images**
+workflow succeeded, then use `yarn studio-server:staging` from that clean branch.
+It resolves all staging aliases to matching commit-labelled immutable digests
+and checks the rendered artifact bind mounts and named data volumes against the existing API container
+before recreating anything. It uses the same data volumes and does not migrate
+storage or change `.env`. See the [staging VM procedure](../../developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
+
 ## Development
+
+Fresh single-host Compose installations initialize SQLite automatically before
+serving: metadata, default App Settings and operational stores use SQLite, while
+large project/dataset/recording/library payloads use checksum-addressed files.
+There is no upgrade tab or reminder on fresh/completed SQLite installations.
+Any retained entry in the four source roots keeps the explicit legacy workflow;
+empty projects alone are not evidence of a new installation. Preserve all data
+and control volumes from first start. Interrupted initialization retries its
+owned identity and never launches a legacy fallback.
+
+For existing file-backed single-host installations, the updated Compose stack offers **Settings → Local storage upgrade** as a browser-guided migration: prepare the server if prompted, pause and create a verified backup, download the archive, copy/verify, activate and validate while paused, then explicitly resume writes. New local settings are plaintext, including credentials: protect volumes and backups. The supported launcher requires none of `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`, `RIVET_LOCAL_METADATA_CONTROL_ROOT` or `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` in user `.env`. Older manual encrypted databases still need their original key until live plaintext conversion completes; custom roots need one boot with their original root to retain its binding. The supervisor performs the necessary API/executor restarts; web/proxy are not restarted. Preserve the reserved `rivet_local_metadata` volume and the App Data installation binding. A lost/corrupt volume or a custom unsupported launcher still requires administrator recovery; the UI must never initialize a replacement over an existing migration. See the [local upgrade runbook](../../developer-docs/studio-server/local-metadata-upgrade.md).
 
 The Docker development stack is the default production-shaped loop:
 
@@ -211,11 +246,43 @@ The Docker development stack is the default production-shaped loop:
 yarn studio-server:dev
 ```
 
+For development from another computer through a VS Code tunnel, use:
+
+```bash
+yarn studio-server:dev:tunnel
+```
+
+Forward the same proxy port shown by the launcher (for example, 8081), then open
+the authenticated tunnel URL. Do not forward the private API or frontend ports.
+Keep tunnel sign-in and Rivet's UI access controls enabled.
+
+This mode bundles frontend edits automatically and keeps the normal backend
+watchers. The first launch waits for a complete bundle; subsequent full rebuilds
+currently take roughly two minutes and need substantial Docker memory (measured
+around 5.3 GiB for the builder alone). It is not intended to build on a small
+production VM. Successful updates refresh a clean, idle workspace. With unsaved
+edits or active work, the app offers **Refresh when safe** instead; save changes
+and finish runs before using it. A failed build keeps the last working frontend
+available; inspect `yarn studio-server:dev:docker:logs` for details.
+
+Run `yarn studio-server:dev` to return to Vite hot reload. These commands are
+alternative modes of the same stack and use the same data mounts. Save browser
+edits before deliberately switching modes. Neither command migrates storage.
+See [tunnel development](../../developer-docs/studio-server/development.md#tunnel-friendly-development)
+for cache limits, troubleshooting and verification commands.
+
+If a loading failure shows **Retry loading**, first check your connection and
+tunnel sign-in, and wait for any build to finish. Retry reloads the failed page
+or editor iframe; it does not reset saved projects or browser recovery data.
+
 Development runs API and executor source watchers in one backend container,
 matching the production Compose container layout while retaining hot reload.
-When Compose recreates that backend or the editor web service, it also restarts
-Nginx so Docker service-name resolution cannot leave the browser connected to
-a retired container IP.
+When Compose recreates the backend, it also restarts Nginx. Frontend mode changes
+do not restart Nginx or disconnect executor sessions: the dev launcher gracefully
+reloads its configuration after frontend readiness, refreshing Docker service-name
+resolution without retiring existing connections. If you recreate only `web`
+using Compose directly, run `docker compose ... exec -T proxy nginx -s reload`
+after it becomes ready, or use the normal dev launcher to do this safely.
 
 Useful commands:
 

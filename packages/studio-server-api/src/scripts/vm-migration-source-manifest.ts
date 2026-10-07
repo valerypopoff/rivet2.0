@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PROJECT_STATS_SUFFIX } from '../routes/workflows/fs-helpers.js';
+import { inspectLocalSqliteSnapshot } from '../local-metadata/sqlite-snapshot.js';
 
 async function hashTree(
   hash: ReturnType<typeof createHash>,
@@ -85,7 +86,19 @@ export async function readVmMigrationSourceParts(roots: SourceRoots): Promise<Re
   const settings = createHash('sha256');
   await hashTree(settings, roots.appData, 'settings');
   parts.settings = settings.digest('hex');
-  for (const database of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite']) {
+  for (const database of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite', 'scheduled-runs.sqlite']) {
+    if (database === 'scheduled-runs.sqlite') {
+      try {
+        // The scheduler retains a WAL connection while paused. Shutdown may
+        // checkpoint it and remove WAL/SHM without changing any committed data.
+        // Protect schema and rows, including committed WAL, not journal layout.
+        parts[database] = (await inspectLocalSqliteSnapshot(path.join(roots.appData, database))).logicalHash;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      continue;
+    }
     const hash = createHash('sha256');
     for (const suffix of ['', '-wal', '-shm']) {
       await hashTree(hash, roots.appData, `${database}${suffix}`);

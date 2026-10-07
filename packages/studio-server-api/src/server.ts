@@ -1,4 +1,7 @@
 import 'dotenv/config';
+import { initializeScheduledRuns, stopScheduledRuns } from './scheduled-runs/runtime.js';
+import { settleBeforeDeadline } from './shutdown-deadline.js';
+import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
@@ -150,8 +153,7 @@ async function closeHttpServer(deadline: number): Promise<boolean> {
     });
     server.closeIdleConnections?.();
   });
-  const remainingMs = Math.max(0, deadline - Date.now());
-  await Promise.race([closedPromise, wait(remainingMs)]);
+  await settleBeforeDeadline(closedPromise, deadline);
   return closed;
 }
 
@@ -162,6 +164,7 @@ function disposeResources(interruptWebAppRuns: boolean): Promise<void> {
 }
 
 async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void> {
+  await stopScheduledRuns(0);
   disposeWorkflowRecordingInputExtractor();
 
   if (webAppActionWebSockets) {
@@ -175,6 +178,9 @@ async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void>
     console.error('[latest-debugger] Failed to dispose during shutdown:', error);
   });
 
+  await projectBundleJobs.dispose().catch((error) => {
+    console.error('[project-bundles] Failed to dispose exports during shutdown:', error);
+  });
   await disposeWorkflowStorage().catch((error) => {
     console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
   });
@@ -217,16 +223,21 @@ async function shutdown(signal: string): Promise<void> {
   webAppActionWebSockets?.drain();
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
+  const scheduledDrain = stopScheduledRuns(shutdownGraceMs);
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
-    await Promise.race([startupPromise.catch(() => undefined), wait(Math.max(0, deadline - Date.now()))]);
+    await settleBeforeDeadline(
+      startupPromise.catch(() => undefined),
+      deadline,
+    );
   }
 
   const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([
     closeHttpServer(deadline),
     waitForActiveWebAppRuns(deadline),
     waitForActiveHttpExecutions(deadline),
+    scheduledDrain,
   ]);
 
   if (!webAppRunsCompleted) {
@@ -356,6 +367,10 @@ async function startServer(): Promise<void> {
     await runtimeHealth.start();
     assertStartupActive();
     await listenHttpServer();
+    assertStartupActive();
+    // Existing schedules may be due immediately. Do not start their execution
+    // until runtime-library reconciliation and the rest of startup have finished.
+    if (isControlPlaneApiProfile(apiRuntimeProfile)) await initializeScheduledRuns();
     assertStartupActive();
   } catch (error) {
     if (error instanceof StartupCancelledError) {

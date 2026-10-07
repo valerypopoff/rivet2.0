@@ -30,7 +30,9 @@ jobs:
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Build
-        run: yarn build
+        # The desktop frontend is a separate mandatory gate, not a prerequisite
+        # for runtime tests that never consume its bundle.
+        run: yarn studio-server:build:dependencies
         env:
           NODE_OPTIONS: --max_old_space_size=6000
       - name: Verify compiled workspace exports
@@ -63,12 +65,12 @@ jobs:
       max-parallel: 6
       matrix:
         include:
-          - label: Core
-            command: test:core
-          - label: Node
-            command: test:node
-          - label: Evaluations
-            command: test:evaluations
+          - label: Core 1/2
+            command: workspace @valerypopoff/rivet2-core run test:shard
+            core-shard: 1/2
+          - label: Core 2/2
+            command: workspace @valerypopoff/rivet2-core run test:shard
+            core-shard: 2/2
           - label: App 1/4
             command: test:app --shard-index 0 --shard-count 4
           - label: App 2/4
@@ -77,10 +79,6 @@ jobs:
             command: test:app --shard-index 2 --shard-count 4
           - label: App 4/4
             command: test:app --shard-index 3 --shard-count 4
-          - label: App Executor
-            command: test:app-executor
-          - label: CLI
-            command: test:cli
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
@@ -100,9 +98,79 @@ jobs:
         run: yarn check:compiled-workspace-exports
       - name: Test ${{ matrix.label }}
         run: yarn ${{ matrix.command }}
+        env:
+          # App shards consume the verified same-commit artifact instead of
+          # rebuilding Core independently in all four consumer jobs.
+          RIVET_APP_TEST_DEPENDENCIES: prebuilt
+          RIVET_CORE_TEST_SHARD: ${{ matrix.core-shard }}
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Test ${{ matrix.label }}"
+
+  supporting-tests:
+    name: Test ${{ matrix.label }}
+    needs: compiled-artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - label: Node
+            command: test:node
+          - label: Evaluations
+            command: test:evaluations
+          - label: App Executor
+            command: test:app-executor
+          - label: CLI
+            command: test:cli
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Test ${{ matrix.label }}"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: build-dependencies-${{ github.sha }}
+          path: packages
+      - name: Verify restored compiled dependencies
+        run: yarn check:compiled-workspace-exports
+      - name: Test ${{ matrix.label }}
+        run: yarn ${{ matrix.command }}
+        env:
+          RIVET_NODE_TEST_DEPENDENCIES: prebuilt
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Test ${{ matrix.label }}"
+
+  frontend-build:
+    name: Compile desktop frontend and CLI
+    needs: compiled-artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-yarn
+      - name: Start timing
+        run: node scripts/ci/job-timing.mjs start "Compile desktop frontend and CLI"
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Download compiled dependencies
+        uses: actions/download-artifact@v7
+        with:
+          name: build-dependencies-${{ github.sha }}
+          path: packages
+      - name: Verify restored compiled dependencies
+        run: yarn check:compiled-workspace-exports
+      - name: Build desktop frontend and CLI
+        run: yarn workspace @valerypopoff/rivet-app run build && yarn workspace @valerypopoff/rivet2-cli run build
+        env:
+          NODE_OPTIONS: --max_old_space_size=6000
+      - name: Report timing
+        if: always()
+        run: node scripts/ci/job-timing.mjs finish "Compile desktop frontend and CLI"
 
   package-lint:
     name: Lint ${{ matrix.label }}
@@ -215,6 +283,8 @@ jobs:
     needs:
       - compiled-artifacts
       - package-tests
+      - supporting-tests
+      - frontend-build
       - package-lint
       - static-validation
       - javascript-audit
@@ -225,16 +295,21 @@ jobs:
         env:
           COMPILE_RESULT: ${{ needs.compiled-artifacts.result }}
           TEST_RESULT: ${{ needs.package-tests.result }}
+          SUPPORTING_TEST_RESULT: ${{ needs.supporting-tests.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-build.result }}
           LINT_RESULT: ${{ needs.package-lint.result }}
           STATIC_RESULT: ${{ needs.static-validation.result }}
           JAVASCRIPT_AUDIT_RESULT: ${{ needs.javascript-audit.result }}
           RUST_RESULT: ${{ needs.rust-audit.result }}
         run: |
-          for result in "$COMPILE_RESULT" "$TEST_RESULT" "$LINT_RESULT" "$STATIC_RESULT" "$JAVASCRIPT_AUDIT_RESULT" "$RUST_RESULT"; do
+          for result in "$COMPILE_RESULT" "$TEST_RESULT" "$SUPPORTING_TEST_RESULT" "$FRONTEND_RESULT" "$LINT_RESULT" "$STATIC_RESULT" "$JAVASCRIPT_AUDIT_RESULT" "$RUST_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@v6
         if: always()
+        with:
+          sparse-checkout: scripts/ci/job-timing.mjs
+          sparse-checkout-cone-mode: false
       - name: Report Build critical path
         if: always()
         continue-on-error: true

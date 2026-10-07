@@ -2,6 +2,8 @@ import { expect, test, type FrameLocator, type Locator, type Page } from '@playw
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
+test.use({ actionTimeout: 15_000 });
+
 const projectName = 'Hosted Classifier node migration';
 const projectPath = `/workflows/${projectName}.rivet-project`;
 
@@ -35,6 +37,13 @@ data:
             timeoutMs: 30000
           visualData: 600/180/280/null//
           outgoingConnections: []
+        '[image]:image "Image"':
+          data:
+            useDataInput: false
+            mediaType: image/png
+            useMediaTypeInput: false
+          visualData: 160/500/250/null//
+          outgoingConnections: []
   plugins:
     - type: built-in
       id: typesafe
@@ -57,19 +66,37 @@ async function openFixture(page: Page): Promise<FrameLocator> {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path === '/api/config' && request.method() === 'GET') {
-      await route.fulfill({ json: {
-        executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/internal',
-        remoteDebuggerDefaultWs: 'ws://127.0.0.1:8081/ws/latest-debugger',
-        publishedWorkflowsBasePath: '/workflows', latestWorkflowsBasePath: '/workflows-latest',
-        publishedAppsBasePath: '/apps', latestAppsBasePath: '/apps-latest', webAppsAuthMode: 'ui-gate',
-      } });
+      await route.fulfill({
+        json: {
+          executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/internal',
+          remoteDebuggerDefaultWs: 'ws://127.0.0.1:8081/ws/latest-debugger',
+          publishedWorkflowsBasePath: '/workflows',
+          latestWorkflowsBasePath: '/workflows-latest',
+          publishedAppsBasePath: '/apps',
+          latestAppsBasePath: '/apps-latest',
+          webAppsAuthMode: 'ui-gate',
+        },
+      });
     } else if (path === '/api/workflows/evaluation-runs/library' && request.method() === 'GET') {
-      await route.fulfill({ json: {
-        revision: 0, resourceVersions: { suites: {}, datasets: {} },
-        library: { version: 1, data: { version: 1, suites: [], baselines: [] }, datasets: [], migratedLegacyProjectIds: [] },
-      } });
+      await route.fulfill({
+        json: {
+          revision: 0,
+          resourceVersions: { suites: {}, datasets: {} },
+          library: {
+            version: 1,
+            data: { version: 1, suites: [], baselines: [] },
+            datasets: [],
+            migratedLegacyProjectIds: [],
+          },
+        },
+      });
     } else if (path === '/api/workflows/tree' && request.method() === 'GET') {
-      const tree: WorkflowTreeResponse = { root: '/workflows', sync: { epoch: 'jev', revision: 0 }, folders: [], projects: [project] };
+      const tree: WorkflowTreeResponse = {
+        root: '/workflows',
+        sync: { epoch: 'jev', revision: 0 },
+        folders: [],
+        projects: [project],
+      };
       await route.fulfill({ json: tree });
     } else if (path === '/api/projects/load' && request.method() === 'POST') {
       await route.fulfill({ json: { contents: fixture, datasetsContents: null, revisionId: null } });
@@ -141,7 +168,9 @@ test('Choice selection persists and keeps both criteria columns usable', async (
   await choice.locator('button.edit-button').click({ force: true });
 
   await selectQuestionType(editor, 'Score');
-  await expect(classifierSection(editor, 'Criteria').getByRole('combobox', { name: 'Criteria type', exact: true })).toBeVisible();
+  await expect(
+    classifierSection(editor, 'Criteria').getByRole('combobox', { name: 'Criteria type', exact: true }),
+  ).toBeVisible();
   await expect(editor.getByRole('combobox', { name: 'Criterion 1 type', exact: true })).toHaveCount(0);
 
   await selectQuestionType(editor, 'Choice');
@@ -224,8 +253,8 @@ test('Classifier cards share the LLM Chat body layout', async ({ page }) => {
   await expect(choice.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
 
   await expect(evaluate.locator('.node-body-markdown')).toHaveCount(0);
-  await expect(evaluate.locator('.llm-node-body-section')).toHaveCount(1);
-  await expect(evaluate.locator('.llm-node-body-label')).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluate.locator('.llm-node-body-section')).toHaveCount(2);
+  await expect(evaluate.locator('.llm-node-body-label')).toHaveText(['Provider:', 'Model:', 'Throw on non-2XX:']);
   await expect(evaluate.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
 });
 
@@ -314,10 +343,11 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await expect(evaluate.locator('.port-label', { hasText: /^Question 1$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Answers$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Cost$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(0);
   await expect(evaluate).not.toContainText('Batch: one request');
   const evaluateBodyFields = evaluate.locator('.llm-node-body-label');
-  await expect(evaluateBodyFields).toHaveText(['Provider:', 'Model:']);
+  await expect(evaluateBodyFields).toHaveText(['Provider:', 'Model:', 'Throw on non-2XX:']);
   await expect(evaluateBodyFields.first()).toHaveCSS('opacity', '0.6');
   await expect(evaluate).toContainText('Provider: Jev');
   await expect(evaluate).toContainText('Model: jev-latest');
@@ -326,37 +356,77 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   // edit action so this assertion exercises switching inspectors instead of relying
   // on page-level keyboard focus across the editor iframe.
   await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const modelSection = editor.getByRole('button', { name: 'Model', exact: true }).and(editor.locator('button'));
+  const modelContent = modelSection
+    .locator('xpath=ancestor::div[@class="Collapsible"][1]')
+    .locator(':scope > .Collapsible__contentOuter');
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
+  await modelSection.click();
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'false');
+  // react-collapsible clips mounted controls rather than display:none-ing them;
+  // Playwright's toBeVisible does not account for this ancestor clipping.
+  await expect(modelContent).toHaveCSS('height', '0px');
+  await expect(modelContent).toHaveCSS('overflow', 'hidden');
+  await expect(modelContent.getByText('Provider', { exact: true })).toHaveCount(1);
+  await expect(modelContent.getByRole('group', { name: 'API key source' })).toHaveCount(1);
+  await modelSection.click();
+  await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
+  await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await editor.getByRole('button', { name: 'Classifier settings', exact: true }).click();
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
+  await expect(editor.getByText(/A missing key fails without fallback/)).toBeVisible();
+  await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByRole('button', { name: 'Classifier settings', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await editor.getByRole('button', { name: 'Automatic', exact: true }).click();
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
+  const outputsHeading = editor.getByText('Outputs', { exact: true });
+  if (
+    (await outputsHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false'
+  ) {
+    await outputsHeading.click();
+  }
   await expect(editor.getByText('Output usage details', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output request body', { exact: true })).toBeVisible();
   await expect(editor.getByText('Output response body', { exact: true })).toBeVisible();
-  await editor.locator('input#outputUsage').check();
+  await editor.getByText('Output usage details', { exact: true }).click();
   await expect(editor.locator('input#outputUsage')).toBeChecked();
-  await editor.locator('input#outputRequestBody').check();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier request body$/ })).toHaveCount(1);
-  await editor.locator('input#outputResponseBody').check();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier response body$/ })).toHaveCount(1);
+  await editor.getByText('Output request body', { exact: true }).click();
+  await expect(evaluate.locator('.port-label', { hasText: /^Request body$/ })).toHaveCount(1);
+  await editor.getByText('Output response body', { exact: true }).click();
+  await expect(evaluate.locator('.port-label', { hasText: /^Response body$/ })).toHaveCount(1);
   await expect(editor.getByText('Error behavior', { exact: true })).toBeVisible();
+  const errorHeading = editor.getByText('Error behavior', { exact: true });
+  if ((await errorHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false') {
+    await errorHeading.click();
+  }
   await expect(editor.getByText('Retry on non-200', { exact: true })).toBeVisible();
-  await editor.locator('input#retryOnNon200').check();
+  await editor.getByText('Retry on non-200', { exact: true }).click();
   await expect(editor.getByText('Repeat times', { exact: true })).toBeVisible();
   await expect(editor.getByText('Cooldown, ms', { exact: true })).toBeVisible();
   await editor.getByRole('button', { name: 'Input port', exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(1);
   await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
   await page.keyboard.press('Escape');
-
 });
 
 test('Classifier nodes are available from the built-in Classifier add-node group', async ({ page }) => {
   const editor = await openFixture(page);
   const canvas = editor.locator('.node-canvas');
-  await canvas.click({ button: 'right', position: { x: 1_400, y: 500 } });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await canvas.click({ button: 'right', position: { x: bounds!.width - 40, y: Math.min(500, bounds!.height - 40) } });
 
   const addNode = editor.locator('.context-menu-label-text', { hasText: 'Add node' });
   await expect(addNode).toHaveText('Add node');
@@ -371,4 +441,138 @@ test('Classifier nodes are available from the built-in Classifier add-node group
   await expect(editor.locator('.context-menu-label-text', { hasText: 'Classifier Evaluate' })).toHaveText(
     'Classifier Evaluate',
   );
+});
+
+test('Liquid AI selection exposes d1 and independent configured credentials without changing questions', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(evaluate).toContainText('Provider: Liquid AI');
+  // This migrated legacy node pins jev-latest. Switching provider must not
+  // silently rewrite that explicit contract; clearing it selects Liquid's default.
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'd1');
+  await expect(evaluate).toContainText('Model: d1');
+  await expect(editor.locator('input[value="liquidApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toHaveCount(0);
+  await expect(choice).toContainText('Type: Choice');
+  await expect(choice).toContainText('Route {{subject}}');
+
+  const programmaticName = editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true });
+  await programmaticName.fill('myLiquidKey');
+  await programmaticName.blur();
+  await provider.fill('Jev');
+  await provider.press('Enter');
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
+  await expect(evaluate).toContainText('Model: jev-latest');
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(programmaticName).toHaveValue('myLiquidKey');
+  await expect(evaluate).toContainText('Model: d1');
+});
+
+test('OpenAI Decisions selection exposes its model, credentials and single multimodal State input', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await expect(evaluate.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await expect(evaluate.locator('.port-label', { hasText: /^State$/ })).toHaveCount(1);
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('OpenAI');
+  await provider.press('Enter');
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'gpt-6-luna');
+  await expect(evaluate).toContainText('Provider: OpenAI');
+  await expect(evaluate).toContainText('Model: gpt-6-luna');
+  await expect(editor.locator('input[value="openAiApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="OPENAI_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toHaveCount(0);
+  await choice.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByText('Question images', { exact: true })).toHaveCount(0);
+  await expect(editor.locator('input#useImagesInput')).toHaveCount(0);
+  await expect(choice).toContainText('Route {{subject}}');
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+});
+
+test('Classifier failure ports follow Catch all failures independently of the HTTP status toggle', async ({ page }) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await editor.getByText('Error behavior', { exact: true }).click();
+  const catchFailures = editor.locator('input#catchRequestFailed');
+  const failHttp = editor.locator('input#errorOnNon200');
+  const failurePorts = evaluate.locator('.port-label', { hasText: /^(Run failed|Run error)$/ });
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await failHttp.locator('..').click();
+  await expect(failHttp).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+});
+
+test('Image file selection infers Media Type from the selected filename, including JPEG extensions', async ({
+  page,
+}) => {
+  // Exercise the ordinary browser file-input fallback rather than the OS picker.
+  await page.addInitScript(() => {
+    delete (window as any).showOpenFilePicker;
+  });
+  const editor = await openFixture(page);
+  const image = editor.locator('.node[data-nodeid="image"]');
+  await image.locator('button.edit-button').dispatchEvent('click');
+  const imageBytes = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    return {
+      jpeg: canvas.toDataURL('image/jpeg').split(',')[1]!,
+      png: canvas.toDataURL('image/png').split(',')[1]!,
+    };
+  });
+
+  for (const file of [
+    { name: 'photo.JPG', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.jpeg', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.png', mimeType: 'image/png', encoded: imageBytes.png, label: 'PNG' },
+    {
+      name: 'photo.gif',
+      mimeType: 'image/gif',
+      encoded: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      label: 'GIF',
+    },
+  ]) {
+    const chooser = page.waitForEvent('filechooser');
+    await editor.getByRole('button', { name: 'Pick Image', exact: true }).click();
+    await (
+      await chooser
+    ).setFiles({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.encoded, 'base64') });
+    await expect(image).toContainText(`Media Type: ${file.label}`);
+    await expect(editor.getByText('Image selected', { exact: true })).toBeVisible();
+  }
 });

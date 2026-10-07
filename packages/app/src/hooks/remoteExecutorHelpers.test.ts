@@ -175,6 +175,34 @@ test('Run Activity observer failures do not suppress primary execution-state eve
   }
 });
 
+test('called-project events stay observable without replacing caller graph or node state', () => {
+  const observed: string[] = [];
+  const projected: string[] = [];
+  const dispatcher = createProcessEventDispatcher({
+    onRunActivityEvent: (message: string) => observed.push(message),
+    onNodeStart: () => projected.push('nodeStart'),
+    onGraphStart: () => projected.push('graphStart'),
+    onNodeOutputsCleared: () => projected.push('nodeOutputsCleared'),
+    onLlmChatOutputSnapshot: () => projected.push('llmChatOutputSnapshot'),
+    onUserInput: () => projected.push('userInput'),
+    onCalledProjectNodeTerminal: () => projected.push('promptCleanup'),
+  } as any);
+  const child = { execution: { projectScope: '\u0000rivet-subgraph:latest:called' } };
+  assert.equal(dispatcher.nodeStart(child), true);
+  assert.equal(dispatcher.graphStart(child), true);
+  assert.equal(dispatcher.nodeOutputsCleared(child), true);
+  assert.equal(dispatcher.llmChatOutputSnapshot(child), true);
+  assert.deepEqual(projected, []);
+  assert.deepEqual(observed, ['nodeStart', 'graphStart', 'nodeOutputsCleared']);
+  dispatcher.userInput(child);
+  assert.deepEqual(projected, ['userInput'], 'live child prompts remain answerable');
+  dispatcher.nodeFinish(child);
+  assert.deepEqual(projected, ['userInput', 'promptCleanup'], 'terminal cleanup does not write child node buffers');
+  dispatcher.nodeStart({ ...child, replayRecordedAt: 1 });
+  dispatcher.graphStart({});
+  assert.deepEqual(projected, ['userInput', 'promptCleanup', 'nodeStart', 'graphStart']);
+});
+
 test('projects replay-shaped waiting, progress, model, profile-health, and tool events into Run Activity', () => {
   const execution: GraphExecutionMetadata = {
     graphId,

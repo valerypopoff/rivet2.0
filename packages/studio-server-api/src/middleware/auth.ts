@@ -73,5 +73,5 @@ function sensitiveStorageOperatorAuth(flag?: string): RequestHandler {
   };
 }
 export const requireVmMigrationOperatorAuth = sensitiveStorageOperatorAuth('RIVET_VM_MIGRATION_ENABLED');
-export const requireLocalUpgradeOperatorAuth = sensitiveStorageOperatorAuth('RIVET_LOCAL_METADATA_UPGRADE_ENABLED');
+export const requireLocalUpgradeOperatorAuth = sensitiveStorageOperatorAuth();
 export const requireLocalUpgradeSetupOperatorAuth = sensitiveStorageOperatorAuth();

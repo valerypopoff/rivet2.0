@@ -1,17 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  createResponseError,
-  parseJsonResponse,
-  parseTextResponse,
-} from '../dashboard/apiRequest.js';
+import { createResponseError, parseJsonResponse, parseTextResponse } from '../dashboard/apiRequest.js';
 import { fetchWorkflowRecordingRuns } from '../dashboard/workflowApi.js';
 
 test('parseJsonResponse returns parsed JSON for successful JSON responses', async () => {
   const response = new Response(JSON.stringify({ ok: true }), {
     status: 200,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    headers: { 'content-type': 'Application/JSON; charset=utf-8' },
   });
 
   const parsed = await parseJsonResponse<{ ok: boolean }>(response);
@@ -24,10 +20,23 @@ test('parseJsonResponse throws the proxy guidance error when HTML is returned', 
     headers: { 'content-type': 'text/html; charset=utf-8' },
   });
 
-  await assert.rejects(
-    parseJsonResponse(response),
-    /HTML instead of JSON/,
+  await assert.rejects(parseJsonResponse(response), /HTML instead of JSON/);
+});
+
+test('an unfinished HTML gateway body is cancelled without delaying its diagnostic', async () => {
+  let cancelled = false;
+  const response = new Response(
+    new ReadableStream({
+      cancel() {
+        cancelled = true;
+        // Cancellation itself must not hold up error reporting either.
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 524, headers: { 'content-type': 'Text/HTML; charset=UTF-8' } },
   );
+  await assert.rejects(parseJsonResponse(response), /HTML instead of JSON \(HTTP 524\)/);
+  assert.equal(cancelled, true);
 });
 
 test('parseJsonResponse preserves JSON error status and message', async () => {
@@ -37,16 +46,13 @@ test('parseJsonResponse preserves JSON error status and message', async () => {
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
 
-  await assert.rejects(
-    parseJsonResponse(response),
-    (error: unknown) => {
-      assert.equal(typeof error, 'object');
-      assert.equal((error as { status?: number }).status, 400);
-      assert.equal((error as { code?: string }).code, 'publication_state_changed');
-      assert.equal((error as Error).message, 'Bad request');
-      return true;
-    },
-  );
+  await assert.rejects(parseJsonResponse(response), (error: unknown) => {
+    assert.equal(typeof error, 'object');
+    assert.equal((error as { status?: number }).status, 400);
+    assert.equal((error as { code?: string }).code, 'publication_state_changed');
+    assert.equal((error as Error).message, 'Bad request');
+    return true;
+  });
 });
 
 test('parseTextResponse returns plain text bodies unchanged', async () => {
@@ -58,6 +64,47 @@ test('parseTextResponse returns plain text bodies unchanged', async () => {
   assert.equal(await parseTextResponse(response), 'hello world');
 });
 
+test('malformed JSON error envelopes retain HTTP status and never expose structured private values', async () => {
+  for (const parse of [parseJsonResponse, parseTextResponse]) {
+    for (const body of ['null', '[]', '42', '{', '{"error":{"private":"secret"},"code":123}']) {
+      await assert.rejects(
+        parse(new Response(body, { status: 503, headers: { 'content-type': 'Application/JSON' } })),
+        (error: unknown) => {
+          assert.equal((error as { status: number }).status, 503);
+          assert.equal((error as { code?: string }).code, undefined);
+          assert.equal((error as Error).message, 'API request failed (HTTP 503).');
+          return true;
+        },
+      );
+    }
+  }
+});
+
+test('invalid successful JSON is redacted while an aborted body read remains an abort', async () => {
+  await assert.rejects(
+    parseJsonResponse(new Response('private response bytes', { headers: { 'content-type': 'application/json' } })),
+    (error: unknown) => {
+      assert.equal((error as { status: number }).status, 200);
+      assert.equal((error as Error).message, 'API returned incomplete or invalid JSON (HTTP 200).');
+      return true;
+    },
+  );
+  const abort = new DOMException('Owned request was cancelled.', 'AbortError');
+  for (const parse of [parseJsonResponse, parseTextResponse]) {
+    for (const status of [200, 503]) {
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(abort);
+          },
+        }),
+        { status, headers: { 'content-type': 'application/json' } },
+      );
+      await assert.rejects(parse(response), (error: unknown) => error === abort);
+    }
+  }
+});
+
 test('parseTextResponse extracts JSON errors and falls back to status text for non-JSON failures', async () => {
   const jsonError = new Response(JSON.stringify({ error: 'No recording' }), {
     status: 404,
@@ -65,15 +112,12 @@ test('parseTextResponse extracts JSON errors and falls back to status text for n
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
 
-  await assert.rejects(
-    parseTextResponse(jsonError),
-    (error: unknown) => {
-      assert.equal(typeof error, 'object');
-      assert.equal((error as { status?: number }).status, 404);
-      assert.equal((error as Error).message, 'No recording');
-      return true;
-    },
-  );
+  await assert.rejects(parseTextResponse(jsonError), (error: unknown) => {
+    assert.equal(typeof error, 'object');
+    assert.equal((error as { status?: number }).status, 404);
+    assert.equal((error as Error).message, 'No recording');
+    return true;
+  });
 
   const plainError = new Response('nope', {
     status: 503,
@@ -81,15 +125,12 @@ test('parseTextResponse extracts JSON errors and falls back to status text for n
     headers: { 'content-type': 'text/plain; charset=utf-8' },
   });
 
-  await assert.rejects(
-    parseTextResponse(plainError),
-    (error: unknown) => {
-      assert.equal(typeof error, 'object');
-      assert.equal((error as { status?: number }).status, 503);
-      assert.equal((error as Error).message, 'Service Unavailable');
-      return true;
-    },
-  );
+  await assert.rejects(parseTextResponse(plainError), (error: unknown) => {
+    assert.equal(typeof error, 'object');
+    assert.equal((error as { status?: number }).status, 503);
+    assert.equal((error as Error).message, 'Service Unavailable');
+    return true;
+  });
 });
 
 test('createResponseError attaches the HTTP status to the thrown error', () => {
@@ -98,22 +139,42 @@ test('createResponseError attaches the HTTP status to the thrown error', () => {
   assert.equal(error.message, 'teapot');
 });
 
+test('gateway HTML errors preserve HTTP status without exposing their body', async () => {
+  for (const body of [
+    '<!DOCTYPE html><html>private gateway diagnostic</html>',
+    '<h1>private gateway diagnostic</h1>',
+  ]) {
+    await assert.rejects(
+      parseJsonResponse(new Response(body, { status: 524, headers: { 'content-type': 'text/html; charset=UTF-8' } })),
+      (error: unknown) => {
+        assert.equal((error as { status: number }).status, 524);
+        assert.match((error as Error).message, /HTTP 524/);
+        assert.doesNotMatch((error as Error).message, /private gateway diagnostic/);
+        return true;
+      },
+    );
+  }
+});
+
 test('recording input searches send the opaque keyset continuation unchanged', async () => {
   const originalFetch = globalThis.fetch;
   let requestedUrl = '';
   globalThis.fetch = (async (input: string | URL | Request) => {
     requestedUrl = String(input);
-    return new Response(JSON.stringify({
-      workflowId: 'workflow-1',
-      page: 1,
-      pageSize: 20,
-      totalRuns: 0,
-      hasMore: false,
-      statusFilter: 'all',
-      runs: [],
-    }), {
-      headers: { 'content-type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        workflowId: 'workflow-1',
+        page: 1,
+        pageSize: 20,
+        totalRuns: 0,
+        hasMore: false,
+        statusFilter: 'all',
+        runs: [],
+      }),
+      {
+        headers: { 'content-type': 'application/json' },
+      },
+    );
   }) as typeof fetch;
 
   try {

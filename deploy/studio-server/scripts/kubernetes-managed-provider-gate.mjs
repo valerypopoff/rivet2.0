@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { buildManagedProviderGateConfig, imageReference } from './lib/kubernetes-managed-provider-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const runnerName = 'kubernetes-managed-provider-gate';
@@ -237,11 +238,7 @@ class ManagedProviderGate {
       ['get', 'manifest', this.config.release, '--namespace', this.config.namespace],
       { capture: true },
     );
-    for (const [component, image] of Object.entries(this.config.images)) {
-      if (!manifest.stdout.includes(imageReference(image))) {
-        throw new Error(`[${runnerName}] ${component} manifest did not use the immutable candidate digest`);
-      }
-    }
+    assertCandidateManifestImages(manifest.stdout, this.config.images, runnerName);
     if (this.config.gatewayMode === 'external') {
       if (/app\.kubernetes\.io\/component:\s*proxy\b/u.test(manifest.stdout)) {
         throw new Error(`[${runnerName}] external gateway release unexpectedly contains an embedded proxy resource`);

@@ -25,6 +25,7 @@ import type {
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
+import { sumWorkflowRecordingCounts } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import {
   countWorkflowRecordingRuns,
@@ -33,6 +34,8 @@ import {
   getWorkflowRecordingIndexRevision,
   getWorkflowRecordingRunRow,
   getWorkflowRecordingStorageState,
+  getWorkflowRecordingScopeCounts,
+  hasWorkflowRecordingRuns,
   getWorkflowRecordingWorkflowRowsBySourceProjectPath,
   listWorkflowRecordingBundlePaths,
   listWorkflowRecordingRunRowsByWorkflowId,
@@ -168,6 +171,8 @@ function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRe
   return {
     id: row.id,
     workflowId: row.workflowId,
+    sourceProjectName: row.sourceProjectName,
+    sourceProjectRelativePath: row.sourceProjectRelativePath,
     createdAt: row.createdAt,
     runKind: row.runKind,
     status: row.status,
@@ -420,7 +425,9 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
       includeStats: false,
     });
     const workflowByPath = recordingWorkflowByPath.get(projectPath);
-    let workflowId = workflowByPath?.workflowId ?? '';
+    // getWorkflowProject already resolves the ID through the validated index
+    // cache. Do not deserialize every unrecorded project just to read it again.
+    let workflowId = workflowByPath?.workflowId || project.projectMetadataId || '';
 
     if (!workflowId) {
       try {
@@ -468,7 +475,7 @@ export async function listWorkflowRecordingWorkflows(root: string): Promise<Work
   });
 
   scheduleWorkflowRecordingIndexRepair(recordingsRoot);
-  return { workflows };
+  return { workflows, totals: sumWorkflowRecordingCounts(recordingWorkflows) };
 }
 
 export async function listWorkflowRecordingRunsPage(
@@ -481,8 +488,14 @@ export async function listWorkflowRecordingRunsPage(
   inputCursor = 0,
   signal?: AbortSignal,
   inputAfter?: string,
+  includeSubgraphRuns = false,
+  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   await ensureWorkflowRecordingStorage(root);
+  const scopeCounts =
+    (workflowId && includeSubgraphRuns) || runScope === 'roots'
+      ? await getWorkflowRecordingScopeCounts(workflowId, runScope)
+      : undefined;
 
   const normalizedPage = Math.max(1, Math.floor(page));
   const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
@@ -495,10 +508,12 @@ export async function listWorkflowRecordingRunsPage(
       normalizedPageSize,
       signal,
       inputAfter,
+      includeSubgraphRuns,
     );
 
     return {
       workflowId,
+      scopeCounts,
       page: normalizedPage,
       pageSize: normalizedPageSize,
       totalRuns: filteredPage.totalRuns,
@@ -513,15 +528,22 @@ export async function listWorkflowRecordingRunsPage(
     };
   }
 
-  const totalRuns = await countWorkflowRecordingRuns(workflowId, statusFilter);
+  const totalRuns = scopeCounts
+    ? statusFilter === 'failed'
+      ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+      : scopeCounts.totalRuns
+    : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const rows = await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
     page: normalizedPage,
     pageSize: normalizedPageSize,
     statusFilter,
+    includeSubgraphRuns,
+    runScope,
   });
 
   return {
     workflowId,
+    scopeCounts,
     page: normalizedPage,
     pageSize: normalizedPageSize,
     totalRuns,
@@ -560,19 +582,28 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
   pageSize: number,
   signal?: AbortSignal,
   inputAfter?: string,
+  includeSubgraphRuns = false,
 ) {
   const inputAfterCursor = parseWorkflowRecordingInputAfter(inputAfter, {
     workflowId,
     statusFilter,
     filter: inputFilter,
+    includeSubgraphRuns,
   });
   return filterRecordingInputWindows(
     inputFilter,
     (after, offset, limit) =>
       listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
         statusFilter,
+        includeSubgraphRuns,
+        runScope: 'roots',
         offset: after ? 0 : offset,
-        after: parseWorkflowRecordingInputAfter(after, { workflowId, statusFilter, filter: inputFilter }),
+        after: parseWorkflowRecordingInputAfter(after, {
+          workflowId,
+          statusFilter,
+          filter: inputFilter,
+          includeSubgraphRuns,
+        }),
         limit,
       }),
     async (row, readSignal) => {
@@ -617,7 +648,7 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
             recordingId: row.id,
             legacyCursor: nextInputCursor,
           },
-          { workflowId, statusFilter, filter: inputFilter },
+          { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns },
         ),
       signal,
     },
@@ -658,8 +689,7 @@ export async function deleteWorkflowRecording(root: string, recordingId: string)
 
   await deleteRecordingRun(row);
 
-  const remainingRuns = await listWorkflowRecordingRunRowsForWorkflow(row.workflowId);
-  if (remainingRuns.length === 0) {
+  if (!(await hasWorkflowRecordingRuns(row.workflowId))) {
     await deleteWorkflowRecordingWorkflowRow(row.workflowId);
     await removeEmptyWorkflowProjectRecordingsRoot(recordingsRoot, row.workflowId);
     return;

@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem } from '../dashboard/types';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -119,6 +119,7 @@ test('marquee and group dragging include bends with nodes and share Undo/Redo', 
     updatedAt: '2026-09-07T00:00:00.000Z',
     settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
   };
+  await mockHostedEditorBootstrap(page);
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -286,6 +287,7 @@ test('Ctrl/Cmd-dragging a Comment carries only bend points inside its area', asy
     updatedAt: '2026-09-12T00:00:00.000Z',
     settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
   };
+  await mockHostedEditorBootstrap(page);
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -354,3 +356,154 @@ test('Ctrl/Cmd-dragging a Comment carries only bend points inside its area', asy
   await expect.poll(() => positions(comment, bends)).toEqual(original);
   await page.screenshot({ path: testInfo.outputPath('comment-bend-enclosure.png') });
 });
+
+for (const method of ['paste', 'cross-graph paste', 'Alt-drag'] as const) {
+  for (const selectBends of [false, true]) {
+    test(`${method} carries relative bends ${selectBends ? 'with' : 'without'} explicit bend selection`, async ({
+      page,
+    }) => {
+      const contents = initialContents.replace(
+        '  plugins: []',
+        `    destination:
+      metadata:
+        id: destination
+        name: Destination Graph
+      nodes: {}
+  plugins: []`,
+      );
+      const project: WorkflowProjectItem = {
+        id: 'bend-selection',
+        name,
+        fileName: `${name}.rivet-project`,
+        relativePath: `${name}.rivet-project`,
+        absolutePath: `/workflows/${name}.rivet-project`,
+        updatedAt: '2026-10-07T00:00:00.000Z',
+        settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+      };
+      await mockHostedEditorBootstrap(page);
+      await page.route('**/api/**', async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path === '/api/workflows/tree') {
+          await route.fulfill({
+            json: { root: '/workflows', sync: { epoch: 'copy-bends', revision: 0 }, folders: [], projects: [project] },
+          });
+        } else if (path === '/api/projects/load') {
+          await route.fulfill({ json: { contents, datasetsContents: null, revisionId: null } });
+        } else if (!['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())) {
+          await route.abort('blockedbyclient');
+        } else await route.fallback();
+      });
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.locator('.project-row', { hasText: name }).dblclick();
+      const frame = page.frameLocator('iframe.dashboard-editor-frame');
+      const nodes = frame.locator('.node[data-nodeid]');
+      const bends = frame.locator('.wire-bend-point[data-connection-key]');
+      const selectedNodes = frame.locator('.node.selected[data-nodeid]');
+      const selectedBends = frame.locator('.wire-bend-point.selected[data-connection-key]');
+      await expect(nodes).toHaveCount(4, { timeout: 90_000 });
+      await expect(bends).toHaveCount(2);
+      const original = await positions(nodes, bends);
+      await nodes.first().locator('.node-title').click();
+      if (selectBends) {
+        const boxes = await nodes.evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom };
+          }),
+        );
+        const iframe = (await page.locator('iframe.dashboard-editor-frame').boundingBox())!;
+        await page.keyboard.down('Shift');
+        await page.mouse.move(
+          iframe.x + Math.min(...boxes.map((box) => box.x)) - 20,
+          iframe.y + Math.min(...boxes.map((box) => box.y)) - 20,
+        );
+        await page.mouse.down();
+        await page.mouse.move(
+          iframe.x + Math.max(...boxes.map((box) => box.right)) + 20,
+          iframe.y + Math.max(...boxes.map((box) => box.bottom)) + 60,
+          { steps: 10 },
+        );
+        await page.mouse.up();
+        await page.keyboard.up('Shift');
+      } else {
+        await page.keyboard.press(`${modifier}+a`);
+      }
+      await expect(selectedNodes).toHaveCount(4);
+      await expect(selectedBends).toHaveCount(selectBends ? 2 : 0);
+
+      if (method === 'Alt-drag') {
+        const box = (await nodes.first().locator('.node-title').boundingBox())!;
+        await page.keyboard.down('Alt');
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 45, { steps: 10 });
+        await page.mouse.up();
+        await page.keyboard.up('Alt');
+      } else {
+        await page.keyboard.press(`${modifier}+c`);
+        // AltGr-style modifier combinations must not invoke hosted node paste.
+        await page.keyboard.press(`${modifier}+Alt+v`);
+        await expect(nodes).toHaveCount(4);
+        if (method === 'cross-graph paste') {
+          await frame.locator('.graph-item[data-folderpath="Destination Graph"]').click();
+          await expect(nodes).toHaveCount(0);
+          await frame.locator('.node-canvas').click({ position: { x: 450, y: 300 } });
+        } else {
+          const box = (await nodes.first().boundingBox())!;
+          await page.mouse.move(box.x + 90, box.y + 80);
+        }
+        await page.keyboard.press(`${modifier}+v`);
+      }
+      await expect(nodes).toHaveCount(method === 'cross-graph paste' ? 4 : 8);
+      await expect(bends).toHaveCount(method === 'cross-graph paste' ? 2 : 4);
+      await expect(selectedNodes).toHaveCount(4);
+      await expect(selectedBends).toHaveCount(2);
+      const copied = await positions(selectedNodes, selectedBends);
+      const dx = copied.nodes[0]!.x - original.nodes[0]!.x;
+      const dy = copied.nodes[0]!.y - original.nodes[0]!.y;
+      for (const kind of ['nodes', 'bends'] as const) {
+        copied[kind].forEach((point, index) => {
+          expect(point.x - original[kind][index]!.x).toBeCloseTo(dx, 1);
+          expect(point.y - original[kind][index]!.y).toBeCloseTo(dy, 1);
+        });
+      }
+      if (method !== 'cross-graph paste') {
+        const all = await positions(nodes, bends);
+        expect(all.nodes.slice(0, 4)).toEqual(original.nodes);
+        expect(all.bends.slice(0, 2)).toEqual(original.bends);
+      }
+      await page.keyboard.press(`${modifier}+z`);
+      await expect(nodes).toHaveCount(method === 'cross-graph paste' ? 0 : 4);
+      await expect(bends).toHaveCount(method === 'cross-graph paste' ? 0 : 2);
+      if (method !== 'cross-graph paste') {
+        await expect(selectedNodes).toHaveCount(4);
+        await expect(selectedBends).toHaveCount(selectBends ? 2 : 0);
+        expect(await positions(nodes, bends)).toEqual(original);
+      }
+      await page.keyboard.press(`${modifier}+Shift+z`);
+      await expect(selectedNodes).toHaveCount(4);
+      await expect(selectedBends).toHaveCount(2);
+      await expect.poll(() => positions(selectedNodes, selectedBends)).toEqual(copied);
+
+      // Newly copied bends follow the group immediately, without another selection gesture.
+      await selectedNodes.first().locator('.node-title').hover();
+      const box = (await selectedNodes.first().locator('.node-title').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 20, { steps: 8 });
+      await page.mouse.up();
+      await expect
+        .poll(async () => (await positions(selectedNodes, selectedBends)).nodes[0]!.x)
+        .not.toBe(copied.nodes[0]!.x);
+      const moved = await positions(selectedNodes, selectedBends);
+      const moveX = moved.nodes[0]!.x - copied.nodes[0]!.x;
+      const moveY = moved.nodes[0]!.y - copied.nodes[0]!.y;
+      moved.bends.forEach((point, index) => {
+        expect(point.x - copied.bends[index]!.x).toBeCloseTo(moveX, 1);
+        expect(point.y - copied.bends[index]!.y).toBeCloseTo(moveY, 1);
+      });
+    });
+  }
+}

@@ -83,9 +83,9 @@ class FallbackTokenizer implements Tokenizer {
   }
 }
 
-export async function loadProjectFromFile(path: string): Promise<Project> {
+export async function loadProjectFromFile(path: string, options: { logErrors?: boolean } = {}): Promise<Project> {
   const content = await readFile(path, { encoding: 'utf8' });
-  return loadProjectFromString(content);
+  return loadProjectFromString(content, options);
 }
 
 export async function loadProjectAndAttachedDataFromFile(path: string): Promise<[Project, AttachedData]> {

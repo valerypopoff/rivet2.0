@@ -43,14 +43,15 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
             {context === 'menu' ? (
               <div className="run-recordings-select-option-count">
                 {formatRecordingCount(option.recordingCount)}
+                {option.value ? ' in this project' : ''}
               </div>
             ) : null}
           </div>
           {context === 'menu' ? (
             <div className="run-recordings-select-option-meta">
-              {option.statusLabel}
-              {option.endpoint ? ` - /workflows/${option.endpoint}` : ''}
-              {option.description ? ` - ${option.description}` : ''}
+              {[option.statusLabel, option.endpoint ? `/workflows/${option.endpoint}` : '', option.description]
+                .filter(Boolean)
+                .join(' - ')}
             </div>
           ) : null}
         </div>

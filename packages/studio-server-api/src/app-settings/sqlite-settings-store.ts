@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -6,7 +6,6 @@ import type { AppSettingsBackend, ManagedSettingsRecord, ManagedSettingsWrite } 
 import {
   decryptManagedSettingsValue,
   deriveManagedSettingsEncryptionKey,
-  encryptManagedSettingsValue,
   type ManagedSettingsEncryptionKey,
 } from './managed-settings-crypto.js';
 
@@ -19,11 +18,12 @@ type SqliteSettingsRow = {
   auth_tag: Uint8Array;
   key_id: string;
   source_hash: string | null;
+  value_json?: string;
 };
 
 const RIVET_LOCAL_METADATA_APPLICATION_ID = 0x52495654;
-const LOCAL_METADATA_SCHEMA_VERSION = 1;
-const APP_SETTINGS_TABLE_SQL = `CREATE TABLE app_settings (
+const LOCAL_METADATA_SCHEMA_VERSION = 2;
+const LEGACY_APP_SETTINGS_TABLE_SQL = `CREATE TABLE app_settings (
   setting_key TEXT PRIMARY KEY,
   revision INTEGER NOT NULL CHECK (revision > 0),
   schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
@@ -34,6 +34,14 @@ const APP_SETTINGS_TABLE_SQL = `CREATE TABLE app_settings (
   source_hash TEXT,
   updated_at TEXT NOT NULL
 )`;
+const APP_SETTINGS_TABLE_SQL = `CREATE TABLE app_settings (
+  setting_key TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 0),
+  value_json TEXT NOT NULL,
+  source_hash TEXT,
+  updated_at TEXT NOT NULL
+)`;
 
 /**
  * Candidate local metadata backend. It is intentionally not selected by the
@@ -41,7 +49,6 @@ const APP_SETTINGS_TABLE_SQL = `CREATE TABLE app_settings (
  */
 export class SqliteAppSettingsBackend implements AppSettingsBackend {
   readonly #databasePath: string;
-  readonly #primaryKey: ManagedSettingsEncryptionKey;
   readonly #keys: ReadonlyMap<string, ManagedSettingsEncryptionKey>;
   readonly #listeners = new Set<(key: string) => Promise<void> | void>();
   readonly #pendingNotifications = new Map<string, number>();
@@ -49,26 +56,30 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
   readonly #notificationTasks = new Set<Promise<void>>();
   #db: DatabaseSync | null = null;
   #readOnly = false;
+  #legacy = false;
+  readonly #convertLegacy: boolean;
   readonly #requireExisting: boolean;
   readonly #assertWritable: () => void;
 
   constructor(options: {
     databasePath: string;
-    encryptionSecret: string;
+    /** Compatibility key only; all new settings are plaintext. */
+    encryptionSecret?: string;
     previousEncryptionSecret?: string;
+    convertLegacy?: boolean;
     requireExisting?: boolean;
     assertWritable?: () => void;
   }) {
-    if (!options.encryptionSecret) throw new Error('SQLite App Settings require an encryption key.');
     this.#databasePath = options.databasePath;
     this.#requireExisting = options.requireExisting ?? false;
     this.#assertWritable = options.assertWritable ?? (() => {});
-    this.#primaryKey = deriveManagedSettingsEncryptionKey(options.encryptionSecret);
+    this.#convertLegacy = options.convertLegacy ?? true;
+    const primary = options.encryptionSecret ? deriveManagedSettingsEncryptionKey(options.encryptionSecret) : null;
     const previous = options.previousEncryptionSecret
       ? deriveManagedSettingsEncryptionKey(options.previousEncryptionSecret)
       : null;
     this.#keys = new Map(
-      [this.#primaryKey, previous]
+      [primary, previous]
         .filter((key): key is ManagedSettingsEncryptionKey => key !== null)
         .map((key) => [key.id, key]),
     );
@@ -87,6 +98,9 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
       if (!stat.isFile()) throw new Error('SQLite App Settings database must be a regular file.');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || readOnly || this.#requireExisting) throw error;
+      // SQLite's default creation mode follows umask. Create privately before
+      // SQLite writes anything, including rollback journals containing settings.
+      closeSync(openSync(this.#databasePath, 'wx', 0o600));
     }
 
     const db = new DatabaseSync(this.#databasePath, { readOnly });
@@ -113,14 +127,16 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
           db.exec('ROLLBACK');
           throw error;
         }
-      } else if (version.user_version !== LOCAL_METADATA_SCHEMA_VERSION) {
+      } else if (![1, LOCAL_METADATA_SCHEMA_VERSION].includes(version.user_version)) {
         throw new Error(`SQLite App Settings schema version ${version.user_version} is unsupported.`);
       }
       if (!readOnly) db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL');
+      this.#legacy = identity.application_id !== 0 && version.user_version === 1;
       const storedSchema = db
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'")
         .get() as { sql: string } | undefined;
-      if (storedSchema?.sql.replace(/\s+/g, ' ').trim() !== APP_SETTINGS_TABLE_SQL.replace(/\s+/g, ' ').trim()) {
+      const expectedSchema = this.#legacy ? LEGACY_APP_SETTINGS_TABLE_SQL : APP_SETTINGS_TABLE_SQL;
+      if (storedSchema?.sql.replace(/\s+/g, ' ').trim() !== expectedSchema.replace(/\s+/g, ' ').trim()) {
         throw new Error('SQLite App Settings schema is incompatible.');
       }
       const schemaNames = db
@@ -130,7 +146,41 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
         throw new Error('SQLite App Settings schema contains unexpected objects.');
       }
       this.#verifyRows(db, true);
+      // Tighten an existing encrypted database before writing plaintext into it.
       if (!readOnly) chmodSync(this.#databasePath, 0o600);
+      if (this.#legacy && !readOnly && this.#convertLegacy) {
+        this.#assertWritable();
+        // One transaction preserves revisions and timestamps. Verify every
+        // ciphertext before mutation; unavailable keys never reset settings.
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const rows = db.prepare('SELECT * FROM app_settings').all() as Array<
+            SqliteSettingsRow & { updated_at: string }
+          >;
+          const decoded = rows.map((row) => ({ row, record: this.#decodeRow(row) }));
+          db.exec('ALTER TABLE app_settings RENAME TO legacy_app_settings');
+          db.exec(APP_SETTINGS_TABLE_SQL);
+          const insert = db.prepare('INSERT INTO app_settings VALUES (?, ?, ?, ?, ?, ?)');
+          for (const { row, record } of decoded)
+            insert.run(
+              row.setting_key,
+              row.revision,
+              row.schema_version,
+              JSON.stringify(record.value),
+              row.source_hash,
+              row.updated_at,
+            );
+          db.exec('DROP TABLE legacy_app_settings');
+          db.exec(`PRAGMA user_version = ${LOCAL_METADATA_SCHEMA_VERSION}`);
+          this.#legacy = false;
+          this.#verifyRows(db, true);
+          db.exec('COMMIT');
+        } catch (error) {
+          this.#legacy = true;
+          db.exec('ROLLBACK');
+          throw error;
+        }
+      }
       this.#db = db;
       this.#readOnly = readOnly;
     } catch (error) {
@@ -161,23 +211,13 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
       | SqliteSettingsRow
       | undefined;
     if (!row) return null;
-    const record = this.#decodeRow(row);
-    if (row.key_id !== this.#primaryKey.id && !this.#readOnly) {
-      const rotated = await this.write({
-        key,
-        expectedRevision: record.revision,
-        schemaVersion: record.schemaVersion,
-        value: record.value,
-        sourceHash: record.sourceHash,
-      });
-      return rotated ?? this.read(key);
-    }
-    return record;
+    return this.#decodeRow(row);
   }
 
   async write(value: ManagedSettingsWrite): Promise<ManagedSettingsRecord | null> {
     this.#assertWritable();
     if (this.#readOnly) throw new Error('SQLite App Settings backend is open for verification only.');
+    if (this.#legacy) throw new Error('Legacy encrypted settings remain read-only until write resumption.');
     const db = this.#database();
     db.exec('BEGIN IMMEDIATE');
     let transactionOpen = true;
@@ -196,23 +236,15 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
       }
       revision = (existing?.revision ?? 0) + 1;
       if (!Number.isSafeInteger(revision)) throw new Error('SQLite App Settings revision limit reached.');
-      const encrypted = encryptManagedSettingsValue(
-        { key: value.key, schemaVersion: value.schemaVersion },
-        value.value,
-        this.#primaryKey,
-      );
       db.prepare(
         `
         INSERT INTO app_settings
-          (setting_key, revision, schema_version, ciphertext, iv, auth_tag, key_id, source_hash, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (setting_key, revision, schema_version, value_json, source_hash, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(setting_key) DO UPDATE SET
           revision = excluded.revision,
           schema_version = excluded.schema_version,
-          ciphertext = excluded.ciphertext,
-          iv = excluded.iv,
-          auth_tag = excluded.auth_tag,
-          key_id = excluded.key_id,
+          value_json = excluded.value_json,
           source_hash = excluded.source_hash,
           updated_at = excluded.updated_at
       `,
@@ -220,10 +252,7 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
         value.key,
         revision,
         value.schemaVersion,
-        encrypted.ciphertext,
-        encrypted.iv,
-        encrypted.authTag,
-        encrypted.keyId,
+        JSON.stringify(value.value),
         value.sourceHash ?? null,
         new Date().toISOString(),
       );
@@ -310,22 +339,36 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
     if (!Number.isSafeInteger(row.schema_version) || row.schema_version < 0) {
       throw new Error(`SQLite App Settings schema version is invalid for ${row.setting_key}.`);
     }
+    const value = this.#legacy
+      ? decryptManagedSettingsValue(
+          { key: row.setting_key, schemaVersion: row.schema_version },
+          {
+            ciphertext: Buffer.from(row.ciphertext),
+            iv: Buffer.from(row.iv),
+            authTag: Buffer.from(row.auth_tag),
+            keyId: row.key_id,
+          },
+          this.#keys,
+        )
+      : this.#decodeJson(row.value_json);
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('SQLite App Settings value must be an object.');
     return {
       key: row.setting_key,
       revision: BigInt(row.revision),
       schemaVersion: row.schema_version,
-      value: decryptManagedSettingsValue(
-        { key: row.setting_key, schemaVersion: row.schema_version },
-        {
-          ciphertext: Buffer.from(row.ciphertext),
-          iv: Buffer.from(row.iv),
-          authTag: Buffer.from(row.auth_tag),
-          keyId: row.key_id,
-        },
-        this.#keys,
-      ),
+      value,
       sourceHash: row.source_hash,
     };
+  }
+
+  #decodeJson(text: string | undefined): Record<string, unknown> {
+    try {
+      return JSON.parse(text!) as Record<string, unknown>;
+    } catch {
+      // Modern JSON parser messages can include private source fragments.
+      throw new Error('SQLite App Settings JSON is invalid.');
+    }
   }
 
   #verifyRows(db: DatabaseSync, fullIntegrityCheck = false): void {

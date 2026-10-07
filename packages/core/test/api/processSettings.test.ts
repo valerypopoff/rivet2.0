@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { DEFAULT_CHAT_NODE_TIMEOUT, resolveProcessSettings } from '../../src/index.js';
+import { DEFAULT_CHAT_NODE_TIMEOUT } from '../../src/utils/defaults.js';
+import { resolveProcessSettings } from '../../src/api/processSettings.js';
 
 describe('resolveProcessSettings', () => {
   it('applies the runtime defaults used by graph processors', () => {

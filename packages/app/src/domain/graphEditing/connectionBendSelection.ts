@@ -2,6 +2,10 @@ import { getProjectConnectionComparisonKey, type NodeConnection } from '@valeryp
 
 export type ConnectionBendMove = { connectionKey: string; position: { x: number; y: number } };
 
+export function getConnectionBendKeys(connections: readonly NodeConnection[]): string[] {
+  return connections.filter((connection) => connection.bendPoint).map(getProjectConnectionComparisonKey);
+}
+
 export function getBoxedConnectionBends(
   connections: readonly NodeConnection[],
   start: { x: number; y: number },

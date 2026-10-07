@@ -9,6 +9,12 @@ import { readMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import { iterateSourceRecordings } from '../local-metadata/filesystem-recording-source.js';
 import { getRecordingArtifactPath } from '../routes/workflows/recordings-artifacts.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
+import { localUpgradeFailure } from '../local-metadata/upgrade-diagnostics.js';
+
+function isBundleLimit(error: unknown): boolean {
+  assert.equal(localUpgradeFailure('workflows', error).reason, 'source-bundle-limit');
+  return true;
+}
 
 test('decoded source budget is per bundle, accumulates across files, and isolates concurrent reads', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-source-budget-'));
@@ -25,12 +31,20 @@ test('decoded source budget is per bundle, accumulates across files, and isolate
           await readMigrationSourceUtf8(file);
           await readMigrationSourceUtf8(file);
         }),
-        /budget/,
+        isBundleLimit,
+      );
+      await withLocalSourceBudget(() => readMigrationSourceUtf8(file), { reuse: true });
+      await assert.rejects(
+        withLocalSourceBudget(async () => {
+          await readMigrationSourceUtf8(file);
+          await withLocalSourceBudget(() => readMigrationSourceUtf8(file), { reuse: true });
+        }),
+        isBundleLimit,
       );
       await fs.writeFile(file, 'x'.repeat(2 * 1048576));
       await assert.rejects(
         withLocalSourceBudget(() => readMigrationSourceUtf8(file)),
-        /budget/,
+        isBundleLimit,
       );
     });
   } finally {
@@ -62,7 +76,7 @@ test('legacy gzip bombs are refused by the recording source iterator before payl
         }),
       );
       await withEnvOverride('RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB', '1', async () => {
-        await assert.rejects(iterateSourceRecordings(root, [{ workflowId: 'project' }]).next(), /budget/);
+        await assert.rejects(iterateSourceRecordings(root, [{ workflowId: 'project' }]).next(), isBundleLimit);
       });
     });
   } finally {

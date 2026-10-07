@@ -45,7 +45,13 @@ export const projectState = atomWithStorage<Omit<Project, 'data'>>(
 
 export const referencedProjectsState = atom<Record<ProjectId, Project>>({});
 
-export const projectDataState = atom<Record<DataId, string> | undefined>(undefined);
+// The active payload is workspace recovery state, not an authority inferred
+// from a global cache that might still belong to a previously selected tab.
+export const projectDataState = atomWithStorage<Record<DataId, string> | undefined>(
+  'projectDataState',
+  undefined,
+  storage,
+);
 
 export const projectMetadataState = atom(
   (get) => get(projectState).metadata,
@@ -188,11 +194,25 @@ export const openedProjectSnapshotsState = atomWithStorage<Record<ProjectId, Ope
   storage,
 );
 
-export const savedProjectContentDigestsState = atom<Record<ProjectId, string | undefined>>({});
+// Baselines and flags must survive with the recovered workspace, otherwise a
+// reload can silently certify unsaved snapshots as the new clean state.
+export const savedProjectContentDigestsState = atomWithStorage<Record<ProjectId, string | undefined>>(
+  'savedProjectContentDigestsState',
+  {},
+  storage,
+);
 
-export const projectUnsavedChangesState = atom<Record<ProjectId, boolean | undefined>>({});
+export const projectUnsavedChangesState = atomWithStorage<Record<ProjectId, boolean | undefined>>(
+  'projectUnsavedChangesState',
+  {},
+  storage,
+);
 
-export const projectDataUnsavedChangesState = atom<Record<ProjectId, boolean | undefined>>({});
+export const projectDataUnsavedChangesState = atomWithStorage<Record<ProjectId, boolean | undefined>>(
+  'projectDataUnsavedChangesState',
+  {},
+  storage,
+);
 
 export const openedProjectsState = atom(
   (get) => get(projectsState).openedProjects,

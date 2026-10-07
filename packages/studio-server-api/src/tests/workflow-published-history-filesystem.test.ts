@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+// test-style: fixture-read: reads serialized project fixtures and test-owned persisted artifacts, never implementation source.
 import fs from 'node:fs/promises';
 import test from 'node:test';
 import { observeFilesystemExecutionInvalidations } from './helpers/workflow-api-harness.js';
@@ -358,4 +359,27 @@ test('filesystem published version history preserves corrupt metadata and reject
   assert.equal(cacheInvalidations.markedIndexDirty, false);
   assert.deepEqual(cacheInvalidations.invalidatedMaterializationPathCalls, []);
   assert.equal(await fs.readFile(created.absolutePath, 'utf8'), originalContents);
+});
+
+test('migration history reads refuse corrupt noncurrent evidence without logging or omitting it', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'StrictMigrationHistory');
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'strict-migration-history',
+  });
+  const first = (await workflowStorageBackend.listWorkflowPublishedVersionsWithBackend(created.relativePath))
+    .versions[0]!;
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'strict-migration-history',
+  });
+  const metadataPath = workflowFs.getPublishedWorkflowSnapshotMetadataPath(workflowsRoot, first.id);
+  const broken = '{private-invalid-metadata';
+  await fs.writeFile(metadataPath, broken);
+  const warning = t.mock.method(console, 'warn', () => undefined);
+  const { readFilesystemPublishedVersionsForMigration } = await import('../routes/workflows/published-versions.js');
+  await assert.rejects(
+    readFilesystemPublishedVersionsForMigration(workflowsRoot, created.absolutePath),
+    /Corrupt published-version metadata/,
+  );
+  assert.equal(warning.mock.callCount(), 0);
+  assert.equal(await fs.readFile(metadataPath, 'utf8'), broken);
 });

@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { memoryStorage, initializeHybridStorage } from '../../app/src/state/storage/migrations.js';
+import { WorkspaceRecoveryStorage } from '../../app/src/state/storage/workspaceRecovery.js';
+import { MemoryAsyncStorage } from '../../app/src/state/storage/indexedDB.js';
+
+// A shared test host persists between recreated recovery writers. The actual
+// memory-only browser fallback must not advertise that guarantee.
+class PersistentTestStorage extends MemoryAsyncStorage {
+  override readonly persistsAcrossReload: boolean = true;
+}
 
 type SessionStorageLike = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
 };
 
 function createSessionStorage(): SessionStorageLike {
@@ -11,6 +21,9 @@ function createSessionStorage(): SessionStorageLike {
   return {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => {
+      values.delete(key);
+    },
   };
 }
 
@@ -69,6 +82,106 @@ test('save-in-flight excludes only its project and settlement requests a fresh o
   assert.equal(revisions.claimHostedProjectObservation(during, 'project-1'), 'retry');
 });
 
+test('accepted revisions belong to the atomic workspace recovery, never independent browser caches', () => {
+  revisions.bindHostedProjectRevision('document-project', path, 'document-revision');
+  assert.equal(window.localStorage.getItem('rivet.hosted-project-revisions.v1'), null);
+  assert.equal(window.sessionStorage.getItem('rivet.hosted-project-revisions.v1'), null);
+  assert.ok(
+    memoryStorage
+      .get('project')
+      .hostedProjectRevisions.some(
+        (entry: { acceptedRevisionId: string }) => entry.acceptedRevisionId === 'document-revision',
+      ),
+  );
+});
+
+test('an unchanged tree observation does not dirty browser recovery', () => {
+  revisions.bindHostedProjectRevision('project-1', path, 'unchanged');
+  const before = memoryStorage.get('project').hostedProjectRevisions;
+  assert.equal(observe('unchanged'), null);
+  assert.equal(memoryStorage.get('project').hostedProjectRevisions, before);
+  observe('changed');
+  assert.notEqual(memoryStorage.get('project').hostedProjectRevisions, before);
+  assert.equal(before.find((entry: { projectId: string }) => entry.projectId === 'project-1')?.pendingRevisionId, null);
+});
+
+test('a new load retains provisional authority until its actual tab is registered', () => {
+  const id = 'loading-project';
+  revisions.bindHostedProjectRevision(id, path, 'loaded', { awaitingActivation: true });
+  revisions.pruneHostedProjectRevisions(['loading-placeholder']);
+  assert.equal(revisions.getHostedProjectExpectedRevision(id, path), 'loaded');
+  assert.equal(
+    memoryStorage.get('project').hostedProjectRevisions.some((entry: { projectId: string }) => entry.projectId === id),
+    false,
+  );
+  revisions.pruneHostedProjectRevisions([id]);
+  assert.equal(
+    memoryStorage.get('project').hostedProjectRevisions.find((entry: { projectId: string }) => entry.projectId === id)
+      ?.acceptedRevisionId,
+    'loaded',
+  );
+  revisions.pruneHostedProjectRevisions([]);
+  assert.equal(revisions.getHostedProjectRevisionState(id), null);
+});
+
+test('recovery restores its own authority and never adopts separately saved newer revisions', async () => {
+  const revisionKey = 'rivet.hosted-project-revisions.v1';
+  const previousGroup = memoryStorage.get('project');
+  const backend = new PersistentTestStorage();
+  const source = new WorkspaceRecoveryStorage(
+    backend,
+    () => ({
+      project: {
+        hostedProjectRevisions: [
+          { projectId: 'recovered', path, acceptedRevisionId: 'checkpoint', pendingRevisionId: null },
+        ],
+      },
+    }),
+    { session: window.sessionStorage, id: 'selected' },
+  );
+  await source.setItem('project', '{}');
+  try {
+    const wrongAuthority = JSON.stringify([
+      { projectId: 'recovered', path, acceptedRevisionId: 'wrong-workspace', pendingRevisionId: null },
+    ]);
+    window.sessionStorage.setItem(revisionKey, wrongAuthority);
+    window.localStorage.setItem(revisionKey, wrongAuthority);
+    memoryStorage.set('project', { hostedProjectRevisions: JSON.parse(wrongAuthority) });
+    const restored = new WorkspaceRecoveryStorage(backend, () => ({}), {
+      session: window.sessionStorage,
+      id: 'restored',
+    });
+    await initializeHybridStorage('project', restored);
+    const modulePath = '../io/hostedProjectRevisionTracker.js?selected-recovery-test';
+    const isolated: typeof revisions = await import(modulePath);
+    assert.equal(isolated.getHostedProjectExpectedRevision('recovered', path), 'checkpoint');
+    isolated.observeHostedProjectRevision({ projectId: 'recovered', path, revisionId: 'latest' });
+    assert.throws(
+      () => isolated.assertHostedProjectRevisionCanSave('recovered'),
+      isolated.HostedProjectRemoteChangePendingError,
+    );
+  } finally {
+    window.sessionStorage.removeItem(revisionKey);
+    window.sessionStorage.removeItem('rivet-workspace-recovery-v1');
+    window.localStorage.removeItem(revisionKey);
+    memoryStorage.set('project', previousGroup);
+  }
+});
+
+test('missing recovered revision authority requires review instead of adopting the latest tree revision', () => {
+  revisions.pruneHostedProjectRevisions([]);
+  assert.throws(() => revisions.assertHostedProjectRevisionCanSave('unknown'), /unknown/);
+  assert.deepEqual(observe('newest', 'unknown'), { projectId: 'unknown', path, revisionId: 'newest' });
+  assert.equal(revisions.getHostedProjectExpectedRevision('unknown', path), null);
+  assert.throws(
+    () => revisions.assertHostedProjectRevisionCanSave('unknown'),
+    revisions.HostedProjectRemoteChangePendingError,
+  );
+  assert.equal(revisions.acceptHostedProjectRemoteRevision('unknown', path, 'newest'), true);
+  assert.equal(revisions.getHostedProjectExpectedRevision('unknown', path), 'newest');
+  assert.doesNotThrow(() => revisions.assertHostedProjectRevisionCanSave('unknown'));
+});
+
 test('a genuine edit following our save is detected by the retry', () => {
   revisions.bindHostedProjectRevision('project-1', path, 'ours');
   const context = revisions.captureHostedProjectReconciliation(['project-1']);
@@ -120,10 +233,17 @@ test('presentation-only title changes publish a newer snapshot without replacing
 test('close/reopen and failed reload restoration never resurrect observation generations', () => {
   revisions.bindHostedProjectRevision('project-1', path, 'ours');
   observe('theirs');
-  const savedState = revisions.getHostedProjectRevisionState('project-1');
   const beforeReload = revisions.captureHostedProjectReconciliation(['project-1']);
+  const finish = revisions.beginHostedProjectReload('project-1');
   revisions.bindHostedProjectRevision('project-1', path, 'theirs');
-  revisions.restoreHostedProjectRevisionState('project-1', savedState);
+  assert.equal(
+    memoryStorage
+      .get('project')
+      .hostedProjectRevisions.find((entry: { projectId: string }) => entry.projectId === 'project-1')
+      ?.acceptedRevisionId,
+    'ours',
+  );
+  finish(false);
   assert.equal(revisions.claimHostedProjectObservation(beforeReload, 'project-1'), 'retry');
   const beforeClose = revisions.captureHostedProjectReconciliation(['project-1']);
   revisions.pruneHostedProjectRevisions([]);
@@ -141,15 +261,13 @@ test('reload keeps the displayed conflict until replacement settles and rollback
   revisions.bindHostedProjectRevision('project-1', path, 'ours');
   observe('theirs');
   const conflict = snapshot().contentChanges[0]!;
-  const before = revisions.getHostedProjectRevisionState('project-1');
   const observation = revisions.captureHostedProjectReconciliation(['project-1']);
   const finish = revisions.beginHostedProjectReload('project-1');
   revisions.bindHostedProjectRevision('project-1', path, 'theirs');
   assert.deepEqual(snapshot().contentChanges, [conflict]);
   assert.throws(() => revisions.assertHostedProjectRevisionCanSave('project-1'));
   assert.equal(revisions.claimHostedProjectObservation(observation, 'project-1'), 'waiting-for-save');
-  revisions.restoreHostedProjectRevisionState('project-1', before);
-  finish();
+  finish(false);
   const settled = snapshot();
   finish();
   const repeated = snapshot();
@@ -205,6 +323,35 @@ test('remote project revisions require an explicit reload or keep-mine choice be
   assert.doesNotThrow(() => revisions.assertHostedProjectRevisionCanSave('project-1'));
 });
 
+test('rejected reload restores authority while retaining a concurrent path move', () => {
+  revisions.pruneHostedProjectRevisions([]);
+  revisions.bindHostedProjectRevision('project-1', path, 'ours');
+  observe('theirs');
+  const finish = revisions.beginHostedProjectReload('project-1');
+  assert.throws(() => revisions.beginHostedProjectSave('project-1'), /finish reloading/);
+  revisions.bindHostedProjectRevision('project-1', path, 'theirs');
+  const moved = '/workflows/Moved/Project.rivet-project';
+  revisions.remapHostedProjectRevisionPaths([{ fromAbsolutePath: path, toAbsolutePath: moved }]);
+  finish(false);
+  assert.deepEqual(revisions.getHostedProjectRevisionState('project-1'), {
+    projectId: 'project-1',
+    path: moved,
+    acceptedRevisionId: 'ours',
+    pendingRevisionId: 'theirs',
+  });
+  assert.throws(() => revisions.assertHostedProjectRevisionCanSave('project-1'));
+});
+
+test('rejected reload does not resurrect a tab whose revision was pruned during IO', () => {
+  revisions.pruneHostedProjectRevisions([]);
+  revisions.bindHostedProjectRevision('project-1', path, 'ours');
+  const finish = revisions.beginHostedProjectReload('project-1');
+  revisions.bindHostedProjectRevision('project-1', path, 'candidate');
+  revisions.pruneHostedProjectRevisions([]);
+  finish(false);
+  assert.equal(revisions.getHostedProjectRevisionState('project-1'), null);
+});
+
 test('a move keeps the accepted revision bound to the same immutable project', () => {
   revisions.pruneHostedProjectRevisions([]);
   revisions.bindHostedProjectRevision('project-1', '/workflows/Original.rivet-project', 'revision-1');
@@ -247,10 +394,10 @@ test('a failed candidate reload restores the prior pending remote-version decisi
     path: '/workflows/Project.rivet-project',
     revisionId: 'revision-2',
   });
-  const beforeCandidateReload = revisions.getHostedProjectRevisionState('project-1');
+  const finish = revisions.beginHostedProjectReload('project-1');
 
   revisions.bindHostedProjectRevision('project-1', '/workflows/Project.rivet-project', 'revision-2');
-  revisions.restoreHostedProjectRevisionState('project-1', beforeCandidateReload);
+  finish(false);
 
   assert.equal(
     revisions.getHostedProjectExpectedRevision('project-1', '/workflows/Project.rivet-project'),

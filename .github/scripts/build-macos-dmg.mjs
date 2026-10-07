@@ -1,13 +1,26 @@
-import { spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const appRoot = join(repositoryRoot, 'packages', 'app');
 const yarnPath = join(repositoryRoot, '.yarn', 'releases', 'yarn-4.17.1.cjs');
 const supportedTargets = new Set(['aarch64-apple-darwin', 'x86_64-apple-darwin']);
 const retainedOutputLength = 64 * 1024;
+const execute = promisify(execFile);
+const runDiskCommand = (args) => execute('/usr/bin/hdiutil', args, { timeout: 30_000 });
+const listAttachedImages = async () => {
+  const { stdout } = await runDiskCommand(['info', '-plist']);
+  return JSON.parse(
+    execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
+      input: stdout,
+      encoding: 'utf8',
+      timeout: 30_000,
+    }),
+  ).images;
+};
 
 export const macDmgBuildRetryDelaysMs = [5_000, 15_000];
 
@@ -26,6 +39,9 @@ const transientMacDmgBuildFailures = [
 
 export const getTransientMacDmgBuildFailure = (result) => {
   if (result.status === 0) return undefined;
+  if (/hdiutil: couldn't eject "disk\d+" - Resource busy/.test(result.output)) {
+    return { kind: 'hdiutil-detach-busy', description: 'hdiutil scratch-image unmount failure' };
+  }
   return transientMacDmgBuildFailures.find(({ message }) => result.output.includes(message));
 };
 
@@ -57,10 +73,13 @@ export const runMacDmgBuildWithRetries = async ({
   throw new Error('macOS DMG build retry loop ended without a result.');
 };
 
-export const cleanupPartialMacDmg = async (target) => {
+export const cleanupPartialMacDmg = async (
+  target,
+  { root = appRoot, listImages = listAttachedImages, diskCommand = runDiskCommand } = {},
+) => {
   if (!supportedTargets.has(target)) throw new Error(`Unsupported macOS target: ${target}`);
 
-  const bundleDirectory = join(appRoot, 'src-tauri', 'target', target, 'release', 'bundle', 'macos');
+  const bundleDirectory = join(root, 'src-tauri', 'target', target, 'release', 'bundle', 'macos');
   let entries;
   try {
     entries = await readdir(bundleDirectory, { withFileTypes: true });
@@ -72,20 +91,50 @@ export const cleanupPartialMacDmg = async (target) => {
   const partialImages = entries.filter(
     (entry) => entry.isFile() && entry.name.startsWith('rw.') && entry.name.endsWith('.dmg'),
   );
-  await Promise.all(partialImages.map((entry) => rm(join(bundleDirectory, entry.name), { force: true })));
+  if (partialImages.length === 0) return;
+  const attachedImages = await listImages();
+  if (!Array.isArray(attachedImages)) throw new Error('Unable to inspect attached DMG images safely.');
+  for (const entry of partialImages) {
+    const imagePath = join(bundleDirectory, entry.name);
+    for (const image of attachedImages) {
+      if (typeof image['image-path'] !== 'string' || resolve(image['image-path']) !== resolve(imagePath)) continue;
+      const device = image['system-entities']?.find((entity) => /^\/dev\/disk\d+$/.test(entity['dev-entry']))?.['dev-entry'];
+      if (!device) throw new Error('Owned scratch DMG has no identifiable whole-disk device; refusing cleanup.');
+      try {
+        await diskCommand(['detach', device]);
+      } catch (error) {
+        // Tauri has already exhausted its normal unmount retries. Force only our disposable scratch image.
+        if (error.code !== 16) throw error;
+        await diskCommand(['detach', device, '-force']);
+      }
+    }
+    await rm(imagePath, { force: true });
+  }
 };
 
-const runTauriMacDmgBuild = (target) =>
+export function macDmgBuildArgs(target, prebuiltWeb = false) {
+  if (!supportedTargets.has(target)) throw new Error(`Unsupported macOS target: ${target}`);
+  return [
+    yarnPath,
+    'tauri',
+    'build',
+    '--verbose',
+    '--ci',
+    '--target',
+    target,
+    '--bundles',
+    'dmg',
+    ...(prebuiltWeb ? ['--config', '../../.github/desktop-prebuilt.conf.json'] : []),
+  ];
+}
+
+const runTauriMacDmgBuild = (target, prebuiltWeb) =>
   new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      [yarnPath, 'tauri', 'build', '--verbose', '--ci', '--target', target, '--bundles', 'dmg'],
-      {
-        cwd: appRoot,
-        env: process.env,
-        stdio: ['inherit', 'pipe', 'pipe'],
-      },
-    );
+    const child = spawn(process.execPath, macDmgBuildArgs(target, prebuiltWeb), {
+      cwd: appRoot,
+      env: process.env,
+      stdio: ['inherit', 'pipe', 'pipe'],
+    });
     let output = '';
     let settled = false;
 
@@ -106,12 +155,16 @@ const runTauriMacDmgBuild = (target) =>
 
 async function main(args = process.argv.slice(2)) {
   const [target, ...extraArgs] = args;
-  if (!target || extraArgs.length > 0 || !supportedTargets.has(target)) {
-    throw new Error('Usage: build-macos-dmg.mjs <aarch64-apple-darwin|x86_64-apple-darwin>');
+  if (
+    !target ||
+    !supportedTargets.has(target) ||
+    (extraArgs.length > 0 && (extraArgs.length !== 1 || extraArgs[0] !== '--prebuilt-web'))
+  ) {
+    throw new Error('Usage: build-macos-dmg.mjs <aarch64-apple-darwin|x86_64-apple-darwin> [--prebuilt-web]');
   }
 
   const result = await runMacDmgBuildWithRetries({
-    run: () => runTauriMacDmgBuild(target),
+    run: () => runTauriMacDmgBuild(target, extraArgs.length === 1),
     cleanup: () => cleanupPartialMacDmg(target),
   });
   if (result.error) throw result.error;

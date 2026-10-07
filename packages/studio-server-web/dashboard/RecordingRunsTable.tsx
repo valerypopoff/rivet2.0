@@ -1,5 +1,5 @@
 import Select from '@atlaskit/select';
-import { type FC, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VariableSizeList, type ListChildComponentProps } from 'react-window';
 
 import {
@@ -12,6 +12,15 @@ import {
   type WorkflowRecordingWorkflowSummary,
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
+import { RecordingInputPathField } from './RecordingInputPathField';
+import { deleteInputPath, readInputPathHistory, rememberInputPath } from './recording-input-path-history';
+import {
+  groupRecordingRuns,
+  recordingHierarchyRows,
+  refreshRecordingRowMeasurements,
+  type RecordingListRow,
+  type RecordingRunFamily,
+} from './recording-run-hierarchy';
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -43,17 +52,21 @@ const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
 const RECORDING_ROW_GAP = 8;
 
 function formatDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return 'Unavailable';
+  }
   if (durationMs < 1000) {
-    return `${durationMs} ms`;
+    return `${durationMs.toFixed(2)} ms`;
   }
 
-  const seconds = durationMs / 1000;
-  if (seconds < 60) {
-    return `${seconds.toFixed(seconds >= 10 ? 1 : 2)} s`;
+  // Split rounded centiseconds so minute boundaries never display 60.00s.
+  const centiseconds = Math.round(durationMs / 10);
+  if (centiseconds < 6000) {
+    return `${(centiseconds / 100).toFixed(2)} s`;
   }
 
-  const minutes = Math.floor(seconds / 60);
-  const remainderSeconds = Math.round(seconds % 60);
+  const minutes = Math.floor(centiseconds / 6000);
+  const remainderSeconds = ((centiseconds % 6000) / 100).toFixed(2);
   return `${minutes}m ${remainderSeconds}s`;
 }
 
@@ -72,6 +85,10 @@ function formatTimestamp(value: string | undefined): string {
 
 function RecordingRow({
   recording,
+  family,
+  expanded,
+  isChild,
+  onToggle,
   isDeleting,
   isInteractionLocked,
   isOpening,
@@ -79,6 +96,10 @@ function RecordingRow({
   onOpen,
 }: {
   recording: WorkflowRecordingRunSummary;
+  family: RecordingRunFamily | null;
+  expanded: boolean;
+  isChild: boolean;
+  onToggle: (key: string) => void;
   isDeleting: boolean;
   isInteractionLocked: boolean;
   isOpening: boolean;
@@ -94,7 +115,10 @@ function RecordingRow({
   const isSubgraphRun = recording.executionIdentity?.surface === 'subgraph_project';
 
   return (
-    <div className={`run-recordings-run ${recording.status}`}>
+    <div
+      className={`run-recordings-run ${recording.status}${isChild ? ' run-recordings-sub-run' : ''}`}
+      data-recording-id={recording.id}
+    >
       <button
         type="button"
         className="run-recordings-run-open-button"
@@ -104,7 +128,13 @@ function RecordingRow({
         <div className="run-recordings-run-body">
           <div className="run-recordings-run-header">
             <div className="run-recordings-run-main">
-              <div className="run-recordings-run-title">{formatTimestamp(recording.createdAt)}</div>
+              <div className="run-recordings-run-title">
+                {recording.executionIdentity?.surface === 'scheduled' ? (
+                  <span>Scheduled · {recording.executionIdentity.scheduleName ?? 'Scheduled run'} · </span>
+                ) : null}
+                {isChild ? <span className="run-recordings-sub-run-label">Sub-run · </span> : null}
+                {formatTimestamp(recording.createdAt)}
+              </div>
               {isOpening ? (
                 <span className="run-recordings-badge opening" role="status" aria-live="polite">
                   Opening…
@@ -134,18 +164,32 @@ function RecordingRow({
           </div>
         </div>
         <div className="run-recordings-run-endpoint">
+          Project:{' '}
+          <span className="run-recordings-run-endpoint-value">
+            {recording.sourceProjectRelativePath || recording.sourceProjectName || recording.workflowId}
+          </span>
+        </div>
+        <div className="run-recordings-run-endpoint">
           {isSubgraphRun ? 'Called graph' : 'Endpoint at execution'}:{' '}
           <span className="run-recordings-run-endpoint-value">
             {isSubgraphRun ? endpointNameAtExecution.replace(/^Subgraph:\s*/, '') : endpointNameAtExecution}
           </span>
         </div>
-        {recording.executionIdentity?.correlationId && (
+        {isSubgraphRun && recording.executionIdentity?.correlationId && (
           <div className="run-recordings-run-endpoint">
             Related run key:{' '}
             <span className="run-recordings-run-endpoint-value">{recording.executionIdentity.correlationId}</span>
           </div>
         )}
       </button>
+      {family ? (
+        <RecordingFamilyToggle
+          family={family}
+          expanded={expanded}
+          disabled={isDeleting || isInteractionLocked}
+          onToggle={onToggle}
+        />
+      ) : null}
       <div className="run-recordings-run-actions">
         <button
           type="button"
@@ -160,55 +204,122 @@ function RecordingRow({
   );
 }
 
+function RecordingFamilyToggle({
+  family,
+  expanded,
+  disabled,
+  onToggle,
+}: {
+  family: RecordingRunFamily;
+  expanded: boolean;
+  disabled: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const count = family.children.length;
+  return (
+    <button
+      type="button"
+      className="run-recordings-family-toggle"
+      aria-expanded={expanded}
+      disabled={disabled}
+      onClick={() => onToggle(family.key)}
+      title={
+        family.childLoadState
+          ? 'Sub-runs are shown regardless of the root input filter.'
+          : 'Includes sub-runs in this page.'
+      }
+    >
+      <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+      {family.childLoadState === 'loading'
+        ? 'Loading sub-runs...'
+        : family.childLoadState === 'failed'
+          ? 'Retry loading sub-runs'
+          : family.childLoadState === 'unloaded'
+            ? 'Show sub-runs'
+            : `${expanded ? 'Hide' : 'Show'} ${count} ${count === 1 ? 'sub-run' : 'sub-runs'}${family.childLoadState ? '' : ' in current results'}`}
+    </button>
+  );
+}
+
 type VirtualizedRecordingRowData = {
-  recordings: WorkflowRecordingRunSummary[];
+  recordings: RecordingListRow[];
   deletingRecordingId: string | null;
   openingRecordingId: string | null;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
+  onToggle: (key: string) => void;
 };
 
 function MeasuredRecordingRow({
-  recording,
+  row,
   isDeleting,
   isInteractionLocked,
   isOpening,
   onDelete,
   onOpen,
   onHeightChange,
+  onToggle,
 }: {
-  recording: WorkflowRecordingRunSummary;
+  row: RecordingListRow;
   isDeleting: boolean;
   isInteractionLocked: boolean;
   isOpening: boolean;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
   onHeightChange: (recordingId: string, height: number) => void;
+  onToggle: (key: string) => void;
 }) {
   const rowRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const row = rowRef.current;
-    if (!row) return;
-    const measure = () =>
-      onHeightChange(recording.id, Math.ceil(row.getBoundingClientRect().height) + RECORDING_ROW_GAP);
+    const element = rowRef.current;
+    if (!element) return;
+    const measure = () => onHeightChange(row.id, Math.ceil(element.getBoundingClientRect().height) + RECORDING_ROW_GAP);
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(row);
+    observer.observe(element);
     return () => observer.disconnect();
-  }, [onHeightChange, recording.id]);
+  }, [
+    onHeightChange,
+    row.id,
+    row.recording,
+    row.expanded,
+    row.isChild,
+    row.family?.children.length,
+    row.family?.childLoadState,
+  ]);
 
   return (
-    <div ref={rowRef}>
-      <RecordingRow
-        recording={recording}
-        isDeleting={isDeleting}
-        isInteractionLocked={isInteractionLocked}
-        isOpening={isOpening}
-        onDelete={onDelete}
-        onOpen={onOpen}
-      />
+    <div ref={rowRef} className={row.isChild ? 'run-recordings-child-row' : undefined}>
+      {row.recording ? (
+        <RecordingRow
+          recording={row.recording}
+          family={row.family}
+          expanded={row.expanded}
+          isChild={row.isChild}
+          onToggle={onToggle}
+          isDeleting={isDeleting}
+          isInteractionLocked={isInteractionLocked}
+          isOpening={isOpening}
+          onDelete={onDelete}
+          onOpen={onOpen}
+        />
+      ) : row.family ? (
+        <div className="run-recordings-family-context">
+          <div className="run-recordings-run-title">Related sub-runs</div>
+          <div>
+            Primary run is not identified in these results. It may be on another page, filtered out, or no longer
+            retained.
+          </div>
+          <RecordingFamilyToggle
+            family={row.family}
+            expanded={row.expanded}
+            disabled={isDeleting || isInteractionLocked}
+            onToggle={onToggle}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -219,37 +330,45 @@ function VirtualizedRecordingRow({ index, style, data }: ListChildComponentProps
   return (
     <div style={{ ...style, boxSizing: 'border-box' }}>
       <MeasuredRecordingRow
-        recording={recording}
+        row={recording}
         isDeleting={data.deletingRecordingId !== null}
         isInteractionLocked={data.openingRecordingId !== null}
-        isOpening={data.openingRecordingId === recording.id}
+        isOpening={data.openingRecordingId === recording.recording?.id}
         onDelete={data.onDelete}
         onOpen={data.onOpen}
         onHeightChange={data.onHeightChange}
+        onToggle={data.onToggle}
       />
     </div>
   );
 }
 
 function VirtualizedRecordingList({
-  recordings,
+  recordings: runs,
+  childLoadStates,
+  expandedKeys,
+  onToggle,
   deletingRecordingId,
   openingRecordingId,
   onDelete,
   onOpen,
 }: {
   recordings: WorkflowRecordingRunSummary[];
+  childLoadStates?: Readonly<Record<string, RecordingRunFamily['childLoadState']>>;
+  expandedKeys: ReadonlySet<string>;
+  onToggle: (key: string) => void;
   deletingRecordingId: string | null;
   openingRecordingId: string | null;
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
+  const families = useMemo(() => groupRecordingRuns(runs, childLoadStates), [runs, childLoadStates]);
+  const recordings = useMemo(() => recordingHierarchyRows(families, expandedKeys), [families, expandedKeys]);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList | null>(null);
   const rowHeightsRef = useRef(new Map<string, number>());
   const rowIndexesRef = useRef(new Map<string, number>());
-  const previousRecordingIdsRef = useRef<string[]>([]);
-  const previousRecordingsRef = useRef<WorkflowRecordingRunSummary[]>([]);
+  const previousRecordingsRef = useRef<RecordingListRow[]>([]);
   const [viewportHeight, setViewportHeight] = useState(0);
 
   useEffect(() => {
@@ -272,42 +391,20 @@ function VirtualizedRecordingList({
   }, []);
 
   useLayoutEffect(() => {
-    const previousIds = previousRecordingIdsRef.current;
-    const previousRecordings = previousRecordingsRef.current;
     const nextIds = recordings.map((recording) => recording.id);
-    let firstChangedIndex = -1;
-    const sharedLength = Math.min(previousIds.length, nextIds.length);
-    for (let index = 0; index < sharedLength; index += 1) {
-      if (previousIds[index] !== nextIds[index]) {
-        firstChangedIndex = index;
-        break;
-      }
-    }
-    if (firstChangedIndex < 0 && previousIds.length > nextIds.length) {
-      firstChangedIndex = nextIds.length;
-    }
-    for (let index = 0; index < sharedLength; index += 1) {
-      if (previousIds[index] === nextIds[index] && previousRecordings[index] !== recordings[index]) {
-        rowHeightsRef.current.delete(nextIds[index]!);
-        firstChangedIndex = firstChangedIndex < 0 ? index : Math.min(firstChangedIndex, index);
-      }
-    }
-
-    const activeIds = new Set(recordings.map((recording) => recording.id));
-    for (const recordingId of rowHeightsRef.current.keys()) {
-      if (!activeIds.has(recordingId)) {
-        rowHeightsRef.current.delete(recordingId);
-      }
-    }
+    const firstChangedIndex = refreshRecordingRowMeasurements(
+      previousRecordingsRef.current,
+      recordings,
+      rowHeightsRef.current,
+    );
     rowIndexesRef.current = new Map(nextIds.map((recordingId, index) => [recordingId, index]));
-    previousRecordingIdsRef.current = nextIds;
     previousRecordingsRef.current = recordings;
 
     // Establish indexes before child passive effects measure newly added rows.
     // Input-filter results append in newest-first order. Existing row heights
     // remain correct, so resetting all virtual measurements on every response
     // would visibly jump a long list for no reason.
-    if (firstChangedIndex >= 0) {
+    if (firstChangedIndex != null) {
       listRef.current?.resetAfterIndex(firstChangedIndex, true);
     }
   }, [recordings]);
@@ -333,6 +430,7 @@ function VirtualizedRecordingList({
     onDelete,
     onOpen,
     onHeightChange,
+    onToggle,
   };
 
   return (
@@ -356,7 +454,10 @@ function VirtualizedRecordingList({
 }
 
 type RecordingRunsTableProps = {
-  selectedWorkflow: WorkflowRecordingWorkflowSummary;
+  childLoadStates?: Readonly<Record<string, RecordingRunFamily['childLoadState']>>;
+  expandedFamilyKeys: ReadonlySet<string>;
+  onToggleFamily: (key: string) => void;
+  selectedWorkflow: WorkflowRecordingWorkflowSummary | null;
   selectedWorkflowEndpoint: string;
   selectedWorkflowStatusLabel: string;
   overallRunsCount: number;
@@ -383,7 +484,7 @@ type RecordingRunsTableProps = {
   onSetInputFilterPath: (path: string) => void;
   onSetInputFilterOperator: (operator: WorkflowRecordingInputFilterOperator) => void;
   onSetInputFilterValue: (value: string) => void;
-  onApplyInputFilter: () => void;
+  onApplyInputFilter: () => boolean;
   onClearInputFilter: () => void;
   onStopInputSearch: () => void;
   onSetRunsPerPage: (pageSize: number) => void;
@@ -393,6 +494,9 @@ type RecordingRunsTableProps = {
 };
 
 export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
+  childLoadStates,
+  expandedFamilyKeys,
+  onToggleFamily,
   selectedWorkflow,
   selectedWorkflowEndpoint,
   selectedWorkflowStatusLabel,
@@ -428,12 +532,13 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   onDeleteRecording,
   onOpenRecording,
 }) => {
+  const [inputPathHistory, setInputPathHistory] = useState(() => readInputPathHistory());
   const allRunsLabel = overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
   const badRunsLabel = badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
   const valueInputDisabled = inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists';
   const selectedInputFilterOperator =
     inputFilterOperatorOptions.find((option) => option.value === inputFilterOperator) ?? inputFilterOperatorOptions[0]!;
-  const inputSearchFoundLabel = visibleRuns.length === 1 ? '1 match found' : `${visibleRuns.length} matches found`;
+  const inputSearchFoundLabel = filteredRunsCount === 1 ? '1 match found' : `${filteredRunsCount} matches found`;
   const inputSearchMessage =
     inputSearchStatus === 'searching'
       ? visibleRuns.length > 0
@@ -456,30 +561,32 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
     : null;
 
   return (
-    <section className="run-recordings-details">
-      <div className="run-recordings-workflow-summary">
-        <div className="run-recordings-workflow-heading-row">
-          <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
-            {selectedWorkflowStatusLabel}
-          </span>
-          <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
-        </div>
+    <section className={`run-recordings-details${selectedWorkflow ? '' : ' run-recordings-details-any'}`}>
+      {selectedWorkflow ? (
+        <div className="run-recordings-workflow-summary">
+          <div className="run-recordings-workflow-heading-row">
+            <span className={`project-status-badge ${selectedWorkflow.project.settings.status}`}>
+              {selectedWorkflowStatusLabel}
+            </span>
+            <div className="run-recordings-workflow-name">{selectedWorkflow.project.name}</div>
+          </div>
 
-        <div className="run-recordings-workflow-fields">
-          <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
-            <div className="run-recordings-field-label">Endpoint</div>
-            <div className="run-recordings-field-value run-recordings-field-code">
-              {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+          <div className="run-recordings-workflow-fields">
+            <div className="run-recordings-workflow-field run-recordings-workflow-field-wide">
+              <div className="run-recordings-field-label">Endpoint</div>
+              <div className="run-recordings-field-value run-recordings-field-code">
+                {selectedWorkflowEndpoint ? `/workflows/${selectedWorkflowEndpoint}` : 'No endpoint configured'}
+              </div>
             </div>
-          </div>
-          <div className="run-recordings-workflow-field">
-            <div className="run-recordings-field-label">Project path</div>
-            <div className="run-recordings-field-value run-recordings-field-code">
-              {selectedWorkflow.project.relativePath}
+            <div className="run-recordings-workflow-field">
+              <div className="run-recordings-field-label">Project path</div>
+              <div className="run-recordings-field-value run-recordings-field-code">
+                {selectedWorkflow.project.relativePath}
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="run-recordings-runs-panel">
         <div className="run-recordings-runs-header">
@@ -543,19 +650,18 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             className="run-recordings-input-filter"
             onSubmit={(event) => {
               event.preventDefault();
-              onApplyInputFilter();
+              if (onApplyInputFilter()) {
+                setInputPathHistory(rememberInputPath(inputFilterPath));
+              }
             }}
           >
-            <label className="run-recordings-input-filter-field">
-              <span className="run-recordings-field-label">Input JSON path</span>
-              <input
-                type="text"
-                value={inputFilterPath}
-                onChange={(event) => onSetInputFilterPath(event.target.value)}
-                placeholder="$.foo"
-                aria-label="Input JSON path"
-              />
-            </label>
+            <RecordingInputPathField
+              value={inputFilterPath}
+              paths={inputPathHistory}
+              onChange={onSetInputFilterPath}
+              onRefresh={() => setInputPathHistory(readInputPathHistory())}
+              onDelete={(path) => setInputPathHistory(deleteInputPath(path))}
+            />
 
             <label className="run-recordings-input-filter-field run-recordings-input-filter-operator">
               <span className="run-recordings-field-label">Operator</span>
@@ -661,7 +767,17 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             </div>
           ) : (
             <VirtualizedRecordingList
+              key={JSON.stringify([
+                selectedWorkflow?.workflowId ?? '',
+                page,
+                runsPerPage,
+                statusFilter,
+                appliedInputFilter,
+              ])}
               recordings={visibleRuns}
+              childLoadStates={childLoadStates}
+              expandedKeys={expandedFamilyKeys}
+              onToggle={onToggleFamily}
               deletingRecordingId={deletingRecordingId}
               openingRecordingId={openingRecordingId}
               onDelete={onDeleteRecording}

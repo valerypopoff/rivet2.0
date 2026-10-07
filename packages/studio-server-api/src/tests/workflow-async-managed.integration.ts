@@ -16,6 +16,7 @@ import {
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import { startAsyncWorkflowProcess } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
+import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -250,6 +251,20 @@ try {
   // the isolated executor bootstrap check has finished.
   await s3.send(new DeleteBucketCommand({ Bucket: 'async-recordings' }));
   api = await startAsyncWorkflowProcess({ storage: storageSettings });
+  await verifyProjectBundleDownload({
+    workflowsBaseUrl: `${api.baseUrl}/api/workflows`,
+    projectsBaseUrl: `${api.baseUrl}/api/projects`,
+    headers: { 'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex') },
+  });
+  console.log('Managed bundles: PostgreSQL/S3 snapshots, versions, datasets, ZIP resume and local execution passed.');
+  // Managed exports must not reconstruct project files under the VM's virtual root.
+  assert.deepEqual(await fs.readdir(path.join(api.root, 'workflows')), []);
+  const exportNamespaces = await fs.readdir(path.join(api.root, 'exports'));
+  assert.equal(exportNamespaces.length, 1);
+  assert.deepEqual(
+    await fs.readdir(path.join(api.root, 'exports', exportNamespaces[0]!)), [],
+    'completed downloads were disposed',
+  );
   for (const [index, route] of ['/workflows', '/internal/workflows', '/workflows-latest'].entries()) {
     const value = `${tail.baseUrl}/${index}`;
     const response: Response = await fetch(`${api.baseUrl}${route}/async-acceptance`, {

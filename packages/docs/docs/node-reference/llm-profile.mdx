@@ -37,6 +37,8 @@ not show an empty **Reasoning** section.
 
 ## Inputs
 
+**Temperature** is optional. Clear it to use the provider default; Rivet omits the generated option rather than sending `null`. Zero and fractional values are preserved. Historical null/NaN values are treated as unset; other invalid non-finite values fail validation. A supplied Temperature input must resolve to a finite number; blank or excluded input values fail rather than silently using a default. If no input value is supplied, Rivet uses the node's configured Temperature, which may be unset. Provider/model support still determines whether a supplied value is accepted. Extra provider options can deliberately override the generated request fields.
+
 Settings with **Use input port** enabled appear as inputs. Depending on the
 configuration these can include Model, API Key, Provider base URL, generation
 parameters, Headers, Extra Provider Options, and provider-specific thinking

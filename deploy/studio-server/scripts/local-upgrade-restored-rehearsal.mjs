@@ -33,6 +33,45 @@ export const RESTORED_REHEARSAL_PHASES = Object.freeze([
   'legacy-resumption-commit-restart-source-fenced',
 ]);
 
+export const RESTORED_REHEARSAL_STEPS = Object.freeze([
+  'provision-control',
+  'enter-maintenance',
+  'fingerprint-source',
+  'initial-startup',
+  'initial-pause',
+  'initial-transfer',
+  'initial-activation',
+  'initial-restart',
+  'initial-validation',
+  'return-to-legacy',
+  'legacy-restart',
+  'legacy-validation',
+  'legacy-refence',
+  'second-pause',
+  'second-transfer',
+  'second-activation',
+  'second-restart',
+  'second-validation',
+  'corrupt-startup',
+  'offline-recovery',
+  'recovered-startup',
+  'recovered-validation',
+  'legacy-resumption',
+]);
+
+/** Only release a fixed operation name, never exception text, command output,
+ * clone paths, settings, credentials, or arbitrary fields from a failed run. */
+export function redactedRestoredFailureStep(result, expected) {
+  if (
+    result?.passed !== false ||
+    result.imageId !== expected.imageId ||
+    result.backupReceipt !== expected.backupReceipt ||
+    !RESTORED_REHEARSAL_STEPS.includes(result.failureStep)
+  )
+    return null;
+  return result.failureStep;
+}
+
 /** A top-level PASS alone is not a completed rehearsal. Bind the evidence to
  * the independently supplied backup/image/limits and require safe cleanup. */
 export function assertRestoredRehearsalResult(result, expected) {
@@ -104,11 +143,11 @@ export async function resumeRestoredLegacyFenced({ action, request, restart }) {
 /** Track ownership before launching: a failed Docker CLI call may still have
  * created a live container. Transient offline tools need the same cleanup. */
 export function createRestoredContainerTracker(runDocker, owner, cleanupDocker = runDocker) {
-  const pending = new Set();
+  const pending = new Map();
   let backendAttempted = false;
   const launch = async (args, transient) => {
     const name = transient ? `${owner}-tool-${randomUUID()}` : owner;
-    pending.add(name);
+    pending.set(name, transient);
     if (!transient) backendAttempted = true;
     const result = await runDocker([
       'run',
@@ -131,13 +170,28 @@ export function createRestoredContainerTracker(runDocker, owner, cleanupDocker =
     async cleanup(remove) {
       let failed = false;
       const retained = [];
-      for (const name of pending) {
+      for (const [name, transient] of pending) {
         try {
-          const inspection = JSON.parse((await cleanupDocker(['inspect', name])).stdout)[0];
+          const stillListed = async () =>
+            (await cleanupDocker(['ps', '-a', '--format', '{{.Names}}'])).stdout.split(/\r?\n/).includes(name);
+          let inspection;
+          try {
+            inspection = JSON.parse((await cleanupDocker(['inspect', name])).stdout)[0];
+          } catch (error) {
+            // Docker --rm can remove a failed one-shot helper before the CLI
+            // reports its nonzero exit. Never apply this exception to the
+            // persistent backend container, or to an unverifiable daemon.
+            if (transient && !(await stillListed())) continue;
+            throw error;
+          }
           assert.equal(inspection.Config.Labels?.['rivet.local-upgrade.restored'], owner);
+          assert.match(inspection.Id, /^[a-f0-9]{64}$/, 'Invalid owned container ID.');
           assert.equal(typeof inspection.State?.Running, 'boolean', 'Invalid owned container state.');
-          if (inspection.State.Running) await cleanupDocker(['stop', '--time', '150', name]);
-          if (remove) await cleanupDocker(['rm', name]);
+          // The inspected ID, unlike a reusable name, still identifies the
+          // same container if Docker auto-removes a helper during cleanup.
+          if (inspection.State.Running) await cleanupDocker(['stop', '--time', '150', inspection.Id]);
+          if (transient && !(await stillListed())) continue;
+          if (remove) await cleanupDocker(['rm', inspection.Id]);
           else retained.push(name);
         } catch {
           failed = true;
@@ -284,6 +338,10 @@ async function main(signal) {
     RIVET_BACKEND_API_PORT: '80',
     RIVET_BACKEND_EXECUTOR_PORT: '21889',
     RIVET_BACKEND_HEALTH_PORT: '21890',
+    // This isolated, write-fenced clone has no active executions to drain.
+    // Keep production's shutdown grace unchanged while allowing the several
+    // required rehearsal restarts to finish within the host gate deadline.
+    RIVET_SHUTDOWN_GRACE_SECONDS: '10',
     RIVET_WORKSPACE_ROOT: '/workspace',
     RIVET_WORKFLOWS_ROOT: mounts.workflows,
     RIVET_WORKFLOW_RECORDINGS_ROOT: mounts.recordings,
@@ -369,7 +427,8 @@ async function main(signal) {
   const phases = [];
   let passed = false,
     frozenSourceFingerprint,
-    peakMemoryBytes = 0;
+    peakMemoryBytes = 0,
+    failureStep = 'provision-control';
   const assertSourceSnapshot = async () =>
     assertRestoredSourceFingerprint((await request('/fingerprint')).sourceFingerprint, frozenSourceFingerprint);
   const evidence = (phase) => {
@@ -404,7 +463,8 @@ async function main(signal) {
     const status = await request('');
     await request('/action', { action, revision: status.transition.revision });
   };
-  const copy = async () => {
+  const copy = async (cycle) => {
+    failureStep = `${cycle}-pause`;
     await request('/pause', {});
     let status;
     for (let attempt = 0; attempt < 120; attempt++) {
@@ -415,6 +475,7 @@ async function main(signal) {
     assert.equal(status.drain?.ready, true);
     const { sourceFingerprint } = await request('/fingerprint');
     assertRestoredSourceFingerprint(sourceFingerprint, frozenSourceFingerprint);
+    failureStep = `${cycle}-transfer`;
     await request('/copy', {
       revision: status.transition.revision,
       backupReference: `restored-backup:${plan.receipt}`,
@@ -431,12 +492,16 @@ async function main(signal) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     assert.equal(status.job?.phase, 'verified', 'Clone conversion timed out.');
+    failureStep = `${cycle}-activation`;
     await action('activate');
+    failureStep = `${cycle}-restart`;
     await restart();
+    failureStep = `${cycle}-validation`;
     await action('validate');
   };
   try {
     await tool('local-metadata-control.js', ['--provision']);
+    failureStep = 'enter-maintenance';
     // Fence the clone BEFORE boot: retention/startup background work must not
     // quietly trim the restored dataset before it is compared or converted.
     await tracker.runTool([
@@ -448,9 +513,11 @@ async function main(signal) {
       '-e',
       `const {enterVmMigrationMaintenance}=await import('${moduleRoot}vm-migration-maintenance.js');await enterVmMigrationMaintenance();`,
     ]);
+    failureStep = 'fingerprint-source';
     frozenSourceFingerprint = JSON.parse(
       (await tool('local-metadata-control.js', ['--fingerprint'])).stdout.trim(),
     ).sourceFingerprint;
+    failureStep = 'initial-startup';
     await tracker.start([...common, '--entrypoint', 'node', image.Id, '/opt/rivet/backend-supervisor.mjs']);
     await ready();
     await assertSourceSnapshot();
@@ -458,15 +525,20 @@ async function main(signal) {
     assert.equal(inspect.HostConfig.NetworkMode, 'none');
     assert.equal(Object.keys(inspect.HostConfig.PortBindings ?? {}).length, 0);
     evidence('isolated-startup');
-    await copy();
+    await copy('initial');
     evidence('conversion-restart-validation');
+    failureStep = 'return-to-legacy';
     await action('return-to-legacy');
+    failureStep = 'legacy-restart';
     await restart();
+    failureStep = 'legacy-validation';
     await action('validate');
     evidence('online-return-to-legacy');
+    failureStep = 'legacy-refence';
     await resumeRestoredLegacyFenced({ action, request, restart });
-    await copy();
+    await copy('second');
     const selected = await request('');
+    failureStep = 'corrupt-startup';
     await runDocker(['stop', '--time', '150', name]);
     const damaged = path.join(control, 'generations', selected.transition.generationId, 'settings.sqlite');
     const handle = await fs.open(damaged, 'r+');
@@ -487,16 +559,20 @@ async function main(signal) {
       if (attempt === 29) throw new Error('Corrupt selected clone failed to stop.');
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
+    failureStep = 'offline-recovery';
     await tool(
       'recover-local-metadata.js',
       [String(selected.transition.revision), selected.transition.generationId],
       true,
     );
+    failureStep = 'recovered-startup';
     await runDocker(['start', name]);
     await ready();
     await assertSourceSnapshot();
+    failureStep = 'recovered-validation';
     await action('validate');
     evidence('corrupt-startup-key-free-offline-recovery');
+    failureStep = 'legacy-resumption';
     await resumeRestoredLegacyFenced({ action, request, restart });
     const final = await request('');
     assert.equal(final.runningBackend, 'legacy');
@@ -523,6 +599,7 @@ async function main(signal) {
       cpus: plan.cpus,
       sampledPeakMemoryBytes: peakMemoryBytes,
       phases,
+      ...(passed ? {} : { failureStep }),
       scope:
         'Read-only equivalence, restart and pre-write recovery; clone source stays fenced. No production workflow executions or live cutover.',
       requiresSeparateControlledFunctionalRehearsal: true,

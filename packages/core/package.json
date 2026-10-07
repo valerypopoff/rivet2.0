@@ -2,7 +2,7 @@
   "name": "@valerypopoff/rivet2-core",
   "license": "MIT",
   "repository": "https://github.com/valerypopoff/rivet2.0",
-  "version": "2.15.0",
+  "version": "2.17.0",
   "packageManager": "yarn@4.17.1",
   "main": "dist/cjs/bundle.cjs",
   "module": "dist/esm/index.js",
@@ -55,6 +55,7 @@
     "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",
     "lint": "eslint ./src",
     "test": "tsx --test test/**/*.test.ts",
+    "test:shard": "tsx --test --test-concurrency=4 --test-shard=$RIVET_CORE_TEST_SHARD test/**/*.test.ts",
     "watch": "tsc -b -w"
   },
   "dependencies": {

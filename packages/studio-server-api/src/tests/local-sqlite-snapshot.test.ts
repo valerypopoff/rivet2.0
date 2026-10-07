@@ -6,8 +6,38 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
 import { createVerifiedLocalSqliteSnapshot, inspectLocalSqliteSnapshot } from '../local-metadata/sqlite-snapshot.js';
+import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 
 // test-style: fixture-read: Reads compare only generated SQLite/WAL fixtures, not repository source.
+
+test('scheduler source proof survives checkpoint and shutdown but detects committed changes', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduler-proof-'));
+  const roots = Object.fromEntries(
+    ['workflows', 'recordings', 'appData', 'runtimeLibraries'].map((name) => [name, path.join(root, name)]),
+  ) as { workflows: string; recordings: string; appData: string; runtimeLibraries: string };
+  let writer: DatabaseSync | undefined;
+  try {
+    for (const directory of Object.values(roots)) await fs.mkdir(directory);
+    const absent = await fingerprintVmMigrationSource(roots);
+    writer = new DatabaseSync(path.join(roots.appData, 'scheduled-runs.sqlite'));
+    writer.exec(
+      'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(id INTEGER); INSERT INTO records VALUES(1)',
+    );
+    const frozen = await fingerprintVmMigrationSource(roots);
+    assert.notEqual(frozen, absent);
+    writer.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    assert.equal(await fingerprintVmMigrationSource(roots), frozen, 'checkpointing is not a data change');
+    writer.close();
+    writer = undefined;
+    assert.equal(await fingerprintVmMigrationSource(roots), frozen, 'closing the paused owner is not a data change');
+    writer = new DatabaseSync(path.join(roots.appData, 'scheduled-runs.sqlite'));
+    writer.exec('INSERT INTO records VALUES(2)');
+    assert.notEqual(await fingerprintVmMigrationSource(roots), frozen, 'committed WAL rows must be protected');
+  } finally {
+    writer?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 async function fixture(
   run: (root: string, source: string, destination: string, writer: DatabaseSync) => Promise<void>,

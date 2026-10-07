@@ -1,6 +1,7 @@
 import stableStringify from 'safe-stable-stringify';
 import type { NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { mergeCurrentGraphIntoProject } from './workspaceTransitions.js';
+import { applyProjectMetadataPatch, type ProjectMetadataPatch } from './projectMetadataUpdates.js';
 
 export type ProjectContentForDigest = {
   project: Omit<Project, 'data'> | Project;
@@ -89,6 +90,25 @@ export function markProjectClean(
     ...currentDigests,
     [projectId]: nextDigest,
   };
+}
+
+/** A server-side rename persists metadata only, not this tab's unsaved graphs.
+ * Apply it to the saved content too, so undoing local edits can become clean. */
+export function patchSavedProjectMetadata(
+  digests: Record<ProjectId, string | undefined>,
+  projectId: ProjectId,
+  patch: ProjectMetadataPatch,
+): Record<ProjectId, string | undefined> {
+  const digest = digests[projectId];
+  if (!digest) return digests;
+  try {
+    const content = JSON.parse(digest) as ProjectContentForDigest;
+    if (content.project?.metadata?.id !== projectId) return digests;
+    return markProjectClean(digests, { project: applyProjectMetadataPatch(content.project, patch) });
+  } catch {
+    // Old or corrupt baseline formats cannot certify current live edits.
+    return digests;
+  }
 }
 
 export function markProjectDirtyFlag(
