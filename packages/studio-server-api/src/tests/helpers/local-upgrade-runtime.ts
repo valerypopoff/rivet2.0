@@ -442,6 +442,96 @@ try {
       console.error = originalLog;
       await listener.close();
     }
+  } else if (command === 'background-preparation') {
+    await initializeWorkflowStorage();
+    const { createApiApp } = await import('../../app.js');
+    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+      'Content-Type': 'application/json',
+      'X-Rivet-Migration-Intent': '1',
+      Origin: listener.baseUrl,
+    };
+    const url = `${listener.baseUrl}/api/app-settings/local-upgrade`;
+    const source = localMetadataSourceRoots();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = fs.readdir;
+    const held = mock.method(fs, 'readdir', async (...args: Parameters<typeof fs.readdir>) => {
+      if (String(args[0]) === source.workflows) await gate;
+      return original(...args);
+    });
+    const request = (body: object, auth = true) =>
+      fetch(`${url}/preparation`, {
+        method: 'POST',
+        headers: auth ? headers : { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
+      });
+    const status = () => fetch(url, { headers, signal: AbortSignal.timeout(5000) }).then((res) => res.json());
+    const waitFor = async (predicate: (value: Awaited<ReturnType<typeof status>>) => boolean) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const value = await status();
+        if (predicate(value)) return value;
+        if (Date.now() > deadline) throw new Error('Owned preparation deadline exceeded.');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+    try {
+      const before = await status();
+      const input = { id: randomUUID(), kind: 'inspect', revision: before.transition.revision };
+      assert.equal((await request(input, false)).status, 403);
+      assert.equal((await request({ ...input, revision: input.revision + 1 })).status, 409);
+      assert.equal((await request(input)).status, 202);
+      const running = await status();
+      assert.equal(running.preparation.phase, 'running');
+      assert.equal(running.operation, 'inspect');
+      assert.equal(running.maintenance, null);
+      assert.equal((await request(input)).status, 202);
+      assert.equal((await request({ ...input, id: randomUUID(), kind: 'pause' })).status, 409);
+      release();
+      const ready = await waitFor((value) => value.preparation?.phase === 'ready');
+      assert.ok(ready.preparation.inventory.capacity.fits);
+      assert.equal(ready.maintenance, null);
+      assert.equal((await request(input)).status, 202);
+      const oversized = path.join(source.workflows, 'owned-oversized.fixture');
+      const oldBudget = process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB;
+      try {
+        process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB = '1';
+        await fs.writeFile(oversized, Buffer.alloc(1048577));
+        const refusedId = randomUUID();
+        assert.equal((await request({ id: refusedId, kind: 'pause-backup', revision: input.revision })).status, 202);
+        const refused = await waitFor(
+          (value) => value.preparation?.id === refusedId && value.preparation.phase === 'failed',
+        );
+        assert.equal(refused.preparation.inventory.capacity.fits, false);
+        assert.equal(refused.maintenance, null, 'capacity refusal must precede pausing any writes');
+        assert.equal(refused.backup, null, 'capacity refusal must not create a backup');
+      } finally {
+        await fs.rm(oversized, { force: true });
+        if (oldBudget === undefined) delete process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB;
+        else process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB = oldBudget;
+      }
+      assert.equal((await request({ id: randomUUID(), kind: 'pause-backup', revision: input.revision })).status, 202);
+      const backedUp = await waitFor((value) => value.backup?.phase === 'ready' && !value.operation);
+      assert.ok(backedUp.maintenance);
+      assert.equal(backedUp.preparation.phase, 'ready');
+      assert.equal(backedUp.preparation.stage, 'backup');
+      assert.equal((await request({ id: randomUUID(), kind: 'fingerprint', revision: input.revision })).status, 202);
+      const fingerprint = await waitFor(
+        (value) => value.preparation.kind === 'fingerprint' && value.preparation.phase === 'ready',
+      );
+      assert.equal(fingerprint.preparation.fingerprint.pausedAt, fingerprint.maintenance.enteredAt);
+      assert.equal(fingerprint.preparation.fingerprint.sourceFingerprint, backedUp.backup.sourceFingerprint);
+    } finally {
+      release();
+      held.mock.restore();
+      await listener.close();
+    }
   } else if (command === 'browser-backup') {
     await initializeWorkflowStorage();
     const { createReviewedBackendPublicationFixtures } = await import('./reviewed-publication.js');

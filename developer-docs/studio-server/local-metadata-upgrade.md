@@ -95,7 +95,7 @@ The panel discards its last status and locks actions when status polling loses c
 
 Runtime validation has visible in-progress, failure and success feedback directly below its action button. Success identifies SQLite or legacy and states that writes remain paused; it is derived from the server's durable validation state, not from an empty HTTP 204 response or a transient toast, so it survives reopening the panel. A different generation, validation phase, required restart, lost operator status or failed revalidation cannot leave a stale success message visible. Revalidation clears the browser acknowledgement, and a failed attempt locks acknowledgement/resumption for that generation and revision until validation succeeds. The feedback never checks the resumption acknowledgement or resumes writes automatically.
 
-Every upgrade action uses the same loading-button/progress component. Inspection, pause/drain, fingerprint, copy, activation, validation, return to legacy, both resumption paths, cancellation and report download show a theme-contrasting spinner on the initiating button and an adjacent live progress message. The pending action is the single source of UI busy state, and a synchronous guard rejects repeated clicks while its request and status refresh are outstanding. Server-reported copying and draining keep their indicators after the initial HTTP request returns and when the panel is reopened; a short request deadline is not imposed on these legitimate long-running operations. Pending indicators clear on success or failure, never select a backend or resume writes themselves.
+Every upgrade action uses the same loading-button/progress component. Inspection, pause/drain, fingerprint, copy, activation, validation, return to legacy, both resumption paths, cancellation and report download show a theme-contrasting spinner on the initiating button and an adjacent live progress message. Local pending actions own request feedback, while server-reported workers keep controls busy after admission and reopening. A synchronous guard rejects repeated clicks while a request and its status refresh are outstanding. Long-running work continues independently of bounded preparation-admission and status requests. Pending indicators clear on success or failure, never select a backend or resume writes themselves.
 
 Action settlement suspends background polling and invalidates older status reads. Every completed or failed action attempts a fresh status read before unlocking controls: a lost HTTP response does not prove that the server made no durable change. If reconciliation fails, the connection gate stays locked while the original action diagnostic is retained. Restart completion is derived from current server status, not a sticky browser flag; validation, acknowledgement and resumption all require the running backend to match the selected backend. A fingerprint is shown and accepted only for the maintenance session in which it was read. Failed repeat fingerprint/inspection reads discard their earlier proof/inventory instead of silently enabling the next step from stale results. These are browser safeguards in addition to server-side revision, source and backup checks, not replacements for them.
 
@@ -117,6 +117,91 @@ Backup status also binds its metadata read to an in-process activity revision, a
 The job persists its current stage and a fixed failure category (`disk-full`, `permission-denied`, `missing-data`, `io-error`, `invalid-data`, or `verification-failed`). Additive `reason` fields distinguish capacity refusal, stale source/backup evidence, parsing, missing/duplicate project IDs, invalid settings/history, publication ownership/routes, bundle limits and catalog import failures. Unknown errors remain `unexpected-error`, not a claim that the source is corrupt. Failed jobs have a downloadable, explicitly unverified report. A new failed copy reports its own job ID, never a previously returned generation's certificate; the download filename follows the returned report identity. Raw exception messages, stacks, paths, SQL and error causes are never persisted: they can contain settings secrets. Project failures include only a 16-character SHA-256-derived relative-path reference. The authenticated, no-cache `GET /api/app-settings/local-upgrade/project-reference?reference=…` resolves matching paths read-only for the panel; paths are not added to the ledger/report. Lookup failure leaves the opaque reference visible and cannot unlock migration. Parser reads use the opt-in quiet mode so a caught malformed project does not leak its contents through parser warnings. Older jobs remain readable but their discarded causes cannot be reconstructed retroactively. An internal checkpoint seam is used only by tests; no HTTP or production environment variable can inject a fault.
 
 Unhandled storage-operator API failures, including inspection failures before a copy job exists, also use only a fixed failure code and request correlation ID in logs. Their HTTP 5xx response is fixed text, never an exposed parser/driver error or its arbitrary error code. A malformed generated recording metadata fixture verifies that private source text does not enter either output. Authentication and request-validation errors retain their normal HTTP status behavior.
+
+### Background source preparation and gateway recovery
+
+`local-metadata/preparation-jobs.ts` owns durable preparation records and worker
+liveness; `operator-service.ts` owns revision, authority and drain checks. Shared
+request/result types live in `studio-server-shared/local-upgrade-types.ts`; the
+progress record does not replace the transition journal or backup certificates.
+
+The current dashboard starts source inspection, pause/drain, frozen fingerprint
+reads and backup preflight through authenticated, same-origin
+`POST /api/app-settings/local-upgrade/preparation`. The request contains a browser
+UUID, operation kind and current transition revision. Admission validates the
+revision, records the operation durably and returns 202 without traversing source
+files. Status polling includes `preparationJobsAvailable`, `preparation` and the
+current operation stage. A lost POST acknowledgement is reconciled by status;
+that acknowledgement is consumed once, so retained preparation status cannot
+erase a diagnostic from a later, unrelated recovery or transition action.
+Replaying the same ID/kind/revision returns its retained result, not another scan
+or pause. An identity reused with different arguments and competing work are
+rejected. The existing synchronous routes remain for older clients; both API and
+web images must be updated to use the background flow.
+
+The guided pause-and-backup action authorizes one server-owned sequence:
+inspection/capacity, pause/drain, then backup preflight if the source is drained.
+Closing the panel does not cancel or repeat that sequence. If work is still
+draining, it ends paused and the operator can start backup when the source is quiet.
+Backup fingerprinting runs in this worker before the existing archive/restore
+worker starts, rather than holding a browser request open. Inspection results are
+informational snapshots, never authority to select SQLite, certify a backup or
+resume writes. Revision, selected-backend, drain and source-proof gates remain in
+the owning service; fingerprint results are bound to the exact maintenance session.
+The panel invalidates inventory/proof when it observes a new corresponding attempt,
+including work started by another operator. Failed/interrupted fingerprint reads
+cannot revive old proofs or attestations. Failures from obsolete transition
+revisions are not presented as failures of the current generation. Unreadable
+preparation status also clears cached preparation evidence and its attestations;
+recovering the result requires a fresh operator attestation, not an automatically
+rechecked checkbox. Independent authoritative backup/recovery status stays usable.
+
+One bounded (1 MiB), schema-validated `preparation.json` record is retained in the
+private control root with mode 0600, atomic replacement and fsync. It holds stage,
+inventory/fingerprint result and fixed failure text, never raw exceptions or
+credentials. Oversized informational results are discarded so a bounded failure
+can still be retained. Status binds each record read to the admission/worker
+activity revision and rereads once if that lifecycle changes during IO. Repeated
+changes report unavailable preparation status rather than a false interruption;
+later stable polling recovers. Admission alone does not count an old worker as live.
+A restart reports a retained running record as interrupted and never automatically
+resumes it. A new explicit attempt replaces the old result. The
+record is operational progress, not a generation certificate or storage authority;
+it does not change the upgrade ledger schema or source fingerprints. Unreadable
+preparation evidence is reported separately without hiding transition/recovery
+status. Existing backup and copy workers retain their independent durable records.
+
+This avoids holding an inventory/fingerprint request through an external gateway's
+response deadline. An Nginx 499 means its client disconnected, not that the API
+aborted its scan; increasing only the bundled proxy timeout cannot fix an earlier
+gateway timeout. HTML/non-JSON errors now retain their HTTP status, omit response
+bodies and explain that a gateway or sign-in response may have replaced JSON.
+Declared HTML responses are cancelled without waiting for the body to finish;
+media-type matching is case-insensitive and ignores charset parameters.
+Malformed JSON error envelopes retain their HTTP status and use fixed fallback
+text rather than throwing on null or displaying arbitrary structured values.
+Invalid/truncated successful JSON also uses a fixed, status-bearing diagnostic;
+parser exceptions cannot disclose response bytes. Aborted reads remain aborts.
+They never authorize retrying a mutation without status reconciliation.
+
+Regression coverage in `local-upgrade-runtime.test.ts` includes held inspection
+IO with real authenticated HTTP admission, replay, competing actions, stale
+revision/auth refusal, guided pause/backup and session-bound fingerprints; owned
+record tests cover completion during status IO, restart interruption, replay
+without resurrecting a stopped worker, result retention, redaction and size
+limits. `local-storage-upgrade.spec.ts` covers a replaced 524 acknowledgement,
+closing/reopening without duplicate work, phase spinners, retained failures and
+cross-operator proof invalidation.
+`api-request.test.ts` covers uppercase/generic gateway HTML, unfinished HTML-body
+cancellation and status preservation. Browser coverage also verifies that later
+recovery errors survive subsequent polls of a retained preparation result.
+
+This contract covers source preparation and backup preflight. Existing authority
+transitions and the integrity check before a native backup download retain their
+synchronous contracts; neither is bypassed or made safe merely by a completed
+preparation record. Large-data deployment qualification must include those steps,
+not only successful inspection. Offline operator/recovery commands remain
+available for deployments whose gateway cannot accommodate those checks.
 
 ## Deployment preparation
 

@@ -83,6 +83,16 @@ S3/PostgreSQL deployments never receive this local migration suggestion.
 4. Choose **Activate SQLite while paused**. Rivet restarts both backend processes, reconnects and validates automatically. Writes remain paused. If validation fails, retry it or choose **Return to legacy while paused**.
 5. Review successful validation, acknowledge that resuming closes one-click rollback, and **Resume writes**. Rivet performs the final restart automatically. Completion shows SQLite live with no pending restart.
 
+Source inspection and backup preparation also run in the background on updated
+servers. The panel shows the current stage and restores progress/results when
+reopened; closing it does not cancel an accepted pause-and-backup sequence. A lost
+connection does not mean the operation failed, so check current status before
+retrying. After a backend restart, interrupted preparation is reported explicitly
+and needs a new operator attempt. Update both API and web images to use this flow.
+If a fingerprint read is retried by another operator or its preparation status
+becomes unreadable, old browser evidence is cleared. Review the current result
+and certify the backup again; reconnecting never checks those confirmations for you.
+
 **Copy and verify** starts a background job. Its status shows preparation (capacity, source fingerprint and backup verification) before conversion begins; accepting the request does not mean the copy passed. You can reload or reopen Settings to check progress. If the connection drops, check current status before retrying. A failed copy keeps the original files selected and writes paused, and shows a specific reason and affected project when available. Download the diagnostic report; do not delete source data or bypass a capacity/integrity refusal. Older failed jobs may only have a generic reason.
 
 The archive and SQLite settings contain private settings and credentials in plaintext; do not share them publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage.
