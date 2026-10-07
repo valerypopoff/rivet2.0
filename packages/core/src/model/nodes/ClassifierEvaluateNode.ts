@@ -28,7 +28,7 @@ import {
 } from '../classifier/credentials.js';
 import { classifierArrayValues, classifierInputDataValue } from '../classifier/json.js';
 import { normalizeClassifierState } from '../classifier/state.js';
-import { CLASSIFIER_LIMITS, classifierPreparationCheck, assertClassifierResourceLimits } from '../classifier/limits.js';
+import { CLASSIFIER_LIMITS, classifierPreparationCheck, ClassifierValueBudget } from '../classifier/limits.js';
 import {
   calculateClassifierUsageCost,
   classifierProviders,
@@ -351,30 +351,38 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         'The separate Images input has been removed. Connect images or an assembled user message to State.',
       );
     }
-    const state = normalizeClassifierState(
-      classifierInputDataValue(inputs, 'state'),
-      checkPreparation,
-      provider.maxRequestBytes,
-    );
+    const stateInput = classifierInputDataValue(inputs, 'state');
+    // First-party providers prepare the Rivet wrapper at their common boundary.
+    // Existing custom descriptors still receive the legacy normalized State contract.
+    const state = provider.evaluateInput
+      ? { state: '', stateInput }
+      : normalizeClassifierState(stateInput, checkPreparation, provider.maxRequestBytes);
+    const legacyBudget = provider.evaluateInput
+      ? undefined
+      : new ClassifierValueBudget(checkPreparation, provider.maxRequestBytes);
+    legacyBudget?.inspect(state);
     const modelValue = this.data.useModelInput
       ? classifierInputDataValue(inputs, 'model')?.value
       : getStaticModel(this.data.model, provider.defaultModel);
     if (typeof modelValue !== 'string' || modelValue.trim() === '') {
       throw new Error(`${provider.label} model is required.`);
     }
+    legacyBudget?.inspect(modelValue);
 
     const questions: ClassifierQuestionDefinition[] = [];
+    const flattenWork = { values: 0 };
     const questionInputs = Object.keys(inputs).filter((portId) => /^question\d+$/.test(portId));
     for (const port of questionInputs.sort(compareQuestionPorts)) {
       const input = classifierInputDataValue(inputs, port);
       if (input) {
-        assertClassifierResourceLimits(input.value, checkPreparation);
-        flattenQuestions(input.value, questions, checkPreparation);
+        // Legacy descriptors do not own the shared preparation boundary.
+        legacyBudget?.inspect(input.value);
+        flattenQuestions(input.value, questions, checkPreparation, new Set(), 0, flattenWork);
       }
     }
     if (questions.length === 0) throw new Error('Classifier Evaluate requires at least one question.');
 
-    const result = await provider.evaluate({
+    const result = await (provider.evaluateInput ?? provider.evaluate).call(provider, {
       apiKey,
       model: modelValue,
       questions,
@@ -386,6 +394,9 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       timeoutMs,
       deadline,
     });
+    // Custom providers still own their asynchronous transport, but no late
+    // result may become a successful node output after the original deadline.
+    checkPreparation();
     const totalCost = calculateClassifierUsageCost(provider, result.response.usage, {
       requestedModel: modelValue,
       responseModel: result.response.model,
@@ -406,7 +417,9 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
           : { type: 'number', value: totalCost },
     };
     if (this.data.outputRequestBody === true) {
+      checkPreparation();
       outputs['requestBody' as PortId] = { type: 'object', value: result.requestBody };
+      checkPreparation();
     }
     if (this.data.outputResponseBody === true) {
       outputs['responseBody' as PortId] = { type: 'object', value: result.responseBody };
@@ -481,8 +494,10 @@ function flattenQuestions(
   check: () => void,
   seen = new Set<object>(),
   depth = 0,
+  work = { values: 0 },
 ): void {
   check();
+  if (++work.values > CLASSIFIER_LIMITS.values) throw new Error('Question inputs have too many expanded values.');
   if (depth > CLASSIFIER_LIMITS.depth) throw new Error('Question inputs exceed the maximum nesting depth of 64.');
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new Error('Question inputs must not contain circular arrays.');
@@ -490,7 +505,7 @@ function flattenQuestions(
     if (value.length > CLASSIFIER_LIMITS.questions)
       throw new Error('Classifier Evaluate supports at most 1000 questions.');
     for (const item of classifierArrayValues(value, 'Questions'))
-      flattenQuestions(item, target, check, seen, depth + 1);
+      flattenQuestions(item, target, check, seen, depth + 1, work);
     seen.delete(value);
     return;
   }

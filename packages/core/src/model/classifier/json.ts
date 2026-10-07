@@ -1,7 +1,7 @@
 import type { ClassifierEntry } from './types.js';
 import type { DataValue } from '../DataValue.js';
 import type { Inputs } from '../GraphProcessor.js';
-import { assertClassifierResourceLimits, type ClassifierPreparationCheck } from './limits.js';
+import { ClassifierValueBudget, type ClassifierPreparationCheck } from './limits.js';
 
 /** Read evidence fields without invoking getters or accepting prototype-provided content. */
 export function classifierDataProperty(value: object, key: string, label = 'State'): unknown {
@@ -42,39 +42,17 @@ export function assertClassifierJson(
   check?: ClassifierPreparationCheck,
   maxBytes?: number,
 ): number {
-  const bytes = assertClassifierResourceLimits(value, check, maxBytes);
-  const seen = new Set<object>();
-  const visit = (item: unknown, allowUndefined: boolean): void => {
-    check?.();
-    if (item === null || typeof item === 'string' || typeof item === 'boolean') return;
-    if (typeof item === 'number' && Number.isFinite(item)) return;
-    if (typeof item !== 'object') throw new Error(`${label} is not JSON-compatible.`);
-    const prototype = Object.getPrototypeOf(item);
-    if (prototype !== (Array.isArray(item) ? Array.prototype : Object.prototype) && prototype !== null)
-      throw new Error(`${label} must contain plain JSON objects.`);
-    const hook =
-      Object.getOwnPropertyDescriptor(item, 'toJSON') ??
-      (prototype && Object.getOwnPropertyDescriptor(prototype, 'toJSON'));
-    if (hook && (!('value' in hook) || typeof hook.value === 'function'))
-      throw new Error(`${label} must not contain JSON serialization hooks.`);
-    if (seen.has(item)) throw new Error(`${label} contains a circular reference.`);
-    seen.add(item);
-    const visitProperty = (key: string): void => {
-      const property = Object.getOwnPropertyDescriptor(item, key);
-      if (!property || !('value' in property))
-        throw new Error(`${label} is not JSON-compatible: use own data properties, not accessors or sparse arrays.`);
-      if (property.value === undefined && allowUndefined && !Array.isArray(item)) return;
-      visit(property.value, false);
-    };
-    if (Array.isArray(item)) {
-      for (const entry of classifierArrayValues(item, label)) visit(entry, false);
-    } else {
-      for (const key of Object.keys(item)) visitProperty(key);
-    }
-    seen.delete(item);
-  };
-  visit(value, allowUndefinedProperties);
-  return bytes;
+  return new ClassifierValueBudget(check, maxBytes).inspect(value, { label, allowUndefinedProperties }).bytes;
+}
+
+/** Validate, account and detach JSON in one bounded walk, without serialization hooks. */
+export function snapshotClassifierJson(
+  value: unknown,
+  label: string,
+  budget: ClassifierValueBudget,
+  allowUndefinedProperties = false,
+): unknown {
+  return budget.inspect(value, { label, allowUndefinedProperties, copy: true }).value;
 }
 
 /** Root entry kinds are narrower than the JSON values allowed inside structured entries. */

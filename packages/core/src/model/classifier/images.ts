@@ -8,6 +8,7 @@ import {
 } from './limits.js';
 
 type ImageInfo = { mediaType: string; width: number; height: number };
+export type PreparedClassifierImage = ImageInfo & { dataUrl: string };
 class InvalidClassifierImageError extends Error {}
 const invalidImage = () =>
   new InvalidClassifierImageError(
@@ -112,7 +113,10 @@ function base64ImageInfo(payload: string, check?: ClassifierPreparationCheck): I
   return imageInfo(base64ToUint8Array(payload.slice(0, 48)));
 }
 
-export function nativeClassifierImage(value: unknown, check?: ClassifierPreparationCheck): string {
+export function prepareNativeClassifierImage(
+  value: unknown,
+  check?: ClassifierPreparationCheck,
+): PreparedClassifierImage {
   if (!value || typeof value !== 'object') throw invalidImage();
   const data = classifierDataProperty(value, 'data');
   const mediaType = classifierDataProperty(value, 'mediaType');
@@ -122,7 +126,11 @@ export function nativeClassifierImage(value: unknown, check?: ClassifierPreparat
   const info = imageInfo(bytes, check);
   if (info.mediaType !== mediaType) throw invalidImage();
   check?.();
-  return `data:${info.mediaType};base64,${uint8ArrayToBase64Sync(bytes)}`;
+  return { ...info, dataUrl: `data:${info.mediaType};base64,${uint8ArrayToBase64Sync(bytes)}` };
+}
+
+export function nativeClassifierImage(value: unknown, check?: ClassifierPreparationCheck): string {
+  return prepareNativeClassifierImage(value, check).dataUrl;
 }
 
 export function inspectClassifierImage(value: unknown, check?: ClassifierPreparationCheck): ImageInfo {
@@ -139,17 +147,23 @@ export function inspectClassifierImage(value: unknown, check?: ClassifierPrepara
 
 /** Recognize image bytes, not merely strings using the base64 alphabet. */
 export function classifierImageFromText(value: string, check?: ClassifierPreparationCheck): string | undefined {
+  return prepareClassifierImageText(value, check)?.dataUrl;
+}
+
+export function prepareClassifierImageText(
+  value: string,
+  check?: ClassifierPreparationCheck,
+): PreparedClassifierImage | undefined {
   check?.();
   if (value.length > CLASSIFIER_LIMITS.requestBytes)
     throw new Error('Classifier image/text exceeds the 32 MiB input limit.');
   if (value.startsWith('data:image/')) {
-    inspectClassifierImage(value, check);
-    return value;
+    return { ...inspectClassifierImage(value, check), dataUrl: value };
   }
   if (!/^(?:iVBOR|\/9j\/|R0lGOD|UklGR)/.test(value) || !isBase64(value)) return undefined;
   try {
     const info = base64ImageInfo(value, check);
-    return `data:${info.mediaType};base64,${value}`;
+    return { ...info, dataUrl: `data:${info.mediaType};base64,${value}` };
   } catch (error) {
     if (error instanceof InvalidClassifierImageError) return undefined;
     throw error;
@@ -161,11 +175,14 @@ export function assertClassifierImages(value: unknown, check?: ClassifierPrepara
   for (const image of value) inspectClassifierImage(image, check);
 }
 
-export function assertLiquidImages(images: readonly string[], check?: ClassifierPreparationCheck): void {
+export function assertLiquidImageLimits(
+  images: readonly PreparedClassifierImage[],
+  check?: ClassifierPreparationCheck,
+): void {
   if (images.length > 8) throw new Error('Liquid d1 State must contain at most 8 images.');
   let patches = 0;
-  for (const image of images) {
-    const { width, height } = inspectClassifierImage(image, check);
+  for (const { width, height } of images) {
+    check?.();
     if (Math.max(width, height) / Math.min(width, height) > 100)
       throw new Error('Liquid d1 images must have an aspect ratio at most 100:1.');
     patches += Math.ceil(width / 32) * Math.ceil(height / 32);

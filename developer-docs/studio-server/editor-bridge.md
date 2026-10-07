@@ -122,7 +122,15 @@ the wrapper must not duplicate them or bypass the bounded response stream reader
 Evaluate exposes an always-on numeric Cost port for the normal graph accumulator,
 independent of its optional Usage details. Unknown cost is excluded, not zero.
 The hosted observer verifies this port alongside the existing migrated outputs.
-Core uses one question validator at the node and provider boundaries. Structured
+Core uses one bounded preparation runner for graph and direct provider inputs.
+Validation, accounting and detached structured snapshots share one traversal;
+the final transformed wire has its own size check. Optional request diagnostics
+are reconstructed lazily only when accessed. Liquid's evidence policy belongs to
+its specification, not a provider-ID branch in the common runner. Existing custom
+descriptors still receive the normalized State contract, with one node-owned
+resource budget across Model, State and Question ports and a deadline check on return.
+The common runner rejects invalid Model/API Key scalar values before serialization
+or HTTP; errors do not echo credentials. Structured
 State and question entries must be plain JSON data: accessors, serialization
 hooks and sparse arrays fail before HTTP rather than changing the captured request.
 Multimodal message and native-image fields must likewise be own data properties;

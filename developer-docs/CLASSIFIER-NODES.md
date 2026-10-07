@@ -5,9 +5,9 @@ Classifier is a first-party Core node family, not a plugin. The canonical node t
 ## Ownership and provider contract
 
 - `ClassifierQuestionNode` is a pure definition builder. It has Choice, Score, and Noul modes but never reads credentials or calls a provider.
-- `ClassifierEvaluateNode` owns graph-level batch validation, variadic flattening, API-key source selection, executor policy, and provider evaluation. Its always-on output contract is **Answers**, **Usage**, and **Cost**; do not restore a Model port. The provider's resolved model remains available only in the opt-in raw response-body diagnostic.
+- `ClassifierEvaluateNode` owns active-port reads, bounded variadic flattening, API-key source selection, executor policy, and output projection. Providers own the shared preparation boundary for graph and direct calls. Its always-on output contract is **Answers**, **Usage**, and **Cost**; do not restore a Model port. The provider's resolved model remains available only in the opt-in raw response-body diagnostic.
 - `classifier/providers.ts` owns the ordered provider registry. A provider has a stable ID, label, default model, default credential names, browser policy, optional static token pricing, and an `evaluate` adapter. Its successful result carries the aggregate response plus the exact JSON request and response bodies at the provider boundary. Use `createApiCompatibleClassifierProvider` for a future System One-compatible provider with a static Core-owned endpoint. New Evaluate nodes keep Model empty and resolve the selected provider's default at runtime; explicit existing models stay authored contracts.
-- Jev is the first provider. Its adapter owns the fixed TypeSafe System One endpoint, retry/backoff, abort cleanup, API-compatible response shape/mapping validation, and high-level error summaries with preserved diagnostic causes. Its Core-owned USD pricing is fixed at **$0.042 / MTok input** and **$0 / MTok output**. Do not make this graph-authored or infer an unpriced future provider is free.
+- Jev is the first provider. Its specification owns the fixed TypeSafe System One endpoint and protocol mapping. All providers use one shared runner for preparation, retry/backoff, abort cleanup and high-level error summaries with preserved diagnostic causes. Its Core-owned USD pricing is fixed at **$0.042 / MTok input** and **$0 / MTok output**. Do not make this graph-authored or infer an unpriced future provider is free.
 - Liquid AI uses stable provider ID `liquid`, default model `d1`, and the fixed `https://api.liquid.ai/decisions/v1/systemone` endpoint through the same System One adapter. Existing Choice, Score and Noul questions (including structured entries, legacy criteria and exact IDs) require no migration or rewriting. Its default credentials are `liquidApiKey` / `LIQUID_API_KEY`; saved credentials use `settings.classifierProviders.liquid.apiKey`. Liquid never reads Jev's legacy plugin credential. Both desktop and hosted Settings → Classifier enumerate the registry, as do both hosts' environment loaders. Node execution is required for both providers.
 
 Liquid d1's Core-owned accounting rate is **$0.04 / MTok input** and **$0 / MTok output**, published in [Liquid's d1 announcement](https://www.liquid.ai/blog/d1-decision-model). The [decision-model API documentation](https://docs.liquid.ai/lfm/models/decision-models) defines the compatible question/response protocol. The Model placeholder and canvas default follow the selected provider. Switching providers does not overwrite an explicit authored or input-supplied model: clear Model to use the new provider's default. Calibrated thresholds may need reevaluation when changing models, even though the question format is compatible.
@@ -35,6 +35,124 @@ Evaluation captures credentials, model, retry settings and transport once, along
 Mixed arrays and user-message parts stop at the global image limit before encoding an excess native image, not just after constructing the complete State. Structured State and internal normalized messages reject callable `toJSON` hooks, including non-enumerable hooks and array hooks: serialization must not replace already-validated evidence. The provider checks unsupported question `images` fields before serialization, so undefined/function-valued fields cannot disappear and bypass the error. Ordinary JSON string fields named `toJSON` remain data.
 
 Provider IDs are serialized graph contracts. Add future API-compatible providers to the registry; do not add another evaluator node, a user-configurable endpoint, or provider selection from an input port without a separate security review.
+
+### Simplified execution ownership
+
+Provider specifications contain metadata, a fixed endpoint, request construction,
+response decoding/validation and an optional evidence-policy check. The System One
+compatibility factory is a thin adapter to the same runner as OpenAI. Liquid's
+image limits belong to its specification; shared execution must not branch on
+provider IDs. `validateClassifierEvaluationResponse` validates the common Rivet
+result, independently of the native protocol. The exported
+`validateApiCompatibleClassifierResponse` remains a compatibility entry point.
+
+First-party providers expose `evaluateInput` for graph-owned Rivet State wrappers
+and `evaluate` for existing provider arguments; both reference the same runner.
+The node uses the former when available. Custom descriptors that implement only
+`evaluate` still receive the existing normalized `state`/`stateMessages` shape.
+Their resource preflight remains node-owned and uses one cumulative budget for
+Model, normalized State and all active Question ports; only the shared runner path
+can remove that redundant walk. The node checks its original deadline after any
+provider returns, even with diagnostics disabled. Custom providers remain
+responsible for bounding asynchronous waits and honoring the passed signal/deadline.
+Do not add trusted-input flags, private-brand registries or validation bypasses.
+The optional `stateInput` wrapper cannot be combined with nonempty provider State
+or `stateMessages`.
+
+`ClassifierValueBudget` shares cumulative byte/value accounting across Model, State
+and questions. Direct provider calls require a nonblank string Model and API Key;
+API keys containing line breaks fail before HTTP. Invalid scalar arguments cannot
+execute JSON or string-coercion hooks, and these errors never echo credentials.
+Model is bounded before whitespace validation or protocol serialization.
+Its descriptor-based traversal can measure, validate plain JSON and
+copy it simultaneously. Explicit structured State and each question are detached
+in that single traversal, before IO. Internal `PreparedClassifierQuestion` and
+`PreparedClassifierState` unions distinguish question criteria and JSON versus
+message evidence; public compatibility definitions remain unchanged. Question-node
+interpolation uses the same traversal to validate and copy referenced values.
+It retains one budget for the complete Question preparation instead of rebuilding
+it per value, so expanded work as well as bytes accumulates across active inputs.
+The 100,000 expanded-value cap applies to the whole preparation, not to each field.
+Interpolation expansion checks use that budget's remaining bytes directly.
+Allowed root-level undefined fields remain present in template snapshots so typed
+missing values retain their meaning; ordinary JSON wire serialization still omits them.
+Omitted fields still consume the expanded-work and conservative byte budgets:
+scan/copy cost does not disappear just because JSON omits a value. Raw multimodal
+preflight also counts sparse/accessor slots without invoking their getters, and
+checks cancellation during these scans. JSON snapshot validation still rejects
+sparse arrays and accessors outright.
+Direct provider calls reject the removed top-level `images` field before copying
+arguments, including inherited/non-enumerable fields and getters. Unsupported
+evidence must not disappear during argument capture or execute an accessor.
+
+Multimodal/ambiguous Rivet inputs still need an early resource preflight before
+image encoding. Normalization constructs owned message/part arrays directly and
+keeps inspected image dimensions beside them for provider policy checks, not in
+the wire body. Recognized image strings reuse inspection results within this
+preparation only; no cross-evaluation cache exists. Ambiguous pure-JSON `any` inputs
+also require plain-data validation after classification. Do not force a nominal
+single-pass design by weakening either boundary.
+
+One operation-local deadline/check is reused by preparation, provider policy,
+wire measurement, attempts and response receipt. HTTP owns attempt timers and
+abort-listener cleanup, retaining bounded waits and disposal of late responses.
+Direct callers' effective timeout must fit the platform timer range (2,147,483,647
+ms); overflow fails before HTTP rather than becoming Node's unexpected 1 ms timer.
+An earlier absolute deadline can still bound a larger declared relative timeout.
+The final transformed request is independently measured because native protocol
+conversion can expand content, especially escaped structured JSON for OpenAI.
+Serialize the wire once and reuse it for every retry. There is no JSON round-trip
+to create the input snapshot. `requestBody` is an enumerable, lazy result getter:
+first access parses the exact wire, later accesses return the same object. A setter
+preserves the public contract for callers that replace/redact their diagnostic;
+replacement never changes the immutable wire or the private validation snapshot.
+This preserves direct-provider result behavior while disabled graph diagnostics incur
+no reconstruction. Enabled graph reconstruction checks the original deadline
+before and after parsing. Response-validation questions remain private and detached.
+
+Built-in descriptors use `modelPricing` only. The public cost helper normalizes
+legacy `pricing` at its entry point for each call, not through a persistent cache;
+caller-owned mutable metadata and unknown/invalid pricing keep their old behavior.
+
+`ClassifierExecutionPreparation.test.ts` checks actual nodes for a single raw-State
+walk, the separate transformed-wire measurement, no pre-HTTP parse, opt-in diagnostics,
+special keys, cumulative budgets, scalar arguments, timer bounds, diagnostic
+deadlines, late custom-provider results, compatibility and ID-independent evidence
+policy. Existing protocol, snapshot, resource and GraphProcessor tests
+remain the behavioral contract, not implementation-source assertions.
+
+### Optional preparation benchmark
+
+From the repository root:
+
+```sh
+yarn workspace @valerypopoff/rivet2-core exec node --expose-gc --import tsx scripts/benchmark-classifier-preparation.mts --runs=30
+```
+
+Use `--source=<source-directory-or-compiled-core.mjs>` to compare the identical
+fixture against an isolated baseline. Run variants sequentially with the same
+Node/runtime, dependency set and compiled/source mode. The harness exercises real
+Evaluate nodes, synthetic 64/524,288-character Unicode-and-quote structured State,
+all three providers and diagnostics on/off. Five warmups precede measured runs;
+HTTP is mocked and no actual credentials are read. Explicit GC is outside each
+timed sample. It reports p50/p95, maximum observed post-run heap growth and sampled
+process RSS; these samples are not a proof of transient allocation high-water or
+production server capacity. Module/loader initialization also affects process RSS.
+
+A local Windows/Node 22.22.3 comparison against `dfa655590`, using separately
+compiled Core bundles and 30 sequential samples per case, produced the following
+large-input results with request diagnostics disabled:
+
+| Provider | p50 before/after (ms) | p95 before/after (ms) | Observed heap growth before/after (MiB) |
+| --- | --- | --- | --- |
+| Jev | 16.51 / 11.26 | 17.33 / 12.14 | 2.60 / 0.83 |
+| Liquid | 16.75 / 11.91 | 17.72 / 12.34 | 2.60 / 0.83 |
+| OpenAI | 17.53 / 12.19 | 18.31 / 13.22 | 4.10 / 2.08 |
+
+Small-input medians remained roughly 0.5 ms. Process RSS ranges were approximately
+531–538 MiB before and 536–542 MiB after, dominated by loading the complete Core
+bundle/dependencies; do not claim a process-RSS reduction. These are mocked local
+execution measurements, not an improvement in external model inference latency.
 
 ### Card presentation
 
@@ -106,7 +224,7 @@ The migration must remain idempotent. Apply it at every serialized project ingre
 
 ## Safety and validation
 
-Keep validation responsibilities in their owning modules: `json.ts` handles plain-data structure, `limits.ts` bounds resource use and response receipt, `questions.ts` handles the shared question shape, and `state.ts` handles evidence normalization. Provider adapters consume these helpers directly; do not add forwarding exports or duplicate host-specific validators. Resource byte accounting is a conservative preparation budget, not a promised exact wire-size measurement.
+Keep validation responsibilities in their owning modules: `json.ts` provides plain-data validation/snapshot helpers over the single budgeted traversal in `limits.ts`; `limits.ts` also bounds response receipt; `questions.ts` prepares the shared question shape; and `state.ts` normalizes evidence. Provider adapters consume these helpers directly; do not add forwarding exports or duplicate host-specific validators. Resource byte accounting is a conservative preparation budget, not a promised exact wire-size measurement.
 
 `classifier/preparation.ts` owns one Question-node preparation budget, separate from the subsequent Evaluate request timeout: 30 seconds, 32 MiB cumulative authored templates/referenced values/resolved entries, 100,000 tokens per template, and 1,000,000 cooperative work checkpoints. Impossible active Choice/Score cardinalities are rejected before any instruction/criterion interpolation. Referenced JSON values are bounded and copied without invoking getters, iterators, serialization or string-conversion hooks. Text processors check expansion before allocating repeated prefixes; result fragments are bounded before concatenation. JSON templates undergo a quote-aware depth/token scan before `JSON.parse`. Active templates only participate; inactive authored representations stay saved. Ordinary Object/interpolation callers retain their old behavior; optional caller-owned guards are generic, and JSON template quote scanning now walks the authored prefix once instead of once per token. Native bounded operations remain synchronous, not hard-preemptible.
 
@@ -120,7 +238,7 @@ Validate the entire matched pricing entry before choosing a tier: both base/tier
 
 Response chunks use intrinsic typed-array byte geometry too: an injected transport cannot underreport bytes through an overridden `byteLength` getter. Question validation applies recursive JSON/resource checks to the complete definition once, then only checks instruction/criterion root kinds instead of rescanning each structured entry. Standalone authored-entry validation still uses the full guard. Root entries remain text/null/objects/arrays, with non-null/nonblank instructions; numbers and booleans remain valid inside structured JSON entries.
 
-`assertClassifierJson` returns its measured byte count and accepts the remaining cumulative budget. Question preparation reuses that count rather than walking the same input again for resource accounting. Provider JSON uses streaming, fatal UTF-8 decoding: malformed or truncated sequences fail as invalid JSON instead of silently replacing evidence. Malformed successful responses are not retried, including when the non-200 retry policy is enabled.
+`assertClassifierJson` returns its measured byte count and accepts an optional byte cap. Cumulative preparation uses `ClassifierValueBudget` directly across inputs. Validation and resource accounting share one traversal; snapshot preparation additionally copies within that walk, without JSON serialization. Provider JSON uses streaming, fatal UTF-8 decoding: malformed or truncated sequences fail as invalid JSON instead of silently replacing evidence. Malformed successful responses are not retried, including when the non-200 retry policy is enabled.
 
 `classifier/limits.ts` owns Core safety budgets: 32 MiB of expanded request content, 8 MiB of decoded response bytes, depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages, and 4,096 content parts. These are Rivet resource limits, not provider capacity claims. Existing provider/image caps remain stricter where applicable. Preflight inspects own descriptors without invoking getters, counts every repeated occurrence (including shared-reference expansion), accounts for UTF-8 JSON escaping and native-image base64 expansion, and stops before expensive encoding/cloning. Question array flattening has the same work/depth guard, including empty repeated arrays. Preparation checks cancellation and the absolute deadline inside traversal/string scanning and between normalization/serialization steps. Bounded native JSON/base64 operations remain synchronous and cannot be preempted mid-operation; do not claim a hard wall-clock interrupt.
 
@@ -130,7 +248,7 @@ Successful responses use a byte-limited stream reader, never `Response.json()`. 
 
 Every successful evaluation computes base estimated USD cost independently of `outputUsage` and emits numeric `cost` for GraphProcessor's existing accumulator. `outputUsage` still controls only the optional `Usage.totalCost` projection. Unsafe token counts or unavailable pricing exclude Cost rather than fabricate zero; actual zero-token evaluations emit zero. Graph totals remain the existing sum of available numeric costs, not a guarantee that unpriced activity was free. Retries without successful usage do not manufacture charges; cost reflects the final successful response, not an authoritative provider invoice. Caught failures exclude Cost alongside other normal outputs. Normal, split, mixed-provider and subgraph tests prove exactly-once accumulation, including a retry and both Usage settings.
 
-`classifier/json.ts` is the shared JSON-data validator for structured State, instructions and criteria. It inspects own property descriptors rather than executing getters or array iterators: reject accessors, sparse arrays, non-plain objects, cycles and callable/accessor `toJSON` hooks before serialization. Ordinary string-valued JSON fields named `toJSON` remain valid. `classifier/questions.ts` applies one question-shape contract at both the Evaluate node and direct provider boundary; required fields must be own and enumerable so they cannot disappear from the request snapshot. Optional undefined envelope properties (such as absent Noul criteria) remain supported, but undefined structured values do not. Question batch flattening uses array indices, rejects holes/accessors/cycles, and never runs custom iterators. Providers copy the batch into an ordinary array before snapshotting, preventing a batch-level serialization hook from dropping questions. `ClassifierInputSnapshot.test.ts` covers these rules through all three providers and the real Evaluate node, including zero-HTTP rejection and valid JSON preservation.
+`classifier/json.ts` is the shared JSON-data validator/snapshot API for structured State, instructions and criteria. It inspects own property descriptors rather than executing getters or array iterators: reject accessors, sparse arrays, non-plain objects, cycles and callable/accessor `toJSON` hooks before serialization. Ordinary string-valued JSON fields named `toJSON` remain valid. `classifier/questions.ts` applies one question-shape contract at the shared preparation boundary; required fields must be own and enumerable so they cannot disappear from the request snapshot. Optional undefined envelope properties (such as absent Noul criteria) remain supported, but undefined structured values do not. Question batch flattening uses array indices, rejects holes/accessors/cycles, and never runs custom iterators. Providers build an ordinary array of individually prepared questions, preventing a batch-level serialization hook from dropping questions. `ClassifierInputSnapshot.test.ts` covers these rules through all three providers and the real Evaluate node, including zero-HTTP rejection and valid JSON preservation.
 
 Questions, state, request maps, and response maps accept exact authored IDs including `__proto__` and `constructor`. Use null-prototype maps, own-property checks, and `Object.defineProperty`; never assign provider-controlled keys through ordinary object assignment.
 
@@ -142,7 +260,7 @@ Classifier inputs use `splitRunBehavior: 'preserve-array'`. **State** is optiona
 
 All API-compatible classifier providers use shape-only response validation: required envelopes/fields, answer types and question IDs, known Choice options, exact probability/legend map keys, and finite JSON-compatible number types. Rivet trusts the provider's numerical contents. Never enforce probability sums or ranges, confidence/Noul ranges, Score bounds, token-count integrality/non-negativity, or numerical relationships; never round, clamp, normalize, or recompute answer values. Legend descriptions are provider-owned content and are not compared with the authored criteria. The response and optional raw diagnostic retain the exact parsed JSON values. Missing fields, wrong types, missing/extra mapped keys and non-representable JSON numbers remain malformed responses. `ClassifierResponseShape.test.ts` covers trusted non-normalized/out-of-range values, malformed shapes, special IDs, and real Evaluate HTTP/failure-control outputs. Optional USD accounting still requires safe non-negative integer token counts: if unavailable, omit `totalCost` without rejecting or altering the successful response or its Usage values.
 
-The API-compatible adapter derives its response-validation questions from the detached, serialized request snapshot, not the original graph inputs. A concurrent branch may mutate shared question objects, IDs, or criteria while a request or retry is pending; these changes must not change the required response shape for the already-sent request. `ClassifierResponseSnapshot.test.ts` verifies both acceptance of the original response and rejection of responses for unsent options, with and without a retry, and preservation of the request diagnostic. Keep this snapshot private until completion, then expose it as the request-body diagnostic.
+Adapters derive response-validation questions from the private detached preparation snapshot, not the original graph inputs or public diagnostic. A concurrent branch may mutate shared question objects, IDs, or criteria while a request or retry is pending; these changes must not change the required response shape for the already-sent request. `ClassifierResponseSnapshot.test.ts` verifies both acceptance of the original response and rejection of responses for unsent options, with and without a retry, and preservation of the request diagnostic. The lazy request diagnostic parses the immutable wire separately and cannot mutate this validation snapshot.
 
 Required response fields must be own properties, including envelope fields, answer type/value/maps, and Usage counts. A prototype-provided value cannot stand in for an absent JSON field. `ClassifierResponseShape.test.ts` covers every required field with a local inherited-property fixture (without polluting the global prototype), and checks specific numeric-field diagnostics for both Choice and Score maps. This is structural validation only; it must not restore numerical range or consistency checks.
 

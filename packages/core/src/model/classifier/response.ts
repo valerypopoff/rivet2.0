@@ -1,7 +1,6 @@
 import type {
-  ClassifierChoiceQuestionDefinition,
-  ClassifierScoreQuestionDefinition,
   ClassifierQuestionDefinition,
+  PreparedClassifierQuestion,
   ClassifierEvaluationResponse,
 } from './types.js';
 
@@ -49,6 +48,15 @@ export function validateApiCompatibleClassifierResponse(
   questions: readonly ClassifierQuestionDefinition[],
   providerLabel = 'Classifier provider',
 ): ClassifierEvaluationResponse {
+  return validateClassifierEvaluationResponse(body, questions as readonly PreparedClassifierQuestion[], providerLabel);
+}
+
+/** Validate the common Rivet result, independently of the provider's wire protocol. */
+export function validateClassifierEvaluationResponse(
+  body: unknown,
+  questions: readonly PreparedClassifierQuestion[],
+  providerLabel = 'Classifier provider',
+): ClassifierEvaluationResponse {
   const model = isRecord(body) ? responseField(body, 'model') : undefined;
   const answers = isRecord(body) ? responseField(body, 'answers') : undefined;
   const usage = isRecord(body) ? responseField(body, 'usage') : undefined;
@@ -70,10 +78,9 @@ export function validateApiCompatibleClassifierResponse(
       throw new Error(`${providerLabel} response type does not match question '${question.questionId}'.`);
     }
     if (question.type === 'choice') {
-      const choiceQuestion = question as ClassifierChoiceQuestionDefinition;
-      const keys = Object.keys(choiceQuestion.criteria);
+      const keys = Object.keys(question.criteria);
       const choice = responseField(answer, 'choice');
-      if (typeof choice !== 'string' || !Object.prototype.hasOwnProperty.call(choiceQuestion.criteria, choice)) {
+      if (typeof choice !== 'string' || !Object.prototype.hasOwnProperty.call(question.criteria, choice)) {
         throw new Error(`${providerLabel} response chose an unknown option for '${question.questionId}'.`);
       }
       requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
@@ -84,10 +91,9 @@ export function validateApiCompatibleClassifierResponse(
         providerLabel,
       );
     } else if (question.type === 'score') {
-      const scoreQuestion = question as ClassifierScoreQuestionDefinition;
       requireResponseNumber(responseField(answer, 'score'), `${question.questionId}.score`, providerLabel);
       requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
-      const keys = scoreQuestion.criteria.map((_, index) => String(index));
+      const keys = question.criteria.map((_, index) => String(index));
       requireProbabilityMap(
         responseField(answer, 'probabilities'),
         keys,

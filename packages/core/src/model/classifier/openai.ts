@@ -1,53 +1,47 @@
-import type {
-  ClassifierEntry,
-  ClassifierEvaluationResponse,
-  ClassifierQuestionDefinition,
-  ClassifierNoulQuestionDefinition,
-  ClassifierScoreQuestionDefinition,
-  ClassifierChoiceQuestionDefinition,
-} from './types.js';
-import type { ClassifierProviderEvaluateArgs } from './providers.js';
-import { validateApiCompatibleClassifierResponse } from './response.js';
+import type { ClassifierEntry, ClassifierEvaluationResponse, PreparedClassifierQuestion } from './types.js';
+import type { PreparedClassifierEvaluation } from './providers.js';
+import { validateClassifierEvaluationResponse } from './response.js';
 
 function text(value: ClassifierEntry): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 /** OpenAI's Decisions schema is not the System One protocol. */
-export function createOpenAIDecisionRequest(args: ClassifierProviderEvaluateArgs): Record<string, unknown> {
-  const state = typeof args.state === 'string' ? args.state : JSON.stringify(args.state);
+export function createOpenAIDecisionRequest(args: PreparedClassifierEvaluation): Record<string, unknown> {
+  const state = args.state;
   return {
     model: args.model,
-    input: args.stateMessages
-      ? args.stateMessages.map(({ parts }) => ({
-          role: 'user',
-          content: parts.map((part) =>
-            part.type === 'text'
-              ? { type: 'input_text', text: part.text }
-              : { type: 'input_image', image_url: part.dataUrl },
-          ),
-        }))
-      : state,
+    input:
+      state.kind === 'messages'
+        ? state.messages.map(({ parts }) => ({
+            role: 'user',
+            content: parts.map((part) =>
+              part.type === 'text'
+                ? { type: 'input_text', text: part.text }
+                : { type: 'input_image', image_url: part.dataUrl },
+            ),
+          }))
+        : typeof state.value === 'string'
+          ? state.value
+          : JSON.stringify(state.value),
     questions: args.questions.map((question) => {
       const common = { name: question.questionId, instructions: text(question.instructions) };
       if (question.type === 'choice')
         return {
           ...common,
           type: 'choice',
-          choices: Object.entries((question as ClassifierChoiceQuestionDefinition).criteria).map(
-            ([value, description]) => ({
-              value,
-              ...(description === null ? {} : { description: text(description) }),
-            }),
-          ),
+          choices: Object.entries(question.criteria).map(([value, description]) => ({
+            value,
+            ...(description === null ? {} : { description: text(description) }),
+          })),
         };
       if (question.type === 'score')
         return {
           ...common,
           type: 'score',
-          levels: (question as ClassifierScoreQuestionDefinition).criteria.map((entry) => ({ label: text(entry) })),
+          levels: question.criteria.map((entry) => ({ label: text(entry) })),
         };
-      const criteria = (question as ClassifierNoulQuestionDefinition).criteria;
+      const criteria = question.criteria;
       return {
         ...common,
         type: 'predicate',
@@ -69,7 +63,7 @@ function field(value: Record<string, unknown>, name: string): unknown {
 
 export function validateOpenAIDecisionResponse(
   body: unknown,
-  questions: readonly ClassifierQuestionDefinition[],
+  questions: readonly PreparedClassifierQuestion[],
   providerLabel = 'OpenAI',
 ): ClassifierEvaluationResponse {
   const nativeAnswers = record(body) ? field(body, 'answers') : undefined;
@@ -127,7 +121,7 @@ export function validateOpenAIDecisionResponse(
     }
     Object.defineProperty(answers, question.questionId, { enumerable: true, value: mapped });
   }
-  return validateApiCompatibleClassifierResponse(
+  return validateClassifierEvaluationResponse(
     {
       model: field(body, 'model'),
       answers,

@@ -4,20 +4,30 @@ import {
   LIQUID_DEFAULT_CREDENTIAL_NAMES,
   OPENAI_DEFAULT_CREDENTIAL_NAMES,
 } from './credentials.js';
-import { assertLiquidImages } from './images.js';
-import { assertClassifierStateMessages, systemOneState, type ClassifierStateMessage } from './state.js';
-import { validateApiCompatibleClassifierResponse } from './response.js';
+import type { DataValue } from '../DataValue.js';
+import { assertLiquidImageLimits } from './images.js';
+import {
+  prepareClassifierState,
+  systemOneState,
+  type ClassifierStateMessage,
+  type PreparedClassifierState,
+} from './state.js';
+import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
-import { validateClassifierQuestion } from './questions.js';
-import { assertClassifierJson, classifierArrayValues } from './json.js';
+import { prepareClassifierQuestion } from './questions.js';
+import { classifierArrayValues } from './json.js';
 import {
   assertClassifierResourceLimits,
-  classifierPreparationCheck,
+  ClassifierValueBudget,
   CLASSIFIER_LIMITS,
   ClassifierResourceLimitError,
   readClassifierResponse,
 } from './limits.js';
-import type { ClassifierEvaluationResponse, ClassifierQuestionDefinition } from './types.js';
+import type {
+  ClassifierEvaluationResponse,
+  ClassifierQuestionDefinition,
+  PreparedClassifierQuestion,
+} from './types.js';
 
 export { validateApiCompatibleClassifierResponse } from './response.js';
 
@@ -40,6 +50,7 @@ export const LIQUID_TOKEN_PRICING = {
 const TOKENS_PER_MILLION = 1_000_000;
 
 const MAX_AUTOMATIC_ATTEMPTS = 3;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const RETRYABLE_STATUSES = new Set([429, 529]);
 
 export const DEFAULT_CLASSIFIER_RETRY_ON_NON_200_REPEAT_TIMES = 1;
@@ -63,6 +74,8 @@ export type ClassifierProvider = {
    * carry the API key and must never become graph outputs.
    */
   evaluate(args: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult>;
+  /** Graph entry uses the same runner without normalizing/copying State twice. */
+  evaluateInput?(args: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult>;
 };
 
 export type ClassifierTokenPricing = {
@@ -91,6 +104,8 @@ export type ClassifierProviderEvaluateArgs = {
   signal: AbortSignal;
   state: string | Record<string, unknown> | unknown[];
   stateMessages?: ClassifierStateMessage[];
+  /** Optional Rivet wrapper for the graph entry; ordinary provider calls use state/stateMessages. */
+  stateInput?: DataValue;
   timeoutMs: number;
   /** An earlier node deadline includes State normalization in the request budget. */
   deadline?: number;
@@ -101,9 +116,17 @@ export type ClassifierProviderEvaluateArgs = {
   fetchImplementation?: typeof fetch;
 };
 
-/** Internal adapters share the snapshot boundary's absolute deadline. */
-type ClassifierRequestProvider = Omit<ClassifierProvider, 'evaluate'> & {
-  evaluate(args: ClassifierProviderEvaluateArgs & { deadline: number }): Promise<ClassifierProviderEvaluationResult>;
+export type PreparedClassifierEvaluation = {
+  model: string;
+  state: PreparedClassifierState;
+  questions: PreparedClassifierQuestion[];
+};
+
+type ClassifierProviderSpec = Omit<ClassifierProvider, 'evaluate' | 'evaluateInput'> & {
+  endpoint: string;
+  buildRequest(args: PreparedClassifierEvaluation): Record<string, unknown>;
+  validateResponse: typeof validateClassifierEvaluationResponse;
+  checkState?(state: PreparedClassifierState, check: () => void): void;
 };
 
 export type ApiCompatibleClassifierProviderConfig = {
@@ -119,6 +142,8 @@ export type ApiCompatibleClassifierProviderConfig = {
   modelPricing?: readonly ClassifierModelPricing[];
   supportsImages?: (model: string) => boolean;
   maxRequestBytes?: number;
+  /** Provider-owned evidence checks, independent of the descriptor's ID. */
+  checkState?: ClassifierProviderSpec['checkState'];
 };
 
 /**
@@ -129,56 +154,15 @@ export type ApiCompatibleClassifierProviderConfig = {
 export function createApiCompatibleClassifierProvider(
   config: ApiCompatibleClassifierProviderConfig,
 ): ClassifierProvider {
-  config = { ...config };
-  return withSharedState({
-    id: config.id,
-    label: config.label,
-    defaultModel: config.defaultModel,
-    credentialNames: config.credentialNames,
+  return createClassifierProvider({
+    ...config,
     browserExecutionSupported: config.browserExecutionSupported ?? false,
-    pricing: config.pricing,
-    modelPricing: config.modelPricing,
-    supportsImages: config.supportsImages ?? (() => false),
-    maxRequestBytes: config.maxRequestBytes,
-    async evaluate({
-      apiKey,
-      fetchImplementation = fetch,
+    buildRequest: ({ model, questions, state }) => ({
+      ...systemOneState(state.kind === 'json' ? { state: state.value } : { state: '', stateMessages: state.messages }),
       model,
-      questions,
-      retryOnNon200,
-      retryOnNon200CooldownMs,
-      retryOnNon200RepeatTimes,
-      signal,
-      state,
-      timeoutMs,
-      stateMessages,
-      deadline,
-    }) {
-      const request: ApiCompatibleRequest = {
-        ...systemOneState({ state, stateMessages }),
-        model,
-        questions: createQuestionMap(questions),
-      };
-      if (config.id === 'liquid')
-        assertLiquidImages(request.images ?? [], classifierPreparationCheck(signal, deadline, timeoutMs));
-
-      return await callClassifierHttp({
-        apiKey,
-        endpoint: config.endpoint,
-        fetchImplementation,
-        providerLabel: config.label,
-        request,
-        questions,
-        validateResponse: validateApiCompatibleClassifierResponse,
-        retryOnNon200,
-        retryOnNon200CooldownMs,
-        retryOnNon200RepeatTimes,
-        signal,
-        timeoutMs,
-        deadline,
-        maxRequestBytes: config.maxRequestBytes,
-      });
-    },
+      questions: createQuestionMap(questions),
+    }),
+    validateResponse: validateClassifierEvaluationResponse,
   });
 }
 
@@ -188,7 +172,6 @@ export const jevClassifierProvider = createApiCompatibleClassifierProvider({
   defaultModel: 'jev-latest',
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
   endpoint: JEV_SYSTEM_ONE_ENDPOINT,
-  pricing: JEV_TOKEN_PRICING,
   modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0'], pricing: JEV_TOKEN_PRICING }],
 });
 
@@ -198,17 +181,21 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   defaultModel: 'd1',
   credentialNames: LIQUID_DEFAULT_CREDENTIAL_NAMES,
   endpoint: LIQUID_SYSTEM_ONE_ENDPOINT,
-  pricing: LIQUID_TOKEN_PRICING,
+  modelPricing: [{ models: ['d1'], pricing: LIQUID_TOKEN_PRICING }],
   supportsImages: (model) => model === 'd1',
   maxRequestBytes: 4_500_000,
+  checkState: (state, check) => {
+    if (state.kind === 'messages') assertLiquidImageLimits(state.images, check);
+  },
 });
 
-export const openaiClassifierProvider: ClassifierProvider = withSharedState({
+export const openaiClassifierProvider: ClassifierProvider = createClassifierProvider({
   id: 'openai',
   label: 'OpenAI',
   defaultModel: 'gpt-6-luna',
   credentialNames: OPENAI_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
+  endpoint: OPENAI_DECISIONS_ENDPOINT,
   supportsImages: (model) => model === 'gpt-6-luna',
   modelPricing: [
     {
@@ -220,87 +207,100 @@ export const openaiClassifierProvider: ClassifierProvider = withSharedState({
       },
     },
   ],
-  async evaluate(args) {
-    return callClassifierHttp({
-      ...args,
-      endpoint: OPENAI_DECISIONS_ENDPOINT,
-      fetchImplementation: args.fetchImplementation ?? fetch,
-      providerLabel: 'OpenAI',
-      request: createOpenAIDecisionRequest(args),
-      validateResponse: validateOpenAIDecisionResponse,
-    });
-  },
+  buildRequest: createOpenAIDecisionRequest,
+  validateResponse: validateOpenAIDecisionResponse,
 });
 
-/** Ordered so adding later API-compatible providers does not alter authored provider IDs. */
+/** Ordered so adding compatible providers does not alter authored IDs. */
 export const classifierProviders: readonly ClassifierProvider[] = [
   jevClassifierProvider,
   liquidClassifierProvider,
   openaiClassifierProvider,
 ];
 
-/** Both protocols evaluate every question against the same shared evidence. */
-function withSharedState(provider: ClassifierRequestProvider): ClassifierProvider {
+type ClassifierOperation = {
+  signal: AbortSignal;
+  deadline: number;
+  check(attemptSignal?: AbortSignal): void;
+};
+
+function createOperation(args: ClassifierProviderEvaluateArgs, label: string): ClassifierOperation {
+  if (
+    !Number.isFinite(args.timeoutMs) ||
+    args.timeoutMs <= 0 ||
+    (args.deadline !== undefined && !Number.isFinite(args.deadline))
+  )
+    throw new Error('Classifier timeout and deadline must be finite, with a positive timeout.');
+  const now = Date.now();
+  const deadline = Math.min(now + args.timeoutMs, args.deadline ?? Infinity);
+  // Node turns overflowing setTimeout delays into 1 ms, not a long timeout.
+  if (deadline - now > MAX_TIMER_DELAY_MS)
+    throw new Error(`Classifier effective timeout must not exceed ${MAX_TIMER_DELAY_MS} ms.`);
+  const timeoutError = () => new Error(`${label} request timed out after ${args.timeoutMs} ms.`);
   return {
-    ...provider,
-    async evaluate(args) {
-      args = { ...args, fetchImplementation: args.fetchImplementation ?? fetch };
-      if (
-        !Number.isFinite(args.timeoutMs) ||
-        args.timeoutMs <= 0 ||
-        (args.deadline !== undefined && !Number.isFinite(args.deadline))
-      )
-        throw new Error('Classifier timeout and deadline must be finite, with a positive timeout.');
-      const deadline = Math.min(Date.now() + args.timeoutMs, args.deadline ?? Infinity);
-      const assertActive = () => {
-        throwIfAborted(args.signal, provider.label);
-        if (Date.now() >= deadline) throw new Error(`${provider.label} request timed out after ${args.timeoutMs} ms.`);
-      };
-      assertActive();
-      if ('images' in args) throw new Error('Pass image evidence through State, not a separate images field.');
-      if (!Array.isArray(args.questions) || args.questions.length === 0)
-        throw new Error('Classifier Evaluate requires at least one question.');
-      if (args.questions.length > CLASSIFIER_LIMITS.questions)
-        throw new Error('Classifier Evaluate supports at most 1000 questions.');
-      assertClassifierResourceLimits(
-        { state: args.state, questions: args.questions, stateMessages: args.stateMessages },
-        assertActive,
-        provider.maxRequestBytes,
-      );
-      const questions: ClassifierQuestionDefinition[] = [];
-      const ids = new Set<string>();
-      for (const question of classifierArrayValues(args.questions, 'Questions')) {
-        validateClassifierQuestion(question, assertActive);
-        if (ids.has(question.questionId))
-          throw new Error(`Question ID '${question.questionId}' is duplicated in this evaluation.`);
-        ids.add(question.questionId);
-        questions.push(question);
-      }
-      assertClassifierJson(args.state, 'State', false, assertActive);
-      if (args.stateMessages !== undefined) {
-        if (args.state !== '')
-          throw new Error('Structured State and multimodal State messages cannot be supplied together.');
-        assertClassifierStateMessages(args.stateMessages, assertActive);
-      }
-      // Detach evidence before IO so retries and response validation use the same snapshot.
-      assertActive();
-      const snapshot = JSON.parse(
-        JSON.stringify({ state: args.state, questions, stateMessages: args.stateMessages }),
-      ) as {
-        state: ClassifierProviderEvaluateArgs['state'];
-        questions: ClassifierQuestionDefinition[];
-        stateMessages?: ClassifierStateMessage[];
-      };
-      const hasImages = snapshot.stateMessages?.some(({ parts }) => parts.some((part) => part.type === 'image'));
-      if (hasImages && !provider.supportsImages?.(args.model)) {
-        throw new Error(`${provider.label} model '${args.model}' does not support classifier images.`);
-      }
-      assertActive();
-      const result = await provider.evaluate({ ...args, ...snapshot, deadline });
-      assertActive();
-      return result;
+    signal: args.signal,
+    deadline,
+    check(attemptSignal) {
+      throwIfAborted(args.signal, label);
+      if (Date.now() >= deadline || attemptSignal?.aborted) throw timeoutError();
     },
   };
+}
+
+/** A plain specification and one runner for both graph and direct provider inputs. */
+function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvider {
+  const { endpoint, buildRequest, validateResponse, checkState, ...provider } = spec;
+  const evaluate = async (input: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult> => {
+    // Reject removed evidence fields before object spread can read a getter or
+    // discard non-enumerable/inherited content.
+    if ('images' in input) throw new Error('Pass image evidence through State, not a separate images field.');
+    const args = { ...input, fetchImplementation: input.fetchImplementation ?? fetch };
+    const operation = createOperation(args, provider.label);
+    operation.check();
+    if (typeof args.model !== 'string') throw new Error('Classifier model must be a nonblank string.');
+    const budget = new ClassifierValueBudget(operation.check, provider.maxRequestBytes);
+    budget.inspect(args.model);
+    if (args.model.trim() === '') throw new Error('Classifier model must be a nonblank string.');
+    if (typeof args.apiKey !== 'string' || args.apiKey.trim() === '' || /[\r\n]/.test(args.apiKey))
+      throw new Error('Classifier API key must be a nonblank string without line breaks.');
+    if (!Array.isArray(args.questions) || args.questions.length === 0)
+      throw new Error('Classifier Evaluate requires at least one question.');
+    if (args.questions.length > CLASSIFIER_LIMITS.questions)
+      throw new Error('Classifier Evaluate supports at most 1000 questions.');
+    const state = prepareClassifierState(args, budget);
+    const questions: PreparedClassifierQuestion[] = [];
+    const ids = new Set<string>();
+    for (const value of classifierArrayValues(args.questions, 'Questions')) {
+      const question = prepareClassifierQuestion(value, budget);
+      if (ids.has(question.questionId))
+        throw new Error(`Question ID '${question.questionId}' is duplicated in this evaluation.`);
+      ids.add(question.questionId);
+      questions.push(question);
+    }
+    if (state.kind === 'messages' && state.images.length && !provider.supportsImages?.(args.model))
+      throw new Error(`${provider.label} model '${args.model}' does not support classifier images.`);
+    checkState?.(state, operation.check);
+    operation.check();
+    const result = await callClassifierHttp(
+      args,
+      { endpoint, validateResponse, label: provider.label, maxRequestBytes: provider.maxRequestBytes },
+      { model: args.model, state, questions },
+      buildRequest,
+      operation,
+    );
+    operation.check();
+    return result;
+  };
+  return { ...provider, evaluate, evaluateInput: evaluate };
+}
+
+function normalizeModelPricing(
+  provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> & Partial<Pick<ClassifierProvider, 'defaultModel'>>,
+): readonly ClassifierModelPricing[] {
+  return (
+    provider.modelPricing ??
+    (provider.pricing && provider.defaultModel ? [{ models: [provider.defaultModel], pricing: provider.pricing }] : [])
+  );
 }
 
 export function getClassifierProvider(id: string | undefined): ClassifierProvider {
@@ -324,9 +324,7 @@ export function calculateClassifierUsageCost(
   models?: { requestedModel: string; responseModel: string },
 ): number | undefined {
   if (!models) return undefined;
-  const entries =
-    provider.modelPricing ??
-    (provider.pricing && provider.defaultModel ? [{ models: [provider.defaultModel], pricing: provider.pricing }] : []);
+  const entries = normalizeModelPricing(provider);
   const entry = entries.find(
     ({ models: names }) => names.includes(models.requestedModel) && names.includes(models.responseModel),
   );
@@ -356,15 +354,8 @@ export function calculateClassifierUsageCost(
   return Number.isFinite(totalCost) && totalCost >= 0 ? totalCost : undefined;
 }
 
-type ApiCompatibleRequest = {
-  state: string | Record<string, unknown> | unknown[];
-  model: string;
-  questions: Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
-  images?: string[];
-};
-
 function createQuestionMap(
-  questions: readonly ClassifierQuestionDefinition[],
+  questions: readonly PreparedClassifierQuestion[],
 ): Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>> {
   const result = Object.create(null) as Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
   for (const question of questions) {
@@ -377,65 +368,36 @@ function createQuestionMap(
   return result;
 }
 
-async function callClassifierHttp({
-  apiKey,
-  endpoint,
-  fetchImplementation,
-  providerLabel,
-  request,
-  questions,
-  validateResponse,
-  retryOnNon200,
-  retryOnNon200CooldownMs,
-  retryOnNon200RepeatTimes,
-  signal,
-  timeoutMs,
-  deadline,
-  maxRequestBytes,
-}: {
-  apiKey: string;
-  endpoint: string;
-  fetchImplementation: typeof fetch;
-  providerLabel: string;
-  request: Record<string, unknown>;
-  questions: readonly ClassifierQuestionDefinition[];
-  validateResponse: typeof validateApiCompatibleClassifierResponse;
-  retryOnNon200?: boolean;
-  retryOnNon200CooldownMs?: number;
-  retryOnNon200RepeatTimes?: number;
-  signal: AbortSignal;
-  timeoutMs: number;
-  deadline: number;
-  maxRequestBytes?: number;
-}): Promise<ClassifierProviderEvaluationResult> {
+async function callClassifierHttp(
+  args: ClassifierProviderEvaluateArgs & { fetchImplementation: typeof fetch },
+  spec: Pick<ClassifierProviderSpec, 'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse'>,
+  prepared: PreparedClassifierEvaluation,
+  buildRequest: ClassifierProviderSpec['buildRequest'],
+  operation: ClassifierOperation,
+): Promise<ClassifierProviderEvaluationResult> {
+  const { apiKey, fetchImplementation, retryOnNon200, retryOnNon200CooldownMs, retryOnNon200RepeatTimes } = args;
+  const { endpoint, label: providerLabel, validateResponse, maxRequestBytes } = spec;
+  const { signal, deadline } = operation;
+  const request = buildRequest(prepared);
   const configuredRetryCount = retryOnNon200 ? normalizeClassifierNon200RetryCount(retryOnNon200RepeatTimes) : 0;
   const configuredCooldownMs = normalizeClassifierNon200RetryCooldownMs(retryOnNon200CooldownMs);
   let automaticRetryCount = 0;
   let configuredRetryCountUsed = 0;
-  // Serialize once before the first attempt. This is the exact body sent for
-  // every retry and a detached snapshot for the optional inspection output,
-  // so concurrent graph code cannot mutate a shared State object between
-  // retries and make the diagnostic disagree with the wire payload.
-  const checkPreparation = () => {
-    throwIfAborted(signal, providerLabel);
-    if (Date.now() >= deadline) throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
-  };
-  assertClassifierResourceLimits(request, checkPreparation);
+  // The transformed protocol can expand content (notably escaped JSON in OpenAI).
+  // This final wire check is distinct from validating/detaching untrusted inputs.
+  assertClassifierResourceLimits(request, operation.check);
   const requestJson = JSON.stringify(request);
   if (maxRequestBytes !== undefined && new TextEncoder().encode(requestJson).byteLength >= maxRequestBytes) {
     throw new Error(
       `${providerLabel} request must be smaller than ${maxRequestBytes / 1_000_000} MB, including State, images, and questions. Resize images or reduce input content.`,
     );
   }
-  const requestBody = JSON.parse(requestJson) as Record<string, unknown>;
-  checkPreparation();
-  // The snapshot boundary already detached every question before IO.
-  const responseQuestions = questions;
+  let requestBody: Record<string, unknown> | undefined;
+  operation.check();
 
   for (;;) {
-    throwIfAborted(signal, providerLabel);
+    operation.check();
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
 
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
@@ -445,12 +407,7 @@ async function callClassifierHttp({
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
     };
-    const assertAttemptActive = () => {
-      throwIfAborted(signal, providerLabel);
-      if (controller.signal.aborted || Date.now() >= deadline) {
-        throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
-      }
-    };
+    const assertAttemptActive = () => operation.check(controller.signal);
 
     let response: Response;
     try {
@@ -467,10 +424,7 @@ async function callClassifierHttp({
       );
     } catch (error) {
       cleanupAttempt();
-      if (signal.aborted) throwAbort(signal, providerLabel);
-      if (Date.now() >= deadline || controller.signal.aborted) {
-        throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
-      }
+      operation.check(controller.signal);
       if (automaticRetryCount >= MAX_AUTOMATIC_ATTEMPTS - 1) {
         throw new Error(
           `${providerLabel} request failed after ${MAX_AUTOMATIC_ATTEMPTS} attempts due to a transport error.`,
@@ -532,18 +486,22 @@ async function callClassifierHttp({
       assertAttemptActive();
     } catch (error) {
       discardResponseBody(response);
-      if (signal.aborted) throwAbort(signal, providerLabel);
-      if (controller.signal.aborted || Date.now() >= deadline) {
-        throw new Error(`${providerLabel} request timed out after ${timeoutMs} ms.`);
-      }
+      operation.check(controller.signal);
       if (error instanceof ClassifierResourceLimitError) throw error;
       throw new Error(`${providerLabel} returned an invalid JSON response.`, { cause: error });
     } finally {
       cleanupAttempt();
     }
-    const validatedResponse = validateResponse(body, responseQuestions, providerLabel);
+    const validatedResponse = validateResponse(body, prepared.questions, providerLabel);
     return {
-      requestBody,
+      // Preserve the direct-provider result contract, but graph runs with the
+      // diagnostic disabled never allocate this second representation.
+      get requestBody() {
+        return (requestBody ??= JSON.parse(requestJson) as Record<string, unknown>);
+      },
+      set requestBody(value: Record<string, unknown>) {
+        requestBody = value;
+      },
       response: validatedResponse,
       // Expose native JSON, not the adapter's Rivet answer projection. The
       // validators accept only object-shaped provider envelopes.

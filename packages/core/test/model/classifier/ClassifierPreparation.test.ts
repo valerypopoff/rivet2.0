@@ -35,6 +35,25 @@ function fixture(
   };
 }
 
+test('Question preparation shares one expanded-work budget across active inputs and resets it per run', async () => {
+  const { impl, context } = fixture({
+    useInstructionsInput: true,
+    criteriaType: 'object',
+    useNoulTrueCriteriaInput: true,
+    useNoulFalseCriteriaInput: true,
+  });
+  const entry = (size: number) => ({ type: 'object' as const, value: { items: Array(size).fill(false) } });
+  await assert.rejects(
+    impl.process({ instructions: entry(60_000), criteriaTrue: entry(60_000), criteriaFalse: entry(1) }, context),
+    /too many expanded values/,
+  );
+  const inputs = { instructions: entry(20_000), criteriaTrue: entry(20_000), criteriaFalse: entry(20_000) };
+  const first = await impl.process(inputs, context);
+  const second = await impl.process(inputs, context);
+  assert.deepEqual(second, first);
+  assert.equal((first.question!.value as any).instructions.items.length, 20_000);
+});
+
 test('Question cancellation prevents interpolation and stops after a global resolver aborts', async () => {
   const controller = new AbortController();
   let calls = 0;

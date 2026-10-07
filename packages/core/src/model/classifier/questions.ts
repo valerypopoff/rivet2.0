@@ -1,28 +1,27 @@
 import {
   assertClassifierEntryKind,
   assertClassifierInstructionsKind,
-  assertClassifierJson,
+  snapshotClassifierJson,
   classifierArrayValues,
 } from './json.js';
-import type { ClassifierQuestionDefinition, ClassifierEntry } from './types.js';
-import type { ClassifierPreparationCheck } from './limits.js';
+import type { ClassifierQuestionDefinition, ClassifierEntry, PreparedClassifierQuestion } from './types.js';
+import type { ClassifierValueBudget } from './limits.js';
 
 /** Shared by node execution and direct provider calls, before taking the request snapshot. */
-export function validateClassifierQuestion(
-  value: unknown,
-  check?: ClassifierPreparationCheck,
-): asserts value is ClassifierQuestionDefinition {
+export function prepareClassifierQuestion(value: unknown, budget: ClassifierValueBudget): PreparedClassifierQuestion {
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Question inputs must contain question definition objects.');
   if ('images' in value)
     throw new Error("Question-level images are not supported. Connect images to Classifier Evaluate's State input.");
-  // Optional envelope properties may be undefined; structured entries themselves must be exact JSON.
-  assertClassifierJson(value, 'Question', true, check);
-  const question = value as ClassifierQuestionDefinition;
   for (const key of ['questionId', 'type', 'instructions']) {
-    if (!Object.prototype.propertyIsEnumerable.call(question, key))
+    if (!Object.prototype.propertyIsEnumerable.call(value, key))
       throw new Error(`Every classifier question must have an own, enumerable '${key}' field.`);
   }
+  const criteriaProperty = Object.getOwnPropertyDescriptor(value, 'criteria');
+  if (criteriaProperty && (!criteriaProperty.enumerable || !('value' in criteriaProperty)))
+    throw new Error('Classifier question criteria must be an own, enumerable field.');
+  // Optional envelope properties may be undefined; structured entries themselves must be exact JSON.
+  const question = snapshotClassifierJson(value, 'Question', budget, true) as ClassifierQuestionDefinition;
   if (typeof question.questionId !== 'string' || question.questionId.trim() === '')
     throw new Error('Every classifier question must have a non-empty Question ID.');
   if (!['choice', 'score', 'noul'].includes(question.type))
@@ -30,10 +29,7 @@ export function validateClassifierQuestion(
   // The whole question has already passed recursive JSON/resource validation.
   // Check only entry kinds here; do not scan each structured entry again.
   assertClassifierInstructionsKind(question.instructions, `Question '${question.questionId}' instructions`);
-  const criteriaProperty = Object.getOwnPropertyDescriptor(question, 'criteria');
-  if (criteriaProperty && (!criteriaProperty.enumerable || !('value' in criteriaProperty)))
-    throw new Error(`Question '${question.questionId}' criteria must be an own, enumerable field.`);
-  const criteria = criteriaProperty?.value;
+  const criteria = question.criteria;
   if (question.type === 'choice') {
     if (typeof criteria !== 'object' || criteria === null || Array.isArray(criteria))
       throw new Error(`Choice question '${question.questionId}' requires object criteria.`);
@@ -64,4 +60,5 @@ export function validateClassifierQuestion(
     assertClassifierEntryKind(entries.true, `Question '${question.questionId}' criteria.true`);
     assertClassifierEntryKind(entries.false, `Question '${question.questionId}' criteria.false`);
   }
+  return question as PreparedClassifierQuestion;
 }
