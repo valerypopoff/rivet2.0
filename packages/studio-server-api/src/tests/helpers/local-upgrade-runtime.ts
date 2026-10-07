@@ -456,12 +456,16 @@ try {
     const url = `${listener.baseUrl}/api/app-settings/local-upgrade`;
     const source = localMetadataSourceRoots();
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
+    let gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let inspectionEntered: (() => void) | null = null;
     const original = fs.readdir;
     const held = mock.method(fs, 'readdir', async (...args: Parameters<typeof fs.readdir>) => {
-      if (String(args[0]) === source.workflows) await gate;
+      if (String(args[0]) === source.workflows) {
+        inspectionEntered?.();
+        await gate;
+      }
       return original(...args);
     });
     const request = (body: object, auth = true) =>
@@ -481,6 +485,35 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
     };
+    const rejectStaleRead = async (kind: 'inspect' | 'fingerprint', revision: number) => {
+      const before = await status();
+      const entered = new Promise<void>((resolve) => {
+        inspectionEntered = resolve;
+      });
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const bootRevision = process.env.RIVET_LOCAL_METADATA_BOOT_REVISION;
+      const id = randomUUID();
+      try {
+        assert.equal((await request({ id, kind, revision })).status, 202);
+        // Cross the authority boundary after the worker has started its actual
+        // source read, not merely before its initial admission check.
+        await entered;
+        process.env.RIVET_LOCAL_METADATA_BOOT_REVISION = String(revision + 1);
+        release();
+        const failed = await waitFor((value) => value.preparation?.id === id && value.preparation.phase === 'failed');
+        assert.equal(failed.preparation.fingerprint, undefined);
+        if (kind === 'inspect') assert.equal(failed.preparation.inventory, undefined);
+        assert.deepEqual(failed.maintenance, before.maintenance);
+        assert.deepEqual(failed.backup, before.backup);
+      } finally {
+        release();
+        inspectionEntered = null;
+        if (bootRevision === undefined) delete process.env.RIVET_LOCAL_METADATA_BOOT_REVISION;
+        else process.env.RIVET_LOCAL_METADATA_BOOT_REVISION = bootRevision;
+      }
+    };
     try {
       const before = await status();
       const input = { id: randomUUID(), kind: 'inspect', revision: before.transition.revision };
@@ -498,6 +531,7 @@ try {
       assert.ok(ready.preparation.inventory.capacity.fits);
       assert.equal(ready.maintenance, null);
       assert.equal((await request(input)).status, 202);
+      await rejectStaleRead('inspect', input.revision);
       const oversized = path.join(source.workflows, 'owned-oversized.fixture');
       const oldBudget = process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB;
       try {
@@ -516,11 +550,31 @@ try {
         if (oldBudget === undefined) delete process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB;
         else process.env.RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB = oldBudget;
       }
-      assert.equal((await request({ id: randomUUID(), kind: 'pause-backup', revision: input.revision })).status, 202);
-      const backedUp = await waitFor((value) => value.backup?.phase === 'ready' && !value.operation);
+      // An accepted editor run may still be draining when the guided worker
+      // freezes writes. It must keep waiting rather than publish pause-only success.
+      const leaseRoot = path.join(source.appData, 'vm-migration-active-editor-runs');
+      const lease = path.join(leaseRoot, 'owned-drain.fixture');
+      await fs.mkdir(leaseRoot, { recursive: true });
+      await fs.writeFile(lease, 'owned editor run');
+      let backedUp;
+      try {
+        assert.equal((await request({ id: randomUUID(), kind: 'pause-backup', revision: input.revision })).status, 202);
+        const draining = await waitFor((value) => value.maintenance && value.preparation?.stage === 'pause');
+        assert.equal(draining.preparation.phase, 'running');
+        assert.equal(draining.operation, 'pause');
+        assert.equal(draining.backup, null);
+        assert.equal(draining.drain.ready, false);
+        assert.ok(draining.drain.blockers.includes('editor graph runs'));
+        assert.equal((await request({ id: randomUUID(), kind: 'backup', revision: input.revision })).status, 409);
+        await fs.rm(lease);
+        backedUp = await waitFor((value) => value.backup?.phase === 'ready' && !value.operation);
+      } finally {
+        await fs.rm(lease, { force: true });
+      }
       assert.ok(backedUp.maintenance);
       assert.equal(backedUp.preparation.phase, 'ready');
       assert.equal(backedUp.preparation.stage, 'backup');
+      await rejectStaleRead('fingerprint', input.revision);
       assert.equal((await request({ id: randomUUID(), kind: 'fingerprint', revision: input.revision })).status, 202);
       const fingerprint = await waitFor(
         (value) => value.preparation.kind === 'fingerprint' && value.preparation.phase === 'ready',

@@ -140,9 +140,34 @@ rejected. The existing synchronous routes remain for older clients; both API and
 web images must be updated to use the background flow.
 
 The guided pause-and-backup action authorizes one server-owned sequence:
-inspection/capacity, pause/drain, then backup preflight if the source is drained.
-Closing the panel does not cancel or repeat that sequence. If work is still
-draining, it ends paused and the operator can start backup when the source is quiet.
+inspection/capacity, pause/drain, then backup preflight once the source is drained.
+The accepted worker polls drain readiness every 250 ms for up to five minutes;
+its preparation remains running at `pause` while existing work finishes. Each
+snapshot rechecks the transition revision and the exact maintenance session before
+and after its read. The deadline is monotonic: an expired attempt does not start
+another snapshot, and a quiet result arriving after the deadline cannot authorize
+backup. An in-flight filesystem read is allowed to settle before failure is
+retained; the deadline does not cancel filesystem IO or release ownership early.
+The source becoming quiet automatically continues backup creation, without
+another browser action. Closing the panel does not cancel or
+repeat that sequence. A drain timeout retains an explicit failed preparation,
+never pause-only success, and leaves writes paused. The operator can inspect the
+remaining blockers and choose **Create verified backup** once the source is quiet.
+The individual **Pause writes and drain** action remains pause-only.
+
+`local-upgrade-drain.test.ts` covers quiet/blocked snapshots, lost ownership,
+exact and late deadline boundaries, retained failure/replay and an explicit new
+retry. Boundary tests use a controlled monotonic clock rather than runner-speed
+assumptions. The authenticated background-preparation runtime fixture holds a
+real editor-run lease through pause, then releases it and verifies automatic
+backup completion without another request.
+
+Inspection and fingerprint results recheck the storage revision and boot authority
+after their source IO, before publishing usable evidence. Pause completion also
+rechecks authority. The runtime fixture holds actual source reads across a boot
+revision change and requires failed preparation without new inventory/fingerprint
+evidence or changes to maintenance and previously verified backups.
+
 Backup fingerprinting runs in this worker before the existing archive/restore
 worker starts, rather than holding a browser request open. Inspection results are
 informational snapshots, never authority to select SQLite, certify a backup or
@@ -331,7 +356,8 @@ On the updated supervised Compose stack, the normal browser workflow has four st
 1. **Prepare / pause and back up.** If needed, choose **Prepare server for migration**
    and wait for automatic reconnection. Then **Pause writes and create verified backup**
    performs capacity inspection, freezes/drains the source and starts backup creation
-   when drained. If active work is still draining, wait and choose **Create verified backup**.
+   when drained. It waits up to five minutes for active work; on timeout, writes
+   remain paused and **Create verified backup** can be used once the source is quiet.
 2. **Download and copy.** Download the verified archive,
    wait for completion, preserve it securely outside the VM and confirm the download check.
    Choose **Copy and verify**. Reference/fingerprint entry is hidden under Advanced;

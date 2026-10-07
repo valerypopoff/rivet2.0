@@ -1935,9 +1935,12 @@ Regression coverage:
   It includes immediate title/description commits and Escape-to-cancel metadata,
   with no false dirty flag when restoring a previously absent description.
   It also checks incomplete JSON-object drafts and formatting-equivalent source
-  acknowledgements, including restored validation errors. Prompt coverage delays
-  dictionary loading and overlaps spellchecks to prove a cancelled check cannot
-  clear the newest markers; editing then clears both markers and status.
+  acknowledgements, including restored validation errors. Monaco draft assertions
+  wait for both rendered text and validation before capturing the expected draft;
+  an immediate DOM read after typing can capture the transient empty render on CI.
+  Prompt coverage delays dictionary loading and overlaps spellchecks to prove a
+  cancelled check cannot clear the newest markers; editing then clears both
+  markers and status.
   Metadata uses canonical controlled values: do not recommit an internal form
   buffer on blur/confirmation. Keep global node controls non-shrinking in the
   scrolling panel so tall Code editors cannot overlap the variant selector. Run it with

@@ -132,6 +132,12 @@ test('background preparation survives a gateway error and reopening without repe
     return route.fulfill({
       json: {
         ...upgradeStatusFixture({ pausedAt, operation: preparation?.phase === 'running' ? preparation.stage : null }),
+        drain: pausedAt
+          ? {
+              ready: preparation?.stage !== 'pause',
+              blockers: preparation?.stage === 'pause' ? ['editor graph runs'] : [],
+            }
+          : null,
         uiRestartAvailable: true,
         runtimeReady: true,
         settingsEncryptionRequired: false,
@@ -153,6 +159,13 @@ test('background preparation survives a gateway error and reopening without repe
   await expect(begin).toHaveAttribute('aria-busy', 'true');
   expect(starts).toBe(1);
   pausedAt = '2026-10-07T00:00:00Z';
+  preparation = { ...preparation!, stage: 'pause' };
+  await expect(panel.getByRole('region', { name: 'Source inspection and maintenance' }).getByRole('status')).toHaveText(
+    'Waiting for: editor graph runs.',
+  );
+  await expect(panel.getByRole('button', { name: 'Create verified backup', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  expect(starts).toBe(1);
   preparation = {
     ...preparation!,
     stage: 'backup',

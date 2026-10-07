@@ -53,7 +53,7 @@ import type {
   LocalUpgradeOperation,
   LocalUpgradePreparation,
 } from '../../../studio-server-shared/local-upgrade-types.js';
-import { LocalUpgradePreparationJobs } from './preparation-jobs.js';
+import { LocalUpgradePreparationJobs, waitForLocalUpgradeDrain } from './preparation-jobs.js';
 import {
   browserBackupDirectory,
   createBrowserBackupArchive,
@@ -369,22 +369,31 @@ export async function startLocalUpgradePreparation(input: Pick<LocalUpgradePrepa
       };
       await checkRevision();
       if (input.kind === 'inspect' || input.kind === 'pause-backup') {
-        job.inventory = await inspectSource();
+        const inventory = await inspectSource();
+        await checkRevision();
+        job.inventory = inventory;
         if (input.kind === 'inspect') return;
         if (!job.inventory.capacity?.fits) throw new Error('Capacity inspection did not pass.');
-        await checkRevision();
       }
       if (input.kind === 'pause' || input.kind === 'pause-backup') {
         await stage('pause');
         await freezeLocalStorageSource();
-        if (input.kind === 'pause' || !(await localStorageDrainSnapshot()).ready) return;
+        await checkRevision();
+        if (input.kind === 'pause') return;
+        const pausedAt = readVmMigrationMaintenance()!.enteredAt;
+        await waitForLocalUpgradeDrain(localStorageDrainSnapshot, async () => {
+          await checkRevision();
+          if (readVmMigrationMaintenance()?.enteredAt !== pausedAt)
+            throw new Error('Maintenance session changed during drain.');
+        });
       }
       if (input.kind === 'fingerprint') {
         await assertDrained();
         const pausedAt = readVmMigrationMaintenance()!.enteredAt;
         const sourceFingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
         await assertDrained();
-        if (readVmMigrationMaintenance()!.enteredAt !== pausedAt) throw new Error('Maintenance session changed.');
+        await checkRevision();
+        if (readVmMigrationMaintenance()?.enteredAt !== pausedAt) throw new Error('Maintenance session changed.');
         job.fingerprint = { pausedAt, sourceFingerprint };
         return;
       }

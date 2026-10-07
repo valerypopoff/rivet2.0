@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import {
   LOCAL_UPGRADE_PREPARATION_KINDS,
@@ -8,6 +9,34 @@ import {
 } from '../../../studio-server-shared/local-upgrade-types.js';
 import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
 import { createHttpError } from '../utils/httpError.js';
+
+export class LocalUpgradeDrainTimeoutError extends Error {
+  constructor() {
+    super(
+      'Timed out waiting for active work to drain. Writes remain paused; wait for the source to become quiet, then choose Create verified backup.',
+    );
+  }
+}
+
+/** Wait inside the accepted worker, not its HTTP admission request. A quiet
+ * snapshot is usable only while the same transition and maintenance still own it. */
+export async function waitForLocalUpgradeDrain(
+  readDrain: () => Promise<{ ready: boolean }>,
+  assertCurrent: () => Promise<void>,
+  timeoutMs = 5 * 60_000,
+): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    await assertCurrent();
+    if (performance.now() >= deadline) throw new LocalUpgradeDrainTimeoutError();
+    const drain = await readDrain();
+    await assertCurrent();
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw new LocalUpgradeDrainTimeoutError();
+    if (drain.ready) return;
+    await delay(Math.min(250, remaining));
+  }
+}
 
 const count = z.number().int().nonnegative();
 const schema = z
@@ -175,9 +204,9 @@ export class LocalUpgradePreparationJobs {
             });
             job.phase = 'ready';
             await this.#save(job);
-          } catch {
+          } catch (error) {
             job.phase = 'failed';
-            job.error = failure;
+            job.error = error instanceof LocalUpgradeDrainTimeoutError ? error.message : failure;
             delete job.fingerprint;
             // A large informational result must not prevent retaining failure.
             if (Buffer.byteLength(JSON.stringify(job)) > maxBytes) delete job.inventory;

@@ -50,6 +50,7 @@ export const defaultApiTestFiles = [
   'src/tests/local-source-budget.test.ts',
   'src/tests/local-sqlite-snapshot.test.ts',
   'src/tests/local-upgrade-diagnostics.test.ts',
+  'src/tests/local-upgrade-drain.test.ts',
   'src/tests/local-upgrade-runtime.test.ts',
   'src/tests/local-workflow-catalog.test.ts',
   'src/tests/managed-catalog.test.ts',
