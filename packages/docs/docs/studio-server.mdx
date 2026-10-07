@@ -69,6 +69,15 @@ The following steps apply only to older installations with file-backed metadata.
 
 The operator-only **App Settings → Local storage upgrade** workflow keeps project, snapshot and recording payloads as local artifact files while moving their authoritative metadata and App Settings to SQLite. It is a separate operation from S3/PostgreSQL migration; changing the Storage selector does not perform it.
 
+Recording and replay artifacts retain their existing compression during the
+upgrade: Rivet does not create expanded recording files on disk. Integrity checks
+and playback decode bounded payloads in memory. New local recordings honor the
+server's compression setting and are compressed when that saves space. The upgrade
+still needs free space for a separate candidate, metadata and verified-backup
+scratch; the originals remain intact. Use current API
+images and backup tools after upgrading—older catalog-format-2 readers cannot read
+the new compressed recording format.
+
 On the updated single-host Compose stack, the normal migration can be completed from the UI:
 
 For signed-in administrators using local storage, the migration suggestion returns

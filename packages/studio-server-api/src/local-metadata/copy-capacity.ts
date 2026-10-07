@@ -77,11 +77,11 @@ export async function inspectLocalCopyCapacity(
       }
     }
     if (recording) {
-      // The catalog stores decoded recording artifacts once, outside SQLite.
+      // The catalog preserves source bytes/encoding once, outside SQLite.
       // Compressed source bytes remain on the source mount and are already
       // reflected in free disk space; they are not another candidate copy.
       if (path.basename(root) === 'metadata.json') metadataAndLibraryBytes += stat.size;
-      else recordingArtifactBytes += decodedBytes;
+      else recordingArtifactBytes += stat.size;
       const directory = path.dirname(root);
       const bytes = (recordingBundles.get(directory) ?? 0) + decodedBytes;
       recordingBundles.set(directory, bytes);
@@ -126,7 +126,8 @@ export async function inspectLocalCopyCapacity(
   const freeBytes = resources?.freeDiskBytes ?? disk.bavail * disk.bsize;
   // Artifact publication hard-links a serial staging file, and serving
   // verification only reads. Do not reserve four installation-wide copies of
-  // expanded recordings. Keep conservative multipliers for the much smaller
+  // recordings. Decoding is bounded in memory, never staged expanded on disk.
+  // Keep conservative multipliers for the much smaller
   // metadata/library domains (SQLite rows/indexes/journals, encrypted settings,
   // tar artifact + extraction tar + package cache) and operational snapshots.
   // Account for small-file allocation, derived rows/paths, and one transient

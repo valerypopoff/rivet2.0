@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { fsync } from 'node:fs';
+import { fsync, createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { createGunzip } from 'node:zlib';
 import { createLocalUpgradeSnapshotPlan } from './local-upgrade-snapshot-plan.mjs';
 import { uiUpgradeBackupLayout } from '../images/api/local-upgrade-ui.mjs';
 
@@ -491,9 +492,10 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
   const catalog = await open(path.join(generation, 'catalog.sqlite'));
   try {
     assert.equal(catalog.prepare('PRAGMA application_id').get().application_id, 0x52495643);
-    assert.equal(catalog.prepare('PRAGMA user_version').get().user_version, 2);
+    const catalogVersion = catalog.prepare('PRAGMA user_version').get().user_version;
+    assert.ok(catalogVersion === 2 || catalogVersion === 3, 'Selected catalog schema version is unsupported.');
     const checked = new Map();
-    const reference = async (value, required) => {
+    const reference = async (value, required, recording = false) => {
       if (value === null) {
         assert.ok(!required, 'Required catalog artifact is missing.');
         return;
@@ -502,8 +504,20 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
       assert.equal(typeof value.hash, 'string', 'Invalid catalog artifact hash.');
       assert.match(value.hash, /^[a-f0-9]{64}$/);
       assert.ok(Number.isSafeInteger(value.size) && value.size >= 0);
+      const compressed = value.encoding === 'gzip';
+      assert.ok(
+        value.encoding === undefined || (recording && catalogVersion === 3 && compressed),
+        'Unsupported catalog artifact encoding.',
+      );
+      assert.ok(
+        compressed
+          ? Number.isSafeInteger(value.decodedSize) && value.decodedSize >= 0
+          : value.decodedSize === undefined,
+        'Invalid catalog decoded artifact size.',
+      );
+      const identity = { size: value.size, encoding: value.encoding, decodedSize: value.decodedSize };
       if (checked.has(value.hash)) {
-        assert.equal(checked.get(value.hash), value.size, 'Conflicting catalog artifact sizes.');
+        assert.deepEqual(checked.get(value.hash), identity, 'Conflicting catalog artifact sizes or encodings.');
         return;
       }
       const file = path.join(generation, 'objects', value.hash.slice(0, 2), value.hash);
@@ -511,14 +525,26 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
       const stat = await fs.lstat(file);
       assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size === value.size, 'Missing referenced artifact.');
       const hash = createHash('sha256');
-      const handle = await fs.open(file, 'r');
+      const input = createReadStream(file);
+      const decoder = compressed ? createGunzip() : null;
+      input.on('data', (chunk) => hash.update(chunk));
+      if (decoder) {
+        input.on('error', (error) => decoder.destroy(error));
+        input.pipe(decoder);
+      }
       try {
-        for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
+        let decodedSize = 0;
+        for await (const chunk of decoder ?? input) {
+          decodedSize += chunk.length;
+          assert.ok(decodedSize <= (value.decodedSize ?? value.size), 'Catalog artifact exceeds its decoded size.');
+        }
+        assert.equal(decodedSize, value.decodedSize ?? value.size, 'Catalog artifact decoded size differs.');
       } finally {
-        await handle.close();
+        input.destroy();
+        decoder?.destroy();
       }
       assert.equal(hash.digest('hex'), value.hash, 'Referenced artifact checksum differs.');
-      checked.set(value.hash, value.size);
+      checked.set(value.hash, identity);
     };
     // These are the catalog schema's artifact fields, not arbitrary objects
     // that happen to contain hash/size. A malformed pointer must not be skipped.
@@ -532,7 +558,8 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
     for (const [table, references] of Object.entries(fields))
       for (const row of catalog.prepare('SELECT metadata_json FROM ' + table).iterate()) {
         const metadata = JSON.parse(row.metadata_json);
-        for (const [field, required] of Object.entries(references)) await reference(metadata[field], required);
+        for (const [field, required] of Object.entries(references))
+          await reference(metadata[field], required, table === 'recordings');
       }
   } finally {
     catalog.close();

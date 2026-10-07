@@ -41,6 +41,30 @@ test('local artifacts reject corrupt pre-existing content instead of replacing i
   }
 });
 
+test('local artifact size mismatches are rejected before opening the payload', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-local-artifact-size-'));
+  try {
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const contents = Buffer.alloc(1024 * 1024, 0x61);
+    const artifact = await store.putBytes(contents);
+    const open = t.mock.method(fs, 'open');
+    try {
+      for (const size of [0, contents.length - 1, contents.length + 1])
+        await assert.rejects(store.read(artifact.hash, size), /unexpected size/);
+      for (const size of [-1, NaN, Infinity, 1.5])
+        await assert.rejects(store.read(artifact.hash, size), /Invalid local artifact expected size/);
+      assert.equal(open.mock.callCount(), 0);
+    } finally {
+      open.mock.restore();
+    }
+    assert.deepEqual(await store.read(artifact.hash, artifact.size), contents);
+    const empty = await store.putBytes(Buffer.alloc(0));
+    assert.deepEqual(await store.read(empty.hash, 0), Buffer.alloc(0));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('local artifacts reject symlinked storage paths and source files', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-local-artifacts-'));
   try {

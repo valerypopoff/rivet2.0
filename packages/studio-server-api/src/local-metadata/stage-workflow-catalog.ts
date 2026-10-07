@@ -1,5 +1,5 @@
 import { collectSourceFolderPaths, iterateSourceWorkflows } from './filesystem-workflow-source.js';
-import { iterateSourceRecordings } from './filesystem-recording-source.js';
+import { iterateSourceRecordings, iterateSourceRecordingImports } from './filesystem-recording-source.js';
 import { LocalWorkflowCatalog } from './workflow-catalog.js';
 import { localUpgradeSourceError } from './upgrade-diagnostics.js';
 
@@ -53,9 +53,9 @@ export async function stageFrozenRecordingCatalog(options: {
   const recordings = () => iterateSourceRecordings(options.recordingsRoot, projects);
   options.catalog.initialize({ verifyOnly: options.verifyOnly });
   if (!options.verifyOnly) {
-    for await (const recording of recordings()) {
+    for await (const { recording, artifacts } of iterateSourceRecordingImports(options.recordingsRoot, projects)) {
       await options.assertFrozen();
-      await options.catalog.importRecording(recording);
+      await options.catalog.importRecording(recording, { sources: artifacts });
     }
   }
   await options.assertFrozen();

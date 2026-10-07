@@ -990,25 +990,28 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       };
       const replayContents = serializeProject(replay, saved.executedAttachedData);
       if (typeof replayContents !== 'string') throw new Error('Serialized replay project is not a string');
-      await this.#catalog.importRecording({
-        recordingId: id,
-        workflowId: saved.sourceProject.metadata.id,
-        sourceProjectRelativePath: this.#parseAbsolute(saved.sourceProjectPath),
-        sourceProjectName: saved.sourceProject.metadata.title,
-        createdAt: new Date().toISOString(),
-        runKind: saved.runKind,
-        status: saved.status,
-        durationMs: saved.durationMs,
-        endpointName: saved.endpointName,
-        errorMessage: saved.errorMessage ?? null,
-        executionIdentity: saved.executionIdentity,
-        recordingContents: saved.recordingSerialized,
-        replayProjectContents: replayContents,
-        replayDatasetContents:
-          config.datasetMode === 'all' && saved.executedDatasets.length
-            ? serializeDatasets(saved.executedDatasets)
-            : null,
-      });
+      await this.#catalog.importRecording(
+        {
+          recordingId: id,
+          workflowId: saved.sourceProject.metadata.id,
+          sourceProjectRelativePath: this.#parseAbsolute(saved.sourceProjectPath),
+          sourceProjectName: saved.sourceProject.metadata.title,
+          createdAt: new Date().toISOString(),
+          runKind: saved.runKind,
+          status: saved.status,
+          durationMs: saved.durationMs,
+          endpointName: saved.endpointName,
+          errorMessage: saved.errorMessage ?? null,
+          executionIdentity: saved.executionIdentity,
+          recordingContents: saved.recordingSerialized,
+          replayProjectContents: replayContents,
+          replayDatasetContents:
+            config.datasetMode === 'all' && saved.executedDatasets.length
+              ? serializeDatasets(saved.executedDatasets)
+              : null,
+        },
+        { compression: config.compression, gzipLevel: config.gzipLevel },
+      );
       await onPersisted?.(id);
     });
     return id;
@@ -1068,11 +1071,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       errorMessage: row.errorMessage ?? undefined,
       hasReplayDataset: row.hasReplayDataset,
       recordingCompressedBytes: row.recordingBytes,
-      recordingUncompressedBytes: row.recordingBytes,
+      recordingUncompressedBytes: row.recordingDecodedBytes,
       projectCompressedBytes: row.projectBytes,
-      projectUncompressedBytes: row.projectBytes,
+      projectUncompressedBytes: row.projectDecodedBytes,
       datasetCompressedBytes: row.datasetBytes,
-      datasetUncompressedBytes: row.datasetBytes,
+      datasetUncompressedBytes: row.datasetDecodedBytes,
     };
   }
 
@@ -1122,7 +1125,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
               `${this.#cacheScope}${row.recordingHash}`,
               () => this.#catalog.readRecordingArtifact(row.recordingId, 'recording'),
               abort,
-              row.recordingBytes,
+              row.recordingDecodedBytes,
             ),
           {
             pageSize: size,
