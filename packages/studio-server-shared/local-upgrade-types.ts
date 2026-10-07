@@ -6,6 +6,7 @@ export type LocalUpgradeOperation =
   | 'pause'
   | 'fingerprint'
   | 'backup'
+  | 'repair'
   | 'copy'
   | 'activate'
   | 'validate'
@@ -13,7 +14,16 @@ export type LocalUpgradeOperation =
   | 'resume'
   | 'cancel';
 
-export const LOCAL_UPGRADE_PREPARATION_KINDS = ['inspect', 'pause', 'pause-backup', 'fingerprint', 'backup'] as const;
+export const LOCAL_UPGRADE_PREPARATION_KINDS = [
+  'inspect',
+  'pause',
+  'pause-backup',
+  'fingerprint',
+  'backup',
+  'repair-inspect',
+  'repair',
+  'repair-recover',
+] as const;
 export type LocalUpgradePreparationKind = (typeof LOCAL_UPGRADE_PREPARATION_KINDS)[number];
 export type LocalUpgradeInventory = {
   source: Record<string, string>;
@@ -44,10 +54,39 @@ export type LocalUpgradePreparation = {
   kind: LocalUpgradePreparationKind;
   revision: number;
   phase: 'running' | 'ready' | 'failed' | 'interrupted';
-  stage: 'inspect' | 'pause' | 'fingerprint' | 'backup';
+  stage: 'inspect' | 'pause' | 'fingerprint' | 'backup' | 'repair';
   inventory?: LocalUpgradeInventory;
   fingerprint?: { pausedAt: string; sourceFingerprint: string };
   error?: string;
+  failure?: { reason?: LocalUpgradeFailureReason; sourceReference?: string; code: string };
+  requestHash?: string;
+  repairAnalysis?: LocalUpgradeDuplicateRepairAnalysis;
+};
+
+/** Authenticated operator preview. Paths are names, never project contents. */
+export type LocalUpgradeDuplicateRepairAnalysis = {
+  token: string;
+  groups: {
+    projectId: string;
+    projects: { path: string; published: boolean }[];
+    history: { id: string; originalPath: string; suggestedOwner: string | null; activeOwner: string | null }[];
+    references: string[];
+    recordings: number;
+    operationalRows: number;
+  }[];
+  warnings: string[];
+};
+export type LocalUpgradeDuplicateRepairChoices = {
+  token: string;
+  retainReferences: true;
+  groups: { projectId: string; keeperPath: string; historyOwners: Record<string, string> }[];
+};
+export type LocalUpgradeDuplicateRepairStatus = {
+  id: string;
+  phase: 'applying' | 'complete';
+  archiveHash: string;
+  changedFiles: number;
+  assignments: { path: string; oldId: string; newId: string }[];
 };
 
 /** Fixed diagnostics only. Never derive display text from a storage exception. */
@@ -60,6 +99,10 @@ export const LOCAL_UPGRADE_FAILURE_REASONS = {
   'project-parse-failed': 'A project or published project snapshot could not be decoded.',
   'project-id-missing': 'A project has no stable project ID.',
   'project-id-duplicate': 'Two source projects have the same project ID.',
+  'repair-preview-stale':
+    'Source data changed since the repair preview. Inspect conflicting IDs again and confirm the new plan.',
+  'repair-publication-active':
+    'Unpublish endpoints and web apps on projects receiving new IDs, or choose the published project to keep the original ID.',
   'project-settings-invalid': 'A project settings sidecar could not be read or validated.',
   'publication-history-invalid': 'Published-version history could not be read or validated.',
   'publication-project-missing': 'Published-version history refers to a project that is absent from the source tree.',

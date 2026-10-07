@@ -10,6 +10,8 @@ type UpgradeStatus = {
   runningBackend: string;
   maintenance: unknown | null;
   restartRequired: boolean;
+  repair?: { phase: string } | null;
+  repairStatusUnreadable?: boolean;
   transition: { phase: string; backend: string; canReturnToLegacy?: boolean } | null;
 };
 
@@ -26,11 +28,12 @@ type SetupStatus = {
 type Prompt =
   | { kind: 'setup'; setup: SetupStatus }
   | { kind: 'offer' }
-  | { kind: 'in-progress'; phase: string; canReturnToLegacy: boolean };
+  | { kind: 'in-progress'; phase: string; canReturnToLegacy: boolean; repairPending: boolean };
 
 function pendingPrompt(status: UpgradeStatus): Prompt | null {
   if (!status.available || !status.transition) return null;
   const { phase, backend, canReturnToLegacy } = status.transition;
+  const repairPending = status.repair?.phase === 'applying' || status.repairStatusUnreadable === true;
   if (
     !['legacy', 'legacy-resumed', 'verified', 'sqlite-validation', 'legacy-validation', 'sqlite-live'].includes(phase)
   )
@@ -49,14 +52,17 @@ function pendingPrompt(status: UpgradeStatus): Prompt | null {
     status.runningBackend === 'legacy' &&
     !status.maintenance &&
     !status.operation &&
+    !repairPending &&
     !status.restartRequired
   )
     return { kind: 'offer' };
   return {
     kind: 'in-progress',
     phase,
+    repairPending,
     canReturnToLegacy:
-      !!canReturnToLegacy || ((phase === 'legacy' || phase === 'legacy-resumed') && !!status.maintenance),
+      !repairPending &&
+      (!!canReturnToLegacy || ((phase === 'legacy' || phase === 'legacy-resumed') && !!status.maintenance)),
   };
 }
 
@@ -148,11 +154,7 @@ export const LocalStorageUpgradePrompt: FC<{
   return (
     <ModalTransition>
       {prompt && !suppressed ? (
-        <ModalDialog
-          testId="local-storage-upgrade-prompt"
-          label="Local storage upgrade"
-          onClose={dismiss}
-        >
+        <ModalDialog testId="local-storage-upgrade-prompt" label="Local storage upgrade" onClose={dismiss}>
           <ModalBody>
             <div className="local-storage-upgrade-prompt">
               {prompt.kind === 'setup' && prompt.setup.uiPreparationAvailable && !prompt.setup.sqliteSelected ? (
@@ -232,10 +234,15 @@ export const LocalStorageUpgradePrompt: FC<{
                     safely. This reminder will return after every page reload until SQLite is live or legacy recovery is
                     complete.
                   </p>
-                  {prompt.canReturnToLegacy ? (
+                  {prompt.repairPending ? (
+                    <p>
+                      A project-ID repair needs recovery. Finish the saved repair in Local storage upgrade before
+                      copying or resuming writes. Do not remove its journal or maintenance marker.
+                    </p>
+                  ) : prompt.canReturnToLegacy ? (
                     <p>
                       {prompt.phase === 'legacy' || prompt.phase === 'legacy-resumed'
-                        ? 'You can cancel the upgrade and resume unchanged legacy storage from the Recovery section.'
+                        ? 'You can cancel the upgrade and resume legacy storage from the Recovery section. Completed project-ID repairs are retained.'
                         : 'You can still return to the old file-backed mode in the Recovery section while writes are paused.'}
                     </p>
                   ) : prompt.phase === 'sqlite-live' ? (

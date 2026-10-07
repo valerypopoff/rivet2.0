@@ -2,6 +2,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { assertLocalMetadataWritesAllowed } from './local-metadata/write-admission.js';
+import { assertNoPendingDuplicateRepair } from './local-metadata/duplicate-project-repair-journal.js';
 import type { RequestHandler, Response } from 'express';
 
 import { getAppDataRoot } from './security.js';
@@ -86,6 +87,12 @@ export async function enterVmMigrationMaintenance(): Promise<void> {
 }
 
 export async function leaveVmMigrationMaintenance(): Promise<void> {
+  // The general migration recovery endpoint must not bypass an unfinished
+  // local identity repair just because legacy remains the selected backend.
+  const control = process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim();
+  if (control) {
+    assertNoPendingDuplicateRepair(control);
+  }
   await fs.rm(markerPath());
   await syncDirectory(getAppDataRoot());
 }

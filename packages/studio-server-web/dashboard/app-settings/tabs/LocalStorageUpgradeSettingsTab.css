@@ -80,6 +80,60 @@
   gap: 10px;
 }
 
+.local-upgrade-repair-history {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.local-repair-select__single-value {
+  max-width: 100%;
+}
+
+.local-repair-select__control {
+  min-height: 42px !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  background: rgba(0, 0, 0, 0.32) !important;
+  box-shadow: none !important;
+}
+
+.local-repair-select__control:hover,
+.local-repair-select__control--is-focused {
+  border-color: rgba(126, 226, 148, 0.4) !important;
+}
+
+.local-repair-select__single-value,
+.local-repair-select__input-container,
+.local-repair-select__indicator {
+  color: var(--grey-lightest) !important;
+}
+
+.local-repair-select__input input {
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.local-repair-select__menu {
+  background: #171719 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+  z-index: 5 !important;
+}
+
+.local-repair-select__option {
+  color: var(--grey-lightest) !important;
+  background: transparent !important;
+  overflow-wrap: anywhere;
+}
+
+.local-repair-select__option--is-focused,
+.local-repair-select__option--is-selected {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
 .local-upgrade-validation-result {
   padding: 10px 12px;
   border: 1px solid rgba(126, 231, 135, 0.25);

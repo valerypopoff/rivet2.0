@@ -19,8 +19,10 @@ import {
   startLocalUpgradeBrowserBackup,
   getLocalUpgradeBrowserBackupDownload,
   startLocalUpgradePreparation,
+  getLocalUpgradeRepairDownload,
 } from '../local-metadata/operator-service.js';
 import { LOCAL_UPGRADE_PREPARATION_KINDS } from '../../../studio-server-shared/local-upgrade-types.js';
+import { duplicateRepairChoicesSchema } from '../local-metadata/duplicate-project-repair.js';
 import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
@@ -99,6 +101,8 @@ export { readRunRecordingsSettings, writeRunRecordingsSettings } from './workflo
 
 export const appSettingsRouter = Router();
 const migrationJsonBody = createJsonBodyParser(() => 16 * 1024);
+// Ownership choices can include many history entries; still keep admission bounded.
+const localPreparationJsonBody = createJsonBodyParser(() => 1024 * 1024);
 const migrationTargetSchema = z
   .object({
     databaseUrl: z.string().min(1),
@@ -192,13 +196,14 @@ appSettingsRouter.get(
 );
 appSettingsRouter.post(
   '/local-upgrade/preparation',
-  migrationJsonBody,
+  localPreparationJsonBody,
   asyncHandler(async (req, res) => {
     const input = z
       .object({
         id: z.string().uuid(),
         kind: z.enum(LOCAL_UPGRADE_PREPARATION_KINDS),
         revision: z.number().int().positive(),
+        repairChoices: duplicateRepairChoicesSchema.optional(),
       })
       .strict()
       .parse(req.body);
@@ -206,6 +211,25 @@ appSettingsRouter.post(
       .set('Cache-Control', 'no-store')
       .status(202)
       .json(await startLocalUpgradePreparation(input));
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/repair/download',
+  asyncHandler(async (req, res) => {
+    assertBackupDownloadRequest(req);
+    const id = z.string().uuid().parse(req.query.id);
+    const archive = await getLocalUpgradeRepairDownload(id);
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    await new Promise<void>((resolve, reject) =>
+      res.download(archive, `rivet-project-id-repair-${id}.tar.gz`, (error) => {
+        if (error && res.headersSent) {
+          res.destroy();
+          resolve();
+        } else if (error) reject(error);
+        else resolve();
+      }),
+    );
   }),
 );
 appSettingsRouter.get(
