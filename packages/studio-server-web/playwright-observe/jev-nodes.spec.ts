@@ -37,6 +37,13 @@ data:
             timeoutMs: 30000
           visualData: 600/180/280/null//
           outgoingConnections: []
+        '[image]:image "Image"':
+          data:
+            useDataInput: false
+            mediaType: image/png
+            useMediaTypeInput: false
+          visualData: 160/500/250/null//
+          outgoingConnections: []
   plugins:
     - type: built-in
       id: typesafe
@@ -336,6 +343,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await expect(evaluate.locator('.port-label', { hasText: /^Question 1$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Answers$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Cost$/ })).toHaveCount(1);
   await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(0);
   await expect(evaluate).not.toContainText('Batch: one request');
   const evaluateBodyFields = evaluate.locator('.llm-node-body-label');
@@ -355,7 +363,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toBeVisible();
   await modelSection.click();
@@ -369,7 +377,18 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await modelSection.click();
   await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Configured key' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await editor.getByRole('button', { name: 'Classifier settings', exact: true }).click();
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
+  await expect(editor.getByText(/A missing key fails without fallback/)).toBeVisible();
+  await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByRole('button', { name: 'Classifier settings', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await editor.getByRole('button', { name: 'Automatic', exact: true }).click();
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
   await expect(editor.getByText('Outputs', { exact: true })).toBeVisible();
   const outputsHeading = editor.getByText('Outputs', { exact: true });
@@ -384,9 +403,9 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await editor.getByText('Output usage details', { exact: true }).click();
   await expect(editor.locator('input#outputUsage')).toBeChecked();
   await editor.getByText('Output request body', { exact: true }).click();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier request body$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Request body$/ })).toHaveCount(1);
   await editor.getByText('Output response body', { exact: true }).click();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier response body$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Response body$/ })).toHaveCount(1);
   await expect(editor.getByText('Error behavior', { exact: true })).toBeVisible();
   const errorHeading = editor.getByText('Error behavior', { exact: true });
   if ((await errorHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false') {
@@ -405,7 +424,9 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
 test('Classifier nodes are available from the built-in Classifier add-node group', async ({ page }) => {
   const editor = await openFixture(page);
   const canvas = editor.locator('.node-canvas');
-  await canvas.click({ button: 'right', position: { x: 1_400, y: 500 } });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  await canvas.click({ button: 'right', position: { x: bounds!.width - 40, y: Math.min(500, bounds!.height - 40) } });
 
   const addNode = editor.locator('.context-menu-label-text', { hasText: 'Add node' });
   await expect(addNode).toHaveText('Add node');
@@ -420,4 +441,138 @@ test('Classifier nodes are available from the built-in Classifier add-node group
   await expect(editor.locator('.context-menu-label-text', { hasText: 'Classifier Evaluate' })).toHaveText(
     'Classifier Evaluate',
   );
+});
+
+test('Liquid AI selection exposes d1 and independent configured credentials without changing questions', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(evaluate).toContainText('Provider: Liquid AI');
+  // This migrated legacy node pins jev-latest. Switching provider must not
+  // silently rewrite that explicit contract; clearing it selects Liquid's default.
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'd1');
+  await expect(evaluate).toContainText('Model: d1');
+  await expect(editor.locator('input[value="liquidApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="TYPESAFE_API_KEY"]')).toHaveCount(0);
+  await expect(choice).toContainText('Type: Choice');
+  await expect(choice).toContainText('Route {{subject}}');
+
+  const programmaticName = editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true });
+  await programmaticName.fill('myLiquidKey');
+  await programmaticName.blur();
+  await provider.fill('Jev');
+  await provider.press('Enter');
+  await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
+  await expect(evaluate).toContainText('Model: jev-latest');
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  await expect(programmaticName).toHaveValue('myLiquidKey');
+  await expect(evaluate).toContainText('Model: d1');
+});
+
+test('OpenAI Decisions selection exposes its model, credentials and single multimodal State input', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  const choice = editor.locator('.node[data-nodeid="choice"]');
+  await expect(evaluate.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await expect(evaluate.locator('.port-label', { hasText: /^State$/ })).toHaveCount(1);
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('OpenAI');
+  await provider.press('Enter');
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await expect(model).toHaveValue('jev-latest');
+  await model.fill('');
+  await model.blur();
+  await expect(model).toHaveAttribute('placeholder', 'gpt-6-luna');
+  await expect(evaluate).toContainText('Provider: OpenAI');
+  await expect(evaluate).toContainText('Model: gpt-6-luna');
+  await expect(editor.locator('input[value="openAiApiKey"]')).toBeVisible();
+  await expect(editor.locator('input[value="OPENAI_API_KEY"]')).toBeVisible();
+  await expect(editor.locator('input[value="LIQUID_API_KEY"]')).toHaveCount(0);
+  await choice.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByText('Question images', { exact: true })).toHaveCount(0);
+  await expect(editor.locator('input#useImagesInput')).toHaveCount(0);
+  await expect(choice).toContainText('Route {{subject}}');
+  await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
+});
+
+test('Classifier failure ports follow Catch all failures independently of the HTTP status toggle', async ({ page }) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await editor.getByText('Error behavior', { exact: true }).click();
+  const catchFailures = editor.locator('input#catchRequestFailed');
+  const failHttp = editor.locator('input#errorOnNon200');
+  const failurePorts = evaluate.locator('.port-label', { hasText: /^(Run failed|Run error)$/ });
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await failHttp.locator('..').click();
+  await expect(failHttp).toBeChecked();
+  await expect(failurePorts).toHaveCount(2);
+  await catchFailures.locator('..').click();
+  await expect(catchFailures).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+  await failHttp.locator('..').click();
+  await expect(failHttp).not.toBeChecked();
+  await expect(failurePorts).toHaveCount(0);
+});
+
+test('Image file selection infers Media Type from the selected filename, including JPEG extensions', async ({
+  page,
+}) => {
+  // Exercise the ordinary browser file-input fallback rather than the OS picker.
+  await page.addInitScript(() => {
+    delete (window as any).showOpenFilePicker;
+  });
+  const editor = await openFixture(page);
+  const image = editor.locator('.node[data-nodeid="image"]');
+  await image.locator('button.edit-button').dispatchEvent('click');
+  const imageBytes = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    return {
+      jpeg: canvas.toDataURL('image/jpeg').split(',')[1]!,
+      png: canvas.toDataURL('image/png').split(',')[1]!,
+    };
+  });
+
+  for (const file of [
+    { name: 'photo.JPG', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.jpeg', mimeType: 'image/jpeg', encoded: imageBytes.jpeg, label: 'JPEG' },
+    { name: 'photo.png', mimeType: 'image/png', encoded: imageBytes.png, label: 'PNG' },
+    {
+      name: 'photo.gif',
+      mimeType: 'image/gif',
+      encoded: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      label: 'GIF',
+    },
+  ]) {
+    const chooser = page.waitForEvent('filechooser');
+    await editor.getByRole('button', { name: 'Pick Image', exact: true }).click();
+    await (
+      await chooser
+    ).setFiles({ name: file.name, mimeType: file.mimeType, buffer: Buffer.from(file.encoded, 'base64') });
+    await expect(image).toContainText(`Media Type: ${file.label}`);
+    await expect(editor.getByText('Image selected', { exact: true })).toBeVisible();
+  }
 });

@@ -7,6 +7,7 @@ import {
   classifierProviders,
   createBuiltInRegistry,
   deserializeProject,
+  getClassifierProviderEnvironmentVariableNames,
   hasLegacyClassifierProjectData,
   normalizeClassifierProject,
   serializeProject,
@@ -96,9 +97,12 @@ test('legacy Jev projects migrate their node types, wires, prefabs, plugin decla
   assert.equal(nodesById.get('choice' as NodeId)?.title, 'Classifier Question');
   assert.equal(nodesById.get('score' as NodeId)?.title, 'Custom score title');
   assert.equal(nodesById.get('evaluate' as NodeId)?.title, 'Classifier Evaluate');
-  assert.deepEqual((nodesById.get('evaluate' as NodeId)?.data as { apiKeyNamesByProvider?: unknown }).apiKeyNamesByProvider, {
-    jev: { programmaticName: 'projectKey', environmentVariableName: 'PROJECT_KEY' },
-  });
+  assert.deepEqual(
+    (nodesById.get('evaluate' as NodeId)?.data as { apiKeyNamesByProvider?: unknown }).apiKeyNamesByProvider,
+    {
+      jev: { programmaticName: 'projectKey', environmentVariableName: 'PROJECT_KEY' },
+    },
+  );
   assert.equal(project.plugins.length, 3);
   assert.ok(project.plugins.some((plugin) => plugin.type === 'built-in' && plugin.id === 'pinecone'));
   assert.ok(project.plugins.some((plugin) => plugin.type === 'package' && plugin.id === 'typesafe'));
@@ -115,7 +119,10 @@ test('legacy Jev projects migrate their node types, wires, prefabs, plugin decla
 
   const [roundTripped] = deserializeProject(serializeProject(project));
   assert.deepEqual(serializeProject(roundTripped), serializeProject(project));
-  assert.equal(roundTripped.plugins.some((plugin) => plugin.type === 'built-in' && plugin.id === 'typesafe'), false);
+  assert.equal(
+    roundTripped.plugins.some((plugin) => plugin.type === 'built-in' && plugin.id === 'typesafe'),
+    false,
+  );
   assert.ok(roundTripped.graphs.main!.nodes.every((node) => !node.type.startsWith('jev')));
   assert.equal(hasLegacyClassifierProjectData(roundTripped), false);
 });
@@ -224,7 +231,9 @@ test('one question node produces choice, score, and noul definitions while retai
   });
 
   const editors = questionNode({ questionType: 'score' }).getEditors();
-  const questionTypeEditor = editors.find((editor) => editor.type === 'segmented' && editor.dataKey === 'questionType') as any;
+  const questionTypeEditor = editors.find(
+    (editor) => editor.type === 'segmented' && editor.dataKey === 'questionType',
+  ) as any;
   assert.deepEqual(questionTypeEditor.options, [
     { value: 'noul', label: 'Noul' },
     { value: 'choice', label: 'Choice' },
@@ -235,9 +244,19 @@ test('one question node produces choice, score, and noul definitions while retai
   const criteriaGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Criteria') as any;
   assert.equal(instructionsGroup.presentation, 'section');
   assert.equal(criteriaGroup.presentation, 'section');
-  assert.ok(instructionsGroup.editors.some((editor: any) => editor.type === 'dropdown' && editor.dataKey === 'instructionsType'));
-  assert.ok(criteriaGroup.editors.some((editor: any) => editor.type === 'dropdown' && editor.dataKey === 'criteriaType'));
-  assert.ok(criteriaGroup.editors.some((editor: any) => editor.type === 'custom' && editor.customEditorId === 'ClassifierScoreCriteria'));
+  assert.ok(
+    instructionsGroup.editors.some(
+      (editor: any) => editor.type === 'dropdown' && editor.dataKey === 'instructionsType',
+    ),
+  );
+  assert.ok(
+    criteriaGroup.editors.some((editor: any) => editor.type === 'dropdown' && editor.dataKey === 'criteriaType'),
+  );
+  assert.ok(
+    criteriaGroup.editors.some(
+      (editor: any) => editor.type === 'custom' && editor.customEditorId === 'ClassifierScoreCriteria',
+    ),
+  );
   const instructionsObjectEditor = instructionsGroup.editors.find(
     (editor: any) => editor.type === 'code' && editor.dataKey === 'instructionsObjectTemplate',
   ) as any;
@@ -272,10 +291,13 @@ test('shared criteria type selects one representation for Choice, Score, and Nou
       { key: 'support', text: '', lines: [''], objectTemplate: '{"department":"support"}' },
     ],
   }).process({}, context());
-  assert.deepEqual({ ...(choice.question!.value as any).criteria }, {
-    sales: { department: 'sales' },
-    support: { department: 'support' },
-  });
+  assert.deepEqual(
+    { ...(choice.question!.value as any).criteria },
+    {
+      sales: { department: 'sales' },
+      support: { department: 'support' },
+    },
+  );
 
   const score = await questionNode({
     questionType: 'score',
@@ -316,12 +338,25 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     ['question1', 'question2', 'question3', 'question4'],
   );
   assert.equal(inputs.find((input) => input.id === 'state')?.required, false);
-  assert.ok(inputs.filter((input) => input.id === 'state' || input.id.startsWith('question')).every((input) => input.splitRunBehavior === 'preserve-array'));
+  assert.ok(
+    inputs
+      .filter((input) => input.id === 'state' || input.id.startsWith('question'))
+      .every((input) => input.splitRunBehavior === 'preserve-array'),
+  );
   const modelGroup = instance.getEditors()[0];
   assert.ok(modelGroup?.type === 'group');
-  const providerEditor = modelGroup.editors.find((editor) => editor.type === 'dropdown' && editor.dataKey === 'provider');
-  assert.deepEqual(providerEditor && 'options' in providerEditor ? providerEditor.options : undefined, [{ value: 'jev', label: 'Jev' }]);
-  assert.deepEqual(instance.getOutputDefinitions().map((output) => output.id), ['answers', 'usage']);
+  const providerEditor = modelGroup.editors.find(
+    (editor) => editor.type === 'dropdown' && editor.dataKey === 'provider',
+  );
+  assert.deepEqual(providerEditor && 'options' in providerEditor ? providerEditor.options : undefined, [
+    { value: 'jev', label: 'Jev' },
+    { value: 'liquid', label: 'Liquid AI' },
+    { value: 'openai', label: 'OpenAI' },
+  ]);
+  assert.deepEqual(
+    instance.getOutputDefinitions().map((output) => output.id),
+    ['answers', 'usage', 'cost'],
+  );
   const body = instance.getBody();
   assert.deepEqual(body, {
     type: 'markdown',
@@ -334,6 +369,45 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     ].join(''),
   });
   assert.doesNotMatch(body.text, /Batch: one request/);
+});
+
+test('Classifier failure ports depend only on Catch all failures for every provider and HTTP policy', async () => {
+  for (const provider of classifierProviders) {
+    for (const catchRequestFailed of [undefined, false, true]) {
+      for (const errorOnNon200 of [undefined, false, true]) {
+        const node = evaluateNode({ provider: provider.id, catchRequestFailed, errorOnNon200 });
+        const ids = node.getOutputDefinitions().map(({ id }) => id);
+        assert.deepEqual(ids, [
+          'answers',
+          'usage',
+          'cost',
+          ...(catchRequestFailed === true ? ['runFailed', 'runError'] : []),
+        ]);
+        let requests = 0;
+        globalThis.fetch = async () => {
+          requests++;
+          return new Response('Rejected test request', { status: 400 });
+        };
+        const execution = node.process(
+          { question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Question?' } } },
+          context({ settings: { classifierProviders: { [provider.id]: { apiKey: 'test-key' } } } }),
+        );
+        if (catchRequestFailed === true || errorOnNon200 === false) {
+          const outputs = await execution;
+          assert.deepEqual(Object.keys(outputs), ids);
+          for (const id of ['answers', 'usage', 'cost'])
+            assert.equal(outputs[id as PortId]?.type, 'control-flow-excluded');
+          if (catchRequestFailed === true) {
+            assert.equal(outputs.runFailed?.value, true);
+            assert.match(String(outputs.runError?.value), /400/);
+          }
+        } else {
+          await assert.rejects(execution, /400/);
+        }
+        assert.equal(requests, 1);
+      }
+    }
+  }
 });
 
 test('Classifier Evaluate sends an empty string when optional State is omitted', async () => {
@@ -407,7 +481,10 @@ test('Classifier Evaluate editor grouping preserves authored settings and existi
   instance.getEditors();
   assert.deepEqual({ data: instance.data, connections }, before);
   assert.deepEqual(instance.getInputDefinitions(connections), inputs);
-  assert.deepEqual(inputs.map((input) => input.id), ['state', 'model', 'apiKey', 'question1', 'question2']);
+  assert.deepEqual(
+    inputs.map((input) => input.id),
+    ['state', 'model', 'apiKey', 'question1', 'question2'],
+  );
 });
 
 test('Classifier Evaluate exposes provider HTTP body outputs only when enabled in Outputs', () => {
@@ -415,28 +492,51 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
   const requestNode = evaluateNode({ outputRequestBody: true });
   const responseNode = evaluateNode({ outputResponseBody: true });
   const bothNode = evaluateNode({ outputRequestBody: true, outputResponseBody: true });
-  const outputsGroup = bothNode.getEditors().find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
+  const outputsGroup = bothNode
+    .getEditors()
+    .find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
 
-  assert.equal(defaultNode.getOutputDefinitions().some((output) => output.id === 'requestBody'), false);
-  assert.equal(defaultNode.getOutputDefinitions().some((output) => output.id === 'responseBody'), false);
-  assert.deepEqual(requestNode.getOutputDefinitions().find((output) => output.id === 'requestBody'), {
-    id: 'requestBody',
-    title: 'Classifier request body',
-    dataType: 'object',
-  });
-  assert.deepEqual(responseNode.getOutputDefinitions().find((output) => output.id === 'responseBody'), {
-    id: 'responseBody',
-    title: 'Classifier response body',
-    dataType: 'object',
-  });
+  assert.equal(
+    defaultNode.getOutputDefinitions().some((output) => output.id === 'requestBody'),
+    false,
+  );
+  assert.equal(
+    defaultNode.getOutputDefinitions().some((output) => output.id === 'responseBody'),
+    false,
+  );
   assert.deepEqual(
-    bothNode.getOutputDefinitions().slice(-2).map((output) => output.id),
+    requestNode.getOutputDefinitions().find((output) => output.id === 'requestBody'),
+    {
+      id: 'requestBody',
+      title: 'Request body',
+      dataType: 'object',
+    },
+  );
+  assert.deepEqual(
+    responseNode.getOutputDefinitions().find((output) => output.id === 'responseBody'),
+    {
+      id: 'responseBody',
+      title: 'Response body',
+      dataType: 'object',
+    },
+  );
+  assert.deepEqual(
+    bothNode
+      .getOutputDefinitions()
+      .slice(-2)
+      .map((output) => output.id),
     ['requestBody', 'responseBody'],
   );
   assert.equal(outputsGroup.editors[0]?.dataKey, 'outputUsage');
   assert.equal(outputsGroup.editors[0]?.label, 'Output usage details');
-  assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label, 'Output request body');
-  assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label, 'Output response body');
+  assert.equal(
+    outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
+    'Output request body',
+  );
+  assert.equal(
+    outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
+    'Output response body',
+  );
 });
 
 test('Classifier Evaluate mirrors LLM Chat Error behavior settings and its node-body summary', () => {
@@ -444,13 +544,10 @@ test('Classifier Evaluate mirrors LLM Chat Error behavior settings and its node-
   const errorGroup = instance.getEditors().at(-1) as any;
 
   assert.equal(errorGroup.label, 'Error behavior');
-  assert.deepEqual(errorGroup.editors.map((editor: any) => editor.dataKey), [
-    'errorOnNon200',
-    'catchRequestFailed',
-    'retryOnNon200',
-    'retryOnNon200RepeatTimes',
-    'retryOnNon200CooldownMs',
-  ]);
+  assert.deepEqual(
+    errorGroup.editors.map((editor: any) => editor.dataKey),
+    ['errorOnNon200', 'catchRequestFailed', 'retryOnNon200', 'retryOnNon200RepeatTimes', 'retryOnNon200CooldownMs'],
+  );
   assert.equal(errorGroup.editors[3].hideIf({ retryOnNon200: false }), true);
   assert.equal(errorGroup.editors[3].hideIf({ retryOnNon200: true }), false);
   const body = instance.getBody().text;
@@ -535,6 +632,214 @@ test('Classifier Evaluate uses its selected provider and first-party, input, and
   assert.deepEqual(models, ['jev-latest', 'jev-latest', 'jev-latest']);
 });
 
+test('Liquid AI evaluates existing text, list and object questions without rewriting their contracts', async () => {
+  const questions = await Promise.all(
+    [
+      questionNode({
+        questionType: 'choice',
+        questionId: 'route',
+        instructions: 'Route {{subject}}',
+        options: [
+          { key: 'billing', value: 'Payments' },
+          { key: 'technical', value: '' },
+        ],
+      }),
+      questionNode({
+        questionType: 'score',
+        questionId: 'severity',
+        instructionsType: 'object',
+        instructionsObjectTemplate: '{"question":"Severity of {{subject}}?"}',
+        levels: ['low', 'high'],
+        scoreCriteria: undefined,
+      }),
+      questionNode({
+        questionType: 'noul',
+        questionId: 'urgent',
+        instructionsType: 'lines',
+        instructionsLines: ['Does {{subject}} convey urgency?', 'Use the context.'],
+        noulTrueCriteria: undefined,
+        noulFalseCriteria: undefined,
+        yesMeans: 'Urgent',
+        noMeans: 'Not urgent',
+      }),
+      questionNode({ questionType: 'noul', questionId: 'refund', instructions: 'Is a refund requested?' }),
+      questionNode({
+        questionType: 'choice',
+        questionId: 'structured',
+        instructions: 'Route?',
+        criteriaType: 'object',
+        choiceCriteria: [
+          { key: 'billing', text: '', lines: [], objectTemplate: '{"example":"Payments"}' },
+          { key: 'technical', text: '', lines: [], objectTemplate: '{"example":"Bugs"}' },
+        ],
+      }),
+      questionNode({
+        questionType: 'score',
+        questionId: 'structuredScore',
+        instructions: 'Severity?',
+        criteriaType: 'lines',
+        scoreCriteria: [
+          { type: 'lines', text: '', lines: ['low'], objectTemplate: '{}' },
+          { type: 'lines', text: '', lines: ['high', 'urgent'], objectTemplate: '{}' },
+        ],
+      }),
+    ].map((node) => node.process({ ['subject' as PortId]: { type: 'string', value: 'ticket' } }, context())),
+  );
+  const providerResponse = {
+    model: 'd1',
+    answers: {
+      route: { type: 'choice', choice: 'billing', confidence: 0.8, probabilities: { billing: 0.9, technical: 0.1 } },
+      severity: {
+        type: 'score',
+        score: 0.5,
+        confidence: 0.2,
+        probabilities: { 0: 0.5, 1: 0.5 },
+        legend: { 0: 'low', 1: 'high' },
+      },
+      urgent: { type: 'noul', noul: 0.75 },
+      refund: { type: 'noul', noul: 0.9 },
+      structured: {
+        type: 'choice',
+        choice: 'technical',
+        confidence: 0.7,
+        probabilities: { billing: 0.2, technical: 0.8 },
+      },
+      structuredScore: {
+        type: 'score',
+        score: 0.8,
+        confidence: 0.6,
+        probabilities: { 0: 0.2, 1: 0.8 },
+        legend: { 0: ['low'], 1: ['high', 'urgent'] },
+      },
+    },
+    usage: { input_tokens: 1_000_000, output_tokens: 0 },
+  };
+  const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (url, init) => {
+    calls.push({ url: String(url), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify(providerResponse));
+  }) as typeof fetch;
+  const instance = evaluateNode({
+    provider: 'liquid',
+    apiKeySource: 'input',
+    outputUsage: true,
+    outputRequestBody: true,
+    outputResponseBody: true,
+  });
+  const outputs = await instance.process(
+    {
+      ['state' as PortId]: { type: 'object', value: { ticket: 'Payouts failed' } },
+      ['apiKey' as PortId]: { type: 'string', value: 'liquid-test-key' },
+      ['question1' as PortId]: { type: 'object[]', value: questions.map((output) => output.question!.value) },
+    },
+    context(),
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, 'https://api.liquid.ai/decisions/v1/systemone');
+  assert.equal(calls[0]!.headers.get('authorization'), 'Bearer liquid-test-key');
+  assert.equal(calls[0]!.headers.get('content-type'), 'application/json');
+  assert.deepEqual(
+    calls[0]!.body,
+    JSON.parse(
+      JSON.stringify({
+        model: 'd1',
+        state: { ticket: 'Payouts failed' },
+        questions: Object.fromEntries(
+          questions.map((output) => {
+            const { questionId, ...definition } = output.question!.value as { questionId: string };
+            return [questionId, definition];
+          }),
+        ),
+      }),
+    ),
+  );
+  assert.deepEqual(outputs.answers!.value, providerResponse.answers);
+  assert.deepEqual(outputs.usage!.value, { ...providerResponse.usage, totalCost: 0.04 });
+  assert.deepEqual(outputs.requestBody!.value, calls[0]!.body);
+  assert.deepEqual(outputs.responseBody!.value, providerResponse);
+  assert.equal(JSON.stringify(outputs).includes('liquid-test-key'), false);
+  const modelGroup = instance.getEditors()[0];
+  assert.ok(modelGroup?.type === 'group');
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'string');
+  assert.equal(modelEditor.placeholder, 'd1');
+  assert.match(instance.getBody().text, /Liquid AI/);
+  assert.match(instance.getBody().text, />d1</);
+  assert.deepEqual(getClassifierProviderEnvironmentVariableNames(), [
+    'TYPESAFE_API_KEY',
+    'LIQUID_API_KEY',
+    'OPENAI_API_KEY',
+  ]);
+});
+
+test('Liquid AI configured keys are provider-scoped and authored models are preserved', async () => {
+  const oldEnv = process.env.LIQUID_API_KEY;
+  delete process.env.LIQUID_API_KEY;
+  const calls: Array<{ model: string; key: string | null }> = [];
+  globalThis.fetch = (async (_url, init) => {
+    const { model } = JSON.parse(String(init?.body));
+    calls.push({ model, key: new Headers(init?.headers).get('authorization') });
+    return new Response(
+      JSON.stringify({
+        model,
+        answers: { q: { type: 'noul', noul: 0.5 } },
+        usage: { input_tokens: 1, output_tokens: 0 },
+      }),
+    );
+  }) as typeof fetch;
+  const inputs = {
+    ['question1' as PortId]: { type: 'object' as const, value: { questionId: 'q', type: 'noul', instructions: 'Q?' } },
+  };
+  try {
+    await assert.rejects(
+      evaluateNode({ provider: 'liquid' }).process(
+        inputs,
+        context({
+          settings: {
+            classifierProviders: { jev: { apiKey: 'jev-key' } },
+            pluginSettings: { typesafe: { typesafeApiKey: 'legacy-key' } },
+            typesafeApiKey: 'named-jev-key',
+            pluginEnv: { TYPESAFE_API_KEY: 'jev-env-key' },
+          },
+        }),
+      ),
+      /liquidApiKey.*LIQUID_API_KEY/,
+    );
+    assert.equal(calls.length, 0);
+    for (const settings of [
+      { classifierProviders: { liquid: { apiKey: 'saved-liquid-key' } } },
+      { liquidApiKey: 'named-liquid-key' },
+      { pluginEnv: { LIQUID_API_KEY: 'liquid-env-key' } },
+    ]) {
+      await evaluateNode({ provider: 'liquid' }).process(inputs, context({ settings }));
+    }
+    await evaluateNode({ provider: 'liquid', model: 'pinned-d1' }).process(
+      inputs,
+      context({ settings: { liquidApiKey: 'named-liquid-key' } }),
+    );
+    await evaluateNode({ provider: 'liquid', useModelInput: true }).process(
+      { ...inputs, ['model' as PortId]: { type: 'string', value: 'input-d1' } },
+      context({ settings: { liquidApiKey: 'named-liquid-key' } }),
+    );
+    assert.deepEqual(calls, [
+      { model: 'd1', key: 'Bearer saved-liquid-key' },
+      { model: 'd1', key: 'Bearer named-liquid-key' },
+      { model: 'd1', key: 'Bearer liquid-env-key' },
+      { model: 'pinned-d1', key: 'Bearer named-liquid-key' },
+      { model: 'input-d1', key: 'Bearer named-liquid-key' },
+    ]);
+    await assert.rejects(
+      evaluateNode({ provider: 'liquid' }).process(inputs, context({ executor: 'browser' })),
+      /Liquid AI cannot run in the Browser executor/,
+    );
+    assert.equal(calls.length, 5);
+  } finally {
+    if (oldEnv === undefined) delete process.env.LIQUID_API_KEY;
+    else process.env.LIQUID_API_KEY = oldEnv;
+  }
+});
+
 test('Classifier Evaluate makes one API-compatible Jev request and excludes Rivet-only fields', async () => {
   const calls: Array<{ url: string; body: any }> = [];
   const providerResponse = {
@@ -615,7 +920,10 @@ test("Classifier Evaluate adds Jev's fixed input-only totalCost to opt-in Usage 
   const plainOutputs = await evaluateNode({ outputResponseBody: true }).process(inputs, context());
   assert.deepEqual(plainOutputs.usage!.value, providerResponse.usage);
 
-  const detailedOutputs = await evaluateNode({ outputResponseBody: true, outputUsage: true }).process(inputs, context());
+  const detailedOutputs = await evaluateNode({ outputResponseBody: true, outputUsage: true }).process(
+    inputs,
+    context(),
+  );
   assert.deepEqual(detailedOutputs.usage!.value, { ...providerResponse.usage, totalCost: 0.042 });
   assert.deepEqual(detailedOutputs.responseBody!.value, providerResponse);
   assert.equal(calculateClassifierUsageCost({}, providerResponse.usage), undefined);
@@ -657,7 +965,10 @@ test('Classifier request output stays identical to every retry even if shared st
 test('Classifier Error behavior retries configured non-200 responses without widening auth, validation, or rate-limit policy', async () => {
   const inputs = {
     ['state' as PortId]: { type: 'string' as const, value: 'state' },
-    ['question1' as PortId]: { type: 'object' as const, value: { questionId: 'q', type: 'noul', instructions: 'Question?' } },
+    ['question1' as PortId]: {
+      type: 'object' as const,
+      value: { questionId: 'q', type: 'noul', instructions: 'Question?' },
+    },
   };
   const validResponse = () =>
     new Response(
@@ -700,7 +1011,7 @@ test('Classifier Error behavior retries configured non-200 responses without wid
     evaluateNode({ retryOnNon200: true, retryOnNon200RepeatTimes: 3 }).process(inputs, context()),
     /HTTP 429/,
   );
-  assert.equal(requests, 3, 'The configured non-200 retry must not exceed Jev\'s existing rate-limit retry bound.');
+  assert.equal(requests, 3, "The configured non-200 retry must not exceed Jev's existing rate-limit retry bound.");
 });
 
 test('browser execution fails before credentials or provider requests', async () => {
@@ -774,7 +1085,14 @@ function legacyProject(): Project {
             type: 'jevChoiceQuestion',
             title: 'Jev Choice Question',
             visualData: { x: 0, y: 0, width: 280 },
-            data: { questionId: 'route', instructions: 'Route?', options: [{ key: 'yes', value: '' }, { key: 'no', value: '' }] },
+            data: {
+              questionId: 'route',
+              instructions: 'Route?',
+              options: [
+                { key: 'yes', value: '' },
+                { key: 'no', value: '' },
+              ],
+            },
           },
           {
             id: 'score' as NodeId,
@@ -819,7 +1137,14 @@ function legacyProject(): Project {
           type: 'jevChoiceQuestion',
           title: 'Jev Choice Question',
           visualData: { x: 0, y: 0, width: 280 },
-          data: { questionId: 'prefab', instructions: 'Prefab?', options: [{ key: 'a', value: '' }, { key: 'b', value: '' }] },
+          data: {
+            questionId: 'prefab',
+            instructions: 'Prefab?',
+            options: [
+              { key: 'a', value: '' },
+              { key: 'b', value: '' },
+            ],
+          },
         },
       },
     },

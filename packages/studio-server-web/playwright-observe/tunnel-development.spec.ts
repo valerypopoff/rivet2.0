@@ -156,6 +156,86 @@ test('runtime errors and late module resource failures do not replace a working 
   await expect(editor.locator('.node-canvas')).toBeVisible();
 });
 
+test('tunnel status notices stay horizontally centered with mobile gutters and a full-viewport shield', async ({
+  page,
+}) => {
+  await prepare(page);
+  // A layout-only Vite run enables the same tunnel UI; supply its generation
+  // marker without requiring an expensive bundle build. Real tunnel HTML already has one.
+  await page.route('**/*', async (route) => {
+    if (route.request().resourceType() !== 'document') return route.fallback();
+    const response = await route.fetch();
+    const html = await response.text();
+    await route.fulfill({
+      response,
+      body: html.includes('name="rivet-dev-generation"')
+        ? html
+        : html.replace('<head>', '<head><meta name="rivet-dev-generation" content="layout-fixture">'),
+    });
+  });
+  await page.goto('/');
+  await waitForDashboardReady(page);
+  const notice = page.locator('.development-update');
+  for (const { width, height } of [
+    { width: 1600, height: 900 },
+    { width: 375, height: 900 },
+    { width: 375, height: 320 },
+  ]) {
+    await page.setViewportSize({ width, height });
+    for (const phase of ['building', 'failed', 'ready'] as const) {
+      await page.evaluate((phase) => {
+        // Keep a ready notification visible instead of allowing safe navigation.
+        if (!document.querySelector('#layout-pending-form')) {
+          const form = document.createElement('form');
+          form.id = 'layout-pending-form';
+          form.textContent = 'Pending fixture edit';
+          document.body.append(form);
+        }
+        (window as any).__sendDevelopmentBuild(phase, `layout-${phase}`, 'Build failed: ' + 'long-path/'.repeat(60));
+      }, phase);
+      await expect(notice).toBeVisible();
+      await expect(notice).toContainText(
+        phase === 'building' ? 'Building frontend' : phase === 'failed' ? 'Build failed:' : 'Frontend update ready.',
+      );
+      await expect
+        .poll(async () => {
+          const box = (await notice.boundingBox())!;
+          return Math.abs(box.x + box.width / 2 - width / 2);
+        })
+        .toBeLessThan(1);
+      const box = (await notice.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(16);
+      expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
+      expect(box.y).toBeGreaterThanOrEqual(16);
+      expect(box.y + box.height).toBeLessThanOrEqual(height - 16);
+      expect(await notice.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      if (height === 320 && phase === 'failed') {
+        expect(await notice.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+      }
+    }
+    await page.evaluate(() => {
+      const shield = document.createElement('div');
+      shield.className = 'development-update-shield';
+      document.querySelector('.development-update')!.append(shield);
+    });
+    // CSS geometry regression: centering must not establish a transformed
+    // containing block for the real checkpoint shield.
+    expect(await page.locator('.development-update-shield').boundingBox()).toEqual({ x: 0, y: 0, width, height });
+    expect(
+      await page.evaluate(() => document.elementFromPoint(1, 1)?.classList.contains('development-update-shield')),
+    ).toBe(true);
+    await page.locator('.development-update-shield').evaluate((element) => element.remove());
+  }
+  await page.evaluate(() => (window as any).__failDevelopmentConnection());
+  await expect(notice).toContainText('Build connection interrupted.');
+  await expect
+    .poll(async () => {
+      const box = (await notice.boundingBox())!;
+      return Math.abs(box.x + box.width / 2 - 375 / 2);
+    })
+    .toBeLessThan(1);
+});
+
 test('connection failure before the first status is visible and reconnect never forces refresh', async ({ page }) => {
   await prepare(page);
   await page.goto('/');

@@ -15,8 +15,11 @@ export const ClassifierSettingsPage: FC = () => {
       <section className="settings-section">
         <h2 className="settings-section-heading">Classifier credentials</h2>
         <FieldHelperMessage>
-          These credentials are used by built-in Classifier nodes. They are not saved into project YAML and may instead be
-          supplied through the node&apos;s API Key input or the provider&apos;s documented environment variable.
+          These credentials are used by built-in Classifier nodes. They are not saved into project YAML and may instead
+          be supplied through the node&apos;s API Key input or the provider&apos;s documented environment variable.
+          Choose Classifier settings in the node to use only the saved provider key. Automatic gives named programmatic
+          and environment credentials priority over these keys; missing keys in Classifier settings mode do not fall
+          back.
         </FieldHelperMessage>
         <div className="settings-section-fields">
           {classifierProviders.map((provider) => (

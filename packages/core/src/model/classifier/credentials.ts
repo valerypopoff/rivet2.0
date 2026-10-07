@@ -1,9 +1,9 @@
 import type { Inputs } from '../GraphProcessor.js';
-import type { PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
+import { classifierDataProperty, classifierInputDataValue } from './json.js';
 
-export type ClassifierApiKeySource = 'configured' | 'input';
+export type ClassifierApiKeySource = 'configured' | 'classifier-settings' | 'input';
 
 export type ClassifierCredentialNames = {
   programmaticName: string;
@@ -15,6 +15,16 @@ export type ClassifierProviderCredentials = Record<string, { apiKey?: string | u
 export const JEV_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
   programmaticName: 'typesafeApiKey',
   environmentVariableName: 'TYPESAFE_API_KEY',
+};
+
+export const LIQUID_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'liquidApiKey',
+  environmentVariableName: 'LIQUID_API_KEY',
+};
+
+export const OPENAI_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'openAiApiKey',
+  environmentVariableName: 'OPENAI_API_KEY',
 };
 
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -47,10 +57,14 @@ export function normalizeClassifierCredentialNames(
   const programmaticName = raw?.programmaticName?.trim() || defaults.programmaticName;
   const environmentVariableName = raw?.environmentVariableName?.trim() || defaults.environmentVariableName;
   if (!isValidClassifierProgrammaticCredentialName(programmaticName)) {
-    throw new Error('Classifier programmatic API key name must be a JavaScript-style identifier without a leading digit.');
+    throw new Error(
+      'Classifier programmatic API key name must be a JavaScript-style identifier without a leading digit.',
+    );
   }
   if (!isValidClassifierEnvironmentCredentialName(environmentVariableName)) {
-    throw new Error('Classifier API key environment variable must contain letters, digits, and _ without a leading digit.');
+    throw new Error(
+      'Classifier API key environment variable must contain letters, digits, and _ without a leading digit.',
+    );
   }
   return { programmaticName, environmentVariableName };
 }
@@ -70,7 +84,10 @@ export function isDefaultClassifierCredentialNames(
   names: ClassifierCredentialNames,
   defaults: ClassifierCredentialNames = JEV_DEFAULT_CREDENTIAL_NAMES,
 ): boolean {
-  return names.programmaticName === defaults.programmaticName && names.environmentVariableName === defaults.environmentVariableName;
+  return (
+    names.programmaticName === defaults.programmaticName &&
+    names.environmentVariableName === defaults.environmentVariableName
+  );
 }
 
 export function resolveClassifierApiKey({
@@ -88,14 +105,30 @@ export function resolveClassifierApiKey({
   inputs: Inputs;
   providerId: string;
 }): string {
+  if (apiKeySource === 'classifier-settings') {
+    const read = (value: unknown, key: string): unknown =>
+      value !== null && typeof value === 'object'
+        ? classifierDataProperty(value, key, 'Classifier settings credentials')
+        : undefined;
+    const saved = getNonEmptyString(read(read(read(context.settings, 'classifierProviders'), providerId), 'apiKey'));
+    if (!saved)
+      throw new Error(`Classifier settings API key for ${providerId} is not set. No automatic fallback is used.`);
+    return saved;
+  }
   if (apiKeySource === 'input') {
-    const value = coerceTypeOptional(inputs['apiKey' as PortId], 'string')?.trim();
+    const value = coerceTypeOptional(classifierInputDataValue(inputs, 'apiKey'), 'string')?.trim();
     if (!value) throw new Error('API Key input is required when API key source is Input port.');
     return value;
   }
+  if (apiKeySource !== undefined && apiKeySource !== 'configured')
+    throw new Error('Unknown classifier API key source.');
 
   const names = normalizeClassifierCredentialNames(apiKeyNames, defaults);
-  const namedValue = resolveNamedClassifierApiKey(context, names);
+  const namedValue = resolveNamedClassifierApiKey(
+    context,
+    names,
+    providerId === 'openai' && isDefaultClassifierCredentialNames(names, defaults),
+  );
   if (namedValue) return namedValue;
 
   if (isDefaultClassifierCredentialNames(names, defaults)) {
@@ -117,9 +150,14 @@ export function resolveClassifierApiKey({
 function resolveNamedClassifierApiKey(
   context: Pick<InternalProcessContext, 'settings'>,
   names: ClassifierCredentialNames,
+  useLegacyOpenAIKey = false,
 ): string | undefined {
   const programmaticValue = getNonEmptyString(context.settings?.[names.programmaticName]);
   if (programmaticValue) return programmaticValue;
+  if (useLegacyOpenAIKey) {
+    const legacy = getNonEmptyString(context.settings.openAiKey);
+    if (legacy) return legacy;
+  }
 
   const environmentValue = getNonEmptyString(context.settings?.pluginEnv?.[names.environmentVariableName]);
   if (environmentValue) return environmentValue;

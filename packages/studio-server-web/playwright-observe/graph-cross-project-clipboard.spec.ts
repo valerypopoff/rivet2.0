@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { deserializeProject, serializeProject, type ChartNode, type GraphId, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 test('copies a graph and folder across hosted projects, saves them, and reopens the destination', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
   const sourceId = 'graph-copy-source' as ProjectId;
   const destinationId = 'graph-copy-destination' as ProjectId;
   const sourcePath = '/workflows/Graph Copy Source.rivet-project';

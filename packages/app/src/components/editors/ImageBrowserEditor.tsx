@@ -25,7 +25,7 @@ export const DefaultImageBrowserEditor: FC<
   const helperMessage = getHelperMessage(editor, node.data);
 
   const handleFileSelected = wrapAsync(
-    async (binaryData: Uint8Array) => {
+    async (binaryData: Uint8Array, fileName: string) => {
       const dataId = nanoid() as DataId;
       onChange(
         {
@@ -35,7 +35,7 @@ export const DefaultImageBrowserEditor: FC<
             [editor.dataKey]: {
               refId: dataId,
             } satisfies DataRef,
-            [editor.mediaTypeDataKey]: mime.getType(editor.dataKey) ?? 'image/png',
+            [editor.mediaTypeDataKey]: mime.getType(fileName) ?? 'image/png',
           },
         },
         {

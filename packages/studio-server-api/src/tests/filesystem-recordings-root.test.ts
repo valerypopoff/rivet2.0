@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, StatementSync } from 'node:sqlite';
 import test from 'node:test';
 import { createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
-
+import { observeFileReads } from './helpers/file-reads.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
+
+// test-style: fixture-read: Reads only generated project-index cache fixtures to exercise missing, stale and malformed metadata.
 
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
@@ -71,6 +73,228 @@ test('workflow and recordings roots initialize separately', async () => {
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.published')), true);
   assert.equal(await workflowFs.pathExists(path.join(workflowsRoot, '.recordings')), false);
   assert.equal(await workflowFs.pathExists(recordingsRoot), true);
+});
+
+test('deleting a recording checks remaining history without materializing row arrays', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'BoundedDelete');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const ids: string[] = [];
+  for (const surface of ['workflow_endpoint', 'subgraph_project'] as const) {
+    const id = await workflowRecordings.persistWorkflowExecutionRecording({
+      workflowsRoot,
+      sourceProject: project,
+      sourceProjectPath: created.absolutePath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets: [],
+      endpointName: 'bounded-delete',
+      recordingSerialized: JSON.stringify({
+        version: 1,
+        recording: { recordingId: surface, events: [], startTs: 1, finishTs: 1 },
+        assets: {},
+        strings: {},
+      }),
+      runKind: 'latest',
+      status: surface === 'workflow_endpoint' ? 'succeeded' : 'failed',
+      executionIdentity: { surface },
+      durationMs: 1,
+    });
+    assert.ok(id);
+    ids.push(id);
+  }
+
+  // Drain persistence-triggered retention so the spy measures deletion only.
+  await workflowRecordings.flushWorkflowExecutionRecordingPersistence();
+
+  const allRows = t.mock.method(StatementSync.prototype, 'all');
+  const recordingRowArrays = () => allRows.mock.calls.filter((call) => call.arguments[0] === project.metadata.id);
+  await workflowRecordings.deleteWorkflowRecording(workflowsRoot, ids[0]!);
+  assert.deepEqual(recordingRowArrays(), []);
+  // A remaining failed child recording still counts as retained history.
+  assert.ok(await workflowRecordingDb.getWorkflowRecordingRunRow(ids[1]!));
+  assert.equal(await workflowFs.pathExists(path.join(recordingsRoot, project.metadata.id!)), true);
+  await workflowRecordings.deleteWorkflowRecording(workflowsRoot, ids[1]!);
+  assert.deepEqual(recordingRowArrays(), []);
+  assert.equal(await workflowRecordingDb.getWorkflowRecordingRunRow(ids[1]!), null);
+  allRows.mock.restore();
+  assert.equal((await workflowRecordingDb.listWorkflowRecordingWorkflowStatsRows()).length, 0);
+  assert.equal(await workflowFs.pathExists(path.join(recordingsRoot, project.metadata.id!)), false);
+});
+
+test('recordings catalog reuses cached project IDs without reopening unpublished projects', async (t) => {
+  const draft = await workflowMutations.createWorkflowProjectItem('', 'CachedDraft');
+  const published = await workflowMutations.createWorkflowProjectItem('', 'CachedPublished');
+  await workflowMutations.publishWorkflowProjectItem(published.relativePath, {
+    endpointName: 'cached-published',
+  });
+  assert.ok(draft.projectMetadataId);
+  assert.ok(published.projectMetadataId);
+
+  const reads = observeFileReads(t);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+    assert.deepEqual(catalog.workflows.map((workflow) => workflow.workflowId), [published.projectMetadataId]);
+    assert.equal(catalog.workflows[0]?.totalRuns, 0);
+    assert.equal(catalog.workflows[0]?.project.settings.status, 'published');
+    assert.equal(catalog.workflows[0]?.project.stats, undefined);
+  }
+
+  assert.equal(reads.filter((file) => file === draft.absolutePath).length, 0);
+  // Publication status still hashes the current source, but there is no second
+  // full-project read/deserialization just to retrieve its already cached ID.
+  assert.equal(reads.filter((file) => file === published.absolutePath).length, 2);
+});
+
+test('recordings catalog matches a moved unpublished project by its cached ID', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MovedCachedProject');
+  assert.ok(created.projectMetadataId);
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot,
+    sourceProject: project,
+    sourceProjectPath: created.absolutePath,
+    executedProject: project,
+    executedAttachedData: attachedData,
+    executedDatasets: [],
+    endpointName: 'previous-location',
+    recordingSerialized: JSON.stringify({
+      version: 1,
+      recording: { recordingId: 'moved-project-recording', events: [], startTs: 1, finishTs: 1 },
+      assets: {},
+      strings: {},
+    }),
+    runKind: 'latest',
+    status: 'succeeded',
+    durationMs: 1,
+  });
+  await workflowRecordingDb.upsertWorkflowRecordingWorkflow({
+    workflowId: created.projectMetadataId,
+    sourceProjectMetadataId: created.projectMetadataId,
+    sourceProjectPath: path.join(workflowsRoot, 'PreviousLocation.rivet-project'),
+    sourceProjectRelativePath: 'PreviousLocation.rivet-project',
+    sourceProjectName: 'PreviousLocation',
+    updatedAt: new Date().toISOString(),
+  });
+
+  const reads = observeFileReads(t);
+  const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  assert.equal(catalog.workflows.length, 1);
+  assert.equal(catalog.workflows[0]?.workflowId, created.projectMetadataId);
+  assert.equal(catalog.workflows[0]?.project.absolutePath, created.absolutePath);
+  assert.equal(catalog.workflows[0]?.project.settings.status, 'unpublished');
+  assert.equal(catalog.workflows[0]?.totalRuns, 1);
+  assert.ok(catalog.workflows[0]?.latestRunAt);
+  assert.equal(catalog.totals?.totalRuns, 1);
+  assert.equal(reads.filter((file) => file === created.absolutePath).length, 0);
+});
+
+test('recordings catalog retains the project-loading fallback when cached metadata has no ID', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MissingCachedId');
+  assert.ok(created.projectMetadataId);
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(created.absolutePath);
+  const cache = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+  cache.projectMetadataId = null;
+  await fs.writeFile(cachePath, JSON.stringify(cache), 'utf8');
+  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+  await workflowRecordingDb.upsertWorkflowRecordingWorkflow({
+    workflowId: created.projectMetadataId,
+    sourceProjectMetadataId: created.projectMetadataId,
+    sourceProjectPath: path.join(workflowsRoot, 'PreviousLocation.rivet-project'),
+    sourceProjectRelativePath: 'PreviousLocation.rivet-project',
+    sourceProjectName: 'PreviousLocation',
+    updatedAt: new Date().toISOString(),
+  });
+
+  const reads = observeFileReads(t);
+  const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  assert.equal(catalog.workflows[0]?.workflowId, created.projectMetadataId);
+  assert.equal(reads.filter((file) => file === created.absolutePath).length, 1);
+});
+
+test('recordings catalog resolves missing, stale and corrupt caches without a second project load', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'ColdCachedProject');
+  assert.ok(created.projectMetadataId);
+  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+  await workflowRecordingDb.upsertWorkflowRecordingWorkflow({
+    workflowId: created.projectMetadataId,
+    sourceProjectMetadataId: created.projectMetadataId,
+    sourceProjectPath: path.join(workflowsRoot, 'PreviousLocation.rivet-project'),
+    sourceProjectRelativePath: 'PreviousLocation.rivet-project',
+    sourceProjectName: 'PreviousLocation',
+    updatedAt: new Date().toISOString(),
+  });
+
+  const cachePath = workflowFs.getWorkflowProjectStatsPath(created.absolutePath);
+  const reads = observeFileReads(t);
+  for (const state of ['missing', 'stale', 'corrupt']) {
+    if (state === 'missing') {
+      await fs.unlink(cachePath);
+    } else if (state === 'corrupt') {
+      await fs.writeFile(cachePath, '{', 'utf8');
+    } else {
+      const cache = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+      cache.fileSize++;
+      await fs.writeFile(cachePath, JSON.stringify(cache), 'utf8');
+    }
+    reads.length = 0;
+    const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+    assert.equal(catalog.workflows[0]?.workflowId, created.projectMetadataId);
+    assert.equal(reads.filter((file) => file === created.absolutePath).length, 1, state);
+  }
+});
+
+test('recordings catalog refreshes source and dataset revisions while preserving cached identity', async (t) => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'EditedCachedProject');
+  assert.ok(created.projectMetadataId);
+  await workflowMutations.publishWorkflowProjectItem(created.relativePath, {
+    endpointName: 'edited-cached-project',
+  });
+  const initial = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  let previousRevision = initial.workflows[0]?.project.revisionId;
+  assert.ok(previousRevision);
+  const reads = observeFileReads(t);
+
+  for (const change of ['project', 'dataset']) {
+    if (change === 'project') {
+      await fs.appendFile(created.absolutePath, '\n# changed draft\n', 'utf8');
+    } else {
+      await fs.writeFile(workflowFs.getWorkflowDatasetPath(created.absolutePath), rivetNode.serializeDatasets([]), 'utf8');
+    }
+    reads.length = 0;
+    const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+    const summary = catalog.workflows[0];
+    assert.equal(summary?.workflowId, created.projectMetadataId, change);
+    assert.equal(summary?.project.settings.status, 'unpublished_changes', change);
+    assert.notEqual(summary?.project.revisionId, previousRevision, change);
+    // One publication hash read and one index-cache rebuild; never a third read
+    // for ID lookup. The next catalog request should use the rebuilt cache.
+    assert.equal(reads.filter((file) => file === created.absolutePath).length, 2, change);
+    previousRevision = summary?.project.revisionId;
+    reads.length = 0;
+    const warmCatalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+    assert.equal(warmCatalog.workflows[0]?.project.revisionId, previousRevision, change);
+    assert.equal(reads.filter((file) => file === created.absolutePath).length, 1, change);
+  }
+});
+
+test('recordings catalog preserves the recording-index identity for an indexed project path', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'IndexedIdentity');
+  await workflowRecordings.initializeWorkflowRecordingStorage(workflowsRoot);
+  const historicalId = 'indexed-historical-workflow-id';
+  await workflowRecordingDb.upsertWorkflowRecordingWorkflow({
+    workflowId: historicalId,
+    sourceProjectMetadataId: historicalId,
+    sourceProjectPath: created.absolutePath,
+    sourceProjectRelativePath: created.relativePath,
+    sourceProjectName: 'IndexedIdentity',
+    updatedAt: new Date().toISOString(),
+  });
+
+  const catalog = await workflowRecordings.listWorkflowRecordingWorkflows(workflowsRoot);
+  assert.equal(catalog.workflows.length, 1);
+  assert.equal(catalog.workflows[0]?.workflowId, historicalId);
+  assert.equal(catalog.workflows[0]?.project.projectMetadataId, created.projectMetadataId);
 });
 
 test('recording index migrates from WAL to volume-compatible rollback journaling', async () => {

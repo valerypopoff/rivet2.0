@@ -120,8 +120,13 @@ for (const type of ['llm', 'classifier'] as const) {
           await assert.rejects(execution, /401|authentication|Denied/);
         } else {
           const outputs = await execution;
-          assert.deepEqual(get(outputs, 'runFailed'), { type: 'boolean', value: true });
-          assert.match(String(get(outputs, 'runError')?.value), /401|authentication|Denied/);
+          if (type === 'llm' || catchRequestFailed) {
+            assert.deepEqual(get(outputs, 'runFailed'), { type: 'boolean', value: true });
+            assert.match(String(get(outputs, 'runError')?.value), /401|authentication|Denied/);
+          } else {
+            assert.equal(get(outputs, 'runFailed'), undefined);
+            assert.equal(get(outputs, 'runError'), undefined);
+          }
           assert.equal(get(outputs, type === 'llm' ? 'response' : 'answers')?.type, 'control-flow-excluded');
           assert.equal(get(outputs, 'usage')?.type, 'control-flow-excluded');
           assert.equal(checkpoints.length, 0, 'Caught errors must not publish a nodeError checkpoint.');
@@ -192,7 +197,7 @@ for (const type of ['llm', 'classifier'] as const) {
     assert.equal(get(outputs, 'runFailed')?.value, true);
   });
 
-  test(`${type}: ports appear only when a failure can return normally`, () => {
+  test(`${type}: failure ports follow the node-specific error policy`, () => {
     assert.equal(
       make()
         .getOutputDefinitions()
@@ -201,6 +206,13 @@ for (const type of ['llm', 'classifier'] as const) {
     );
     for (const settings of [{ errorOnNon200: false }, { catchRequestFailed: true }]) {
       const ports = make(settings).getOutputDefinitions();
+      if (type === 'classifier' && settings.catchRequestFailed !== true) {
+        assert.equal(
+          ports.some((port) => port.id === 'runFailed' || port.id === 'runError'),
+          false,
+        );
+        continue;
+      }
       assert.ok(
         ports.some((port) => port.id === 'runFailed' && port.title === 'Run failed' && port.dataType === 'boolean'),
       );
@@ -424,11 +436,19 @@ for (const phase of ['headers', 'body'] as const) {
       const response = successfulResponse('classifier');
       if (phase === 'headers') await new Promise((resolve) => setTimeout(resolve, 40));
       else {
-        const readJson = response.json.bind(response);
-        response.json = async () => {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-          return readJson();
-        };
+        return new Response(
+          new ReadableStream({
+            async start(controller) {
+              await new Promise((resolve) => setTimeout(resolve, 40));
+              try {
+                controller.enqueue(new TextEncoder().encode(await response.text()));
+                controller.close();
+              } catch {
+                /* Cancelled reader. */
+              }
+            },
+          }),
+        );
       }
       return response;
     };
@@ -512,9 +532,7 @@ for (const phase of ['headers', 'body'] as const) {
   test(`Classifier timeout settles when ${phase} ignores the abort signal`, { timeout: 1_000 }, async () => {
     globalThis.fetch = async () => {
       if (phase === 'headers') return new Promise<Response>(() => undefined);
-      const response = successfulResponse('classifier');
-      response.json = () => new Promise(() => undefined);
-      return response;
+      return new Response(new ReadableStream({ pull: () => new Promise(() => undefined) }));
     };
     const outputs = await classifier({ timeoutMs: 10, catchRequestFailed: true }).process(questions, context());
     assert.equal(get(outputs, 'runFailed')?.value, true);
@@ -552,7 +570,7 @@ test('Classifier body cleanup throwing synchronously cannot mask the HTTP status
     };
     return response;
   };
-  const outputs = await classifier({ errorOnNon200: false }).process(questions, context());
+  const outputs = await classifier({ errorOnNon200: false, catchRequestFailed: true }).process(questions, context());
   assert.equal(get(outputs, 'runFailed')?.value, true);
   assert.match(String(get(outputs, 'runError')?.value), /HTTP 418/);
 });

@@ -6,24 +6,24 @@ sidebar_label: Classifier Evaluate
 
 ## Overview
 
-Evaluates one shared state against a batch of independent typed questions in exactly one provider request. It is not an LLM Chat node and does not stream tokens.
+Evaluates one shared state and optional images against a batch of independent typed questions in one provider request, apart from retries. Every question sees the same state and images. It is not an LLM Chat node and does not stream tokens.
 
 ## Settings
 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
-- **Provider**: selects the classifier protocol implementation. The first built-in provider is **Jev**.
-- **Model**: defaults to `jev-latest` for Jev. New nodes resolve the selected provider's default model unless you enter an explicit model, so switching Provider does not retain Jev's default accidentally. Pin a version when downstream thresholds were calibrated against it.
-- **API key source**: use an API Key input port or a configured provider key. Jev defaults to the `typesafeApiKey` programmatic setting and `TYPESAFE_API_KEY` environment variable. The Rivet app also provides Settings → Classifier → Jev API Key.
-- **Overall timeout**: defaults to 30 seconds and includes retries and backoff.
-- **Outputs**: enable **Output usage details** to add calculated cost to Usage. For Jev, Rivet uses the fixed rate of **$0.042 / MTok input** and **free output tokens**. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
+- **Provider**: choose **Jev**, **Liquid AI**, or **OpenAI**. All use the same Choice, Score, and Noul question definitions.
+- **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, and `gpt-6-luna` for OpenAI. Leave it blank to use the selected provider's default. An explicit saved model or Model input is preserved when you switch providers; clear an old model to use the new provider's default. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
+- **API key source**: **Automatic** checks the named programmatic key, then environment credentials, then the saved classifier key when using default names. Existing graphs retain this mode. **Classifier settings** uses only Settings → Classifier's key for the selected provider and fails if missing; it never falls back to a general OpenAI key or environment credentials. **Input port** uses only the API Key input. Jev defaults to `typesafeApiKey` / `TYPESAFE_API_KEY`; Liquid AI to `liquidApiKey` / `LIQUID_API_KEY`; OpenAI to `openAiApiKey` / `OPENAI_API_KEY` (with legacy `openAiKey` checked before environment credentials in Automatic). Custom key names are provider-scoped and available in Automatic. Credentials are resolved on the executor, which may be remote.
+- **Overall timeout**: defaults to 30 seconds and includes State preparation/image encoding, retries, backoff and response validation.
+- **Outputs**: enable **Output usage details** to add estimated cost to Usage. Rivet uses base rates of **$0.042 / MTok input** for Jev, **$0.04 / MTok input** for Liquid AI d1, and **$0.10 / MTok input** for OpenAI Decisions, with **free output tokens**. Provider premiums are not included. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
 - **Error behavior**: controls HTTP-status failures, catching other node failures, and retries. See the behavior below. **Repeat times** and **Cooldown, ms** use the same defaults and layout as LLM Chat.
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
 
 ## Inputs
 
-- **State**: optional string, JSON object, or JSON array. When it is unconnected, Classifier Evaluate sends an empty string to the provider.
+- **State**: optional text, image, assembled user message, or an ordered array of these. Native image bytes are converted to base64 automatically. Inline image data URLs and recognizable bare base64 image strings also work. JSON objects and structured arrays remain supported. An unconnected State sends an empty string. There is no separate Images input.
 - **Questions 1…N**: one definition or an array/nested array of definitions. A trailing empty port is always available. Arrays are preserved during split runs and recursively flattened in authored order.
 - **Model**: shown when **Model from input** is enabled.
 - **API Key**: shown when **API key source** is **Input port**. It is never saved in the project.
@@ -33,10 +33,11 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 ## Outputs
 
 - **Answers** (`object`): aggregate answer map keyed by Question ID.
-- **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled, Jev also includes `totalCost` in USD, calculated from its fixed $0.042 / MTok input rate; output tokens contribute $0.
-- **Classifier request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
-- **Classifier response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
-- **Run failed** (`boolean`) and **Run error** (`string`): available when **Fail on non-2XX status code** is disabled or **Catch all failures** is enabled. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
+- **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled and pricing is known, includes `totalCost` in USD using the matched model's rate and context tier; output tokens contribute $0 for the currently priced models.
+- **Cost** (`number`): estimated USD cost, included in automatic graph-cost accounting regardless of the Usage-details setting. Excluded when the cost cannot be calculated.
+- **Request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
+- **Response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
+- **Run failed** (`boolean`) and **Run error** (`string`): available only when **Catch all failures** is enabled, independently of **Fail on non-2XX status code**. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
 
 For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a numeric `score` (which can be fractional), `legend`, `probabilities`, and `confidence`; Noul answers contain a numeric `noul` probability. These values come from the provider; Rivet does not enforce their numerical ranges.
 
@@ -44,12 +45,59 @@ Rivet checks the response structure, required field types, and question/option/l
 
 Calculated `totalCost` is added only when Usage contains safe, non-negative integer token counts. Otherwise the provider's Usage is still returned unchanged, without calculated cost.
 
+Pricing must also be known for both the requested and returned models. Recognized Jev IDs are `jev-latest`, `jev-preview` and `jev-1.13.0`; Liquid pricing is known for paid `d1`. Unknown models, including `d1:free`, do not inherit a paid default rate and are not assumed free. Their Answers and Usage remain available, but Cost is excluded and Usage.totalCost is omitted.
+
+## Resource limits and cost accounting
+
+Rivet limits each evaluation to 32 MiB of expanded request content, 8 MiB of response data, JSON nesting depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages and 4,096 content parts. Native images count at their base64-encoded size. Stricter provider limits still apply. Oversized input is rejected, not truncated or split; reduce the evidence upstream. Repeated references count each time they would appear in JSON.
+
+The always-available **Cost** output is estimated USD cost and contributes to the graph's normal cost total even when **Output usage details** is off. Enabling that setting additionally puts the same estimate in `Usage.totalCost`. Cost is excluded when pricing or safe token counts are unavailable; a genuine zero-token result produces zero. Graph totals sum known costs and may be incomplete when any cost is unavailable. Estimates use successful-response usage and base rates, not an invoice for failed attempts or provider premiums.
+
+The overall timeout covers preparation, retries and response receipt. Preparation checks the deadline while traversing content; individual bounded JSON/base64 operations remain synchronous and cannot be interrupted mid-operation.
+
+For OpenAI `gpt-6-luna` Decisions, requests with more than 272,000 input tokens use $0.20/MTok input for the whole request; smaller requests use $0.10/MTok. Output tokens remain free. Regional and account-specific premiums are not included. See [OpenAI's model pricing details](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
 ## Error behavior
 
-- **Fail on non-2XX status code** is enabled by default. Disable it to route a failed provider HTTP status to Run failed and Run error instead of throwing. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.
+- **Fail on non-2XX status code** is enabled by default. Disable it to suppress failed provider HTTP statuses instead of throwing; unavailable normal outputs are excluded. Run failed and Run error appear only when **Catch all failures** is enabled. This switch does not bypass response-shape validation: a malformed successful HTTP response still fails.
 - **Catch all failures** is off by default. Enable it to route node failures, including invalid inputs, missing credentials, transport errors, request timeouts and malformed responses, to the failure outputs. Explicit graph cancellation remains cancellation, not a caught node failure.
 - **Retry on non-200** retries non-authentication, non-validation HTTP failures. **Repeat times** is the number of retries after the initial request; **Cooldown, ms** is the fixed wait between them. Despite the setting's name, a valid response with any successful 2XX status is accepted. Malformed 2XX responses are not retried.
 
+Error diagnostics retain underlying causes for debugging and can include provider details or malformed-response fragments. Review them before sharing logs or recordings.
+
 ## Execution requirements
 
-Jev requires Node execution, Studio Server, the CLI/desktop sidecar, or remote debugging. Browser execution is rejected before any credential lookup. Jev retries transient transport failures and HTTP 429/529 at most three attempts total, bounded by the overall timeout and `Retry-After`, whether or not **Retry on non-200** is enabled. The Error behavior setting additionally retries other non-authentication, non-validation HTTP failures. Every retry resends the same captured request JSON; the response-body output contains the final successful response. Authentication and validation failures are not retried.
+All providers require Node execution, Studio Server, the CLI/desktop sidecar, or remote debugging. Browser execution is rejected before any credential lookup. Transient transport failures and HTTP 429/529 share a budget of at most two automatic retries, bounded by the overall timeout and `Retry-After`, whether or not **Retry on non-200** is enabled. The Error behavior setting has a separate retry budget for other non-authentication, non-validation HTTP failures, so a mixed sequence can exceed three requests. Both budgets share the same overall timeout. Every retry resends the same captured request JSON; the response-body output contains the final successful response. Authentication and validation failures are not retried.
+
+## Using Liquid AI d1
+
+Create a key in [Liquid Console](https://console.liquid.ai), then supply it through Settings → Classifier → Liquid AI API Key, the `LIQUID_API_KEY` environment variable, the `liquidApiKey` processor setting, or the API Key input port. Select **Liquid AI** in Classifier Evaluate and leave Model blank (or enter `d1`). Existing Classifier Question nodes and their connections do not need changes. See [Liquid's decision-model documentation](https://docs.liquid.ai/lfm/models/decision-models).
+
+## Using OpenAI Decisions
+
+Select **OpenAI** and leave Model blank or enter `gpt-6-luna`. Supply the key through Settings → Classifier → OpenAI API Key, `OPENAI_API_KEY`, the `openAiApiKey` processor setting (legacy `openAiKey` also works), or API Key input. OpenAI's native predicate answers become Rivet Noul probabilities; Choice/Score outputs retain the existing maps and zero-based levels. Structured instructions/criteria and JSON State are serialized as text for OpenAI, preserving their contents. Refusals fail the node rather than supplying fake answers. Base estimated cost is $0.10 / MTok input, excluding provider premiums. See [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions).
+
+## Multimodal shared State
+
+Connect an Image node directly to **State** for image-only evaluation. For text plus images, use **Assemble Message** with type **User**, just as with LLM Chat: connect text and images to its ordered Part inputs, then connect its Message output to State. Use **Array** to combine multiple user messages or a sequence mixing text with native images. Every question receives this entire shared context; images cannot be attached to individual questions.
+
+For an array of multimodal messages:
+
+1. On each **Assemble Message**, choose **Type → User**, or enable its Type input and pass `user`.
+2. Connect the text to **Part 1** and the image to **Part 2** on the same node (more ordered Parts are allowed).
+3. Connect each node's **Message** output to **Assemble Prompt**'s **Message 1**, **Message 2**, etc., in the desired order. These inputs also accept existing message arrays.
+4. Connect **Assemble Prompt → Prompt** directly to **Classifier Evaluate → State**.
+
+Assemble Prompt combines messages into one ordered `chat-message[]` prompt, not one flattened message. Text/image ordering and message boundaries are preserved. **Array → Output** is also supported as an alternative. If you enable **Filter empty prompts**, whitespace-only text messages are removed, but image-only messages remain. Anthropic cache-breakpoint metadata does not affect classifier evidence and is not sent to decision providers.
+
+OpenAI keeps these as separate messages, including each message's ordered text and image parts. Its Decisions endpoint currently accepts **User only**, unlike LLM Chat; selecting System, Developer, Assistant or Function fails before a request instead of silently changing the role. Liquid does not have chat roles: accepted User messages are combined into shared state with blank lines between messages. See the [OpenAI Decisions message schema](https://developers.openai.com/api/reference/resources/decisions).
+
+OpenAI preserves ordered text/image parts in its native `input` messages. Liquid keeps images in its native `images` array and puts numbered `[Image N]` references in the shared text so captions stay associated with the right images. It does not turn image base64 into textual evidence. Jev and Liquid `d1:free` reject images; Liquid `d1` and OpenAI `gpt-6-luna` support them.
+
+Use `data:image/png;base64,...` (or JPEG/GIF/WebP) when passing encoded images. Bare base64 is recognized only when decoded image headers identify a supported format; ordinary strings such as `test` remain text. Malformed explicitly marked images fail. Rivet never downloads image URLs or reads paths from State. System/developer/assistant/tool messages, document/audio parts, and explicit URL parts are not supported; use User messages containing text and inline images.
+
+Object/Object Array inputs stay structured JSON, including strings in their fields. Ordinary JSON arrays through Any/Any Array retain their previous meaning. For an explicit text-only content sequence, use String Array or Assemble Message. Arrays containing native images or assembled messages are recognized as multimodal content.
+
+OpenAI allows up to 128 images. Liquid allows up to 8, with the entire JSON request below 4.5 MB (including base64, text and questions), at most 10,000 patches of 32 × 32 pixels, and an aspect ratio no greater than 100:1 per image. Rivet rejects over-limit requests before sending them; resize images upstream if necessary. It never silently drops images or splits the question batch. See [Liquid image requirements](https://docs.liquid.ai/lfm/models/decision-models) and [OpenAI's request schema](https://developers.openai.com/api/reference/resources/decisions).
+
+Optional request/response diagnostics preserve native bodies and may contain complete image data and sensitive authored content. If different questions need different images, use separate Evaluate nodes with their own State inputs.

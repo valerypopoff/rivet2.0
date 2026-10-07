@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import type * as RivetNode from '@valerypopoff/rivet2-node';
 
 import { getAggregateWorkflowProjectStatus } from '../../../../studio-server-shared/workflow-types.js';
 import { validatePath } from '../../security.js';
@@ -29,10 +30,11 @@ import type {
 import type { PublicationFileChange } from './filesystem-publication-transactions.js';
 import { nextPublicationVersion, normalizePublicationVersion } from './publication-preconditions.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
+import { getWorkflowProjectIndexDataFromFileCached } from './project-stats.js';
 
 export { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
 
-let rivetNodeImport: Promise<typeof import('@valerypopoff/rivet2-node')> | null = null;
+let rivetNodeImport: Promise<typeof RivetNode> | null = null;
 
 /** Already checked migration bytes; ordinary serving callers keep filesystem reads. */
 export type WorkflowPublicationSourceSnapshot = {
@@ -728,8 +730,12 @@ export function createPublishedWorkflowProjectReferenceLoader(root: string, root
 
         for (const candidateProjectPath of projectPaths) {
           try {
-            const candidateProject = await loadProjectFromFile(candidateProjectPath);
-            if (candidateProject.metadata.id === projectId) {
+            const indexData = await getWorkflowProjectIndexDataFromFileCached(candidateProjectPath);
+            // This only discovers a candidate; loadProject below still verifies
+            // the actual live/published project's identity before returning it.
+            const candidateId =
+              indexData.projectMetadataId ?? (await loadProjectFromFile(candidateProjectPath)).metadata.id;
+            if (candidateId === projectId) {
               return candidateProjectPath;
             }
           } catch {

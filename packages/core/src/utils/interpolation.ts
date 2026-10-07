@@ -64,9 +64,20 @@ export type InterpolationTokenReplacementInfo = {
 
 export type ReplaceInterpolationTokensOptions = {
   trim?: boolean;
+  guard?: InterpolationGuard;
+};
+
+/** Optional caller-owned preparation limits; ordinary interpolation is unchanged. */
+export type InterpolationGuard = {
+  tokenLimit: number;
+  check: () => void;
+  prepareValue: (value: unknown) => unknown;
+  output: (fragment: string, previousLength: number) => void;
+  processing: (input: string, name: string, parameter: number | undefined) => void;
 };
 
 export type InterpolateOptions = {
+  guard?: InterpolationGuard;
   /** A snapshot of the globals referenced by this template. */
   globalValues?: Record<string, unknown>;
   /** Set false when ordinary interpolation variables are raw JSON. */
@@ -79,6 +90,7 @@ export type InterpolateOptions = {
 };
 
 export type InterpolationValueSources = {
+  guard?: InterpolationGuard;
   variables?: Record<string, unknown>;
   graphInputValues?: Record<string, unknown>;
   contextValues?: Record<string, unknown>;
@@ -481,8 +493,13 @@ function freezeReference(
   return reference ? Object.freeze({ ...reference }) : undefined;
 }
 
-function parseInterpolationTemplateUncached(template: string): ParsedInterpolationTemplate {
-  const tokens = scanInterpolationTokenSpans(template).map((span) => {
+function parseInterpolationTemplateUncached(
+  template: string,
+  check?: () => void,
+  tokenLimit = Infinity,
+): ParsedInterpolationTemplate {
+  const tokens = scanInterpolationTokenSpans(template, check, tokenLimit).map((span) => {
+    check?.();
     const parsedToken = parseInterpolationToken(span.rawInner);
     return Object.freeze({
       ...parsedToken,
@@ -541,13 +558,19 @@ function cacheInterpolationTemplate(template: string, parsed: ParsedInterpolatio
 }
 
 /** Returns an immutable, cached syntax representation. It never evaluates values. */
-export function parseInterpolationTemplate(template: string): ParsedInterpolationTemplate {
+export function parseInterpolationTemplate(
+  template: string,
+  check?: () => void,
+  tokenLimit = Infinity,
+): ParsedInterpolationTemplate {
+  check?.();
   const cached = interpolationTemplateCache.get(template);
   if (cached) {
+    if (cached.parsed.tokens.length > tokenLimit) throw new Error('Interpolation template has too many tokens.');
     return cached.parsed;
   }
 
-  const parsed = parseInterpolationTemplateUncached(template);
+  const parsed = parseInterpolationTemplateUncached(template, check, tokenLimit);
   if (template.includes('{{')) {
     cacheInterpolationTemplate(template, parsed);
   }
@@ -582,7 +605,7 @@ export function replaceInterpolationTokens(
   getReplacement: (token: InterpolationTokenReplacementInfo) => string,
   options: ReplaceInterpolationTokensOptions = {},
 ): string {
-  const parsedTemplate = parseInterpolationTemplate(template);
+  const parsedTemplate = parseInterpolationTemplate(template, options.guard?.check, options.guard?.tokenLimit);
 
   if (parsedTemplate.tokens.length === 0) {
     const restoredTemplate = restoreEscapedInterpolationTokens(template);
@@ -591,23 +614,30 @@ export function replaceInterpolationTokens(
 
   let result = '';
   let cursor = 0;
+  const append = (fragment: string) => {
+    options.guard?.output(fragment, result.length);
+    result += fragment;
+  };
 
   for (const token of parsedTemplate.tokens) {
     // Restore escaped delimiters only from authored template text. A
     // replacement may deliberately contain `{{{...}}}` or `\\{\\{...\\}\\}` and
     // must be returned unchanged rather than interpreted as template syntax.
-    result += restoreEscapedInterpolationTokens(template.slice(cursor, token.span.start));
-    result += getReplacement({
-      rawInner: token.rawInner,
-      span: { ...token.span },
-      tokenName: token.tokenName,
-      processingChain: token.processingChain,
-      reference: token.reference ? { ...token.reference } : undefined,
-    });
+    options.guard?.check();
+    append(restoreEscapedInterpolationTokens(template.slice(cursor, token.span.start)));
+    append(
+      getReplacement({
+        rawInner: token.rawInner,
+        span: { ...token.span },
+        tokenName: token.tokenName,
+        processingChain: token.processingChain,
+        reference: token.reference ? { ...token.reference } : undefined,
+      }),
+    );
     cursor = token.span.end;
   }
 
-  result += restoreEscapedInterpolationTokens(template.slice(cursor));
+  append(restoreEscapedInterpolationTokens(template.slice(cursor)));
   return options.trim ? result.trim() : result;
 }
 
@@ -651,15 +681,22 @@ export function extractInterpolationVariableReferences(template: string): Interp
 export function getInterpolationGlobalValues<T>(
   template: string,
   getGlobal: ((id: string) => T | undefined) | undefined,
+  check?: () => void,
+  tokenLimit = Infinity,
 ): Record<string, T> {
   const values = Object.create(null) as Record<string, T>;
   if (!getGlobal || !template.includes('{{')) {
     return values;
   }
 
-  for (const token of parseInterpolationTemplate(template).tokens) {
+  for (const token of parseInterpolationTemplate(template, check, tokenLimit).tokens) {
+    check?.();
     const reference = token.reference;
-    if (!reference || reference.source !== 'globals' || Object.prototype.hasOwnProperty.call(values, reference.baseName)) {
+    if (
+      !reference ||
+      reference.source !== 'globals' ||
+      Object.prototype.hasOwnProperty.call(values, reference.baseName)
+    ) {
       continue;
     }
 
@@ -718,18 +755,22 @@ export function resolveInterpolationExpressionRawValue(
   }
 
   const shouldUnwrapDataValue = reference.source !== 'variable' || sources.unwrapVariableDataValues !== false;
-  const baseValue = shouldUnwrapDataValue
-    ? unwrapPotentialDataValue(source[reference.baseName])
-    : source[reference.baseName];
+  const property = sources.guard ? Object.getOwnPropertyDescriptor(source, reference.baseName) : undefined;
+  if (sources.guard && (!property || !('value' in property)))
+    throw new Error('Interpolation sources must use own data properties, not accessors.');
+  const sourceValue = sources.guard ? sources.guard.prepareValue(property!.value) : source[reference.baseName];
+  const baseValue = shouldUnwrapDataValue ? unwrapPotentialDataValue(sourceValue) : sourceValue;
   if (reference.jsonPath === undefined) {
     return baseValue;
   }
 
+  let selected: unknown;
   try {
-    return evaluateJsonPath(baseValue, reference.jsonPath, false);
+    selected = evaluateJsonPath(baseValue, reference.jsonPath, false);
   } catch {
     return undefined;
   }
+  return sources.guard ? sources.guard.prepareValue(selected) : selected;
 }
 
 export function resolveInterpolationTokenRawValue(
@@ -783,7 +824,8 @@ function parseProcessing(instruction: string): { func: string; param?: number } 
   };
 }
 
-function applyProcessing(value: string, processingChain: string): string {
+function applyProcessing(value: string, processingChain: string, guard?: InterpolationGuard): string {
+  guard?.processing(processingChain, 'chain', undefined);
   const instructions = processingChain
     .split('|')
     .map((instruction) => instruction.trim())
@@ -791,6 +833,7 @@ function applyProcessing(value: string, processingChain: string): string {
 
   return instructions.reduce((result, instruction) => {
     const { func, param } = parseProcessing(instruction);
+    guard?.processing(result, func, param);
     const processingFunc = processingFunctions[func];
 
     if (!processingFunc) {
@@ -798,7 +841,9 @@ function applyProcessing(value: string, processingChain: string): string {
       return result;
     }
 
-    return processingFunc(result, param);
+    const processed = processingFunc(result, param);
+    guard?.output(processed, 0);
+    return processed;
   }, value);
 }
 
@@ -814,33 +859,39 @@ export function interpolate(
   contextValues?: Record<string, DataValue>,
   options: InterpolateOptions = {},
 ): string {
-  return replaceInterpolationTokens(template, (token) => {
-    if (!token.reference) {
-      return '';
-    }
+  return replaceInterpolationTokens(
+    template,
+    (token) => {
+      if (!token.reference) {
+        return '';
+      }
 
-    const resolvedValue = resolveInterpolationExpressionRawValue(token.reference, {
-      variables,
-      graphInputValues,
-      contextValues,
-      globalValues: options.globalValues,
-      unwrapVariableDataValues: options.unwrapVariableDataValues,
-    });
+      const resolvedValue = resolveInterpolationExpressionRawValue(token.reference, {
+        variables,
+        graphInputValues,
+        contextValues,
+        globalValues: options.globalValues,
+        unwrapVariableDataValues: options.unwrapVariableDataValues,
+        guard: options.guard,
+      });
 
-    if (resolvedValue === undefined) {
-      console.warn(`Interpolation variable or path "${token.tokenName}" not found or resolved to undefined.`);
-      return '';
-    }
+      if (resolvedValue === undefined) {
+        console.warn(`Interpolation variable or path "${token.tokenName}" not found or resolved to undefined.`);
+        return '';
+      }
 
-    const isBareOrdinaryVariable = token.reference.source === 'variable' && token.reference.jsonPath === undefined;
-    const stringValue = isBareOrdinaryVariable
-      ? stringifyInterpolationSourceValue(variables[token.reference.baseName], {
-          coerceDataValueToString: options.coerceBareVariableDataValues,
-          unwrapDataValue: options.unwrapVariableDataValues !== false,
-        })
-      : stringifyInterpolationValue(resolvedValue);
-    return token.processingChain ? applyProcessing(stringValue, token.processingChain) : stringValue;
-  });
+      const isBareOrdinaryVariable = token.reference.source === 'variable' && token.reference.jsonPath === undefined;
+      const stringValue = isBareOrdinaryVariable
+        ? stringifyInterpolationSourceValue(options.guard ? resolvedValue : variables[token.reference.baseName], {
+            coerceDataValueToString: options.coerceBareVariableDataValues,
+            unwrapDataValue: !options.guard && options.unwrapVariableDataValues !== false,
+          })
+        : stringifyInterpolationValue(resolvedValue);
+      options.guard?.output(stringValue, 0);
+      return token.processingChain ? applyProcessing(stringValue, token.processingChain, options.guard) : stringValue;
+    },
+    { guard: options.guard },
+  );
 }
 
 /** Runtime helper injected into JavaScript runners without exposing the whole Rivet API. */

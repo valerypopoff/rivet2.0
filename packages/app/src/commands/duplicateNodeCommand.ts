@@ -1,13 +1,12 @@
 import { type ChartNode, type NodeConnection, type NodeId } from '@valerypopoff/rivet2-core';
-import { useSetAtom, useAtomValue } from 'jotai';
-import { connectionsState, nodesByIdState, nodesState } from '../state/graph';
+import { useSetAtom } from 'jotai';
+import { connectionsState, nodesState } from '../state/graph';
 import { duplicateNodeWithConnections } from '../domain/graphEditing/nodeActions.js';
 import { useProjectNodeRegistry } from '../hooks/useProjectNodeRegistry';
 import { useCommand } from './Command';
 import { removeMatchingConnection } from '../domain/graphEditing/connectionActions.js';
 
 export function useDuplicateNodeCommand() {
-  const nodesById = useAtomValue(nodesByIdState);
   const setNodes = useSetAtom(nodesState);
   const setConnections = useSetAtom(connectionsState);
   const projectNodeRegistry = useProjectNodeRegistry();
@@ -31,7 +30,7 @@ export function useDuplicateNodeCommand() {
         return appliedData;
       }
 
-      const node = nodesById[nodeId];
+      const node = currentState.nodes.find((candidate) => candidate.id === nodeId);
 
       if (!node) {
         throw new Error(`Node with id ${nodeId} not found`);

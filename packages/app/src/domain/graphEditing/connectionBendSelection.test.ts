@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getProjectConnectionComparisonKey, type NodeConnection } from '@valerypopoff/rivet2-core';
-import { getBoxedConnectionBends, moveConnectionBends, offsetConnectionBends } from './connectionBendSelection.js';
+import {
+  getConnectionBendKeys,
+  getBoxedConnectionBends,
+  moveConnectionBends,
+  offsetConnectionBends,
+} from './connectionBendSelection.js';
 
 const connection = (id: string, bendPoint?: { x: number; y: number }): NodeConnection =>
   ({
@@ -11,6 +16,19 @@ const connection = (id: string, bendPoint?: { x: number; y: number }): NodeConne
     inputId: 'input',
     bendPoint,
   }) as NodeConnection;
+
+test('copied bend selection uses the new connection identities and excludes straight wires', () => {
+  const bends = [
+    connection('copied-a', { x: 10, y: 20 }),
+    connection('straight'),
+    connection('copied-b', { x: 30, y: 40 }),
+  ];
+  assert.deepEqual(
+    getConnectionBendKeys(bends),
+    [bends[0], bends[2]].map((bend) => getProjectConnectionComparisonKey(bend!)),
+  );
+  assert.deepEqual(getConnectionBendKeys([]), []);
+});
 
 test('marquee includes authored bend centers in either direction, not unbent wires', () => {
   const bends = [

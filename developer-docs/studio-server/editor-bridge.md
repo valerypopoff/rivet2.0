@@ -83,6 +83,78 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ## Model-node error behavior
 
+The shared Image file picker (`ImageBrowserEditor.tsx`) receives bytes and the
+selected filename from the IO provider. Infer its Media Type from that filename,
+not the editor's data-field key; `.jpg`/`.jpeg` files must be labeled `image/jpeg`.
+This applies to hosted and desktop editors and leaves the selected bytes unchanged.
+Unknown extensions retain the existing PNG fallback, and binary/base64 inputs
+still use the authored Media Type. Existing saved images are not relabeled:
+reselect the file or correct Media Type manually if an older import used PNG.
+Classifier validation must continue rejecting mismatched headers/media types.
+The headless classifier observer covers JPEG (including uppercase `.JPG`), PNG
+and GIF selections through the real Image editor and browser file-input path.
+
+Classifier Evaluate's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
+Decisions (`gpt-6-luna`). The hosted
+editor uses Core's ordered registry for provider/model defaults and the shared
+Settings → Classifier credentials page; its environment shim enumerates the
+registry's default names, including `LIQUID_API_KEY` and `OPENAI_API_KEY`, before Node execution.
+Evaluate's single State port accepts text, native images, base64 image strings,
+and assembled user messages or ordered mixed arrays. There is no separate Images
+port. Question definitions remain text/JSON only; question-level image fields
+fail with guidance to use Evaluate's State. Unsupported models reject images rather than
+dropping them. OpenAI request/answer adaptation retains the existing node output
+and error contracts without image-based batching or aggregate diagnostic envelopes.
+For a message array, wire text and image Parts into each Assemble Message, then
+combine its Message outputs with Assemble Prompt and connect Prompt directly to
+State (Array's Output is also supported). Assemble Prompt accepts scalar messages
+and message arrays, preserving numeric port order and content/message boundaries;
+its optional empty-message filter retains image-only messages. Classifier State
+ignores Anthropic cache-breakpoint metadata, not the message's evidence. Static
+User Type and input-supplied `user` roles are supported. OpenAI Decisions accepts
+only User messages (not the Chat/Responses role set); unsupported assembled roles
+fail before HTTP. OpenAI retains each message boundary; System One flattens
+accepted message content without pretending it supports chat roles.
+Each evaluation captures its request configuration once and uses one absolute
+deadline across request preparation, retries and response validation.
+Credentialed classifier requests never follow redirects.
+Classifier credential UI presents Automatic (legacy `configured`), strict
+Classifier settings, and Input port. Preserve existing source values; do not
+silently change old graphs' key precedence. Strict saved-key selection must not
+fall back through the hosted environment shim or general OpenAI credentials.
+The editor shows source policy, not secret values or guesses about remote state.
+Question preparation uses its own bounded, cancellation-aware interpolation
+path before JSON parsing. Hosted wrappers use the same Core behavior.
+Estimated Cost is available only for verified requested/returned model pairs,
+including documented context-dependent rates. Unknown pricing excludes Cost
+without turning a successful evaluation into a failure or fabricating zero.
+Classifier preparation and response receipt use Core's shared resource limits;
+the wrapper must not duplicate them or bypass the bounded response stream reader.
+Evaluate exposes an always-on numeric Cost port for the normal graph accumulator,
+independent of its optional Usage details. Unknown cost is excluded, not zero.
+The hosted observer verifies this port alongside the existing migrated outputs.
+Core uses one bounded preparation runner for graph and direct provider inputs.
+Validation, accounting and detached structured snapshots share one traversal;
+the final transformed wire has its own size check. Optional request diagnostics
+are reconstructed lazily only when accessed. Liquid's evidence policy belongs to
+its specification, not a provider-ID branch in the common runner. Existing custom
+descriptors still receive the normalized State contract, with one node-owned
+resource budget across Model, State and Question ports and a deadline check on return.
+The common runner rejects invalid Model/API Key scalar values before serialization
+or HTTP; errors do not echo credentials. Structured
+State and question entries must be plain JSON data: accessors, serialization
+hooks and sparse arrays fail before HTTP rather than changing the captured request.
+Multimodal message and native-image fields must likewise be own data properties;
+their getters are rejected without execution rather than allowing evidence to
+change between type detection and encoding.
+The same own-data rule covers active input ports and their Rivet type/value
+wrappers; unused ports are not read. Core rejects malformed UTF-8 provider JSON
+instead of replacing characters, and never retries a malformed successful body.
+Nested Question arrays are flattened by index with cycle detection, not custom iterators.
+No wrapper-specific provider adapter or TypeSafe plugin is needed. The shared
+question format, credential isolation and HTTP contract are documented in
+[Classifier nodes](../CLASSIFIER-NODES.md).
+
 LLM Chat and Classifier Evaluate expose `Fail on non-2XX status code` and
 `Catch all failures` in their Error behavior group. The node-owned fields are
 `errorOnNon200` (default true, including older nodes without this field) and
@@ -262,6 +334,9 @@ Rivet owns editor-local find/search UIs, but `Ctrl+F` / `Cmd+F` can fire while f
 Node copy/paste shortcuts do not cross the editor bridge. Dashboard-focused duplicate is the narrow exception because browsers reserve `Ctrl+D` / `Cmd+D` for bookmark UI before the iframe can see it.
 
 - `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` stay inside the iframe, but hosted builds replace the upstream hotkey hook with a tracked wrapper override so copy/cut/paste reads the latest Jotai state immediately instead of waiting for a React re-render.
+- The hosted override delegates paste and single-node duplicate mutations to the shared editor commands rather than rebuilding node/connection copies itself. Thus copied wire bends follow the same node offset in desktop and hosted editors, even if the bends were not selected; paste and Alt-drag select copied bends with their new nodes and participate in shared Undo/Redo. Cross-graph paste copies only links internal to the copied nodes.
+- Hosted node shortcuts reject Alt-modified/AltGr key combinations, matching the desktop shortcut policy. Both paste entry points ignore empty node clipboards rather than clearing selection and adding an empty history step. Copy commands clear stale node hover on Apply/Undo/Redo so overlapping originals cannot block the newly selected copies.
+- Isolated clipboard browser fixtures use `mockHostedEditorBootstrap` for configuration and the shared evaluation library, alongside their project API fixtures. They exercise real canvas interactions without relying on an ambient backend to initialize editor persistence.
 - `Ctrl+D` / `Cmd+D` is editor-local when the iframe has focus. When an active project is open but focus is still on dashboard chrome, the dashboard prevents the browser bookmark default, focuses the iframe, and sends `trigger-editor-duplicate-shortcut`; the iframe then replays a normal `KeyD` shortcut so the existing Rivet node-duplicate handler owns selection, edit-state checks, and mutation.
 - The dashboard does not relay copy/cut/paste shortcuts to the iframe. That approach was intentionally avoided because iframe-focused clipboard events are not reliable at the parent-page level.
 - In hosted mode, shortcut reliability depends on editor focus, not dashboard focus. The hosted wrapper therefore explicitly focuses the iframe after `project-opened` and reclaims iframe focus on capture-phase pointer interactions inside `.node-canvas`.
