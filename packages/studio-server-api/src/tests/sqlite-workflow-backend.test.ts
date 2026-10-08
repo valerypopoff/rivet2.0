@@ -753,6 +753,61 @@ test('SQLite case-insensitive route collisions roll back the complete publicatio
   });
 });
 
+test('SQLite reuses an unpublished preference without losing history or confusing serving verification', async () => {
+  await fixture(async (backend, options, setPaused) => {
+    let archived = await createExecutable(backend, 'Archived');
+    archived = await backend.publishWorkflowProjectItem(
+      archived.relativePath,
+      { endpointName: 'game-engine-test' },
+      conditions(archived),
+    );
+    const history = (await backend.listWorkflowPublishedVersions(archived.relativePath)).versions;
+    archived = await backend.unpublishWorkflowProjectItem(archived.relativePath, conditions(archived));
+    assert.equal(archived.settings.endpointName, 'game-engine-test');
+    assert.equal(await backend.loadLatestExecutionProject('game-engine-test'), null);
+    assert.equal(await backend.loadPublishedExecutionProject('game-engine-test'), null);
+    let live = await createExecutable(backend, 'Live');
+    live = await backend.publishWorkflowProjectItem(
+      live.relativePath,
+      { endpointName: 'game-engine-test' },
+      conditions(live),
+    );
+    for (const read of ['loadLatestExecutionProject', 'loadPublishedExecutionProject'] as const) {
+      assert.equal((await backend[read]('GAME-ENGINE-TEST'))?.project.metadata.id, live.projectMetadataId);
+    }
+    await assert.rejects(
+      backend.publishWorkflowProjectItem(
+        archived.relativePath,
+        { endpointName: 'GAME-ENGINE-TEST' },
+        conditions(archived),
+      ),
+      /destination already exists/,
+    );
+    assert.deepEqual(
+      (await backend.listWorkflowPublishedVersions(archived.relativePath)).versions,
+      history.map((v) => ({ ...v, isCurrent: false })),
+    );
+    setPaused(true);
+    const catalog = new LocalWorkflowCatalog(options);
+    try {
+      catalog.initialize({ verifyOnly: true });
+      const snapshots = await Promise.all([archived, live].map((item) => catalog.readProject(item.relativePath)));
+      assert.deepEqual(
+        await verifySqliteWorkflowServing({
+          ...options,
+          folders: [],
+          projects: snapshots.map((p) => p!),
+          recordings: [],
+          assertFrozen: async () => {},
+        }),
+        { projects: 2, endpoints: 2, publishedVersions: 2, webApps: 0, recordings: 0 },
+      );
+    } finally {
+      catalog.close();
+    }
+  });
+});
+
 test('SQLite web-app publication preserves binding identity and enforces access changes', async () => {
   await fixture(async (backend) => {
     const created = await createExecutable(backend),

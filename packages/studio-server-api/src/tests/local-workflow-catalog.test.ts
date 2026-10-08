@@ -35,6 +35,7 @@ import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import { ImmutableLocalArtifactStore } from '../local-metadata/immutable-artifact-store.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import { localUpgradeFailure, localUpgradeSourceReference } from '../local-metadata/upgrade-diagnostics.js';
+import { verifySqliteWorkflowServing } from '../local-metadata/verify-serving-candidate.js';
 
 function project(overrides: Partial<LocalWorkflowCatalogSnapshot> = {}): LocalWorkflowCatalogSnapshot {
   const relativePath = overrides.relativePath ?? 'folder/story.rivet-project';
@@ -123,6 +124,28 @@ async function fixture(run: (catalog: LocalWorkflowCatalog, root: string) => Pro
   } finally {
     catalog.close();
     await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+function useLegacyCatalogSchema(file: string, version: number): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`BEGIN;
+      DROP INDEX projects_endpoint_name_unique;
+      CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> '';
+      ALTER TABLE web_apps RENAME TO current_web_apps;
+      CREATE TABLE web_apps (
+        app_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+        slug TEXT NOT NULL UNIQUE,
+        metadata_json TEXT NOT NULL
+      );
+      INSERT INTO web_apps(rowid, app_id, workflow_id, slug, metadata_json)
+        SELECT rowid, app_id, workflow_id, slug, metadata_json FROM current_web_apps;
+      DROP TABLE current_web_apps;
+      PRAGMA user_version=${version}; COMMIT`);
+  } finally {
+    db.close();
   }
 }
 
@@ -247,7 +270,19 @@ test('local catalog late route failure rolls back folder and project changes tog
         expectedProjectPaths: [before.relativePath, other.relativePath],
         folders: ['folder', 'new'],
         projects: [
-          { before: other, after: { ...other, relativePath: 'new/other.rivet-project', endpointName: 'STORY' } },
+          {
+            before: other,
+            after: {
+              ...other,
+              relativePath: 'new/other.rivet-project',
+              endpointName: 'STORY',
+              publishedEndpointName: 'other',
+              publishedContents: other.contents,
+              publishedDatasetsContents: other.datasetsContents,
+              endpointStatus: 'unpublished_changes',
+              lastPublishedAt: before.lastPublishedAt,
+            },
+          },
         ],
       }),
       /collision/,
@@ -356,9 +391,7 @@ test('v2 recording catalogs remain readable and only a new recording write advan
     await catalog.importRecording(snapshot, { compression: 'identity' });
     catalog.close();
     const file = path.join(root, 'catalog.sqlite');
-    const db = new DatabaseSync(file);
-    db.exec('PRAGMA user_version=2');
-    db.close();
+    useLegacyCatalogSchema(file, 2);
     catalog.initialize({ verifyOnly: true });
     assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
     catalog.checkHealth();
@@ -369,7 +402,7 @@ test('v2 recording catalogs remain readable and only a new recording write advan
     catalog.initialize({ requireExisting: true });
     await catalog.importRecording(recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }));
     const after = new DatabaseSync(file, { readOnly: true });
-    assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 3);
+    assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 4);
     after.close();
     assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
   });
@@ -857,6 +890,114 @@ test('local catalog retries exactly, rejects drift, extra rows, and route collis
   });
 });
 
+test('unpublished endpoint preferences preserve history without reserving or stealing live routes', async () => {
+  await fixture(async (catalog) => {
+    const live = project();
+    const archived = project({
+      workflowId: 'archived-id',
+      relativePath: 'folder/archived.rivet-project',
+      endpointStatus: 'unpublished',
+      publishedEndpointName: '',
+      publishedVersionId: null,
+      publishedContents: null,
+      publishedDatasetsContents: null,
+      publishedVersions: live.publishedVersions.map((v) => ({ ...v, versionId: `archived-${v.versionId}` })),
+      publishedWebApps: [],
+    });
+    const copy = project({
+      ...archived,
+      workflowId: 'copy-id',
+      relativePath: 'folder/copy.rivet-project',
+      name: 'copy',
+      fileName: 'copy.rivet-project',
+      endpointName: 'STORY',
+      publishedVersions: [],
+    });
+    // Import archived preferences first, as in a failed legacy migration.
+    catalog.importFolder('folder');
+    for (const p of [archived, copy, live]) await catalog.importProject(p);
+    for (const p of [archived, copy, live]) await catalog.importProject(p);
+    await catalog.verifyExact(['folder'], [archived, copy, live]);
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'STORY-LATEST', version: 'latest' }))?.workflowId,
+      live.workflowId,
+    );
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'STORY', version: 'published' }))?.workflowId,
+      live.workflowId,
+    );
+    assert.equal(await catalog.readExecutionSource({ endpointName: 'STORY', version: 'latest' }), null);
+    assert.equal(
+      (await catalog.readExecutionSource({ workflowId: archived.workflowId, version: 'latest' }))?.workflowId,
+      archived.workflowId,
+    );
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyExact(['folder'], [archived, copy, live]);
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'story-latest', version: 'latest' }))?.workflowId,
+      live.workflowId,
+    );
+  });
+});
+
+test('v2 and v3 schemas upgrade only with a successful project write and retain exact retry state', async () => {
+  for (const version of [2, 3]) {
+    await fixture(async (catalog, root) => {
+      const source = project();
+      await catalog.importProject(source);
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      const legacyIndex =
+        "CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> ''";
+      useLegacyCatalogSchema(file, version);
+      const original = new DatabaseSync(file, { readOnly: true });
+      const legacyTable = original.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql;
+      original.close();
+      const bytes = await fs.readFile(file);
+      catalog.initialize({ verifyOnly: true });
+      catalog.checkHealth();
+      assert.deepEqual(await catalog.readProject(source.relativePath), source);
+      catalog.close();
+      assert.deepEqual(await fs.readFile(file), bytes, 'Read-only verification preserves certified bytes.');
+      catalog.initialize({ requireExisting: true });
+      await catalog.importProject(source);
+      await assert.rejects(catalog.replaceProject({ ...source, contents: 'stale' }, source), /changed concurrently/);
+      const unchanged = new DatabaseSync(file, { readOnly: true });
+      assert.equal(unchanged.prepare('PRAGMA user_version').get()!.user_version, version);
+      assert.equal(
+        unchanged.prepare("SELECT sql FROM sqlite_master WHERE name='projects_endpoint_name_unique'").get()!.sql,
+        legacyIndex,
+      );
+      assert.equal(unchanged.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql, legacyTable);
+      unchanged.close();
+      const copy = project({
+        workflowId: 'copy-id',
+        relativePath: 'copy.rivet-project',
+        endpointStatus: 'unpublished',
+        publishedEndpointName: '',
+        publishedVersionId: null,
+        publishedContents: null,
+        publishedDatasetsContents: null,
+        publishedVersions: [],
+        publishedWebApps: [{ ...source.publishedWebApps[0]!, slug: 'copied-app' }],
+      });
+      await catalog.importProject(copy);
+      await catalog.importProject(copy);
+      const upgraded = new DatabaseSync(file, { readOnly: true });
+      assert.equal(upgraded.prepare('PRAGMA user_version').get()!.user_version, 4);
+      upgraded.close();
+      catalog.close();
+      catalog.initialize({ verifyOnly: true });
+      await catalog.verifyExact([], [source, copy]);
+      assert.equal(
+        (await catalog.readExecutionSource({ endpointName: source.endpointName, version: 'latest' }))?.workflowId,
+        source.workflowId,
+      );
+    });
+  }
+});
+
 test('local catalog replaces a project atomically and rejects stale writes', async () => {
   await fixture(async (catalog) => {
     const before = project();
@@ -894,10 +1035,16 @@ test('local catalog rejects invalid policies, publication pointers and duplicate
           { ...before.publishedWebApps[0]!, appId: 'second-app', slug: 'second-ui' },
         ],
       }),
+      project({
+        publishedWebApps: [
+          before.publishedWebApps[0]!,
+          { ...before.publishedWebApps[0]!, uiGraphId: 'second-graph', slug: 'second-ui' },
+        ],
+      }),
     ]) {
       await assert.rejects(
         catalog.replaceProject(before, next),
-        /Invalid local|pointer is inconsistent|duplicate web-app/,
+        /Invalid local|pointer is inconsistent|duplicate web-app|UNIQUE constraint failed: web_apps/,
       );
       assert.deepEqual(await catalog.readProject(before.relativePath), before);
     }
@@ -1258,6 +1405,130 @@ test('frozen filesystem tree stages into the catalog and can be verified without
       }
     });
   } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('frozen conversion preserves shared preferences and project-scoped legacy web-app bindings', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-shared-endpoint-source-'));
+  const sourceRoot = path.join(root, 'workflows');
+  const databasePath = path.join(root, 'catalog.sqlite');
+  const artifactRoot = path.join(root, 'objects');
+  const catalog = new LocalWorkflowCatalog({ databasePath, artifactRoot });
+  try {
+    await fs.mkdir(path.join(sourceRoot, '.published'), { recursive: true });
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      const originals = new Map<string, string>();
+      const write = async (file: string, contents: string) => {
+        originals.set(file, contents);
+        await fs.writeFile(file, contents);
+      };
+      for (const name of ['archived', 'copy', 'live']) {
+        await write(path.join(sourceRoot, `${name}.rivet-project`), createBlankProjectFile(name));
+      }
+      const initial = await collectSourceWorkflows(sourceRoot);
+      const publishedAt = '2026-01-01T00:00:00.000Z';
+      for (const source of initial) {
+        const file = path.join(sourceRoot, source.relativePath);
+        const versionId = `${source.name}-version`;
+        const stateHash = createWorkflowPublicationStateHashFromContents(source.contents, null, 'shared');
+        await write(
+          getWorkflowProjectSettingsPath(file),
+          JSON.stringify({
+            endpointName: 'shared',
+            publicationVersion: '2',
+            publishedWebApps:
+              source.name === 'copy'
+                ? []
+                : [
+                    {
+                      uiGraphId: 'shared-ui',
+                      slug: `${source.name}-app`,
+                      publishedSnapshotId: versionId,
+                      publishedAt,
+                    },
+                  ],
+            ...(source.name === 'copy' ? {} : { lastPublishedAt: publishedAt }),
+            ...(source.name === 'live'
+              ? { publishedEndpointName: 'shared', publishedSnapshotId: versionId, publishedStateHash: stateHash }
+              : {}),
+          }),
+        );
+        if (source.name === 'copy') continue;
+        await write(path.join(sourceRoot, '.published', `${versionId}.rivet-project`), source.contents);
+        await write(
+          path.join(sourceRoot, '.published', `${versionId}.json`),
+          JSON.stringify({
+            version: 1,
+            id: versionId,
+            projectId: source.workflowId,
+            projectName: source.name,
+            relativePath: source.relativePath,
+            endpointName: 'shared',
+            publishedAt,
+            stateHash,
+          }),
+        );
+      }
+      const sources = await collectSourceWorkflows(sourceRoot);
+      assert.equal(sources.filter((source) => source.publishedContents !== null).length, 1);
+      assert.deepEqual(
+        sources.flatMap((source) => source.publishedWebApps.map((app) => app.appId)),
+        ['legacy:shared-ui', 'legacy:shared-ui'],
+      );
+      assert.deepEqual(await checkLocalWorkflowSource(sourceRoot), { projects: 3, folders: 0 });
+      const assertFrozen = async () => {};
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const report = await stageFrozenWorkflowCatalog({ sourceRoot, catalog, assertFrozen });
+        assert.deepEqual(report, { folders: 0, projects: 3, publishedVersions: 2, publishedWebApps: 2 });
+      }
+      catalog.close();
+      const report = await verifySqliteWorkflowServing({
+        databasePath,
+        artifactRoot,
+        virtualRoot: sourceRoot,
+        folders: [],
+        projects: sources,
+        recordings: [],
+        assertFrozen,
+      });
+      assert.deepEqual(report, { projects: 3, endpoints: 2, publishedVersions: 2, webApps: 2, recordings: 0 });
+      // A real slug conflict must fail inspection, not first surface after backup/copy.
+      const archivedPath = path.join(sourceRoot, 'archived.rivet-project');
+      const settingsFile = getWorkflowProjectSettingsPath(archivedPath);
+      const settings = JSON.parse(originals.get(settingsFile)!);
+      settings.publishedWebApps[0].slug = 'LIVE-APP';
+      await fs.writeFile(settingsFile, JSON.stringify(settings));
+      await assert.rejects(checkLocalWorkflowSource(sourceRoot), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'publication-route-conflict');
+        assert.ok(failure.sourceReference);
+        return true;
+      });
+      await fs.writeFile(settingsFile, originals.get(settingsFile)!);
+      const activeSettings = JSON.parse(originals.get(settingsFile)!);
+      Object.assign(activeSettings, {
+        endpointName: 'SHARED',
+        publishedEndpointName: 'shared',
+        publishedSnapshotId: 'archived-version',
+        publishedStateHash: createWorkflowPublicationStateHashFromContents(
+          originals.get(archivedPath)!,
+          null,
+          'shared',
+        ),
+      });
+      await fs.writeFile(settingsFile, JSON.stringify(activeSettings));
+      await assert.rejects(checkLocalWorkflowSource(sourceRoot), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'publication-route-conflict');
+        assert.equal(failure.sourceReference, localUpgradeSourceReference('live.rivet-project'));
+        return true;
+      });
+      await fs.writeFile(settingsFile, originals.get(settingsFile)!);
+      for (const [file, contents] of originals) assert.equal(await fs.readFile(file, 'utf8'), contents);
+    });
+  } finally {
+    catalog.close();
     await fs.rm(root, { recursive: true, force: true });
   }
 });

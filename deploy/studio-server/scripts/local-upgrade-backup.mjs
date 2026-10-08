@@ -493,7 +493,7 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
   try {
     assert.equal(catalog.prepare('PRAGMA application_id').get().application_id, 0x52495643);
     const catalogVersion = catalog.prepare('PRAGMA user_version').get().user_version;
-    assert.ok(catalogVersion === 2 || catalogVersion === 3, 'Selected catalog schema version is unsupported.');
+    assert.ok([2, 3, 4].includes(catalogVersion), 'Selected catalog schema version is unsupported.');
     const checked = new Map();
     const reference = async (value, required, recording = false) => {
       if (value === null) {
@@ -506,7 +506,7 @@ export async function inspectSqliteServingBackup(controlRoot, appDataRoot) {
       assert.ok(Number.isSafeInteger(value.size) && value.size >= 0);
       const compressed = value.encoding === 'gzip';
       assert.ok(
-        value.encoding === undefined || (recording && catalogVersion === 3 && compressed),
+        value.encoding === undefined || (recording && catalogVersion >= 3 && compressed),
         'Unsupported catalog artifact encoding.',
       );
       assert.ok(
