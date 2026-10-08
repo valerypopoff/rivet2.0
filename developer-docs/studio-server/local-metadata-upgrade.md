@@ -743,6 +743,21 @@ snapshots. A successful project mutation or new recording insertion upgrades the
 route index, project-scoped web-app table and catalog marker to format 4 in the same
 SQLite transaction; failed writes roll all schema changes back, and exact import
 retries do not rewrite the catalog.
+Startup, health checks and write migrations share a schema/identity validator
+that checks the complete DDL in one SQLite read snapshot, not only `user_version`.
+Older development recording writers could advance that marker without applying
+the format-4 DDL. The exact legacy schema marked as 4 remains readable, including
+compressed recordings; its next successful project or recording write upgrades
+DDL transactionally. No reset, header downgrade or bulk payload rewrite is needed.
+Opening/verification never repairs schema or changes the frozen candidate proof.
+Mixed schemas, altered columns, extra objects, foreign identities and future
+versions still fail closed. The literal `sqlite_` prefix (`GLOB 'sqlite_*'`)
+excludes internal objects without hiding similarly named user objects.
+Existing-catalog schema, integrity and route validation precede journal-mode
+normalization, so rejecting an incompatible WAL catalog does not checkpoint it
+into DELETE mode first. Regression tests cover both journal modes, open-connection
+schema changes, concurrent recovery, compressed payload preservation, byte-identical
+read-only/retry behavior and rollback after an injected post-migration write failure.
 Old identity artifacts stay readable; no bulk payload rewrite is performed. Older
 images/backup tools that do not understand the new format must not be used after
 that boundary. The current standalone backup/restore helper accepts formats 2, 3

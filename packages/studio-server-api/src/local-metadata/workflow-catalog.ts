@@ -248,6 +248,51 @@ function normalizedSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim();
 }
 
+/** The recording encoding marker was historically advanced without changing DDL.
+ * Recognize only complete known schemas, including legacy DDL marked as v4.
+ * Reads must not rewrite certified candidates. Writers migrate inside their
+ * existing transaction, even when the marker already says v4. */
+function readCatalogSchema(db: DatabaseSync): 'legacy' | 'current' {
+  db.exec('SAVEPOINT catalog_schema_check');
+  try {
+    const identity = (db.prepare('PRAGMA application_id').get() as { application_id: number }).application_id;
+    if (identity !== APPLICATION_ID) throw new Error('Local workflow catalog has an unsupported database identity.');
+    const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (!supportedSchemaVersion(version)) throw new Error('Local workflow catalog has an unsupported schema version.');
+    const objects = db.prepare("SELECT name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all() as Array<{
+      name: string;
+      sql: string;
+    }>;
+    const actual = new Map(objects.map(({ name, sql }) => [name, normalizedSql(sql)]));
+    const legacy = actual.get('projects_endpoint_name_unique') === normalizedSql(LEGACY_ENDPOINT_INDEX);
+    if (!legacy && version !== SCHEMA_VERSION) {
+      throw new Error('Local workflow catalog schema does not match its version.');
+    }
+    for (const currentStatement of SCHEMA_STATEMENTS) {
+      const statement = !legacy
+        ? currentStatement
+        : currentStatement === ENDPOINT_INDEX
+          ? LEGACY_ENDPOINT_INDEX
+          : currentStatement === WEB_APPS_TABLE
+            ? LEGACY_WEB_APPS_TABLE
+            : currentStatement;
+      const name = /\b(?:TABLE|INDEX) ([a-z_]+)/.exec(statement)?.[1];
+      if (!name) throw new Error('Local workflow catalog has an invalid expected schema.');
+      if (actual.get(name) !== normalizedSql(statement)) {
+        throw new Error(`Local workflow catalog schema is incompatible at ${name}.`);
+      }
+    }
+    if (actual.size !== SCHEMA_STATEMENTS.length) {
+      throw new Error('Local workflow catalog schema contains unexpected objects.');
+    }
+    db.exec('RELEASE catalog_schema_check');
+    return legacy ? 'legacy' : 'current';
+  } catch (error) {
+    db.exec('ROLLBACK TO catalog_schema_check; RELEASE catalog_schema_check');
+    throw error;
+  }
+}
+
 function comparableJson(value: unknown): unknown {
   // Catalog snapshots are JSON data. Match persisted omission of optional
   // undefined fields without serializing large artifact strings a second time.
@@ -640,7 +685,7 @@ export class LocalWorkflowCatalog {
       const identity = (db.prepare('PRAGMA application_id').get() as { application_id: number }).application_id;
       const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
       if (identity === 0 && version === 0 && !readOnly && !options.requireExisting) {
-        const existing = db.prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+        const existing = db.prepare("SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1").get();
         if (existing) throw new Error('Local workflow catalog path contains an unidentified database.');
         db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE');
         try {
@@ -653,42 +698,19 @@ export class LocalWorkflowCatalog {
       } else if (identity !== APPLICATION_ID || !supportedSchemaVersion(version)) {
         throw new Error('Local workflow catalog has an unsupported database identity or schema version.');
       }
-      if (!readOnly) db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL');
       const integrity = db.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
       if (integrity.integrity_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').get()) {
         throw new Error('Local workflow catalog failed SQLite integrity checks.');
       }
-      const expectedSchemaNames: string[] = [];
-      for (const currentStatement of SCHEMA_STATEMENTS) {
-        const legacyStatement =
-          currentStatement === ENDPOINT_INDEX
-            ? LEGACY_ENDPOINT_INDEX
-            : currentStatement === WEB_APPS_TABLE
-              ? LEGACY_WEB_APPS_TABLE
-              : currentStatement;
-        const statement = version > 0 && version < SCHEMA_VERSION ? legacyStatement : currentStatement;
-        const name = /\b(?:TABLE|INDEX) ([a-z_]+)/.exec(statement)?.[1];
-        if (!name) throw new Error('Local workflow catalog has an invalid expected schema.');
-        expectedSchemaNames.push(name);
-        const actual = db.prepare('SELECT sql FROM sqlite_master WHERE name = ?').get(name) as
-          | { sql: string }
-          | undefined;
-        if (!actual || normalizedSql(actual.sql) !== normalizedSql(statement)) {
-          throw new Error(`Local workflow catalog schema is incompatible at ${name}.`);
-        }
+      readCatalogSchema(db);
+      this.#validateRoutes(db);
+      // Reject incompatible existing databases before changing persistent pragmas.
+      if (!readOnly) {
+        db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL');
+        chmodSync(this.#databasePath, 0o600);
       }
-      const actualSchemaNames = (
-        db.prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{
-          name: string;
-        }>
-      ).map((row) => row.name);
-      if (!sameJson(actualSchemaNames, expectedSchemaNames.sort())) {
-        throw new Error('Local workflow catalog schema contains unexpected objects.');
-      }
-      if (!readOnly) chmodSync(this.#databasePath, 0o600);
       this.#db = db;
       this.#readOnly = readOnly;
-      this.#validateRoutes(db);
     } catch (error) {
       this.#db = null;
       db.close();
@@ -705,16 +727,9 @@ export class LocalWorkflowCatalog {
 
   checkHealth(): void {
     const db = this.#database();
-    const identity = (db.prepare('PRAGMA application_id').get() as { application_id: number }).application_id;
-    const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    readCatalogSchema(db);
     const integrity = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
-    if (
-      identity !== APPLICATION_ID ||
-      !supportedSchemaVersion(version) ||
-      integrity.length !== 1 ||
-      integrity[0]?.quick_check !== 'ok' ||
-      db.prepare('PRAGMA foreign_key_check').get()
-    )
+    if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').get())
       throw new Error('Local workflow catalog failed its health check.');
   }
 
@@ -740,9 +755,7 @@ export class LocalWorkflowCatalog {
 
   /** Called inside the caller's write transaction; failed writes roll this back too. */
   #upgradeSchema(db: DatabaseSync): void {
-    const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (version === SCHEMA_VERSION) return;
-    if (!supportedSchemaVersion(version)) throw new Error('Local workflow catalog has an unsupported schema version.');
+    if (readCatalogSchema(db) === 'current') return;
     db.exec(`DROP INDEX projects_endpoint_name_unique; ${ENDPOINT_INDEX};
       ALTER TABLE web_apps RENAME TO legacy_web_apps;
       ${WEB_APPS_TABLE};
