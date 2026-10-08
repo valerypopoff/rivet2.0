@@ -41,37 +41,32 @@ export const requireOperatorAuth: RequestHandler = (req, res, next) => {
 };
 
 /** Migration exports the complete installation, including secrets. General UI access and trusted-client bypass are insufficient. */
-function sensitiveStorageOperatorAuth(flag?: string): RequestHandler {
-  return (req, res, next) => {
-    if (flag && process.env[flag] !== '1') {
-      return next(createHttpError(404, 'Not found'));
-    }
-    const mode = getServerUiAuthMode();
-    const authenticated =
-      mode === 'key'
-        ? isTrustedUiSessionRequest(req)
-        : mode === 'oauth' && isServerUiOAuthSessionAllowed(readServerUiOAuthSession(req));
-    if (!authenticated) return next(createHttpError(403, 'Migration requires a signed-in operator session.'));
+const sensitiveStorageOperatorAuth: RequestHandler = (req, _res, next) => {
+  const mode = getServerUiAuthMode();
+  const authenticated =
+    mode === 'key'
+      ? isTrustedUiSessionRequest(req)
+      : mode === 'oauth' && isServerUiOAuthSessionAllowed(readServerUiOAuthSession(req));
+  if (!authenticated) return next(createHttpError(403, 'Migration requires a signed-in operator session.'));
 
-    if (req.method !== 'GET') {
-      // A custom header prevents a cross-site HTML form from invoking a state-changing route.
-      if (req.get('X-Rivet-Migration-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site') {
-        return next(createHttpError(403, 'Migration request must come from the server UI.'));
-      }
-      const origin = req.get('Origin');
-      if (origin) {
-        try {
-          if (new URL(origin).host !== req.get('Host')) {
-            return next(createHttpError(403, 'Migration request origin does not match this server.'));
-          }
-        } catch {
-          return next(createHttpError(403, 'Migration request origin is invalid.'));
+  if (req.method !== 'GET') {
+    // A custom header prevents a cross-site HTML form from invoking a state-changing route.
+    if (req.get('X-Rivet-Migration-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site') {
+      return next(createHttpError(403, 'Migration request must come from the server UI.'));
+    }
+    const origin = req.get('Origin');
+    if (origin) {
+      try {
+        if (new URL(origin).host !== req.get('Host')) {
+          return next(createHttpError(403, 'Migration request origin does not match this server.'));
         }
+      } catch {
+        return next(createHttpError(403, 'Migration request origin is invalid.'));
       }
     }
-    next();
-  };
-}
-export const requireVmMigrationOperatorAuth = sensitiveStorageOperatorAuth('RIVET_VM_MIGRATION_ENABLED');
-export const requireLocalUpgradeOperatorAuth = sensitiveStorageOperatorAuth();
-export const requireLocalUpgradeSetupOperatorAuth = sensitiveStorageOperatorAuth();
+  }
+  next();
+};
+export const requireVmMigrationOperatorAuth = sensitiveStorageOperatorAuth;
+export const requireLocalUpgradeOperatorAuth = sensitiveStorageOperatorAuth;
+export const requireLocalUpgradeSetupOperatorAuth = sensitiveStorageOperatorAuth;

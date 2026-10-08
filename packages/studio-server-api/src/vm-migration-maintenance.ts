@@ -10,7 +10,25 @@ import { syncDirectory, writeDurableExclusive } from './routes/workflows/filesys
 
 const markerName = 'vm-migration-maintenance.json';
 let activeRequests = 0;
+let controlOperation = false;
 const passiveStreams = new Set<() => void>();
+
+/** Serializes the two UI storage workflows before either can create/remove a fence. */
+export function claimLocalStorageControl(): () => void {
+  if (controlOperation) throw new Error('Another local storage control operation is running.');
+  controlOperation = true;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    controlOperation = false;
+  };
+}
+
+export function assertNoManagedMigrationMaintenance(): void {
+  if (readVmMigrationMaintenance()?.migrationId)
+    throw new Error('Use Migration recovery to resume this server; a managed transfer owns the maintenance barrier.');
+}
 
 /** Notification-only SSE owners opt in after their asynchronous setup is
  * complete. Do not register executions or mutating requests here. */
@@ -50,13 +68,28 @@ export function isVmMigrationMaintenanceActive(): boolean {
   }
 }
 
-export function readVmMigrationMaintenance(): { enteredAt: string } | null {
+export function readVmMigrationMaintenance(): { enteredAt: string; migrationId?: string } | null {
   try {
-    const parsed = JSON.parse(readFileSync(markerPath(), 'utf8')) as { version?: unknown; enteredAt?: unknown };
-    if (parsed.version !== 1 || typeof parsed.enteredAt !== 'string') {
+    const stat = lstatSync(markerPath());
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid VM migration maintenance marker type.');
+    const parsed = JSON.parse(readFileSync(markerPath(), 'utf8')) as {
+      version?: unknown;
+      enteredAt?: unknown;
+      migrationId?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.enteredAt !== 'string' ||
+      !Number.isFinite(Date.parse(parsed.enteredAt)) ||
+      (parsed.migrationId !== undefined &&
+        (typeof parsed.migrationId !== 'string' || !/^[a-f0-9-]{36}$/.test(parsed.migrationId)))
+    ) {
       throw new Error('Invalid VM migration maintenance marker.');
     }
-    return { enteredAt: parsed.enteredAt };
+    return {
+      enteredAt: parsed.enteredAt,
+      ...(typeof parsed.migrationId === 'string' ? { migrationId: parsed.migrationId } : {}),
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     // A damaged marker is still an active maintenance barrier. Never interpret
@@ -65,9 +98,11 @@ export function readVmMigrationMaintenance(): { enteredAt: string } | null {
   }
 }
 
-export async function enterVmMigrationMaintenance(): Promise<void> {
+export async function enterVmMigrationMaintenance(migrationId?: string): Promise<void> {
   if (isVmMigrationMaintenanceActive()) {
-    readVmMigrationMaintenance();
+    const existing = readVmMigrationMaintenance();
+    if (migrationId && !existing?.migrationId)
+      throw new Error('Another storage workflow owns maintenance. Finish its recovery before starting migration.');
     closePassiveStreams();
     return;
   }
@@ -75,18 +110,20 @@ export async function enterVmMigrationMaintenance(): Promise<void> {
   try {
     await writeDurableExclusive(
       markerPath(),
-      JSON.stringify({ version: 1, enteredAt: new Date().toISOString() }),
+      JSON.stringify({ version: 1, enteredAt: new Date().toISOString(), ...(migrationId ? { migrationId } : {}) }),
       0o600,
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    readVmMigrationMaintenance();
+    const existing = readVmMigrationMaintenance();
+    if (migrationId && !existing?.migrationId) throw new Error('Another storage workflow owns maintenance.');
   }
   await syncDirectory(getAppDataRoot());
   closePassiveStreams();
 }
 
-export async function leaveVmMigrationMaintenance(): Promise<void> {
+export async function leaveVmMigrationMaintenance(options: { managedMigration?: boolean } = {}): Promise<void> {
+  if (!options.managedMigration) assertNoManagedMigrationMaintenance();
   // The general migration recovery endpoint must not bypass an unfinished
   // local identity repair just because legacy remains the selected backend.
   const control = process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim();

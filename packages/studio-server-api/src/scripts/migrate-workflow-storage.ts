@@ -610,7 +610,11 @@ async function main() {
     appData: path.resolve(sourceAppDataRoot),
     runtimeLibraries: path.resolve(sourceRuntimeLibrariesRoot),
   };
-  const native = controlRoot ? await SqliteMigrationSource.open(controlRoot, manifestRoots) : undefined;
+  const native = controlRoot
+    ? await SqliteMigrationSource.open(controlRoot, manifestRoots, {
+        expectedIdentity: process.env.RIVET_MIGRATION_SOURCE_IDENTITY,
+      })
+    : undefined;
   const sourceIdentity =
     native?.sourceIdentity ??
     migrationSourceIdentity([

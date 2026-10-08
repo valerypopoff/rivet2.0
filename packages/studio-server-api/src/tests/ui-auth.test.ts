@@ -13,6 +13,7 @@ import { uiAuthRouter } from '../routes/ui-auth.js';
 import { appSettingsRouter } from '../routes/app-settings.js';
 import { writeWebAppAuthSettings } from '../web-app-auth-settings.js';
 import { writeTrustedClientSettings } from '../trusted-client-settings.js';
+import { getVmMigrationSourceInventory } from '../vm-migration-service.js';
 import { addUiAuthErrorToReturnTo, removeUiAuthErrorFromReturnTo, sanitizeUiAuthReturnTo } from '../ui-auth-utils.js';
 
 const SERVER_UI_AUTH_ENV_KEYS = [
@@ -23,6 +24,9 @@ const SERVER_UI_AUTH_ENV_KEYS = [
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_SERVER_UI_AUTH_MODE',
   'RIVET_VM_MIGRATION_ENABLED',
+  'RIVET_VM_MIGRATION_EDITOR_CONTROL',
+  'RIVET_LOCAL_METADATA_CONTROL_ROOT',
+  'RIVET_DEPLOYMENT_TOPOLOGY',
 ] as const;
 
 type ServerUiAuthEnv = Partial<Record<(typeof SERVER_UI_AUTH_ENV_KEYS)[number], string | undefined>>;
@@ -127,7 +131,7 @@ function getCookieValue(setCookieHeader: string, name: string): string {
   return match[1]!;
 }
 
-test('VM migration requires explicit enablement, a real operator session and same-origin intent', async () => {
+test('VM migration needs no enablement flag but requires a real operator session and same-origin intent', async () => {
   await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
     await withUiAuthServer(async (baseUrl) => {
       const cookie = `rivet_ui_token=${getExpectedUiSessionToken()}`;
@@ -136,14 +140,15 @@ test('VM migration requires explicit enablement, a real operator session and sam
           method: 'POST',
           headers: trustedProxyHeaders({ cookie, ...headers }),
         });
-      assert.equal((await request({ 'x-rivet-migration-intent': '1' })).status, 404);
-      process.env.RIVET_VM_MIGRATION_ENABLED = '1';
+      assert.equal((await request({ 'x-rivet-migration-intent': '1' })).status, 204);
+      process.env.RIVET_VM_MIGRATION_ENABLED = '0'; // Retained deployment values no longer gate migration.
       assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: baseUrl })).status, 204);
       assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: 'http://127.0.0.1:1' })).status, 403);
       assert.equal((await request()).status, 403);
       assert.equal((await request({ 'x-rivet-migration-intent': '1', origin: 'https://evil.example' })).status, 403);
       assert.equal((await request({ 'x-rivet-migration-intent': '1', 'sec-fetch-site': 'cross-site' })).status, 403);
       assert.equal((await request({ 'x-rivet-migration-intent': '1' })).status, 204);
+      await writeTrustedClientSettings({ trustedClients: ['127.0.0.1'] });
       assert.equal(
         (
           await fetch(`${baseUrl}/migration-test`, {
@@ -155,7 +160,7 @@ test('VM migration requires explicit enablement, a real operator session and sam
       );
     });
   });
-  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'none', RIVET_VM_MIGRATION_ENABLED: '1' }, async () => {
+  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'none' }, async () => {
     await withUiAuthServer(async (baseUrl) => {
       assert.equal(
         (
@@ -175,6 +180,42 @@ test('VM migration requires explicit enablement, a real operator session and sam
         ).status,
         403,
       );
+    });
+  });
+});
+
+test('migration status and action admission share source safety checks without opt-in', async () => {
+  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key', RIVET_VM_MIGRATION_EDITOR_CONTROL: '1' }, async () => {
+    await withUiAuthServer(async (baseUrl) => {
+      const readStatus = async () => {
+        const response = await fetch(`${baseUrl}/api/app-settings/vm-migration`, {
+          headers: trustedProxyHeaders({ cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` }),
+        });
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+      const available = await readStatus();
+      assert.equal(available.available, true);
+      assert.equal(available.unavailableReason, null);
+      process.env.RIVET_VM_MIGRATION_ENABLED = '0';
+      assert.equal((await readStatus()).available, true);
+      for (const [name, value, reason] of [
+        ['RIVET_LOCAL_METADATA_CONTROL_ROOT', '/owned-fixture-control', /local SQLite metadata/],
+        ['RIVET_DEPLOYMENT_TOPOLOGY', 'replicated', /single-host source/],
+        ['RIVET_VM_MIGRATION_EDITOR_CONTROL', '0', /supervised backend/],
+      ] as const) {
+        const previous = process.env[name];
+        process.env[name] = value;
+        try {
+          const status = await readStatus();
+          assert.equal(status.available, false);
+          assert.match(status.unavailableReason, reason);
+          await assert.rejects(getVmMigrationSourceInventory(), reason);
+        } finally {
+          if (previous === undefined) delete process.env[name];
+          else process.env[name] = previous;
+        }
+      }
     });
   });
 });
@@ -360,6 +401,10 @@ test('server UI dummy OAuth creates an admin session and rejects non-admin email
         assert.equal(session.status, 200);
         assert.equal(session.headers.get('cache-control'), 'no-store');
         assert.deepEqual(await session.json(), { mode: 'oauth', email: 'admin@example.test' });
+        const migrationStatus = await fetch(`${baseUrl}/api/app-settings/vm-migration`, {
+          headers: trustedProxyHeaders({ cookie: `rivet_ui_oauth_session=${sessionCookie}` }),
+        });
+        assert.equal(migrationStatus.status, 200);
 
         const logout = await fetch(`${baseUrl}/ui-auth/logout?return_to=%2F`, {
           redirect: 'manual',

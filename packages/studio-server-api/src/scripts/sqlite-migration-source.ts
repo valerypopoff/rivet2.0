@@ -29,9 +29,26 @@ export class SqliteMigrationSource {
   readonly #journal: LocalMetadataTransitionJournal;
   readonly #selection: string;
   readonly #roots: LocalMetadataSourceRoots;
+  readonly #supervisedBarrier?: string;
   readonly sourceIdentity: string;
 
-  private constructor(controlRoot: string, roots: LocalMetadataSourceRoots, journal: LocalMetadataTransitionJournal) {
+  static identity(controlRoot: string, generationId: string, roots: LocalMetadataSourceRoots): string {
+    return createHash('sha256')
+      .update('sqlite-managed-source-v1\0')
+      .update(path.resolve(controlRoot))
+      .update('\0')
+      .update(generationId)
+      .update('\0')
+      .update(localMetadataSourceIdentity(roots))
+      .digest('hex');
+  }
+
+  private constructor(
+    controlRoot: string,
+    roots: LocalMetadataSourceRoots,
+    journal: LocalMetadataTransitionJournal,
+    supervisedBarrier?: string,
+  ) {
     const state = journal.read();
     if (
       state.phase !== 'sqlite-live' ||
@@ -44,16 +61,10 @@ export class SqliteMigrationSource {
       throw new Error('Native migration source roots differ from the selected generation.');
     this.#journal = journal;
     this.#roots = roots;
+    this.#supervisedBarrier = supervisedBarrier;
     this.#selection = JSON.stringify(state);
     this.paths = localMetadataGenerationPaths(controlRoot, state.generation.id);
-    this.sourceIdentity = createHash('sha256')
-      .update('sqlite-managed-source-v1\0')
-      .update(path.resolve(controlRoot))
-      .update('\0')
-      .update(state.generation.id)
-      .update('\0')
-      .update(state.generation.sourceIdentity)
-      .digest('hex');
+    this.sourceIdentity = SqliteMigrationSource.identity(controlRoot, state.generation.id, roots);
     this.catalog = new LocalWorkflowCatalog({
       databasePath: this.paths.catalogDatabasePath,
       artifactRoot: this.paths.artifactRoot,
@@ -75,21 +86,27 @@ export class SqliteMigrationSource {
     });
   }
 
-  static async open(controlRoot: string, roots: LocalMetadataSourceRoots): Promise<SqliteMigrationSource> {
+  static async open(
+    controlRoot: string,
+    roots: LocalMetadataSourceRoots,
+    options: { inspection?: boolean; supervisedBarrier?: string; expectedIdentity?: string } = {},
+  ): Promise<SqliteMigrationSource> {
     if (!path.isAbsolute(controlRoot)) throw new Error('Native migration control root must be absolute.');
     const journal = new LocalMetadataTransitionJournal(path.join(controlRoot, 'transition.sqlite'));
     let source: SqliteMigrationSource | undefined;
     try {
       await assertRealDirectories([controlRoot, roots.appData]);
       await journal.initialize({ readOnly: true });
-      source = new SqliteMigrationSource(controlRoot, roots, journal);
+      source = new SqliteMigrationSource(controlRoot, roots, journal, options.supervisedBarrier);
+      if (options.expectedIdentity && source.sourceIdentity !== options.expectedIdentity)
+        throw new Error('Selected SQLite generation differs from the migration source identity.');
       await assertRealDirectories([
         path.join(controlRoot, 'generations'),
         source.paths.root,
         source.paths.artifactRoot,
         source.paths.operationalRoot,
       ]);
-      await source.assertFrozen();
+      if (!options.inspection) await source.assertFrozen();
       source.catalog.initialize({ verifyOnly: true, requireExisting: true });
       source.workflows.initialize({ readOnly: true });
       await source.settings.initialize({ readOnly: true });
@@ -134,7 +151,11 @@ export class SqliteMigrationSource {
   }
 
   async assertFrozen(): Promise<void> {
-    if (process.env.RIVET_MIGRATION_SOURCE_QUIESCED !== '1' || process.env.RIVET_MIGRATION_SOURCE_STOPPED !== '1')
+    const supervisedBarrier = this.#supervisedBarrier ?? process.env.RIVET_MIGRATION_SOURCE_SUPERVISED_BARRIER;
+    if (
+      (!this.#supervisedBarrier && process.env.RIVET_MIGRATION_SOURCE_QUIESCED !== '1') ||
+      (process.env.RIVET_MIGRATION_SOURCE_STOPPED !== '1' && !supervisedBarrier)
+    )
       throw new Error(
         'Stop BOTH source processes and acknowledge SOURCE_STOPPED and SOURCE_QUIESCED before native migration.',
       );
@@ -144,9 +165,18 @@ export class SqliteMigrationSource {
     const stat = await fs.lstat(marker);
     if (!stat.isFile() || stat.isSymbolicLink())
       throw new Error('Native migration requires the durable maintenance barrier.');
-    const value = JSON.parse(await fs.readFile(marker, 'utf8')) as { version?: unknown; enteredAt?: unknown };
+    const value = JSON.parse(await fs.readFile(marker, 'utf8')) as {
+      version?: unknown;
+      enteredAt?: unknown;
+      migrationId?: unknown;
+    };
     if (value.version !== 1 || typeof value.enteredAt !== 'string' || !Number.isFinite(Date.parse(value.enteredAt)))
       throw new Error('Native migration maintenance barrier is invalid.');
+    if (
+      supervisedBarrier &&
+      (process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL !== '1' || value.migrationId !== supervisedBarrier)
+    )
+      throw new Error('Supervised migration requires the exact UI-owned maintenance barrier and editor coordination.');
   }
 
   async projectHeaders() {

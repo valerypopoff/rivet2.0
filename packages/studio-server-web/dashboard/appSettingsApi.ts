@@ -48,6 +48,9 @@ export type VmMigrationTarget = {
 
 export type VmMigrationStatus = {
   available: boolean;
+  unavailableReason?: string | null;
+  sourceKind?: 'legacy' | 'sqlite';
+  precopyAvailable?: boolean;
   maintenance: { enteredAt: string } | null;
   drain: { ready: boolean; blockers: string[] } | null;
   job: {

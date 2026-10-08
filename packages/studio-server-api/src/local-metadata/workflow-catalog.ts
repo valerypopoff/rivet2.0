@@ -940,6 +940,27 @@ export class LocalWorkflowCatalog {
       .sort((left, right) => left.localeCompare(right));
   }
 
+  readMigrationCounts(): {
+    projects: number;
+    folders: number;
+    recordingBundles: number;
+    publishedEndpoints: number;
+    publishedWebApps: number;
+    publishedVersions: number;
+  } {
+    return this.#database()
+      .prepare(
+        `SELECT
+      (SELECT COUNT(*) FROM projects) AS projects,
+      (SELECT COUNT(*) FROM folders) AS folders,
+      (SELECT COUNT(*) FROM recordings) AS recordingBundles,
+      (SELECT COUNT(*) FROM projects WHERE published_endpoint_name != '') AS publishedEndpoints,
+      (SELECT COUNT(*) FROM web_apps) AS publishedWebApps,
+      (SELECT COUNT(*) FROM published_versions) AS publishedVersions`,
+      )
+      .get() as ReturnType<LocalWorkflowCatalog['readMigrationCounts']>;
+  }
+
   findProjectPathById(workflowId: string): string | null {
     const row = this.#database().prepare('SELECT relative_path FROM projects WHERE workflow_id = ?').get(workflowId) as
       | { relative_path: string }

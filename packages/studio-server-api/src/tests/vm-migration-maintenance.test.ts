@@ -14,6 +14,8 @@ import {
   readVmMigrationMaintenance,
   vmMigrationRequestBarrier,
   watchVmMigrationPassiveStream,
+  claimLocalStorageControl,
+  assertNoManagedMigrationMaintenance,
 } from '../vm-migration-maintenance.js';
 
 // test-style: fixture-read: Only the test-owned damaged maintenance marker is read to verify recovery requests preserve it.
@@ -36,6 +38,30 @@ async function withAppData(run: (root: string) => Promise<void>): Promise<void> 
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test('managed migration owns its durable pause barrier and serializes local upgrade control', async () => {
+  await withAppData(async () => {
+    const release = claimLocalStorageControl();
+    assert.throws(claimLocalStorageControl, /Another local storage/);
+    release();
+    const second = claimLocalStorageControl();
+    release(); // A stale release cannot unlock the next owner.
+    assert.throws(claimLocalStorageControl, /Another local storage/);
+    second();
+    await enterVmMigrationMaintenance('11111111-1111-4111-8111-111111111111');
+    assert.throws(assertNoManagedMigrationMaintenance, /Migration recovery/);
+    await assert.rejects(leaveVmMigrationMaintenance(), /Migration recovery/);
+    assert.equal(isVmMigrationMaintenanceActive(), true);
+    await leaveVmMigrationMaintenance({ managedMigration: true });
+    assertNoManagedMigrationMaintenance();
+    await enterVmMigrationMaintenance();
+    await assert.rejects(
+      enterVmMigrationMaintenance('22222222-2222-4222-8222-222222222222'),
+      /Another storage workflow/,
+    );
+    await leaveVmMigrationMaintenance();
+  });
+});
 
 function check(pathname: string, method = 'POST') {
   const req = { path: pathname, method } as Request;

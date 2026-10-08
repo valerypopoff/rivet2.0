@@ -451,7 +451,10 @@ appSettingsRouter.post(
   migrationJsonBody,
   asyncHandler(async (req, res) => {
     const { target, checks } = migrationDeploymentReviewSchema.parse(req.body);
-    res.set('Cache-Control', 'no-store').json(await reviewVmMigrationDeployment(target, checks));
+    res
+      .status(202)
+      .set('Cache-Control', 'no-store')
+      .json(await reviewVmMigrationDeployment(target, checks));
   }),
 );
 appSettingsRouter.get('/trusted-clients/current-request', (req, res) => {
