@@ -221,6 +221,14 @@ an explicit choice. The unload warning applies only to unsaved work without
 confirmed reload recovery. Neither `pagehide` nor successful initiation of a write
 is proof of durability.
 
+Grouped browser writes normally debounce for one second of idle time. Continuous
+editing cannot postpone checkpoints indefinitely: a five-second maximum wait
+also schedules a write during a busy burst (or the configured debounce interval,
+if longer). This bounds scheduling, not backend IO completion. The final trailing
+edit still gets its idle-time checkpoint; explicit flushes cancel pending timers.
+`hybridStorage.test.ts` uses a fake clock to verify both the busy-burst checkpoint
+and the final trailing edit without relying on unload events.
+
 The default `BrowserStaticDataStore` is a derived document-local memory cache.
 Legacy `rivet_static_data` is read only during compatibility bootstrap, never
 cleared or rewritten. New payload authority lives in the checkpoint and project

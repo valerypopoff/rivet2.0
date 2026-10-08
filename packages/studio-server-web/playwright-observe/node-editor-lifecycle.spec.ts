@@ -3,6 +3,36 @@ import { writeFile } from 'node:fs/promises';
 import { deserializeProject, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 import type { WorkflowProjectItem } from '../dashboard/types';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
+
+async function waitForWorkspaceCheckpoint(
+  page: Page,
+  activeProjectId: string,
+  openedProjectIds: string[],
+  markers: string[] = [],
+) {
+  // A rendered tab is not a persistence acknowledgement. Observe the normal
+  // automatic checkpoint; do not force a flush or rely on unload-time writes.
+  await expect
+    .poll(async () => {
+      const raw = await readCommittedWorkspaceCheckpoint(page);
+      if (!raw) return null;
+      const checkpoint = JSON.parse(raw) as {
+        groups: {
+          project?: {
+            projectState?: { metadata: { id: string } };
+            projectsState?: { openedProjectsSortedIds: string[] };
+          };
+        };
+      };
+      return {
+        activeProjectId: checkpoint.groups.project?.projectState?.metadata.id,
+        openedProjectIds: checkpoint.groups.project?.projectsState?.openedProjectsSortedIds,
+        containsEdits: markers.every((marker) => raw.includes(marker)),
+      };
+    })
+    .toEqual({ activeProjectId, openedProjectIds, containsEdits: true });
+}
 
 async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRows = 0) {
   const field = type === 'object' ? 'jsonTemplate' : 'code';
@@ -305,31 +335,12 @@ test('reload preserves open tabs, unsaved content and sidebar selection while th
   await w.openNode();
   await w.edit('reload-B');
   await expect(w.row('B')).toHaveClass(/\bactive\b/);
-  // Wait for the normal automatic browser checkpoint, without saving to the
-  // server or synthesizing pagehide. Reload must restore the coherent workspace.
-  await expect
-    .poll(() =>
-      w.editorFrame.evaluate(async () => {
-        const key = sessionStorage.getItem('rivet-workspace-recovery-v1');
-        if (!key) return false;
-        const request = indexedDB.open('jotai-store');
-        const db = await new Promise<IDBDatabase>((resolve, reject) => {
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
-        try {
-          const read = db.transaction('state').objectStore('state').get(key);
-          const checkpoint = await new Promise<string | undefined>((resolve, reject) => {
-            read.onsuccess = () => resolve(read.result);
-            read.onerror = () => reject(read.error);
-          });
-          return Boolean(checkpoint?.includes('reload-A') && checkpoint.includes('reload-B'));
-        } finally {
-          db.close();
-        }
-      }),
-    )
-    .toBe(true);
+  await waitForWorkspaceCheckpoint(
+    page,
+    w.items[1]!.id,
+    w.items.map((item) => item.id),
+    ['reload-A', 'reload-B'],
+  );
   let releaseTree!: () => void;
   const treeGate = new Promise<void>((resolve) => {
     releaseTree = resolve;
@@ -375,6 +386,11 @@ test('reload preserves independent sidebar selection across a failed tree reques
   const w = await workspace(page);
   await w.row('B').dblclick();
   await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  await waitForWorkspaceCheckpoint(
+    page,
+    w.items[1]!.id,
+    w.items.map((item) => item.id),
+  );
   // Sidebar selection can precede an editor open or remain independent of it.
   // Seed that persisted state so startup ordering is deterministic.
   await page.evaluate(
@@ -400,6 +416,11 @@ test('reload preserves independent sidebar selection across a failed tree reques
       },
     }),
   );
+  await waitForWorkspaceCheckpoint(
+    page,
+    w.items[1]!.id,
+    w.items.map((item) => item.id),
+  );
   await page.reload();
   await expect(w.tab('B')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
   await expect(w.row('A')).toHaveClass(/\bactive\b/);
@@ -414,6 +435,7 @@ test('reload preserves independent sidebar selection across a failed tree reques
 test('reload clears a deleted sidebar selection without closing recovered tabs', async ({ page }) => {
   const w = await workspace(page);
   await expect(w.row('A')).toHaveClass(/\bactive\b/);
+  await waitForWorkspaceCheckpoint(page, w.items[0]!.id, [w.items[0]!.id]);
   await page.route('**/api/workflows/tree', (route) =>
     route.fulfill({
       json: {
@@ -467,29 +489,7 @@ test('a delayed save preserves newer text and sibling settings through close and
     await w.edit('unsaved-recovery');
     // Hidden-page checkpoint uses the public browser lifecycle, not a test-only store hook.
     await w.input.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-    await expect
-      .poll(() =>
-        w.editorFrame.evaluate(async () => {
-          const key = sessionStorage.getItem('rivet-workspace-recovery-v1');
-          if (!key) return false;
-          const request = indexedDB.open('jotai-store');
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-          });
-          try {
-            const read = database.transaction('state').objectStore('state').get(key);
-            const checkpoint = await new Promise<string | undefined>((resolve, reject) => {
-              read.onsuccess = () => resolve(read.result);
-              read.onerror = () => reject(read.error);
-            });
-            return checkpoint?.includes('unsaved-recovery') ?? false;
-          } finally {
-            database.close();
-          }
-        }),
-      )
-      .toBe(true);
+    await waitForWorkspaceCheckpoint(page, w.items[0]!.id, [w.items[0]!.id], ['unsaved-recovery']);
     await page.reload();
     await waitForDashboardReady(page);
     await w.openNode();

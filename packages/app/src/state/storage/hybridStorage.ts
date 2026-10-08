@@ -71,9 +71,15 @@ function createDebouncedSave(
     return undefined;
   }
 
-  return debounce(async (value: any) => {
-    await controller.saveNow(value).catch(() => undefined);
-  }, debounceMs);
+  return debounce(
+    async (value: any) => {
+      await controller.saveNow(value).catch(() => undefined);
+    },
+    debounceMs,
+    // A busy editor must still checkpoint. This bounds scheduling delay, not
+    // IO completion; only a verified backend commit acknowledges recovery.
+    { maxWait: Math.max(debounceMs, 5_000) },
+  );
 }
 
 function persistGroupedSnapshot(controller: GroupedStorageController, value: any): void {

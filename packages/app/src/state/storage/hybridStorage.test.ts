@@ -11,6 +11,34 @@ import { MemoryAsyncStorage } from './indexedDB.js';
 import { initializeHybridStorage, memoryStorage } from './migrations.js';
 
 describe('createHybridStorage', () => {
+  it('continuous workspace edits checkpoint periodically and retain the final trailing edit', async (t) => {
+    const oldMemory = new Map(memoryStorage);
+    memoryStorage.clear();
+    const backend = new MemoryAsyncStorage();
+    const previous = configureHybridStorageBackend(backend);
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    try {
+      const { storage } = createHybridStorage('project');
+      // There is never a full second of idle time in this editing burst.
+      for (let edit = 0; edit < 10; edit++) {
+        storage.setItem('marker', edit);
+        t.mock.timers.tick(500);
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const keys = await backend.listKeys('workspace-recovery/');
+      assert.equal(keys.length, 1, 'Continuous edits must not postpone recovery indefinitely');
+      assert.equal(JSON.parse((await backend.getItem(keys[0]!))!).groups.project.marker, 9);
+      storage.setItem('marker', 'final');
+      t.mock.timers.tick(1_000);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(JSON.parse((await backend.getItem(keys[0]!))!).groups.project.marker, 'final');
+    } finally {
+      configureHybridStorageBackend(previous);
+      memoryStorage.clear();
+      for (const [key, value] of oldMemory) memoryStorage.set(key, value);
+    }
+  });
+
   it('recovery checkpoints serialize the coherent workspace without separately serializing the project group', async (t) => {
     const oldMemory = new Map(memoryStorage);
     memoryStorage.clear();
