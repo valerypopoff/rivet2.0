@@ -994,6 +994,9 @@ persisting each fence and checks unchanged settings/journal bytes, rejected
 credentials, method/path lookalikes, and continued execution/write fencing.
 `vm-migration-maintenance.test.ts` checks exact-route drain accounting and permits
 the recovery read without clearing or rewriting a damaged maintenance marker.
+These tests read only test-owned temporary journal/marker artifacts, not
+implementation source, and carry the required `test-style: fixture-read`
+annotations; see [repository test guardrails](../BUILD-AND-CI.md#yarn-teststyle).
 The companion executor startup configuration exception is also exact `GET` only;
 its loopback, proxy-token and executor-token requirements remain unchanged.
 

@@ -24,6 +24,8 @@ import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
 import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
 
+// test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
+
 const relevantEnvKeys = [
   'RIVET_KEY',
   'RIVET_CORS_ALLOWED_ORIGINS',

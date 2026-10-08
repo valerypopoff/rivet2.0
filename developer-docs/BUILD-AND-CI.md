@@ -319,6 +319,14 @@ reported for review rather than rejected by this checker. A reported skipped tes
 is not execution evidence. Do not interpret the report-only policy as meaning
 that output pruning is parked: Skip unused outputs has active per-node coverage.
 
+Test-owned generated artifacts, such as temporary SQLite journals and damaged
+JSON markers used to verify byte preservation, also require the fixture-read
+annotation. Review every filesystem read in an annotated file: the exception
+does not authorize mixed production-source assertions. Run the root
+`yarn test:style` gate before committing test changes; the narrower
+`yarn studio-server:verify:test-style` check validates Studio Server suite
+ownership and conventions but does not replace the filesystem-read policy.
+
 The Studio Server monorepo import added its existing source-contract tests to this
 same shrinking baseline. They are migration debt, not precedent for new static tests;
 remove each entry when its contract moves behind an observable owner seam.

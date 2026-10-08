@@ -16,6 +16,8 @@ import {
   watchVmMigrationPassiveStream,
 } from '../vm-migration-maintenance.js';
 
+// test-style: fixture-read: Only the test-owned damaged maintenance marker is read to verify recovery requests preserve it.
+
 async function withAppData(run: (root: string) => Promise<void>): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-vm-migration-'));
   const previous = process.env.RIVET_APP_DATA_ROOT;
