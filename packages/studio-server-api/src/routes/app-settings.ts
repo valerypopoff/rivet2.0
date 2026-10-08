@@ -23,7 +23,7 @@ import {
 } from '../local-metadata/operator-service.js';
 import { LOCAL_UPGRADE_PREPARATION_KINDS } from '../../../studio-server-shared/local-upgrade-types.js';
 import { duplicateRepairChoicesSchema } from '../local-metadata/duplicate-project-repair.js';
-import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
+import type { RuntimeLimitSettingsDraft, ServerUiSession } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
   readDeploymentStorageSettings,
@@ -74,6 +74,7 @@ import {
 } from '../workflow-endpoint-auth-settings.js';
 import { createHttpError } from '../utils/httpError.js';
 import { getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';
+import { getServerUiAuthMode, isServerUiOAuthSessionAllowed, readServerUiOAuthSession } from '../server-ui-auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import { createJsonBodyParser } from '../middleware/body-parsers.js';
@@ -145,6 +146,14 @@ const migrationDeploymentReviewSchema = z
   .strict();
 
 appSettingsRouter.use('/vm-migration', requireVmMigrationOperatorAuth);
+appSettingsRouter.get('/server-ui-session', (req, res) => {
+  const mode = getServerUiAuthMode();
+  const session = mode === 'oauth' ? readServerUiOAuthSession(req) : null;
+  res.set('Cache-Control', 'no-store').json({
+    mode,
+    email: session && isServerUiOAuthSessionAllowed(session) ? session.email : null,
+  } satisfies ServerUiSession);
+});
 appSettingsRouter.get(
   '/local-upgrade/setup',
   requireLocalUpgradeSetupOperatorAuth,

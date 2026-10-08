@@ -343,6 +343,18 @@ The saved web-app callback URL remains the visitor-web-app callback, usually `${
 
 Server UI OAuth sessions are fail-closed. Empty admin email lists deny all OAuth users. State cookies and session cookies are bound to the active saved OAuth settings version, so changing provider URL, client credentials, scopes, email claim, admin emails, or session policy invalidates stale sign-ins without needing to rotate `RIVET_KEY`.
 
+`Settings` -> `Server UI access` shows the signed-in OAuth email and a `Sign out`
+link only when the current request has a valid, allowed server UI OAuth session.
+The operator-authenticated, non-cacheable `GET /api/app-settings/server-ui-session`
+projection returns only the active deployment auth mode and that email (otherwise
+`null`); it never exposes cookies, tokens or provider secrets. Trusted-client bypass
+alone does not count as an OAuth sign-in. Sign out navigates to
+`/__rivet_auth/logout?return_to=%2F`, clears the server UI session/state and key
+cookies, and returns to the dashboard (or its sign-in gate when authentication is
+required). Trusted-client bypass still applies after sign-out. Pending settings
+edits are not saved. This does not sign out of the external identity provider or clear separate
+web-app OAuth sessions; with Local dummy the next sign-in can use another email.
+
 `RIVET_KEY` is still required in proxy-fronted deployments even when `RIVET_SERVER_UI_AUTH_MODE=none` or `oauth`, because the proxy-to-API trust header is derived from that key.
 
 ## Web apps

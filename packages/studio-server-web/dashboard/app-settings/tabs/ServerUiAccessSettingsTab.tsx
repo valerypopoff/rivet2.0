@@ -1,9 +1,36 @@
+import { useEffect, useState } from 'react';
+import type { ServerUiSession } from '../../../../studio-server-shared/app-settings-types';
+import { readServerUiSession } from '../../appSettingsApi';
 import type { useWebAppAuthForm } from '../useWebAppAuthForm';
 
 export function ServerUiAccessSettingsTab({ auth }: { auth: ReturnType<typeof useWebAppAuthForm> }) {
+  const [session, setSession] = useState<ServerUiSession | null>(null);
+  const [sessionError, setSessionError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void readServerUiSession(controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setSession(value);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSessionError(true);
+      });
+    return () => controller.abort();
+  }, []);
+
   return (
     <div className="project-settings-tab-panel app-settings-server-ui-access-panel" role="tabpanel">
       <section className="app-settings-section" aria-label="Server UI access">
+        {!session && !sessionError ? <p role="status">Checking sign-in status…</p> : null}
+        {session?.mode === 'oauth' && session.email ? (
+          <div className="app-settings-field">
+            <span>Signed in as {session.email}</span>
+            <a href="/__rivet_auth/logout?return_to=%2F">Sign out</a>
+            <span className="app-settings-field-help">Signing out does not save pending settings changes.</span>
+          </div>
+        ) : null}
+        {sessionError ? <p role="status">Could not read your sign-in status.</p> : null}
         <div className="app-settings-field-grid" aria-busy={auth.controlsDisabled}>
           <div className="app-settings-field">
             <span className="app-settings-field-label">Access mode</span>

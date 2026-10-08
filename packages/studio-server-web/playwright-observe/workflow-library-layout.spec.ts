@@ -12,6 +12,61 @@ const STATUS_DOT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished_changes: 'rgb(255, 215, 106)',
 };
 
+for (const session of [
+  { mode: 'oauth', email: 'admin@example.test' },
+  { mode: 'oauth', email: null },
+  { mode: 'key', email: null },
+  { mode: 'none', email: null },
+]) {
+  test(`Server UI access sign out for ${session.mode} session ${session.email ?? 'without OAuth email'}`, async ({
+    page,
+  }) => {
+    await installStatusDotTreeRoute(page, []);
+    await installAppSettingsRoute(page);
+    await page.route('**/api/app-settings/server-ui-session', (route) => route.fulfill({ json: session }));
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const modal = page.getByTestId('app-settings-modal');
+    await modal.getByRole('tab', { name: 'Server UI access' }).click();
+    const panel = modal.locator('.app-settings-server-ui-access-panel');
+    await expect(panel.getByText('Checking sign-in status…')).toHaveCount(0);
+    await expect(panel.getByLabel('Server UI admin emails')).toBeEnabled();
+    const signOut = panel.getByRole('link', { name: 'Sign out', exact: true });
+    if (session.email) {
+      await expect(panel.getByText(`Signed in as ${session.email}`)).toBeVisible();
+      await expect(signOut).toHaveAttribute('href', '/__rivet_auth/logout?return_to=%2F');
+      await expect(panel.getByText('Signing out does not save pending settings changes.')).toBeVisible();
+      let settingsWrites = 0;
+      page.on('request', (request) => {
+        if (request.method() !== 'GET' && request.url().includes('/api/app-settings/')) settingsWrites += 1;
+      });
+      await panel.getByLabel('Server UI admin emails').fill('pending@example.test');
+      await page.route('**/__rivet_auth/logout?return_to=%2F', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: '<h1>Sign in required</h1>',
+        }),
+      );
+      await signOut.click();
+      await expect(page).toHaveURL(/\/__rivet_auth\/logout\?return_to=%2F$/);
+      await expect(page.getByRole('heading', { name: 'Sign in required' })).toBeVisible();
+      expect(settingsWrites).toBe(0);
+    } else {
+      await expect(page.getByText('Could not read your sign-in status.')).toHaveCount(0);
+      await expect(signOut).toHaveCount(0);
+      await expect(panel.getByText(/Signed in as/)).toHaveCount(0);
+    }
+  });
+}
+
 const ACTIVE_PROJECT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgba(255, 255, 255, 0.07)',
   published: 'rgba(126, 226, 148, 0.12)',

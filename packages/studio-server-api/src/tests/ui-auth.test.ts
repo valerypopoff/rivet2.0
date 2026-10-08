@@ -12,6 +12,7 @@ import { requireOperatorAuth, requireVmMigrationOperatorAuth } from '../middlewa
 import { uiAuthRouter } from '../routes/ui-auth.js';
 import { appSettingsRouter } from '../routes/app-settings.js';
 import { writeWebAppAuthSettings } from '../web-app-auth-settings.js';
+import { writeTrustedClientSettings } from '../trusted-client-settings.js';
 import { addUiAuthErrorToReturnTo, removeUiAuthErrorFromReturnTo, sanitizeUiAuthReturnTo } from '../ui-auth-utils.js';
 
 const SERVER_UI_AUTH_ENV_KEYS = [
@@ -353,6 +354,31 @@ test('server UI dummy OAuth creates an admin session and rejects non-admin email
         });
         assert.equal(authorized.status, 204);
 
+        const session = await fetch(`${baseUrl}/api/app-settings/server-ui-session`, {
+          headers: trustedProxyHeaders({ cookie: `rivet_ui_oauth_session=${sessionCookie}` }),
+        });
+        assert.equal(session.status, 200);
+        assert.equal(session.headers.get('cache-control'), 'no-store');
+        assert.deepEqual(await session.json(), { mode: 'oauth', email: 'admin@example.test' });
+
+        const logout = await fetch(`${baseUrl}/ui-auth/logout?return_to=%2F`, {
+          redirect: 'manual',
+          headers: trustedProxyHeaders({ cookie: `rivet_ui_oauth_session=${sessionCookie}` }),
+        });
+        assert.equal(logout.status, 303);
+        assert.equal(logout.headers.get('location'), '/');
+        for (const name of ['rivet_ui_oauth_session', 'rivet_ui_oauth_state', 'rivet_ui_token']) {
+          assert.ok(
+            logout.headers
+              .getSetCookie()
+              .some((cookie) => cookie.startsWith(`${name}=`) && cookie.includes('Max-Age=0')),
+          );
+        }
+        const signedOut = await fetch(`${baseUrl}/api/app-settings/server-ui-session`, {
+          headers: trustedProxyHeaders(),
+        });
+        assert.equal(signedOut.status, 403);
+
         await writeDummyServerUiOAuthSettings(['someone-else@example.test']);
         const stale = await fetch(`${baseUrl}/ui-auth/check`, {
           headers: trustedProxyHeaders({
@@ -360,9 +386,43 @@ test('server UI dummy OAuth creates an admin session and rejects non-admin email
           }),
         });
         assert.equal(stale.status, 401);
+        await writeTrustedClientSettings({ trustedClients: ['127.0.0.1'] });
+        const bypassWithStaleSession = await fetch(`${baseUrl}/api/app-settings/server-ui-session`, {
+          headers: trustedProxyHeaders({ cookie: `rivet_ui_oauth_session=${sessionCookie}` }),
+        });
+        assert.equal(bypassWithStaleSession.status, 200);
+        assert.deepEqual(await bypassWithStaleSession.json(), { mode: 'oauth', email: null });
       });
     },
   );
+});
+
+test('server UI session projection does not mistake trusted-client bypass or key login for OAuth', async () => {
+  for (const mode of ['none', 'key', 'oauth'] as const) {
+    await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: mode }, async () => {
+      await writeDummyServerUiOAuthSettings(['admin@example.test']);
+      await writeTrustedClientSettings({ trustedClients: ['127.0.0.1'] });
+      await withUiAuthServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/app-settings/server-ui-session`, {
+          headers: trustedProxyHeaders({ cookie: 'rivet_ui_oauth_session=forged' }),
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { mode, email: null });
+        if (mode === 'key') {
+          const keySession = await fetch(`${baseUrl}/api/app-settings/server-ui-session`, {
+            headers: trustedProxyHeaders({
+              'x-rivet-client-ip': '192.0.2.10',
+              cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+            }),
+          });
+          assert.equal(keySession.status, 200);
+          assert.deepEqual(await keySession.json(), { mode: 'key', email: null });
+        }
+        const untrusted = await fetch(`${baseUrl}/api/app-settings/server-ui-session`);
+        assert.equal(untrusted.status, 403);
+      });
+    });
+  }
 });
 
 test('server UI OAuth uses saved app settings instead of retired server OAuth env', async () => {
