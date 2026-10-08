@@ -20,6 +20,11 @@ import { isWebAppSocketRouteEnabled } from '../web-app-action-websocket.js';
 import { createHttpError } from '../utils/httpError.js';
 import { MAX_LOCAL_EDITOR_RECORDING_REQUEST_BYTES } from '../routes/workflows/local-editor-recording-limits.js';
 import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-settings.js';
+import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-migration-maintenance.js';
+import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
+import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
+
+// test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
 
 const relevantEnvKeys = [
   'RIVET_KEY',
@@ -33,6 +38,8 @@ const relevantEnvKeys = [
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_SERVER_UI_AUTH_MODE',
   'RIVET_DEPLOYMENT_TOPOLOGY',
+  'RIVET_LOCAL_METADATA_CONTROL_ROOT',
+  'RIVET_LOCAL_METADATA_BOOT_REVISION',
 ] as const;
 
 async function withApiEnv(
@@ -452,6 +459,77 @@ test('web-app WebSocket routes follow the same profile split as their HTTP count
   assert.equal(isWebAppSocketRouteEnabled('latest', 'execution'), false);
   assert.equal(isWebAppSocketRouteEnabled('published', 'combined'), true);
   assert.equal(isWebAppSocketRouteEnabled('latest', 'combined'), true);
+});
+
+test('proxy startup configuration remains authenticated and readable while storage admission is fenced', async () => {
+  for (const profile of ['combined', 'control'] as const) {
+    await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+      const initialSettings = createProxySettingsSnapshot();
+      const control = path.join(process.env.RIVET_APP_DATA_ROOT!, 'local-control');
+      fs.mkdirSync(control, { recursive: true });
+      const journalPath = path.join(control, 'transition.sqlite');
+      const journal = new LocalMetadataTransitionJournal(journalPath);
+      try {
+        await journal.initialize({ create: true });
+      } finally {
+        journal.close();
+      }
+      process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT = control;
+      // A stale process boot revision fences writes independently of maintenance.
+      process.env.RIVET_LOCAL_METADATA_BOOT_REVISION = '0';
+      const journalBytes = fs.readFileSync(journalPath);
+      await enterVmMigrationMaintenance();
+      for (const code of ['vm_migration_maintenance', 'local_metadata_paused']) {
+        // Recreate the API app after the durable fence, as on a paused VM deploy.
+        const server = await startServer(profile);
+        const configurationUrl = `${server.baseUrl}/internal/app-settings/proxy-config`;
+        const existingFiles = fs.readdirSync(process.env.RIVET_APP_DATA_ROOT!, { recursive: true }).sort();
+        try {
+          const configuration = await fetch(configurationUrl, { headers: trustedProxyHeaders() });
+          assert.equal(configuration.status, 200, `${profile}: ${code}`);
+          assert.equal(configuration.headers.get('cache-control'), 'no-store');
+          assert.deepEqual(await configuration.json(), initialSettings);
+          for (const token of ['', 'invalid-token']) {
+            const unauthorized = await fetch(configurationUrl, {
+              headers: { 'x-rivet-proxy-auth': token },
+            });
+            assert.equal(unauthorized.status, 403);
+          }
+          for (const [pathname, method] of [
+            ['/internal/app-settings/proxy-config', 'POST'],
+            ['/internal/app-settings/proxy-config', 'HEAD'],
+            ['/internal/app-settings/proxy-config', 'PUT'],
+            ['/internal/app-settings/proxy-config', 'DELETE'],
+            ['/internal/app-settings/proxy-config/anything', 'GET'],
+            ['/internal/app-settings/proxy-config-extra', 'GET'],
+            ['/internal/executor-runtime-config', 'POST'],
+            ['/internal/executor-runtime-config', 'HEAD'],
+            ['/internal/executor-runtime-config', 'PUT'],
+            ['/internal/executor-runtime-config', 'DELETE'],
+            ['/internal/executor-runtime-config/anything', 'GET'],
+            ['/internal/executor-runtime-config-extra', 'GET'],
+            ['/api/workflows/save', 'POST'],
+            ['/workflows/missing', 'GET'],
+            ['/internal/workflows-latest/missing', 'POST'],
+          ]) {
+            const blocked = await fetch(`${server.baseUrl}${pathname}`, {
+              method,
+              headers: trustedProxyHeaders(),
+            });
+            assert.equal(blocked.status, 503, `${profile}: ${method} ${pathname}`);
+            assert.equal(blocked.headers.get('retry-after'), '60');
+            if (method === 'HEAD') assert.equal(await blocked.text(), '');
+            else assert.equal((await blocked.json()).code, code);
+          }
+          assert.deepEqual(fs.readFileSync(journalPath), journalBytes, 'Recovery reads do not alter the journal.');
+          assert.deepEqual(fs.readdirSync(process.env.RIVET_APP_DATA_ROOT!, { recursive: true }).sort(), existingFiles);
+        } finally {
+          await server.close();
+        }
+        if (code === 'vm_migration_maintenance') await leaveVmMigrationMaintenance();
+      }
+    });
+  }
 });
 
 test('control profile exposes control-plane routes and does not expose published execution routes', async () => {

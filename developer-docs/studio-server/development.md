@@ -615,6 +615,9 @@ checks timer release; a successful shutdown must not keep Node alive until an un
 grace timeout. Automatic validation waits for combined readiness, not merely an API
 status response. Headless UI coverage checks the consolidated flow, reconnect,
 readiness delay and explicit final acknowledgement.
+The real supervised flow also reads proxy startup settings without an operator
+cookie and checks UI authentication while paused, both before copy and after the
+SQLite restart. Writes and public workflow GET execution must still return 503.
 
 Run `local-browser-backup.test.ts` for archive/restore, capacity, drift, path
 and permission/link preservation; run it on Linux as well as Windows.
@@ -978,6 +981,24 @@ The older manual route remains available: set exactly one `RIVET_IMAGE_TAG=candi
 Running staging images against the production VM's existing data is still a live deployment, not an isolated rehearsal. Back up and test restore of the persistent roots and encryption key first; after new writes or a storage/schema upgrade, changing the image tag back may not restore the old data contract. Promote to `main` only after the staging run and VM checks are satisfactory; the `main` run must pass its own gates before it advances `latest` and the production release pointer.
 
 ## Proxy DNS recovery and health
+
+Proxy startup fetches the authenticated, read-only
+`GET /internal/app-settings/proxy-config` snapshot before starting Nginx. The
+migration request barrier must permit this exact method/path during migration
+maintenance and local-selection restart/validation fences; otherwise recreating
+the proxy while storage is paused locks operators out of the recovery UI. The
+route still requires proxy authentication and returns `Cache-Control: no-store`.
+Do not broaden this exception to other internal routes, writes, or public GET
+execution routes. `api-profile.test.ts` recreates combined/control API apps after
+persisting each fence and checks unchanged settings/journal bytes, rejected
+credentials, method/path lookalikes, and continued execution/write fencing.
+`vm-migration-maintenance.test.ts` checks exact-route drain accounting and permits
+the recovery read without clearing or rewriting a damaged maintenance marker.
+These tests read only test-owned temporary journal/marker artifacts, not
+implementation source, and carry the required `test-style: fixture-read`
+annotations; see [repository test guardrails](../BUILD-AND-CI.md#yarn-teststyle).
+The companion executor startup configuration exception is also exact `GET` only;
+its loopback, proxy-token and executor-token requirements remain unchanged.
 
 Proxy service destinations use runtime DNS resolution consistently across the
 development, Compose production, and packaged image templates. Do not add literal
