@@ -8,12 +8,13 @@ schedule database is an error, not an empty domain. Review schedules in the
 destination UI before enabling them. See [Scheduled runs](./scheduled-runs.md).
 
 This is the implementation and safety contract for copying a filesystem-backed
-single-host Rivet Server with legacy file metadata into a separate managed destination. The Settings ->
+single-host Rivet Server with legacy file metadata or a selected live SQLite
+generation into a separate managed destination. The legacy Settings ->
 Migration tab can test a destination, pause the source, run the importer,
 verify it, and record a separate deployment review. **It does not route traffic to Kubernetes or change the VM's active
 Storage setting.** Local-to-managed activation through the Storage tab/API is
-blocked: local files must first migrate to SQLite, and a later selected-SQLite
-transfer needs its own verified adapter (not implemented yet). Existing managed
+blocked: local files must first migrate to SQLite; selected-SQLite transfer now
+uses the offline operator adapter below, not a blind storage selector. Existing managed
 installations remain configurable. This legacy importer copies to a separate
 destination; it is not an exemption from the source activation policy.
 
@@ -29,14 +30,15 @@ tool and needs access-controlled source mounts and credentials.
 
 ## Source and destination
 
-This importer does not yet read a selected local SQLite generation. The browser
+The CLI reads a selected local SQLite generation when local-metadata control is
+configured. The browser
 workflow is deliberately unavailable whenever local-metadata control is configured,
 including its paused legacy phases. After the local storage upgrade, retained legacy
 files are not the live authority and must never be supplied to this CLI as a substitute
-for a SQLite export. A selected-SQLite-to-S3/PostgreSQL adapter is a separate future
-feature; do not remove or bypass the control configuration to unlock migration.
+for a SQLite export. Do not remove or bypass the control configuration to unlock
+the legacy browser workflow.
 
-The source must still be in legacy filesystem storage mode. It is the VM's workflow
+For the legacy importer, the source must still be in legacy filesystem storage mode. It is the VM's workflow
 root, recording-bundle root, app-data root, and runtime-library root. Preserve
 all four together in a backup before beginning.
 In that mode Rivet's workflow, Evaluation, health, recording and App Settings
@@ -72,6 +74,54 @@ foreign keys prevent writes to a deleted project instead. Plugin package trees
 are per-pod reconstructible caches, not durable managed state; app logs, VM
 Docker metadata, browser-local data, and external secrets are outside this
 migration.
+
+## Offline live SQLite source
+
+Use a maintenance window. Back up the complete local-metadata control root and
+selected generation (catalog, settings, immutable objects and operational SQLite
+databases), along with the original app-data root containing the migration
+barrier. Retained pre-upgrade workflow files are not an up-to-date backup.
+
+Stop **both** source API and executor processes and keep the managed destination
+offline. Run the CLI in a separate operator process/container with the source
+mounts and the same source settings decryption key when applicable. Keep the four
+original roots in `RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT`,
+`RIVET_MIGRATION_SOURCE_APP_DATA_ROOT`, `RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT`,
+`RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT` unchanged: they identify the selected generation,
+but workflow/recording/runtime contents come from that generation, not those old
+roots. Set `RIVET_MIGRATION_SOURCE_LOCAL_METADATA_CONTROL_ROOT` to its absolute
+control path (the normal `RIVET_LOCAL_METADATA_CONTROL_ROOT` is also recognized).
+Supply the destination `RIVET_MIGRATION_TARGET_*` configuration described below.
+
+After independently confirming all source writers/runs have stopped, set
+`RIVET_MIGRATION_SOURCE_STOPPED=1` and `RIVET_MIGRATION_SOURCE_QUIESCED=1`, then run:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:freeze-source
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:migrate
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:verify
+```
+
+`freeze-source` creates/validates the durable maintenance barrier; these flags
+are operator acknowledgements, not automatic process shutdown. Only validated
+`sqlite-live` generations are accepted. Control/generation directories and the
+barrier must be real, non-symlink paths. Copy and verify use read-only SQLite
+handles, bind the destination gate to the selected generation, compare logical
+database snapshots before/after, and fail if the selector or source changed.
+Every copy/verification pass requires both stopped-source acknowledgements, not
+only barrier creation; the original app-data directory must also be non-symlink.
+Publication histories, settings, Evaluation/health/schedule state and the active
+runtime release are preserved (schedules retain the safety transform above).
+Recordings are decoded within bounded memory and uploaded using managed
+compression; they are not expanded into temporary disk trees. A failed copy can
+be retried against the same frozen source/destination. Native pre-copy is not
+supported.
+
+Only after verification and deployment review should operators start the
+destination and route traffic to it. Keep the source stopped/paused. If abandoning
+the transfer, invalidate the destination serving gate before clearing the source
+maintenance barrier and restarting source writers. This adapter does not switch
+the source's Storage setting or implement a browser-assisted SQLite cutover.
 
 ## Browser-assisted sequence
 

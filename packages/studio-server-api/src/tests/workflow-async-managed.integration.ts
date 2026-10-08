@@ -14,6 +14,8 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
+import { parseManagedArtifactDescriptor } from '../routes/workflows/managed/artifact-descriptor.js';
+import { isManagedWorkflowArtifactObjectKey } from '../routes/workflows/managed/blob-store.js';
 import { startAsyncWorkflowProcess } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
@@ -300,17 +302,40 @@ try {
   const storedObjects = await s3.send(new ListObjectsV2Command({ Bucket: 'async-recordings' }));
   const keys = storedObjects.Contents?.map((object) => object.Key ?? '') ?? [];
   assert.ok(keys.length > 0);
-  assert.ok(keys.every((key) => key.startsWith('tenant/async-workflows/')));
+  const prefix = storageSettings.objectStoragePrefix;
+  assert.ok(keys.every((key) => key.startsWith(prefix)));
+  const artifactPaths = keys.map((key) => {
+    const relativeKey = key.slice(prefix.length);
+    assert.ok(
+      isManagedWorkflowArtifactObjectKey(relativeKey),
+      'stored workflow objects use the recognized grammar',
+    );
+    assert.ok(parseManagedArtifactDescriptor(relativeKey), 'new artifacts carry immutable integrity descriptors');
+    return relativeKey.slice(0, relativeKey.lastIndexOf('.artifact-v1.'));
+  });
+  const references = await pool.query<{ key: string }>(`
+    SELECT key FROM (
+      SELECT project_blob_key AS key FROM workflow_revisions
+      UNION SELECT dataset_blob_key FROM workflow_revisions
+      UNION SELECT recording_blob_key FROM workflow_recordings
+      UNION SELECT replay_project_blob_key FROM workflow_recordings
+      UNION SELECT replay_dataset_blob_key FROM workflow_recordings
+    ) AS referenced WHERE key IS NOT NULL
+  `);
+  assert.ok(references.rows.length > 0);
+  const storedKeys = new Set(keys);
+  for (const { key } of references.rows)
+    assert.ok(storedKeys.has(`${prefix}${key}`), 'SQL artifact references resolve under the configured S3 prefix');
   assert.ok(
-    keys.some((key) => key.endsWith('/project.rivet-project')),
+    artifactPaths.some((key) => key.endsWith('/project.rivet-project')),
     'saved and published revisions use the prefix',
   );
   assert.ok(
-    keys.some((key) => key.endsWith('/recording.rivet-recording')),
+    artifactPaths.some((key) => key.endsWith('/recording.rivet-recording')),
     'recordings use the prefix',
   );
   assert.ok(
-    keys.some((key) => key.endsWith('/replay.rivet-project')),
+    artifactPaths.some((key) => key.endsWith('/replay.rivet-project')),
     'replay projects use the prefix',
   );
 

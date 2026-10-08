@@ -14,6 +14,7 @@ import type {
   EvaluationLibrary,
   EvaluationRecordingArtifact,
   EvaluationRun,
+  EvaluationRunHistoryPage,
   EvaluationRunEvent,
   EvaluationStore,
   EvaluationStoreInitialization,
@@ -822,6 +823,28 @@ export function createHttpEvaluationStore(options: {
       if (response.status === 404) return undefined;
       await requireOk(response);
       return options.normalizeRun(await response.json());
+    },
+    async listPage(input) {
+      const requestUrl = new URL(
+        url(options.baseUrl, "/history"),
+        window.location.origin,
+      );
+      requestUrl.searchParams.set("projectId", String(input.projectId));
+      if (input.suiteId !== undefined)
+        requestUrl.searchParams.set("suiteId", input.suiteId);
+      if (input.after !== undefined)
+        requestUrl.searchParams.set("after", input.after);
+      requestUrl.searchParams.set("limit", String(input.limit ?? 25));
+      const response = await fetch(requestUrl);
+      await requireOk(response);
+      const page = (await response.json()) as EvaluationRunHistoryPage;
+      if (
+        !page ||
+        !Array.isArray(page.runs) ||
+        (page.nextCursor !== undefined && typeof page.nextCursor !== "string")
+      )
+        throw new Error("Invalid compact evaluation history response.");
+      return page;
     },
     async list(input) {
       const requestUrl = new URL(url(options.baseUrl), window.location.origin);

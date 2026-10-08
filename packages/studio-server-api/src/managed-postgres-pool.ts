@@ -51,9 +51,31 @@ export function getManagedPostgresPoolMax(env: NodeJS.ProcessEnv = process.env):
 
 export function withManagedPostgresPoolMax(config: PoolConfig, env: NodeJS.ProcessEnv = process.env): PoolConfig {
   return {
-    ...config,
+    ...withAuthoritativePostgresTls(config),
+    // Bound ordinary reads as well as transaction-local writes. The driver's
+    // slightly longer deadline also covers a server/network that stops replying.
+    statement_timeout: config.statement_timeout ?? 60_000,
+    query_timeout: config.query_timeout ?? 65_000,
     max: getManagedPostgresPoolMax(env),
   };
+}
+
+/** pg parses URL TLS options after the explicit SSL object. Never allow a URL
+ * to silently weaken the deployment policy. sslmode is the legacy UI hint;
+ * Rivet's separate policy owns it, so remove it rather than reinterpret it. */
+export function withAuthoritativePostgresTls(config: PoolConfig): PoolConfig {
+  if (!config.connectionString) return config;
+  const url = new URL(config.connectionString);
+  for (const key of url.searchParams.keys()) {
+    if (key.toLowerCase() === 'sslmode') continue;
+    if (key.toLowerCase().startsWith('ssl') || key.toLowerCase() === 'uselibpqcompat') {
+      throw new Error('PostgreSQL URL TLS overrides are not supported. Configure Rivet database SSL mode instead.');
+    }
+  }
+  for (const key of [...url.searchParams.keys()]) {
+    if (key.toLowerCase() === 'sslmode') url.searchParams.delete(key);
+  }
+  return { ...config, connectionString: url.toString(), ssl: config.ssl ?? false };
 }
 
 export class ManagedPostgresPoolRegistry {

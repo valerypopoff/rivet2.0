@@ -16,12 +16,20 @@ import { createManagedBucketCommand } from '../../../managed-bucket-creation.js'
 import { observeObjectStorageOperation, type MetricsObjectStorageDomain } from '../../../metrics.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
+import {
+  decodeManagedArtifact,
+  MAX_MANAGED_ARTIFACT_BYTES,
+  parseManagedArtifactDescriptor,
+  verifyManagedArtifactBytes,
+  type ManagedArtifactDescriptor,
+} from './artifact-descriptor.js';
 
 export interface ManagedWorkflowBlobStore {
   initialize?(): Promise<void>;
   checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   dispose?(): void;
   putText(key: string, contents: string, contentType?: string): Promise<void>;
+  putArtifact?(descriptor: ManagedArtifactDescriptor, bytes: Uint8Array, contentType?: string): Promise<void>;
   getText(key: string, options?: { signal?: AbortSignal }): Promise<string>;
   /**
    * Returns bytes which remain stable for bounded worker-side decoding.
@@ -187,26 +195,81 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
 
   async getText(key: string, options?: { signal?: AbortSignal }): Promise<string> {
     const bytes = await this.getBytes(key, options);
-    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
+    return decodeManagedArtifact(bytes, parseManagedArtifactDescriptor(key));
+  }
+
+  async putArtifact(
+    descriptor: ManagedArtifactDescriptor,
+    bytes: Uint8Array,
+    contentType = 'text/plain; charset=utf-8',
+  ): Promise<void> {
+    verifyManagedArtifactBytes(bytes, descriptor);
+    try {
+      await observeObjectStorageOperation(this.#metricsDomain, 'put', () =>
+        this.#client.send(
+          new PutObjectCommand({
+            Bucket: this.#bucket,
+            Key: this.#key(descriptor.key),
+            Body: bytes,
+            ContentType: contentType,
+            ...(descriptor.encoding === 'gzip' ? { ContentEncoding: 'gzip' } : {}),
+            IfNoneMatch: '*',
+          }),
+          { abortSignal: AbortSignal.timeout(300_000) },
+        ),
+      );
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 412) throw error;
+      // An identical immutable upload is idempotent; a corrupt existing object
+      // must fail rather than be overwritten or accepted merely by HEAD.
+      await this.getBytes(descriptor.key);
+    }
   }
 
   async getBytes(key: string, options?: { signal?: AbortSignal }): Promise<Uint8Array> {
+    const descriptor = parseManagedArtifactDescriptor(key);
+    const deadline = AbortSignal.timeout(300_000);
+    const signal = options?.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
     return observeObjectStorageOperation(this.#metricsDomain, 'get', async () => {
       const response = await this.#client.send(
         new GetObjectCommand({
           Bucket: this.#bucket,
           Key: this.#key(key),
         }),
-        { abortSignal: options?.signal },
+        { abortSignal: signal },
       );
 
       if (!response.Body) {
         throw new Error(`Object body missing for key ${key}`);
       }
 
-      // The extractor owns the single transfer copy, made only on dispatch.
-      // Returning the SDK bytes here avoids another full-artifact allocation.
-      return response.Body.transformToByteArray();
+      const limit = descriptor?.storedBytes ?? MAX_MANAGED_ARTIFACT_BYTES;
+      const body = response.Body as AsyncIterable<Uint8Array> & { destroy?(error?: Error): void };
+      const abort = () =>
+        body.destroy?.(signal.reason instanceof Error ? signal.reason : new Error('Artifact read aborted.'));
+      signal.addEventListener('abort', abort, { once: true });
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        signal.throwIfAborted();
+        if (response.ContentLength !== undefined && (response.ContentLength > limit || response.ContentLength < 0))
+          throw new Error('Managed artifact exceeds its expected size.');
+        for await (const chunk of body) {
+          signal.throwIfAborted();
+          size += chunk.byteLength;
+          if (size > limit) throw new Error('Managed artifact exceeds its expected size.');
+          chunks.push(chunk);
+        }
+        signal.throwIfAborted();
+        const bytes = Buffer.concat(chunks, size);
+        if (descriptor) verifyManagedArtifactBytes(bytes, descriptor);
+        return bytes;
+      } catch (error) {
+        body.destroy?.();
+        throw error;
+      } finally {
+        signal.removeEventListener('abort', abort);
+      }
     });
   }
 
@@ -376,7 +439,13 @@ export function createRecordingBlobKey(
 export function isManagedWorkflowArtifactObjectKey(key: string): boolean {
   const segments = key.split('/');
   if (segments.length !== 4 || segments.some((segment) => !segment || segment !== segment.trim())) return false;
-  const [workflowId, collection, objectId, fileName] = segments;
+  const [workflowId, collection, objectId, storedFileName] = segments;
+  let fileName = storedFileName;
+  try {
+    if (parseManagedArtifactDescriptor(key)) fileName = storedFileName!.split('.artifact-v1.')[0];
+  } catch {
+    return false;
+  }
   if (!workflowId || !objectId || workflowId === '.' || workflowId === '..' || objectId === '.' || objectId === '..') {
     return false;
   }

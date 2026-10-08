@@ -17,7 +17,7 @@ import type {
   WorkflowRecordingRunSummary,
   WorkflowRecordingRunsPageResponse,
 } from '../../../studio-server-shared/workflow-recording-types.js';
-import type { LocalRecordingMetadata } from './workflow-catalog.js';
+import type { LocalRecordingMetadata, LocalPublicationState } from './workflow-catalog.js';
 import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
 import {
   buildWorkflowRunStatistics,
@@ -305,6 +305,24 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       projects: [],
     };
   }
+  async #commitStructure(
+    structure: Structure,
+    projects: Array<{ before: LocalWorkflowTreeProject; relativePath: string | null }>,
+    folders = structure.expectedFolders,
+  ) {
+    try {
+      await this.#catalog.applyStructureChanges({ ...structure, projects, folders });
+    } catch (error) {
+      if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
+        throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
+      throw error;
+    }
+    for (const change of projects) {
+      notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(change.before.relativePath)}`);
+      if (change.relativePath)
+        notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(change.relativePath)}`);
+    }
+  }
   async #commit(
     structure: Structure,
     projects: LocalCatalogChange[],
@@ -400,24 +418,36 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         if (!currentPath) throw conflict('This project no longer exists. Reopen it or use Save As.');
         value = currentPath;
       }
-      const before = await this.#catalog.readProject(value);
       this.#requireFolder(structure.expectedFolders, parentOf(value));
-      let next = this.#newProject(value, options.contents, options.datasetsContents);
-      if (before) {
-        if (before.workflowId !== submitted.metadata.id)
-          throw conflict('The save target belongs to a different project.');
-        if (options.expectedRevisionId && options.expectedRevisionId !== revision(before))
-          throw conflict('Project has changed since it was opened. Reload before saving.');
-        next = {
-          ...before,
+      const next = this.#newProject(value, options.contents, options.datasetsContents);
+      let saved: LocalWorkflowTreeProject | null;
+      try {
+        saved = await this.#catalog.saveDraft({
+          relativePath: value,
+          workflowId: submitted.metadata.id,
           contents: next.contents,
           datasetsContents: next.datasetsContents,
+          expectedRevisionId: options.expectedRevisionId,
           updatedAt: next.updatedAt,
+        });
+      } catch (error) {
+        if (/different project/.test(String(error))) throw conflict('The save target belongs to a different project.');
+        if (/concurrently/.test(String(error)))
+          throw conflict('Project has changed since it was opened. Reload before saving.');
+        throw error;
+      }
+      if (saved) {
+        notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(value)}`);
+        return {
+          path: this.#absolute(value),
+          revisionId: saved.revisionId,
+          project: this.#treeItem(saved),
+          created: false,
         };
-        next.endpointStatus = this.#status(next);
-      } else if (options.expectedRevisionId) throw conflict('The save target no longer exists.');
-      await this.#commit(structure, [{ before, after: next }]);
-      return { path: this.#absolute(value), revisionId: revision(next), project: this.#item(next), created: !before };
+      }
+      if (options.expectedRevisionId) throw conflict('The save target no longer exists.');
+      await this.#commit(structure, [{ before: null, after: next }]);
+      return { path: this.#absolute(value), revisionId: revision(next), project: this.#item(next), created: true };
     });
   }
   async createWorkflowProjectItem(folderValue: unknown, nameValue: unknown): Promise<WorkflowProjectItem> {
@@ -477,12 +507,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return this.#item(next);
     });
   }
-  async #moveProject(value: unknown, target: (source: Snapshot) => string) {
+  async #moveProject(value: unknown, target: (source: LocalWorkflowTreeProject) => string) {
     return this.#withWrite(async () => {
       const structure = this.#structure(),
-        before = await this.#project(value),
-        newPath = target(before);
-      if (newPath === before.relativePath) return { project: this.#item(before), movedProjectPaths: [] };
+        before = await this.#catalog.readTreeProject(this.#projectPath(value));
+      if (!before) throw createHttpError(404, 'Project not found');
+      const newPath = target(before);
+      if (newPath === before.relativePath) return { project: this.#treeItem(before), movedProjectPaths: [] };
       this.#requireFolder(structure.expectedFolders, parentOf(newPath));
       const name = path.posix.basename(newPath, '.rivet-project');
       const after = {
@@ -491,9 +522,9 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         name,
         fileName: `${name}.rivet-project`,
       };
-      await this.#commit(structure, [{ before, after }]);
+      await this.#commitStructure(structure, [{ before, relativePath: newPath }]);
       return {
-        project: this.#item(after),
+        project: this.#treeItem(after),
         movedProjectPaths: [
           { fromAbsolutePath: this.#absolute(before.relativePath), toAbsolutePath: this.#absolute(newPath) },
         ],
@@ -513,9 +544,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async deleteWorkflowProjectItem(value: unknown): Promise<string | null> {
     return this.#withWrite(async () => {
       const structure = this.#structure(),
-        before = await this.#project(value);
+        before = await this.#catalog.readTreeProject(this.#projectPath(value));
+      if (!before) throw createHttpError(404, 'Project not found');
       await this.#beforeDeleteProject(before.workflowId);
-      await this.#commit(structure, [{ before, after: null }]);
+      await this.#commitStructure(structure, [{ before, relativePath: null }]);
       return before.workflowId;
     });
   }
@@ -527,7 +559,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       const structure = this.#structure();
       this.#requireFolder(structure.expectedFolders, parent);
       if (structure.expectedFolders.includes(value)) throw conflict('Folder already exists');
-      await this.#commit(structure, [], [...structure.expectedFolders, value]);
+      await this.#commitStructure(structure, [], [...structure.expectedFolders, value]);
       return this.#folder(value);
     });
   }
@@ -542,12 +574,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       this.#requireFolder(structure.expectedFolders, parentOf(destination));
       if (structure.expectedFolders.includes(destination)) throw conflict('Folder already exists');
       const inSource = (item: string) => item === source || item.startsWith(`${source}/`);
-      const changes: LocalCatalogChange[] = [];
+      const changes: Array<{ before: LocalWorkflowTreeProject; relativePath: string }> = [];
       for (const value of structure.expectedProjectPaths.filter(inSource)) {
-        const before = await this.#project(value);
-        changes.push({ before, after: { ...before, relativePath: `${destination}${value.slice(source.length)}` } });
+        const before = await this.#catalog.readTreeProject(value);
+        if (!before) throw conflict('Project changed concurrently');
+        changes.push({ before, relativePath: `${destination}${value.slice(source.length)}` });
       }
-      await this.#commit(
+      await this.#commitStructure(
         structure,
         changes,
         structure.expectedFolders.map((folder) =>
@@ -557,8 +590,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return {
         folder: this.#folder(destination),
         movedProjectPaths: changes.map((change) => ({
-          fromAbsolutePath: this.#absolute(change.before!.relativePath),
-          toAbsolutePath: this.#absolute(change.after!.relativePath),
+          fromAbsolutePath: this.#absolute(change.before.relativePath),
+          toAbsolutePath: this.#absolute(change.relativePath),
         })),
       };
     });
@@ -576,11 +609,14 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return this.#withWrite(async () => {
       const structure = this.#structure();
       this.#requireFolder(structure.expectedFolders, source);
-      const changes: LocalCatalogChange[] = [];
-      for (const item of structure.expectedProjectPaths.filter((item) => item.startsWith(`${source}/`)))
-        changes.push({ before: await this.#project(item), after: null });
-      for (const change of changes) await this.#beforeDeleteProject(change.before!.workflowId);
-      await this.#commit(
+      const changes: Array<{ before: LocalWorkflowTreeProject; relativePath: null }> = [];
+      for (const item of structure.expectedProjectPaths.filter((item) => item.startsWith(`${source}/`))) {
+        const before = await this.#catalog.readTreeProject(item);
+        if (!before) throw conflict('Project changed concurrently');
+        changes.push({ before, relativePath: null });
+      }
+      for (const change of changes) await this.#beforeDeleteProject(change.before.workflowId);
+      await this.#commitStructure(
         structure,
         changes,
         structure.expectedFolders.filter((item) => item !== source && !item.startsWith(`${source}/`)),
@@ -607,27 +643,34 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     value: unknown,
     preconditions: WorkflowPublicationPreconditions,
     kind: Parameters<typeof assertPublicationPreconditions>[2],
-    update: (next: Snapshot) => void,
+    update: (next: LocalPublicationState) => void,
   ) {
     preconditions = structuredClone(preconditions);
     return this.#withWrite(async () => {
-      const structure = this.#structure(),
-        before = await this.#project(value);
-      assertPublicationPreconditions(
-        preconditions,
-        {
-          projectId: before.workflowId,
-          publicationVersion: before.publicationVersion,
-          draftRevisionId: revision(before),
-        },
-        kind,
-      );
-      const next = structuredClone(before);
-      update(next);
-      next.publicationVersion = nextPublicationVersion(before.publicationVersion);
-      next.endpointStatus = this.#status(next);
-      await this.#commit(structure, [{ before, after: next }]);
-      return next;
+      const projectPath = this.#projectPath(value);
+      try {
+        const result = await this.#catalog.mutatePublication(
+          projectPath,
+          (next, revisionId) => {
+            assertPublicationPreconditions(
+              preconditions,
+              { projectId: next.workflowId, publicationVersion: next.publicationVersion, draftRevisionId: revisionId },
+              kind,
+            );
+            const publicationVersion = nextPublicationVersion(next.publicationVersion);
+            update(next);
+            next.publicationVersion = publicationVersion;
+          },
+          kind === 'publish-endpoint' || kind === 'publish-web-apps',
+        );
+        if (!result) throw createHttpError(404, 'Project not found');
+        notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(projectPath)}`);
+        return result;
+      } catch (error) {
+        if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
+          throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
+        throw error;
+      }
     });
   }
   async publishWorkflowProjectItem(
@@ -637,9 +680,9 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   ) {
     const endpointName = normalizeStoredEndpointName((settings as { endpointName?: string })?.endpointName ?? '');
     if (!endpointName) throw badRequest('Missing endpoint name');
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'publish-endpoint', (next) => {
-        requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(next.contents)[0]);
+        requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(next.draftText)[0]);
         const publishedAt = new Date().toISOString(),
           versionId = randomUUID();
         next.endpointName = next.publishedEndpointName = endpointName;
@@ -660,7 +703,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async unpublishWorkflowProjectItem(value: unknown, preconditions: WorkflowPublicationPreconditions) {
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'unpublish-endpoint', (next) => {
         next.publishedEndpointName = '';
         next.publishedVersionId = null;
@@ -676,7 +719,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     preconditions: WorkflowPublicationPreconditions,
   ) {
     if (access !== 'public' && access !== 'internal') throw badRequest('Invalid endpoint access');
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'set-endpoint-access', (next) => {
         next.endpointAccess = access;
       }),
@@ -734,9 +777,9 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppPublicationDrafts(publications);
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'publish-web-apps', (next) => {
-        const graphs = this.#uiGraphs(loadProjectAndAttachedDataFromString(next.contents)[0]);
+        const graphs = this.#uiGraphs(loadProjectAndAttachedDataFromString(next.draftText)[0]);
         const apps = drafts.map((draft) => {
           const graph = graphs.find((graph) => graph.uiGraphId === draft.uiGraphId);
           if (!graph) throw createHttpError(404, 'Web app not found');
@@ -765,7 +808,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     preconditions: WorkflowPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppAccessDrafts(updates);
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'set-web-app-access', (next) => {
         for (const draft of drafts) {
           const app = next.publishedWebApps.find((app) => app.uiGraphId === draft.uiGraphId);
@@ -781,7 +824,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     preconditions: WorkflowPublicationPreconditions,
   ) {
     if (typeof uiGraphId !== 'string' || !uiGraphId) throw badRequest('Missing uiGraphId');
-    return this.#item(
+    return this.#treeItem(
       await this.#publication(value, preconditions, 'unpublish-web-app', (next) => {
         if (!next.publishedWebApps.some((app) => app.uiGraphId === uiGraphId))
           throw createHttpError(404, 'Published web app not found');
@@ -853,7 +896,20 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     id: unknown,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
-    const snapshot = await this.#publication(value, preconditions, 'restore-version', (next) => {
+    preconditions = structuredClone(preconditions);
+    const snapshot = await this.#withWrite(async () => {
+      const structure = this.#structure(),
+        before = await this.#project(value);
+      assertPublicationPreconditions(
+        preconditions,
+        {
+          projectId: before.workflowId,
+          publicationVersion: before.publicationVersion,
+          draftRevisionId: revision(before),
+        },
+        'restore-version',
+      );
+      const next = structuredClone(before);
       const version = this.#version(next, id);
       requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(version.contents)[0]);
       const versionId = randomUUID(),
@@ -864,6 +920,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       next.endpointName = next.publishedEndpointName = version.endpointName;
       next.lastPublishedAt = next.updatedAt = publishedAt;
       next.publishedVersions.unshift({ ...version, versionId, publishedAt, isStarred: false, comment: '' });
+      next.publicationVersion = nextPublicationVersion(before.publicationVersion);
+      next.endpointStatus = this.#status(next);
+      await this.#commit(structure, [{ before, after: next }]);
+      return next;
     });
     return {
       project: this.#item(snapshot),
@@ -1070,6 +1130,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         heldRecordingIds,
       });
       for (const row of deleted) workflowRecordingInputCache.invalidate(`${this.#cacheScope}${row.recordingHash}`);
+      await this.#catalog.collectOrphanArtifacts({ now, batchSize });
       return deleted.length;
     });
   }

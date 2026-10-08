@@ -23,6 +23,7 @@ import type { RuntimeLibraryManifest } from '../runtime-libraries/manifest.js';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { readMigrationSourceUtf8 } from './migration-source-utf8.js';
 import { chargeLocalSourceBytes } from '../local-metadata/source-budget.js';
+import type { LocalRuntimeLibraryState } from '../local-metadata/workflow-catalog.js';
 
 function runtimeConfig(target: ManagedWorkflowStorageConfig): ManagedRuntimeLibrariesConfig {
   return {
@@ -159,17 +160,25 @@ export async function migrateRuntimeLibraries(options: {
   sourceRoot: string;
   target: ManagedWorkflowStorageConfig;
   verifyOnly?: boolean;
+  sourceState?: LocalRuntimeLibraryState;
 }): Promise<number> {
-  const manifest = await readSourceManifest(options.sourceRoot);
+  const manifest = options.sourceState?.manifest ?? (await readSourceManifest(options.sourceRoot));
   const hasPackages = Object.keys(manifest.packages).length > 0;
   if (hasPackages && process.env.RIVET_MIGRATION_RUNTIME_PLATFORM_ACK !== '1') {
     throw new Error(
       'Runtime libraries may contain native binaries. Confirm matching source/target image, OS, architecture and Node ABI with RIVET_MIGRATION_RUNTIME_PLATFORM_ACK=1.',
     );
   }
-  const archive = hasPackages ? await createSourceArchive(options.sourceRoot) : null;
+  const archive = hasPackages
+    ? options.sourceState
+      ? options.sourceState.archive
+      : await createSourceArchive(options.sourceRoot)
+    : null;
+  if (hasPackages && !archive) throw new Error('Selected runtime libraries have packages but no immutable archive.');
   const archiveSha = archive ? createHash('sha256').update(archive).digest('hex') : null;
-  const releaseId = archiveSha ? `vm-migration-${archiveSha.slice(0, 32)}` : null;
+  const releaseId = archiveSha
+    ? options.sourceState?.manifest.activeReleaseId ?? `vm-migration-${archiveSha.slice(0, 32)}`
+    : null;
   const artifactKey = releaseId ? createRuntimeLibraryReleaseArtifactKey(releaseId) : null;
   const config = runtimeConfig(options.target);
   const pool = new Pool(getPoolConfig(config));

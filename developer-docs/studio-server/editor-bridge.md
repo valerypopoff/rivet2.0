@@ -330,6 +330,11 @@ clearing live data is guarded by the unchanged dataset selection revision.
 two 350-node graphs and a roughly 2 MiB sidecar per project, asserting exactly one
 project request per initial open, preserved dirty content and separately retained
 datasets with deliberately reused IDs.
+The loaded-tab locator excludes opening placeholders: an active placeholder is
+an in-flight activation, not a usable warm snapshot. The scenario gates the second
+load to verify this distinction before exercising warm switches. Selecting an
+existing tab while another is still loading intentionally cancels the unfinished
+activation and must continue to do so.
 Its timing attachment is a synthetic local observation, not a VM latency promise.
 Selected project bytes, dataset import, normalization, graph rendering and coherent
 browser recovery remain proportional to the content actually needed; no automatic

@@ -9,6 +9,8 @@ import {
 } from './blob-store.js';
 import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
 import type { ManagedObjectDeletionReason } from './maintenance.js';
+import { prepareManagedTextArtifact } from './artifact-descriptor.js';
+import { getWorkflowRecordingConfig } from '../recordings-config.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
@@ -76,6 +78,8 @@ export function createManagedWorkflowRevisionFactory(options: {
 
   return {
     scheduleRevisionBlobCleanup,
+    discardPreparedRevision: (revision: Pick<RevisionRow, 'project_blob_key' | 'dataset_blob_key'>) =>
+      queueKnownBlobCleanup('unused prepared revision', [revision.project_blob_key, revision.dataset_blob_key]),
 
     readRevisionProjectContents,
 
@@ -93,14 +97,30 @@ export function createManagedWorkflowRevisionFactory(options: {
 
     async createRevision(workflowId: string, contents: string, datasetsContents: string | null): Promise<RevisionRow> {
       const revisionId = createManagedRevisionId();
-      const projectBlobKey = createRevisionBlobKey(workflowId, revisionId, 'project');
-      const datasetBlobKey = datasetsContents != null ? createRevisionBlobKey(workflowId, revisionId, 'dataset') : null;
+      let projectBlobKey = createRevisionBlobKey(workflowId, revisionId, 'project');
+      let datasetBlobKey = datasetsContents != null ? createRevisionBlobKey(workflowId, revisionId, 'dataset') : null;
       const stats = getWorkflowProjectStatsFromContents(contents);
 
-      await options.blobStore.putText(projectBlobKey, contents, 'application/x-yaml; charset=utf-8');
+      const projectArtifact = options.blobStore.putArtifact
+        ? await prepareManagedTextArtifact(projectBlobKey, contents)
+        : null;
+      const datasetArtifact =
+        options.blobStore.putArtifact && datasetBlobKey && datasetsContents !== null
+          ? await prepareManagedTextArtifact(datasetBlobKey, datasetsContents)
+          : null;
+      projectBlobKey = projectArtifact?.descriptor.key ?? projectBlobKey;
+      datasetBlobKey = datasetArtifact?.descriptor.key ?? datasetBlobKey;
       try {
+        if (projectArtifact)
+          await options.blobStore.putArtifact!(
+            projectArtifact.descriptor,
+            projectArtifact.bytes,
+            'application/x-yaml; charset=utf-8',
+          );
+        else await options.blobStore.putText(projectBlobKey, contents, 'application/x-yaml; charset=utf-8');
         if (datasetBlobKey && datasetsContents != null) {
-          await options.blobStore.putText(datasetBlobKey, datasetsContents, 'text/plain; charset=utf-8');
+          if (datasetArtifact) await options.blobStore.putArtifact!(datasetArtifact.descriptor, datasetArtifact.bytes);
+          else await options.blobStore.putText(datasetBlobKey, datasetsContents, 'text/plain; charset=utf-8');
         }
       } catch (error) {
         await queueKnownBlobCleanup('revision upload rollback', [projectBlobKey, datasetBlobKey]);
@@ -146,19 +166,45 @@ export function createManagedWorkflowRevisionFactory(options: {
       artifacts: RecordingBlobArtifacts,
       cleanupContext: string,
     ): Promise<RecordingBlobKeys> {
-      const recordingBlobKey = createRecordingBlobKey(workflowId, recordingId, 'recording');
-      const replayProjectBlobKey = createRecordingBlobKey(workflowId, recordingId, 'replay-project');
-      const replayDatasetBlobKey =
+      let recordingBlobKey = createRecordingBlobKey(workflowId, recordingId, 'recording');
+      let replayProjectBlobKey = createRecordingBlobKey(workflowId, recordingId, 'replay-project');
+      let replayDatasetBlobKey =
         artifacts.replayDataset != null ? createRecordingBlobKey(workflowId, recordingId, 'replay-dataset') : null;
+      const policy = getWorkflowRecordingConfig();
+      const prepare = (key: string, text: string) =>
+        options.blobStore.putArtifact
+          ? prepareManagedTextArtifact(key, text, policy.compression === 'gzip', policy.gzipLevel)
+          : null;
+      const recording = await prepare(recordingBlobKey, artifacts.recording);
+      const project = await prepare(replayProjectBlobKey, artifacts.replayProject);
+      const dataset =
+        replayDatasetBlobKey !== null && artifacts.replayDataset != null
+          ? await prepare(replayDatasetBlobKey, artifacts.replayDataset)
+          : null;
+      recordingBlobKey = recording?.descriptor.key ?? recordingBlobKey;
+      replayProjectBlobKey = project?.descriptor.key ?? replayProjectBlobKey;
+      replayDatasetBlobKey = dataset?.descriptor.key ?? replayDatasetBlobKey;
 
       try {
-        await Promise.all([
-          options.blobStore.putText(recordingBlobKey, artifacts.recording, 'text/plain; charset=utf-8'),
-          options.blobStore.putText(replayProjectBlobKey, artifacts.replayProject, 'application/x-yaml; charset=utf-8'),
+        const results = await Promise.allSettled([
+          recording
+            ? options.blobStore.putArtifact!(recording.descriptor, recording.bytes)
+            : options.blobStore.putText(recordingBlobKey, artifacts.recording, 'text/plain; charset=utf-8'),
+          project
+            ? options.blobStore.putArtifact!(project.descriptor, project.bytes, 'application/x-yaml; charset=utf-8')
+            : options.blobStore.putText(
+                replayProjectBlobKey,
+                artifacts.replayProject,
+                'application/x-yaml; charset=utf-8',
+              ),
           replayDatasetBlobKey != null && artifacts.replayDataset != null
-            ? options.blobStore.putText(replayDatasetBlobKey, artifacts.replayDataset, 'text/plain; charset=utf-8')
+            ? dataset
+              ? options.blobStore.putArtifact!(dataset.descriptor, dataset.bytes)
+              : options.blobStore.putText(replayDatasetBlobKey, artifacts.replayDataset, 'text/plain; charset=utf-8')
             : Promise.resolve(),
         ]);
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
       } catch (error) {
         await queueKnownBlobCleanup(cleanupContext, [recordingBlobKey, replayProjectBlobKey, replayDatasetBlobKey]);
         throw error;

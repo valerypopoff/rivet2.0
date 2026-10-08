@@ -8,11 +8,22 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
 
-import { createEmptyEvaluationLibrary } from '@valerypopoff/rivet2-evaluations';
-import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
+import { createEmptyEvaluationLibrary, normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
+import { loadProjectFromFile, loadProjectAndAttachedDataFromString, serializeProject } from '@valerypopoff/rivet2-node';
 import { Pool } from 'pg';
 
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
+import { listWorkflowFolders } from '../routes/workflows/workflow-query.js';
+import { LocalWorkflowCatalog } from '../local-metadata/workflow-catalog.js';
+import { SqliteWorkflowBackend } from '../local-metadata/sqlite-workflow-backend.js';
+import { localMetadataGenerationPaths } from '../local-metadata/serving-selection.js';
+import { localMetadataSourceIdentity } from '../local-metadata/source-identity.js';
+import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
+import { SqliteAppSettingsBackend } from '../app-settings/sqlite-settings-store.js';
+import { PostgresRivetEvaluationStore } from '../evaluation-runs/managed-store.js';
+import { collectSourceWorkflows } from '../local-metadata/filesystem-workflow-source.js';
+import { collectSourceAppSettings } from '../scripts/migrate-app-settings.js';
+import { createSourceArchive } from '../scripts/migrate-runtime-libraries.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
 import { readWorkflowMigrationTargetConfig } from '../scripts/migrate-workflow-storage-lib.js';
@@ -330,6 +341,7 @@ try {
     RIVET_MANAGED_MAINTENANCE_ENABLED: 'true', // Migration mode must suppress background work despite ambient flags.
     RIVET_HOSTED_EVALUATIONS_ENABLED: 'true',
     RIVET_MIGRATION_REPORT_PATH: path.join(root, 'verification-report.json'),
+    RIVET_LOCAL_METADATA_CONTROL_ROOT: '',
   };
   const destination = {
     databaseUrl,
@@ -345,7 +357,7 @@ try {
     targetOffline: true,
     runtimePlatformCompatible: true,
   };
-  const run = (mode: 'precopy' | 'migrate' | 'verify', overrides: NodeJS.ProcessEnv = {}) =>
+  const run = (mode: 'precopy' | 'migrate' | 'verify' | 'freeze-source', overrides: NodeJS.ProcessEnv = {}) =>
     execFileSync(
       process.execPath,
       [
@@ -623,6 +635,41 @@ try {
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_library')).rows[0]?.count, 1);
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_library_imports')).rows[0]?.count, 1);
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_runs')).rows[0]?.count, 1);
+  // Exercise the shared keyset query against actual PostgreSQL, not just a
+  // mocked pool. Equal timestamps must neither repeat nor omit run headers.
+  const evaluationStore = new PostgresRivetEvaluationStore(pool);
+  const pageIds = Array.from({ length: 4 }, (_, index) => `page-fixture-${index}`);
+  try {
+    for (const id of pageIds) {
+      const fixture = normalizeEvaluationRun({ id, status: 'completed', trials: [] });
+      await evaluationStore.put({ ...fixture, projectId, suiteId: 'page-fixture', startedAt: publishedAt });
+    }
+    const first = await evaluationStore.listPage({ projectId, suiteId: 'page-fixture', limit: 2 });
+    assert.deepEqual(
+      first.runs.map((run) => run.id),
+      ['page-fixture-3', 'page-fixture-2'],
+    );
+    assert.equal('trials' in first.runs[0]!, false);
+    assert.equal('provenance' in first.runs[0]!, false);
+    const second = await evaluationStore.listPage({
+      projectId,
+      suiteId: 'page-fixture',
+      limit: 2,
+      after: first.nextCursor,
+    });
+    assert.deepEqual(
+      second.runs.map((run) => run.id),
+      ['page-fixture-1', 'page-fixture-0'],
+    );
+    assert.equal(second.nextCursor, undefined);
+    assert.ok(Array.isArray((await evaluationStore.get({ projectId, runId: pageIds[0]! }))?.trials));
+    await assert.rejects(
+      evaluationStore.listPage({ projectId, suiteId: 'other-suite', after: first.nextCursor }),
+      /cursor/,
+    );
+  } finally {
+    for (const id of pageIds) await evaluationStore.delete({ projectId, runId: id });
+  }
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_recordings')).rows[0]?.count, 1);
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_dataset_snapshots')).rows[0]?.count, 1);
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM llm_profile_health')).rows[0]?.count, 1);
@@ -710,6 +757,144 @@ try {
   await invalidateVmMigrationTargetGate(pool!, sourceIdentity, targetIdentity); // Recovery after a VM crash is idempotent.
   await assert.rejects(() => assertVmMigrationTargetMayServe(pool!), /migration target is incomplete/i);
   console.log('VM-to-managed migration: copy, idempotent retry and exact verification passed.');
+
+  // A resumed SQLite installation must export its live generation, not its
+  // retained legacy files. Rehearse this into a separate database and bucket.
+  await pool!.query('CREATE DATABASE rivet_native_migration');
+  const controlRoot = path.join(root, 'native-control');
+  const paths = localMetadataGenerationPaths(controlRoot, 'native-live');
+  const sourceRoots = {
+    workflows: workflowsRoot,
+    recordings: recordingsRoot,
+    appData: appDataRoot,
+    runtimeLibraries: runtimeRoot,
+  };
+  const catalog = new LocalWorkflowCatalog({
+    databasePath: paths.catalogDatabasePath,
+    artifactRoot: paths.artifactRoot,
+  });
+  const sourceBackend = new SqliteWorkflowBackend({
+    databasePath: paths.catalogDatabasePath,
+    artifactRoot: paths.artifactRoot,
+    virtualRoot: workflowsRoot,
+    withWrite: (operation) => operation(),
+  });
+  const sourceSettings = new SqliteAppSettingsBackend({ databasePath: paths.settingsDatabasePath });
+  const journal = new LocalMetadataTransitionJournal(path.join(controlRoot, 'transition.sqlite'));
+  const nativeEnv = {
+    RIVET_MIGRATION_SOURCE_LOCAL_METADATA_CONTROL_ROOT: controlRoot,
+    RIVET_MIGRATION_TARGET_DATABASE_URL: `postgres://postgres@127.0.0.1:${databasePort}/rivet_native_migration`,
+    RIVET_MIGRATION_TARGET_S3_BUCKET: 'rivet-native-migration-fixture',
+    RIVET_MIGRATION_SOURCE_STOPPED: '1',
+  };
+  const previousNativeRoots = Object.fromEntries(Object.keys(originalRoots).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, {
+    RIVET_WORKFLOWS_ROOT: workflowsRoot,
+    RIVET_APP_DATA_ROOT: appDataRoot,
+    RIVET_WORKFLOW_RECORDINGS_ROOT: recordingsRoot,
+    RIVET_RUNTIME_LIBRARIES_ROOT: runtimeRoot,
+  });
+  try {
+    await fs.mkdir(paths.operationalRoot, { recursive: true });
+    catalog.initialize();
+    sourceBackend.initialize();
+    await sourceSettings.initialize();
+    const importFolders = (folders: Awaited<ReturnType<typeof listWorkflowFolders>>) => {
+      for (const folder of folders) {
+        catalog.importFolder(folder.relativePath);
+        importFolders(folder.folders);
+      }
+    };
+    importFolders(await listWorkflowFolders(workflowsRoot));
+    for (const snapshot of await collectSourceWorkflows(workflowsRoot)) await catalog.importProject(snapshot);
+    const latest = await sourceBackend.loadHostedProject(projectPath);
+    const [project, attached] = loadProjectAndAttachedDataFromString(latest.contents);
+    project.metadata.description = 'Changed after SQLite cutover; retained legacy file is stale.';
+    let liveContents = serializeProject(project, attached) as string;
+    await sourceBackend.saveHostedProject({
+      projectPath,
+      contents: liveContents,
+      datasetsContents: null,
+      expectedRevisionId: latest.revisionId,
+    });
+    // Hosted saves normalize title to the catalog name. Transfer must preserve
+    // the actual durable source bytes, not the pre-normalization UI submission.
+    liveContents = (await sourceBackend.loadHostedProject(projectPath)).contents;
+    assert.equal(
+      loadProjectAndAttachedDataFromString(liveContents)[0].metadata.description,
+      project.metadata.description,
+    );
+    await catalog.importRecording({
+      recordingId,
+      workflowId: projectId,
+      sourceProjectRelativePath: 'fixture.rivet-project',
+      sourceProjectName: 'fixture',
+      createdAt: publishedAt,
+      runKind: 'published',
+      status: 'succeeded',
+      durationMs: 7,
+      endpointName: 'migration-fixture',
+      errorMessage: null,
+      recordingContents,
+      replayProjectContents: projectContents,
+      replayDatasetContents: null,
+    });
+    for (const row of await collectSourceAppSettings(appDataRoot))
+      await sourceSettings.write({ ...row, expectedRevision: null });
+    await catalog.importRuntimeLibraryState({
+      manifest: {
+        packages: { 'tiny-lib': { name: 'tiny-lib', version: '1.0.0' } },
+        updatedAt: publishedAt,
+        activeReleaseId: 'native-release',
+      },
+      archive: await createSourceArchive(runtimeRoot),
+    });
+    for (const database of ['evaluation-runs.sqlite', 'llm-profile-health.sqlite'])
+      await fs.copyFile(path.join(appDataRoot, database), path.join(paths.operationalRoot, database));
+    const proof = {
+      id: 'native-live',
+      sourceIdentity: localMetadataSourceIdentity(sourceRoots),
+      candidateIdentity: '1'.repeat(64),
+      sourceFingerprint: '2'.repeat(64),
+      candidateFingerprint: '3'.repeat(64),
+      reportHash: '4'.repeat(64),
+    };
+    await journal.initialize({ create: true });
+    const verified = journal.recordVerifiedCandidate(1, proof),
+      selected = journal.selectSqliteForValidation(verified.revision, proof);
+    const validated = journal.recordRuntimeValidation(selected.revision, 'sqlite', proof.id, '5'.repeat(64));
+    journal.resumeWrites(validated.revision, proof);
+    sourceBackend.close();
+    catalog.close();
+    await sourceSettings.dispose();
+    journal.close();
+    run('freeze-source', nativeEnv);
+    run('migrate', nativeEnv);
+    run('migrate', nativeEnv);
+    run('verify', nativeEnv);
+    const target = new ManagedWorkflowBackend(readWorkflowMigrationTargetConfig({ ...env, ...nativeEnv }), undefined, {
+      migrationMode: 'verify',
+    });
+    try {
+      await target.initialize();
+      assert.equal((await target.readWorkflowMigrationSnapshot('fixture.rivet-project'))?.contents, liveContents);
+      assert.equal(await target.readWorkflowRecordingArtifact(recordingId, 'recording'), recordingContents);
+    } finally {
+      await target.dispose();
+    }
+    console.log(
+      'Live SQLite-to-managed migration: live draft, history, recording, operational rows, settings and runtime release verified.',
+    );
+  } finally {
+    sourceBackend.close();
+    catalog.close();
+    await sourceSettings.dispose();
+    journal.close();
+    for (const [key, value] of Object.entries(previousNativeRoots)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 } finally {
   await pool?.end().catch(() => undefined);
   for (const id of owned.reverse()) {

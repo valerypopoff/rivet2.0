@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { setImmediate as yieldToRequests } from 'node:timers/promises';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { LRUCache } from 'lru-cache';
@@ -115,6 +116,11 @@ type StoredVersion = Omit<
 type StoredWebApp = Omit<LocalWorkflowCatalogSnapshot['publishedWebApps'][number], 'contents' | 'datasetsContents'> & {
   contents: ArtifactRef;
   datasetsContents: ArtifactRef;
+};
+export type LocalPublicationState = StoredProject & {
+  draftText: string;
+  publishedVersions: StoredVersion[];
+  publishedWebApps: StoredWebApp[];
 };
 type StoredProject = Omit<
   LocalWorkflowCatalogSnapshot,
@@ -668,6 +674,7 @@ export class LocalWorkflowCatalog {
   #db: DatabaseSync | null = null;
   #readOnly = false;
   readonly #treeIndexes = new LRUCache<string, Promise<ProjectTreeIndex>>({ max: 1024 });
+  #collectionCursor = '';
 
   constructor(options: { databasePath: string; artifactRoot: string }) {
     this.#databasePath = options.databasePath;
@@ -736,6 +743,14 @@ export class LocalWorkflowCatalog {
   }
 
   checkHealth(): void {
+    const db = this.#database();
+    // Integrity/schema validation is performed on initialize. Readiness only
+    // proves this open authority is responsive; do not scan every row each poll.
+    readCatalogSchema(db);
+    db.prepare('SELECT 1 FROM projects LIMIT 1').get();
+  }
+
+  checkIntegrity(): void {
     const db = this.#database();
     readCatalogSchema(db);
     const integrity = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
@@ -1089,6 +1104,7 @@ export class LocalWorkflowCatalog {
       for (const change of encoded) {
         if (!change.after) continue;
         const { project, versions, apps } = change.after;
+        this.#assertStoredArtifacts(project);
         const parent = path.posix.dirname(project.relativePath);
         if (parent !== '.' && !options.folders.includes(parent))
           throw new Error('Local project parent folder is missing.');
@@ -1123,6 +1139,85 @@ export class LocalWorkflowCatalog {
         const parent = path.posix.dirname(projectPath);
         if (parent !== '.' && !options.folders.includes(parent))
           throw new Error('Local project parent folder is missing.');
+      }
+      this.#validateRoutes(db);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Moves/deletes alter catalog structure, not immutable bodies or history. */
+  async applyStructureChanges(options: {
+    expectedFolders: string[];
+    expectedProjectPaths: string[];
+    folders: string[];
+    projects: Array<{ before: LocalWorkflowTreeProject; relativePath: string | null }>;
+  }): Promise<void> {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    options = structuredClone(options);
+    const ordered = (values: string[]) => [...values].sort((a, b) => a.localeCompare(b));
+    const observed = new Map<string, StoredProject>();
+    for (const change of options.projects) {
+      const current = this.#readStoredProjectBundle(change.before.relativePath, false)?.project;
+      if (
+        !current ||
+        current.workflowId !== change.before.workflowId ||
+        current.publicationVersion !== change.before.publicationVersion ||
+        (await this.#treeIndex(current)).revisionId !== change.before.revisionId ||
+        observed.has(current.workflowId)
+      )
+        throw new Error('Local catalog project changed concurrently; reload before saving.');
+      observed.set(current.workflowId, current);
+    }
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#upgradeSchema(db);
+      if (
+        !sameJson(this.listFolders(), ordered(options.expectedFolders)) ||
+        !sameJson(this.listProjectPaths(), ordered(options.expectedProjectPaths))
+      )
+        throw new Error('Local catalog structure changed concurrently; reload before saving.');
+      for (const folder of options.folders) assertPath(folder, 'folder');
+      if (new Set(options.folders).size !== options.folders.length) throw new Error('Duplicate local catalog folder.');
+      const ids = new Set<string>();
+      const changes = options.projects.map((change) => {
+        const current = this.#readStoredProjectBundle(change.before.relativePath, false)?.project;
+        if (!current || !sameJson(current, observed.get(current.workflowId)) || ids.has(current.workflowId))
+          throw new Error('Local catalog project changed concurrently; reload before saving.');
+        ids.add(current.workflowId);
+        if (change.relativePath !== null) assertPath(change.relativePath, 'project');
+        return { current, relativePath: change.relativePath };
+      });
+      const temporary = `.__catalog_move__-${randomUUID()}`;
+      for (const { current, relativePath } of changes) {
+        if (relativePath === null) db.prepare('DELETE FROM projects WHERE workflow_id = ?').run(current.workflowId);
+        else
+          db.prepare('UPDATE projects SET relative_path = ? WHERE workflow_id = ?').run(
+            `${temporary}/${current.workflowId}`,
+            current.workflowId,
+          );
+      }
+      for (const folder of options.expectedFolders)
+        if (!options.folders.includes(folder)) db.prepare('DELETE FROM folders WHERE path = ?').run(folder);
+      for (const folder of options.folders)
+        if (!options.expectedFolders.includes(folder)) db.prepare('INSERT INTO folders VALUES (?)').run(folder);
+      for (const { current, relativePath } of changes) {
+        if (relativePath === null) continue;
+        const fileName = path.posix.basename(relativePath);
+        const next = { ...current, relativePath, fileName, name: fileName.slice(0, -'.rivet-project'.length) };
+        db.prepare('UPDATE projects SET relative_path = ?, metadata_json = ? WHERE workflow_id = ?').run(
+          relativePath,
+          JSON.stringify(next),
+          current.workflowId,
+        );
+      }
+      for (const value of [...options.folders, ...this.listProjectPaths()]) {
+        const parent = path.posix.dirname(value);
+        if (parent !== '.' && !options.folders.includes(parent))
+          throw new Error('Local catalog parent folder is missing.');
       }
       this.#validateRoutes(db);
       db.exec('COMMIT');
@@ -1201,12 +1296,25 @@ export class LocalWorkflowCatalog {
 
   /** Counts and their current owner metadata must come from the same commit. */
   readRecordingWorkflowProjection() {
-    return this.#readMetadata(() =>
-      this.#recordingWorkflowSummaries().flatMap((summary) => {
+    return this.#readMetadata(() => {
+      const summaries = new Map(this.#recordingWorkflowSummaries().map((summary) => [summary.workflowId, summary]));
+      // Match managed storage: published endpoints remain selectable before
+      // their first run. Only compact catalog metadata is needed here.
+      const published = this.#database()
+        .prepare(
+          `SELECT workflow_id FROM projects
+        WHERE endpoint_name <> '' AND json_extract(metadata_json, '$.endpointStatus') <> 'unpublished'`,
+        )
+        .all() as Array<{ workflow_id: string }>;
+      for (const { workflow_id: workflowId } of published) {
+        if (!summaries.has(workflowId))
+          summaries.set(workflowId, { workflowId, latestRunAt: '', totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 });
+      }
+      return [...summaries.values()].flatMap((summary) => {
         const project = this.readProjectMetadataById(summary.workflowId);
-        return project ? [{ ...summary, project }] : [];
-      }),
-    );
+        return project ? [{ ...summary, latestRunAt: summary.latestRunAt || undefined, project }] : [];
+      });
+    });
   }
 
   listRecordingMetadata(
@@ -1350,6 +1458,7 @@ export class LocalWorkflowCatalog {
     db.exec('BEGIN IMMEDIATE');
     try {
       this.#upgradeSchema(db);
+      this.#assertStoredArtifacts(project);
       db.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)').run(
         snapshot.workflowId,
         snapshot.relativePath,
@@ -1421,6 +1530,7 @@ export class LocalWorkflowCatalog {
 
   #insertProjectChildren(db: DatabaseSync, workflowId: string, versions: StoredVersion[], apps: StoredWebApp[]): void {
     for (const version of versions) {
+      this.#assertStoredArtifacts(version);
       db.prepare('INSERT INTO published_versions VALUES (?, ?, ?)').run(
         version.versionId,
         workflowId,
@@ -1428,6 +1538,7 @@ export class LocalWorkflowCatalog {
       );
     }
     for (const app of apps) {
+      this.#assertStoredArtifacts(app);
       db.prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)').run(app.appId, workflowId, app.slug, JSON.stringify(app));
     }
   }
@@ -1485,6 +1596,7 @@ export class LocalWorkflowCatalog {
       if (!sameProjectBundle(current, expectedStored)) {
         throw new Error('Local catalog project changed concurrently; reload before saving.');
       }
+      this.#assertStoredArtifacts(nextStored.project);
       db.prepare(
         `UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ?
          WHERE workflow_id = ? AND relative_path = ?`,
@@ -1545,6 +1657,14 @@ export class LocalWorkflowCatalog {
   hasProjectArtifact(relativePath: string, dataset = false): boolean {
     const bundle = this.#readStoredProjectBundle(relativePath, false);
     return !!bundle && (!dataset || bundle.project.datasetsContents !== null);
+  }
+  async readTreeProject(relativePath: string): Promise<LocalWorkflowTreeProject | null> {
+    const before = this.#readStoredProjectBundle(relativePath, false);
+    if (!before) return null;
+    const index = await this.#treeIndex(before.project);
+    if (!sameJson(before, this.#readStoredProjectBundle(relativePath, false)))
+      throw new Error('Local catalog project changed concurrently while loading.');
+    return { ...projectTreeMetadata(before.project, before.apps), ...index };
   }
 
   readProjectMetadataById(workflowId: string): Omit<LocalWorkflowTreeProject, 'revisionId' | 'stats'> | null {
@@ -1611,6 +1731,163 @@ export class LocalWorkflowCatalog {
 
   /** Ordinary reads select only the requested immutable pair. Full snapshots
    * remain separate authority for mutation CAS and exact migration verification. */
+  async saveDraft(options: {
+    relativePath: string;
+    workflowId: string;
+    contents: string;
+    datasetsContents: string | null;
+    expectedRevisionId?: string | null;
+    updatedAt: string;
+  }): Promise<LocalWorkflowTreeProject | null> {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    options = structuredClone(options);
+    const before = this.#readStoredProjectBundle(options.relativePath, false);
+    if (!before) return null;
+    if (before.project.workflowId !== options.workflowId)
+      throw new Error('The save target belongs to a different project.');
+    const oldIndex = await this.#treeIndex(before.project);
+    if (options.expectedRevisionId && options.expectedRevisionId !== oldIndex.revisionId)
+      throw new Error('Local catalog project changed concurrently; reload before saving.');
+    const index = projectTreeIndex(options.contents, options.datasetsContents);
+    const draftReference = (contents: string | null, previous: ArtifactRef) =>
+      sameArtifactReference(hashText(contents), previous)
+        ? Promise.resolve(previous)
+        : putText(this.#artifacts, contents);
+    const next = {
+      ...before.project,
+      contents: await draftReference(options.contents, before.project.contents),
+      datasetsContents: await draftReference(options.datasetsContents, before.project.datasetsContents),
+      updatedAt: options.updatedAt,
+      treeIndex: index,
+    };
+    next.endpointStatus =
+      next.publishedContents === null
+        ? 'unpublished'
+        : sameJson(next.contents, next.publishedContents) &&
+            sameJson(next.datasetsContents, next.publishedDatasetsContents) &&
+            next.endpointName.trim().toLowerCase() === next.publishedEndpointName.trim().toLowerCase()
+          ? 'published'
+          : 'unpublished_changes';
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!sameJson(before, this.#readStoredProjectBundle(options.relativePath, false)))
+        throw new Error('Local catalog project changed concurrently; reload before saving.');
+      this.#upgradeSchema(db);
+      this.#assertStoredArtifacts(next);
+      db.prepare('UPDATE projects SET metadata_json = ? WHERE workflow_id = ?').run(
+        JSON.stringify(next),
+        next.workflowId,
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ...projectTreeMetadata(next, before.apps), ...index };
+  }
+
+  /** Publication changes reuse the durable draft references. Old publication
+   * bodies and rows are never hydrated or rewritten by ordinary mutations. */
+  async mutatePublication(
+    relativePath: string,
+    update: (state: LocalPublicationState, revisionId: string) => void,
+    requireDraft = false,
+  ) {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    const before = this.#readStoredProjectBundle(relativePath, false);
+    if (!before) return null;
+    const index = await this.#treeIndex(before.project);
+    const next: LocalPublicationState = {
+      ...structuredClone(before.project),
+      draftText: requireDraft ? (await readText(this.#artifacts, before.project.contents))! : '',
+      publishedVersions: [],
+      publishedWebApps: structuredClone(before.apps),
+    };
+    update(next, index.revisionId);
+    const { draftText: _text, publishedVersions: added, publishedWebApps: apps, ...project } = next;
+    if (
+      project.workflowId !== before.project.workflowId ||
+      project.relativePath !== relativePath ||
+      !sameArtifactReference(project.contents, before.project.contents) ||
+      !sameArtifactReference(project.datasetsContents, before.project.datasetsContents)
+    )
+      throw new Error('Publication cannot change the draft identity or artifacts.');
+    project.endpointStatus =
+      project.publishedContents === null
+        ? 'unpublished'
+        : sameArtifactReference(project.contents, project.publishedContents) &&
+            sameArtifactReference(project.datasetsContents, project.publishedDatasetsContents) &&
+            project.endpointName.trim().toLowerCase() === project.publishedEndpointName.trim().toLowerCase()
+          ? 'published'
+          : 'unpublished_changes';
+    storedProject({
+      workflow_id: project.workflowId,
+      relative_path: relativePath,
+      endpoint_name: project.endpointName,
+      published_endpoint_name: project.publishedEndpointName,
+      metadata_json: JSON.stringify(project),
+    });
+    for (const app of apps) assertWebAppMetadata(app);
+    for (const version of added) assertVersionMetadata(version);
+    assertPublicationPointer(project, [...added, ...before.versions], apps);
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!sameJson(before, this.#readStoredProjectBundle(relativePath, false)))
+        throw new Error('Local catalog project changed concurrently; reload before saving.');
+      this.#upgradeSchema(db);
+      this.#assertStoredArtifacts(project);
+      db.prepare(
+        'UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ? WHERE workflow_id = ?',
+      ).run(project.endpointName, project.publishedEndpointName, JSON.stringify(project), project.workflowId);
+      for (const version of added) {
+        this.#assertStoredArtifacts(version);
+        db.prepare(
+          'INSERT INTO published_versions(rowid, version_id, workflow_id, metadata_json) VALUES ((SELECT COALESCE(MIN(rowid), 0) - 1 FROM published_versions), ?, ?, ?)',
+        ).run(version.versionId, project.workflowId, JSON.stringify(version));
+      }
+      for (const old of before.apps)
+        if (!apps.some((app) => app.appId === old.appId))
+          db.prepare('DELETE FROM web_apps WHERE workflow_id = ? AND app_id = ?').run(project.workflowId, old.appId);
+      // Release changed slugs together so a valid A/B swap is atomic too.
+      const temporarySlug = `catalog-move-${randomUUID()}`;
+      for (const app of apps) {
+        const old = before.apps.find((item) => item.appId === app.appId);
+        if (old && old.slug !== app.slug)
+          db.prepare('UPDATE web_apps SET slug = ? WHERE workflow_id = ? AND app_id = ?').run(
+            `${temporarySlug}-${app.appId}`,
+            project.workflowId,
+            app.appId,
+          );
+      }
+      for (const app of apps) {
+        this.#assertStoredArtifacts(app);
+        const old = before.apps.find((item) => item.appId === app.appId);
+        if (old && !sameJson(old, app))
+          db.prepare('UPDATE web_apps SET slug = ?, metadata_json = ? WHERE workflow_id = ? AND app_id = ?').run(
+            app.slug,
+            JSON.stringify(app),
+            project.workflowId,
+            app.appId,
+          );
+        else if (!old)
+          db.prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)').run(
+            app.appId,
+            project.workflowId,
+            app.slug,
+            JSON.stringify(app),
+          );
+      }
+      this.#validateRoutes(db);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ...projectTreeMetadata(project, apps), ...index };
+  }
+
   async readProjectPayload(
     relativePath: string,
     selection: 'latest' | 'published' | 'published-or-latest' | { versionId: string } = 'latest',
@@ -1770,6 +2047,7 @@ export class LocalWorkflowCatalog {
     try {
       // Upgrade only with a committed write, never while verifying a certificate.
       this.#upgradeSchema(db);
+      this.#assertStoredArtifacts(stored);
       db.prepare('INSERT INTO recordings(recording_id, workflow_id, metadata_json) VALUES (?, ?, ?)').run(
         recording.recordingId,
         recording.workflowId,
@@ -1814,9 +2092,19 @@ export class LocalWorkflowCatalog {
       manifest: state.manifest,
       archive: state.archive === null ? null : await this.#artifacts.putBytes(state.archive),
     };
-    this.#database()
-      .prepare('INSERT INTO runtime_library_state(slot, metadata_json) VALUES (?, ?)')
-      .run('default', JSON.stringify(stored));
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#assertStoredArtifacts(stored);
+      db.prepare('INSERT INTO runtime_library_state(slot, metadata_json) VALUES (?, ?)').run(
+        'default',
+        JSON.stringify(stored),
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   async readRuntimeLibraryState(): Promise<LocalRuntimeLibraryState | null> {
@@ -1868,6 +2156,7 @@ export class LocalWorkflowCatalog {
         | undefined;
       if (!row || !sameJson(JSON.parse(row.metadata_json), before))
         throw new Error('Runtime-library state changed concurrently; reload before activating.');
+      this.#assertStoredArtifacts(after);
       db.prepare("UPDATE runtime_library_state SET metadata_json = ? WHERE slot = 'default'").run(
         JSON.stringify(after),
       );
@@ -1878,8 +2167,99 @@ export class LocalWorkflowCatalog {
     }
   }
 
-  /** Metadata-only retention. Immutable objects stay until a separately audited
-   * reference collector can prove that physical deletion is safe. */
+  #assertStoredArtifacts(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
+    const object = value as Record<string, unknown>;
+    if (typeof object.hash === 'string' && typeof object.size === 'number') {
+      this.#artifacts.assertPresent(object as LocalArtifact);
+      return;
+    }
+    for (const child of Object.values(object)) this.#assertStoredArtifacts(child);
+  }
+
+  /** Scan references in yielding metadata batches, without holding a writer
+   * lock. A separate connection's data_version detects ALL intervening writes,
+   * including this instance's own saves. Delete only after confirming that
+   * proof under BEGIN IMMEDIATE; never trust a stale reference snapshot. */
+  async collectOrphanArtifacts(options: { now?: number; graceMs?: number; batchSize?: number } = {}) {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    const now = options.now ?? Date.now(),
+      graceMs = options.graceMs ?? 86400000,
+      batchSize = options.batchSize ?? 100;
+    if (
+      !Number.isFinite(now) ||
+      !Number.isSafeInteger(graceMs) ||
+      graceMs < 3600000 ||
+      !Number.isSafeInteger(batchSize) ||
+      batchSize < 1 ||
+      batchSize > 1000
+    )
+      throw new Error('Invalid artifact collection policy.');
+    const before = now - graceMs;
+    const scan = await this.#artifacts.listCollectionCandidates({
+      before,
+      after: this.#collectionCursor,
+      limit: batchSize,
+    });
+    if (scan.candidates.length === 0) {
+      this.#collectionCursor = scan.cursor;
+      return { removed: 0, bytes: 0 };
+    }
+    const db = this.#database();
+    const reader = new DatabaseSync(this.#databasePath, { readOnly: true });
+    let removed = 0,
+      bytes = 0;
+    try {
+      const version = () => reader.prepare('PRAGMA data_version').get()!.data_version;
+      const initialVersion = version();
+      const candidates = new Set(scan.candidates.map((artifact) => artifact.hash));
+      const referenced = new Set<string>();
+      const visit = (value: unknown): void => {
+        if (!value || typeof value !== 'object') return;
+        const object = value as Record<string, unknown>;
+        if (typeof object.hash === 'string' && candidates.has(object.hash)) referenced.add(object.hash);
+        for (const child of Object.values(object)) visit(child);
+      };
+      for (const table of ['projects', 'published_versions', 'web_apps', 'recordings', 'runtime_library_state']) {
+        let cursor: number | undefined;
+        while (true) {
+          const rows = reader
+            .prepare(
+              `SELECT rowid AS cursor, metadata_json FROM ${table} ${cursor === undefined ? '' : 'WHERE rowid > ?'} ORDER BY rowid LIMIT 100`,
+            )
+            .all(...(cursor === undefined ? [] : [cursor])) as Array<{ cursor: number; metadata_json: string }>;
+          for (const row of rows) visit(JSON.parse(row.metadata_json));
+          if (rows.length < 100) break;
+          cursor = rows.at(-1)!.cursor;
+          await yieldToRequests();
+          if (version() !== initialVersion) return { removed: 0, bytes: 0 };
+        }
+      }
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        // Reader is a DIFFERENT connection: its version changes even when the
+        // intervening write used this catalog's primary connection.
+        if (version() === initialVersion) {
+          for (const artifact of scan.candidates) {
+            if (!referenced.has(artifact.hash) && this.#artifacts.removeUnreferenced(artifact, before)) {
+              removed++;
+              bytes += artifact.size;
+            }
+          }
+          this.#collectionCursor = scan.cursor;
+        }
+        db.exec('COMMIT');
+        return { removed, bytes };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    } finally {
+      reader.close();
+    }
+  }
+
+  /** Remove catalog rows first; the grace-period collector reclaims orphans. */
   pruneRecordings(options: {
     now: number;
     retentionDays: number;
@@ -1913,7 +2293,7 @@ export class LocalWorkflowCatalog {
         .prepare(
           `WITH ranked AS (
         SELECT recording_id, json_extract(metadata_json, '$.createdAt') AS created_at,
-          ROW_NUMBER() OVER (PARTITION BY workflow_id ORDER BY json_extract(metadata_json, '$.createdAt') DESC, recording_id DESC) AS run_rank,
+          ROW_NUMBER() OVER (PARTITION BY workflow_id, LOWER(TRIM(json_extract(metadata_json, '$.endpointName'))) ORDER BY json_extract(metadata_json, '$.createdAt') DESC, recording_id DESC) AS run_rank,
           json_extract(metadata_json, '$.recordingContents.size') + json_extract(metadata_json, '$.replayProjectContents.size') +
             COALESCE(json_extract(metadata_json, '$.replayDatasetContents.size'), 0) AS bytes
         FROM recordings WHERE recording_id NOT IN (SELECT value FROM json_each(?))

@@ -17,6 +17,7 @@
     "workflow-schema:migrate": "tsx src/scripts/migrate-managed-workflow-schema.ts migrate",
     "workflow-schema:verify": "tsx src/scripts/migrate-managed-workflow-schema.ts verify",
     "workflow-storage:migrate": "tsx src/scripts/migrate-workflow-storage.ts migrate",
+    "workflow-storage:freeze-source": "tsx src/scripts/migrate-workflow-storage.ts freeze-source",
     "workflow-storage:precopy": "tsx src/scripts/migrate-workflow-storage.ts precopy",
     "workflow-storage:verify": "tsx src/scripts/migrate-workflow-storage.ts verify",
     "local-metadata:return-to-legacy": "tsx src/scripts/recover-local-metadata.ts",

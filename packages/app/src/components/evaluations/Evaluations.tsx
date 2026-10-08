@@ -31,6 +31,7 @@ import {
   type EvaluationEvaluatorInputSource,
   type EvaluationAssertionOperator,
   type EvaluationRun,
+  type EvaluationRunSummary as EvaluationHistoryEntry,
   type EvaluationRunPurpose,
   type EvaluationRecordingReference,
   type EvaluationSuite,
@@ -1701,6 +1702,11 @@ const EvaluationsContainer: FC<{
   const [datasetUsageExpanded, setDatasetUsageExpanded] = useState(false);
   const [runsStatus, setRunsStatus] = useState<EvaluationRunHistoryLoadStatus>('idle');
   const [runsError, setRunsError] = useState<string>();
+  const [runDetailsLoading, setRunDetailsLoading] = useState(false);
+  const [runDetailsError, setRunDetailsError] = useState<string>();
+  const [loadingHistoryPage, setLoadingHistoryPage] = useState(false);
+  const historyPageRequest = useRef<object>();
+  const [runDetailsRetry, setRunDetailsRetry] = useState(0);
   const [retryingHostedRunId, setRetryingHostedRunId] = useState<string>();
   // Reading history is asynchronous, while deleting a run updates the store
   // and local selection immediately. A request generation prevents an older
@@ -1766,6 +1772,15 @@ const EvaluationsContainer: FC<{
     [selectedSuiteId, state.runs],
   );
   const suiteCurrentRun = state.currentRun?.suiteId === selectedSuite?.id ? state.currentRun : undefined;
+  const suiteHistoryEntries = useMemo(() => {
+    const entries = new Map<string, EvaluationHistoryEntry>();
+    if (hasCachedRunHistory)
+      for (const entry of state.runHistoryEntries ?? [])
+        if (entry.suiteId === selectedSuiteId) entries.set(entry.id, entry);
+    for (const run of suiteRuns) entries.set(run.id, run);
+    if (suiteCurrentRun) entries.set(suiteCurrentRun.id, suiteCurrentRun);
+    return [...entries.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
+  }, [hasCachedRunHistory, state.runHistoryEntries, suiteRuns, suiteCurrentRun, selectedSuiteId]);
   const suiteBaseline = useMemo(
     () =>
       selectedSuiteId ? state.data.baselines.find((candidate) => candidate.suiteId === selectedSuiteId) : undefined,
@@ -1778,7 +1793,11 @@ const EvaluationsContainer: FC<{
   const comparableRun = useMemo(
     () =>
       selectedSuiteId
-        ? resolveComparableEvaluationRun(selectedSuiteId, suiteRuns, state.selectedRunId, suiteCurrentRun)
+        ? state.selectedRunId &&
+          !suiteRuns.some((run) => run.id === state.selectedRunId) &&
+          suiteCurrentRun?.id !== state.selectedRunId
+          ? undefined
+          : resolveComparableEvaluationRun(selectedSuiteId, suiteRuns, state.selectedRunId, suiteCurrentRun)
         : undefined,
     [selectedSuiteId, state.selectedRunId, suiteCurrentRun, suiteRuns],
   );
@@ -2263,6 +2282,8 @@ const EvaluationsContainer: FC<{
 
   useEffect(() => {
     const readGeneration = ++runHistoryReadGeneration.current;
+    historyPageRequest.current = undefined;
+    setLoadingHistoryPage(false);
     if (!projectAvailable) {
       setRunsStatus('idle');
       setRunsError(undefined);
@@ -2295,7 +2316,7 @@ const EvaluationsContainer: FC<{
 
     const scope: EvaluationRunHistoryScope = { projectId: project.metadata.id, suiteId: selectedSuiteId };
     const hadCachedHistory = isEvaluationRunHistoryCached({ runHistoryScope: runHistoryScopeRef.current }, scope);
-    // A successfully listed exact scope is complete for this session. Reuse it
+    // A successfully listed exact scope has a warm first page. Reuse it
     // on an overlay remount instead of doing a synchronous-heavy durable read
     // before Definition, Runs, or Compare can respond to a tab click.
     setRunsStatus(hadCachedHistory ? 'ready' : 'loading');
@@ -2303,9 +2324,20 @@ const EvaluationsContainer: FC<{
     if (hadCachedHistory) return;
 
     let active = true;
-    void runStore
-      .list({ projectId: project.metadata.id, suiteId: selectedSuiteId })
-      .then((runs) => {
+    const readHistory = async () => {
+      const input = { projectId: project.metadata.id, suiteId: selectedSuiteId };
+      if (!runStore.listPage) return { runs: await runStore.list(input), entries: undefined, nextCursor: undefined };
+      const page = await runStore.listPage(input);
+      // Render the picker as soon as headers arrive. Selected bodies have one
+      // independent hydration path below, including initial loads and retries.
+      return {
+        runs: [] as EvaluationRun[],
+        entries: page.runs.filter((run) => run.projectId === input.projectId && run.suiteId === input.suiteId),
+        nextCursor: page.nextCursor,
+      };
+    };
+    void readHistory()
+      .then(({ runs, entries, nextCursor }) => {
         if (!active || readGeneration !== runHistoryReadGeneration.current) return;
         setRunsStatus('ready');
         setState((current) => {
@@ -2313,19 +2345,24 @@ const EvaluationsContainer: FC<{
           // boundary as well. A stale or buggy host store must not leak a
           // different suite's history into the selected suite or its Compare
           // view.
-          const persistedSuiteRuns = runs.filter((run) => run.suiteId === selectedSuiteId);
+          const persistedSuiteRuns = runs.filter(
+            (run) => run.projectId === project.metadata.id && run.suiteId === selectedSuiteId,
+          );
           const mergedRuns = mergeEvaluationRunHistory(
             persistedSuiteRuns,
             current.currentRun?.suiteId === selectedSuiteId ? current.currentRun : undefined,
           );
           const selectedRunId =
-            current.selectedRunId && mergedRuns.some((run) => run.id === current.selectedRunId)
+            current.selectedRunId &&
+            (entries !== undefined || mergedRuns.some((run) => run.id === current.selectedRunId))
               ? current.selectedRunId
-              : mergedRuns[0]?.id;
+              : mergedRuns[0]?.id ?? entries?.[0]?.id;
           return {
             ...current,
             runs: mergedRuns,
-            // Only a successful list proves the full stored history is warm.
+            runHistoryEntries: entries ? [...entries] : undefined,
+            runHistoryNextCursor: nextCursor,
+            // Only a successful list proves this history page is warm.
             // Progress and terminal snapshots intentionally do not set this.
             runHistoryScope: scope,
             runTrialExpansion:
@@ -2352,6 +2389,122 @@ const EvaluationsContainer: FC<{
     // history when `runningSuiteId` changes would briefly replace that selection
     // with whichever old run the store returned first.
   }, [project.metadata.id, projectAvailable, runStore, selectedSuiteId, setState]);
+
+  useEffect(() => {
+    setRunDetailsError(undefined);
+    if (
+      !hasCachedRunHistory ||
+      !runStore.listPage ||
+      !state.selectedRunId ||
+      suiteRuns.some((run) => run.id === state.selectedRunId) ||
+      suiteCurrentRun?.id === state.selectedRunId
+    ) {
+      setRunDetailsLoading(false);
+      return;
+    }
+    let active = true;
+    setRunDetailsLoading(true);
+    void runStore
+      .get({ projectId: project.metadata.id, runId: state.selectedRunId })
+      .then((run) => {
+        if (!active) return;
+        if (!run || run.suiteId !== selectedSuiteId) {
+          // A persisted selection can be older than the first page or belong
+          // to the previously selected suite. Only replace an unavailable
+          // selection when it wasn't advertised in this scope's headers.
+          const entries = state.runHistoryEntries ?? [];
+          const fallback = entries.find((entry) => entry.suiteId === selectedSuiteId)?.id;
+          if (
+            fallback &&
+            fallback !== state.selectedRunId &&
+            !entries.some((entry) => entry.id === state.selectedRunId)
+          ) {
+            setState((current) =>
+              current.selectedRunId !== state.selectedRunId ||
+              current.runHistoryScope?.projectId !== project.metadata.id ||
+              current.runHistoryScope?.suiteId !== selectedSuiteId
+                ? current
+                : { ...current, selectedRunId: fallback, runTrialExpansion: undefined },
+            );
+            setRunDetailsLoading(false);
+            return;
+          }
+          throw new Error('This evaluation run is no longer available.');
+        }
+        if (run.id !== state.selectedRunId || run.projectId !== project.metadata.id)
+          throw new Error('Evaluation run details do not match the selected project and run.');
+        setState((current) =>
+          current.selectedRunId !== state.selectedRunId ||
+          current.runHistoryScope?.projectId !== project.metadata.id ||
+          current.runHistoryScope?.suiteId !== selectedSuiteId ||
+          current.runs.some((item) => item.id === run.id) ||
+          current.currentRun?.id === run.id
+            ? current
+            : { ...current, runs: [...current.runs.slice(-9), run] },
+        );
+        setRunDetailsLoading(false);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setRunDetailsLoading(false);
+        setRunDetailsError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    hasCachedRunHistory,
+    runStore,
+    state.selectedRunId,
+    project.metadata.id,
+    selectedSuiteId,
+    suiteRuns,
+    suiteCurrentRun,
+    state.runHistoryEntries,
+    setState,
+    runDetailsRetry,
+  ]);
+
+  const loadMoreRunHistory = async () => {
+    if (
+      historyPageRequest.current ||
+      !hasCachedRunHistory ||
+      !runStore.listPage ||
+      !state.runHistoryNextCursor ||
+      !selectedSuiteId
+    )
+      return;
+    const request = {};
+    historyPageRequest.current = request;
+    const generation = runHistoryReadGeneration.current;
+    setLoadingHistoryPage(true);
+    try {
+      const page = await runStore.listPage({
+        projectId: project.metadata.id,
+        suiteId: selectedSuiteId,
+        after: state.runHistoryNextCursor,
+      });
+      if (generation !== runHistoryReadGeneration.current) return;
+      const entries = page.runs.filter(
+        (run) => run.projectId === project.metadata.id && run.suiteId === selectedSuiteId,
+      );
+      setState((current) => ({
+        ...current,
+        runHistoryEntries: [
+          ...new Map([...(current.runHistoryEntries ?? []), ...entries].map((entry) => [entry.id, entry])).values(),
+        ],
+        runHistoryNextCursor: page.nextCursor,
+      }));
+    } catch (error) {
+      if (generation === runHistoryReadGeneration.current)
+        setRunsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (historyPageRequest.current === request) {
+        historyPageRequest.current = undefined;
+        setLoadingHistoryPage(false);
+      }
+    }
+  };
 
   // An in-memory snapshot is authoritative while the runner is active and
   // remains useful for the terminal hand-off to durable history. Keep it
@@ -2608,6 +2761,9 @@ const EvaluationsContainer: FC<{
           ...current,
           currentRun: current.currentRun ? rename(current.currentRun) : undefined,
           runs: current.runs.map(rename),
+          runHistoryEntries: current.runHistoryEntries?.map((entry) =>
+            entry.id === runId ? { ...entry, name: value.trim() || undefined } : entry,
+          ),
         }));
       }
     } catch (error) {
@@ -2713,7 +2869,11 @@ const EvaluationsContainer: FC<{
           ...current,
           currentRun: current.currentRun?.id === run.id ? undefined : current.currentRun,
           runs,
-          selectedRunId: current.selectedRunId === run.id ? replacement?.id : current.selectedRunId,
+          runHistoryEntries: current.runHistoryEntries?.filter((entry) => entry.id !== run.id),
+          selectedRunId:
+            current.selectedRunId === run.id
+              ? replacement?.id ?? current.runHistoryEntries?.find((entry) => entry.id !== run.id)?.id
+              : current.selectedRunId,
           runTrialExpansion: current.runTrialExpansion?.runId === run.id ? undefined : current.runTrialExpansion,
         };
       });
@@ -3103,6 +3263,18 @@ const EvaluationsContainer: FC<{
                 <Runs
                   dataset={suiteDataset}
                   runs={suiteRuns}
+                  historyEntries={suiteHistoryEntries}
+                  detailsLoading={
+                    runDetailsLoading ||
+                    (!!state.selectedRunId &&
+                      !suiteRuns.some((run) => run.id === state.selectedRunId) &&
+                      suiteCurrentRun?.id !== state.selectedRunId)
+                  }
+                  detailsError={runDetailsError}
+                  onRetryDetails={() => setRunDetailsRetry((value) => value + 1)}
+                  hasMoreHistory={state.runHistoryNextCursor !== undefined}
+                  loadingHistoryPage={loadingHistoryPage}
+                  onLoadMoreHistory={() => void loadMoreRunHistory()}
                   currentRun={suiteCurrentRun}
                   selectedRunId={state.selectedRunId}
                   scoreSort={runScoreSort}
@@ -4761,6 +4933,13 @@ const HostedInterruptedTrialRetry: FC<{
 const Runs: FC<{
   dataset?: EvaluationDataset;
   runs: EvaluationRun[];
+  historyEntries: EvaluationHistoryEntry[];
+  detailsLoading: boolean;
+  detailsError?: string;
+  onRetryDetails: () => void;
+  hasMoreHistory: boolean;
+  loadingHistoryPage: boolean;
+  onLoadMoreHistory: () => void;
   currentRun?: EvaluationRun;
   selectedRunId?: string;
   scoreSort: EvaluationScoreSort;
@@ -4781,6 +4960,13 @@ const Runs: FC<{
 }> = ({
   dataset,
   runs,
+  historyEntries,
+  detailsLoading,
+  detailsError,
+  onRetryDetails,
+  hasMoreHistory,
+  loadingHistoryPage,
+  onLoadMoreHistory,
   currentRun,
   selectedRunId,
   scoreSort,
@@ -4810,8 +4996,8 @@ const Runs: FC<{
     [currentRun, selectedRun],
   );
   const run = useMemo(
-    () => liveRun ?? selectedRunSnapshot ?? currentRun ?? runs[0],
-    [currentRun, liveRun, runs, selectedRunSnapshot],
+    () => liveRun ?? (selectedRunId ? selectedRunSnapshot : currentRun ?? runs[0]),
+    [currentRun, liveRun, runs, selectedRunSnapshot, selectedRunId],
   );
   const sortedTrials = useMemo(() => (run ? sortEvaluationTrialsByScore(run.trials, scoreSort) : []), [run, scoreSort]);
   const runSummary = useMemo(() => (run ? getCachedEvaluationRunSummary(run) : undefined), [run]);
@@ -4828,8 +5014,9 @@ const Runs: FC<{
     );
   }, [dataset?.fields]);
   const runOptions = useMemo(
-    () => runs.map((candidate) => ({ label: formatEvaluationRunOptionLabel(candidate), value: candidate.id })),
-    [runs],
+    () =>
+      historyEntries.map((candidate) => ({ label: formatEvaluationRunOptionLabel(candidate), value: candidate.id })),
+    [historyEntries],
   );
   const selectedRunOption = useMemo(
     () =>
@@ -4864,6 +5051,23 @@ const Runs: FC<{
 
   if (status === 'loading') return <div className="empty">Loading evaluation runs…</div>;
   if (status === 'error') return <div className="empty danger">Could not load evaluation runs: {error}</div>;
+  if (!liveRun && (detailsLoading || detailsError))
+    return (
+      <section className="section">
+        <Select
+          className="field"
+          options={runOptions}
+          value={runOptions.find((option) => option.value === selectedRunId)}
+          onChange={(value) => value && onSelect(value.value)}
+        />
+        <p className={detailsError ? 'danger' : 'empty'}>{detailsError ?? 'Loading selected run…'}</p>
+        {detailsError ? (
+          <button type="button" onClick={onRetryDetails}>
+            Retry loading run
+          </button>
+        ) : null}
+      </section>
+    );
   if (!run) {
     return (
       <section className="section">
@@ -4957,7 +5161,7 @@ const Runs: FC<{
       {refreshError ? (
         <p className="evaluation-run-history-refresh-warning">Could not refresh run history: {refreshError}</p>
       ) : null}
-      {runs.length > 1 && (
+      {historyEntries.length > 1 && (
         <div className="row">
           <Select
             className="field"
@@ -4966,6 +5170,11 @@ const Runs: FC<{
             onChange={(value) => onSelect(value!.value)}
           />
         </div>
+      )}
+      {hasMoreHistory && (
+        <Button isDisabled={loadingHistoryPage} onClick={onLoadMoreHistory}>
+          {loadingHistoryPage ? 'Loading…' : 'Load older runs'}
+        </Button>
       )}
       <ResourceTitle
         className="evaluation-run-name"

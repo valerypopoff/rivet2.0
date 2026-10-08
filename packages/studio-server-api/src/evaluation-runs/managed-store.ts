@@ -1,4 +1,6 @@
 import type { Pool, PoolClient } from "pg";
+import { evaluationHistoryPageQuery, type EvaluationHistoryRow } from "./history-page.js";
+import type { EvaluationRunHistoryQuery } from "@valerypopoff/rivet2-evaluations";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
 import {
   assertEvaluationDatasetSnapshot,
@@ -345,6 +347,12 @@ export class PostgresRivetEvaluationStore
             [String(input.projectId), input.suiteId],
           );
     return result.rows.map((row) => parseRun(row)!);
+  }
+
+  async listPage(input: EvaluationRunHistoryQuery) {
+    const query = evaluationHistoryPageQuery("postgres", input);
+    const result = await this.#pool.query<EvaluationHistoryRow>(query.sql, query.values);
+    return query.page(result.rows);
   }
 
   async delete(input: { projectId: ProjectId; runId: string }): Promise<void> {

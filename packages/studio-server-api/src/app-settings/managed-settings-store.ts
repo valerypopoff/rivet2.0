@@ -2,7 +2,11 @@ import { Client, Pool, type PoolConfig, type QueryResultRow } from 'pg';
 import { performance } from 'node:perf_hooks';
 
 import { checkPostgresPoolHealth, MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../managed-health.js';
-import { acquireManagedPostgresPool, type ManagedPostgresPoolLease } from '../managed-postgres-pool.js';
+import {
+  acquireManagedPostgresPool,
+  withAuthoritativePostgresTls,
+  type ManagedPostgresPoolLease,
+} from '../managed-postgres-pool.js';
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 import { recordStudioMetrics, type MetricsManagedSettingsSynchronizationSource } from '../metrics.js';
 import {
@@ -553,14 +557,14 @@ function buildConnectionString(env: NodeJS.ProcessEnv): string {
 
 export function getPostgresAppSettingsPoolConfigFromEnv(env: NodeJS.ProcessEnv = process.env): PoolConfig {
   const sslMode = env.RIVET_DEPLOYMENT_DATABASE_SSL_MODE?.trim().toLowerCase() || 'require';
-  return {
+  return withAuthoritativePostgresTls({
     connectionString: buildConnectionString(env),
     keepAlive: true,
     keepAliveInitialDelayMillis: 30_000,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS,
     ...(sslMode === 'disable' ? {} : { ssl: { rejectUnauthorized: sslMode === 'verify-full' } }),
-  };
+  });
 }
 
 export function createPostgresAppSettingsBackendFromEnv(

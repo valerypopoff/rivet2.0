@@ -1,5 +1,116 @@
 # Architecture
 
+## SQL and immutable-artifact boundaries
+
+Ordinary SQLite draft saves use a focused catalog update. They preserve active
+publication, historical version and web-app artifact references without loading
+their bodies, rewriting child rows or rebuilding the folder table. Only changed
+draft/dataset artifacts are published; the metadata snapshot is rechecked inside
+`BEGIN IMMEDIATE`, including concurrent moves/publication/access changes. Missing
+legacy tree summaries may require reading the current draft pair once. Route
+ownership is unchanged by this operation.
+
+SQLite workflow readiness is a bounded metadata probe, not a database-wide
+integrity scan. Catalog initialization still verifies schema, SQLite integrity,
+foreign keys and routes; `LocalWorkflowCatalog.checkIntegrity()` is the explicit
+full check. Per-endpoint recording retention partitions by workflow identity and
+trimmed, case-folded historical endpoint name, matching managed PostgreSQL.
+The recording maintenance pass also collects unreferenced local artifacts in
+bounded batches. Collection has a 24-hour default grace period (minimum one
+hour), excludes staging/unknown files, and scans references in yielding chunks
+of 100 compact metadata rows without holding a writer lock. A separate read
+connection's `data_version` is checked under the final writer lock: any
+intervening catalog write defers deletion until a later pass, including writes
+through the collector's own catalog instance. Only the candidate hashes are
+retained in memory. File identity is rechecked under that lock. Drafts,
+publication history, web apps, replay artifacts and runtime libraries protect
+shared objects. Writers
+check prepared-object presence under that same lock before publishing pointers;
+a racing collector cannot leave a committed dangling reference. This is local
+generation collection, not permission to prune retained source roots or backups.
+
+Publication/access and folder/project moves use focused metadata mutations too.
+They append new history only, keep unchanged artifacts and child rows, and guard
+path topology and revisions atomically. Web-app slug swaps release old claims
+inside the same transaction before assigning new ones. Explicit historical
+restore and project creation retain the general snapshot path.
+
+Managed hosted draft saves prepare immutable objects outside database
+transactions and recheck the observed workflow metadata under the row lock before
+publishing revision pointers. A change during preparation produces a conflict,
+not a last-writer-wins save. No-op saves do not upload a redundant revision.
+Unused/precommit objects go through reference-aware deletion intents, including
+uncertain commit outcomes. Transaction-local lock/statement timeouts are 5/60
+seconds. Commit/rollback hooks run only after releasing the pool connection;
+cleanup must not acquire another connection while retaining the first one.
+Shared managed pools also default to a 60-second server statement deadline and
+65-second driver query deadline for ordinary reads outside transactions. Explicit
+pool configuration can override these operator limits.
+
+PostgreSQL connection URLs cannot override the selected TLS policy. The legacy
+`sslmode` URL hint is discarded; other `ssl*` and `uselibpqcompat` query options
+are rejected without echoing credentials. The explicit deployment mode owns
+certificate verification, and `disable` explicitly sets `ssl: false` rather than
+inheriting driver environment settings. This applies to settings/listener,
+workflow and runtime-library connection boundaries.
+
+New S3 revision/recording keys carry an `artifact-v1` descriptor suffix with the
+expected stored SHA-256, stored size, decoded size and encoding. SQL retains the
+whole immutable key; S3 metadata cannot redefine the expected descriptor. Uploads
+use conditional creation and verify existing bytes on an idempotent retry.
+Recordings use the configured gzip/identity policy and report actual stored and
+decoded sizes. Stream reads and decompression enforce a 100 MiB per-artifact bound;
+oversized or corrupt objects fail closed. Earlier descriptor-free plain-text
+objects remain readable within that bound. Recording input-search workers receive
+the descriptor's encoding. Payload uploads/reads have a five-minute absolute
+deadline in addition to transport timeouts. Reconciliation recognizes both key
+generations.
+The managed async integration test validates descriptor-bearing keys with the
+shared artifact grammar and checks every SQL revision/recording reference against
+objects under the configured prefix. Logical filename assertions apply before the
+descriptor suffix, not to the end of the physical S3 key.
+Precopy-aware migration stores forward descriptor uploads through the immutable
+boundary; legacy server-side text precopy remains only for descriptor-free writes.
+
+Evaluation history uses `GET /api/workflows/evaluation-runs/history`: compact
+headers, keyset pagination by `(started_at, run_id)` descending, 25 rows by
+default and a maximum of 100. Cursors are bound to project/suite scope. Both SQL
+backends strip trial/evidence bodies in SQL for current-format runs; bounded
+legacy pages are normalized before stripping so quality semantics stay intact.
+Summary identity and timestamps are checked against their SQL ordering columns;
+an inconsistent stored JSON header fails closed instead of skipping or repeating
+history through a misleading cursor.
+The picker fetches full details only for the selected run, caches a bounded set,
+and exposes detail failures/retry without displaying another run's evidence.
+The first page becomes visible before selected details finish: a slow or failed
+body read must not hide successful compact history. Initial selection, later
+selections and retries share one hydration path. Missing persisted selections
+outside the first page fall back to its latest run; cross-project/run responses
+are rejected. Scope changes invalidate pending pagination independently.
+The client filters compact headers by both project and suite, matching the
+full-history boundary for third-party or stale provider responses.
+Live execution still takes precedence. The old full-list method remains for
+compatibility with non-hosted stores, not the hosted picker. Temporary Evaluation
+recording cleanup runs on a bounded maintenance timer, not list/detail reads.
+The timer and project-scoped write-side cleanup share a maximum of 100 expired
+rows per pass; saving a recording cannot drain an entire backlog in its writer
+transaction. Other projects and non-temporary recordings are excluded from
+write-side expiry cleanup. Background cleanup checks the maintenance marker in
+legacy mode as well as selected SQLite, even without a configured control
+journal: the HTTP barrier alone cannot protect an in-process timer during backup.
+The expiry index is installed only when writes are permitted, including selected
+live SQLite. Paused validation neither creates the index nor deletes rows.
+
+The operator migration CLI now exports the selected validated live SQLite
+generation to a separate PostgreSQL/S3 destination. It never substitutes retained
+legacy files. It requires a stopped/quiesced source and durable maintenance
+barrier, streams projects individually, preserves catalog identities, history,
+compressed recording contents and operational domains, verifies the frozen
+logical source again, and opens the
+destination serving gate only after exact verification. This is an offline CLI
+adapter, not a hot selector or browser migration wizard. See
+[VM-to-managed migration](./vm-to-managed-migration.md).
+
 ## Scheduled runs
 
 The sidebar's **Scheduled runs** action manages a server-owned durable SQL queue,
@@ -529,7 +640,7 @@ Interpretation rules:
 
 ### Storage and runtime libraries
 
-- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch pending a separate verified transfer adapter. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
+- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
 - `Local Docker Postgres` is a local rehearsal option for managed metadata only. It uses the optional Compose Postgres default connection, but object storage remains controlled by the separate project artifact storage fields. Make sure the managed-services Compose profile is running before restarting into object-storage mode.
 - Storage mode, database mode, managed PostgreSQL credentials, and object-storage credentials are read from the active settings repository, not `.env`. If the file-backed domain is absent, Docker/API runtime defaults to `Local folders` and `Local Docker Postgres`. Kubernetes's migration Job seeds the PostgreSQL row from Helm/Vault bootstrap values only when the row is absent. Serving APIs load that row directly, and the co-located executor receives its startup configuration through the authenticated loopback API; Kubernetes does not project compatibility settings files into pod-local app data.
 - Managed workflow object location is stored as explicit bucket, endpoint, region, prefix, and path-style fields alongside the compatibility `storageUrl` in the version-1 deployment-storage payload. Legacy rows lacking those fields resolve with the original URL parser and `workflows/` prefix. Runtime libraries keep their independent `runtime-libraries/` prefix. Active managed storage cannot change object location or addressing through App Settings without an operator migration and restart; replicated Kubernetes topology rejects all Storage-tab writes because existing API/executor clients are startup-scoped and a mixed-pod configuration would split writes. Helm bootstrap values seed only an absent PostgreSQL row, never overwrite an existing location.

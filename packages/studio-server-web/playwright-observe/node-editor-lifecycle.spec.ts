@@ -90,6 +90,7 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
   const disk = new Map(items.map((item) => [item.absolutePath, serializeProject(project(item))]));
   const saves: Project[] = [];
   let loads = 0;
+  let waitForLoad: Promise<void> | undefined;
   let waitForSave: Promise<void> | undefined;
   await mockHostedEditorBootstrap(page);
   await page.route('**/api/config/env/*', (route) => route.fulfill({ json: { value: null } }));
@@ -98,10 +99,11 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
       json: { root: '/workflows', sync: { epoch: 'lifecycle', revision: 0 }, folders: [], projects: items },
     }),
   );
-  await page.route('**/api/projects/load', (route) => {
+  await page.route('**/api/projects/load', async (route) => {
     const { path } = route.request().postDataJSON();
     expect(disk.has(path)).toBe(true);
     loads++;
+    await waitForLoad;
     const projectId = items.find((item) => item.absolutePath === path)!.id;
     const datasetsContents = datasetRows
       ? JSON.stringify({
@@ -134,7 +136,10 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
   const editorFrame = page.frames().find((entry) => entry.parentFrame() === page.mainFrame())!;
   const row = (name: string) => page.locator('.project-row', { hasText: `lifecycle-${name}` });
-  const tab = (name: string) => frame.locator('.projects-container .project').filter({ hasText: `lifecycle-${name}` });
+  // Opening placeholders can already be active, but are not warm projects.
+  // Switching away from one intentionally cancels its unfinished activation.
+  const tab = (name: string) =>
+    frame.locator('.projects-container .project:not(.opening)').filter({ hasText: `lifecycle-${name}` });
   const input = frame.locator('.monaco-editor textarea').first();
   const view = frame.locator('.monaco-editor .view-lines').first();
   const openNode = () => frame.locator('.node[data-nodeid="shared-node"] .edit-button').dispatchEvent('click');
@@ -165,7 +170,7 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
     )[field];
   await expect(row('A')).toBeEnabled({ timeout: 120_000 });
   await row('A').dblclick();
-  await expect(tab('A')).toHaveClass(/\bactive\b/);
+  await expect(tab('A')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
   await openNode();
   if (type === 'subGraph') {
     await expect(frame.locator('.section-node .subgraph-node-body-select')).toBeVisible();
@@ -188,6 +193,9 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
     items,
     value,
     loads: () => loads,
+    holdLoad: (gate: Promise<void> | undefined) => {
+      waitForLoad = gate;
+    },
     holdSave: (gate: Promise<void> | undefined) => {
       waitForSave = gate;
     },
@@ -199,8 +207,26 @@ test('large hosted projects open once and warm tab switches retain edits without
 }, info) => {
   const w = await workspace(page, 'object', 349, 2000);
   await w.edit('unsaved-tab-payload');
-  await w.row('B').dblclick();
-  await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  let release!: () => void;
+  w.holdLoad(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  try {
+    await w.row('B').dblclick();
+    await expect.poll(w.loads).toBe(2);
+    // Force the state seen in the failing CI trace, independent of machine
+    // speed: an active placeholder is visible while loading is unfinished.
+    await expect(w.frame.locator('.project.opening.active', { hasText: 'lifecycle-B' })).toBeVisible();
+    await expect(w.tab('B')).toHaveCount(0);
+  } finally {
+    release();
+    w.holdLoad(undefined);
+  }
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
+  await expect(w.frame.locator('.projects-container .project.opening')).toHaveCount(0);
+  await expect(w.tab('B')).not.toHaveClass(/\bpreview\b/);
   expect(w.loads()).toBe(2);
   const samples: number[] = [];
   for (const name of ['A', 'B', 'A', 'B', 'A']) {
@@ -212,6 +238,7 @@ test('large hosted projects open once and warm tab switches retain edits without
   await w.openNode();
   await expect(w.view).toContainText('unsaved-tab-payload');
   await expect(w.tab('A')).toHaveClass(/\bhas-unsaved-changes\b/);
+  await expect(w.frame.locator('.projects-container .project:not(.opening)')).toHaveCount(2);
   expect(w.loads()).toBe(2);
   // Check worker-prepared datasets survived both imports and repeated selection.
   const retained = await w.editorFrame.evaluate(async () => {
