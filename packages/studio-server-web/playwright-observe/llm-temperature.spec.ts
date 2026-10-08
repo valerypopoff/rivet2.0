@@ -89,7 +89,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
     const frame = page.frameLocator('iframe.dashboard-editor-frame');
     const row = (name: string) => page.locator('.project-row', { hasText: `temperature-${name}` });
     const tab = (name: string) =>
-      frame.locator('.projects-container .project').filter({ hasText: `temperature-${name}` });
+      frame.locator('.projects-container .project:not(.opening)').filter({ hasText: `temperature-${name}` });
     const node = frame.locator('.node[data-nodeid="shared-node"]');
     const openEditor = () => node.locator('.edit-button').dispatchEvent('click');
     const input = frame.getByLabel('Temperature', { exact: true });

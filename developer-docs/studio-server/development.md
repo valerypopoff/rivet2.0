@@ -777,6 +777,19 @@ HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in th
 
 ## Project workspace lifecycle regressions
 
+Project-ready assertions must exclude `.project.opening`. Loading placeholders
+already have the requested title and can be `.active` before worker parsing,
+dataset import and workspace commit finish. Selecting another tab at that point
+correctly cancels the pending open; it is not a warm switch. The large-project
+case in `node-editor-lifecycle.spec.ts` holds the second load behind a gate and
+waits for the request to enter that gate before checking that its active placeholder
+does not match the loaded-tab locator. It then releases the gate, waits for the
+committed persistent tab and removal of opening placeholders, and verifies repeated
+warm switches without extra requests, lost edits or mixed datasets. Cold-open
+readiness uses the existing 120-second startup budget; warm-switch assertions
+retain the ordinary 20-second expectation budget. Do not replace readiness with
+sleeps, API-response counts, retries or a longer whole-test timeout.
+
 Tree selection checks must use an overflowing folder list, not only a tiny tree. The `tree selection survives` browser case verifies that distant folder expansion stays in view, keyboard Enter/Space and Ctrl-click expand/collapse preserve the selected card, and reopening its own ancestor reveals the selected project again without reloading it. This catches scroll jumps from an overly broad expansion-map dependency as well as click-away deselection.
 
 Keep opening and dirty-state behavior under the shared app owners (`useActivateOpenedProject`, `useWorkspaceHostOpenProject`, `useSyncProjectDirtyState`). Host wrappers may adapt IO, titles, Evaluation caching and executor policies, but must not duplicate activation or certify a recovered snapshot as clean.
