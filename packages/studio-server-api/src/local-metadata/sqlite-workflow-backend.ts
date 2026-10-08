@@ -275,8 +275,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         endpointName: snapshot.endpointName,
         publishedEndpointName: snapshot.publishedEndpointName,
         endpointAccess: snapshot.endpointAccess,
-        publicationStatus: snapshot.endpointStatus,
-        status: getAggregateWorkflowProjectStatus(
+        status: snapshot.endpointStatus,
+        publicationStatus: getAggregateWorkflowProjectStatus(
           snapshot.endpointStatus,
           webApps.map((app) => app.status),
         ),
@@ -546,6 +546,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       const structure = this.#structure(),
         before = await this.#catalog.readTreeProject(this.#projectPath(value));
       if (!before) throw createHttpError(404, 'Project not found');
+      if (
+        before.endpointStatus !== 'unpublished' ||
+        before.publishedVersionId ||
+        before.publishedEndpointName ||
+        before.publishedWebApps.length > 0
+      )
+        throw conflict('Unpublish the workflow endpoint and web apps before deleting the project');
       await this.#beforeDeleteProject(before.workflowId);
       await this.#commitStructure(structure, [{ before, relativePath: null }]);
       return before.workflowId;
@@ -609,17 +616,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return this.#withWrite(async () => {
       const structure = this.#structure();
       this.#requireFolder(structure.expectedFolders, source);
-      const changes: Array<{ before: LocalWorkflowTreeProject; relativePath: null }> = [];
-      for (const item of structure.expectedProjectPaths.filter((item) => item.startsWith(`${source}/`))) {
-        const before = await this.#catalog.readTreeProject(item);
-        if (!before) throw conflict('Project changed concurrently');
-        changes.push({ before, relativePath: null });
-      }
-      for (const change of changes) await this.#beforeDeleteProject(change.before.workflowId);
+      if ([...structure.expectedFolders, ...structure.expectedProjectPaths].some((item) => item.startsWith(`${source}/`)))
+        throw conflict('Only empty folders can be deleted');
       await this.#commitStructure(
         structure,
-        changes,
-        structure.expectedFolders.filter((item) => item !== source && !item.startsWith(`${source}/`)),
+        [],
+        structure.expectedFolders.filter((item) => item !== source),
       );
     });
   }

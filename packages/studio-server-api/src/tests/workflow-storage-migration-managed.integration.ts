@@ -824,6 +824,14 @@ try {
       loadProjectAndAttachedDataFromString(liveContents)[0].metadata.description,
       project.metadata.description,
     );
+    // Endpoint state must not inherit a still-published web app's aggregate state.
+    const publication = await sourceBackend.listWorkflowProjectWebApps('fixture.rivet-project');
+    const unpublished = await sourceBackend.unpublishWorkflowProjectItem('fixture.rivet-project', {
+      expectedProjectId: publication.projectId,
+      expectedPublicationVersion: publication.publicationVersion!,
+    });
+    assert.equal(unpublished.settings.status, 'unpublished');
+    assert.equal(unpublished.settings.publicationStatus, 'unpublished_changes');
     await catalog.importRecording({
       recordingId,
       workflowId: projectId,
@@ -879,6 +887,10 @@ try {
       await target.initialize();
       assert.equal((await target.readWorkflowMigrationSnapshot('fixture.rivet-project'))?.contents, liveContents);
       assert.equal(await target.readWorkflowRecordingArtifact(recordingId, 'recording'), recordingContents);
+      const migrated = (await target.listWorkflowProjectWebApps('fixture.rivet-project')).project;
+      assert.equal(migrated.settings.status, 'unpublished');
+      assert.equal(migrated.settings.publicationStatus, 'unpublished_changes');
+      assert.equal(migrated.settings.publishedWebApps.length, 1);
     } finally {
       await target.dispose();
     }

@@ -422,7 +422,7 @@ async function verifyMigration(
       relativePath: project.relativePath,
       endpointName: project.settings.endpointName,
       lastPublishedAt: project.settings.lastPublishedAt,
-      status: project.settings.publicationStatus ?? project.settings.status,
+      status: project.settings.status,
     }))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 

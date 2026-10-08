@@ -110,7 +110,7 @@ export async function verifySqliteWorkflowServing(options: {
         [
           item.settings.endpointName,
           item.settings.publishedEndpointName,
-          item.settings.publicationStatus,
+          item.settings.status,
           item.settings.lastPublishedAt,
         ],
         [source.endpointName, source.publishedEndpointName, source.endpointStatus, source.lastPublishedAt],
@@ -139,7 +139,7 @@ export async function verifySqliteWorkflowServing(options: {
         'published web-app set',
       );
       equal(
-        item.settings.status,
+        item.settings.publicationStatus,
         getAggregateWorkflowProjectStatus(
           source.endpointStatus,
           sourceApps.map((app) => app.status),

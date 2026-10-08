@@ -645,6 +645,75 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
+  test('endpoint unpublish shows Unpublished while an independent web app remains published', async ({ page }) => {
+    const project = createProjectSettingsFixture('endpoint-with-published-app');
+    project.settings = {
+      status: 'published',
+      publicationStatus: 'published',
+      publicationVersion: '8',
+      endpointName: 'summary',
+      publishedEndpointName: 'summary',
+      endpointAccess: 'public',
+      lastPublishedAt: '2026-04-08T10:30:00.000Z',
+      publishedWebApps: [
+        {
+          uiGraphId: 'ui',
+          uiGraphName: 'Summary app',
+          slug: 'summary-app',
+          allowedEmails: ['operator@example.com'],
+          publishedAt: '2026-04-08T10:30:00.000Z',
+          status: 'published',
+        },
+      ],
+    };
+    project.webApps = [
+      {
+        uiGraphId: 'ui',
+        name: 'Summary app',
+        publishedSlug: 'summary-app',
+        publishedAt: '2026-04-08T10:30:00.000Z',
+        allowedEmails: ['operator@example.com'],
+        status: 'published',
+        isMissingFromProject: false,
+      },
+    ];
+    project.stats!.webAppCount = 1;
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let unpublishRequests = 0;
+    await page.route('**/api/workflows/projects/unpublish', async (route) => {
+      const request = route.request().postDataJSON();
+      expect(request.preconditions.expectedPublicationVersion).toBe('8');
+      expect(request.relativePath).toBe(project.relativePath);
+      unpublishRequests++;
+      project.settings = {
+        ...project.settings,
+        status: 'unpublished',
+        publicationStatus: 'published',
+        publishedEndpointName: '',
+        lastPublishedAt: null,
+        publicationVersion: '9',
+      };
+      await route.fulfill({ json: { project } });
+    });
+    page.on('dialog', (dialog) => void dialog.accept());
+    const { modal } = await openProjectSettingsModal(page, project);
+    await expect(modal.locator('.project-settings-status-block .project-status-badge')).toHaveText('Published');
+    await modal.getByRole('button', { name: 'Unpublish', exact: true }).click();
+    await expect(modal.locator('.project-settings-status-block .project-status-badge')).toHaveText('Unpublished');
+    await expect(modal.getByText('Workflow is not published as endpoint.', { exact: true })).toBeVisible();
+    await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Publish', exact: true })).toBeEnabled();
+    await expect(modal.locator('.project-settings-status-help')).toHaveCount(0);
+    expect(unpublishRequests).toBe(1);
+    await expect(page.locator('.active-project-status-line').first()).toContainText('Unpublished');
+    await modal.getByRole('tab', { name: 'Web apps', exact: true }).click();
+    const app = modal.locator('.project-settings-web-app-row', { hasText: 'Summary app' });
+    await expect(app.locator('.project-settings-web-app-state')).toHaveText('Published');
+    await expect(app.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+    await modal.getByRole('tab', { name: 'Danger zone' }).click();
+    await expect(modal.getByRole('button', { name: 'Delete project', exact: true })).toBeDisabled();
+  });
+
   test('deletion stays disabled after unavailable publication reads until a successful review', async ({ page }) => {
     const project = createProjectSettingsFixture('delete-publication-unavailable');
     await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());

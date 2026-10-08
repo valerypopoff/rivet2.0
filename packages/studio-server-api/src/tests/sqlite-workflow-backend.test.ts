@@ -24,6 +24,7 @@ async function fixture(
     options: { databasePath: string; artifactRoot: string; virtualRoot: string },
     setPaused: (value: boolean) => void,
   ) => Promise<void>,
+  hooks: { beforeDeleteProject?: (projectId: string) => Promise<void> } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-sqlite-backend-'));
   const options = {
@@ -34,6 +35,7 @@ async function fixture(
   let paused = false;
   const backend = new SqliteWorkflowBackend({
     ...options,
+    ...hooks,
     withWrite: async (operation) => {
       if (paused) throw new Error('maintenance');
       return operation();
@@ -108,6 +110,63 @@ function executable(contents: string) {
   return serializeProject(project, attached) as string;
 }
 
+test('SQLite endpoint unpublish preserves web apps without reporting a published endpoint', async () => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    const loaded = await backend.loadHostedProject(item.absolutePath);
+    const [project, attached] = loadProjectAndAttachedDataFromString(loaded.contents);
+    project.uiGraphs = { ui: { id: 'ui', name: 'Summary app', components: [] } } as typeof project.uiGraphs;
+    item = (
+      await backend.saveHostedProject({
+        projectPath: item.absolutePath,
+        contents: serializeProject(project, attached) as string,
+        datasetsContents: null,
+        expectedRevisionId: loaded.revisionId,
+      })
+    ).project;
+    const assertStatuses = async (endpoint: string, aggregate: string) => {
+      const tree = (await backend.getTree()).projects[0]!;
+      const settings = (await backend.listWorkflowProjectWebApps(item.relativePath)).project;
+      for (const view of [item, tree, settings]) {
+        assert.equal(view.settings.status, endpoint);
+        assert.equal(view.settings.publicationStatus, aggregate);
+      }
+    };
+    item = await backend.publishWorkflowProjectWebApps(
+      item.relativePath,
+      [{ uiGraphId: 'ui', slug: 'summary-app', allowedEmails: ['operator@example.com'] }],
+      conditions(item),
+    );
+    await assertStatuses('unpublished', 'published');
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'summary' }, conditions(item));
+    await assertStatuses('published', 'published');
+    const app = item.settings.publishedWebApps[0];
+    item = await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
+    await assertStatuses('unpublished', 'published');
+    assert.equal(item.settings.publishedEndpointName, '');
+    assert.equal(item.settings.endpointName, 'summary');
+    assert.equal(item.settings.lastPublishedAt, null);
+    assert.deepEqual(item.settings.publishedWebApps, [app]);
+    assert.equal(await backend.loadPublishedExecutionProject('summary'), null);
+    assert.ok(await backend.loadPublishedWebAppExecutionProject('summary-app'));
+    assert.equal((await backend.listWorkflowPublishedVersions(item.relativePath)).versions.length, 1);
+    const draft = await backend.loadHostedProject(item.absolutePath);
+    const [edited, data] = loadProjectAndAttachedDataFromString(draft.contents);
+    edited.metadata.description = 'Unpublished draft change';
+    item = (
+      await backend.saveHostedProject({
+        projectPath: item.absolutePath,
+        contents: serializeProject(edited, data) as string,
+        datasetsContents: null,
+        expectedRevisionId: draft.revisionId,
+      })
+    ).project;
+    await assertStatuses('unpublished', 'unpublished_changes');
+    item = await backend.unpublishWorkflowProjectWebApp(item.relativePath, 'ui', conditions(item));
+    await assertStatuses('unpublished', 'unpublished');
+  });
+});
+
 test('SQLite recording picker includes published endpoints without runs using only metadata', async (t) => {
   await fixture(async (backend) => {
     let item = await createExecutable(backend);
@@ -120,6 +179,61 @@ test('SQLite recording picker includes published endpoints without runs using on
     assert.equal(summary?.latestRunAt, undefined);
     assert.equal(reads.mock.callCount(), 0);
   });
+});
+
+test('SQLite deletion rejects live endpoint and web-app publications before running cleanup', async () => {
+  const deleted: string[] = [];
+  await fixture(
+    async (backend) => {
+      let item = await createExecutable(backend);
+      const loaded = await backend.loadHostedProject(item.absolutePath);
+      const [project, attached] = loadProjectAndAttachedDataFromString(loaded.contents);
+      project.uiGraphs = { ui: { id: 'ui', name: 'Live app', components: [] } } as typeof project.uiGraphs;
+      item = (
+        await backend.saveHostedProject({
+          projectPath: item.absolutePath,
+          contents: serializeProject(project, attached) as string,
+          datasetsContents: null,
+          expectedRevisionId: loaded.revisionId,
+        })
+      ).project;
+      const assertProtected = async () => {
+        await assert.rejects(backend.deleteWorkflowProjectItem(item.relativePath), {
+          status: 409,
+          message: 'Unpublish the workflow endpoint and web apps before deleting the project',
+        });
+        assert.deepEqual(deleted, []);
+        assert.equal((await backend.getTree()).projects[0]?.projectMetadataId, item.projectMetadataId);
+      };
+      item = await backend.publishWorkflowProjectWebApps(
+        item.relativePath,
+        [{ uiGraphId: 'ui', slug: 'live-app', allowedEmails: [] }],
+        conditions(item),
+      );
+      await assertProtected();
+      assert.ok(await backend.loadPublishedWebAppExecutionProject('live-app'));
+      item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'live' }, conditions(item));
+      await assertProtected();
+      item = await backend.unpublishWorkflowProjectWebApp(item.relativePath, 'ui', conditions(item));
+      await assertProtected();
+      assert.ok(await backend.loadPublishedExecutionProject('live'));
+      item = await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
+      const versions = (await backend.listWorkflowPublishedVersions(item.relativePath)).versions;
+      assert.equal(versions.length, 1);
+      assert.equal(versions[0]?.isCurrent, false);
+      // Historical publications alone do not block deletion once all routes are gone.
+      assert.equal(await backend.deleteWorkflowProjectItem(item.relativePath), item.projectMetadataId);
+      assert.deepEqual(deleted, [item.projectMetadataId]);
+      assert.equal((await backend.getTree()).projects.length, 0);
+      assert.equal(await backend.loadPublishedExecutionProject('live'), null);
+      assert.equal(await backend.loadPublishedWebAppExecutionProject('live-app'), null);
+    },
+    {
+      beforeDeleteProject: async (id) => {
+        deleted.push(id);
+      },
+    },
+  );
 });
 async function createExecutable(backend: SqliteWorkflowBackend, name = 'Story') {
   const item = await backend.createWorkflowProjectItem('', name),
@@ -396,7 +510,7 @@ test('SQLite serving verification checks independent web-app freshness and aggre
     const verifyOptions = { ...options, folders: [], projects: [source], recordings: [], assertFrozen: async () => {} };
     await verifySqliteWorkflowServing(verifyOptions);
     const original = SqliteWorkflowBackend.prototype.getTree;
-    for (const field of ['webApp', 'aggregate'] as const) {
+    for (const field of ['webApp', 'aggregate', 'endpoint'] as const) {
       const faulty = t.mock.method(
         SqliteWorkflowBackend.prototype,
         'getTree',
@@ -405,6 +519,7 @@ test('SQLite serving verification checks independent web-app freshness and aggre
           const settings = tree.projects[0]!.settings;
           if (field === 'webApp')
             settings.publishedWebApps!.find((app) => app.uiGraphId === 'second')!.status = 'published';
+          else if (field === 'aggregate') settings.publicationStatus = 'published';
           else settings.status = 'published';
           return tree;
         },
@@ -412,7 +527,7 @@ test('SQLite serving verification checks independent web-app freshness and aggre
       try {
         await assert.rejects(
           verifySqliteWorkflowServing(verifyOptions),
-          /published web-app set|aggregate publication status/,
+          /published web-app set|aggregate publication status|publication pointers/,
         );
       } finally {
         faulty.mock.restore();
@@ -622,7 +737,8 @@ test('SQLite tree includes dataset-only revisions and independent web-app freshn
       [{ uiGraphId: 'ui', slug: 'story-ui', allowedEmails: [] }],
       conditions(item),
     );
-    assert.equal(item.settings.publicationStatus, 'unpublished');
+    assert.equal(item.settings.status, 'unpublished');
+    assert.equal(item.settings.publicationStatus, 'published');
     assert.equal(item.settings.publishedWebApps![0]!.status, 'published');
     const published = item;
     const current = await backend.loadHostedProject(item.absolutePath);
@@ -1509,9 +1625,20 @@ test('SQLite folder moves are atomic and keep historical recording identities', 
         (await backend.getTree()).folders.find((folder) => folder.name === 'B')!.folders[0]!.projects.length,
         1,
       );
-      await backend.deleteWorkflowFolderItem('B');
+      await assert.rejects(backend.deleteWorkflowFolderItem('B'), {
+        status: 409,
+        message: 'Only empty folders can be deleted',
+      });
+      await assert.rejects(backend.deleteWorkflowFolderItem('B/nested'), /Only empty folders/);
+      assert.equal(catalog.findProjectPathById(item.projectMetadataId!), 'B/nested/Story.rivet-project');
+      assert.ok(await catalog.readRecording('run-1'));
+      await backend.deleteWorkflowProjectItem('B/nested/Story.rivet-project');
       assert.equal(catalog.findProjectPathById(item.projectMetadataId!), null);
       assert.equal(await catalog.readRecording('run-1'), null);
+      await assert.rejects(backend.deleteWorkflowFolderItem('B'), /Only empty folders/);
+      await backend.deleteWorkflowFolderItem('B/nested');
+      await backend.deleteWorkflowFolderItem('B');
+      assert.deepEqual((await backend.getTree()).folders.map((folder) => folder.name), ['C']);
     } finally {
       catalog.close();
     }

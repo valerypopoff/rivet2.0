@@ -99,7 +99,9 @@ export function getWorkflowPublishedVersionPreviewFromVirtualProjectPath(
 }
 
 export type WorkflowProjectSettings = {
+  /** Endpoint-only publication state; web-app publications do not affect it. */
   status: WorkflowProjectStatus;
+  /** Combined endpoint/web-app state for the project tree and overall badges. */
   publicationStatus?: WorkflowProjectStatus;
   endpointName: string;
   publishedEndpointName?: string;
