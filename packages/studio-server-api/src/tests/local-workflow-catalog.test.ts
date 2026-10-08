@@ -149,6 +149,33 @@ function useLegacyCatalogSchema(file: string, version: number): void {
   }
 }
 
+test('focused publication swaps app slugs atomically without reading or rewriting artifacts', async (t) => {
+  await fixture(async (catalog) => {
+    const source = project();
+    source.publishedWebApps.push({
+      ...source.publishedWebApps[0]!,
+      appId: 'app-two',
+      uiGraphId: 'graph-two',
+      slug: 'second-ui',
+    });
+    await catalog.importProject(source);
+    // Warm the compatibility summary for this deliberately minimal fixture.
+    await catalog.readTreeProject(source.relativePath);
+    const reads = t.mock.method(ImmutableLocalArtifactStore.prototype, 'read');
+    const writes = t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes');
+    await catalog.mutatePublication(source.relativePath, (state) => {
+      state.endpointAccess = 'public';
+      const [first, second] = state.publishedWebApps;
+      [first!.slug, second!.slug] = [second!.slug, first!.slug];
+    });
+    assert.equal(reads.mock.callCount(), 0);
+    assert.equal(writes.mock.callCount(), 0);
+    assert.equal(catalog.readWebAppPolicy('second-ui')?.webApp?.appId, 'app-id');
+    assert.equal(catalog.readWebAppPolicy('story-ui')?.webApp?.appId, 'app-two');
+    assert.equal(catalog.readProjectPublicationMetadata(source.relativePath)?.publishedVersions.length, 2);
+  });
+});
+
 test('recording imports require canonical UTC dates before writing artifacts', async (t) => {
   await fixture(async (catalog) => {
     catalog.importFolder('folder');
@@ -430,6 +457,75 @@ test('local recording retention is bounded, deterministic and removes references
       catalog.pruneRecordings({ ...policy, maxRunsPerEndpoint: 0, retentionDays: 1 })[0]!.recordingId,
       'run-3',
     );
+  });
+});
+
+test('local orphan collection protects shared references and reclaims only old unreferenced objects', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording());
+    const row = catalog.listRecordingMetadata()[0]!;
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const orphan = await store.putBytes(Buffer.from('unreferenced upload'));
+    assert.deepEqual(await catalog.collectOrphanArtifacts(), { removed: 0, bytes: 0 });
+    assert.ok(await store.read(orphan.hash));
+    const now = Date.now() + 2 * 86400000;
+    assert.equal((await catalog.collectOrphanArtifacts({ now })).removed, 1);
+    await assert.rejects(store.read(orphan.hash), /ENOENT/);
+    assert.ok(await store.read(row.recordingHash));
+    catalog.deleteRecording(row.recordingId);
+    assert.ok((await catalog.collectOrphanArtifacts({ now })).removed >= 1);
+    await assert.rejects(store.read(row.recordingHash), /ENOENT/);
+    assert.ok(await catalog.readProject(project().relativePath));
+    await assert.rejects(catalog.collectOrphanArtifacts({ graceMs: 0 }), /Invalid/);
+  });
+});
+
+test('orphan reference scans yield without a writer lock and reject an intervening primary-connection write', async (t) => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording());
+    const database = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const orphan = await store.putBytes(Buffer.from('old orphan during busy collection'));
+    try {
+      const original = database.prepare('SELECT metadata_json FROM recordings LIMIT 1').get()!.metadata_json as string;
+      for (let index = 0; index < 101; index++) {
+        const metadata = { ...JSON.parse(original), recordingId: `copy-${index}` };
+        database
+          .prepare('INSERT INTO recordings VALUES (?, ?, ?)')
+          .run(metadata.recordingId, 'project-id', JSON.stringify(metadata));
+      }
+      const prepare = DatabaseSync.prototype.prepare;
+      let changed = false;
+      const scan = t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (sql.startsWith('SELECT rowid AS cursor, metadata_json FROM recordings')) {
+          const all = statement.all.bind(statement);
+          t.mock.method(statement, 'all', (...parameters: any[]) => {
+            const rows = all(...parameters);
+            if (!changed) {
+              changed = true;
+              // This succeeds only if the collector is NOT holding its writer
+              // lock. A primary-connection write must invalidate the separate
+              // reader's proof just like a write from another process.
+              catalog.deleteRecording('run-1');
+            }
+            return rows;
+          });
+        }
+        return statement;
+      });
+      const now = Date.now() + 2 * 86400000;
+      assert.deepEqual(await catalog.collectOrphanArtifacts({ now }), { removed: 0, bytes: 0 });
+      assert.equal(changed, true);
+      assert.ok(await store.read(orphan.hash));
+      scan.mock.restore();
+      assert.equal((await catalog.collectOrphanArtifacts({ now })).removed, 1);
+      await assert.rejects(store.read(orphan.hash), /ENOENT/);
+    } finally {
+      database.close();
+    }
   });
 });
 

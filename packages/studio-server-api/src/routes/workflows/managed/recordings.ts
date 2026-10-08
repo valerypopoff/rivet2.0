@@ -25,6 +25,7 @@ import {
 } from '../../../llm-profile-health/state.js';
 import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
+import { parseManagedArtifactDescriptor } from './artifact-descriptor.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { ManagedWorkflowMaintenanceLease } from './maintenance.js';
@@ -198,6 +199,10 @@ function getUtf8ByteLength(value: string | null | undefined): number {
   return value == null ? 0 : Buffer.byteLength(value, 'utf8');
 }
 
+function getStoredByteLength(key: string | null, text: string | null | undefined): number {
+  return key ? parseManagedArtifactDescriptor(key)?.storedBytes ?? getUtf8ByteLength(text) : 0;
+}
+
 async function filterManagedRecordingRowsByInput(
   loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingRow[]>,
   workflowId: string,
@@ -225,7 +230,9 @@ async function filterManagedRecordingRowsByInput(
               // text-only interface. Built-in stores always provide bytes; this
               // fallback retains cancellation and never changes match semantics.
               Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
-          encoding: 'identity' as const,
+          encoding: blobStore.getBytes
+            ? parseManagedArtifactDescriptor(row.recording_blob_key)?.encoding ?? 'identity'
+            : 'identity',
         }),
         readSignal,
         Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
@@ -461,11 +468,17 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: getUtf8ByteLength(options.recordingContents),
+          recordingCompressedBytes: getStoredByteLength(uploadedBlobs.recordingBlobKey, options.recordingContents),
           recordingUncompressedBytes: getUtf8ByteLength(options.recordingContents),
-          projectCompressedBytes: getUtf8ByteLength(options.replayProjectContents),
+          projectCompressedBytes: getStoredByteLength(
+            uploadedBlobs.replayProjectBlobKey,
+            options.replayProjectContents,
+          ),
           projectUncompressedBytes: getUtf8ByteLength(options.replayProjectContents),
-          datasetCompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
+          datasetCompressedBytes: getStoredByteLength(
+            uploadedBlobs.replayDatasetBlobKey,
+            options.replayDatasetContents,
+          ),
           datasetUncompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
         },
         {
@@ -807,11 +820,11 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: getUtf8ByteLength(options.recordingSerialized),
+          recordingCompressedBytes: getStoredByteLength(uploadedBlobs.recordingBlobKey, options.recordingSerialized),
           recordingUncompressedBytes: getUtf8ByteLength(options.recordingSerialized),
-          projectCompressedBytes: getUtf8ByteLength(replayProjectSerialized),
+          projectCompressedBytes: getStoredByteLength(uploadedBlobs.replayProjectBlobKey, replayProjectSerialized),
           projectUncompressedBytes: getUtf8ByteLength(replayProjectSerialized),
-          datasetCompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
+          datasetCompressedBytes: getStoredByteLength(uploadedBlobs.replayDatasetBlobKey, replayDatasetSerialized),
           datasetUncompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
         },
         {

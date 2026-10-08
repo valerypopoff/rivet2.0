@@ -3,11 +3,9 @@ import type { Pool, PoolClient } from 'pg';
 import { withManagedDbRetry } from './db.js';
 import type { TransactionHooks } from './types.js';
 
-export function createManagedWorkflowTransactionRunner(options: {
-  pool: Pool;
-  initialize(): Promise<void>;
-}) {
-  const connectWithRetry = async (): Promise<PoolClient> => withManagedDbRetry('database connect', () => options.pool.connect());
+export function createManagedWorkflowTransactionRunner(options: { pool: Pool; initialize(): Promise<void> }) {
+  const connectWithRetry = async (): Promise<PoolClient> =>
+    withManagedDbRetry('database connect', () => options.pool.connect());
 
   return {
     connectWithRetry,
@@ -26,35 +24,43 @@ export function createManagedWorkflowTransactionRunner(options: {
         },
       };
 
+      let committed = false;
+      let result: T;
+      let failure: unknown;
+      let failed = false;
+      let releaseError: Error | undefined;
       try {
         await client.query('BEGIN');
-        const result = await run(client, hooks);
+        // Bound lock contention independently of the statement's execution.
+        // LOCAL settings cannot leak into a subsequently leased connection.
+        await client.query("SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '60s'");
+        result = await run(client, hooks);
         await client.query('COMMIT');
-
-        for (const task of onCommitTasks) {
-          try {
-            await task();
-          } catch (error) {
-            console.error('[managed-workflows] Post-commit cleanup failed:', error);
-          }
-        }
-
-        return result;
+        committed = true;
       } catch (error) {
-        await client.query('ROLLBACK').catch(() => {});
-
-        for (const task of onRollbackTasks) {
-          try {
-            await task();
-          } catch (cleanupError) {
-            console.error('[managed-workflows] Rollback cleanup failed:', cleanupError);
-          }
+        failed = true;
+        failure = error;
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackError) {
+          // A connection whose transaction state is unknown must not re-enter
+          // the pool. Preserve the original failure for the caller.
+          releaseError = rollbackError instanceof Error ? rollbackError : new Error('Transaction rollback failed.');
         }
-
-        throw error;
       } finally {
-        client.release();
+        client.release(releaseError);
       }
+      // Hooks may acquire their own connection. Releasing first is essential
+      // for bounded pools, particularly a single-connection deployment.
+      for (const task of committed ? onCommitTasks : onRollbackTasks) {
+        try {
+          await task();
+        } catch (error) {
+          console.error('[managed-workflows] Transaction cleanup failed:', error);
+        }
+      }
+      if (failed) throw failure;
+      return result!;
     },
   };
 }

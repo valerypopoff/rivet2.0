@@ -6,6 +6,7 @@ import type {
   EvaluationLibrarySyncIssue,
   EvaluationProjectData,
   EvaluationRun,
+  EvaluationRunSummary,
   EvaluationRunEvent,
   EvaluationSuite,
 } from '@valerypopoff/rivet2-evaluations';
@@ -39,10 +40,12 @@ export type EvaluationsState = {
   selectedDatasetId?: string;
   currentRun?: EvaluationRun;
   runs: EvaluationRun[];
+  /** Compact hosted history; `runs` contains only lazily hydrated details. */
+  runHistoryEntries?: EvaluationRunSummary[];
+  runHistoryNextCursor?: string;
   /**
-   * The project and suite for which `runs` was last fully hydrated from the
-   * run store. Progress snapshots never set this: they are useful live
-   * evidence, but do not prove that the complete persisted history is loaded.
+   * The project and suite for which history was successfully loaded. Hosted
+   * stores load a compact page, not every historical trial body.
    */
   runHistoryScope?: EvaluationRunHistoryScope;
   /** Session-only presentation preferences, scoped to one project and suite. */

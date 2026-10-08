@@ -330,6 +330,7 @@ function combineLegacyEvaluationRunStore(runStore: EvaluationRunStore, librarySt
     updateRunName: (input) => runStore.updateRunName(input),
     get: (input) => runStore.get(input),
     list: (input) => runStore.list(input),
+    ...(runStore.listPage ? { listPage: runStore.listPage.bind(runStore) } : {}),
     delete: (input) => runStore.delete(input),
     putDatasetSnapshot: (snapshot) => runStore.putDatasetSnapshot(snapshot),
     getDatasetSnapshot: (input) => runStore.getDatasetSnapshot(input),

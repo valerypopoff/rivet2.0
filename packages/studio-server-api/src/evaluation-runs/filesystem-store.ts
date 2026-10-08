@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { ProjectId } from '@valerypopoff/rivet2-node';
@@ -13,10 +14,12 @@ import {
   type EvaluationLibrary,
   type EvaluationRecordingArtifact,
   type EvaluationRun,
+  type EvaluationRunHistoryQuery,
   type EvaluationRunEvent,
 } from '@valerypopoff/rivet2-evaluations';
 
 import { getAppDataRoot } from '../security.js';
+import { evaluationHistoryPageQuery, type EvaluationHistoryRow } from './history-page.js';
 import { getLocalMetadataServingSelection } from '../local-metadata/serving-selection.js';
 import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
 import { assertLocalMetadataWritesAllowed } from '../local-metadata/write-admission.js';
@@ -64,8 +67,15 @@ function isExpired(artifact: EvaluationRecordingArtifact): boolean {
 }
 
 function localRetentionIsWritable(): boolean {
-  if (!getLocalMetadataServingSelection()) return true;
   try {
+    // Background work bypasses the HTTP barrier. Legacy source databases must
+    // stay frozen during backup too, even without a configured control root.
+    try {
+      lstatSync(path.join(getAppDataRoot(), 'vm-migration-maintenance.json'));
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     assertLocalMetadataWritesAllowed();
     return true;
   } catch {
@@ -97,6 +107,7 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
   #disposePromise: Promise<void> | null = null;
   #disposed = false;
   #observedLibraryRevision: number | undefined;
+  #cleanupTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(databasePath = getFilesystemEvaluationRunsDatabasePath()) {
     this.#databasePath = databasePath;
@@ -118,9 +129,8 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
         if (getLocalMetadataServingSelection()) {
           assertLocalOperationalSchema(database, 'evaluations');
           database.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = DELETE;');
-          return database;
-        }
-        database.exec(`
+        } else
+          database.exec(`
           PRAGMA busy_timeout = 5000;
           PRAGMA journal_mode = DELETE;
           CREATE TABLE IF NOT EXISTS evaluation_library (
@@ -172,6 +182,32 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
         database.close();
         throw error;
       }
+      let cleanupIndexReady = false;
+      const ensureCleanupIndex = () => {
+        if (cleanupIndexReady) return;
+        database.exec(`CREATE INDEX IF NOT EXISTS evaluation_recordings_temporary_expiry_idx
+          ON evaluation_recordings(datetime(json_extract(artifact_json, '$.reference.expiresAt')))
+          WHERE json_extract(artifact_json, '$.reference.retention') = 'temporary'`);
+        cleanupIndexReady = true;
+      };
+      // Do not alter a certified database during paused runtime validation.
+      // Both legacy and selected live SQLite get the same indexed maintenance.
+      try {
+        if (localRetentionIsWritable()) ensureCleanupIndex();
+      } catch (error) {
+        database.close();
+        throw error;
+      }
+      this.#cleanupTimer ??= setInterval(() => {
+        if (this.#disposed || !localRetentionIsWritable()) return;
+        try {
+          ensureCleanupIndex();
+          this.#deleteExpiredTemporaryRecordings(database);
+        } catch (error) {
+          console.error('[evaluations] Temporary recording cleanup failed:', error);
+        }
+      }, 60000);
+      this.#cleanupTimer.unref();
       return database;
     })().catch((error) => {
       this.#databasePromise = null;
@@ -181,25 +217,25 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
   }
 
   /**
-   * Temporary candidate artifacts are deliberately short-lived. Run-history
-   * reads are a natural cleanup point too: an idle project should not need a
-   * later evaluation write or a request for the exact expired recording to
-   * reclaim that storage.
+   * Write-side and periodic cleanup share the same bounded cost. Backlogs drain
+   * over later passes; reads never delete rows or acquire the writer lock.
    */
-  #deleteExpiredTemporaryRecordings(database: DatabaseSync, projectId: ProjectId): void {
-    // Reads during paused validation must not mutate the certified snapshot.
+  #deleteExpiredTemporaryRecordings(database: DatabaseSync, projectId?: ProjectId): void {
+    // Paused backups/validation must not mutate the certified snapshot.
     if (!localRetentionIsWritable()) return;
     database
       .prepare(
         `
-      DELETE FROM evaluation_recordings
-      WHERE project_id = ?
-        AND json_extract(artifact_json, '$.reference.retention') = 'temporary'
-        AND json_extract(artifact_json, '$.reference.expiresAt') IS NOT NULL
-        AND datetime(json_extract(artifact_json, '$.reference.expiresAt')) <= datetime('now')
+      DELETE FROM evaluation_recordings WHERE rowid IN (
+        SELECT rowid FROM evaluation_recordings
+        WHERE ${projectId === undefined ? '' : 'project_id = ? AND'}
+          json_extract(artifact_json, '$.reference.retention') = 'temporary'
+          AND datetime(json_extract(artifact_json, '$.reference.expiresAt')) <= datetime('now')
+        LIMIT 100
+      )
     `,
       )
-      .run(String(projectId));
+      .run(...(projectId === undefined ? [] : [String(projectId)]));
   }
 
   #assertProjectWritable(database: DatabaseSync, projectId: ProjectId): void {
@@ -373,7 +409,6 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
 
   async get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined> {
     const database = await this.#database();
-    this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     return parseRun(
       database
         .prepare('SELECT run_json FROM evaluation_runs WHERE project_id = ? AND run_id = ?')
@@ -383,7 +418,6 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
 
   async list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]> {
     const database = await this.#database();
-    this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     const rows =
       input.suiteId == null
         ? database
@@ -395,6 +429,14 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
             )
             .all<Row>(String(input.projectId), input.suiteId);
     return rows.map((row) => parseRun(row)!);
+  }
+
+  async listPage(input: EvaluationRunHistoryQuery) {
+    const query = evaluationHistoryPageQuery('sqlite', input);
+    const database = await this.#database();
+    return query.page(
+      database.prepare(query.sql).all(...(query.values as Array<string | number>)) as EvaluationHistoryRow[],
+    );
   }
 
   async delete(input: { projectId: ProjectId; runId: string }): Promise<void> {
@@ -479,18 +521,12 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
     recordingId: string;
   }): Promise<EvaluationRecordingArtifact | undefined> {
     const database = await this.#database();
-    this.#deleteExpiredTemporaryRecordings(database, input.projectId);
     const artifact = parseRecording(
       database
         .prepare('SELECT artifact_json FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
         .get<RecordingRow>(String(input.projectId), input.recordingId),
     );
-    if (!artifact || !isExpired(artifact)) return artifact;
-    if (!localRetentionIsWritable()) return undefined;
-    database
-      .prepare('DELETE FROM evaluation_recordings WHERE project_id = ? AND recording_id = ?')
-      .run(String(input.projectId), input.recordingId);
-    return undefined;
+    return artifact && isExpired(artifact) ? undefined : artifact;
   }
 
   async updateRecordingRetention(input: {
@@ -599,9 +635,13 @@ export class FilesystemRivetEvaluationStore implements RivetStudioEvaluationStor
 
   async dispose(): Promise<void> {
     this.#disposed = true;
+    clearInterval(this.#cleanupTimer);
+    this.#cleanupTimer = undefined;
     this.#disposePromise ??= (async () => {
       const promise = this.#databasePromise;
       if (promise) (await promise).close();
+      clearInterval(this.#cleanupTimer);
+      this.#cleanupTimer = undefined;
       this.#databasePromise = null;
     })();
     await this.#disposePromise;

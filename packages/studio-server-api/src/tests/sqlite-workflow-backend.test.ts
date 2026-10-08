@@ -60,6 +60,46 @@ const conditions = (item: WorkflowProjectItem) => ({
   expectedPublicationVersion: item.settings.publicationVersion!,
   expectedDraftRevisionId: item.revisionId!,
 });
+
+test('SQLite draft saves preserve publication artifacts without reading history', async (t) => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'story' }, conditions(item));
+    const loaded = await backend.loadHostedProject(item.absolutePath);
+    const [project, attached] = loadProjectAndAttachedDataFromString(loaded.contents);
+    project.metadata.description = 'draft edit';
+    let reads = 0;
+    let writes = 0;
+    const originalRead = ImmutableLocalArtifactStore.prototype.read;
+    const originalPut = ImmutableLocalArtifactStore.prototype.putBytes;
+    t.mock.method(
+      ImmutableLocalArtifactStore.prototype,
+      'read',
+      function (this: ImmutableLocalArtifactStore, ...args: Parameters<typeof originalRead>) {
+        reads++;
+        return originalRead.apply(this, args);
+      },
+    );
+    t.mock.method(
+      ImmutableLocalArtifactStore.prototype,
+      'putBytes',
+      function (this: ImmutableLocalArtifactStore, ...args: Parameters<typeof originalPut>) {
+        writes++;
+        return originalPut.apply(this, args);
+      },
+    );
+    const saved = await backend.saveHostedProject({
+      projectPath: item.absolutePath,
+      contents: serializeProject(project, attached) as string,
+      datasetsContents: null,
+      expectedRevisionId: loaded.revisionId,
+    });
+    assert.equal(reads, 0);
+    assert.equal(writes, 1);
+    assert.equal(saved.project.settings.status, 'unpublished_changes');
+    assert.equal((await backend.listWorkflowPublishedVersions(item.relativePath)).versions.length, 1);
+  });
+});
 function executable(contents: string) {
   const [project, attached] = loadProjectAndAttachedDataFromString(contents);
   const graphId = 'main' as NonNullable<typeof project.metadata.mainGraphId>;
@@ -67,6 +107,20 @@ function executable(contents: string) {
   project.graphs = { [graphId]: { metadata: { id: graphId, name: 'Main' }, nodes: [], connections: [] } };
   return serializeProject(project, attached) as string;
 }
+
+test('SQLite recording picker includes published endpoints without runs using only metadata', async (t) => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    assert.equal((await backend.listWorkflowRecordingWorkflows()).workflows.length, 0);
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'story' }, conditions(item));
+    const reads = t.mock.method(ImmutableLocalArtifactStore.prototype, 'read');
+    const [summary] = (await backend.listWorkflowRecordingWorkflows()).workflows;
+    assert.equal(summary?.workflowId, item.projectMetadataId);
+    assert.equal(summary?.totalRuns, 0);
+    assert.equal(summary?.latestRunAt, undefined);
+    assert.equal(reads.mock.callCount(), 0);
+  });
+});
 async function createExecutable(backend: SqliteWorkflowBackend, name = 'Story') {
   const item = await backend.createWorkflowProjectItem('', name),
     loaded = await backend.loadHostedProject(item.absolutePath);
@@ -1526,6 +1580,51 @@ test('SQLite retention refuses an unreadable hold authority and preserves held d
       }
     }),
   );
+});
+
+test('SQLite endpoint retention preserves separate endpoint histories and folds endpoint case', async () => {
+  await fixture(async (backend, options) => {
+    const item = await createExecutable(backend);
+    const catalog = new LocalWorkflowCatalog(options);
+    catalog.initialize({ requireExisting: true });
+    try {
+      for (const [recordingId, endpointName, createdAt] of [
+        ['a-old', ' First ', '2025-01-01T00:00:00.000Z'],
+        ['a-new', 'first', '2025-01-02T00:00:00.000Z'],
+        ['b', 'second', '2025-01-01T00:00:00.000Z'],
+      ]) {
+        await catalog.importRecording({
+          recordingId: recordingId!,
+          endpointName: endpointName!,
+          createdAt: createdAt!,
+          workflowId: item.projectMetadataId!,
+          sourceProjectName: item.name,
+          sourceProjectRelativePath: item.relativePath,
+          runKind: 'published',
+          status: 'succeeded',
+          durationMs: 1,
+          errorMessage: null,
+          recordingContents: '{}',
+          replayProjectContents: '{}',
+          replayDatasetContents: null,
+        });
+      }
+      const deleted = catalog.pruneRecordings({
+        now: Date.now(),
+        retentionDays: 0,
+        maxRunsPerEndpoint: 1,
+        maxTotalBytes: 0,
+        batchSize: 100,
+      });
+      assert.deepEqual(
+        deleted.map((row) => row.recordingId),
+        ['a-old'],
+      );
+      assert.deepEqual(catalog.listRecordingIds(), ['a-new', 'b']);
+    } finally {
+      catalog.close();
+    }
+  });
 });
 
 test('SQLite in-place save follows stable project identity after moving to a different folder', async () => {

@@ -84,6 +84,7 @@ export function createPrecopyAwareMigrationBlobStore(
       base.dispose();
       client.destroy();
     },
+    putArtifact: (descriptor, bytes, contentType) => base.putArtifact(descriptor, bytes, contentType),
     putText: async (key, contents, contentType) => {
       const staged = stageKey(sourceIdentity, contents);
       let stagedAvailable = false;

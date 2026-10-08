@@ -18,7 +18,7 @@ import {
 } from '@valerypopoff/rivet2-evaluations';
 
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { badRequest, conflict } from '../../utils/httpError.js';
+import { badRequest, conflict, createHttpError } from '../../utils/httpError.js';
 import { validateBody } from '../../middleware/validate.js';
 import { createControlPlaneJsonBodyParser, createJsonBodyParser } from '../../middleware/body-parsers.js';
 import { getEvaluationStore, getHostedEvaluationCoordinator } from './storage-backend.js';
@@ -604,6 +604,25 @@ evaluationRunsRouter.put(
     res.status(204).end();
   }),
 );
+evaluationRunsRouter.get(
+  '/history',
+  asyncHandler(async (req, res) => {
+    const parsed = listSchema
+      .extend({ limit: z.coerce.number().int().min(1).max(100).optional(), after: z.string().max(2048).optional() })
+      .safeParse(req.query);
+    if (!parsed.success) throw badRequest('Invalid evaluation history query.');
+    const store = await getEvaluationStore();
+    if (!store.listPage) throw createHttpError(501, 'Compact evaluation history is unavailable.');
+    try {
+      res.json(await store.listPage({ ...parsed.data, projectId: parsed.data.projectId as ProjectId }));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Invalid evaluation history cursor'))
+        throw badRequest(error.message);
+      throw error;
+    }
+  }),
+);
+
 evaluationRunsRouter.get(
   '/',
   asyncHandler(async (req, res) => {

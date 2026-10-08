@@ -55,6 +55,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
     readRevisionContents: options.context.revisions.readRevisionContents,
     createRevision: options.context.revisions.createRevision,
     scheduleRevisionBlobCleanup: options.context.revisions.scheduleRevisionBlobCleanup,
+    discardPreparedRevision: options.context.revisions.discardPreparedRevision,
     insertRevision: options.context.revisions.insertRevision,
     syncWorkflowEndpointRows: options.context.endpointSync.syncWorkflowEndpointRows,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
@@ -102,6 +103,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
       projectId?: string;
       saveIntent?: 'in-place' | 'save-as';
     }): Promise<SaveHostedProjectResult> {
+      options = structuredClone(options);
       const requestedRelativePath = parseManagedWorkflowProjectVirtualPath(options.projectPath);
       const submittedProject = parseHostedProjectContents(options.contents, 'Could not save project').project;
       const submittedProjectId = submittedProject.metadata.id;
@@ -112,150 +114,215 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         throw createHttpError(400, 'Project identity does not match the submitted project contents.');
       }
 
-      return deps.withTransaction(async (client, hooks) => {
-        let relativePath = requestedRelativePath;
-        let workflow: WorkflowRow | null;
-        if (options.saveIntent === 'in-place') {
-          // The UI path is only a hint: an already-open project may have been
-          // moved or renamed by another collaborator after it was loaded.
-          // Lock and save the immutable-ID owner instead of recreating a file
-          // at the stale path.
-          workflow = await deps.getWorkflowById(client, submittedProjectId, { forUpdate: true });
-          if (!workflow) {
-            throw conflict('This project no longer exists. Reopen it before saving.');
-          }
-          relativePath = workflow.relative_path;
-        } else {
-          workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
-        }
-
-        const projectName = path.posix.basename(relativePath, WORKFLOW_PROJECT_EXTENSION);
-        const folderRelativePath = path.posix.dirname(relativePath) === '.' ? '' : path.posix.dirname(relativePath);
-        const normalizedContents = normalizeHostedProjectTitle(options.contents, projectName, 'Could not save project');
-        const { project: sourceProject, attachedData } = normalizedContents;
-        await deps.ensureFolderChain(client, folderRelativePath);
-
-        let contents = normalizedContents.contents;
-        let created = false;
-        let workflowId = sourceProject.metadata.id ?? (randomUUID() as typeof sourceProject.metadata.id);
-
-        if (workflow) {
-          workflowId = workflow.workflow_id as typeof sourceProject.metadata.id;
-          if (sourceProject.metadata.id !== workflowId) {
-            throw conflict('The save target belongs to a different project. Choose a new path or reopen the target.');
-          }
-
-          const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
-          if (!currentDraftRevision) {
-            throw createHttpError(500, 'Current workflow revision could not be loaded');
-          }
-
-          const currentDraftContents = await deps.readRevisionContents(currentDraftRevision);
-          if (options.expectedRevisionId && options.expectedRevisionId !== workflow.current_draft_revision_id) {
-            const expectedRevision = await deps.getRevision(client, options.expectedRevisionId);
-            const expectedContents = expectedRevision ? await deps.readRevisionContents(expectedRevision) : null;
-            const normalizedExpectedContents = expectedContents
-              ? normalizeHostedProjectTitle(expectedContents.contents, projectName, 'Could not save project')
-              : null;
-            const isRenameOnlyRebase =
-              options.saveIntent === 'in-place' &&
-              normalizedExpectedContents != null &&
-              getManagedRevisionContentsKey(
-                normalizedExpectedContents.contents,
-                expectedContents?.datasetsContents ?? null,
-              ) === getManagedRevisionContentsKey(currentDraftContents.contents, currentDraftContents.datasetsContents);
-
-            if (!isRenameOnlyRebase) {
-              throw conflict('Project has changed since it was opened. Reload it before saving again.');
+      await deps.initialize();
+      // Prepare immutable payloads without occupying a connection or a workflow
+      // row lock. The transaction below must still recheck the entire metadata
+      // snapshot before publishing pointers to these objects.
+      const observed =
+        options.saveIntent === 'in-place'
+          ? await deps.getWorkflowById(deps.pool, submittedProjectId)
+          : await deps.getWorkflowByRelativePath(deps.pool, requestedRelativePath);
+      if (!observed && options.saveIntent === 'in-place')
+        throw conflict('This project no longer exists. Reopen it before saving.');
+      if (observed && observed.workflow_id !== submittedProjectId)
+        throw conflict('The save target belongs to a different project. Choose a new path or reopen the target.');
+      const preparedPath = observed?.relative_path ?? requestedRelativePath;
+      const observedMetadata = JSON.stringify(observed);
+      const preparedName = path.posix.basename(preparedPath, WORKFLOW_PROJECT_EXTENSION);
+      const normalized = normalizeHostedProjectTitle(options.contents, preparedName, 'Could not save project');
+      if (!observed && (await deps.getWorkflowById(deps.pool, submittedProjectId))) {
+        normalized.project.metadata.id = randomUUID() as typeof normalized.project.metadata.id;
+        options.contents = serializeProject(normalized.project, normalized.attachedData) as string;
+      } else options.contents = normalized.contents;
+      const preparedId = observed?.workflow_id ?? normalized.project.metadata.id;
+      const payloads = new Map<string, ManagedRevisionContents>();
+      for (const id of new Set([
+        observed?.current_draft_revision_id,
+        observed?.published_revision_id,
+        options.expectedRevisionId,
+      ])) {
+        if (!id) continue;
+        const row = await deps.getRevision(deps.pool, id);
+        if (row) payloads.set(id, await deps.readRevisionContents(row));
+      }
+      const readPreparedContents = (row: RevisionRow) => {
+        const contents = payloads.get(row.revision_id);
+        if (!contents) throw conflict('Workflow storage changed while preparing the save. Reload before saving.');
+        return contents;
+      };
+      const currentContents = observed?.current_draft_revision_id
+        ? payloads.get(observed.current_draft_revision_id)
+        : null;
+      const saveTarget =
+        observed && currentContents
+          ? deps.resolveManagedHostedProjectSaveTarget({
+              nextContents: { contents: options.contents, datasetsContents: options.datasetsContents },
+              currentDraftContents: currentContents,
+              publishedContents: observed.published_revision_id
+                ? payloads.get(observed.published_revision_id) ?? null
+                : null,
+              draftEndpointName: observed.endpoint_name,
+              publishedEndpointName: observed.published_endpoint_name,
+            })
+          : 'new-revision';
+      const preparedRevision =
+        saveTarget === 'current-draft' || saveTarget === 'published-revision'
+          ? null
+          : await deps.createRevision(preparedId, options.contents, options.datasetsContents);
+      let attached = false;
+      try {
+        const result = await deps.withTransaction(async (client, hooks) => {
+          let relativePath = requestedRelativePath;
+          let workflow: WorkflowRow | null;
+          if (options.saveIntent === 'in-place') {
+            // The UI path is only a hint: an already-open project may have been
+            // moved or renamed by another collaborator after it was loaded.
+            // Lock and save the immutable-ID owner instead of recreating a file
+            // at the stale path.
+            workflow = await deps.getWorkflowById(client, submittedProjectId, { forUpdate: true });
+            if (!workflow) {
+              throw conflict('This project no longer exists. Reopen it before saving.');
             }
+            relativePath = workflow.relative_path;
+          } else {
+            workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
           }
+          if (JSON.stringify(workflow) !== observedMetadata)
+            throw conflict('Workflow storage changed while preparing the save. Reload before saving.');
 
-          let publishedContents: ManagedRevisionContents | null = null;
+          const projectName = path.posix.basename(relativePath, WORKFLOW_PROJECT_EXTENSION);
+          const folderRelativePath = path.posix.dirname(relativePath) === '.' ? '' : path.posix.dirname(relativePath);
+          const normalizedContents = normalizeHostedProjectTitle(
+            options.contents,
+            projectName,
+            'Could not save project',
+          );
+          const { project: sourceProject, attachedData } = normalizedContents;
+          await deps.ensureFolderChain(client, folderRelativePath);
 
-          if (workflow.published_revision_id) {
-            if (workflow.published_revision_id === currentDraftRevision.revision_id) {
-              publishedContents = currentDraftContents;
-            } else {
-              const publishedRevision = await deps.getRevision(client, workflow.published_revision_id);
-              if (!publishedRevision) {
-                throw createHttpError(500, 'Published workflow revision could not be loaded');
+          let contents = normalizedContents.contents;
+          let created = false;
+          let workflowId = sourceProject.metadata.id ?? (randomUUID() as typeof sourceProject.metadata.id);
+
+          if (workflow) {
+            workflowId = workflow.workflow_id as typeof sourceProject.metadata.id;
+            if (sourceProject.metadata.id !== workflowId) {
+              throw conflict('The save target belongs to a different project. Choose a new path or reopen the target.');
+            }
+
+            const currentDraftRevision = await deps.getRevision(client, workflow.current_draft_revision_id);
+            if (!currentDraftRevision) {
+              throw createHttpError(500, 'Current workflow revision could not be loaded');
+            }
+
+            const currentDraftContents = readPreparedContents(currentDraftRevision);
+            if (options.expectedRevisionId && options.expectedRevisionId !== workflow.current_draft_revision_id) {
+              const expectedRevision = await deps.getRevision(client, options.expectedRevisionId);
+              const expectedContents = expectedRevision ? readPreparedContents(expectedRevision) : null;
+              const normalizedExpectedContents = expectedContents
+                ? normalizeHostedProjectTitle(expectedContents.contents, projectName, 'Could not save project')
+                : null;
+              const isRenameOnlyRebase =
+                options.saveIntent === 'in-place' &&
+                normalizedExpectedContents != null &&
+                getManagedRevisionContentsKey(
+                  normalizedExpectedContents.contents,
+                  expectedContents?.datasetsContents ?? null,
+                ) ===
+                  getManagedRevisionContentsKey(currentDraftContents.contents, currentDraftContents.datasetsContents);
+
+              if (!isRenameOnlyRebase) {
+                throw conflict('Project has changed since it was opened. Reload it before saving again.');
               }
-
-              publishedContents = await deps.readRevisionContents(publishedRevision);
             }
-          }
 
-          const saveTarget = deps.resolveManagedHostedProjectSaveTarget({
-            nextContents: {
-              contents,
-              datasetsContents: options.datasetsContents,
-            },
-            currentDraftContents,
-            publishedContents,
-            draftEndpointName: workflow.endpoint_name,
-            publishedEndpointName: workflow.published_endpoint_name,
-          });
+            let publishedContents: ManagedRevisionContents | null = null;
 
-          if (saveTarget === 'current-draft') {
-            return {
-              path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
-              revisionId: currentDraftRevision.revision_id,
-              project: deps.mapWorkflowRowToProjectItem(workflow),
-              created,
-            };
-          }
+            if (workflow.published_revision_id) {
+              if (workflow.published_revision_id === currentDraftRevision.revision_id) {
+                publishedContents = currentDraftContents;
+              } else {
+                const publishedRevision = await deps.getRevision(client, workflow.published_revision_id);
+                if (!publishedRevision) {
+                  throw createHttpError(500, 'Published workflow revision could not be loaded');
+                }
 
-          if (saveTarget === 'published-revision') {
-            const publishedRevisionId = workflow.published_revision_id ?? currentDraftRevision.revision_id;
-            if (workflow.current_draft_revision_id !== publishedRevisionId) {
-              await client.query(
-                `
+                publishedContents = readPreparedContents(publishedRevision);
+              }
+            }
+
+            const saveTarget = deps.resolveManagedHostedProjectSaveTarget({
+              nextContents: {
+                contents,
+                datasetsContents: options.datasetsContents,
+              },
+              currentDraftContents,
+              publishedContents,
+              draftEndpointName: workflow.endpoint_name,
+              publishedEndpointName: workflow.published_endpoint_name,
+            });
+
+            if (saveTarget === 'current-draft') {
+              return {
+                path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+                revisionId: currentDraftRevision.revision_id,
+                project: deps.mapWorkflowRowToProjectItem(workflow),
+                created,
+              };
+            }
+
+            if (saveTarget === 'published-revision') {
+              const publishedRevisionId = workflow.published_revision_id ?? currentDraftRevision.revision_id;
+              if (workflow.current_draft_revision_id !== publishedRevisionId) {
+                await client.query(
+                  `
                   UPDATE workflows
                   SET current_draft_revision_id = $2
                   WHERE workflow_id = $1
                 `,
-                [workflow.workflow_id, publishedRevisionId],
-              );
+                  [workflow.workflow_id, publishedRevisionId],
+                );
 
-              workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
-              if (!workflow) {
-                throw createHttpError(500, 'Saved workflow could not be loaded');
+                workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
+                if (!workflow) {
+                  throw createHttpError(500, 'Saved workflow could not be loaded');
+                }
+
+                if (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow)) {
+                  await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+                }
               }
 
-              if (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow)) {
-                await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+              return {
+                path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+                revisionId: publishedRevisionId,
+                project: deps.mapWorkflowRowToProjectItem(workflow),
+                created,
+              };
+            }
+          } else {
+            const existingIdOwner = await deps.getWorkflowById(client, workflowId);
+            if (existingIdOwner) {
+              sourceProject.metadata.id = randomUUID() as typeof sourceProject.metadata.id;
+              workflowId = sourceProject.metadata.id;
+              const rewritten = serializeProject(sourceProject, attachedData);
+              if (typeof rewritten !== 'string') {
+                throw createHttpError(400, 'Could not save project');
               }
+              contents = rewritten;
             }
 
-            return {
-              path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
-              revisionId: publishedRevisionId,
-              project: deps.mapWorkflowRowToProjectItem(workflow),
-              created,
-            };
-          }
-        } else {
-          const existingIdOwner = await deps.getWorkflowById(client, workflowId);
-          if (existingIdOwner) {
-            sourceProject.metadata.id = randomUUID() as typeof sourceProject.metadata.id;
-            workflowId = sourceProject.metadata.id;
-            const rewritten = serializeProject(sourceProject, attachedData);
-            if (typeof rewritten !== 'string') {
-              throw createHttpError(400, 'Could not save project');
-            }
-            contents = rewritten;
+            created = true;
           }
 
-          created = true;
-        }
+          if (!preparedRevision || workflowId !== preparedRevision.workflow_id || contents !== options.contents)
+            throw conflict('Workflow identity changed while preparing the save. Try saving again.');
+          const revision = preparedRevision;
 
-        const revision = await deps.createRevision(workflowId, contents, options.datasetsContents);
-        deps.scheduleRevisionBlobCleanup(hooks, revision);
-
-        if (workflow) {
-          await deps.insertRevision(client, revision);
-          await client.query(
-            `
+          if (workflow) {
+            await deps.insertRevision(client, revision);
+            await client.query(
+              `
               UPDATE workflows
               SET name = $2,
                   file_name = $3,
@@ -264,54 +331,63 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
                   updated_at = NOW()
               WHERE workflow_id = $1
             `,
-            [
-              workflow.workflow_id,
-              projectName,
-              `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
-              folderRelativePath,
-              revision.revision_id,
-            ],
-          );
+              [
+                workflow.workflow_id,
+                projectName,
+                `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
+                folderRelativePath,
+                revision.revision_id,
+              ],
+            );
 
-          workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
-        } else {
-          await client.query(
-            `
+            workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
+          } else {
+            await client.query(
+              `
               INSERT INTO workflows (
                 workflow_id, name, file_name, relative_path, folder_relative_path, updated_at,
                 current_draft_revision_id, published_revision_id, published_version_id, endpoint_name, published_endpoint_name, last_published_at
               )
               VALUES ($1, $2, $3, $4, $5, NOW(), $6, NULL, NULL, '', '', NULL)
             `,
-            [
-              workflowId,
-              projectName,
-              `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
-              relativePath,
-              folderRelativePath,
-              revision.revision_id,
-            ],
-          );
-          await deps.insertRevision(client, revision);
+              [
+                workflowId,
+                projectName,
+                `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
+                relativePath,
+                folderRelativePath,
+                revision.revision_id,
+              ],
+            );
+            await deps.insertRevision(client, revision);
 
-          workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
+            workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
+          }
+
+          if (!workflow) {
+            throw createHttpError(500, 'Saved workflow could not be loaded');
+          }
+
+          if (!created && (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow))) {
+            await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+          }
+
+          return {
+            path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
+            revisionId: revision.revision_id,
+            project: deps.mapWorkflowRowToProjectItem(workflow),
+            created,
+          };
+        });
+        attached = result.revisionId === preparedRevision?.revision_id;
+        return result;
+      } finally {
+        if (preparedRevision && !attached) {
+          // Reference-aware outbox cleanup also handles a commit with an
+          // uncertain network result. Never directly delete a prepared object.
+          await deps.discardPreparedRevision(preparedRevision);
         }
-
-        if (!workflow) {
-          throw createHttpError(500, 'Saved workflow could not be loaded');
-        }
-
-        if (!created && (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow))) {
-          await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-        }
-
-        return {
-          path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
-          revisionId: revision.revision_id,
-          project: deps.mapWorkflowRowToProjectItem(workflow),
-          created,
-        };
-      });
+      }
     },
 
     async importWorkflow(options: ImportManagedWorkflowOptions) {

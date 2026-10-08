@@ -99,9 +99,9 @@ function candidateSql(forUpdate: boolean, onlyRecognizedArtifacts: boolean): str
       AND split_part(finding.subject_key, '/', 4) = btrim(split_part(finding.subject_key, '/', 4))
       AND (
         (split_part(finding.subject_key, '/', 2) = 'revisions'
-          AND split_part(finding.subject_key, '/', 4) IN ('project.rivet-project', 'dataset.rivet-data'))
+          AND split_part(split_part(finding.subject_key, '/', 4), '.artifact-v1.', 1) IN ('project.rivet-project', 'dataset.rivet-data'))
         OR (split_part(finding.subject_key, '/', 2) = 'recordings'
-          AND split_part(finding.subject_key, '/', 4) IN ('recording.rivet-recording', 'replay.rivet-project', 'replay.rivet-data'))
+          AND split_part(split_part(finding.subject_key, '/', 4), '.artifact-v1.', 1) IN ('recording.rivet-recording', 'replay.rivet-project', 'replay.rivet-data'))
       )`
     : '';
   return `

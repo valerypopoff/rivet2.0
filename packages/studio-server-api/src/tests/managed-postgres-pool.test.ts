@@ -2,12 +2,56 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Pool, PoolConfig } from 'pg';
+import pg from 'pg';
 
 import {
   DEFAULT_MANAGED_POSTGRES_POOL_MAX,
   getManagedPostgresPoolMax,
   ManagedPostgresPoolRegistry,
+  withAuthoritativePostgresTls,
+  withManagedPostgresPoolMax,
 } from '../managed-postgres-pool.js';
+
+test('PostgreSQL TLS policy survives final driver URL parsing', () => {
+  for (const ssl of [false, { rejectUnauthorized: true }, { rejectUnauthorized: false }]) {
+    const config = withAuthoritativePostgresTls({
+      connectionString: 'postgresql://rivet@example.test/rivet?sslmode=no-verify&application_name=rivet',
+      ssl,
+    });
+    const client = new pg.Client(config);
+    assert.deepEqual((client as unknown as { connectionParameters: { ssl: unknown } }).connectionParameters.ssl, ssl);
+  }
+  for (const option of [
+    'ssl=no-verify',
+    'ssl=true',
+    'sslcert=cert',
+    'sslkey=key',
+    'sslrootcert=ca',
+    'uselibpqcompat=true',
+    'SSL=no-verify',
+  ]) {
+    assert.throws(
+      () =>
+        withAuthoritativePostgresTls({
+          connectionString: `postgresql://rivet@example.test/rivet?${option}`,
+          ssl: { rejectUnauthorized: true },
+        }),
+      /TLS overrides/,
+    );
+  }
+});
+
+test('managed pool reads have server and driver deadlines, with explicit operator overrides', () => {
+  const config = withManagedPostgresPoolMax({ connectionString: 'postgresql://rivet@example.test/rivet' }, {});
+  const client = new pg.Client(config);
+  const parameters = (client as unknown as { connectionParameters: { statement_timeout: number } })
+    .connectionParameters;
+  assert.equal(parameters.statement_timeout, 60_000);
+  assert.equal(config.query_timeout, 65_000);
+  const custom = withManagedPostgresPoolMax({ statement_timeout: 120_000, query_timeout: 125_000 }, {});
+  assert.equal(custom.statement_timeout, 120_000);
+  assert.equal(custom.query_timeout, 125_000);
+});
 
 type FakePool = Pool & {
   endCalls: number;

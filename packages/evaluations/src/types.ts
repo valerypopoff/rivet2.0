@@ -629,12 +629,19 @@ export type EvaluationGraphRunner = (input: {
   };
 }) => Promise<EvaluationGraphExecution>;
 
+/** History entries deliberately omit trial payloads. Fetch get() for details. */
+export type EvaluationRunSummary = Omit<EvaluationRun, 'trials' | 'thresholdResults' | 'warnings' | 'provenance'>;
+export type EvaluationRunHistoryPage = { runs: readonly EvaluationRunSummary[]; nextCursor?: string };
+export type EvaluationRunHistoryQuery = { projectId: ProjectId; suiteId?: string; limit?: number; after?: string };
+
 export type EvaluationRunStore = {
   put(run: EvaluationRun): Promise<void>;
   /** Sets a user-assigned run name; omit the name to restore the Unnamed label. */
   updateRunName(input: { projectId: ProjectId; runId: string; name?: string }): Promise<EvaluationRun | undefined>;
   get(input: { projectId: ProjectId; runId: string }): Promise<EvaluationRun | undefined>;
   list(input: { projectId: ProjectId; suiteId?: string }): Promise<readonly EvaluationRun[]>;
+  /** Optional compact, keyset-paginated history for large hosted catalogs. */
+  listPage?(input: EvaluationRunHistoryQuery): Promise<EvaluationRunHistoryPage>;
   delete(input: { projectId: ProjectId; runId: string }): Promise<void>;
   /**
    * Persists the first project-scoped snapshot for a dataset fingerprint.

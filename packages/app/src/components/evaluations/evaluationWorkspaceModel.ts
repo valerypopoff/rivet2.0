@@ -15,6 +15,7 @@ import {
   type EvaluationGraphEvaluator,
   type EvaluationQualityStatus,
   type EvaluationRun,
+  type EvaluationRunSummary,
   type EvaluationSuite,
   type EvaluationThreshold,
   type PortableJson,
@@ -705,7 +706,9 @@ export function getEvaluationExecutionConfigurationAuthoringIssues(
  * Render the authoritative v2 quality state. Accounting completeness is a
  * separate concern and must never overwrite a passed quality result.
  */
-export function getEvaluationRunQualityPresentation(run: EvaluationRun): EvaluationRunQualityPresentation {
+export function getEvaluationRunQualityPresentation(
+  run: Pick<EvaluationRun, 'qualityStatus' | 'qualityReason'>,
+): EvaluationRunQualityPresentation {
   const qualityStatus: EvaluationQualityStatus = run.qualityStatus;
   if (qualityStatus === 'passed') {
     return { label: 'Passed', explanation: run.qualityReason.message };
@@ -742,7 +745,7 @@ export function formatEvaluationScore(value: number | undefined): string {
  * payloads. The Runs view can therefore switch tabs without touching every
  * input, output, evidence object, or recording reference in history.
  */
-export function formatEvaluationRunOptionLabel(run: EvaluationRun): string {
+export function formatEvaluationRunOptionLabel(run: EvaluationRunSummary): string {
   const liveLabel =
     run.executionStatus === 'queued' ? 'Queued' : run.executionStatus === 'running' ? 'Running' : undefined;
   const result =
@@ -751,9 +754,7 @@ export function formatEvaluationRunOptionLabel(run: EvaluationRun): string {
       : `Evaluation · ${liveLabel ?? getEvaluationRunQualityPresentation(run).label}`;
   const score = run.aggregate?.meanScore;
   const scoreLabel =
-    run.evaluationMode === 'scoring' && typeof score === 'number'
-      ? ` · Score ${formatEvaluationScore(score)}`
-      : '';
+    run.evaluationMode === 'scoring' && typeof score === 'number' ? ` · Score ${formatEvaluationScore(score)}` : '';
   const name = typeof run.name === 'string' && run.name.trim().length > 0 ? run.name.trim() : 'Unnamed';
   return `${name} · ${run.suiteName} · ${new Date(run.startedAt).toLocaleString()} · ${result}${scoreLabel}`;
 }

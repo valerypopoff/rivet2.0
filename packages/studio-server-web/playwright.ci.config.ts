@@ -22,6 +22,7 @@ export default defineConfig({
     'node-editor-ownership.spec.ts',
     'node-editor-lifecycle.spec.ts',
     'llm-temperature.spec.ts',
+    'evaluation-history-paging.spec.ts',
   ],
   timeout: 180_000,
   expect: {

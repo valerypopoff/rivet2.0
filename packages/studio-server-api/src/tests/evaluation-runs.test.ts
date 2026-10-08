@@ -36,9 +36,109 @@ import {
 } from "../routes/workflows/evaluation-runs.js";
 import { createHttpEvaluationStore } from "../../../studio-server-shared/evaluationRunHttpStore.js";
 import { createApiApp } from "../app.js";
+import { evaluationHistoryPageQuery } from "../evaluation-runs/history-page.js";
 
 const projectA = "project-a" as ProjectId;
 const projectB = "project-b" as ProjectId;
+
+test("history cursors use verified SQL identities and preserve legacy normalization", () => {
+  for (const dialect of ["sqlite", "postgres"] as const) {
+    const legacy = legacyRun(projectA, "legacy-page");
+    const row = {
+      run_id: legacy.id,
+      project_id: String(projectA),
+      suite_id: legacy.suiteId,
+      started_at: dialect === "postgres" ? new Date(legacy.startedAt) : legacy.startedAt,
+      summary_json: JSON.stringify(legacy),
+    };
+    const query = evaluationHistoryPageQuery(dialect, { projectId: projectA, limit: 1 });
+    const page = query.page([row, row]);
+    assert.equal(page.runs[0]?.qualityStatus, "not-evaluated");
+    assert.equal("trials" in page.runs[0]!, false);
+    assert.equal(page.nextCursor !== undefined, true);
+    for (const corrupted of [
+      { ...row, run_id: "wrong" },
+      { ...row, suite_id: "wrong" },
+      { ...row, project_id: String(projectB) },
+      { ...row, started_at: "2000-01-01T00:00:00.000Z" },
+    ]) {
+      assert.throws(() => query.page([corrupted]), /Invalid evaluation history metadata/);
+    }
+  }
+});
+
+test("evaluation history pages are compact, stable across equal timestamps and scoped", async () => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "rivet-evaluation-pages-"),
+  );
+  const store = new FilesystemRivetEvaluationStore(
+    path.join(root, "history.sqlite"),
+  );
+  try {
+    for (let index = 0; index < 6; index++)
+      await store.put(run(projectA, `run-${index}`));
+    await store.put(run(projectB, "foreign-run"));
+    const first = await store.listPage({
+      projectId: projectA,
+      suiteId: "suite",
+      limit: 2,
+    });
+    assert.deepEqual(
+      first.runs.map((run) => run.id),
+      ["run-5", "run-4"],
+    );
+    assert.equal("trials" in first.runs[0]!, false);
+    assert.equal("provenance" in first.runs[0]!, false);
+    const second = await store.listPage({
+      projectId: projectA,
+      suiteId: "suite",
+      limit: 2,
+      after: first.nextCursor,
+    });
+    assert.deepEqual(
+      second.runs.map((run) => run.id),
+      ["run-3", "run-2"],
+    );
+    const last = await store.listPage({
+      projectId: projectA,
+      suiteId: "suite",
+      limit: 2,
+      after: second.nextCursor,
+    });
+    assert.deepEqual(
+      last.runs.map((run) => run.id),
+      ["run-1", "run-0"],
+    );
+    assert.equal(last.nextCursor, undefined);
+    assert.equal(
+      (await store.get({ projectId: projectA, runId: "run-5" }))?.trials.length,
+      1,
+    );
+    await assert.rejects(
+      store.listPage({
+        projectId: projectB,
+        suiteId: "suite",
+        after: first.nextCursor,
+      }),
+      /cursor/,
+    );
+    await assert.rejects(
+      store.listPage({
+        projectId: projectA,
+        suiteId: "other",
+        after: first.nextCursor,
+      }),
+      /cursor/,
+    );
+    await assert.rejects(
+      store.listPage({ projectId: projectA, limit: 1000 }),
+      /page size/,
+    );
+  } finally {
+    await store.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("evaluation history API is behind the global control-plane authentication boundary", async () => {
   const server = http.createServer(createApiApp("control"));
