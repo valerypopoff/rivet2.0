@@ -149,7 +149,7 @@ export async function verifySqliteWorkflowServing(options: {
           'execution datasets',
         );
       };
-      if (source.endpointName) {
+      if (source.endpointName && source.publishedContents !== null) {
         await checkExecution(
           await backend.loadLatestExecutionProject(source.endpointName),
           source.contents,
@@ -157,7 +157,7 @@ export async function verifySqliteWorkflowServing(options: {
         );
         report.endpoints++;
       }
-      if (source.publishedContents !== null) {
+      if (source.publishedEndpointName && source.publishedContents !== null) {
         await checkExecution(
           await backend.loadPublishedExecutionProject(source.publishedEndpointName),
           source.publishedContents,

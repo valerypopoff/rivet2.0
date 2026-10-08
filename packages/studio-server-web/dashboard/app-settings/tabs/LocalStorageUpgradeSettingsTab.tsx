@@ -161,8 +161,17 @@ export function LocalStorageUpgradeSettingsTab() {
   const setupSnapshot = useRef(setup);
   const [status, setStatus] = useState<Status | null>(null);
   const [projectDiagnostic, setProjectDiagnostic] = useState<{ token: string; paths: string[] } | null>(null);
-  const diagnosticReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
-  const diagnosticToken = diagnosticReference ? `${status?.job?.id}:${diagnosticReference}` : null;
+  const preparationReference =
+    status?.preparation?.phase === 'failed' && status.preparation.revision === status.transition?.revision
+      ? status.preparation.failure?.sourceReference
+      : undefined;
+  const copyReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
+  const preparationDiagnosticToken = preparationReference
+    ? `preparation:${status?.preparation?.id}:${preparationReference}`
+    : null;
+  const copyDiagnosticToken = copyReference ? `copy:${status?.job?.id}:${copyReference}` : null;
+  const diagnosticReference = preparationReference ?? copyReference;
+  const diagnosticToken = preparationDiagnosticToken ?? copyDiagnosticToken;
   useEffect(() => {
     if (!diagnosticToken || !diagnosticReference || !/^[a-f0-9]{16}$/.test(diagnosticReference)) return;
     const controller = new AbortController();
@@ -562,6 +571,12 @@ export function LocalStorageUpgradeSettingsTab() {
           <p role="alert" className="project-settings-error">
             {preparation.error}
             {preparation.failure?.reason && ` ${LOCAL_UPGRADE_FAILURE_REASONS[preparation.failure.reason]}`}
+            {preparationReference &&
+              /^[a-f0-9]{16}$/.test(preparationReference) &&
+              ` Project reference: ${preparationReference}.`}
+            {projectDiagnostic?.token === preparationDiagnosticToken &&
+              projectDiagnostic.paths.length > 0 &&
+              ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
         )}
       {status?.preparationStatusUnreadable && (
@@ -978,7 +993,7 @@ export function LocalStorageUpgradeSettingsTab() {
             {status.job.failure?.sourceReference &&
               /^[a-f0-9]{16}$/.test(status.job.failure.sourceReference) &&
               ` Project reference: ${status.job.failure.sourceReference}.`}
-            {projectDiagnostic?.token === diagnosticToken &&
+            {projectDiagnostic?.token === copyDiagnosticToken &&
               projectDiagnostic.paths.length > 0 &&
               ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>

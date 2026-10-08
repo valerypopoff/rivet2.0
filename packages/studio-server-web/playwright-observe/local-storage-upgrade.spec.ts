@@ -1007,7 +1007,7 @@ const loadingActions = [
     path: '/action',
     phase: 'legacy',
     paused: true,
-    progress: 'Restoring unchanged legacy operation',
+    progress: 'Restoring legacy operation',
   },
   {
     kind: 'report',
@@ -2199,7 +2199,8 @@ test('background copy preparation stays busy after acceptance and shows a specif
   page,
 }) => {
   const fingerprint = 'a'.repeat(64),
-    reference = '0123456789abcdef';
+    reference = '0123456789abcdef',
+    backupReference = 'restored-fixture';
   let paused = false,
     started = false,
     failed = false;
@@ -2214,6 +2215,11 @@ test('background copy preparation stays busy after acceptance and shows a specif
       return route.fulfill({ status: 204 });
     }
     if (pathname.endsWith('/copy')) {
+      expect(route.request().postDataJSON()).toMatchObject({
+        backupSourceFingerprint: fingerprint,
+        backupReference,
+        backupRestored: true,
+      });
       started = true;
       return route.fulfill({ status: 202, json: { started: true } });
     }
@@ -2227,6 +2233,8 @@ test('background copy preparation stays busy after acceptance and shows a specif
           ? {
               id: 'background-fixture',
               phase: failed ? 'failed' : 'copying',
+              sourceFingerprint: fingerprint,
+              backupReference,
               stage: failed ? 'workflows' : 'capacity',
               message: 'Legacy source is untouched and writes remain paused.',
               failure: failed
@@ -2246,7 +2254,7 @@ test('background copy preparation stays busy after acceptance and shows a specif
   await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
   await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
   await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
-  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Backup reference', { exact: true }).fill(backupReference);
   await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
   await panel.getByLabel('I restored a separate backup of all four source roots.').check();
   await panel.getByLabel('I backed up the local settings encryption key separately.').check();
@@ -2259,6 +2267,68 @@ test('background copy preparation stays busy after acceptance and shows a specif
   await expect(panel.getByText(/Affected project: Test\/problem.rivet-project/)).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
   await expect(panel.getByRole('button', { name: 'Retry copy and verification', exact: true })).toBeEnabled();
+});
+
+test('preparation diagnostics identify the current conflict without relabeling an older failed copy', async ({
+  page,
+}) => {
+  await mockHostedEditorBootstrap(page);
+  const preparationReference = '0123456789abcdef',
+    copyReference = 'fedcba9876543210';
+  const lookups: string[] = [];
+  let preparationRevision = 1;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/project-reference')) {
+      const reference = url.searchParams.get('reference')!;
+      lookups.push(reference);
+      return route.fulfill({
+        json: {
+          reference,
+          paths: [reference === preparationReference ? 'New/conflict.rivet-project' : 'Old/copy.rivet-project'],
+        },
+      });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture(),
+        preparationJobsAvailable: true,
+        preparation: {
+          id: '9c88b867-f67b-4f0d-bf3f-1d9984690d5e',
+          kind: 'inspect',
+          revision: preparationRevision,
+          phase: 'failed',
+          stage: 'inspect',
+          error: 'Local storage preparation failed.',
+          failure: {
+            reason: 'publication-route-conflict',
+            code: 'invalid-data',
+            sourceReference: preparationReference,
+          },
+        },
+        job: {
+          id: 'old-copy',
+          phase: 'failed',
+          stage: 'workflows',
+          message: 'Older copy failed.',
+          failure: { stage: 'workflows', code: 'invalid-data', sourceReference: copyReference },
+        },
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  const failure = panel.getByRole('alert').filter({ hasText: 'Local storage preparation failed.' });
+  await expect(failure).toContainText('Projects have conflicting endpoint names or web-app slugs.');
+  await expect(failure).toContainText('Affected project: New/conflict.rivet-project.');
+  const oldCopy = panel.getByRole('status').filter({ hasText: 'Older copy failed.' });
+  await expect(oldCopy).not.toContainText('New/conflict.rivet-project');
+  expect(lookups).toEqual([preparationReference]);
+  // A preparation from a different authority revision cannot displace current diagnostics.
+  preparationRevision = 0;
+  await expect(failure).toHaveCount(0);
+  await expect(oldCopy).toContainText('Affected project: Old/copy.rivet-project.');
+  expect(lookups).toEqual([preparationReference, copyReference]);
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
 });
 
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {

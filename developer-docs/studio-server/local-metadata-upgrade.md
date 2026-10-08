@@ -619,6 +619,59 @@ During the disk-estimator audit, the generated 64 MiB recording fixture stayed b
 
 Catalog equality checks compare JSON-domain values directly, ignoring omitted optional `undefined` fields while preserving exact artifact strings and array order. They do not serialize whole project/recording payloads into additional JSON strings merely to compare them. Artifact checksum and size verification still run before returned bytes can be trusted.
 
+### Unpublished endpoint preferences
+
+Format 4 scopes the saved-endpoint unique index to projects with an active endpoint
+publication (`publishedContents !== null`). An unpublished project's saved name,
+last publication timestamp and archived versions are preserved but do not reserve
+an endpoint. Multiple unpublished copies can retain the same preference, including
+the name owned by a live project. Named latest/published execution and serving
+verification use only active endpoint publications; workflow-ID latest execution
+still supports unpublished projects. Web-app publication remains independent.
+
+Web-app binding IDs are project-scoped in format 4. Older settings can derive the
+same `legacy:<uiGraphId>` ID in multiple projects; conversion preserves those IDs,
+permissions and snapshots instead of rejecting them or rotating the binding.
+The catalog key is `(workflow_id, app_id)`; public slugs remain globally unique.
+The transactional format-2/3 upgrade preserves child row order and stored metadata,
+and rolls back the table/index changes together when the write fails.
+
+Active saved and published aliases remain case-insensitively unique across
+projects. Publishing a conflicting preference fails atomically, without changing
+folders, project state or archived versions. A failed conversion can retry its
+existing candidate against the same certified frozen source after deploying the
+compatible image; no legacy filename, ID or saved endpoint preference needs to be
+removed to bypass this check. Backup, fingerprint, maintenance and retry admission
+checks still apply.
+
+Source inspection and catalog writes share the same case-insensitive route-claim
+rules. Genuine active endpoint/web-app slug collisions now fail read-only inspection
+with a fixed diagnostic and opaque project reference, before a verified backup is
+prepared. Unpublished preferences and project-scoped legacy binding IDs do not
+trigger these errors. This preview is not source certification; frozen copy still
+rechecks the constraints inside its transaction.
+
+The browser resolves an opaque project reference for the current failed preparation
+as well as failed copy jobs. Lookups are optional and bounded; their result cannot
+unlock controls. Preparation diagnostics take precedence only at the current
+transition revision, and their paths are never attached to an older copy failure.
+
+Regression coverage exercises frozen filesystem conversion and retry, exact
+history/source preservation, named route ownership, workflow-ID execution,
+publication rollback, serving verification and format-2/3 table/index upgrade rollback.
+Browser copy-failure fixtures retain the accepted source fingerprint and backup
+reference so exact-retry checks do not accidentally exercise fresh-candidate admission.
+These fixtures do not certify an operator's production data.
+
+The 2026-10-08 follow-up passed 100 focused catalog/backend/capacity/candidate/
+recovery/transition tests, 40 standalone backup tests (two platform-specific
+Windows skips), the supervised UI preparation/backup/copy/restart/validation/
+resume runtime scenario, and four headless browser scenarios for guided migration,
+copy failure, current-versus-stale preparation diagnostics and recovery controls.
+API type-check, frontend build, root `yarn test:style`, formatting and diff checks
+also passed. These are working-tree checks, not a production-data or exact-image
+release certification.
+
 ### Compressed local recording artifacts
 
 Catalog format 3 adds an explicit `encoding: gzip` and `decodedSize` to compressed
@@ -645,13 +698,16 @@ Summary compressed sizes and retention quotas use stored bytes; uncompressed
 sizes and input-search memory admission use decoded bytes. Physical artifact GC
 is still separate from removing catalog references.
 
-Existing format-2 catalogs remain readable without rewriting certified snapshots.
-A successful new recording insertion advances the catalog marker to format 3 in
-the same SQLite transaction. Old identity artifacts stay readable; no bulk rewrite
-is performed. Older images/backup tools that only understand format 2 must not be
-used after that boundary. The current standalone backup/restore helper accepts
-both versions, preserves compressed objects, and checks encoding, compressed hash,
-stored size and streamed decoded size before certifying a backup.
+Existing format-2 and format-3 catalogs remain readable without rewriting certified
+snapshots. A successful project mutation or new recording insertion upgrades the
+route index, project-scoped web-app table and catalog marker to format 4 in the same
+SQLite transaction; failed writes roll all schema changes back, and exact import
+retries do not rewrite the catalog.
+Old identity artifacts stay readable; no bulk payload rewrite is performed. Older
+images/backup tools that do not understand the new format must not be used after
+that boundary. The current standalone backup/restore helper accepts formats 2, 3
+and 4, preserves compressed objects in formats 3 and 4, and checks encoding,
+compressed hash, stored size and streamed decoded size before certifying a backup.
 
 Capacity continues to decode gzip in bounded chunks to validate memory limits,
 but counts only its compressed file size for candidate disk space. Diagnostic

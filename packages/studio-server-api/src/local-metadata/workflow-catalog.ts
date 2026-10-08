@@ -13,6 +13,7 @@ import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
 import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
 import type { WorkflowProjectReferenceSnapshot } from '../routes/workflows/project-reference-snapshots.js';
+import { LocalWorkflowRouteClaims } from './workflow-route-claims.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -160,8 +161,25 @@ export type LocalCatalogChange = {
 type StoredRuntimeLibraryState = { manifest: RuntimeLibraryManifest; archive: ArtifactRef };
 
 const APPLICATION_ID = 0x52495643; // RIVC; separate candidate DB from the App Settings candidate.
-const SCHEMA_VERSION = 3;
-const supportedSchemaVersion = (version: number) => version === 2 || version === SCHEMA_VERSION;
+const SCHEMA_VERSION = 4;
+const supportedSchemaVersion = (version: number) => [2, 3, SCHEMA_VERSION].includes(version);
+const LEGACY_ENDPOINT_INDEX =
+  "CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> ''";
+// A saved preference is not a route reservation after the endpoint is unpublished.
+const ENDPOINT_INDEX = `${LEGACY_ENDPOINT_INDEX} AND json_extract(metadata_json, '$.publishedContents') IS NOT NULL`;
+const LEGACY_WEB_APPS_TABLE = `CREATE TABLE web_apps (
+  app_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+  slug TEXT NOT NULL UNIQUE,
+  metadata_json TEXT NOT NULL
+)`;
+const WEB_APPS_TABLE = `CREATE TABLE web_apps (
+  app_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+  slug TEXT NOT NULL UNIQUE,
+  metadata_json TEXT NOT NULL,
+  PRIMARY KEY(workflow_id, app_id)
+)`;
 const SCHEMA = `
 CREATE TABLE folders (path TEXT PRIMARY KEY);
 CREATE TABLE projects (
@@ -171,19 +189,14 @@ CREATE TABLE projects (
   published_endpoint_name TEXT NOT NULL,
   metadata_json TEXT NOT NULL
 );
-CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> '';
+${ENDPOINT_INDEX};
 CREATE UNIQUE INDEX projects_published_endpoint_name_unique ON projects(published_endpoint_name) WHERE published_endpoint_name <> '';
 CREATE TABLE published_versions (
   version_id TEXT PRIMARY KEY,
   workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
   metadata_json TEXT NOT NULL
 );
-CREATE TABLE web_apps (
-  app_id TEXT PRIMARY KEY,
-  workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
-  slug TEXT NOT NULL UNIQUE,
-  metadata_json TEXT NOT NULL
-);
+${WEB_APPS_TABLE};
 CREATE TABLE recordings (
   recording_id TEXT PRIMARY KEY,
   workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
@@ -512,7 +525,14 @@ export class LocalWorkflowCatalog {
         throw new Error('Local workflow catalog failed SQLite integrity checks.');
       }
       const expectedSchemaNames: string[] = [];
-      for (const statement of SCHEMA_STATEMENTS) {
+      for (const currentStatement of SCHEMA_STATEMENTS) {
+        const legacyStatement =
+          currentStatement === ENDPOINT_INDEX
+            ? LEGACY_ENDPOINT_INDEX
+            : currentStatement === WEB_APPS_TABLE
+              ? LEGACY_WEB_APPS_TABLE
+              : currentStatement;
+        const statement = version > 0 && version < SCHEMA_VERSION ? legacyStatement : currentStatement;
         const name = /\b(?:TABLE|INDEX) ([a-z_]+)/.exec(statement)?.[1];
         if (!name) throw new Error('Local workflow catalog has an invalid expected schema.');
         expectedSchemaNames.push(name);
@@ -568,36 +588,32 @@ export class LocalWorkflowCatalog {
     return this.#db;
   }
 
+  /** Called inside the caller's write transaction; failed writes roll this back too. */
+  #upgradeSchema(db: DatabaseSync): void {
+    const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (version === SCHEMA_VERSION) return;
+    if (!supportedSchemaVersion(version)) throw new Error('Local workflow catalog has an unsupported schema version.');
+    db.exec(`DROP INDEX projects_endpoint_name_unique; ${ENDPOINT_INDEX};
+      ALTER TABLE web_apps RENAME TO legacy_web_apps;
+      ${WEB_APPS_TABLE};
+      INSERT INTO web_apps(rowid, app_id, workflow_id, slug, metadata_json)
+        SELECT rowid, app_id, workflow_id, slug, metadata_json FROM legacy_web_apps;
+      DROP TABLE legacy_web_apps;
+      PRAGMA user_version = ${SCHEMA_VERSION}`);
+  }
+
   #validateRoutes(db: DatabaseSync): void {
-    const endpoints = new Map<string, string>();
+    const routes = new LocalWorkflowRouteClaims();
     for (const row of db
-      .prepare('SELECT workflow_id, endpoint_name, published_endpoint_name FROM projects')
+      .prepare(
+        `SELECT workflow_id, endpoint_name, published_endpoint_name FROM projects
+        WHERE json_extract(metadata_json, '$.publishedContents') IS NOT NULL`,
+      )
       .all() as ProjectRow[]) {
-      for (const name of [row.endpoint_name, row.published_endpoint_name]) {
-        if (!name) continue;
-        const key = name.toLowerCase(),
-          owner = endpoints.get(key);
-        if (owner && owner !== row.workflow_id)
-          throw new LocalUpgradeDiagnosticError(
-            'publication-route-conflict',
-            undefined,
-            undefined,
-            'Local catalog endpoint already exists (case-insensitive route collision).',
-          );
-        endpoints.set(key, row.workflow_id);
-      }
+      for (const name of [row.endpoint_name, row.published_endpoint_name]) routes.endpoint(row.workflow_id, name);
     }
-    const slugs = new Set<string>();
     for (const row of db.prepare('SELECT slug FROM web_apps').all() as WebAppRow[]) {
-      const key = row.slug.toLowerCase();
-      if (slugs.has(key))
-        throw new LocalUpgradeDiagnosticError(
-          'publication-route-conflict',
-          undefined,
-          undefined,
-          'Local catalog web-app slug already exists (case-insensitive route collision).',
-        );
-      slugs.add(key);
+      routes.webApp(row.slug);
     }
   }
 
@@ -627,7 +643,7 @@ export class LocalWorkflowCatalog {
       'SELECT * FROM folders ORDER BY path',
       'SELECT * FROM projects ORDER BY workflow_id',
       'SELECT * FROM published_versions ORDER BY version_id',
-      'SELECT * FROM web_apps ORDER BY app_id',
+      'SELECT * FROM web_apps ORDER BY workflow_id, app_id',
     ])
       digest.update(JSON.stringify(db.prepare(sql).all())).update('\0');
     return digest.digest('hex');
@@ -656,7 +672,10 @@ export class LocalWorkflowCatalog {
     } else if ('endpointName' in selection) {
       const column = selection.version === 'published' ? 'published_endpoint_name' : 'endpoint_name';
       row = db
-        .prepare(`SELECT relative_path FROM projects WHERE ${column} = ? COLLATE NOCASE AND ${column} <> ''`)
+        .prepare(
+          `SELECT relative_path FROM projects WHERE ${column} = ? COLLATE NOCASE AND ${column} <> ''
+          AND json_extract(metadata_json, '$.publishedContents') IS NOT NULL`,
+        )
         .get(selection.endpointName) as typeof row;
     } else {
       row = db
@@ -762,6 +781,7 @@ export class LocalWorkflowCatalog {
     const db = this.#database();
     db.exec('BEGIN IMMEDIATE');
     try {
+      this.#upgradeSchema(db);
       if (
         !sameJson(this.listFolders(), ordered(options.expectedFolders)) ||
         !sameJson(this.listProjectPaths(), ordered(options.expectedProjectPaths))
@@ -988,6 +1008,7 @@ export class LocalWorkflowCatalog {
     const db = this.#database();
     db.exec('BEGIN IMMEDIATE');
     try {
+      this.#upgradeSchema(db);
       db.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)').run(
         snapshot.workflowId,
         snapshot.relativePath,
@@ -1146,6 +1167,7 @@ export class LocalWorkflowCatalog {
     const db = this.#database();
     db.exec('BEGIN IMMEDIATE');
     try {
+      this.#upgradeSchema(db);
       const current = this.#readStoredProjectBundle(db, expected.relativePath);
       if (!sameJson(current, expectedStored)) {
         throw new Error('Local catalog project changed concurrently; reload before saving.');
@@ -1299,9 +1321,8 @@ export class LocalWorkflowCatalog {
     const db = this.#database();
     db.exec('BEGIN IMMEDIATE');
     try {
-      // v2 remains readable without rewriting its certified snapshot. A new
-      // write marks the encoding-aware format atomically, fencing old readers.
-      db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      // Upgrade only with a committed write, never while verifying a certificate.
+      this.#upgradeSchema(db);
       db.prepare('INSERT INTO recordings(recording_id, workflow_id, metadata_json) VALUES (?, ?, ?)').run(
         recording.recordingId,
         recording.workflowId,

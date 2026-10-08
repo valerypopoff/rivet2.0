@@ -708,29 +708,32 @@ test('backup checks catalog artifact fields rather than interpreting unrelated h
   });
 });
 
-test('v3 selected backup preserves gzip recording bytes and validates decoded sizes during restore', async () => {
-  await fixture(async (options) => {
-    const selected = await sqliteFixture(options);
-    const text = '\ufeff' + 'recording'.repeat(10000);
-    const compressed = gzipSync(text, { level: 1 });
-    const hash = createHash('sha256').update(compressed).digest('hex');
-    const relative = path.join('objects', hash.slice(0, 2), hash);
-    await fs.mkdir(path.dirname(path.join(selected.generation, relative)), { recursive: true });
-    await fs.writeFile(path.join(selected.generation, relative), compressed);
-    const db = new DatabaseSync(path.join(selected.generation, 'catalog.sqlite'));
-    db.exec('PRAGMA user_version=3');
-    const ref = { hash, size: compressed.length, encoding: 'gzip', decodedSize: Buffer.byteLength(text) };
-    db.prepare('INSERT INTO recordings VALUES (?)').run(
-      JSON.stringify({ recordingContents: ref, replayProjectContents: ref, replayDatasetContents: null }),
-    );
-    db.close();
-    const copied = await createLocalUpgradeBackup(selected);
-    const restored = path.join(options.root, 'compressed-restore');
-    await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
-    const retained = await fs.readFile(path.join(restored, 'control', 'generations', 'selected-generation', relative));
-    assert.deepEqual(retained, compressed);
-    assert.equal(gunzipSync(retained).toString(), text);
-  });
+test('v3 and v4 selected backups preserve gzip recording bytes and validate decoded sizes during restore', async () => {
+  for (const version of [3, 4])
+    await fixture(async (options) => {
+      const selected = await sqliteFixture(options);
+      const text = '\ufeff' + 'recording'.repeat(10000);
+      const compressed = gzipSync(text, { level: 1 });
+      const hash = createHash('sha256').update(compressed).digest('hex');
+      const relative = path.join('objects', hash.slice(0, 2), hash);
+      await fs.mkdir(path.dirname(path.join(selected.generation, relative)), { recursive: true });
+      await fs.writeFile(path.join(selected.generation, relative), compressed);
+      const db = new DatabaseSync(path.join(selected.generation, 'catalog.sqlite'));
+      db.exec(`PRAGMA user_version=${version}`);
+      const ref = { hash, size: compressed.length, encoding: 'gzip', decodedSize: Buffer.byteLength(text) };
+      db.prepare('INSERT INTO recordings VALUES (?)').run(
+        JSON.stringify({ recordingContents: ref, replayProjectContents: ref, replayDatasetContents: null }),
+      );
+      db.close();
+      const copied = await createLocalUpgradeBackup(selected);
+      const restored = path.join(options.root, 'compressed-restore');
+      await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
+      const retained = await fs.readFile(
+        path.join(restored, 'control', 'generations', 'selected-generation', relative),
+      );
+      assert.deepEqual(retained, compressed);
+      assert.equal(gunzipSync(retained).toString(), text);
+    });
 });
 
 test('selected backup refuses gzip corruption, unknown encodings and false decoded sizes', async () => {
