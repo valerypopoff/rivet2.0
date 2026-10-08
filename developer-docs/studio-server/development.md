@@ -1399,6 +1399,43 @@ Windows PowerShell override example:
 
 ### Subgraph output-pruning verification
 
+Canvas connection pruning must distinguish an unavailable Subgraph definition
+from a resolved graph with no ports. Cross-project previews are asynchronous;
+older saved callers may not contain `targetBoundary`. Until the exact
+project/version/graph resolves, preserve their persisted connections and do not
+mark the caller dirty. Preview failure or a missing local/external graph is not
+permission to delete wires. A saved external boundary remains the authored
+contract even when the preview fails or changes; genuinely stale ports in a
+resolved contract still use the existing pruning behavior.
+`connectionValidation.test.ts` covers these cases and latest/published key
+isolation. `cross-project-subgraph-loading.spec.ts` holds or rejects each
+version's preview, checks clean tabs and rendered ports/wires after resolution,
+then checks exact saved connections through mocked storage. It runs in the CI
+editor lane and requires no real project writes or model calls.
+
+The same availability rule applies to node-edit reconciliation, including the
+node at the other end of the edited node's wire. Unknown Subgraph ports preserve
+existing wires; restoring a recoverable wire still requires confirmed ports on
+both ends, and a known removed port on either peer still breaks the connection,
+even if the other peer's definition is unavailable. Keep this rule
+shared with canvas pruning rather than adding loading delays to edits.
+Legacy reference reloads clear their old closure before loading, then merge
+their results with independently loaded, version-keyed Subgraph previews.
+A failed reload must not erase those previews. Subgraph controls and canvas
+ports use one shared, version-keyed preview cache: a control must not retain a
+private preview that shadows a newer refresh from another control. A shared
+cache reset reloads current definitions; unavailable definitions continue to
+preserve authored wires in the meantime.
+The browser regression also edits both connected peers before preview completion
+and releases successful/failed legacy-reference loads after the preview arrives;
+the caller's ports, wires and clean saved state must survive both orderings.
+Shared-refresh cases keep two Subgraph controls mounted, refresh one of them,
+and verify both display the same current target without dirtying the caller.
+`node-editor-lifecycle.spec.ts` also verifies that retired preview responses
+cannot contaminate the next project after a tab switch. Its workspace bootstrap
+authenticates when the proxy UI gate is enabled, so the same check works on both
+the authenticated local tunnel and CI fixtures.
+
 `subgraph-output-pruning.spec.ts` opens a project with two connected Subgraph instances
 sharing a child graph and a third caller with no consumed outputs. It enables
 **Skip unused outputs** on the first connected instance, verifies its enabled-only
@@ -1824,6 +1861,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - App Settings HTTP resources use `ETag` and `If-Match`; domain writers must merge scoped PATCH drafts into the repository's current value so independent tabs and concurrent browser sessions do not lose unrelated fields
   - missing files mean first-run defaults, schema upgrades require explicit migrations, writes remain atomic owner-only JSON files, and the repository poller is the compatibility path for external proxy/bootstrap writers
 - dashboard controllers belong in `packages/studio-server-web/dashboard/`
+  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows or in their filename tooltips. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
   - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the active project card grey/green/yellow tinted from that same aggregate status where any `Unpublished changes` wins over `Published`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width
@@ -1856,6 +1894,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - Rivet stores them under `projectContext__"<projectId>"`, so hosted open/reopen persistence depends on stable `project.metadata.id` values
   - keep `packages/studio-server-web/overrides/state/savedGraphs.ts` exporting the hosted `clearProjectContextState` compatibility helper by delegating normal tab cleanup to upstream `releaseProjectContextState`, so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` can close tabs without deleting those stored values
   - actual dashboard workflow deletion should forward the project id returned by `DELETE /api/workflows/projects`, then call `deleteHostedProjectContextState` and `clearHostedDatasetsForProject` from the iframe delete handler so stale editor-owned browser state does not remain even when the tab was already closed; the delete helper removes `projectContext__"<projectId>"` through the shared `project` storage group
+  - `HostedDatasetProvider` inherits project-scoped cleanup from `BrowserDatasetProvider`; its only specialization is atomic replacement on import. Do not reintroduce clear-then-import or require duplicated cleanup code in source-contract tests. `hosted-dataset-provider.test.ts` exercises the actual hosted adapter with IndexedDB, including shared dataset IDs across projects, inactive imports, stale selections, quota failure rollback, and cancellation after replacement deletes. The app's `BrowserDatasetProvider.test.ts` covers the shared implementation and schema migration.
 - editor executor transport should prefer Rivet's upstream host/session seam
   - mount the editor through `RivetAppHost`
   - pass the hosted executor websocket through `executor.internalExecutorUrl`; it must come from runtime `/api/config`, defaulting to the current host's `/ws/executor/internal` unless App Settings has a saved websocket override

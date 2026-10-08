@@ -1622,6 +1622,108 @@ test('SQLite publication history, restoration, access and latest execution use S
   });
 });
 
+test('SQLite publication annotations update only metadata and preserve revisions and sibling annotations', async (t) => {
+  await fixture(async (backend, _options, setPaused) => {
+    const item = await createExecutable(backend);
+    const published = await backend.publishWorkflowProjectItem(
+      item.relativePath,
+      { endpointName: 'story' },
+      conditions(item),
+    );
+    const first = (await backend.listWorkflowPublishedVersions(item.relativePath)).versions[0]!;
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', async () => {
+      throw new Error('Annotations must not read immutable artifacts');
+    });
+    await backend.setWorkflowPublishedVersionComment(item.relativePath, first.id, ' Keep this ');
+    await backend.setWorkflowPublishedVersionStar(item.relativePath, first.id, true);
+    await backend.setWorkflowPublishedVersionStar(item.relativePath, first.id, true);
+    const annotated = (await backend.listWorkflowPublishedVersions(item.relativePath)).versions[0]!;
+    assert.equal(annotated.comment, 'Keep this');
+    assert.equal(annotated.isStarred, true);
+    assert.equal((await backend.getTree()).projects[0]?.revisionId, published.revisionId);
+    assert.equal(
+      (await backend.getTree()).projects[0]?.settings.publicationVersion,
+      published.settings.publicationVersion,
+    );
+    await assert.rejects(backend.setWorkflowPublishedVersionStar(item.relativePath, 'missing', true), /not found/);
+    setPaused(true);
+    await assert.rejects(
+      backend.setWorkflowPublishedVersionComment(item.relativePath, first.id, 'Denied'),
+      /maintenance/,
+    );
+    assert.equal((await backend.listWorkflowPublishedVersions(item.relativePath)).versions[0]?.comment, 'Keep this');
+  });
+});
+
+test('SQLite duplication reads only the requested project version, not its publication history', async (t) => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    for (let index = 0; index < 3; index++) {
+      const loaded = await backend.loadHostedProject(item.absolutePath);
+      const [project, attached] = loadProjectAndAttachedDataFromString(loaded.contents);
+      project.metadata.description = `Version ${index}`;
+      item = (
+        await backend.saveHostedProject({
+          projectPath: item.absolutePath,
+          contents: serializeProject(project, attached) as string,
+          datasetsContents: null,
+          expectedRevisionId: loaded.revisionId,
+        })
+      ).project;
+      item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'story' }, conditions(item));
+    }
+    const read = ImmutableLocalArtifactStore.prototype.read;
+    let reads = 0;
+    t.mock.method(
+      ImmutableLocalArtifactStore.prototype,
+      'read',
+      function (this: ImmutableLocalArtifactStore, ...args: Parameters<typeof read>) {
+        reads++;
+        return read.apply(this, args);
+      },
+    );
+    for (const version of ['live', 'published'] as const) {
+      const before = reads;
+      const duplicate = await backend.duplicateWorkflowProjectItem(item.relativePath, version);
+      assert.equal(reads - before, 1, 'Only selected project content is read; this fixture has no dataset');
+      const loaded = await backend.loadHostedProject(duplicate.absolutePath);
+      const [project] = loadProjectAndAttachedDataFromString(loaded.contents);
+      assert.equal(project.metadata.description, 'Version 2');
+      assert.notEqual(project.metadata.id, item.projectMetadataId);
+    }
+  });
+});
+
+test('SQLite web-app settings read the draft definition without datasets or history', async (t) => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    const loaded = await backend.loadHostedProject(item.absolutePath);
+    item = (
+      await backend.saveHostedProject({
+        projectPath: item.absolutePath,
+        contents: loaded.contents,
+        datasetsContents: serializeDatasets([]),
+        expectedRevisionId: loaded.revisionId,
+      })
+    ).project;
+    const read = ImmutableLocalArtifactStore.prototype.read;
+    let reads = 0;
+    t.mock.method(
+      ImmutableLocalArtifactStore.prototype,
+      'read',
+      function (this: ImmutableLocalArtifactStore, ...args: Parameters<typeof read>) {
+        if (++reads > 1) throw new Error('Settings must read only the project definition');
+        return read.apply(this, args);
+      },
+    );
+    const settings = await backend.listWorkflowProjectWebApps(item.relativePath);
+    assert.equal(reads, 1);
+    assert.equal(settings.draftRevisionId, item.revisionId, 'Dataset-inclusive saved revision remains authoritative');
+    assert.equal(settings.project.revisionId, item.revisionId);
+    assert.equal(settings.hasMainGraph, true);
+  });
+});
+
 test('SQLite case-insensitive route collisions roll back the complete publication', async () => {
   await fixture(async (backend) => {
     const first = await createExecutable(backend, 'First'),

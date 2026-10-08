@@ -8,9 +8,11 @@ import {
   type ProjectId,
   type NodeRegistration,
   type NodeInputDefinition,
+  type SubGraphNode,
   isInterpolationInputDefinition,
   resolveNodePrefabInstance,
 } from '@valerypopoff/rivet2-core';
+import { hasSubGraphPortDefinitions } from './connectionValidation.js';
 
 export type ReconcileNodeEditConnectionsResult = {
   nextConnections: NodeConnection[];
@@ -64,11 +66,7 @@ function dedupeConnections(connections: readonly NodeConnection[]): NodeConnecti
   return dedupedConnections;
 }
 
-function buildUpdatedNodes(
-  nodeId: NodeId,
-  newNode: Partial<ChartNode>,
-  nodes: readonly ChartNode[],
-): ChartNode[] {
+function buildUpdatedNodes(nodeId: NodeId, newNode: Partial<ChartNode>, nodes: readonly ChartNode[]): ChartNode[] {
   return produce([...nodes], (draft) => {
     const index = draft.findIndex((node) => node.id === nodeId);
 
@@ -114,6 +112,12 @@ function resolveNodePortDefinitions({
     Object.entries(nodesById).map(([id, node]) => [id, resolveNodePrefabInstance(project, node)]),
   ) as Record<NodeId, ChartNode>;
   const effectiveNode = effectiveNodesById[nodeId] ?? updatedNode;
+  if (
+    effectiveNode.type === 'subGraph' &&
+    !hasSubGraphPortDefinitions(effectiveNode as SubGraphNode, project, referencedProjects)
+  ) {
+    return undefined;
+  }
   const instance = projectNodeRegistry.createDynamicImpl(effectiveNode);
   const inputDefinitions = instance.getInputDefinitionsIncludingBuiltIn(
     nodeConnections,
@@ -121,7 +125,12 @@ function resolveNodePortDefinitions({
     project,
     referencedProjects,
   );
-  const outputDefinitions = instance.getOutputDefinitions(nodeConnections, effectiveNodesById, project, referencedProjects);
+  const outputDefinitions = instance.getOutputDefinitions(
+    nodeConnections,
+    effectiveNodesById,
+    project,
+    referencedProjects,
+  );
 
   return {
     inputDefinitions,
@@ -136,8 +145,7 @@ function hasValidConnectionPortIds(
   inputPortIds: NodePortDefinitions | undefined,
 ): boolean {
   return !!(
-    outputPortIds?.outputPortIds.has(connection.outputId) &&
-    inputPortIds?.inputPortIds.has(connection.inputId)
+    outputPortIds?.outputPortIds.has(connection.outputId) && inputPortIds?.inputPortIds.has(connection.inputId)
   );
 }
 
@@ -253,33 +261,38 @@ export function reconcileNodeEditConnections({
     rename: interpolationInputRename,
   });
   const newBrokenConnections = dedupeConnections(
-    liveConnectionsForReconcile.filter(
-      (connection) =>
-        isIncidentConnection(nodeId, connection) &&
-        !hasValidConnectionPortIds(
-          connection,
-          connection.outputNodeId === nodeId
-            ? editedNodePortDefinitions
-            : resolveNodePortDefinitions({
-                nodeId: connection.outputNodeId,
-                nodesById,
-                connections: liveConnectionsForReconcile,
-                project,
-                referencedProjects,
-                projectNodeRegistry,
-              }),
-          connection.inputNodeId === nodeId
-            ? editedNodePortDefinitions
-            : resolveNodePortDefinitions({
-                nodeId: connection.inputNodeId,
-                nodesById,
-                connections: liveConnectionsForReconcile,
-                project,
-                referencedProjects,
-                projectNodeRegistry,
-              }),
-        ),
-    ),
+    liveConnectionsForReconcile.filter((connection) => {
+      if (!isIncidentConnection(nodeId, connection)) return false;
+      if (!nodesById[connection.outputNodeId] || !nodesById[connection.inputNodeId]) return true;
+      const output =
+        connection.outputNodeId === nodeId
+          ? editedNodePortDefinitions
+          : resolveNodePortDefinitions({
+              nodeId: connection.outputNodeId,
+              nodesById,
+              connections: liveConnectionsForReconcile,
+              project,
+              referencedProjects,
+              projectNodeRegistry,
+            });
+      const input =
+        connection.inputNodeId === nodeId
+          ? editedNodePortDefinitions
+          : resolveNodePortDefinitions({
+              nodeId: connection.inputNodeId,
+              nodesById,
+              connections: liveConnectionsForReconcile,
+              project,
+              referencedProjects,
+              projectNodeRegistry,
+            });
+      // Unknown definitions alone do not invalidate a wire; a confirmed missing
+      // port on either peer does. Restoration below requires both confirmed ports.
+      return !!(
+        (output && !output.outputPortIds.has(connection.outputId)) ||
+        (input && !input.inputPortIds.has(connection.inputId))
+      );
+    }),
   );
   const brokenConnectionKeys = new Set(newBrokenConnections.map(getNodeConnectionKey));
   const activeLiveConnections = liveConnectionsForReconcile.filter(
@@ -305,11 +318,7 @@ export function reconcileNodeEditConnections({
       continue;
     }
 
-    const candidateConnections = [
-      ...activeLiveConnections,
-      ...restorableConnections,
-      recoverableConnection,
-    ];
+    const candidateConnections = [...activeLiveConnections, ...restorableConnections, recoverableConnection];
     const outputPortIds = resolveNodePortDefinitions({
       nodeId: recoverableConnection.outputNodeId,
       nodesById,
@@ -337,10 +346,7 @@ export function reconcileNodeEditConnections({
     restorableConnections.push(recoverableConnection);
   }
 
-  const nextConnections = dedupeConnections([
-    ...activeLiveConnections,
-    ...restorableConnections,
-  ]);
+  const nextConnections = dedupeConnections([...activeLiveConnections, ...restorableConnections]);
   const nextRecoverableConnections = dedupeConnections([...stillRecoverableConnections, ...newBrokenConnections]);
 
   return {

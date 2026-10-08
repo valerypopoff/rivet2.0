@@ -13,7 +13,6 @@ import type {
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
-  WorkflowRunStatisticsTarget,
 } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
@@ -41,11 +40,13 @@ import {
   parseWorkflowRecordingInputAfter,
 } from '../recording-input-filter.js';
 import { getManagedRecordingInputCacheKey, workflowRecordingInputCache } from '../recording-input-cache.js';
+import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from '../recording-statistics.js';
 import {
-  buildWorkflowRunStatistics,
-  buildWorkflowRunStatisticsCatalog,
-  type WorkflowRecordingStatisticsRow,
-} from '../recording-statistics.js';
+  recordingStatisticsCatalogSql,
+  recordingStatisticsRowsSql,
+  statisticsSqlRow,
+  type RecordingStatisticsSqlRow,
+} from '../recording-statistics-sql.js';
 
 type ManagedHealthEntryRow = {
   entry_json: StoredLLMProfileHealthEntry | string | null;
@@ -125,58 +126,6 @@ function getExecutionIdentity(row: RecordingRow) {
     componentLabel: row.component_label_at_execution ?? undefined,
     correlationId: normalizeRivetCorrelationId(row.correlation_id) ?? undefined,
   } as const;
-}
-
-function getManagedStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {
-  clause: string;
-  parameters: string[];
-} {
-  if (!target) return { clause: '', parameters: [] };
-  if (target.surface === 'endpoint') {
-    return {
-      clause: `AND workflow_id = $3
-        AND (execution_surface = 'workflow_endpoint'
-          OR (execution_surface IS NULL AND endpoint_name_at_execution NOT LIKE '/%'))`,
-      parameters: [target.workflowId],
-    };
-  }
-  if ('legacyEndpointName' in target) {
-    return {
-      clause: `AND workflow_id = $3
-        AND (
-          execution_surface IS NULL
-          OR (
-            execution_surface = 'web_app_action'
-            AND (ui_graph_id_at_execution IS NULL OR component_id_at_execution IS NULL)
-          )
-        )
-        AND endpoint_name_at_execution = $4`,
-      parameters: [target.workflowId, target.legacyEndpointName],
-    };
-  }
-  return {
-    clause: `AND workflow_id = $3
-      AND execution_surface = 'web_app_action'
-      AND ui_graph_id_at_execution = $4
-      AND component_id_at_execution = $5`,
-    parameters: [target.workflowId, target.uiGraphId, target.componentId],
-  };
-}
-
-function toStatisticsRow(
-  row: RecordingRow,
-  toIsoString: (value: Date | string | null | undefined) => string | null,
-): WorkflowRecordingStatisticsRow {
-  return {
-    workflowId: row.workflow_id,
-    sourceProjectName: row.source_project_name,
-    createdAt: toIsoString(row.created_at) ?? new Date().toISOString(),
-    runKind: row.run_kind,
-    status: row.status,
-    durationMs: row.duration_ms,
-    endpointNameAtExecution: row.endpoint_name_at_execution,
-    executionIdentity: getExecutionIdentity(row),
-  };
 }
 
 export function selectManagedRecordingRowsForCleanup(
@@ -732,39 +681,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       surface: WorkflowRunStatisticsSurface,
     ): Promise<WorkflowRunStatisticsCatalogResponse> {
       await deps.initialize();
-      const rows = await deps.queryRows<RecordingRow>(
-        deps.pool,
-        `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          ORDER BY created_at ASC, recording_id ASC
-        `,
-        [],
-      );
-      return buildWorkflowRunStatisticsCatalog(
-        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
-        surface,
-      );
+      const query = recordingStatisticsCatalogSql('postgres', surface);
+      const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, query.sql, query.values);
+      return buildWorkflowRunStatisticsCatalog(rows.map(statisticsSqlRow), surface);
     },
 
     async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
       await deps.initialize();
-      const target = getManagedStatisticsTargetClause(query.target);
-      const rows = await deps.queryRows<RecordingRow>(
-        deps.pool,
-        `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-          ${target.clause}
-          ORDER BY created_at ASC, recording_id ASC
-        `,
-        [query.period.from, query.period.to, ...target.parameters],
-      );
-      return buildWorkflowRunStatistics(
-        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
-        query,
-      );
+      const statement = recordingStatisticsRowsSql('postgres', query);
+      const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, statement.sql, statement.values);
+      return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query);
     },
 
     async readWorkflowRecordingArtifact(

@@ -6,6 +6,16 @@ import { isDeepStrictEqual, promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { LRUCache } from 'lru-cache';
 import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
+import {
+  recordingStatisticsCatalogSql,
+  recordingStatisticsRowsSql,
+  statisticsSqlRow,
+  type RecordingStatisticsSqlRow,
+} from '../routes/workflows/recording-statistics-sql.js';
+import type {
+  WorkflowRunStatisticsQuery,
+  WorkflowRunStatisticsSurface,
+} from '../../../studio-server-shared/workflow-recording-types.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
@@ -1270,6 +1280,24 @@ export class LocalWorkflowCatalog {
     });
   }
 
+  readRecordingStatisticsCatalog(surface: WorkflowRunStatisticsSurface) {
+    const query = recordingStatisticsCatalogSql('sqlite', surface);
+    return (
+      this.#database()
+        .prepare(query.sql)
+        .all(...query.values) as RecordingStatisticsSqlRow[]
+    ).map(statisticsSqlRow);
+  }
+
+  readRecordingStatistics(query: WorkflowRunStatisticsQuery) {
+    const statement = recordingStatisticsRowsSql('sqlite', query);
+    return (
+      this.#database()
+        .prepare(statement.sql)
+        .all(...statement.values) as RecordingStatisticsSqlRow[]
+    ).map(statisticsSqlRow);
+  }
+
   #storedRecording(row: RecordingRow): StoredRecording {
     const data = JSON.parse(row.metadata_json) as StoredRecording;
     if (
@@ -1541,6 +1569,46 @@ export class LocalWorkflowCatalog {
     };
   }
 
+  /** An annotation changes one SQL row, never any immutable artifact or draft revision. */
+  annotatePublishedVersion(
+    relativePath: string,
+    versionId: string,
+    update: Partial<Pick<StoredVersion, 'isStarred' | 'comment'>>,
+  ) {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    const db = this.#database();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const bundle = this.#readStoredProjectBundle(relativePath, false);
+      const row = bundle
+        ? (db
+            .prepare('SELECT * FROM published_versions WHERE workflow_id = ? AND version_id = ?')
+            .get(bundle.project.workflowId, versionId) as VersionRow | undefined)
+        : undefined;
+      const current = row ? storedVersion(row) : null;
+      if (!bundle || !current) {
+        db.exec('ROLLBACK');
+        return null;
+      }
+      const version = { ...current, ...update };
+      assertVersionMetadata(version);
+      if (!sameJson(current, version)) {
+        this.#upgradeSchema(db);
+        db.prepare('UPDATE published_versions SET metadata_json = ? WHERE workflow_id = ? AND version_id = ?').run(
+          JSON.stringify(version),
+          bundle.project.workflowId,
+          versionId,
+        );
+      }
+      db.exec('COMMIT');
+      const { contents: _contents, datasetsContents: _datasets, ...metadata } = version;
+      return { project: bundle.project, version: metadata };
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   /** Ordinary reads select only the requested immutable pair. Full snapshots
    * remain separate authority for mutation CAS and exact migration verification. */
   async readProjectPayload(
@@ -1575,8 +1643,10 @@ export class LocalWorkflowCatalog {
       });
     const selected = readSelection();
     if (!selected) return null;
-    const contents = await readText(this.#artifacts, selected.source.contents);
-    const datasetsContents = await readText(this.#artifacts, selected.source.datasetsContents);
+    const [contents, datasetsContents] = await Promise.all([
+      readText(this.#artifacts, selected.source.contents),
+      readText(this.#artifacts, selected.source.datasetsContents),
+    ]);
     if (!sameJson(selected, readSelection()))
       throw new Error('Local catalog project changed concurrently while loading.');
     return {
@@ -1585,6 +1655,20 @@ export class LocalWorkflowCatalog {
       datasetsContents,
       publishedAt: selected.version?.publishedAt ?? null,
     };
+  }
+
+  /** Publication settings need the draft definition and its saved summary, not datasets or history. */
+  async readDraftDefinition(relativePath: string): Promise<(LocalWorkflowTreeProject & { contents: string }) | null> {
+    const bundle = this.#readStoredProjectBundle(relativePath, false);
+    if (!bundle) return null;
+    const [contents, index] = await Promise.all([
+      readText(this.#artifacts, bundle.project.contents),
+      this.#treeIndex(bundle.project),
+    ]);
+    if (contents === null) throw new Error('Project artifact is missing.');
+    if (!sameJson(bundle, this.#readStoredProjectBundle(relativePath, false)))
+      throw new Error('Local catalog project changed concurrently while loading.');
+    return { ...projectTreeMetadata(bundle.project, bundle.apps), ...index, stats: { ...index.stats }, contents };
   }
 
   async readProject(relativePath: string): Promise<LocalWorkflowCatalogSnapshot | null> {

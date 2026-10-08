@@ -457,8 +457,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   ): Promise<WorkflowProjectItem> {
     return this.#withWrite(async () => {
       const structure = this.#structure(),
-        source = await this.#project(value);
-      const contents = version === 'published' ? source.publishedContents : source.contents;
+        source = await this.#payload(value, version === 'published' ? 'published' : 'latest');
+      const contents = source.contents;
       if (contents === null) throw conflict('Published version is not available');
       const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
       project.metadata.id = randomUUID() as typeof project.metadata.id;
@@ -471,7 +471,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       const next = this.#newProject(
         path.posix.join(parentOf(source.relativePath), `${name}.rivet-project`),
         serializeProject(project, attachedData) as string,
-        version === 'published' ? source.publishedDatasetsContents : source.datasetsContents,
+        source.datasetsContents,
       );
       await this.#commit(structure, [{ before: null, after: next }]);
       return this.#item(next);
@@ -689,17 +689,14 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     }));
   }
   async listWorkflowProjectWebApps(value: unknown): Promise<WorkflowProjectWebAppsResponse> {
-    const snapshot = await this.#payload(value),
-      contents = snapshot.contents!,
+    const snapshot = await this.#catalog.readDraftDefinition(this.#projectPath(value));
+    if (!snapshot) throw createHttpError(404, 'Project not found');
+    const contents = snapshot.contents,
       project = loadProjectAndAttachedDataFromString(contents)[0],
       graphs = this.#uiGraphs(project),
-      draftRevisionId = revision({ contents, datasetsContents: snapshot.datasetsContents });
+      draftRevisionId = snapshot.revisionId;
     return {
-      project: this.#treeItem({
-        ...snapshot,
-        revisionId: draftRevisionId,
-        stats: getWorkflowProjectStatsFromContents(contents),
-      }),
+      project: this.#treeItem(snapshot),
       projectId: snapshot.workflowId,
       draftRevisionId,
       publicationVersion: snapshot.publicationVersion,
@@ -833,30 +830,23 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async #annotateVersion(
     value: unknown,
     id: unknown,
-    update: (version: Snapshot['publishedVersions'][number]) => void,
+    update: Partial<Pick<Snapshot['publishedVersions'][number], 'isStarred' | 'comment'>>,
   ) {
+    if (typeof id !== 'string' || !id) throw createHttpError(404, 'Published version not found');
     return this.#withWrite(async () => {
-      const structure = this.#structure(),
-        before = await this.#project(value),
-        next = structuredClone(before);
-      const version = this.#version(next, id);
-      update(version);
-      await this.#commit(structure, [{ before, after: next }]);
-      return this.#versionSummary(next, version);
+      const result = this.#catalog.annotatePublishedVersion(this.#projectPath(value), id, update);
+      if (!result) throw createHttpError(404, 'Published version not found');
+      return this.#versionSummary(result.project, result.version);
     });
   }
   setWorkflowPublishedVersionStar(value: unknown, id: unknown, starred: unknown) {
     if (typeof starred !== 'boolean') throw badRequest('Invalid isStarred');
-    return this.#annotateVersion(value, id, (version) => {
-      version.isStarred = starred;
-    });
+    return this.#annotateVersion(value, id, { isStarred: starred });
   }
   setWorkflowPublishedVersionComment(value: unknown, id: unknown, comment: unknown) {
     if (typeof comment !== 'string' || comment.trim().length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH)
       throw badRequest('Invalid comment');
-    return this.#annotateVersion(value, id, (version) => {
-      version.comment = comment.trim();
-    });
+    return this.#annotateVersion(value, id, { comment: comment.trim() });
   }
   async restoreWorkflowPublishedVersion(
     value: unknown,
@@ -1200,30 +1190,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     result.sort((left, right) => left.project.relativePath.localeCompare(right.project.relativePath));
     return { workflows: result };
   }
-  #statistics(row: LocalRecordingMetadata) {
-    return {
-      workflowId: row.workflowId,
-      sourceProjectName: row.sourceProjectName,
-      createdAt: row.createdAt,
-      runKind: row.runKind,
-      status: row.status,
-      durationMs: row.durationMs,
-      endpointNameAtExecution: row.endpointName,
-      executionIdentity: row.executionIdentity,
-    };
-  }
   async listWorkflowRunStatisticsCatalog(surface: WorkflowRunStatisticsSurface) {
-    return buildWorkflowRunStatisticsCatalog(
-      this.#catalog.listRecordingMetadata().map((row) => this.#statistics(row)),
-      surface,
-    );
+    return buildWorkflowRunStatisticsCatalog(this.#catalog.readRecordingStatisticsCatalog(surface), surface);
   }
   async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery) {
-    return buildWorkflowRunStatistics(
-      this.#catalog
-        .listRecordingMetadata({ workflowId: query.target.workflowId, from: query.period.from, to: query.period.to })
-        .map((row) => this.#statistics(row)),
-      query,
-    );
+    return buildWorkflowRunStatistics(this.#catalog.readRecordingStatistics(query), query);
   }
 }

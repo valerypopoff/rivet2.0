@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { deserializeProject, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 import type { WorkflowProjectItem } from '../dashboard/types';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRows = 0) {
   const field = type === 'object' ? 'jsonTemplate' : 'code';
@@ -99,6 +99,7 @@ async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRow
     await route.fulfill({ json: { path, revisionId: `lifecycle-save-${saves.length}` } });
   });
   await page.goto('/');
+  await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
   const editorFrame = page.frames().find((entry) => entry.parentFrame() === page.mainFrame())!;

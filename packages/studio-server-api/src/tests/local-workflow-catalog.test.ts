@@ -1088,6 +1088,56 @@ test('legacy schemas, including a premature v4 marker, upgrade only with a succe
   }
 });
 
+test('version annotations preserve certified legacy bytes on no-ops and upgrade atomically on real writes', async (t) => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    const bytes = await fs.readFile(file);
+    catalog.initialize({ verifyOnly: true });
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false }),
+      /verification only/,
+    );
+    catalog.close();
+    catalog.initialize({ requireExisting: true });
+    const treeStamp = catalog.changeStamp();
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', async () => {
+      throw new Error('Unexpected artifact read');
+    });
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes', async () => {
+      throw new Error('Unexpected artifact write');
+    });
+    assert.equal(
+      catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: true })?.version.comment,
+      'First version',
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'A no-op must not rewrite or upgrade a certified catalog');
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 123 as never }),
+      /metadata/,
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'Invalid annotations roll back');
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false });
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 'Changed' });
+    assert.equal(catalog.changeStamp(), treeStamp, 'Historical annotations do not invalidate tree summaries');
+    const version = catalog
+      .readProjectPublicationMetadata(source.relativePath)!
+      .publishedVersions.find((entry) => entry.versionId === 'publish-1')!;
+    assert.equal(version.isStarred, false);
+    assert.equal(version.comment, 'Changed');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 4);
+    } finally {
+      db.close();
+    }
+    catalog.checkHealth();
+  });
+});
+
 test('a failed recording insert rolls back recovery of legacy DDL marked v4', async (t) => {
   await fixture(async (catalog, root) => {
     const source = project();

@@ -583,8 +583,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         return { workflow, revision, publishedRows };
       });
 
-      const contents = await deps.readRevisionContents(revision);
-      const currentProject = loadProjectFromString(contents.contents);
+      const contents = await deps.readRevisionProjectContents(revision);
+      const currentProject = loadProjectFromString(contents);
       const currentUiGraphs = getUiGraphsFromProject(currentProject);
       const currentUiGraphIds = new Set(currentUiGraphs.map((uiGraph) => uiGraph.uiGraphId));
       const publishedByUiGraphId = new Map(publishedRows.map((row) => [row.ui_graph_id, row]));

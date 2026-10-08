@@ -92,6 +92,7 @@ export const defaultApiTestFiles = [
   'src/tests/recording-input-filter.test.ts',
   'src/tests/recording-input-query-plan.test.ts',
   'src/tests/recording-input-worker.test.ts',
+  'src/tests/recording-statistics-sql.test.ts',
   'src/tests/recording-statistics.test.ts',
   'src/tests/recording-workflow-scope.test.ts',
   'src/tests/recordings-store.test.ts',

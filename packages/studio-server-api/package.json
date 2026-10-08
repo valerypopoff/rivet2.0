@@ -26,6 +26,7 @@
     "test:files": "tsx --test --test-concurrency=1",
     "test:async-managed": "tsx src/tests/workflow-async-managed.integration.ts",
     "test:scheduled-managed": "tsx src/tests/scheduled-runs-managed.integration.ts",
+    "test:statistics-managed": "tsx src/tests/recording-statistics-managed.integration.ts",
     "test:migration-managed": "tsx src/tests/workflow-storage-migration-managed.integration.ts"
   },
   "dependencies": {

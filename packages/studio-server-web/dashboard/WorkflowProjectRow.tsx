@@ -49,7 +49,9 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
     editing ? 'editing' : null,
     renaming ? 'renaming' : null,
     draggedItem?.itemType === 'project' && draggedItem.absolutePath === project.absolutePath ? 'dragging' : null,
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const handleClick = () => {
     onPreviewOpen(project);
@@ -104,7 +106,7 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
       onDoubleClick={handleDoubleClick}
       onContextMenu={(event) => onContextMenu(project, event)}
       onKeyDown={onKeyDown(project)}
-      title={editorReady ? project.fileName : 'Loading editor...'}
+      title={project.fileName}
     >
       {projectRowContent}
     </button>
@@ -132,11 +134,7 @@ const ProjectRowContent: FC<ProjectRowContentProps> = ({
     <div className="project-main">
       {dotStatus ? <span className={`project-status-dot ${dotStatus}`} aria-hidden="true" /> : null}
       {editing ? (
-        <ProjectRenameInput
-          project={project}
-          onSubmit={onRenameSubmit}
-          onCancel={onRenameCancel}
-        />
+        <ProjectRenameInput project={project} onSubmit={onRenameSubmit} onCancel={onRenameCancel} />
       ) : (
         <div className="project-label-wrap">
           {renaming ? <span className="project-rename-spinner" aria-hidden="true" /> : null}
@@ -153,11 +151,7 @@ type ProjectRenameInputProps = {
   onCancel: (project: WorkflowProjectItem) => void;
 };
 
-const ProjectRenameInput: FC<ProjectRenameInputProps> = ({
-  project,
-  onSubmit,
-  onCancel,
-}) => (
+const ProjectRenameInput: FC<ProjectRenameInputProps> = ({ project, onSubmit, onCancel }) => (
   <WorkflowInlineRenameInput
     classNamePrefix="project"
     initialValue={project.name}

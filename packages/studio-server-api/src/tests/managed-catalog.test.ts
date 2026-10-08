@@ -36,6 +36,17 @@ function createRevisionRow(workflowId: string, revisionId: string): RevisionRow 
   };
 }
 
+function createTreeRow(workflow: WorkflowRow, revision: RevisionRow | null) {
+  return {
+    ...workflow,
+    draft_revision_id: revision?.revision_id ?? null,
+    draft_project_blob_key: revision?.project_blob_key ?? null,
+    stats_graph_count: revision?.stats_graph_count ?? null,
+    stats_total_node_count: revision?.stats_total_node_count ?? null,
+    stats_web_app_count: revision?.stats_web_app_count ?? null,
+  };
+}
+
 function createWebAppPublicationRow(workflowId: string, revisionId: string, uiGraphId: string): WebAppPublicationRow {
   return {
     app_id: `app-${uiGraphId}`,
@@ -182,9 +193,16 @@ test('managed reference catalog and snapshots read active project revisions only
   await assert.rejects(catalog.readWorkflowProjectReferenceSnapshots(workflow.relative_path), { status: 409 });
 });
 
-test('managed workflow tree includes graph and node stats from current draft revision metadata', async () => {
+test('managed workflow tree bulk-joins revision stats without per-project queries or blob reads', async () => {
   const workflowRow = createWorkflowRow();
   const revisionRow = createRevisionRow(workflowRow.workflow_id, workflowRow.current_draft_revision_id);
+  const treeRows = Array.from({ length: 500 }, (_, index) =>
+    createTreeRow(
+      createWorkflowRow({ workflow_id: `workflow-${index}`, relative_path: `Project ${index}.rivet-project` }),
+      revisionRow,
+    ),
+  );
+  let sqlQueries = 0;
 
   const catalog = createManagedWorkflowCatalogService({
     context: {
@@ -195,7 +213,10 @@ test('managed workflow tree includes graph and node stats from current draft rev
       },
       db: {
         queryOne: async () => null,
-        queryRows: async () => [],
+        queryRows: async (_client: unknown, sql: string) => {
+          sqlQueries++;
+          return sql.includes('FROM workflows w') ? treeRows : [];
+        },
         isUniqueViolation: () => false,
         withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
@@ -206,8 +227,9 @@ test('managed workflow tree includes graph and node stats from current draft rev
         listWorkflowRows: async () => [workflowRow],
         getWorkflowByRelativePath: async () => null,
         getWorkflowById: async () => null,
-        getRevision: async (_client: unknown, revisionId: string | null | undefined) =>
-          revisionId === revisionRow.revision_id ? revisionRow : null,
+        getRevision: async () => {
+          throw new Error('Tree must not query individual revisions');
+        },
         getCurrentDraftWorkflowRevision: async () => null,
         ensureFolderChain: async () => {},
         assertFolderExists: async () => {},
@@ -249,8 +271,13 @@ test('managed workflow tree includes graph and node stats from current draft rev
 
   const tree = await catalog.getTree();
 
-  assert.equal(tree.projects.length, 1);
-  assert.equal(tree.projects[0]?.projectMetadataId, workflowRow.workflow_id);
+  assert.equal(tree.projects.length, 500);
+  assert.equal(
+    sqlQueries,
+    2,
+    'One workflow/revision join and one publication summary query, independent of project count',
+  );
+  assert.equal(tree.projects[0]?.projectMetadataId, 'workflow-0');
   assert.equal(tree.projects[0]?.stats?.graphCount, 1);
   assert.equal(tree.projects[0]?.stats?.totalNodeCount, 2);
   assert.equal(tree.projects[0]?.stats?.webAppCount, 1);
@@ -302,7 +329,12 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
       },
       db: {
         queryOne: async () => null,
-        queryRows: async () => webAppRows,
+        queryRows: async (_client: unknown, sql: string) =>
+          sql.includes('FROM workflows w')
+            ? [webAppPublishedWorkflow, staleWebAppWorkflow].map((workflow) =>
+                createTreeRow(workflow, revisions.get(workflow.current_draft_revision_id) ?? null),
+              )
+            : webAppRows,
         isUniqueViolation: () => false,
         withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),
@@ -464,6 +496,7 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
           if (/UPDATE workflow_revisions/.test(sql)) {
             updateQueries.push({ sql, params });
           }
+          if (sql.includes('FROM workflows w')) return [createTreeRow(workflowRow, revisionRow)];
           return [];
         },
         isUniqueViolation: () => false,
@@ -540,7 +573,8 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
       },
       db: {
         queryOne: async () => null,
-        queryRows: async () => [],
+        queryRows: async (_client: unknown, sql: string) =>
+          sql.includes('FROM workflows w') ? [createTreeRow(workflowRow, null)] : [],
         isUniqueViolation: () => false,
         withManagedDbRetry: async <T>(_scope: string, run: () => Promise<T>) => run(),
         getManagedDbConnectionConfig: () => ({}),

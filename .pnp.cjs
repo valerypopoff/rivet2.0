@@ -16728,6 +16728,7 @@ const RAW_RUNTIME_STATE =
             "emittery",\
             "npm:0.13.1"\
           ]],\
+          ["fake-indexeddb", "npm:6.2.5"],\
           ["fast-deep-equal", "npm:3.1.3"],\
           ["fuse.js", "npm:6.6.2"],\
           ["github-markdown-css", "npm:5.9.0"],\

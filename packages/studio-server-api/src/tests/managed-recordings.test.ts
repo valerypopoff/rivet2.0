@@ -149,7 +149,8 @@ test('managed recording statistics preserve web-app action identity and run-kind
     },
     db: {
       queryOne: async () => null,
-      queryRows: async () => [webAppRow, childRow],
+      queryRows: async (_client: unknown, sql: string) =>
+        sql.includes('WITH source AS') ? [{ ...webAppRow, metadata_valid: 1, total_runs: '1' }] : [webAppRow, childRow],
     },
     blobStore: { getText: async () => '' },
     mappers: {

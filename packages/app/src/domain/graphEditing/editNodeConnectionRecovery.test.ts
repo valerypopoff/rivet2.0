@@ -5,6 +5,7 @@ import {
   createBuiltInRegistry,
   extractInterpolationVariables,
   pluginNodeDefinition,
+  getSubgraphProjectKey,
   type ChartNode,
   type NodeConnection,
   type NodeId,
@@ -14,9 +15,20 @@ import {
   type MatchCaseNode,
   type PortId,
   type Project,
+  type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import { reconcileNodeEditConnections } from './editNodeConnectionRecovery.js';
-import { createTestNodeRegistry, makeConnection, makeObjectNode, makeTextNode } from './testGraphBuilders.js';
+import {
+  createTestNodeRegistry,
+  makeConnection,
+  makeGraph,
+  makeGraphInputNode,
+  makeGraphOutputNode,
+  makeObjectNode,
+  makeProject,
+  makeSubGraphNode,
+  makeTextNode,
+} from './testGraphBuilders.js';
 import { createEditableStringListRows, prepareStringListPortBindingEdit } from './stringListPortBinding.js';
 
 const registry = createTestNodeRegistry();
@@ -83,6 +95,82 @@ pluginRegistry.registerPlugin({
 const project = {
   graphs: {},
 } as Project;
+
+for (const version of ['latest', 'published'] as const) {
+  test(`editing either end of an unresolved ${version} Subgraph wire preserves it`, () => {
+    const projectId = 'external' as ProjectId;
+    const source = makeTextNode('source', 'before');
+    const subgraph = makeSubGraphNode('subgraph', 'child', {
+      data: { targetProjectId: projectId, targetVersion: version },
+    });
+    const sink = makeTextNode('sink', '{{answer}}');
+    const connections = [
+      makeConnection({ inputNodeId: subgraph.id, inputId: 'prompt' as PortId }),
+      makeConnection({
+        outputNodeId: subgraph.id,
+        outputId: 'answer' as PortId,
+        inputNodeId: sink.id,
+        inputId: 'answer' as PortId,
+      }),
+    ];
+    const nodes = [source, subgraph, sink];
+    const options = {
+      nodes,
+      project: makeProject(),
+      referencedProjects: {},
+      projectNodeRegistry: registry,
+      liveConnections: connections,
+      recoverableConnections: [],
+    };
+    for (const node of nodes) {
+      const result = reconcileNodeEditConnections({ ...options, nodeId: node.id, newNode: { title: 'Edited' } });
+      assert.deepEqual(result.nextConnections, connections);
+      assert.deepEqual(result.nextRecoverableConnections, []);
+    }
+    // Unknown ports cannot justify restoring an old wire either.
+    const waiting = reconcileNodeEditConnections({
+      ...options,
+      nodeId: source.id,
+      newNode: { title: 'Edited' },
+      liveConnections: [connections[1]!],
+      recoverableConnections: [connections[0]!],
+    });
+    assert.deepEqual(waiting.nextConnections, [connections[1]!]);
+    assert.deepEqual(waiting.nextRecoverableConnections, [connections[0]!]);
+    const key = getSubgraphProjectKey({ projectId, version });
+    const resolved = reconcileNodeEditConnections({
+      ...options,
+      nodeId: source.id,
+      newNode: { title: 'Edited' },
+      referencedProjects: {
+        [key]: makeProject([
+          makeGraph('child', [makeGraphInputNode('in', 'prompt'), makeGraphOutputNode('out', 'answer')]),
+        ]),
+      },
+      liveConnections: [connections[1]!],
+      recoverableConnections: [connections[0]!],
+    });
+    assert.deepEqual(resolved.nextConnections, [connections[1]!, connections[0]!]);
+    assert.deepEqual(resolved.nextRecoverableConnections, []);
+    // A confirmed removed target port is still recoverable, not silently kept.
+    const removed = reconcileNodeEditConnections({
+      ...options,
+      nodeId: source.id,
+      newNode: { title: 'Edited' },
+      referencedProjects: { [key]: makeProject([makeGraph('child')]) },
+    });
+    assert.deepEqual(removed.nextConnections, [connections[1]!]);
+    assert.deepEqual(removed.nextRecoverableConnections, [connections[0]!]);
+    // Unknown output data must not protect a known removed input on its peer.
+    const changedSink = reconcileNodeEditConnections({
+      ...options,
+      nodeId: sink.id,
+      newNode: { data: { ...(sink.data as object), text: 'No input' } },
+    });
+    assert.deepEqual(changedSink.nextConnections, [connections[0]!]);
+    assert.deepEqual(changedSink.nextRecoverableConnections, [connections[1]!]);
+  });
+}
 
 function makePromptNode(nodeId: string, promptText: string): ChartNode {
   const node = registry.createDynamic('prompt');
