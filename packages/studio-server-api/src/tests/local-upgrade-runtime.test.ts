@@ -349,6 +349,23 @@ describe('isolated local upgrade runtime scenarios', { concurrency }, () => {
   const scenarios: { name: string; run: () => Promise<void> }[] = [];
   const scenario = (name: string, run: () => Promise<void>) => scenarios.push({ name, run });
   scenario(
+    'copy admission requires paused drained source and the current boot revision, and recovers after restart',
+    async () => {
+      await fixture(async (_source, _control, command) => {
+        await command('copy-admission-fences');
+        // A new process loads the fenced revision and can safely continue the
+        // exact retained source; rejection never creates an abandoned candidate.
+        await command('copy');
+      });
+    },
+  );
+  for (const phase of ['failed', 'interrupted'])
+    scenario(`copy retry evidence rejects stale ${phase} attempts and admits a fresh verified backup`, async () => {
+      await fixture(async (_source, _control, command) => {
+        await command(`copy-retry-evidence-${phase}`);
+      });
+    });
+  scenario(
     'guided duplicate identity repair is authenticated, replayable and cannot bypass recovery fences',
     async () => {
       await fixture(async (_source, _control, command) => {
