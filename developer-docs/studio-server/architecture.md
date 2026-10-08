@@ -65,6 +65,10 @@ objects remain readable within that bound. Recording input-search workers receiv
 the descriptor's encoding. Payload uploads/reads have a five-minute absolute
 deadline in addition to transport timeouts. Reconciliation recognizes both key
 generations.
+The managed async integration test validates descriptor-bearing keys with the
+shared artifact grammar and checks every SQL revision/recording reference against
+objects under the configured prefix. Logical filename assertions apply before the
+descriptor suffix, not to the end of the physical S3 key.
 Precopy-aware migration stores forward descriptor uploads through the immutable
 boundary; legacy server-side text precopy remains only for descriptor-free writes.
 
