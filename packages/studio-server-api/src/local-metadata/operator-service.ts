@@ -211,10 +211,16 @@ async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Pr
   }
 }
 async function assertDrained(): Promise<void> {
-  if (!isVmMigrationMaintenanceActive()) throw new Error('Pause writes before copying or changing storage authority.');
+  if (!isVmMigrationMaintenanceActive())
+    throw createHttpError(409, 'Pause writes before copying or changing storage authority.', {
+      code: 'local-upgrade-pause-required',
+    });
   readVmMigrationMaintenance();
   const drain = await localStorageDrainSnapshot();
-  if (!drain.ready) throw new Error(`Wait for active work to drain: ${drain.blockers.join(', ')}.`);
+  if (!drain.ready)
+    throw createHttpError(409, 'Wait for active work to drain; writes remain paused. Reload status before retrying.', {
+      code: 'local-upgrade-drain-required',
+    });
 }
 
 export async function getLocalUpgradeStatus() {
@@ -529,7 +535,10 @@ export async function startLocalUpgradeCopy(
   input = { ...input };
   hooks = { ...hooks };
   return exclusive('copy', async () => {
-    if (getLocalMetadataServingSelection()) throw new Error('A SQLite generation is already selected.');
+    if (getLocalMetadataServingSelection())
+      throw createHttpError(409, 'A SQLite generation is already selected. Reload status before copying.', {
+        code: 'local-upgrade-state-mismatch',
+      });
     await assertDrained();
     if (!input.backupRestored || !input.backupReference.trim() || input.backupReference.length > 512)
       throw new Error('A restored backup must be certified.');
@@ -549,12 +558,24 @@ export async function startLocalUpgradeCopy(
         backup.pausedAt !== readVmMigrationMaintenance()?.enteredAt ||
         backup.sourceFingerprint !== sourceFingerprint
       )
-        throw new Error('The browser backup is stale or unverified. Create and download a current backup.');
+        throw createHttpError(
+          409,
+          'The browser backup is stale or unverified. Reload status and confirm a current verified backup before copying.',
+          { code: 'local-upgrade-backup-mismatch' },
+        );
     }
     const job = await withLocalMetadataControl(async (journal, store) => {
       const state = journal.read();
-      if (state.revision !== input.revision || !['legacy', 'legacy-resumed'].includes(state.phase))
-        throw new Error('Stale upgrade request or an existing verified generation. Reload status.');
+      if (
+        state.revision !== input.revision ||
+        state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+        !['legacy', 'legacy-resumed'].includes(state.phase)
+      )
+        throw createHttpError(
+          409,
+          'Storage authority changed. Reload status and finish any required backend restart before copying or retrying.',
+          { code: 'local-upgrade-state-mismatch' },
+        );
       const old = store.latestJob();
       if (input.retryJobId) {
         if (
@@ -564,7 +585,11 @@ export async function startLocalUpgradeCopy(
           old.sourceFingerprint !== sourceFingerprint ||
           old.backupReference !== input.backupReference
         )
-          throw new Error('Retry must use the same frozen source, backup and interrupted generation.');
+          throw createHttpError(
+            409,
+            'This retry uses a different attempt, source or backup. Reload status and confirm the backup; the copy button will choose Retry or Copy and verify.',
+            { code: 'local-upgrade-retry-mismatch' },
+          );
         const next: LocalUpgradeJob = {
           ...old,
           phase: 'copying',
@@ -576,7 +601,22 @@ export async function startLocalUpgradeCopy(
         store.saveJob(next);
         return next;
       }
-      if (old?.phase === 'copying') throw new Error('Retry the interrupted generation explicitly.');
+      if (old?.phase === 'copying') {
+        // The exclusive gate already rejected a live worker. A retained copying
+        // row is therefore interrupted, not permission to reuse its candidate
+        // with different evidence (for example after a project-ID repair).
+        if (old.sourceFingerprint === sourceFingerprint && old.backupReference === input.backupReference)
+          throw createHttpError(409, 'Retry the interrupted generation explicitly.', {
+            code: 'local-upgrade-retry-required',
+          });
+        store.saveJob({
+          ...old,
+          phase: 'interrupted',
+          finishedAt: new Date().toISOString(),
+          message:
+            'Copy was interrupted. A new attempt uses different source or backup evidence; earlier candidate files are retained.',
+        });
+      }
       const next: LocalUpgradeJob = {
         id: randomUUID(),
         phase: 'copying',

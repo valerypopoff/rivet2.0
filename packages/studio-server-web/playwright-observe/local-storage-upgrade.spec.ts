@@ -629,6 +629,191 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
   await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
 });
 
+for (const scenario of [
+  { phase: 'failed', evidence: 'matching' },
+  { phase: 'interrupted', evidence: 'matching' },
+  { phase: 'failed', evidence: 'whitespace' },
+  { phase: 'failed', evidence: 'changed-source' },
+  { phase: 'failed', evidence: 'changed-backup' },
+  { phase: 'interrupted', evidence: 'changed-both' },
+  { phase: 'failed', evidence: 'missing' },
+]) {
+  test(`copy button selects ${scenario.evidence} evidence for a ${scenario.phase} attempt`, async ({ page }) => {
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: { root: '/workflows', sync: { epoch: 'copy-evidence', revision: 0 }, folders: [], projects: [] },
+      }),
+    );
+    await page.route('**/?editor', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+    );
+    const fingerprint = 'a'.repeat(64);
+    const archiveHash = 'b'.repeat(64);
+    const id = '9921c08b-44df-493c-98bd-02b61a5406d5';
+    const reference = `browser-backup:${id}:${archiveHash}`;
+    const matching = ['matching', 'whitespace'].includes(scenario.evidence);
+    let job = {
+      id: 'old-copy-attempt',
+      phase: scenario.phase,
+      sourceFingerprint:
+        scenario.evidence === 'missing'
+          ? undefined
+          : scenario.evidence.includes('source') || scenario.evidence === 'changed-both'
+            ? 'c'.repeat(64)
+            : fingerprint,
+      backupReference:
+        scenario.evidence === 'missing'
+          ? undefined
+          : scenario.evidence.includes('backup') || scenario.evidence === 'changed-both'
+            ? 'old-backup-reference'
+            : reference,
+      message: 'An earlier copy did not finish.',
+      stage: 'workflows',
+    };
+    let payload: Record<string, unknown> | null = null;
+    const pausedAt = '2026-10-08T00:00:00Z';
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+      if (new URL(route.request().url()).pathname.endsWith('/copy')) {
+        payload = route.request().postDataJSON();
+        job = {
+          ...job,
+          id: matching ? job.id : 'fresh-copy-attempt',
+          phase: 'copying',
+          sourceFingerprint: fingerprint,
+          backupReference: reference,
+        };
+        return route.fulfill({ status: 202, json: { started: true } });
+      }
+      return route.fulfill({
+        json: {
+          ...upgradeStatusFixture({ pausedAt, operation: payload ? 'copy' : null }),
+          settingsEncryptionRequired: false,
+          job,
+          backup: {
+            id,
+            revision: 1,
+            pausedAt,
+            phase: 'ready',
+            sourceFingerprint: fingerprint,
+            archiveHash,
+            bytes: 4096,
+          },
+        },
+      });
+    });
+    const panel = await openLocalUpgrade(page);
+    await expect(panel.getByLabel('Restored backup fingerprint', { exact: true })).toHaveValue(fingerprint);
+    if (scenario.evidence === 'whitespace') {
+      if (!(await panel.getByLabel('Backup reference', { exact: true }).isVisible()))
+        await panel.getByText('Advanced: independently restored backup evidence', { exact: true }).click();
+      await panel.getByLabel('Backup reference', { exact: true }).fill(`  ${reference}  `);
+    }
+    const copy = panel.getByRole('button', {
+      name: matching ? 'Retry copy and verification' : 'Copy and verify',
+      exact: true,
+    });
+    await expect(copy).toBeDisabled();
+    if (!matching) await expect(panel.getByText(/Previous copy status:/)).toBeVisible();
+    await panel.getByLabel('I saved the verified backup download securely outside this VM.').check();
+    await expect(copy).toBeEnabled();
+    await copy.click();
+    await expect.poll(() => payload).not.toBeNull();
+    expect(payload).toEqual({
+      revision: 1,
+      backupReference: reference,
+      backupSourceFingerprint: fingerprint,
+      backupRestored: true,
+      ...(matching ? { retryJobId: 'old-copy-attempt' } : {}),
+    });
+    await expect(panel.getByText(/Copy status: copying/)).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  });
+}
+
+test('copy admission conflict reconciles replacement backup and requires a fresh attestation', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', sync: { epoch: 'copy-conflict', revision: 0 }, folders: [], projects: [] },
+    }),
+  );
+  await page.route('**/?editor', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+  );
+  const pausedAt = '2026-10-08T00:00:00Z';
+  let backup = {
+    id: '9921c08b-44df-493c-98bd-02b61a5406d5',
+    revision: 1,
+    pausedAt,
+    phase: 'ready',
+    sourceFingerprint: 'a'.repeat(64),
+    archiveHash: 'b'.repeat(64),
+    bytes: 4096,
+  };
+  const reference = () => `browser-backup:${backup.id}:${backup.archiveHash}`;
+  let job = {
+    id: 'old-copy',
+    phase: 'failed',
+    sourceFingerprint: backup.sourceFingerprint,
+    backupReference: reference(),
+  };
+  const submissions: Record<string, unknown>[] = [];
+  let accepted = false;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/copy')) {
+      submissions.push(route.request().postDataJSON());
+      if (submissions.length === 1) {
+        backup = { ...backup, id: '42bfd0bf-a606-4af4-a8cd-a0bb94e39c10', archiveHash: 'c'.repeat(64) };
+        return route.fulfill({
+          status: 409,
+          json: { error: 'The browser backup is stale or unverified. Reload status.' },
+        });
+      }
+      accepted = true;
+      job = {
+        id: 'fresh-copy',
+        phase: 'copying',
+        sourceFingerprint: backup.sourceFingerprint,
+        backupReference: reference(),
+      };
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({ pausedAt, operation: accepted ? 'copy' : null }),
+        settingsEncryptionRequired: false,
+        backup,
+        job,
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  const attestation = panel.getByLabel('I saved the verified backup download securely outside this VM.');
+  await attestation.check();
+  await panel.getByRole('button', { name: 'Retry copy and verification', exact: true }).click();
+  await expect(
+    panel.getByText('The browser backup is stale or unverified. Reload status.', { exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByLabel('Backup reference', { exact: true })).toHaveValue(reference());
+  await expect(attestation).not.toBeChecked();
+  const copy = panel.getByRole('button', { name: 'Copy and verify', exact: true });
+  await expect(copy).toBeDisabled();
+  await expect(panel.getByText(/Previous copy status:/)).toBeVisible();
+  await attestation.check();
+  await copy.click();
+  await expect.poll(() => submissions.length).toBe(2);
+  expect(submissions[0].retryJobId).toBe('old-copy');
+  expect(submissions[1]).toEqual({
+    revision: 1,
+    backupReference: reference(),
+    backupSourceFingerprint: backup.sourceFingerprint,
+    backupRestored: true,
+  });
+  await expect(panel.getByText(/Copy status: copying/)).toBeVisible();
+  await expect(copy).toBeDisabled();
+});
+
 test('browser backup survives reload, downloads archive and key separately and requires explicit attestations', async ({
   page,
   context,
@@ -927,11 +1112,14 @@ for (const navigation of ['tab', 'modal'] as const) {
 
 test('editing backup evidence or advancing the transition requires fresh backup attestations', async ({ page }) => {
   let revision = 1;
+  let restartRequired = false;
   const fingerprint = 'c'.repeat(64);
   await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/fingerprint'))
       return route.fulfill({ json: { sourceFingerprint: fingerprint } });
-    return route.fulfill({ json: upgradeStatusFixture({ pausedAt: '2026-09-29T00:00:00Z', revision }) });
+    return route.fulfill({
+      json: { ...upgradeStatusFixture({ pausedAt: '2026-09-29T00:00:00Z', revision }), restartRequired },
+    });
   });
   const panel = await openLocalUpgrade(page);
   const restored = panel.getByLabel('I restored a separate backup of all four source roots.');
@@ -959,9 +1147,15 @@ test('editing backup evidence or advancing the transition requires fresh backup 
   await expect(copy).toBeDisabled();
   await certify();
   revision++;
+  restartRequired = true;
   await expect(copy).toBeDisabled();
   await expect(restored).not.toBeChecked();
   await expect(key).not.toBeChecked();
+  await restored.check();
+  await key.check();
+  await expect(copy).toBeDisabled();
+  restartRequired = false;
+  await expect(copy).toBeEnabled();
 });
 
 for (const unavailable of [false, true]) {
@@ -1889,6 +2083,8 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   const job = {
     id: 'failed-fixture',
     phase: 'failed',
+    sourceFingerprint: 'a'.repeat(64),
+    backupReference: 'restored-fixture',
     stage: 'settings',
     message: 'Copy failed safely. Legacy data remains selected.',
     failure: { stage: 'settings', code: 'disk-full' },

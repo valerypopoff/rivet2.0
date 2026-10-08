@@ -108,6 +108,41 @@ Authenticated status also reports a fixed, non-secret `operation` name while any
 
 Closing the browser does not cancel copying. Restart leaves an interrupted job and maintenance intact. Explicit retry accepts only the same generation, frozen source and backup reference; existing candidate metadata/bytes must match. Failure never selects a partial candidate. If certification committed but the final job-status write did not, the durable transition takes precedence in status reporting.
 
+The copy button offers **Retry copy and verification** only when a failed/interrupted
+job's source fingerprint and backup reference both match the current backup
+evidence. After ID repair, a replacement backup, or missing older job evidence it
+offers **Copy and verify** without `retryJobId`, creating a fresh candidate while
+retaining earlier candidate files and audit records. Old failures are labeled
+**Previous copy status** so they cannot be confused with a newly rejected request.
+Both actions still require explicit backup attestation before the button enables.
+The API rejects mismatched explicit retries with HTTP 409
+`local-upgrade-retry-mismatch`, not a generic 500/invalid-data error. With no live
+worker, an abandoned `copying` row can be superseded by new evidence and is marked
+interrupted; unchanged evidence still requires explicit same-generation retry
+(409 `local-upgrade-retry-required`). No retry or fresh admission bypasses current
+backup, pause/drain, revision, capacity, source or archive verification gates.
+API/browser regressions cover unchanged retries, changed source/backup evidence,
+older missing evidence and retention of earlier candidates.
+
+The browser uses one trimmed backup reference for recognition, attestation,
+retry selection and submission, matching the API's request normalization.
+Incomplete or mismatched fingerprint evidence cannot select a retry. Known
+admission conflicts return HTTP 409 `local-upgrade-backup-mismatch` (stale or
+unverified browser receipt) or `local-upgrade-state-mismatch` (changed journal
+revision/authority); they do not rewrite the prior job or start a worker.
+Reconciliation reloads current status so a replacement backup requires a new
+off-VM attestation. Actual worker failures retain their separate stage diagnostics.
+
+Copy admission also requires the running backend's boot revision to equal the
+current transition revision, including independently restored/manual backup
+receipts. A current request revision alone cannot bypass a pending restart.
+HTTP 409 `local-upgrade-pause-required` and `local-upgrade-drain-required` identify
+ordinary maintenance/drain preconditions with fixed, non-secret guidance rather
+than reporting source corruption. Refused admission creates no job or candidate
+and preserves the maintenance fence. Runtime regressions cover an active HTTP
+execution, a journal revision advanced without restarting, and continuation from
+a new process that has loaded that revision.
+
 Copy admission performs only authorization, maintenance/drain, revision, configuration, retry-identity and backup-metadata checks before durably recording a job and returning HTTP 202. Acceptance is not verification. Capacity traversal, frozen-source hashing and browser archive rehashing run inside that tracked worker, before a candidate is created. Stages `capacity`, `source-fingerprint` and `backup-verification` make preparation observable without keeping one HTTP request open through gigabytes of IO. The submitted fingerprint remains an unverified claim until the fresh source comparison succeeds. The same busy gate covers preparation and conversion; status/reports reconcile a lost response instead of blindly submitting another copy. No resource, backup or exact-copy gate is skipped.
 
 Status captures copy-worker liveness and the operation name together with the synchronous journal/job snapshot, before awaiting optional backup metadata or drain checks. A copy finishing during those reads must not turn an older `copying` row into a false `interrupted` result. That response may still describe the running snapshot; the next poll reports the durable terminal job. The runtime regression deliberately holds backup status IO across a copy failure and checks both snapshots.

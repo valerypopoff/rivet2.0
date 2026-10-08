@@ -50,6 +50,7 @@ import { initializeRuntimeLibrariesBackend } from '../../runtime-libraries/backe
 import { DatabaseSync } from 'node:sqlite';
 import { FilesystemRivetLLMProfileHealthStore } from '../../llm-profile-health/filesystem-store.js';
 import { format } from 'node:util';
+import { registerActiveHttpExecution } from '../../active-http-executions.js';
 
 const command = process.argv[2];
 const { assertLocalMetadataExecutorAdmission } = (await import(
@@ -440,6 +441,190 @@ try {
       assert.equal(isVmMigrationMaintenanceActive(), false);
     } finally {
       console.error = originalLog;
+      await listener.close();
+    }
+  } else if (command === 'copy-admission-fences') {
+    await initializeWorkflowStorage();
+    const source = localMetadataSourceRoots();
+    const { createApiApp } = await import('../../app.js');
+    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+      'Content-Type': 'application/json',
+      'X-Rivet-Migration-Intent': '1',
+      Origin: listener.baseUrl,
+    };
+    const input = {
+      revision: state.revision,
+      backupReference: 'fixture-restored-copy',
+      backupSourceFingerprint: await fingerprintVmMigrationSource(source),
+      backupRestored: true,
+    };
+    const post = (body = input) =>
+      fetch(`${listener.baseUrl}/api/app-settings/local-upgrade/copy`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+    const assertRefused = async (code: string, body = input) => {
+      const response = await post(body);
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).code, code);
+      const status = await getLocalUpgradeStatus();
+      assert.equal(status.job, null);
+      assert.equal(status.operation, null);
+      await assert.rejects(fs.stat(path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'generations')), {
+        code: 'ENOENT',
+      });
+    };
+    try {
+      await assertRefused('local-upgrade-pause-required');
+      const execution = registerActiveHttpExecution();
+      try {
+        await pauseLocalUpgradeSource();
+        assert.equal((await getLocalUpgradeStatus()).drain?.ready, false);
+        await assertRefused('local-upgrade-drain-required');
+      } finally {
+        execution.release();
+      }
+      const frozen = await fingerprintVmMigrationSource(source);
+      const next = await withLocalMetadataControl(async (journal) => journal.requireLegacyRestart(state.revision));
+      assert.equal((await getLocalUpgradeStatus()).restartRequired, true);
+      for (const retryJobId of [undefined, randomUUID()])
+        await assertRefused('local-upgrade-state-mismatch', {
+          ...input,
+          revision: next.revision,
+          backupSourceFingerprint: frozen,
+          ...(retryJobId ? { retryJobId } : {}),
+        });
+      assert.equal(await fingerprintVmMigrationSource(source), frozen);
+      assert.equal(isVmMigrationMaintenanceActive(), true);
+    } finally {
+      await listener.close();
+    }
+  } else if (command === 'copy-retry-evidence-failed' || command === 'copy-retry-evidence-interrupted') {
+    await initializeWorkflowStorage();
+    await pauseLocalUpgradeSource();
+    const source = localMetadataSourceRoots();
+    const firstInput = {
+      revision: state.revision,
+      backupReference: 'fixture-restored-copy',
+      backupSourceFingerprint: await fingerprintVmMigrationSource(source),
+      backupRestored: true,
+    };
+    const waitFor = async (predicate: (value: Awaited<ReturnType<typeof getLocalUpgradeStatus>>) => boolean) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const value = await getLocalUpgradeStatus();
+        if (predicate(value)) return value;
+        if (Date.now() > deadline) throw new Error('Copy evidence fixture deadline exceeded.');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+    await startLocalUpgradeCopy(firstInput, {
+      checkpoint: async (point) => {
+        if (point === 'copy:workflows') throw new Error('fixture interrupted before workflow import');
+      },
+    });
+    const failed = await waitFor((value) => !value.operation && value.job?.phase === 'failed');
+    const oldId = failed.job!.id;
+    const retained = path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'generations', oldId, 'retained-marker');
+    await fs.writeFile(retained, 'old candidate must not be reused or deleted');
+    if (command.endsWith('interrupted'))
+      await withLocalMetadataControl(async (_journal, store) => {
+        store.saveJob({ ...failed.job!, phase: 'copying', finishedAt: null });
+      });
+    const before = await getLocalUpgradeStatus();
+    const { createApiApp } = await import('../../app.js');
+    const listener = await listenTestServer(http.createServer(createApiApp('combined')));
+    const url = `${listener.baseUrl}/api/app-settings/local-upgrade/copy`;
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+      'Content-Type': 'application/json',
+      'X-Rivet-Migration-Intent': '1',
+      Origin: listener.baseUrl,
+    };
+    const post = (body: object) => fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    try {
+      for (const change of [
+        { retryJobId: randomUUID() },
+        { backupReference: 'different-restored-backup' },
+        { backupSourceFingerprint: 'f'.repeat(64) },
+      ]) {
+        const response = await post({ ...firstInput, retryJobId: oldId, ...change });
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.code, 'local-upgrade-retry-mismatch');
+        assert.match(body.error, /Copy and verify/);
+        assert.deepEqual((await getLocalUpgradeStatus()).job, before.job, 'rejection cannot rewrite the old attempt');
+      }
+      if (command.endsWith('interrupted')) {
+        const response = await post(firstInput);
+        assert.equal(response.status, 409);
+        assert.equal((await response.json()).code, 'local-upgrade-retry-required');
+        assert.deepEqual((await getLocalUpgradeStatus()).job, before.job);
+      }
+      const staleRevision = await post({ ...firstInput, revision: state.revision + 1 });
+      assert.equal(staleRevision.status, 409);
+      assert.equal((await staleRevision.json()).code, 'local-upgrade-state-mismatch');
+      assert.deepEqual((await getLocalUpgradeStatus()).job, before.job);
+      // Model a repaired source and fresh verified browser backup. Its receipt
+      // must start a new candidate, never authorize reuse of the older one.
+      await fs.appendFile(path.join(source.workflows, 'story.rivet-project'), '\n');
+      await startLocalUpgradeBrowserBackup(state.revision);
+      const backedUp = await waitFor((value) => !value.operation && value.backup?.phase === 'ready');
+      const backup = backedUp.backup!;
+      const nextInput = {
+        revision: state.revision,
+        backupReference: `browser-backup:${backup.id}:${backup.archiveHash}`,
+        backupSourceFingerprint: backup.sourceFingerprint,
+        backupRestored: true,
+      };
+      assert.notEqual(nextInput.backupSourceFingerprint, firstInput.backupSourceFingerprint);
+      for (const change of [
+        { backupReference: `browser-backup:${randomUUID()}:${backup.archiveHash}` },
+        { backupSourceFingerprint: firstInput.backupSourceFingerprint },
+        { revision: state.revision + 1 },
+      ]) {
+        const response = await post({ ...nextInput, ...change });
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.code, 'local-upgrade-backup-mismatch');
+        assert.match(body.error, /Reload status/);
+        assert.deepEqual((await getLocalUpgradeStatus()).job, before.job, 'stale admission must preserve the ledger');
+        assert.equal(await fs.readFile(retained, 'utf8'), 'old candidate must not be reused or deleted');
+      }
+      const staleRetry = await post({ ...nextInput, retryJobId: oldId });
+      assert.equal(staleRetry.status, 409);
+      assert.equal((await staleRetry.json()).code, 'local-upgrade-retry-mismatch');
+      assert.equal((await post(nextInput)).status, 202);
+      const done = await waitFor((value) => !value.operation && value.job?.id !== oldId);
+      assert.equal(done.job?.phase, 'verified', JSON.stringify(done));
+      assert.equal(done.job?.sourceFingerprint, nextInput.backupSourceFingerprint);
+      assert.equal(done.job?.backupReference, nextInput.backupReference);
+      const certifiedConflict = await post(nextInput);
+      assert.equal(certifiedConflict.status, 409);
+      assert.equal((await certifiedConflict.json()).code, 'local-upgrade-state-mismatch');
+      assert.deepEqual(
+        (await getLocalUpgradeStatus()).job,
+        done.job,
+        'a certified generation cannot be replaced by copy',
+      );
+      assert.equal(await fs.readFile(retained, 'utf8'), 'old candidate must not be reused or deleted');
+      assert.equal(done.runningBackend, 'legacy');
+      assert.equal(isVmMigrationMaintenanceActive(), true);
+      const database = new DatabaseSync(path.join(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, 'upgrade.sqlite'), {
+        readOnly: true,
+      });
+      try {
+        const row = database.prepare('SELECT job_json FROM jobs WHERE id = ?').get(oldId) as { job_json: string };
+        assert.equal(JSON.parse(row.job_json).phase, command.endsWith('interrupted') ? 'interrupted' : 'failed');
+      } finally {
+        database.close();
+      }
+    } finally {
       await listener.close();
     }
   } else if (command === 'duplicate-repair') {
@@ -1363,6 +1548,16 @@ try {
       else if (command === 'return') await transitionLocalUpgrade('return-to-legacy', state.revision);
       else if (command === 'validate') {
         assert.throws(assertLocalMetadataWritesAllowed, /paused/);
+        if (getAppSettingsBackendKind() === 'sqlite')
+          await assert.rejects(
+            startLocalUpgradeCopy({
+              revision: state.revision,
+              backupReference: 'stale-browser-copy-request',
+              backupSourceFingerprint: 'a'.repeat(64),
+              backupRestored: true,
+            }),
+            { status: 409, code: 'local-upgrade-state-mismatch' },
+          );
         await transitionLocalUpgrade('validate', state.revision);
       } else {
         assert.ok(state.validationEvidenceHash);

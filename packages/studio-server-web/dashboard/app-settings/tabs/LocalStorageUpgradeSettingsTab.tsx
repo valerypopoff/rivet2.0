@@ -56,6 +56,8 @@ type Status = {
     id: string;
     phase: string;
     message: string | null;
+    sourceFingerprint?: string;
+    backupReference?: string;
     stage?: string;
     failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
@@ -420,8 +422,10 @@ export function LocalStorageUpgradeSettingsTab() {
     setKeyBackedUpFor(null);
     setDownloadStarted(false);
   }, [automatedBackup?.id]);
+  const normalizedBackupReference = backupReference.trim();
   const usesAutomatedBackup =
-    !!automatedBackup && backupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
+    !!automatedBackup &&
+    normalizedBackupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
   const downloadBackup = (key = false) => {
     if (!automatedBackup) return;
     const anchor = document.createElement('a');
@@ -439,15 +443,23 @@ export function LocalStorageUpgradeSettingsTab() {
   const sourceFingerprint =
     frozenSource?.pausedAt === status?.maintenance?.enteredAt ? frozenSource?.fingerprint ?? '' : '';
   const backupToken =
-    sourceFingerprint && backupReference.trim() && backupFingerprint === sourceFingerprint
+    sourceFingerprint && normalizedBackupReference && backupFingerprint === sourceFingerprint
       ? JSON.stringify([
           status?.maintenance?.enteredAt,
           transition?.revision,
           sourceFingerprint,
-          backupReference.trim(),
+          normalizedBackupReference,
         ])
       : null;
   const backupRestored = backupToken !== null && backupRestoredFor === backupToken;
+  const retainedCopy = ['interrupted', 'failed'].includes(status?.job?.phase ?? '') ? status?.job : null;
+  const retryJob =
+    backupToken !== null &&
+    retainedCopy?.sourceFingerprint === sourceFingerprint &&
+    retainedCopy.backupReference === normalizedBackupReference
+      ? retainedCopy
+      : null;
+  const previousCopy = backupToken !== null && !!retainedCopy && !retryJob;
   // Older servers still require key attestation; new plaintext servers do not.
   const settingsEncryptionRequired = status?.settingsEncryptionRequired !== false;
   const keyBackedUp = !settingsEncryptionRequired || (backupToken !== null && keyBackedUpFor === backupToken);
@@ -515,8 +527,7 @@ export function LocalStorageUpgradeSettingsTab() {
     inventory?.capacity?.fits !== false &&
     backupRestored &&
     keyBackedUp &&
-    !!backupReference.trim() &&
-    (!backupReference.trim().startsWith('browser-backup:') || usesAutomatedBackup) &&
+    (!normalizedBackupReference.startsWith('browser-backup:') || usesAutomatedBackup) &&
     /^[a-f0-9]{64}$/.test(backupFingerprint) &&
     backupFingerprint === sourceFingerprint;
   return (
@@ -937,24 +948,27 @@ export function LocalStorageUpgradeSettingsTab() {
             void act(async () => {
               await request('/copy', {
                 revision: transition?.revision,
-                backupReference,
+                backupReference: normalizedBackupReference,
                 backupSourceFingerprint: backupFingerprint,
                 backupRestored,
                 ...(settingsEncryptionRequired ? { encryptionKeyBackedUp: keyBackedUp } : {}),
-                ...(['interrupted', 'failed'].includes(status?.job?.phase ?? '')
-                  ? { retryJobId: status!.job!.id }
-                  : {}),
+                ...(retryJob ? { retryJobId: retryJob.id } : {}),
               });
             }, 'copy')
           }
         >
-          {['interrupted', 'failed'].includes(status?.job?.phase ?? '')
-            ? 'Retry copy and verification'
-            : 'Copy and verify'}
+          {retryJob ? 'Retry copy and verification' : 'Copy and verify'}
         </UpgradeActionButton>
+        {previousCopy && (
+          <p className="app-settings-field-help">
+            The previous attempt used different or unavailable source/backup evidence. Copy and verify starts a new
+            candidate using the confirmed backup; earlier candidate files are retained, not reused or deleted.
+          </p>
+        )}
         {status?.job && (
           <p className="app-settings-field-help" role="status">
-            Copy status: {status.job.phase}. {status.job.stage && `Stage: ${status.job.stage}. `}
+            {previousCopy ? 'Previous copy status' : 'Copy status'}: {status.job.phase}.{' '}
+            {status.job.stage && `Stage: ${status.job.stage}. `}
             {status.job.message}
             {status.job.failure &&
               ` Failure: ${status.job.failure.code} at ${status.job.failure.stage}. Download the diagnostic report; no exception contents or secrets are included.`}
