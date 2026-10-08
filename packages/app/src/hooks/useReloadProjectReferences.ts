@@ -33,7 +33,9 @@ export function useReloadProjectReferences() {
       const loader = new TauriProjectReferenceLoader(pathPolicy);
       const references = await loadProjectReferenceTree(referenceRoot, loadedProject.path ?? undefined, loader);
       if (generation === reloadGeneration.current) {
-        setReferencedProjects(references);
+        // External Subgraph previews can finish while legacy references load.
+        // They have separate, versioned keys and must not be overwritten.
+        setReferencedProjects((current) => ({ ...current, ...references }));
       }
     } catch (err) {
       // An earlier project can otherwise remain visible after its reference
@@ -41,7 +43,8 @@ export function useReloadProjectReferences() {
       // with an execution that correctly fails to load the reference.
       if (generation !== reloadGeneration.current) return;
 
-      setReferencedProjects({});
+      // The old closure was cleared before loading. Do not erase independent
+      // Subgraph previews that became available in the meantime.
       handleError(err, 'Failed to reload project references', {
         metadata: {
           projectId: referenceRoot.metadata.id,

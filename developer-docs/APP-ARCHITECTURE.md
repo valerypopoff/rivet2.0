@@ -1041,7 +1041,14 @@ Their persisted identities are compatibility contracts:
   resolves the provider rather than opening connections itself; embedded hosts
   can still inject a `StaticDataStore`.
 - [`io/BrowserDatasetProvider.ts`](../packages/app/src/io/BrowserDatasetProvider.ts)
-  owns `datasets` version 2 and its `datasets` and `data` object stores. The
+  owns `datasets` version 4 and its `datasets` and `data` object stores. Both use
+  `[projectId, datasetId]` keys; runtime dataset IDs remain unchanged. The
+  `by-project` metadata index bounds tab reads and replacement to their owner.
+  The upgrade atomically rekeys v2/v3 records one dataset at a time, preserving
+  missing-data fallback and rolling back on failure. Imports bind metadata to
+  the receiving project, so copies and detached previews cannot overwrite an
+  unrelated owner's cache. Project cleanup shares the import transaction without
+  activating its target or superseding a newer selection. The
   provider caches one internal connection, resets it after blocking or
   termination, and continues returning a fresh native `IDBDatabase` from the
   public `getDatasetDatabase()` compatibility method.

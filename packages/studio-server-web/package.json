@@ -8,7 +8,7 @@
     "dev:all": "concurrently --names api,web --prefix-colors blue,green \"yarn workspace @valerypopoff/rivet-studio-server-api run dev\" \"vite --config vite.config.ts\"",
     "build": "yarn check:google-hosted-override && vite build --config vite.config.ts",
     "check:google-hosted-override": "yarn workspace @valerypopoff/rivet2-core exec tsc -p ../studio-server-web/tsconfig.google-hosted-override.json",
-    "test": "tsx --test tests/api-request.test.ts tests/deserialize-worker.test.ts tests/development-refresh.test.ts tests/editor-bridge-contract.test.ts tests/editor-bridge-focus.test.ts tests/editor-project-refresh.test.ts tests/google-hosted-override.test.ts tests/google-hosted-resolver.test.ts tests/hosted-env-shim.test.ts tests/hosted-evaluation-coordinator.test.ts tests/hosted-local-execution-recording-persistence.test.ts tests/hosted-project-conflict-notices.test.ts tests/hosted-project-revision-tracker.test.ts tests/hosted-runtime-config.test.ts tests/llm-profile-health-settings.test.ts tests/opened-project-metadata.test.ts tests/publication-version.test.ts tests/published-items.test.ts tests/recording-input-path-history.test.ts tests/recording-run-hierarchy.test.ts tests/scheduled-project-options.test.ts tests/scheduled-run-api.test.ts tests/tunnel-launcher.test.ts tests/vite-aliases.test.ts && node --test dev/*.test.mjs",
+    "test": "tsx --test tests/api-request.test.ts tests/deserialize-worker.test.ts tests/development-refresh.test.ts tests/editor-bridge-contract.test.ts tests/editor-bridge-focus.test.ts tests/editor-project-refresh.test.ts tests/google-hosted-override.test.ts tests/google-hosted-resolver.test.ts tests/hosted-dataset-provider.test.ts tests/hosted-env-shim.test.ts tests/hosted-evaluation-coordinator.test.ts tests/hosted-local-execution-recording-persistence.test.ts tests/hosted-project-conflict-notices.test.ts tests/hosted-project-revision-tracker.test.ts tests/hosted-runtime-config.test.ts tests/llm-profile-health-settings.test.ts tests/opened-project-metadata.test.ts tests/publication-version.test.ts tests/published-items.test.ts tests/recording-input-path-history.test.ts tests/recording-run-hierarchy.test.ts tests/scheduled-project-options.test.ts tests/scheduled-run-api.test.ts tests/tunnel-launcher.test.ts tests/vite-aliases.test.ts tests/workflow-library-selection-storage.test.ts && node --test dev/*.test.mjs",
     "preview": "vite preview --config vite.config.ts"
   },
   "dependencies": {
@@ -137,6 +137,7 @@
     "@playwright/test": "^1.53.0",
     "@valerypopoff/rivet2-node": "workspace:^",
     "concurrently": "^9.1.2",
+    "fake-indexeddb": "^6.2.5",
     "tsx": "^4.23.0"
   }
 }

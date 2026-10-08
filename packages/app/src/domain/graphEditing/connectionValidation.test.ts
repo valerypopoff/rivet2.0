@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  getGraphBoundary,
+  getSubgraphProjectKey,
   type ChartNode,
   type GraphId,
   type NodeConnection,
   type NodeId,
   type PortId,
   type Project,
+  type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import {
   filterValidSubGraphConnections,
@@ -148,6 +151,92 @@ test('filterValidSubGraphConnections leaves non-subgraph connections untouched',
   });
 
   assert.deepEqual(filtered, [connection]);
+});
+
+for (const version of ['latest', 'published'] as const) {
+  test(`unavailable ${version} external subgraphs preserve wires until their exact target resolves`, () => {
+    const projectId = 'external' as ProjectId;
+    const source = makeTextNode('source');
+    const subgraph = makeSubGraphNode('subgraph', subGraphId, {
+      data: { targetProjectId: projectId, targetVersion: version },
+    });
+    const sink = makeTextNode('sink', '{{value}}');
+    const connections = [
+      makeConnection(),
+      makeConnection({
+        outputNodeId: subgraph.id,
+        outputId: 'output' as PortId,
+        inputNodeId: sink.id,
+        inputId: 'value' as PortId,
+      }),
+    ];
+    const options = {
+      connections,
+      nodesById: { [source.id]: source, [subgraph.id]: subgraph, [sink.id]: sink },
+      project: makeProject(),
+      projectNodeRegistry: registry,
+    };
+    assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), connections);
+    const target = makeProjectWithSubGraph([makeGraphInputNode('in', 'input'), makeGraphOutputNode('out', 'output')]);
+    // The other version, an ordinary reference, or a missing target graph
+    // cannot authorize deletion of this version's saved wires.
+    for (const referencedProjects of [
+      { [projectId]: target },
+      { [getSubgraphProjectKey({ projectId, version: version === 'latest' ? 'published' : 'latest' })]: target },
+      { [getSubgraphProjectKey({ projectId, version })]: makeProject() },
+    ]) {
+      assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects }), connections);
+    }
+    const key = getSubgraphProjectKey({ projectId, version });
+    assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects: { [key]: target } }), connections);
+    const renamed = makeProjectWithSubGraph([
+      makeGraphInputNode('in', 'renamed'),
+      makeGraphOutputNode('out', 'renamed'),
+    ]);
+    assert.deepEqual(filterValidSubGraphConnections({ ...options, referencedProjects: { [key]: renamed } }), []);
+    assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), connections);
+  });
+}
+
+test('a saved external boundary remains authoritative during missing or changed previews', () => {
+  const projectId = 'external' as ProjectId;
+  const target = makeProjectWithSubGraph([makeGraphInputNode('in', 'input')]);
+  const source = makeTextNode('source');
+  const subgraph = makeSubGraphNode('subgraph', subGraphId, {
+    data: { targetProjectId: projectId, targetBoundary: getGraphBoundary(target, subGraphId) },
+  });
+  const valid = makeConnection();
+  const stale = makeConnection({ inputId: 'stale' as PortId });
+  const options = {
+    connections: [valid, stale],
+    nodesById: { [source.id]: source, [subgraph.id]: subgraph },
+    project: makeProject(),
+    projectNodeRegistry: registry,
+  };
+  assert.deepEqual(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), [valid]);
+  assert.deepEqual(
+    filterValidSubGraphConnections({
+      ...options,
+      referencedProjects: {
+        [getSubgraphProjectKey({ projectId, version: 'latest' })]: makeProjectWithSubGraph([]),
+      },
+    }),
+    [valid],
+  );
+});
+
+test('missing local subgraphs preserve wires, but a loaded graph with no ports can prune them', () => {
+  const source = makeTextNode('source');
+  const subgraph = makeSubGraphNode('subgraph');
+  const connections = [makeConnection()];
+  const options = {
+    connections,
+    nodesById: { [source.id]: source, [subgraph.id]: subgraph },
+    projectNodeRegistry: registry,
+    referencedProjects: {},
+  };
+  assert.equal(filterValidSubGraphConnections({ ...options, project: makeProject() }), connections);
+  assert.deepEqual(filterValidSubGraphConnections({ ...options, project: makeProjectWithSubGraph([]) }), []);
 });
 
 test('getAsyncBranchTopologyViolation reports a Graph Output reached from an async branch', () => {

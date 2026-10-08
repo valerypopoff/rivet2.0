@@ -298,7 +298,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           onDragLeave={handleRootDragLeave}
           onDrop={(event) => void handleRootDrop(event)}
         >
-          {!editorReady ? <div className="body-status body-status-top">Loading editor...</div> : null}
           {bodyContent}
           <div className="body-actions">
             <button type="button" className="link-button" onClick={() => void handleCreateFolder()}>

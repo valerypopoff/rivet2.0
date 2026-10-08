@@ -1,5 +1,27 @@
 # Recording input search performance
 
+## SQL-backed browsing and statistics
+
+SQLite plus local immutable files and PostgreSQL plus S3 share the same read-path rule: catalog requests query metadata; object bodies are fetched only when their contents are needed. The existing recordings picker uses SQL counts/latest timestamps and compact project summaries. It must not rebuild the workflow tree or hydrate project/publication artifacts.
+
+Run statistics now use `recording-statistics-sql.ts` for both SQL engines:
+
+- Target catalogs return one row per logical target, with SQL counts and the newest timestamp/project label. Stable web-app graph/component IDs, legacy route-only targets, and latest non-null historical labels retain the shared builder semantics. Equal timestamps use recording ID descending to select the newest representative consistently in both backends.
+- Metrics push workflow/target, selected time range and run kind into SQL and return only the compact duration/status/identity projection. SQLite uses the existing workflow/created-at expression index. Exact median/p95 interpolation, status exclusions and chart buckets remain in the existing shared builder; they are not approximated.
+- Neither path reads recording, replay, dataset or project artifacts. SQLite validates the projected metadata, and aggregate counts are checked before entering the response builder. Artifact integrity remains the responsibility of artifact readers and verification, not a reason to download every object for a count.
+- This bounds response materialization by targets for catalogs and by matching runs for metrics. Catalog window aggregates still scan relevant metadata; exact percentiles still require the selected durations. This is not a constant-time analytics store or a guarantee of production latency.
+
+Verification:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/recording-statistics-sql.test.ts src/tests/managed-recordings.test.ts src/tests/sqlite-workflow-backend.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api test:statistics-managed
+```
+
+The second command starts and removes its own isolated PostgreSQL container (Docker required). Both engines execute identical mixed-target fixtures and compare exact results with the shared in-memory baseline. SQLite additionally checks its actual query plan. This establishes semantic parity and compact query boundaries, not S3/network latency or a production PostgreSQL execution-plan benchmark.
+
+The broader read-path audit also leaves two explicit profiling candidates: SQLite readiness performs full `quick_check`/foreign-key checks on the catalog, and structural/publication mutations still capture full history snapshots for CAS. Both can become costly as metadata/history grows. This patch does not throttle integrity checks or replace mutation consistency proofs just to improve a nominal timing. Evaluation run lists also intentionally return complete run documents under their current API contract; introducing summary pagination there is a separate API/UI change. Production measurements should distinguish these costs from the now metadata-only browsing paths.
+
 ## All-workflow scope
 
 The workflow-details card (name, status, endpoint and project path) is rendered only for an individual workflow. Any omits the entire card, including its heading; the runs panel and filters remain visible. Browser coverage checks both the default Any view and switching from a workflow back to Any.
@@ -79,15 +101,15 @@ Additional compiled two-CPU trials exercised TTL expiry (`recording-input-search
 
 Node 22.22.3, two-CPU affinity, 1,000 recordings, alternating compressibility, 32 KiB unrelated payloads, 20 sparse matches, 10 ms simulated request latency. Report: `recording-input-search-1789204894305.json`.
 
-| Worker-byte search | Single window | Multiple windows |
-| --- | ---: | ---: |
-| Cold HTTP requests | 43 | 3 |
-| Cold completion | 1,508 ms | 477 ms |
-| Warm HTTP requests | 42 | 2 |
-| Warm completion | 650 ms | 65 ms |
-| Two cold searches, combined requests | 84 | 6 |
-| Two cold searches, completion | 1,299 ms | 311 ms |
-| Two cold searches, artifact reads | 1,000 | 1,000 |
+| Worker-byte search                   | Single window | Multiple windows |
+| ------------------------------------ | ------------: | ---------------: |
+| Cold HTTP requests                   |            43 |                3 |
+| Cold completion                      |      1,508 ms |           477 ms |
+| Warm HTTP requests                   |            42 |                2 |
+| Warm completion                      |        650 ms |            65 ms |
+| Two cold searches, combined requests |            84 |                6 |
+| Two cold searches, completion        |      1,299 ms |           311 ms |
+| Two cold searches, artifact reads    |         1,000 |            1,000 |
 
 Warm searches performed zero artifact reads. Cold first-result timings were 315 ms versus 374 ms in this run: startup/scheduling variance remains visible and this checkpoint does **not** establish faster cold first-result latency. Warm first-result timings were 43 ms versus 25 ms. The newest-match probe remains independently covered by a behavioral test that forbids older reads before returning it.
 
@@ -97,12 +119,12 @@ Actual SQLite query plan: `SEARCH recording_runs USING INDEX idx_recording_runs_
 
 The benchmark-only `json-stream-es` prototype tokenizes/decompresses the entire stream, selects start events/string-table entries, and discards unrelated assets. It is not used by the server. The isolated two-CPU trials measured:
 
-| 16 MiB unrelated content | Full parse | Tokenizer |
-| --- | ---: | ---: |
-| Repeated-text time | 34 ms | 863 ms |
-| Mixed-entropy time | 79 ms | 1,109 ms |
-| Repeated-text process peak RSS | 179 MiB | 153 MiB |
-| Mixed-entropy process peak RSS | 193 MiB | 171 MiB |
+| 16 MiB unrelated content       | Full parse | Tokenizer |
+| ------------------------------ | ---------: | --------: |
+| Repeated-text time             |      34 ms |    863 ms |
+| Mixed-entropy time             |      79 ms |  1,109 ms |
+| Repeated-text process peak RSS |    179 MiB |   153 MiB |
+| Mixed-entropy process peak RSS |    193 MiB |   171 MiB |
 
 Small 32 KiB artifacts were also slower with tokenization (17–19 ms versus under 1 ms). Retain native full parsing: the measured memory reduction does not justify the latency regression. The prototype would additionally require duplicate-container/invalid-wrapper semantic hardening before production use. Neither these fixtures nor a late string table prove every possible tokenizer will perform poorly.
 

@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 export const rivetCoreSourceEntrypoints = {
   '@valerypopoff/rivet2-core': 'index.ts',
+  '@valerypopoff/rivet2-core/serialization': 'serialization.ts',
   '@valerypopoff/rivet2-core/web-app-runtime': 'webAppRuntime.ts',
   '@valerypopoff/rivet2-core/interpolation-runtime': 'interpolationRuntime.ts',
   '@valerypopoff/rivet2-core/interpolation-syntax': 'utils/interpolationSyntax.ts',

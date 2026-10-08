@@ -27,6 +27,11 @@
         "require": "./dist/cjs/bundle.cjs"
       }
     },
+    "./serialization": {
+      "types": "./dist/types/serialization.d.ts",
+      "import": "./dist/esm/serialization.js",
+      "require": "./dist/cjs/serialization.cjs"
+    },
     "./web-app-runtime": {
       "types": "./dist/types/webAppRuntime.d.ts",
       "import": "./dist/esm/webAppRuntime.js",

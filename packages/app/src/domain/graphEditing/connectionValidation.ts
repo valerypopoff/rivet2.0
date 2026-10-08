@@ -1,5 +1,6 @@
 import {
   compileDataBusTopology,
+  getSubgraphProjectKey,
   isDataBusTopologyNode,
   type ChartNode,
   type GraphId,
@@ -9,6 +10,7 @@ import {
   type PortId,
   type Project,
   type ProjectId,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 
 type NodePortIds =
@@ -52,6 +54,22 @@ function getConnectionsByNodeId(connections: readonly NodeConnection[]): Record<
   return connectionsByNodeId;
 }
 
+/** Unavailable target data must never authorize deletion of authored wires. */
+export function hasSubGraphPortDefinitions(
+  node: SubGraphNode,
+  project: Project,
+  referencedProjects: Record<ProjectId, Project>,
+): boolean {
+  const data = node.data;
+  if (data.targetProjectId && data.targetBoundary) return true;
+  const target = data.targetProjectId
+    ? referencedProjects[
+        getSubgraphProjectKey({ projectId: data.targetProjectId, version: data.targetVersion ?? 'latest' })
+      ]
+    : project;
+  return !!target?.graphs[data.graphId];
+}
+
 function resolveSubGraphPortIds({
   node,
   nodesById,
@@ -68,6 +86,14 @@ function resolveSubGraphPortIds({
   projectNodeRegistry: NodeRegistration<any, any>;
 }): NodePortIds {
   if (node.type !== 'subGraph') {
+    return undefined;
+  }
+
+  // Missing definitions are not an empty port contract. External previews load
+  // asynchronously (and may fail), so pruning here would permanently delete
+  // authored wires and dirty a project merely by opening it. A saved external
+  // boundary is authoritative even while its preview is unavailable.
+  if (!hasSubGraphPortDefinitions(node as SubGraphNode, project, referencedProjects)) {
     return undefined;
   }
 

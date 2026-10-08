@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
 // Valid two-sample silent WAV; media decode errors must not obscure regressions.
 const STATIC_AUDIO = 'UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQQAAAAAAAAA';
@@ -319,6 +320,7 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
       database.close();
     }
   });
+  await waitForRecoveryCheckpoint(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
@@ -394,6 +396,7 @@ test('tree activation preserves active and inactive edits, dirty dots, and the s
   // Reload clears the Evaluation session cache but retains tab snapshots.
   // Cancelling an inactive tab's slow recovery must keep the current tab and
   // live graph intact, rather than letting the late response steal selection.
+  await waitForRecoveryCheckpoint(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
@@ -519,34 +522,21 @@ async function editRecoveryNode(page: Page, name: string) {
 
 type BrowserRecoveryCheckpoint = {
   groups: {
-    project?: { hostedProjectRevisions?: Array<{ projectId: string; acceptedRevisionId: string }> };
+    project?: {
+      hostedProjectRevisions?: Array<{ projectId: string; acceptedRevisionId: string }>;
+      projectState?: { metadata: { title: string } };
+      projectsState?: {
+        openedProjectsSortedIds: string[];
+        openedProjects: Record<string, { title: string }>;
+      };
+    };
     graph?: { graphState?: { nodes: Array<{ id: string; visualData: { x: number; y: number } }> } };
   };
 };
 
 async function readRecoveryCheckpoint(page: Page): Promise<BrowserRecoveryCheckpoint | undefined> {
-  const editor = await (await page.locator('iframe.dashboard-editor-frame').elementHandle())!.contentFrame();
-  return editor!.evaluate(async () => {
-    const key = sessionStorage.getItem('rivet-workspace-recovery-v1');
-    if (!key) return undefined;
-    const checkpoint = await new Promise<string | undefined>((resolve, reject) => {
-      const request = indexedDB.open('jotai-store', 1);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        const db = request.result;
-        const read = db.transaction('state', 'readonly').objectStore('state').get(key);
-        read.onsuccess = () => {
-          db.close();
-          resolve(read.result);
-        };
-        read.onerror = () => {
-          db.close();
-          reject(read.error);
-        };
-      };
-    });
-    return checkpoint ? JSON.parse(checkpoint) : undefined;
-  });
+  const checkpoint = await readCommittedWorkspaceCheckpoint(page);
+  return checkpoint ? JSON.parse(checkpoint) : undefined;
 }
 
 async function checkpointAcceptedRevision(page: Page, projectId: string): Promise<string | undefined> {
@@ -566,15 +556,23 @@ async function waitForRecoveryCheckpoint(page: Page): Promise<void> {
       .sort((a, b) => a.id!.localeCompare(b.id!)),
   );
   expect(expected.length).toBeGreaterThan(0);
+  const activeTitle = await frame.locator('.projects .project.active .project-name').innerText();
+  const tabTitles = await frame.locator('.projects .project .project-name').allInnerTexts();
   // Routine recovery is intentionally invisible. Verify actual committed
   // content rather than using a success notification as an IO barrier.
   await expect
-    .poll(async () =>
-      (await readRecoveryCheckpoint(page))?.groups.graph?.graphState?.nodes
-        .map((node) => ({ id: node.id, x: node.visualData.x, y: node.visualData.y }))
-        .sort((a, b) => a.id.localeCompare(b.id)),
-    )
-    .toEqual(expected);
+    .poll(async () => {
+      const checkpoint = await readRecoveryCheckpoint(page);
+      const projects = checkpoint?.groups.project?.projectsState;
+      return {
+        nodes: checkpoint?.groups.graph?.graphState?.nodes
+          .map((node) => ({ id: node.id, x: node.visualData.x, y: node.visualData.y }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        activeTitle: checkpoint?.groups.project?.projectState?.metadata.title,
+        tabTitles: projects?.openedProjectsSortedIds.map((id) => projects.openedProjects[id]?.title),
+      };
+    })
+    .toEqual({ nodes: expected, activeTitle, tabTitles });
   await expect(frame.getByRole('region', { name: 'Workspace recovery' })).toHaveCount(0);
 }
 

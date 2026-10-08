@@ -149,6 +149,77 @@ function useLegacyCatalogSchema(file: string, version: number): void {
   }
 }
 
+test('recording imports require canonical UTC dates before writing artifacts', async (t) => {
+  await fixture(async (catalog) => {
+    catalog.importFolder('folder');
+    await catalog.importProject(project());
+    const writes = t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes');
+    for (const createdAt of [
+      'now',
+      '2026',
+      '2026-02-30T00:00:00.000Z',
+      '2026-10-08T24:00:00.000Z',
+      '2026-10-08T24:01:00.000Z',
+      '2026-10-08T02:00:00.000+02:00',
+      '2026-10-08T00:00:00Z',
+    ]) {
+      await assert.rejects(catalog.importRecording(recording({ createdAt })), /canonical UTC timestamp/);
+    }
+    assert.equal(writes.mock.callCount(), 0);
+    for (const createdAt of ['2026-03-01T00:00:00.001Z', '2026-03-01T00:00:00.999Z', '2024-02-29T00:00:00.000Z']) {
+      await catalog.importRecording(recording({ recordingId: createdAt, createdAt }));
+    }
+    const [summary] = catalog.readRecordingWorkflowProjection();
+    assert.equal(summary!.totalRuns, 3);
+    assert.equal(summary!.latestRunAt, '2026-03-01T00:00:00.999Z');
+    assert.equal(catalog.listRecordingMetadata()[0]!.createdAt, summary!.latestRunAt);
+  });
+});
+
+test('recording picker counts and owner metadata share one snapshot under a competing connection', async (t) => {
+  await fixture(async (catalog, root) => {
+    catalog.importFolder('folder');
+    const owner = project({ endpointAccess: 'public' });
+    await catalog.importProject(owner);
+    await catalog.importRecording(recording());
+    const db = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      const prepare = DatabaseSync.prototype.prepare;
+      let competingWrite = true;
+      t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (/\bFROM recordings\b/i.test(sql)) {
+          const all = statement.all;
+          t.mock.method(statement, 'all', (...args: Parameters<typeof all>) => {
+            const result = all.apply(statement, args);
+            if (competingWrite) {
+              competingWrite = false;
+              db.exec('BEGIN IMMEDIATE');
+              db.prepare(
+                "UPDATE projects SET metadata_json = json_set(metadata_json, '$.endpointAccess', 'internal')",
+              ).run();
+              db.prepare("UPDATE recordings SET metadata_json = json_set(metadata_json, '$.status', 'failed')").run();
+              db.exec('COMMIT');
+            }
+            return result;
+          });
+        }
+        return statement;
+      });
+      const [before] = catalog.readRecordingWorkflowProjection();
+      assert.equal(competingWrite, false);
+      assert.equal(before!.failedRuns, 0);
+      assert.equal(before!.project.endpointAccess, owner.endpointAccess);
+      const [after] = catalog.readRecordingWorkflowProjection();
+      assert.equal(after!.failedRuns, 1);
+      assert.equal(after!.project.endpointAccess, 'internal');
+    } finally {
+      db.close();
+    }
+  });
+});
+
 test('reference scans read only current draft and active publications, not datasets or archived history', async () => {
   await fixture(async (catalog, root) => {
     const source = project();
@@ -237,6 +308,11 @@ test('local catalog change stamp detects same-owner and separate-connection comm
       const treeStamp = catalog.changeStamp();
       await other.importRecording(recording());
       assert.equal(catalog.changeStamp(), treeStamp, 'Recording traffic does not invalidate the project tree');
+      const beforeHistory = (await other.readProject('folder/story.rivet-project'))!;
+      const editedHistory = structuredClone(beforeHistory);
+      editedHistory.publishedVersions[0]!.comment = 'Historical comment only';
+      await other.replaceProject(beforeHistory, editedHistory);
+      assert.equal(catalog.changeStamp(), treeStamp, 'Unrelated historical edits do not invalidate the project tree');
     } finally {
       other.close();
     }
@@ -384,28 +460,36 @@ test('recording gzip artifacts round-trip through reopen, replay and decoded met
   });
 });
 
-test('v2 recording catalogs remain readable and only a new recording write advances the format', async () => {
-  await fixture(async (catalog, root) => {
-    await catalog.importProject(project());
-    const snapshot = recording();
-    await catalog.importRecording(snapshot, { compression: 'identity' });
-    catalog.close();
-    const file = path.join(root, 'catalog.sqlite');
-    useLegacyCatalogSchema(file, 2);
-    catalog.initialize({ verifyOnly: true });
-    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
-    catalog.checkHealth();
-    catalog.close();
-    const before = new DatabaseSync(file, { readOnly: true });
-    assert.equal(before.prepare('PRAGMA user_version').get()!.user_version, 2);
-    before.close();
-    catalog.initialize({ requireExisting: true });
-    await catalog.importRecording(recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }));
-    const after = new DatabaseSync(file, { readOnly: true });
-    assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 4);
-    after.close();
-    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
-  });
+test('legacy recording catalogs, including a premature v4 marker, upgrade with a new recording write', async () => {
+  for (const version of [2, 3, 4]) {
+    await fixture(async (catalog, root) => {
+      await catalog.importProject(project());
+      const snapshot = recording({ recordingContents: 'original-recording'.repeat(1000) });
+      await catalog.importRecording(snapshot, { compression: version === 2 ? 'identity' : 'gzip' });
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      useLegacyCatalogSchema(file, version);
+      catalog.initialize({ verifyOnly: true });
+      assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+      catalog.checkHealth();
+      catalog.close();
+      const before = new DatabaseSync(file, { readOnly: true });
+      assert.equal(before.prepare('PRAGMA user_version').get()!.user_version, version);
+      before.close();
+      catalog.initialize({ requireExisting: true });
+      await catalog.importRecording(recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }));
+      const after = new DatabaseSync(file, { readOnly: true });
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 4);
+      after.close();
+      assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+      catalog.close();
+      catalog.initialize({ verifyOnly: true });
+      await catalog.verifyRecordingsExact([
+        snapshot,
+        recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }),
+      ]);
+    });
+  }
 });
 
 test('new recording writes honor identity encoding and the selected gzip level', async () => {
@@ -941,8 +1025,8 @@ test('unpublished endpoint preferences preserve history without reserving or ste
   });
 });
 
-test('v2 and v3 schemas upgrade only with a successful project write and retain exact retry state', async () => {
-  for (const version of [2, 3]) {
+test('legacy schemas, including a premature v4 marker, upgrade only with a successful project write', async () => {
+  for (const version of [2, 3, 4]) {
     await fixture(async (catalog, root) => {
       const source = project();
       await catalog.importProject(source);
@@ -951,6 +1035,9 @@ test('v2 and v3 schemas upgrade only with a successful project write and retain 
       const legacyIndex =
         "CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> ''";
       useLegacyCatalogSchema(file, version);
+      const withoutIndex = new DatabaseSync(file);
+      withoutIndex.exec("UPDATE projects SET metadata_json = json_remove(metadata_json, '$.treeIndex')");
+      withoutIndex.close();
       const original = new DatabaseSync(file, { readOnly: true });
       const legacyTable = original.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql;
       original.close();
@@ -958,6 +1045,9 @@ test('v2 and v3 schemas upgrade only with a successful project write and retain 
       catalog.initialize({ verifyOnly: true });
       catalog.checkHealth();
       assert.deepEqual(await catalog.readProject(source.relativePath), source);
+      const tree = await catalog.readTreeProjection();
+      assert.equal(tree.projects[0]!.workflowId, source.workflowId);
+      assert.equal(tree.projects[0]!.publishedWebApps.length, source.publishedWebApps.length);
       catalog.close();
       assert.deepEqual(await fs.readFile(file), bytes, 'Read-only verification preserves certified bytes.');
       catalog.initialize({ requireExisting: true });
@@ -994,6 +1084,164 @@ test('v2 and v3 schemas upgrade only with a successful project write and retain 
         (await catalog.readExecutionSource({ endpointName: source.endpointName, version: 'latest' }))?.workflowId,
         source.workflowId,
       );
+    });
+  }
+});
+
+test('version annotations preserve certified legacy bytes on no-ops and upgrade atomically on real writes', async (t) => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    const bytes = await fs.readFile(file);
+    catalog.initialize({ verifyOnly: true });
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false }),
+      /verification only/,
+    );
+    catalog.close();
+    catalog.initialize({ requireExisting: true });
+    const treeStamp = catalog.changeStamp();
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', async () => {
+      throw new Error('Unexpected artifact read');
+    });
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes', async () => {
+      throw new Error('Unexpected artifact write');
+    });
+    assert.equal(
+      catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: true })?.version.comment,
+      'First version',
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'A no-op must not rewrite or upgrade a certified catalog');
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 123 as never }),
+      /metadata/,
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'Invalid annotations roll back');
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false });
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 'Changed' });
+    assert.equal(catalog.changeStamp(), treeStamp, 'Historical annotations do not invalidate tree summaries');
+    const version = catalog
+      .readProjectPublicationMetadata(source.relativePath)!
+      .publishedVersions.find((entry) => entry.versionId === 'publish-1')!;
+    assert.equal(version.isStarred, false);
+    assert.equal(version.comment, 'Changed');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 4);
+    } finally {
+      db.close();
+    }
+    catalog.checkHealth();
+  });
+});
+
+test('a failed recording insert rolls back recovery of legacy DDL marked v4', async (t) => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    const original = await fs.readFile(file);
+    catalog.initialize({ requireExisting: true });
+    const prepare = DatabaseSync.prototype.prepare;
+    const failure = t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+      if (sql.startsWith('INSERT INTO recordings')) throw new Error('Injected recording insert failure');
+      return prepare.call(this, sql);
+    });
+    await assert.rejects(catalog.importRecording(recording()), /Injected recording insert failure/);
+    failure.mock.restore();
+    catalog.close();
+    assert.deepEqual(await fs.readFile(file), original, 'DDL recovery rolls back with the failed recording write.');
+    catalog.initialize({ requireExisting: true });
+    assert.deepEqual(await catalog.readProject(source.relativePath), source);
+    await catalog.importRecording(recording());
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyRecordingsExact([recording()]);
+  });
+});
+
+test('two catalog connections tolerate recovery committed by the other writer', async () => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    catalog.initialize({ requireExisting: true });
+    const other = new LocalWorkflowCatalog({ databasePath: file, artifactRoot: path.join(root, 'objects') });
+    other.initialize({ requireExisting: true });
+    try {
+      await catalog.importRecording(recording());
+      const edited = { ...source, contents: 'edited after recovery' };
+      await other.replaceProject(source, edited);
+      assert.deepEqual(await catalog.readProject(source.relativePath), edited);
+      assert.deepEqual(await other.readRecording('run-1'), recording());
+      other.checkHealth();
+    } finally {
+      other.close();
+    }
+  });
+});
+
+test('catalog compatibility refuses mixed, modified and future schemas without repairing them', async () => {
+  const mutations = [
+    `DROP INDEX projects_endpoint_name_unique;
+      CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name)
+      WHERE endpoint_name <> '' AND json_extract(metadata_json, '$.publishedContents') IS NOT NULL`,
+    `ALTER TABLE web_apps RENAME TO old_web_apps;
+      CREATE TABLE web_apps (
+        app_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+        slug TEXT NOT NULL UNIQUE,
+        metadata_json TEXT NOT NULL,
+        PRIMARY KEY(workflow_id, app_id)
+      ); DROP TABLE old_web_apps`,
+    'ALTER TABLE projects ADD COLUMN unexpected TEXT',
+    'CREATE TRIGGER unexpected AFTER INSERT ON projects BEGIN SELECT 1; END',
+    'CREATE VIEW sqliteXunexpected AS SELECT workflow_id FROM projects',
+    'PRAGMA journal_mode=WAL; CREATE VIEW unexpected AS SELECT workflow_id FROM projects',
+    'PRAGMA user_version=5',
+  ];
+  for (const mutation of mutations) {
+    await fixture(async (catalog, root) => {
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      useLegacyCatalogSchema(file, 4);
+      const raw = new DatabaseSync(file);
+      raw.exec(mutation);
+      raw.close();
+      const original = await fs.readFile(file);
+      for (const verifyOnly of [true, false]) {
+        assert.throws(() => catalog.initialize({ verifyOnly, requireExisting: true }), /schema/);
+        assert.deepEqual(await fs.readFile(file), original);
+      }
+    });
+  }
+});
+
+test('an open catalog detects schema or identity changes before health checks and new writes', async () => {
+  for (const mutation of [
+    'CREATE VIEW sqliteXunexpected AS SELECT workflow_id FROM projects',
+    'ALTER TABLE projects ADD COLUMN unexpected TEXT',
+    'PRAGMA application_id=1',
+    'PRAGMA user_version=5',
+  ]) {
+    await fixture(async (catalog, root) => {
+      await catalog.importProject(project());
+      const file = path.join(root, 'catalog.sqlite');
+      const raw = new DatabaseSync(file);
+      raw.exec(mutation);
+      raw.close();
+      const original = await fs.readFile(file);
+      assert.throws(() => catalog.checkHealth(), /schema|identity|health check/);
+      await assert.rejects(catalog.importRecording(recording()), /schema|identity/);
+      catalog.close();
+      assert.deepEqual(await fs.readFile(file), original, 'Rejected writes must not alter the catalog.');
     });
   }
 });
@@ -1350,7 +1598,7 @@ test('local catalog refuses unidentified or invalid candidate databases', async 
     const catalog = new LocalWorkflowCatalog({ databasePath, artifactRoot: path.join(root, 'objects') });
     assert.throws(() => catalog.initialize({ verifyOnly: true }), /does not exist/);
     const unrelated = new DatabaseSync(databasePath);
-    unrelated.exec('CREATE TABLE unrelated (id INTEGER)');
+    unrelated.exec('CREATE TABLE sqliteXunrelated (id INTEGER)');
     unrelated.close();
     assert.throws(() => catalog.initialize(), /unidentified database/);
   } finally {
