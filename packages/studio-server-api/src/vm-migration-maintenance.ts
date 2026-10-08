@@ -118,7 +118,10 @@ export const vmMigrationRequestBarrier: RequestHandler = (req, res, next) => {
     (req.method === 'GET' && req.path === '/api/workflows/tree' && isVmMigrationMaintenanceActive()) ||
     req.path.startsWith('/api/app-settings/vm-migration') ||
     req.path.startsWith('/api/app-settings/local-upgrade') ||
-    req.path === '/internal/executor-runtime-config' ||
+    // Infrastructure must restart while storage is frozen so operators can
+    // reach recovery controls. These exact read-only routes still require auth.
+    (req.method === 'GET' &&
+      ['/internal/app-settings/proxy-config', '/internal/executor-runtime-config'].includes(req.path)) ||
     req.path.startsWith('/ui-auth') ||
     (req.method === 'GET' &&
       (req.path.startsWith('/api/app-settings/') ||
