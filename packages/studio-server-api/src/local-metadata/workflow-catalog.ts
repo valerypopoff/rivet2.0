@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
+import { LRUCache } from 'lru-cache';
 import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
@@ -14,6 +15,10 @@ import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/
 import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
 import type { WorkflowProjectReferenceSnapshot } from '../routes/workflows/project-reference-snapshots.js';
 import { LocalWorkflowRouteClaims } from './workflow-route-claims.js';
+import {
+  getWorkflowProjectIndexDataFromContents,
+  type WorkflowProjectIndexData,
+} from '../routes/workflows/project-stats.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -72,6 +77,24 @@ export type LocalRecordingCatalogSnapshot = {
 };
 
 type ArtifactRef = LocalArtifact | null;
+type ProjectTreeIndex = Pick<WorkflowProjectIndexData, 'revisionId' | 'stats'>;
+export type LocalWorkflowTreeProject = Omit<
+  LocalWorkflowCatalogSnapshot,
+  | 'contents'
+  | 'datasetsContents'
+  | 'publishedContents'
+  | 'publishedDatasetsContents'
+  | 'publishedVersions'
+  | 'publishedWebApps'
+> &
+  ProjectTreeIndex & {
+    publishedWebApps: Array<
+      Pick<
+        LocalWorkflowCatalogSnapshot['publishedWebApps'][number],
+        'uiGraphId' | 'uiGraphName' | 'slug' | 'allowedEmails' | 'publishedAt'
+      > & { status: 'published' | 'unpublished_changes' }
+    >;
+  };
 type StoredVersion = Omit<
   LocalWorkflowCatalogSnapshot['publishedVersions'][number],
   'contents' | 'datasetsContents'
@@ -96,6 +119,8 @@ type StoredProject = Omit<
   datasetsContents: ArtifactRef;
   publishedContents: ArtifactRef;
   publishedDatasetsContents: ArtifactRef;
+  /** Optional derived summary: older certified catalogs remain readable without rewriting them. */
+  treeIndex?: ProjectTreeIndex;
 };
 type ProjectRow = {
   workflow_id: string;
@@ -107,6 +132,7 @@ type ProjectRow = {
 type VersionRow = { version_id: string; workflow_id: string; metadata_json: string };
 type WebAppRow = { app_id: string; workflow_id: string; slug: string; metadata_json: string };
 type RecordingRow = { recording_id: string; workflow_id: string; metadata_json: string };
+
 type RecordingArtifactRef =
   | (LocalArtifact & ({ encoding?: undefined; decodedSize?: undefined } | { encoding: 'gzip'; decodedSize: number }))
   | null;
@@ -140,6 +166,11 @@ export type LocalRecordingMetadata = Omit<
   hasReplayDataset: boolean;
 };
 type StoredProjectBundle = { project: StoredProject; versions: StoredVersion[]; apps: StoredWebApp[] };
+export type LocalWorkflowProjectPayload = Omit<LocalWorkflowTreeProject, 'revisionId' | 'stats'> & {
+  contents: string | null;
+  datasetsContents: string | null;
+  publishedAt: string | null;
+};
 export type LocalRuntimeLibraryState = { manifest: RuntimeLibraryManifest; archive: Buffer | null };
 export type LocalExecutionSelection =
   | { endpointName: string; version: 'latest' | 'published' }
@@ -341,6 +372,101 @@ function assertPublicationPointer<T>(
     throw new Error('Local catalog contains duplicate web-app graph bindings.');
 }
 
+function projectTreeIndex(contents: string, datasetsContents: string | null): ProjectTreeIndex {
+  const { revisionId, stats } = getWorkflowProjectIndexDataFromContents(contents, datasetsContents);
+  return { revisionId, stats };
+}
+
+function assertTreeIndex(index: ProjectTreeIndex | undefined): void {
+  if (index === undefined) return;
+  if (
+    !index ||
+    typeof index.revisionId !== 'string' ||
+    !/^fs-sha256:[a-f0-9]{64}$/.test(index.revisionId) ||
+    !index.stats ||
+    ![index.stats.graphCount, index.stats.totalNodeCount, index.stats.webAppCount].every(
+      (count) => Number.isSafeInteger(count) && count >= 0,
+    )
+  )
+    throw new Error('Invalid local project tree index.');
+}
+
+/** Derived summaries are not part of the editable snapshot or its CAS authority. */
+function sameProjectBundle(left: StoredProjectBundle | null, right: StoredProjectBundle | null): boolean {
+  if (!left || !right) return left === right;
+  const { treeIndex: _leftIndex, ...leftProject } = left.project;
+  const { treeIndex: _rightIndex, ...rightProject } = right.project;
+  return sameJson({ ...left, project: leftProject }, { ...right, project: rightProject });
+}
+
+function sameArtifactReference(left: ArtifactRef, right: ArtifactRef): boolean {
+  return left === null || right === null ? left === right : left.hash === right.hash && left.size === right.size;
+}
+
+function storedProject(row: ProjectRow): StoredProject {
+  const project = JSON.parse(row.metadata_json) as StoredProject;
+  assertProjectMetadata(project);
+  assertTreeIndex(project.treeIndex);
+  for (const ref of [
+    project.contents,
+    project.datasetsContents,
+    project.publishedContents,
+    project.publishedDatasetsContents,
+  ])
+    assertArtifactReference(ref);
+  if (
+    project.workflowId !== row.workflow_id ||
+    project.relativePath !== row.relative_path ||
+    project.endpointName !== row.endpoint_name ||
+    project.publishedEndpointName !== row.published_endpoint_name ||
+    project.contents === null
+  )
+    throw new Error(`Local catalog project row is inconsistent: ${row.relative_path}`);
+  return project;
+}
+
+function storedVersion(row: VersionRow): StoredVersion {
+  const version = JSON.parse(row.metadata_json) as StoredVersion;
+  assertVersionMetadata(version);
+  for (const ref of [version.contents, version.datasetsContents]) assertArtifactReference(ref);
+  if (version.versionId !== row.version_id || version.contents === null)
+    throw new Error('Local catalog version row is inconsistent.');
+  return version;
+}
+
+function storedWebApp(row: WebAppRow): StoredWebApp {
+  const app = JSON.parse(row.metadata_json) as StoredWebApp;
+  assertWebAppMetadata(app);
+  for (const ref of [app.contents, app.datasetsContents]) assertArtifactReference(ref);
+  if (app.appId !== row.app_id || app.slug !== row.slug || app.contents === null)
+    throw new Error('Local catalog web-app row is inconsistent.');
+  return app;
+}
+
+function projectTreeMetadata(project: StoredProject, apps: StoredWebApp[]) {
+  const {
+    contents,
+    datasetsContents,
+    publishedContents: _published,
+    publishedDatasetsContents: _datasets,
+    treeIndex: _index,
+    ...metadata
+  } = project;
+  return {
+    ...metadata,
+    publishedWebApps: apps.map(({ contents: appContents, datasetsContents: appDatasets, ...app }) => {
+      const { appId: _id, ...summary } = app;
+      return {
+        ...summary,
+        status:
+          sameArtifactReference(contents, appContents) && sameArtifactReference(datasetsContents, appDatasets)
+            ? ('published' as const)
+            : ('unpublished_changes' as const),
+      };
+    }),
+  };
+}
+
 function assertProjectSnapshot(snapshot: LocalWorkflowCatalogSnapshot): void {
   assertProjectMetadata(snapshot);
   if (
@@ -390,6 +516,13 @@ async function readBytes(store: ImmutableLocalArtifactStore, ref: ArtifactRef): 
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
+
+function isRecordingTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
 function assertRecordingArtifactReference(ref: RecordingArtifactRef): void {
   assertArtifactReference(ref);
   if (ref === null) return;
@@ -473,12 +606,13 @@ function assertRuntimeLibraryState(state: LocalRuntimeLibraryState): void {
   }
 }
 
-/** Candidate-only catalog. The serving filesystem backend does not select this class. */
+/** Immutable-artifact catalog for candidate verification and selected SQLite serving. */
 export class LocalWorkflowCatalog {
   readonly #databasePath: string;
   readonly #artifacts: ImmutableLocalArtifactStore;
   #db: DatabaseSync | null = null;
   #readOnly = false;
+  readonly #treeIndexes = new LRUCache<string, Promise<ProjectTreeIndex>>({ max: 1024 });
 
   constructor(options: { databasePath: string; artifactRoot: string }) {
     this.#databasePath = options.databasePath;
@@ -566,6 +700,7 @@ export class LocalWorkflowCatalog {
     this.#db?.close();
     this.#db = null;
     this.#readOnly = false;
+    this.#treeIndexes.clear();
   }
 
   checkHealth(): void {
@@ -586,6 +721,21 @@ export class LocalWorkflowCatalog {
   #database(): DatabaseSync {
     if (!this.#db) throw new Error('Local workflow catalog is not initialized.');
     return this.#db;
+  }
+
+  /** Synchronous metadata snapshot only: never hold a SQLite read lock across file I/O.
+   * Savepoints also work inside mutation transactions and nested metadata reads. */
+  #readMetadata<T>(read: (db: DatabaseSync) => T): T {
+    const db = this.#database();
+    db.exec('SAVEPOINT local_metadata_read');
+    try {
+      const result = read(db);
+      db.exec('RELEASE local_metadata_read');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK TO local_metadata_read; RELEASE local_metadata_read');
+      throw error;
+    }
   }
 
   /** Called inside the caller's write transaction; failed writes roll this back too. */
@@ -635,18 +785,115 @@ export class LocalWorkflowCatalog {
       .sort((left, right) => left.localeCompare(right));
   }
 
-  /** Tree-only logical stamp; recording traffic must not invalidate tree reads. */
+  /** A consistent metadata-only view. No historical bodies or recording rows belong in tree reads. */
+  #treeMetadata() {
+    return this.#readMetadata((db) => {
+      const folders = this.listFolders();
+      const rows = db
+        .prepare(
+          `
+        SELECT projects.*, current_version.version_id AS current_version_id,
+          current_version.metadata_json AS current_version_json
+        FROM projects LEFT JOIN published_versions AS current_version
+          ON current_version.version_id = json_extract(projects.metadata_json, '$.publishedVersionId')
+          AND current_version.workflow_id = projects.workflow_id
+        ORDER BY projects.relative_path
+      `,
+        )
+        .all() as Array<ProjectRow & { current_version_id: string | null; current_version_json: string | null }>;
+      const appRows = db.prepare('SELECT * FROM web_apps ORDER BY workflow_id, rowid').all() as WebAppRow[];
+      const stamp = createHash('sha256').update(JSON.stringify({ folders, rows, appRows })).digest('hex');
+      return { folders, rows, appRows, stamp };
+    });
+  }
+
+  /** Tree-only stamp: recording traffic and unrelated publication history do not invalidate it. */
   changeStamp(): string {
-    const db = this.#database();
-    const digest = createHash('sha256');
-    for (const sql of [
-      'SELECT * FROM folders ORDER BY path',
-      'SELECT * FROM projects ORDER BY workflow_id',
-      'SELECT * FROM published_versions ORDER BY version_id',
-      'SELECT * FROM web_apps ORDER BY workflow_id, app_id',
-    ])
-      digest.update(JSON.stringify(db.prepare(sql).all())).update('\0');
-    return digest.digest('hex');
+    return this.#treeMetadata().stamp;
+  }
+
+  #treeIndex(project: StoredProject): Promise<ProjectTreeIndex> {
+    if (project.treeIndex) return Promise.resolve(project.treeIndex);
+    const key = JSON.stringify([project.contents, project.datasetsContents]);
+    const cached = this.#treeIndexes.get(key);
+    if (cached) return cached;
+    // Legacy catalogs need only their current draft, once per immutable revision.
+    // Sharing promises also coalesces simultaneous browser reloads; failures are retryable.
+    const pending = (async () => {
+      const contents = await readText(this.#artifacts, project.contents);
+      const datasets = await readText(this.#artifacts, project.datasetsContents);
+      return projectTreeIndex(contents!, datasets);
+    })().catch((error: unknown) => {
+      if (this.#treeIndexes.peek(key) === pending) this.#treeIndexes.delete(key);
+      throw error;
+    });
+    this.#treeIndexes.set(key, pending);
+    return pending;
+  }
+
+  async readTreeProjection(): Promise<{ folders: string[]; projects: LocalWorkflowTreeProject[]; stamp: string }> {
+    const { folders, rows, appRows, stamp } = this.#treeMetadata();
+    const apps = new Map<string, StoredWebApp[]>();
+    const owners = new Set(rows.map((row) => row.workflow_id));
+    for (const row of appRows) {
+      if (!owners.has(row.workflow_id)) throw new Error('Local catalog web-app owner is missing.');
+      const list = apps.get(row.workflow_id) ?? [];
+      list.push(storedWebApp(row));
+      apps.set(row.workflow_id, list);
+    }
+    const projects = rows
+      .map((row) => {
+        const project = storedProject(row);
+        const webApps = apps.get(row.workflow_id) ?? [];
+        const current =
+          row.current_version_json === null
+            ? []
+            : [
+                storedVersion({
+                  version_id: row.current_version_id!,
+                  workflow_id: row.workflow_id,
+                  metadata_json: row.current_version_json,
+                }),
+              ];
+        assertPublicationPointer(project, current, webApps);
+        // Capture this snapshot's cache hits before misses start evicting them.
+        // A tree larger than the cache must not reread every body in scan order.
+        const cachedIndex = project.treeIndex
+          ? undefined
+          : this.#treeIndexes.get(JSON.stringify([project.contents, project.datasetsContents]));
+        return { project, webApps, cachedIndex };
+      })
+      .sort((left, right) => left.project.relativePath.localeCompare(right.project.relativePath));
+    const result: LocalWorkflowTreeProject[] = new Array(projects.length);
+    let cursor = 0;
+    let stopped = false;
+    // Bound cold legacy reads instead of opening every project simultaneously.
+    // Drain already-started reads even on failure; don't leave background workers
+    // populating a cache after the request has failed or its owner has closed.
+    const workers = await Promise.allSettled(
+      Array.from({ length: Math.min(8, projects.length) }, async () => {
+        while (!stopped && cursor < projects.length) {
+          const index = cursor++;
+          const { project, webApps, cachedIndex } = projects[index]!;
+          let summary: ProjectTreeIndex;
+          try {
+            summary = await (cachedIndex ?? this.#treeIndex(project));
+          } catch (error) {
+            stopped = true;
+            throw error;
+          }
+          result[index] = {
+            ...projectTreeMetadata(project, webApps),
+            ...summary,
+            // Each reader owns its output; cached legacy summaries are immutable.
+            stats: { ...summary.stats },
+          };
+        }
+      }),
+    );
+    const failed = workers.find((worker) => worker.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+    return { folders, projects: result, stamp };
   }
 
   listRecordingIds(): string[] {
@@ -663,36 +910,37 @@ export class LocalWorkflowCatalog {
   }
 
   #executionBundle(selection: LocalExecutionSelection): { bundle: StoredProjectBundle; app?: StoredWebApp } | null {
-    const db = this.#database();
-    let row: { relative_path: string } | undefined;
-    if ('workflowId' in selection) {
-      row = db
-        .prepare('SELECT relative_path FROM projects WHERE workflow_id = ?')
-        .get(selection.workflowId) as typeof row;
-    } else if ('endpointName' in selection) {
-      const column = selection.version === 'published' ? 'published_endpoint_name' : 'endpoint_name';
-      row = db
-        .prepare(
-          `SELECT relative_path FROM projects WHERE ${column} = ? COLLATE NOCASE AND ${column} <> ''
+    return this.#readMetadata((db) => {
+      let row: { relative_path: string } | undefined;
+      if ('workflowId' in selection) {
+        row = db
+          .prepare('SELECT relative_path FROM projects WHERE workflow_id = ?')
+          .get(selection.workflowId) as typeof row;
+      } else if ('endpointName' in selection) {
+        const column = selection.version === 'published' ? 'published_endpoint_name' : 'endpoint_name';
+        row = db
+          .prepare(
+            `SELECT relative_path FROM projects WHERE ${column} = ? COLLATE NOCASE AND ${column} <> ''
           AND json_extract(metadata_json, '$.publishedContents') IS NOT NULL`,
-        )
-        .get(selection.endpointName) as typeof row;
-    } else {
-      row = db
-        .prepare(
-          `SELECT projects.relative_path FROM projects JOIN web_apps USING(workflow_id)
+          )
+          .get(selection.endpointName) as typeof row;
+      } else {
+        row = db
+          .prepare(
+            `SELECT projects.relative_path FROM projects JOIN web_apps USING(workflow_id)
         WHERE web_apps.slug = ? COLLATE NOCASE`,
-        )
-        .get(selection.webAppSlug) as typeof row;
-    }
-    if (!row) return null;
-    const bundle = this.#readStoredProjectBundle(db, row.relative_path)!;
-    const app =
-      'webAppSlug' in selection
-        ? bundle.apps.find((app) => app.slug.toLowerCase() === selection.webAppSlug.toLowerCase())
-        : undefined;
-    if ('webAppSlug' in selection && !app) throw new Error('Local catalog web-app lookup is inconsistent.');
-    return { bundle, ...(app ? { app } : {}) };
+          )
+          .get(selection.webAppSlug) as typeof row;
+      }
+      if (!row) return null;
+      const bundle = this.#readStoredProjectBundle(row.relative_path, false)!;
+      const app =
+        'webAppSlug' in selection
+          ? bundle.apps.find((app) => app.slug.toLowerCase() === selection.webAppSlug.toLowerCase())
+          : undefined;
+      if ('webAppSlug' in selection && !app) throw new Error('Local catalog web-app lookup is inconsistent.');
+      return { bundle, ...(app ? { app } : {}) };
+    });
   }
 
   /** Route/policy lookup never reads unrelated projects or old history blobs. */
@@ -790,7 +1038,7 @@ export class LocalWorkflowCatalog {
       }
       for (const change of encoded) {
         if (change.before) {
-          if (!sameJson(this.#readStoredProjectBundle(db, change.before.project.relativePath), change.before))
+          if (!sameProjectBundle(this.#readStoredProjectBundle(change.before.project.relativePath), change.before))
             throw new Error('Local catalog project changed concurrently; reload before saving.');
         } else if (
           db
@@ -886,6 +1134,58 @@ export class LocalWorkflowCatalog {
       .get(...(workflowId ? [workflowId] : [])) as { totalRuns: number; failedRuns: number; suspiciousRuns: number };
   }
 
+  /** Aggregate in SQLite; only one compact row per recording owner crosses into JS. */
+  #recordingWorkflowSummaries() {
+    const rows = this.#database()
+      .prepare(
+        `WITH metadata AS (
+          SELECT recording_id, workflow_id,
+            CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END AS data
+          FROM recordings
+        ), projected AS (
+          SELECT workflow_id AS workflowId,
+            json_extract(data, '$.createdAt') AS createdAt,
+            json_extract(data, '$.status') AS status,
+            COALESCE(
+              json_type(data, '$.recordingId') = 'text' AND json_extract(data, '$.recordingId') = recording_id
+              AND json_type(data, '$.workflowId') = 'text' AND json_extract(data, '$.workflowId') = workflow_id
+              AND json_type(data, '$.createdAt') = 'text'
+              AND substr(json_extract(data, '$.createdAt'), 12, 2) BETWEEN '00' AND '23'
+              AND json_extract(data, '$.createdAt') = strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(data, '$.createdAt'))
+              AND json_extract(data, '$.status') IN ('succeeded', 'failed', 'suspicious'), 0
+            ) AS metadataValid
+          FROM metadata
+        )
+        SELECT workflowId, MAX(createdAt) AS latestRunAt, COUNT(*) AS totalRuns,
+          COALESCE(SUM(status = 'failed'), 0) AS failedRuns,
+          COALESCE(SUM(status = 'suspicious'), 0) AS suspiciousRuns,
+          MIN(metadataValid) AS metadataValid
+        FROM projected GROUP BY workflowId`,
+      )
+      .all() as Array<{
+      workflowId: string;
+      latestRunAt: string;
+      totalRuns: number;
+      failedRuns: number;
+      suspiciousRuns: number;
+      metadataValid: number;
+    }>;
+    return rows.map(({ metadataValid, ...summary }) => {
+      if (metadataValid !== 1) throw new Error('Local recording metadata is inconsistent.');
+      return summary;
+    });
+  }
+
+  /** Counts and their current owner metadata must come from the same commit. */
+  readRecordingWorkflowProjection() {
+    return this.#readMetadata(() =>
+      this.#recordingWorkflowSummaries().flatMap((summary) => {
+        const project = this.readProjectMetadataById(summary.workflowId);
+        return project ? [{ ...summary, project }] : [];
+      }),
+    );
+  }
+
   listRecordingMetadata(
     options: {
       recordingId?: string;
@@ -966,7 +1266,7 @@ export class LocalWorkflowCatalog {
       !data.replayProjectContents ||
       !Number.isFinite(data.durationMs) ||
       data.durationMs < 0 ||
-      !Number.isFinite(Date.parse(data.createdAt)) ||
+      !isRecordingTimestamp(data.createdAt) ||
       !['published', 'latest', 'editor'].includes(data.runKind) ||
       !['succeeded', 'failed', 'suspicious'].includes(data.status)
     )
@@ -1048,6 +1348,7 @@ export class LocalWorkflowCatalog {
       datasetsContents: await reference(snapshot.datasetsContents),
       publishedContents: await reference(snapshot.publishedContents),
       publishedDatasetsContents: await reference(snapshot.publishedDatasetsContents),
+      ...(publishArtifacts ? { treeIndex: projectTreeIndex(snapshot.contents, snapshot.datasetsContents) } : {}),
     };
     const versions: StoredVersion[] = [];
     for (const version of snapshot.publishedVersions) {
@@ -1090,60 +1391,31 @@ export class LocalWorkflowCatalog {
     }
   }
 
-  #readStoredProjectBundle(db: DatabaseSync, relativePath: string): StoredProjectBundle | null {
-    const row = db.prepare('SELECT * FROM projects WHERE relative_path = ?').get(relativePath) as
-      | ProjectRow
-      | undefined;
-    if (!row) return null;
-    const project = JSON.parse(row.metadata_json) as StoredProject;
-    assertProjectMetadata(project);
-    for (const ref of [
-      project.contents,
-      project.datasetsContents,
-      project.publishedContents,
-      project.publishedDatasetsContents,
-    ])
-      assertArtifactReference(ref);
-    if (
-      project.workflowId !== row.workflow_id ||
-      project.relativePath !== row.relative_path ||
-      project.endpointName !== row.endpoint_name ||
-      project.publishedEndpointName !== row.published_endpoint_name ||
-      project.contents === null
-    ) {
-      throw new Error(`Local catalog project row is inconsistent: ${relativePath}`);
-    }
-    const versions = (
-      db
-        .prepare('SELECT * FROM published_versions WHERE workflow_id = ? ORDER BY rowid')
-        .all(row.workflow_id) as VersionRow[]
-    ).map((version) => {
-      const stored = JSON.parse(version.metadata_json) as StoredVersion;
-      assertVersionMetadata(stored);
-      for (const ref of [stored.contents, stored.datasetsContents]) assertArtifactReference(ref);
-      if (stored.versionId !== version.version_id || stored.contents === null) {
-        throw new Error('Local catalog version row is inconsistent.');
-      }
-      return stored;
+  #readStoredProjectBundle(relativePath: string, includeHistory = true): StoredProjectBundle | null {
+    return this.#readMetadata((db) => {
+      const row = db.prepare('SELECT * FROM projects WHERE relative_path = ?').get(relativePath) as
+        | ProjectRow
+        | undefined;
+      if (!row) return null;
+      const project = storedProject(row);
+      const versions = (
+        db
+          .prepare(
+            `SELECT * FROM published_versions WHERE workflow_id = ? ${includeHistory ? '' : 'AND version_id = ?'} ORDER BY rowid`,
+          )
+          .all(row.workflow_id, ...(includeHistory ? [] : [project.publishedVersionId ?? ''])) as VersionRow[]
+      ).map(storedVersion);
+      const apps = (
+        db.prepare('SELECT * FROM web_apps WHERE workflow_id = ? ORDER BY rowid').all(row.workflow_id) as WebAppRow[]
+      ).map(storedWebApp);
+      const bundle = {
+        project,
+        versions,
+        apps,
+      };
+      assertPublicationPointer(project, versions, apps);
+      return bundle;
     });
-    const apps = (
-      db.prepare('SELECT * FROM web_apps WHERE workflow_id = ? ORDER BY rowid').all(row.workflow_id) as WebAppRow[]
-    ).map((app) => {
-      const stored = JSON.parse(app.metadata_json) as StoredWebApp;
-      assertWebAppMetadata(stored);
-      for (const ref of [stored.contents, stored.datasetsContents]) assertArtifactReference(ref);
-      if (stored.appId !== app.app_id || stored.slug !== app.slug || stored.contents === null) {
-        throw new Error('Local catalog web-app row is inconsistent.');
-      }
-      return stored;
-    });
-    const bundle = {
-      project,
-      versions,
-      apps,
-    };
-    assertPublicationPointer(project, versions, apps);
-    return bundle;
   }
 
   /**
@@ -1168,8 +1440,8 @@ export class LocalWorkflowCatalog {
     db.exec('BEGIN IMMEDIATE');
     try {
       this.#upgradeSchema(db);
-      const current = this.#readStoredProjectBundle(db, expected.relativePath);
-      if (!sameJson(current, expectedStored)) {
+      const current = this.#readStoredProjectBundle(expected.relativePath);
+      if (!sameProjectBundle(current, expectedStored)) {
         throw new Error('Local catalog project changed concurrently; reload before saving.');
       }
       db.prepare(
@@ -1195,7 +1467,7 @@ export class LocalWorkflowCatalog {
 
   listProjectReferenceCatalog() {
     return this.listProjectPaths().map((relativePath) => {
-      const bundle = this.#readStoredProjectBundle(this.#database(), relativePath)!;
+      const bundle = this.#readStoredProjectBundle(relativePath)!;
       return {
         name: bundle.project.name,
         relativePath,
@@ -1206,7 +1478,7 @@ export class LocalWorkflowCatalog {
   }
 
   async readProjectReferenceSnapshots(relativePath: string): Promise<WorkflowProjectReferenceSnapshot[] | null> {
-    const bundle = this.#readStoredProjectBundle(this.#database(), relativePath);
+    const bundle = this.#readStoredProjectBundle(relativePath);
     if (!bundle) return null;
     const snapshots: WorkflowProjectReferenceSnapshot[] = [];
     const cache = new Map<string, string>();
@@ -1224,15 +1496,92 @@ export class LocalWorkflowCatalog {
       });
     for (const app of bundle.apps)
       snapshots.push({ source: { kind: 'published-web-app', label: app.slug }, contents: await read(app.contents) });
-    if (!sameJson(this.#readStoredProjectBundle(this.#database(), relativePath), bundle))
+    if (!sameJson(this.#readStoredProjectBundle(relativePath), bundle))
       throw new Error('Project changed while checking references.');
     return snapshots;
   }
 
-  async readProject(relativePath: string): Promise<LocalWorkflowCatalogSnapshot | null> {
-    const bundle = this.#readStoredProjectBundle(this.#database(), relativePath);
+  hasProjectArtifact(relativePath: string, dataset = false): boolean {
+    const bundle = this.#readStoredProjectBundle(relativePath, false);
+    return !!bundle && (!dataset || bundle.project.datasetsContents !== null);
+  }
+
+  readProjectMetadataById(workflowId: string): Omit<LocalWorkflowTreeProject, 'revisionId' | 'stats'> | null {
+    return this.#readMetadata(() => {
+      const relativePath = this.findProjectPathById(workflowId);
+      if (!relativePath) return null;
+      const bundle = this.#readStoredProjectBundle(relativePath, false);
+      return bundle ? projectTreeMetadata(bundle.project, bundle.apps) : null;
+    });
+  }
+
+  readProjectPublicationMetadata(relativePath: string) {
+    const bundle = this.#readStoredProjectBundle(relativePath);
     if (!bundle) return null;
-    const { project: stored, versions, apps } = bundle;
+    return {
+      workflowId: bundle.project.workflowId,
+      name: bundle.project.name,
+      publishedVersionId: bundle.project.publishedVersionId,
+      publishedVersions: bundle.versions.map(
+        ({ contents: _contents, datasetsContents: _datasets, ...metadata }) => metadata,
+      ),
+    };
+  }
+
+  /** Ordinary reads select only the requested immutable pair. Full snapshots
+   * remain separate authority for mutation CAS and exact migration verification. */
+  async readProjectPayload(
+    relativePath: string,
+    selection: 'latest' | 'published' | 'published-or-latest' | { versionId: string } = 'latest',
+  ): Promise<LocalWorkflowProjectPayload | null> {
+    selection = structuredClone(selection);
+    const readSelection = () =>
+      this.#readMetadata((db) => {
+        const bundle = this.#readStoredProjectBundle(relativePath, false);
+        if (!bundle) return null;
+        let version: StoredVersion | null = null;
+        if (typeof selection === 'object') {
+          const row = db
+            .prepare('SELECT * FROM published_versions WHERE workflow_id = ? AND version_id = ?')
+            .get(bundle.project.workflowId, selection.versionId) as VersionRow | undefined;
+          if (!row) return null;
+          version = storedVersion(row);
+        }
+        const published =
+          selection === 'published' ||
+          (selection === 'published-or-latest' && bundle.project.publishedContents !== null);
+        const source =
+          version ??
+          (published
+            ? {
+                contents: bundle.project.publishedContents,
+                datasetsContents: bundle.project.publishedDatasetsContents,
+              }
+            : bundle.project);
+        return { bundle, version, source: { contents: source.contents, datasetsContents: source.datasetsContents } };
+      });
+    const selected = readSelection();
+    if (!selected) return null;
+    const contents = await readText(this.#artifacts, selected.source.contents);
+    const datasetsContents = await readText(this.#artifacts, selected.source.datasetsContents);
+    if (!sameJson(selected, readSelection()))
+      throw new Error('Local catalog project changed concurrently while loading.');
+    return {
+      ...projectTreeMetadata(selected.bundle.project, selected.bundle.apps),
+      contents,
+      datasetsContents,
+      publishedAt: selected.version?.publishedAt ?? null,
+    };
+  }
+
+  async readProject(relativePath: string): Promise<LocalWorkflowCatalogSnapshot | null> {
+    const bundle = this.#readStoredProjectBundle(relativePath);
+    if (!bundle) return null;
+    const {
+      project: { treeIndex: _index, ...stored },
+      versions,
+      apps,
+    } = bundle;
     // Do not open one file per historical publication in parallel. A large
     // history must not exhaust file descriptors during an ordinary read.
     const publishedVersions: LocalWorkflowCatalogSnapshot['publishedVersions'] = [];
@@ -1259,7 +1608,7 @@ export class LocalWorkflowCatalog {
       publishedWebApps,
     };
     assertProjectSnapshot(snapshot);
-    if (!sameJson(this.#readStoredProjectBundle(this.#database(), relativePath), bundle))
+    if (!sameJson(this.#readStoredProjectBundle(relativePath), bundle))
       throw new Error('Local catalog project changed concurrently while loading.');
     return snapshot;
   }
@@ -1275,6 +1624,7 @@ export class LocalWorkflowCatalog {
     if (!recording.recordingId || !recording.workflowId || !Number.isFinite(recording.durationMs)) {
       throw new Error('Local recording needs a stable ID, workflow ID, and duration.');
     }
+    if (!isRecordingTimestamp(recording.createdAt)) throw new Error('Local recording needs a canonical UTC timestamp.');
     const existing = await this.readRecording(recording.recordingId);
     if (existing) {
       if (!sameJson(existing, recording)) {

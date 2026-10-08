@@ -108,7 +108,13 @@ function getOrCreateGroupedStorageController(
       const backend = controller.asyncStorage;
       let serializedValue: string;
       try {
-        serializedValue = JSON.stringify(value);
+        // Recovery captures and validates the complete workspace itself. The
+        // per-group argument is ignored there; serializing it first duplicates
+        // all open project bodies on every checkpoint/explicit project open.
+        serializedValue =
+          backend instanceof WorkspaceRecoveryStorage && workspaceRecoveryGroups.has(mainKey)
+            ? '{}'
+            : JSON.stringify(value);
       } catch (error) {
         if (backend instanceof WorkspaceRecoveryStorage) backend.failed();
         handleError(error, 'Failed to serialize browser recovery', {

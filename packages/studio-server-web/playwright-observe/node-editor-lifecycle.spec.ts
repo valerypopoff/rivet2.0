@@ -4,7 +4,7 @@ import { deserializeProject, serializeProject, type Project } from '@valerypopof
 import type { WorkflowProjectItem } from '../dashboard/types';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
-async function workspace(page: Page, type = 'object', extraNodes = 0) {
+async function workspace(page: Page, type = 'object', extraNodes = 0, datasetRows = 0) {
   const field = type === 'object' ? 'jsonTemplate' : 'code';
   const value = (marker: string) => (type === 'object' ? JSON.stringify({ marker }) : `return "${marker}";`);
   const items: WorkflowProjectItem[] = ['A', 'B'].map((name) => ({
@@ -59,6 +59,7 @@ async function workspace(page: Page, type = 'object', extraNodes = 0) {
     }) as unknown as Project;
   const disk = new Map(items.map((item) => [item.absolutePath, serializeProject(project(item))]));
   const saves: Project[] = [];
+  let loads = 0;
   let waitForSave: Promise<void> | undefined;
   await mockHostedEditorBootstrap(page);
   await page.route('**/api/config/env/*', (route) => route.fulfill({ json: { value: null } }));
@@ -70,7 +71,25 @@ async function workspace(page: Page, type = 'object', extraNodes = 0) {
   await page.route('**/api/projects/load', (route) => {
     const { path } = route.request().postDataJSON();
     expect(disk.has(path)).toBe(true);
-    return route.fulfill({ json: { contents: disk.get(path), datasetsContents: null, revisionId: null } });
+    loads++;
+    const projectId = items.find((item) => item.absolutePath === path)!.id;
+    const datasetsContents = datasetRows
+      ? JSON.stringify({
+          datasets: [
+            {
+              meta: { id: 'shared-dataset', projectId, name: 'Load fixture', description: '' },
+              data: {
+                id: 'shared-dataset',
+                rows: Array.from({ length: datasetRows }, (_, i) => ({
+                  id: `row-${i}`,
+                  data: [`${projectId}:${i}:${'x'.repeat(1024)}`],
+                })),
+              },
+            },
+          ],
+        })
+      : null;
+    return route.fulfill({ json: { contents: disk.get(path), datasetsContents, revisionId: null } });
   });
   await page.route('**/api/projects/save', async (route) => {
     const { path, contents } = route.request().postDataJSON();
@@ -137,11 +156,74 @@ async function workspace(page: Page, type = 'object', extraNodes = 0) {
     disk,
     items,
     value,
+    loads: () => loads,
     holdSave: (gate: Promise<void> | undefined) => {
       waitForSave = gate;
     },
   };
 }
+
+test('large hosted projects open once and warm tab switches retain edits without fetching or reparsing projects', async ({
+  page,
+}, info) => {
+  const w = await workspace(page, 'object', 349, 2000);
+  await w.edit('unsaved-tab-payload');
+  await w.row('B').dblclick();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  expect(w.loads()).toBe(2);
+  const samples: number[] = [];
+  for (const name of ['A', 'B', 'A', 'B', 'A']) {
+    const start = performance.now();
+    await w.tab(name).click();
+    await expect(w.tab(name)).toHaveClass(/\bactive\b/);
+    samples.push(performance.now() - start);
+  }
+  await w.openNode();
+  await expect(w.view).toContainText('unsaved-tab-payload');
+  await expect(w.tab('A')).toHaveClass(/\bhas-unsaved-changes\b/);
+  expect(w.loads()).toBe(2);
+  // Check worker-prepared datasets survived both imports and repeated selection.
+  const retained = await w.editorFrame.evaluate(async () => {
+    const request = indexedDB.open('datasets');
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      const transaction = db.transaction('data');
+      return await Promise.all(
+        ['A', 'B'].map((name) => {
+          const read = transaction.objectStore('data').get([`lifecycle-${name}`, 'shared-dataset']);
+          return new Promise<{ count: number; first: string }>((resolve, reject) => {
+            read.onsuccess = () =>
+              resolve({ count: read.result?.rows.length ?? 0, first: read.result?.rows[0]?.data[0] ?? '' });
+            read.onerror = () => reject(read.error);
+          });
+        }),
+      );
+    } finally {
+      db.close();
+    }
+  });
+  expect(retained.map((dataset) => dataset.count)).toEqual([2000, 2000]);
+  expect(retained[0]!.first).toMatch(/^lifecycle-A:0:/);
+  expect(retained[1]!.first).toMatch(/^lifecycle-B:0:/);
+  await info.attach('project-tab-loading.json', {
+    contentType: 'application/json',
+    body: JSON.stringify(
+      {
+        nodesPerGraph: 350,
+        graphsPerProject: 2,
+        datasetRowsPerProject: 2000,
+        projectRequests: w.loads(),
+        warmTabSamplesMs: samples,
+        note: 'Local synthetic browser click-to-active observations including automation overhead; not production latency.',
+      },
+      null,
+      2,
+    ),
+  });
+});
 
 test('a retired Subgraph preview cannot contaminate the next project and current version changes still work', async ({
   page,
@@ -210,6 +292,145 @@ test('a retired Subgraph preview cannot contaminate the next project and current
   )!.data as Record<string, unknown>;
   expect(data.targetVersion).toBe('published');
   expect(w.saves[0]!.metadata.id).toBe('lifecycle-B');
+});
+
+test('reload preserves open tabs, unsaved content and sidebar selection while the tree is loading', async ({
+  page,
+}) => {
+  const w = await workspace(page);
+  await w.edit('reload-A');
+  await w.row('B').dblclick();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  await w.openNode();
+  await w.edit('reload-B');
+  await expect(w.row('B')).toHaveClass(/\bactive\b/);
+  // Wait for the normal automatic browser checkpoint, without saving to the
+  // server or synthesizing pagehide. Reload must restore the coherent workspace.
+  await expect
+    .poll(() =>
+      w.editorFrame.evaluate(async () => {
+        const key = sessionStorage.getItem('rivet-workspace-recovery-v1');
+        if (!key) return false;
+        const request = indexedDB.open('jotai-store');
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        try {
+          const read = db.transaction('state').objectStore('state').get(key);
+          const checkpoint = await new Promise<string | undefined>((resolve, reject) => {
+            read.onsuccess = () => resolve(read.result);
+            read.onerror = () => reject(read.error);
+          });
+          return Boolean(checkpoint?.includes('reload-A') && checkpoint.includes('reload-B'));
+        } finally {
+          db.close();
+        }
+      }),
+    )
+    .toBe(true);
+  let releaseTree!: () => void;
+  const treeGate = new Promise<void>((resolve) => {
+    releaseTree = resolve;
+  });
+  await page.route('**/api/workflows/tree', async (route) => {
+    await treeGate;
+    await route.fulfill({
+      json: {
+        root: '/workflows',
+        sync: { epoch: 'lifecycle', revision: 0 },
+        folders: [],
+        projects: w.items,
+      },
+    });
+  });
+  try {
+    await page.reload();
+    await expect(w.tab('B')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
+    expect(await page.evaluate(() => sessionStorage.getItem('rivet-studio-workflow-selection-v1'))).toBe(
+      w.items[1]!.absolutePath,
+    );
+    releaseTree();
+    await expect(w.row('B')).toHaveClass(/\bactive\b/);
+    await expect(w.frame.locator('.projects-container .project .project-name')).toHaveText([
+      'lifecycle-A',
+      'lifecycle-B',
+    ]);
+    await w.openNode();
+    await expect(w.view).toContainText('reload-B');
+    await expect(w.tab('B')).toHaveClass(/\bhas-unsaved-changes\b/);
+    await w.tab('A').click();
+    await expect(w.row('A')).toHaveClass(/\bactive\b/);
+    await w.openNode();
+    await expect(w.view).toContainText('reload-A');
+    await expect(w.tab('A')).toHaveClass(/\bhas-unsaved-changes\b/);
+    expect(w.saves).toHaveLength(0);
+  } finally {
+    releaseTree();
+  }
+});
+
+test('reload preserves independent sidebar selection across a failed tree request', async ({ page }) => {
+  const w = await workspace(page);
+  await w.row('B').dblclick();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  // Sidebar selection can precede an editor open or remain independent of it.
+  // Seed that persisted state so startup ordering is deterministic.
+  await page.evaluate(
+    (path) => sessionStorage.setItem('rivet-studio-workflow-selection-v1', path),
+    w.items[0]!.absolutePath,
+  );
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({ status: 503, json: { error: 'Tree unavailable' } }),
+  );
+  await page.reload();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
+  await expect(page.getByText('Tree unavailable', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem('rivet-studio-workflow-selection-v1'))).toBe(
+    w.items[0]!.absolutePath,
+  );
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        sync: { epoch: 'lifecycle', revision: 0 },
+        folders: [],
+        projects: w.items,
+      },
+    }),
+  );
+  await page.reload();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
+  await expect(w.row('A')).toHaveClass(/\bactive\b/);
+  await w.tab('A').click();
+  await expect(w.tab('A')).toHaveClass(/\bactive\b/);
+  await w.tab('B').click();
+  await expect(w.tab('B')).toHaveClass(/\bactive\b/);
+  await expect(w.row('B')).toHaveClass(/\bactive\b/);
+  expect(w.saves).toHaveLength(0);
+});
+
+test('reload clears a deleted sidebar selection without closing recovered tabs', async ({ page }) => {
+  const w = await workspace(page);
+  await expect(w.row('A')).toHaveClass(/\bactive\b/);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        sync: { epoch: 'lifecycle', revision: 1 },
+        folders: [],
+        projects: [w.items[1]],
+      },
+    }),
+  );
+  await page.reload();
+  await expect(w.tab('A')).toHaveClass(/\bactive\b/, { timeout: 120_000 });
+  await expect(w.row('B')).toBeVisible();
+  await expect(page.locator('.project-row.active')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('rivet-studio-workflow-selection-v1'))).toBeNull();
+  await w.openNode();
+  await expect(w.view).toContainText('main-original');
+  expect(w.saves).toHaveLength(0);
 });
 
 test('a delayed save preserves newer text and sibling settings through close and recovery', async ({ page }) => {

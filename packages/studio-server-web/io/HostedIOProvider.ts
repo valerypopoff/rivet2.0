@@ -6,7 +6,7 @@ import {
   type Project,
   type ProjectId,
   ExecutionRecorder,
-  deserializeDatasets,
+  type CombinedDataset,
   deserializeGraph,
   serializeDatasets,
   serializeGraph,
@@ -58,7 +58,7 @@ function isAbortError(error: unknown): boolean {
 type HostedDatasetProvider = AppDatasetProvider & {
   importDatasetsForProject: (
     projectId: ProjectId,
-    datasets: ReturnType<typeof deserializeDatasets>,
+    datasets: CombinedDataset[],
     options?: { isCurrent?: () => boolean; signal?: AbortSignal; activate?: boolean },
   ) => Promise<void>;
 };
@@ -269,14 +269,21 @@ async function deserializeHostedProjectPayload(
   contents: string,
   path: string,
   signal?: AbortSignal,
-): Promise<{ project: Project; evaluation: EvaluationProjectFileData }> {
-  const { project, serializedEvaluationData } = await deserializeHostedProjectPayloadAsync(contents, path, { signal });
+  datasetsContents?: string | null,
+): Promise<{
+  project: Project;
+  evaluation: EvaluationProjectFileData;
+  datasets: CombinedDataset[];
+}> {
+  const { project, serializedEvaluationData, datasets, evaluationDatasets } =
+    await deserializeHostedProjectPayloadAsync(contents, path, { signal, datasetsContents });
 
   return {
     project,
+    datasets,
     evaluation: {
       evaluationData: deserializeLegacyEvaluationProjectData(serializedEvaluationData),
-      evaluationDatasets: [],
+      evaluationDatasets,
     },
   };
 }
@@ -500,7 +507,7 @@ export class HostedIOProvider implements IOProvider {
     const complete = async (
       project: Project,
       evaluation: EvaluationProjectFileData,
-      datasets: ReturnType<typeof deserializeDatasets>,
+      datasets: CombinedDataset[],
       revision?: string | null,
     ): Promise<LoadedProjectData> => {
       const commit = async (isCurrent: () => boolean): Promise<boolean> => {
@@ -527,27 +534,16 @@ export class HostedIOProvider implements IOProvider {
         previewReference.versionId,
         { signal: options.signal },
       );
-      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(
-        preview.contents,
-        path,
-        options.signal,
-      );
+      const {
+        project: projectData,
+        evaluation,
+        datasets,
+      } = await deserializeHostedProjectPayload(preview.contents, path, options.signal, preview.datasetsContents);
       const previewProject = createPublishedVersionPreviewProject(projectData, previewReference);
-      let datasets: ReturnType<typeof deserializeDatasets> = [];
-
-      if (preview.datasetsContents) {
-        datasets = deserializeDatasets(preview.datasetsContents);
-        const evaluationDatasets =
-          (
-            JSON.parse(preview.datasetsContents) as {
-              evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
-            }
-          ).evaluationDatasets ?? [];
-        evaluation.evaluationDatasets = evaluationDatasets.map((dataset) => ({
-          ...dataset,
-          projectId: previewProject.metadata.id,
-        }));
-      }
+      evaluation.evaluationDatasets = evaluation.evaluationDatasets.map((dataset) => ({
+        ...dataset,
+        projectId: previewProject.metadata.id,
+      }));
 
       return complete(previewProject, evaluation, datasets);
     }
@@ -574,36 +570,22 @@ export class HostedIOProvider implements IOProvider {
             throw error;
           }),
       ]);
-      const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path, options.signal);
-      let datasets: ReturnType<typeof deserializeDatasets> = [];
-
-      if (replayDatasetResult.datasetsText) {
-        datasets = deserializeDatasets(replayDatasetResult.datasetsText);
-        evaluation.evaluationDatasets =
-          (
-            JSON.parse(replayDatasetResult.datasetsText) as {
-              evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
-            }
-          ).evaluationDatasets ?? [];
-      }
+      const {
+        project: projectData,
+        evaluation,
+        datasets,
+      } = await deserializeHostedProjectPayload(data, path, options.signal, replayDatasetResult.datasetsText);
 
       return complete(projectData, evaluation, datasets);
     }
 
     const loaded = await apiLoadProject(path, options.signal);
     const data = loaded.contents;
-    const { project: projectData, evaluation } = await deserializeHostedProjectPayload(data, path, options.signal);
-    let datasets: ReturnType<typeof deserializeDatasets> = [];
-
-    if (loaded.datasetsContents) {
-      datasets = deserializeDatasets(loaded.datasetsContents);
-      evaluation.evaluationDatasets =
-        (
-          JSON.parse(loaded.datasetsContents) as {
-            evaluationDatasets?: EvaluationProjectFileData['evaluationDatasets'];
-          }
-        ).evaluationDatasets ?? [];
-    }
+    const {
+      project: projectData,
+      evaluation,
+      datasets,
+    } = await deserializeHostedProjectPayload(data, path, options.signal, loaded.datasetsContents);
 
     return complete(projectData, evaluation, datasets, loaded.revisionId ?? null);
   }

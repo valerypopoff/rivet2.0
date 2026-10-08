@@ -73,6 +73,17 @@ names this exact tab; selecting a storage backend still does not perform migrati
 
 Graph metadata embedded in project bytes remains part of that artifact. Catalog rows, not scans or sidecars, establish existence, tree position and publication state. New writes never update retained `.wrapper-settings.json`, `.published/*.json`, recording `metadata.json`, App Settings JSON or runtime `manifest.json`.
 
+Normal SQLite browsing selects only the requested project/dataset artifacts;
+history and recordings workflow selectors are metadata-only. These lightweight
+reads are not certification. Copy, serving verification and selected-runtime
+validation still load required artifacts and retained publication history, compare
+source bytes and refuse corruption. A missing old version can be listed, but it
+cannot be opened or pass full verification. Mutation CAS also keeps its complete
+snapshot checks. The performance fix neither rewrites an existing certified
+catalog on a read nor changes the rollback/certification boundary. See
+[SQLite browsing](./workflow-publication.md#local-sqlite-browsing-and-selected-payloads)
+for the reproducible synthetic benchmark and read-budget regressions.
+
 Plugin preparation, stats, temporary files and extracted caches are not metadata authorities. Arbitrary VM file dependencies and browser IndexedDB are not converted. This is not a disk-write-free mode.
 
 ## Delivered workflow and rollback boundary
@@ -573,6 +584,35 @@ Recovery verifies ownership, journal/schema/integrity, expected revision/generat
 - Once the selected cache has a POSIX activation link, promotion replaces it atomically rather than removing it before installing the new one. Concurrent executor reads cannot observe a missing `current`; injected permission failure leaves the prior link and release intact. Non-directory/non-link activation entries are refused. Directory/junction compatibility swaps remain for startup and Windows tests.
 - A missing extracted runtime-cache directory is recreated from the selected SQL archive; it is not part of the authority proof. An existing symlink or non-directory at that cache path still blocks startup. The runtime rehearsal removes the cache before coordinated startup and verifies package loading after reconstruction.
 - SQL recording retention respects health holds, stays paused during conversion/validation and runs only for writable live generations. Unreferenced immutable files are retained: audited artifact GC is a separate feature.
+
+The local workflow tree is a metadata projection, not a full candidate scan.
+New project imports/writes include optional derived `treeIndex` metadata (counts
+and the canonical draft/dataset revision); this does not change catalog format 4
+or add schema objects. Existing format 2/3/4 rows remain compatible. A missing
+summary is derived from only the current draft/datasets and cached in bounded
+process memory; tree reads never backfill certified/read-only database bytes.
+Trees capture existing cache hits before cold reads, preventing scan-order
+thrashing when an older catalog exceeds the 1,024-summary cache limit.
+Normal project writes persist the summary, while exact import retries and failed
+CAS writes preserve the old row. Tree summaries are excluded from editable
+snapshots/CAS comparison, not from database certification. Full snapshot,
+conversion, serving and runtime validation retain their artifact integrity
+checks. Serving validation also compares derived tree revisions and counts with
+the source, not only their metadata shape; valid-looking but stale summaries are
+rejected without rewriting a certified database. Independent web-app freshness
+and aggregate publication status are checked against source snapshots as well.
+See `workflow-publication.md` ->
+`Local SQLite workflow tree` for the read boundary and regression commands.
+Deploying this optimization needs an updated API image, not another local storage upgrade.
+The recordings picker likewise reads owner metadata and SQL aggregates only:
+it does not reload every project/history body or return every recording row to
+JavaScript for counting. Counts and owner metadata share one short read snapshot.
+Recording dates retain the canonical UTC/millisecond format written by Rivet;
+relative, offset or overflowing timestamps fail without rewriting source values.
+Import checks this before artifact writes, so a bad date cannot leave newly
+created orphan payloads. Exact serving/migration checks still load and verify
+the required artifact bytes. No database reset, re-conversion or disk upgrade is
+needed to deploy these read-path optimizations.
 
 ## Limits and release evidence
 

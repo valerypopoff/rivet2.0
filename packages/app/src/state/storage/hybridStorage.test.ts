@@ -11,6 +11,26 @@ import { MemoryAsyncStorage } from './indexedDB.js';
 import { initializeHybridStorage, memoryStorage } from './migrations.js';
 
 describe('createHybridStorage', () => {
+  it('recovery checkpoints serialize the coherent workspace without separately serializing the project group', async (t) => {
+    const oldMemory = new Map(memoryStorage);
+    memoryStorage.clear();
+    const backend = new MemoryAsyncStorage();
+    const previous = configureHybridStorageBackend(backend);
+    try {
+      const { storage } = createHybridStorage('project');
+      storage.setItem('marker', 'retained');
+      const group = memoryStorage.get('project');
+      const stringify = t.mock.method(JSON, 'stringify');
+      await flushHybridStorageGroup('project');
+      assert.equal(stringify.mock.calls.filter((call) => call.arguments[0] === group).length, 0);
+      const key = (await backend.listKeys('workspace-recovery/'))[0]!;
+      assert.equal(JSON.parse((await backend.getItem(key))!).groups.project.marker, 'retained');
+    } finally {
+      configureHybridStorageBackend(previous);
+      memoryStorage.clear();
+      for (const [key, value] of oldMemory) memoryStorage.set(key, value);
+    }
+  });
   it('a replaced backend cannot hydrate over its replacement after a delayed startup read', async () => {
     const key = 'grouped-stale-hydration';
     const before = new Set(allInitializeStoreFns);

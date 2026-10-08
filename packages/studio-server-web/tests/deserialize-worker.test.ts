@@ -1,5 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
+import { parseHostedProjectPayload } from '../overrides/utils/hostedProjectPayload.js';
+
+test('worker preparation parses the sidecar once and retains datasets and legacy Evaluation attachments', (t) => {
+  const contents = serializeProject({ metadata: { id: 'worker', title: 'Worker' }, graphs: {} } as Project);
+  const datasets = [
+    { meta: { id: 'data', projectId: 'worker' }, data: { id: 'data', rows: [{ id: 'row', data: ['value'] }] } },
+  ];
+  const evaluationDatasets = [{ id: 'legacy-evaluation', projectId: 'worker' }];
+  const sidecar = JSON.stringify({ datasets, evaluationDatasets });
+  const parse = t.mock.method(JSON, 'parse');
+  const result = parseHostedProjectPayload(contents, 'worker.rivet-project', sidecar);
+  assert.deepEqual(result.datasets, datasets);
+  assert.deepEqual(result.evaluationDatasets, evaluationDatasets);
+  assert.equal(parse.mock.calls.filter((call) => call.arguments[0] === sidecar).length, 1);
+  assert.deepEqual(parseHostedProjectPayload(contents).datasets, []);
+  for (const invalid of ['null', '{}', '{"datasets":{}}', '{"datasets":[],"evaluationDatasets":{}}', 'broken']) {
+    assert.throws(() => parseHostedProjectPayload(contents, undefined, invalid));
+  }
+});
 
 class TestWorker extends EventTarget {
   static instances: TestWorker[] = [];
@@ -47,6 +67,18 @@ test('a stalled worker is replaced on its deadline and subsequent requests remai
   assert.equal((await next).metadata.id, 'next');
 });
 
+test('cancelling one parse preserves another request sharing the worker', async () => {
+  const controller = new AbortController();
+  const cancelled = deserializeProjectAsync('cancelled', undefined, { signal: controller.signal });
+  const worker = TestWorker.instances.at(-1)!;
+  const next = deserializeProjectAsync('next');
+  controller.abort();
+  await assert.rejects(cancelled, /abort/i);
+  assert.equal(worker.terminated, false);
+  worker.respond({ metadata: { id: 'next' } });
+  assert.equal((await next).metadata.id, 'next');
+});
+
 test('hosted preparation and deferred import share one configurable deadline', async (t) => {
   const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
   t.mock.timers.enable({ apis: ['Date'], now: 1_000 });
@@ -72,6 +104,8 @@ test('hosted preparation and deferred import share one configurable deadline', a
   TestWorker.instances.at(-1)!.respond({
     project: { metadata: { id: 'deadline', title: 'Deadline' }, graphs: {} },
     serializedEvaluationData: null,
+    datasets: [],
+    evaluationDatasets: [],
   });
   const result = await loading;
   t.mock.timers.setTime(2_001);
@@ -98,4 +132,36 @@ test('a pre-cancelled hosted load performs no fetch, parsing or dataset work', a
     /abort/i,
   );
   assert.equal(fetch.mock.callCount(), 0);
+});
+
+test('hosted loading sends the sidecar to its worker and commits exactly the prepared datasets', async (t) => {
+  const { HostedIOProvider } = await import('../io/HostedIOProvider.js');
+  const sidecar = '{"datasets":[]}';
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async () => new Response(JSON.stringify({ contents: 'fixture', datasetsContents: sidecar })),
+  );
+  const datasets = [{ meta: { id: 'prepared', projectId: 'prepared-project' }, data: { id: 'prepared', rows: [] } }];
+  let imported: unknown;
+  const provider = new HostedIOProvider(
+    {
+      importDatasetsForProject: async (_id: unknown, value: unknown) => {
+        imported = value;
+      },
+    } as ConstructorParameters<typeof HostedIOProvider>[0],
+    {} as ConstructorParameters<typeof HostedIOProvider>[1],
+  );
+  const loading = provider.loadProjectDataNoPrompt('/workflows/prepared.rivet-project');
+  await new Promise((resolve) => setImmediate(resolve));
+  const worker = TestWorker.instances.at(-1)!;
+  assert.equal((worker.request as unknown as { data: { datasetsContents: string } }).data.datasetsContents, sidecar);
+  worker.respond({
+    project: { metadata: { id: 'prepared-project' }, graphs: {} },
+    serializedEvaluationData: null,
+    datasets,
+    evaluationDatasets: [],
+  });
+  await loading;
+  assert.deepEqual(imported, datasets);
 });

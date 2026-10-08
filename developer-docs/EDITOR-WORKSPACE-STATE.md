@@ -76,6 +76,14 @@ selection. A request generation and the tab's current identity/path are checked
 before publishing prepared state. The coordinator defaults to a 60-second deadline;
 native file-picker interaction is instead untimed, but its result is still fenced
 against newer selections. Providers that cannot abort must not commit late results.
+
+Workspace-group persistence delegates serialization directly to the coherent
+recovery envelope. Hybrid storage must not first stringify the `project` group:
+the recovery backend ignores that argument and captures all groups in the same
+JS turn, so a preliminary pass only duplicates serialization of every open tab.
+Other storage backends still receive their normal serialized group. Envelope
+validation, backend-generation fencing and durable read-back verification remain
+unchanged; this optimization does not defer capture or weaken recovery guarantees.
 The hosted bridge has an additional command-ordering layer; see
 [Editor Bridge](./studio-server/editor-bridge.md#message-flow).
 
@@ -162,6 +170,11 @@ notifications, never the open project's content revision. See
 revision acknowledgement and stale-path conflicts, and the
 [refactor UI scenarios](./REFACTOR-BASELINE.md#ui-acceptance-scenarios) for two-window
 and inactive-tab checks.
+
+The Studio Server dashboard persists its own sidebar selection separately from
+App's tab/content recovery. Reloading restores both without saving projects to
+the server or replacing recovered unsaved snapshots. See
+[hosted reload persistence](./studio-server/editor-bridge.md#reload-persistence).
 
 ## Browser recovery
 

@@ -149,6 +149,77 @@ function useLegacyCatalogSchema(file: string, version: number): void {
   }
 }
 
+test('recording imports require canonical UTC dates before writing artifacts', async (t) => {
+  await fixture(async (catalog) => {
+    catalog.importFolder('folder');
+    await catalog.importProject(project());
+    const writes = t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes');
+    for (const createdAt of [
+      'now',
+      '2026',
+      '2026-02-30T00:00:00.000Z',
+      '2026-10-08T24:00:00.000Z',
+      '2026-10-08T24:01:00.000Z',
+      '2026-10-08T02:00:00.000+02:00',
+      '2026-10-08T00:00:00Z',
+    ]) {
+      await assert.rejects(catalog.importRecording(recording({ createdAt })), /canonical UTC timestamp/);
+    }
+    assert.equal(writes.mock.callCount(), 0);
+    for (const createdAt of ['2026-03-01T00:00:00.001Z', '2026-03-01T00:00:00.999Z', '2024-02-29T00:00:00.000Z']) {
+      await catalog.importRecording(recording({ recordingId: createdAt, createdAt }));
+    }
+    const [summary] = catalog.readRecordingWorkflowProjection();
+    assert.equal(summary!.totalRuns, 3);
+    assert.equal(summary!.latestRunAt, '2026-03-01T00:00:00.999Z');
+    assert.equal(catalog.listRecordingMetadata()[0]!.createdAt, summary!.latestRunAt);
+  });
+});
+
+test('recording picker counts and owner metadata share one snapshot under a competing connection', async (t) => {
+  await fixture(async (catalog, root) => {
+    catalog.importFolder('folder');
+    const owner = project({ endpointAccess: 'public' });
+    await catalog.importProject(owner);
+    await catalog.importRecording(recording());
+    const db = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      const prepare = DatabaseSync.prototype.prepare;
+      let competingWrite = true;
+      t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (/\bFROM recordings\b/i.test(sql)) {
+          const all = statement.all;
+          t.mock.method(statement, 'all', (...args: Parameters<typeof all>) => {
+            const result = all.apply(statement, args);
+            if (competingWrite) {
+              competingWrite = false;
+              db.exec('BEGIN IMMEDIATE');
+              db.prepare(
+                "UPDATE projects SET metadata_json = json_set(metadata_json, '$.endpointAccess', 'internal')",
+              ).run();
+              db.prepare("UPDATE recordings SET metadata_json = json_set(metadata_json, '$.status', 'failed')").run();
+              db.exec('COMMIT');
+            }
+            return result;
+          });
+        }
+        return statement;
+      });
+      const [before] = catalog.readRecordingWorkflowProjection();
+      assert.equal(competingWrite, false);
+      assert.equal(before!.failedRuns, 0);
+      assert.equal(before!.project.endpointAccess, owner.endpointAccess);
+      const [after] = catalog.readRecordingWorkflowProjection();
+      assert.equal(after!.failedRuns, 1);
+      assert.equal(after!.project.endpointAccess, 'internal');
+    } finally {
+      db.close();
+    }
+  });
+});
+
 test('reference scans read only current draft and active publications, not datasets or archived history', async () => {
   await fixture(async (catalog, root) => {
     const source = project();
@@ -237,6 +308,11 @@ test('local catalog change stamp detects same-owner and separate-connection comm
       const treeStamp = catalog.changeStamp();
       await other.importRecording(recording());
       assert.equal(catalog.changeStamp(), treeStamp, 'Recording traffic does not invalidate the project tree');
+      const beforeHistory = (await other.readProject('folder/story.rivet-project'))!;
+      const editedHistory = structuredClone(beforeHistory);
+      editedHistory.publishedVersions[0]!.comment = 'Historical comment only';
+      await other.replaceProject(beforeHistory, editedHistory);
+      assert.equal(catalog.changeStamp(), treeStamp, 'Unrelated historical edits do not invalidate the project tree');
     } finally {
       other.close();
     }
@@ -951,6 +1027,9 @@ test('v2 and v3 schemas upgrade only with a successful project write and retain 
       const legacyIndex =
         "CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> ''";
       useLegacyCatalogSchema(file, version);
+      const withoutIndex = new DatabaseSync(file);
+      withoutIndex.exec("UPDATE projects SET metadata_json = json_remove(metadata_json, '$.treeIndex')");
+      withoutIndex.close();
       const original = new DatabaseSync(file, { readOnly: true });
       const legacyTable = original.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql;
       original.close();
@@ -958,6 +1037,9 @@ test('v2 and v3 schemas upgrade only with a successful project write and retain 
       catalog.initialize({ verifyOnly: true });
       catalog.checkHealth();
       assert.deepEqual(await catalog.readProject(source.relativePath), source);
+      const tree = await catalog.readTreeProjection();
+      assert.equal(tree.projects[0]!.workflowId, source.workflowId);
+      assert.equal(tree.projects[0]!.publishedWebApps.length, source.publishedWebApps.length);
       catalog.close();
       assert.deepEqual(await fs.readFile(file), bytes, 'Read-only verification preserves certified bytes.');
       catalog.initialize({ requireExisting: true });

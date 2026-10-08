@@ -1,5 +1,6 @@
-import { getError, type Project } from '@valerypopoff/rivet2-core';
+import { getError, type CombinedDataset, type Project } from '@valerypopoff/rivet2-core';
 import type { EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
+import type { EvaluationProjectFileData } from '../../../app/src/io/IOProvider.js';
 import { nanoid } from 'nanoid';
 
 type PromiseResolvers<T> = {
@@ -12,6 +13,8 @@ type PromiseResolvers<T> = {
 type DeserializedHostedProjectPayload = {
   project: Project;
   serializedEvaluationData: EvaluationProjectData | null;
+  datasets: CombinedDataset[];
+  evaluationDatasets: EvaluationProjectFileData['evaluationDatasets'];
 };
 
 const waiting = new Map<string, PromiseResolvers<unknown>>();
@@ -145,11 +148,11 @@ export function deserializeProjectAsync(
 export function deserializeHostedProjectPayloadAsync(
   serializedProject: unknown,
   path?: string,
-  options?: { signal?: AbortSignal; timeoutMs?: number },
+  options?: { signal?: AbortSignal; timeoutMs?: number; datasetsContents?: string | null },
 ): Promise<DeserializedHostedProjectPayload> {
   return enqueueWorkerRequest<DeserializedHostedProjectPayload>(
     'deserializeHostedProjectPayload',
-    { serializedProject, path },
+    { serializedProject, path, datasetsContents: options?.datasetsContents },
     'deserializeHostedProjectPayload:result',
     options,
   );

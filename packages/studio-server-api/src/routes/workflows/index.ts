@@ -449,18 +449,12 @@ workflowsRouter.get(
 );
 
 workflowsRouter.get(
-  '/recordings',
+  ['/recordings', '/recordings/workflows'],
+  timing,
   asyncHandler(async (_req, res) => {
+    const startedAt = performance.now();
     const catalog = await listWorkflowRecordingWorkflowsWithBackend();
-    prepareWorkflowRecordingInputExtractor();
-    res.json(catalog);
-  }),
-);
-
-workflowsRouter.get(
-  '/recordings/workflows',
-  asyncHandler(async (_req, res) => {
-    const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+    res.setHeader('Server-Timing', `recording_catalog;dur=${(performance.now() - startedAt).toFixed(2)}`);
     prepareWorkflowRecordingInputExtractor();
     res.json(catalog);
   }),

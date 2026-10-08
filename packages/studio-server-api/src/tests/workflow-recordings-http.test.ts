@@ -32,6 +32,22 @@ const { writeRunRecordingsSettings } = await import('../routes/workflows/recordi
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+test('recordings catalog reports server timing and keeps the compatibility alias', async () => {
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    for (const endpoint of ['/recordings/workflows', '/recordings']) {
+      const response = await fetch(`${apiBaseUrl}${endpoint}`);
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('server-timing') ?? '', /^recording_catalog;dur=\d+\.\d{2}$/);
+      assert.match(response.headers.get('x-duration-ms') ?? '', /^\d+$/);
+      assert.match(response.headers.get('cache-control') ?? '', /no-store/);
+      assert.deepEqual(await response.json(), {
+        workflows: [],
+        totals: { totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
+      });
+    }
+  });
+});
+
 for (const isSplitSequential of [false, true]) {
   test(`headless ${isSplitSequential ? 'sequential' : 'parallel'} pruned calls persist replayable per-item recordings`, async () => {
     const created = await workflowMutations.createWorkflowProjectItem('', 'PrunedRecording');
