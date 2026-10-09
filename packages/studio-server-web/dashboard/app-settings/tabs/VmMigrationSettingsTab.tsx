@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import TextField from '@atlaskit/textfield';
 
 import {
@@ -45,6 +45,7 @@ export function VmMigrationSettingsTab() {
   const [resumeConfirmed, setResumeConfirmed] = useState(false);
   const [interruptedStopped, setInterruptedStopped] = useState(false);
   const [restartRequired, setRestartRequired] = useState(false);
+  const statusRequest = useRef(0);
   const [reviewChecks, setReviewChecks] = useState<VmMigrationDeploymentChecks>({
     backupCompleted: false,
     deploymentSettingsMatch: false,
@@ -65,30 +66,42 @@ export function VmMigrationSettingsTab() {
     setError(null);
   };
 
+  const refreshStatus = useCallback(async () => {
+    const request = ++statusRequest.current;
+    try {
+      const next = await readVmMigrationStatus();
+      if (request === statusRequest.current) setStatus(next);
+    } catch (failure) {
+      if (request === statusRequest.current) throw failure;
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
+    let timeout: number | undefined;
     const refresh = async () => {
       try {
-        const next = await readVmMigrationStatus();
-        if (active) setStatus(next);
+        await refreshStatus();
       } catch (failure) {
         if (active) setError(failure instanceof Error ? failure.message : 'Could not read migration status.');
+      } finally {
+        if (active) timeout = window.setTimeout(() => void refresh(), 2_000);
       }
     };
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 2_000);
     return () => {
       active = false;
-      window.clearInterval(interval);
+      ++statusRequest.current;
+      window.clearTimeout(timeout);
     };
-  }, []);
+  }, [refreshStatus]);
 
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
       await action();
-      setStatus(await readVmMigrationStatus());
+      await refreshStatus();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Migration action failed.');
     } finally {
@@ -104,13 +117,15 @@ export function VmMigrationSettingsTab() {
       (status.job.finalCopyStarted === true ||
         (status.job.finalCopyStarted === undefined && status.job.precopyCompleted === true)));
   const tested = databaseTested && objectStorageTested;
+  const needsPrecopy = status?.precopyAvailable !== false;
   const canRun = Boolean(
     tested &&
+      inventory &&
       status?.maintenance &&
       status.drain?.ready &&
-      status.job?.precopyCompleted &&
-      !precopyStale &&
+      (!needsPrecopy || (status.job?.precopyCompleted && !precopyStale)) &&
       target.targetOffline &&
+      target.runtimePlatformCompatible &&
       !activeJob &&
       !verified &&
       status.job?.phase !== 'interrupted',
@@ -134,11 +149,11 @@ export function VmMigrationSettingsTab() {
         </p>
       ) : !status.available ? (
         <p>
-          This tool requires a single-host server using local project folders, key or OAuth sign-in, and explicit
-          migration enablement on the VM.
+          {status.unavailableReason ??
+            'This tool requires a supervised single-host server using local project storage and a signed-in key or OAuth operator session.'}
         </p>
       ) : (
-        <>
+        <fieldset className="app-settings-migration-controls" disabled={busy || activeJob}>
           <section className="app-settings-section" aria-label="Migration source inventory">
             <h4>Review the source</h4>
             <p className="app-settings-field-help">
@@ -285,35 +300,42 @@ export function VmMigrationSettingsTab() {
             </button>
             {databaseTested ? <p role="status">PostgreSQL DDL, read and write checks passed.</p> : null}
           </section>
-          <section className="app-settings-section" aria-label="Migration pre-copy">
-            <h4>3. Pre-copy project and completed recording content</h4>
+          {needsPrecopy ? (
+            <section className="app-settings-section" aria-label="Migration pre-copy">
+              <h4>3. Pre-copy project and completed recording content</h4>
+              <p className="app-settings-field-help">
+                While this VM stays online, stage content-addressed project snapshots and completed recording artifacts
+                in the destination bucket. The final copy rechecks current bytes after maintenance begins; changed or
+                still-active content is uploaded normally.
+              </p>
+              <button
+                type="button"
+                disabled={
+                  busy ||
+                  !inventory ||
+                  !tested ||
+                  !target.targetOffline ||
+                  Boolean(status?.maintenance) ||
+                  activeJob ||
+                  verified
+                }
+                onClick={() =>
+                  void act(async () => {
+                    await startVmMigrationPrecopy(target);
+                    setPrecopyStale(false);
+                  })
+                }
+              >
+                Pre-copy content
+              </button>
+              {status?.job?.phase === 'precopy_complete' ? <p role="status">Content pre-copy complete.</p> : null}
+            </section>
+          ) : (
             <p className="app-settings-field-help">
-              While this VM stays online, stage content-addressed project snapshots and completed recording artifacts in
-              the destination bucket. The final copy rechecks current bytes after maintenance begins; changed or
-              still-active content is uploaded normally.
+              SQLite source selected. Online pre-copy is not needed. Back up the selected generation, pause this server
+              and wait for the source to become quiet before copying.
             </p>
-            <button
-              type="button"
-              disabled={
-                busy ||
-                !inventory ||
-                !tested ||
-                !target.targetOffline ||
-                Boolean(status?.maintenance) ||
-                activeJob ||
-                verified
-              }
-              onClick={() =>
-                void act(async () => {
-                  await startVmMigrationPrecopy(target);
-                  setPrecopyStale(false);
-                })
-              }
-            >
-              Pre-copy content
-            </button>
-            {status?.job?.phase === 'precopy_complete' ? <p role="status">Content pre-copy complete.</p> : null}
-          </section>
+          )}
           <section className="app-settings-section" aria-label="Migration maintenance">
             <h4>4. Pause this server and copy</h4>
             <p className="app-settings-field-help">
@@ -323,7 +345,16 @@ export function VmMigrationSettingsTab() {
             {!status?.maintenance ? (
               <button
                 type="button"
-                disabled={busy || !tested || !status?.job?.precopyCompleted || precopyStale || restartRequired}
+                disabled={
+                  busy ||
+                  activeJob ||
+                  !inventory ||
+                  !tested ||
+                  !target.targetOffline ||
+                  !target.runtimePlatformCompatible ||
+                  (needsPrecopy && (!status?.job?.precopyCompleted || precopyStale)) ||
+                  restartRequired
+                }
                 onClick={() => void act(enterVmMigrationMode)}
               >
                 Enter maintenance mode
@@ -518,7 +549,7 @@ export function VmMigrationSettingsTab() {
             ) : null}
             {restartRequired ? <p role="status">Restart the backend before serving runs again.</p> : null}
           </section>
-        </>
+        </fieldset>
       )}
       {error ? (
         <p className="project-settings-error" role="alert">

@@ -16,7 +16,11 @@ import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 import { listWorkflowFolders } from '../routes/workflows/workflow-query.js';
 import { LocalWorkflowCatalog } from '../local-metadata/workflow-catalog.js';
 import { SqliteWorkflowBackend } from '../local-metadata/sqlite-workflow-backend.js';
-import { localMetadataGenerationPaths } from '../local-metadata/serving-selection.js';
+import {
+  localMetadataGenerationPaths,
+  installLocalMetadataServingSelection,
+} from '../local-metadata/serving-selection.js';
+import { disposeWorkflowStorage } from '../routes/workflows/storage-backend.js';
 import { localMetadataSourceIdentity } from '../local-metadata/source-identity.js';
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
 import { SqliteAppSettingsBackend } from '../app-settings/sqlite-settings-store.js';
@@ -25,6 +29,8 @@ import { collectSourceWorkflows } from '../local-metadata/filesystem-workflow-so
 import { collectSourceAppSettings } from '../scripts/migrate-app-settings.js';
 import { createSourceArchive } from '../scripts/migrate-runtime-libraries.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
+import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
+import { SqliteMigrationSource } from '../scripts/sqlite-migration-source.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
 import { readWorkflowMigrationTargetConfig } from '../scripts/migrate-workflow-storage-lib.js';
 import {
@@ -32,8 +38,17 @@ import {
   reviewVmMigrationDeployment,
   testVmMigrationDatabase,
   testVmMigrationObjectStorage,
+  getVmMigrationStatus,
+  getVmMigrationSourceInventory,
+  enterVmMigrationMode,
+  startVmMigration,
+  startVmMigrationPrecopy,
 } from '../vm-migration-service.js';
-import { enterVmMigrationMaintenance, isVmMigrationMaintenanceActive } from '../vm-migration-maintenance.js';
+import {
+  enterVmMigrationMaintenance,
+  isVmMigrationMaintenanceActive,
+  leaveVmMigrationMaintenance,
+} from '../vm-migration-maintenance.js';
 import {
   assertVmMigrationTargetMayServe,
   invalidateVmMigrationTargetGate,
@@ -372,12 +387,10 @@ try {
 
   const previousAppDataRoot = process.env.RIVET_APP_DATA_ROOT;
   const previousEditorControl = process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL;
-  const previousMigrationEnabled = process.env.RIVET_VM_MIGRATION_ENABLED;
   const previousUiAuthMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
   const previousTopology = process.env.RIVET_DEPLOYMENT_TOPOLOGY;
   process.env.RIVET_APP_DATA_ROOT = appDataRoot;
   process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL = '1';
-  process.env.RIVET_VM_MIGRATION_ENABLED = '1';
   process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
   delete process.env.RIVET_DEPLOYMENT_TOPOLOGY;
   try {
@@ -396,8 +409,6 @@ try {
     else process.env.RIVET_APP_DATA_ROOT = previousAppDataRoot;
     if (previousEditorControl === undefined) delete process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL;
     else process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL = previousEditorControl;
-    if (previousMigrationEnabled === undefined) delete process.env.RIVET_VM_MIGRATION_ENABLED;
-    else process.env.RIVET_VM_MIGRATION_ENABLED = previousMigrationEnabled;
     if (previousUiAuthMode === undefined) delete process.env.RIVET_SERVER_UI_AUTH_MODE;
     else process.env.RIVET_SERVER_UI_AUTH_MODE = previousUiAuthMode;
     if (previousTopology === undefined) delete process.env.RIVET_DEPLOYMENT_TOPOLOGY;
@@ -512,7 +523,6 @@ try {
     'RIVET_WORKFLOW_RECORDINGS_ROOT',
     'RIVET_RUNTIME_LIBRARIES_ROOT',
     'RIVET_VM_MIGRATION_EDITOR_CONTROL',
-    'RIVET_VM_MIGRATION_ENABLED',
     'RIVET_SERVER_UI_AUTH_MODE',
     'RIVET_DEPLOYMENT_TOPOLOGY',
   ];
@@ -523,7 +533,6 @@ try {
     process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = recordingsRoot;
     process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeRoot;
     process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL = '1';
-    process.env.RIVET_VM_MIGRATION_ENABLED = '1';
     process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
     delete process.env.RIVET_DEPLOYMENT_TOPOLOGY;
     await enterVmMigrationMaintenance();
@@ -545,17 +554,19 @@ try {
        VALUES ($1, $2, 'queued', '{}'::jsonb)`,
       [projectId, evaluationRunId],
     );
-    await assert.rejects(
-      () =>
-        reviewVmMigrationDeployment(destination, {
-          backupCompleted: true,
-          deploymentSettingsMatch: true,
-          functionalRehearsalPassed: true,
-          externalDependenciesReviewed: true,
-          rollbackWindowUnderstood: true,
-        }),
-      /Final comparison failed/,
-    );
+    const admittedReview = await reviewVmMigrationDeployment(destination, {
+      backupCompleted: true,
+      deploymentSettingsMatch: true,
+      functionalRehearsalPassed: true,
+      externalDependenciesReviewed: true,
+      rollbackWindowUnderstood: true,
+    });
+    assert.equal(admittedReview.phase, 'verifying');
+    const reviewDeadline = Date.now() + 120_000;
+    while ((await getVmMigrationStatus()).job?.phase === 'verifying') {
+      if (Date.now() > reviewDeadline) throw new Error('Failed deployment review did not settle');
+      await delay(100);
+    }
     const failedReview = JSON.parse(await fs.readFile(path.join(appDataRoot, 'vm-migration-job.json'), 'utf8'));
     assert.equal(failedReview.phase, 'failed');
     assert.match(failedReview.message, /destination gate is closed/);
@@ -824,6 +835,14 @@ try {
       loadProjectAndAttachedDataFromString(liveContents)[0].metadata.description,
       project.metadata.description,
     );
+    // Endpoint state must not inherit a still-published web app's aggregate state.
+    const publication = await sourceBackend.listWorkflowProjectWebApps('fixture.rivet-project');
+    const unpublished = await sourceBackend.unpublishWorkflowProjectItem('fixture.rivet-project', {
+      expectedProjectId: publication.projectId,
+      expectedPublicationVersion: publication.publicationVersion!,
+    });
+    assert.equal(unpublished.settings.status, 'unpublished');
+    assert.equal(unpublished.settings.publicationStatus, 'unpublished_changes');
     await catalog.importRecording({
       recordingId,
       workflowId: projectId,
@@ -863,7 +882,7 @@ try {
     const verified = journal.recordVerifiedCandidate(1, proof),
       selected = journal.selectSqliteForValidation(verified.revision, proof);
     const validated = journal.recordRuntimeValidation(selected.revision, 'sqlite', proof.id, '5'.repeat(64));
-    journal.resumeWrites(validated.revision, proof);
+    const live = journal.resumeWrites(validated.revision, proof);
     sourceBackend.close();
     catalog.close();
     await sourceSettings.dispose();
@@ -879,12 +898,147 @@ try {
       await target.initialize();
       assert.equal((await target.readWorkflowMigrationSnapshot('fixture.rivet-project'))?.contents, liveContents);
       assert.equal(await target.readWorkflowRecordingArtifact(recordingId, 'recording'), recordingContents);
+      const migrated = (await target.listWorkflowProjectWebApps('fixture.rivet-project')).project;
+      assert.equal(migrated.settings.status, 'unpublished');
+      assert.equal(migrated.settings.publicationStatus, 'unpublished_changes');
+      assert.equal(migrated.settings.publishedWebApps.length, 1);
     } finally {
       await target.dispose();
     }
     console.log(
       'Live SQLite-to-managed migration: live draft, history, recording, operational rows, settings and runtime release verified.',
     );
+
+    // Exercise the UI service with the serving selection installed, without
+    // offline STOPPED acknowledgements or a legacy pre-copy. Real child
+    // import/verify processes must transfer the live bytes and close the right gate.
+    const nativeGate = new Pool(getManagedDbPoolConfig(readWorkflowMigrationTargetConfig({ ...env, ...nativeEnv })));
+    try {
+      await invalidateVmMigrationTargetGate(
+        nativeGate,
+        SqliteMigrationSource.identity(controlRoot, 'native-live', sourceRoots),
+        migrationTargetIdentity(readWorkflowMigrationTargetConfig({ ...env, ...nativeEnv })),
+      );
+    } finally {
+      await nativeGate.end();
+    }
+    await fs.rm(path.join(appDataRoot, 'vm-migration-maintenance.json'));
+    await fs.rm(path.join(appDataRoot, 'vm-migration-job.json'), { force: true });
+    await pool!.query('CREATE DATABASE rivet_ui_native_migration');
+    const uiTargetEnv = {
+      ...env,
+      ...nativeEnv,
+      RIVET_MIGRATION_TARGET_DATABASE_URL: `postgres://postgres@127.0.0.1:${databasePort}/rivet_ui_native_migration`,
+      RIVET_MIGRATION_TARGET_S3_BUCKET: 'rivet-ui-native-migration-fixture',
+    };
+    const uiTarget = {
+      databaseUrl: uiTargetEnv.RIVET_MIGRATION_TARGET_DATABASE_URL,
+      databaseSslMode: env.RIVET_MIGRATION_TARGET_DATABASE_SSL_MODE,
+      bucket: uiTargetEnv.RIVET_MIGRATION_TARGET_S3_BUCKET,
+      endpoint: env.RIVET_MIGRATION_TARGET_S3_ENDPOINT,
+      region: env.RIVET_MIGRATION_TARGET_S3_REGION,
+      prefix: env.RIVET_MIGRATION_TARGET_S3_PREFIX,
+      forcePathStyle: true,
+      accessKeyId: env.RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID,
+      secretAccessKey: env.RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY,
+      settingsEncryptionKey: env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+      targetOffline: true,
+      runtimePlatformCompatible: true,
+    };
+    const uiEnv = {
+      RIVET_LOCAL_METADATA_CONTROL_ROOT: controlRoot,
+      RIVET_LOCAL_METADATA_BOOT_REVISION: String(live.revision),
+      RIVET_VM_MIGRATION_EDITOR_CONTROL: '1',
+      RIVET_SERVER_UI_AUTH_MODE: 'key',
+      RIVET_MIGRATION_SOURCE_STOPPED: '',
+      RIVET_MIGRATION_SOURCE_QUIESCED: '',
+    };
+    const previousUiEnv = Object.fromEntries(Object.keys(uiEnv).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, uiEnv);
+    installLocalMetadataServingSelection({ ...paths, generationId: 'native-live', source: sourceRoots });
+    try {
+      const status = await getVmMigrationStatus();
+      assert.equal(status.available, true);
+      assert.equal(status.sourceKind, 'sqlite');
+      assert.equal(status.precopyAvailable, false);
+      const inventory = await getVmMigrationSourceInventory();
+      assert.equal(inventory.recordingBundles, 1);
+      assert.match(inventory.sourceDatabaseAuthority, /Selected live SQLite/);
+      await assert.rejects(startVmMigrationPrecopy(uiTarget), /pre-copy is not needed/);
+      await testVmMigrationDatabase(uiTarget);
+      await testVmMigrationObjectStorage(uiTarget);
+      await enterVmMigrationMode();
+      await assert.rejects(leaveVmMigrationMaintenance(), /Migration recovery/);
+      await assert.rejects(
+        startVmMigration({ ...uiTarget, runtimePlatformCompatible: false }),
+        /platform compatibility/,
+      );
+      await startVmMigration(uiTarget);
+      const deadline = Date.now() + 120_000;
+      let result;
+      do {
+        result = await getVmMigrationStatus();
+        if (result.job?.phase === 'failed') throw new Error(result.job.message ?? 'UI SQLite migration failed');
+        if (Date.now() > deadline) throw new Error('UI SQLite migration did not finish');
+        if (result.job?.phase !== 'verified') await delay(100);
+      } while (result.job?.phase !== 'verified');
+      assert.equal(result.job.report?.recordings, 1);
+      assert.equal(result.job.sourceIdentity, SqliteMigrationSource.identity(controlRoot, 'native-live', sourceRoots));
+      const review = await reviewVmMigrationDeployment(uiTarget, {
+        backupCompleted: true,
+        deploymentSettingsMatch: true,
+        functionalRehearsalPassed: true,
+        externalDependenciesReviewed: true,
+        rollbackWindowUnderstood: true,
+      });
+      assert.equal(review.phase, 'verifying');
+      await assert.rejects(leaveVmMigrationMode(uiTarget), /state is changing/);
+      await assert.rejects(
+        reviewVmMigrationDeployment(uiTarget, {
+          backupCompleted: true,
+          deploymentSettingsMatch: true,
+          functionalRehearsalPassed: true,
+          externalDependenciesReviewed: true,
+          rollbackWindowUnderstood: true,
+        }),
+        /state is changing/,
+      );
+      const reviewDeadline = Date.now() + 120_000;
+      do {
+        result = await getVmMigrationStatus();
+        if (result.job?.phase === 'failed') throw new Error(result.job.message ?? 'UI SQLite review failed');
+        if (Date.now() > reviewDeadline) throw new Error('UI SQLite review did not finish');
+        if (result.job?.phase !== 'verified') await delay(100);
+      } while (result.job?.phase !== 'verified');
+      assert.ok(result.job.deploymentReview?.reviewedAt);
+      const uiBackend = new ManagedWorkflowBackend(readWorkflowMigrationTargetConfig(uiTargetEnv), undefined, {
+        migrationMode: 'verify',
+      });
+      try {
+        await uiBackend.initialize();
+        assert.equal((await uiBackend.readWorkflowMigrationSnapshot('fixture.rivet-project'))?.contents, liveContents);
+        assert.equal(await uiBackend.readWorkflowRecordingArtifact(recordingId, 'recording'), recordingContents);
+      } finally {
+        await uiBackend.dispose();
+      }
+      await assert.rejects(leaveVmMigrationMode({ ...uiTarget, bucket: 'wrong-bucket' }), /Destination differs/);
+      assert.equal(isVmMigrationMaintenanceActive(), true);
+      await leaveVmMigrationMode(uiTarget);
+      assert.equal(isVmMigrationMaintenanceActive(), false);
+      const uiPool = new Pool(getManagedDbPoolConfig(readWorkflowMigrationTargetConfig(uiTargetEnv)));
+      try {
+        await assert.rejects(assertVmMigrationTargetMayServe(uiPool), /migration target is incomplete/i);
+      } finally {
+        await uiPool.end();
+      }
+      console.log('SQLite UI migration: inspection, pause/drain, real copy/verify, review and fenced recovery passed.');
+    } finally {
+      await disposeWorkflowStorage();
+      for (const [key, value] of Object.entries(previousUiEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   } finally {
     sourceBackend.close();
     catalog.close();

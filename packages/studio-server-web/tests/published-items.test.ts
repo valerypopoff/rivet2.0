@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { HostedRouteConfig, WorkflowProjectItem } from '../dashboard/types';
 import { getPublishedItems } from '../dashboard/publishedItems';
+import { getWorkflowProjectPublicationStatus } from '../dashboard/workflowProjectPublicationStatus';
 
 const routeConfig: HostedRouteConfig = {
   executorWsUrl: '',
@@ -106,6 +107,29 @@ test('omits unpublished endpoint drafts and projects without publications', () =
   });
 
   assert.deepEqual(getPublishedItems([unpublished], routeConfig), []);
+});
+
+test('aggregate fallback preserves web-app freshness without changing endpoint status', () => {
+  for (const status of ['published', 'unpublished_changes', undefined] as const) {
+    const appOnly = project('app-only', 'App only', {
+      status: 'unpublished',
+      endpointName: 'draft',
+      lastPublishedAt: null,
+      publishedWebApps: [
+        {
+          uiGraphId: 'app',
+          uiGraphName: 'App',
+          slug: 'app',
+          publishedAt: '2026-09-15T00:00:00.000Z',
+          allowedEmails: [],
+          status,
+        },
+      ],
+    });
+    assert.equal(getWorkflowProjectPublicationStatus(appOnly), status ?? 'published');
+    assert.equal(appOnly.settings.status, 'unpublished');
+    assert.deepEqual(getPublishedItems([appOnly], routeConfig).map((item) => item.kind), ['web-app']);
+  }
 });
 
 test('treats a published web app from an older tree response as published', () => {

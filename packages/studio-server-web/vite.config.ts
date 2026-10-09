@@ -25,6 +25,7 @@ const normalizedWorkspaceSourceRoots = [upstreamApp, upstreamCore, upstreamEvalu
 );
 const shimDir = resolve(__dirname, 'shims');
 const overrideDir = resolve(__dirname, 'overrides');
+const hostedFocusLock = resolve(shimDir, 'hosted-focus-lock.tsx');
 const webDistDir = resolve(__dirname, 'dist');
 const hostedViteCacheDir = process.env.HOSTED_VITE_CACHE_DIR?.trim();
 
@@ -484,6 +485,17 @@ export default defineConfig({
       preserveSymlinks: true,
       alias: [
         ...createTauriShimAliases(shimDir),
+        {
+          find: /^react-focus-lock$/,
+          replacement: hostedFocusLock,
+          // The adapter delegates to the real library; do not alias its own
+          // import back to itself. Apply the policy to all hosted modal users.
+          customResolver(source, importer) {
+            return importer && normalizeModuleId(importer) === normalizePath(hostedFocusLock)
+              ? resolveWrapperPackageFile('react-focus-lock', 'dist/es2015/index.js')
+              : source;
+          },
+        },
         ...wrapperExactDependencyAliases,
         {
           find: /^@gentrace\/core\/(.+)$/,

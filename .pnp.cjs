@@ -16772,6 +16772,7 @@ const RAW_RUNTIME_STATE =
           ["react-dnd-html5-backend", "npm:16.0.1"],\
           ["react-dom", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:18.2.0"],\
           ["react-error-boundary", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.0.11"],\
+          ["react-focus-lock", "virtual:97a3a9a576305afbb7266e4982f5b59c3ed847ae075847925434d38281ff41e6f529ce5c9beaf9e3c74173fe63935c557cda5711e05956fa14d4e3f97795b41f#npm:2.9.6"],\
           ["react-hotkeys-hook", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:4.4.1"],\
           ["react-is", "npm:16.13.1"],\
           ["react-select", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:5.7.7"],\

@@ -1,5 +1,10 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady, waitForFocusTag } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  waitForDashboardReady,
+  waitForFocusTag,
+} from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 const shortcutModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -13,6 +18,8 @@ async function openSeededEditorProject(page: Page, idPrefix: string, title: stri
     projectPath: `/workflows/${title}.rivet-project`,
     title,
   });
+
+  await mockHostedEditorBootstrap(page);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
@@ -56,7 +63,11 @@ test('iframe-focused Ctrl+F opens Rivet search instead of browser find', async (
 });
 
 test('iframe-focused physical find shortcut works when event.key is not f', async ({ page }) => {
-  const frameLocator = await openSeededEditorProject(page, 'localized-search-shortcut', 'Localized Search Shortcut Project');
+  const frameLocator = await openSeededEditorProject(
+    page,
+    'localized-search-shortcut',
+    'Localized Search Shortcut Project',
+  );
 
   const prevented = await frameLocator.locator('body').evaluate(() => {
     const decoySearch = document.createElement('div');
@@ -88,7 +99,11 @@ test('iframe-focused physical find shortcut works when event.key is not f', asyn
 });
 
 test('iframe-focused Ctrl+F does not steal focus from editor text inputs', async ({ page }) => {
-  const frameLocator = await openSeededEditorProject(page, 'editable-search-shortcut', 'Editable Search Shortcut Project');
+  const frameLocator = await openSeededEditorProject(
+    page,
+    'editable-search-shortcut',
+    'Editable Search Shortcut Project',
+  );
 
   const prevented = await frameLocator.locator('body').evaluate(() => {
     const editorInput = document.createElement('input');

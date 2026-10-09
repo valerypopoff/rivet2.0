@@ -5,6 +5,8 @@ import { getActiveScheduledRunCount } from './scheduled-runs/activity.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
+import { LocalMetadataTransitionJournal } from './local-metadata/transition-journal.js';
+import { SqliteMigrationSource } from './scripts/sqlite-migration-source.js';
 import { getLocalWorkflowActiveWriteCount } from './routes/workflows/storage-backend.js';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -52,6 +54,7 @@ import {
   isVmMigrationMaintenanceActive,
   leaveVmMigrationMaintenance,
   readVmMigrationMaintenance,
+  claimLocalStorageControl,
 } from './vm-migration-maintenance.js';
 
 export type VmMigrationJobStatus = {
@@ -71,6 +74,7 @@ export type VmMigrationJobStatus = {
   precopyCompleted?: boolean;
   finalCopyStarted?: boolean;
   targetIdentity?: string;
+  sourceIdentity?: string;
   report?: VmMigrationVerificationReport;
   deploymentReview?: { reviewedAt: string; sourceManifestHash: string };
 };
@@ -179,6 +183,7 @@ async function readJob(): Promise<VmMigrationJobStatus | null> {
       (value.precopyCompleted !== undefined && typeof value.precopyCompleted !== 'boolean') ||
       (value.finalCopyStarted !== undefined && typeof value.finalCopyStarted !== 'boolean') ||
       (value.targetIdentity !== undefined && !/^[a-f0-9]{64}$/.test(value.targetIdentity)) ||
+      (value.sourceIdentity !== undefined && !/^[a-f0-9]{64}$/.test(value.sourceIdentity)) ||
       (value.deploymentReview !== undefined &&
         (typeof value.deploymentReview.reviewedAt !== 'string' ||
           !/^[a-f0-9]{64}$/.test(value.deploymentReview.sourceManifestHash))) ||
@@ -211,21 +216,106 @@ function targetEnvironment(input: TargetInput): NodeJS.ProcessEnv {
   return env;
 }
 
-function assertAvailable(): void {
-  if (
-    process.env.RIVET_VM_MIGRATION_ENABLED !== '1' ||
-    !!process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT ||
-    getServerUiAuthMode() === 'none' ||
-    process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated' ||
-    process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL !== '1' ||
-    getWorkflowStorageBackendMode() !== 'filesystem'
-  ) {
-    throw new Error('VM migration must be explicitly enabled on a combined filesystem-backed single-host source.');
+function currentSourceRoots() {
+  const selected = getLocalMetadataServingSelection();
+  if (selected) return selected.source;
+  const runtimeLibraries = process.env.RIVET_RUNTIME_LIBRARIES_ROOT?.trim();
+  if (!runtimeLibraries) throw new Error('Runtime-library source root is not configured.');
+  return {
+    workflows: getWorkflowsRoot(),
+    recordings: getWorkflowRecordingsRoot(),
+    appData: getAppDataRoot(),
+    runtimeLibraries,
+  };
+}
+
+function currentSourceIdentity(): string {
+  const roots = currentSourceRoots();
+  const selected = getLocalMetadataServingSelection();
+  return selected
+    ? SqliteMigrationSource.identity(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, selected.generationId, roots)
+    : migrationSourceIdentity(
+        [roots.workflows, roots.appData, roots.recordings, roots.runtimeLibraries].map((root) => path.resolve(root)),
+      );
+}
+
+/** Issued only after the UI owner has installed the durable fence and drained every writer. */
+function frozenSourceEnvironment(): NodeJS.ProcessEnv {
+  const roots = currentSourceRoots();
+  const selected = getLocalMetadataServingSelection();
+  const barrier = readVmMigrationMaintenance();
+  if (!barrier) throw new Error('The source must remain paused.');
+  if (selected && !barrier.migrationId) throw new Error('Enter Migration maintenance before copying SQLite.');
+  return {
+    RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT: roots.workflows,
+    RIVET_MIGRATION_SOURCE_APP_DATA_ROOT: roots.appData,
+    RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT: roots.recordings,
+    RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT: roots.runtimeLibraries,
+    RIVET_MIGRATION_SOURCE_LOCAL_METADATA_CONTROL_ROOT: selected ? process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT : '',
+    RIVET_MIGRATION_SOURCE_SUPERVISED_BARRIER: selected ? barrier.migrationId : '',
+    RIVET_MIGRATION_SOURCE_STOPPED: '', // UI supervision is not an offline stop acknowledgement.
+    RIVET_MIGRATION_SOURCE_QUIESCED: '1',
+    RIVET_MIGRATION_SOURCE_IDENTITY: currentSourceIdentity(),
+  };
+}
+
+async function currentSourceManifest(): Promise<string> {
+  const roots = currentSourceRoots();
+  if (!getLocalMetadataServingSelection())
+    return fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots));
+  const source = await SqliteMigrationSource.open(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, roots, {
+    supervisedBarrier: readVmMigrationMaintenance()?.migrationId,
+    expectedIdentity: currentSourceIdentity(),
+  });
+  try {
+    return fingerprintVmMigrationSourceParts(await source.manifest());
+  } finally {
+    await source.dispose();
   }
 }
 
+async function migrationUnavailableReason(): Promise<string | null> {
+  const control = process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim();
+  const selected = getLocalMetadataServingSelection();
+  if (control || selected) {
+    if (!control || !selected) return 'Finish the local SQLite metadata upgrade and restart before using Migration.';
+    const journal = new LocalMetadataTransitionJournal(path.join(control, 'transition.sqlite'));
+    try {
+      await journal.initialize({ readOnly: true });
+      const state = journal.read();
+      if (
+        state.phase !== 'sqlite-live' ||
+        !state.validationEvidenceHash ||
+        state.generation?.id !== selected.generationId ||
+        state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION)
+      )
+        return 'Finish SQLite validation and restart the current selected generation before using Migration.';
+    } catch {
+      return 'Local SQLite metadata selection could not be verified. Repair its control state before migration.';
+    } finally {
+      journal.close();
+    }
+  }
+  if (getServerUiAuthMode() === 'none') return 'Migration requires a signed-in key or OAuth operator session.';
+  if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
+    return 'This migration tool requires a single-host source, not a replicated deployment.';
+  }
+  if (process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL !== '1') {
+    return 'This migration tool requires a supervised backend that coordinates API and editor execution.';
+  }
+  if (getWorkflowStorageBackendMode() !== 'filesystem') {
+    return 'This migration tool requires local project storage; the source already uses managed storage.';
+  }
+  return null;
+}
+
+async function assertAvailable(): Promise<void> {
+  const reason = await migrationUnavailableReason();
+  if (reason) throw new Error(reason);
+}
+
 export async function getVmMigrationSourceInventory() {
-  assertAvailable();
+  await assertAvailable();
   return inspectVmMigrationSource();
 }
 
@@ -250,14 +340,14 @@ export async function localStorageDrainSnapshot(): Promise<{ ready: boolean; blo
   if (getLocalWorkflowActiveWriteCount() > 0) blockers.push('SQLite catalog writes');
   const recordings = getWorkflowExecutionRecordingPersistenceMetrics();
   if (recordings.activeWrites > 0 || recordings.pendingWrites > 0) blockers.push('recording writes');
-  // Migration only runs with filesystem storage. Query the local job runner
+  // Local artifacts use the same job runner in legacy and SQLite modes. Query it
   // directly: getState() creates staging directories and would mutate a frozen source.
   if (filesystemRuntimeLibraryJobRunner.isRunning()) blockers.push('runtime-library job');
   return { ready: blockers.length === 0, blockers };
 }
 const drainSnapshot = localStorageDrainSnapshot;
-export async function freezeLocalStorageSource(): Promise<void> {
-  await enterVmMigrationMaintenance();
+export async function freezeLocalStorageSource(migrationId?: string): Promise<void> {
+  await enterVmMigrationMaintenance(migrationId);
   beginActiveHttpExecutionDrain();
   getPublishedExecutionAdmission().beginDrain();
   getWebAppActionWebSocketRuntime()?.drain();
@@ -267,15 +357,12 @@ export async function freezeLocalStorageSource(): Promise<void> {
 export async function getVmMigrationStatus() {
   const maintenance = readVmMigrationMaintenance();
   const job = await readJob();
+  const unavailableReason = await migrationUnavailableReason();
   return {
-    available:
-      !getLocalMetadataServingSelection() &&
-      !process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT &&
-      process.env.RIVET_VM_MIGRATION_ENABLED === '1' &&
-      getServerUiAuthMode() !== 'none' &&
-      process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated' &&
-      process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL === '1' &&
-      getWorkflowStorageBackendMode() === 'filesystem',
+    available: unavailableReason === null,
+    unavailableReason,
+    sourceKind: getLocalMetadataServingSelection() ? ('sqlite' as const) : ('legacy' as const),
+    precopyAvailable: !getLocalMetadataServingSelection(),
     maintenance,
     drain: maintenance ? await drainSnapshot() : null,
     job:
@@ -293,19 +380,22 @@ export async function getVmMigrationStatus() {
 }
 
 export async function enterVmMigrationMode(): Promise<ReturnType<typeof getVmMigrationStatus>> {
-  assertAvailable();
+  await assertAvailable();
   if (maintenanceTransition || startingJob || runningJob) throw new Error('Migration state is changing.');
+  const releaseControl = claimLocalStorageControl();
   maintenanceTransition = true;
   try {
-    await freezeLocalStorageSource();
+    await freezeLocalStorageSource(randomUUID());
     return await getVmMigrationStatus();
   } finally {
     maintenanceTransition = false;
+    releaseControl();
   }
 }
 
 export async function leaveVmMigrationMode(input?: TargetInput): Promise<void> {
   if (maintenanceTransition || startingJob || runningJob) throw new Error('Migration state is changing.');
+  const releaseControl = claimLocalStorageControl();
   maintenanceTransition = true;
   try {
     const job = await readJob();
@@ -327,13 +417,9 @@ export async function leaveVmMigrationMode(input?: TargetInput): Promise<void> {
       const target = readWorkflowMigrationTargetConfig(env);
       const targetIdentity = migrationTargetIdentity(target);
       if (targetIdentity !== job.targetIdentity) throw new Error('Destination differs from the verified copy.');
-      const runtimeRoot = process.env.RIVET_RUNTIME_LIBRARIES_ROOT?.trim();
-      if (!runtimeRoot) throw new Error('Runtime-library source root is not configured.');
-      const sourceIdentity = migrationSourceIdentity(
-        [getWorkflowsRoot(), getAppDataRoot(), getWorkflowRecordingsRoot(), runtimeRoot].map((root) =>
-          path.resolve(root),
-        ),
-      );
+      const sourceIdentity = currentSourceIdentity();
+      if (job.sourceIdentity && job.sourceIdentity !== sourceIdentity)
+        throw new Error('Migration source selection changed. Keep both installations paused.');
       const pool = new Pool(getManagedDbPoolConfig(target));
       try {
         const releaseLock = await acquireVmMigrationImporterLock(pool);
@@ -362,11 +448,12 @@ export async function leaveVmMigrationMode(input?: TargetInput): Promise<void> {
         message: 'Source resumed; destination gate is closed. Use a fresh target for a later migration.',
       });
     }
-    await leaveVmMigrationMaintenance();
+    await leaveVmMigrationMaintenance({ managedMigration: true });
     // Process-local admission drains are intentionally not reversed. Restart the
     // backend before serving again; otherwise an old WebSocket could be reused.
   } finally {
     maintenanceTransition = false;
+    releaseControl();
   }
 }
 
@@ -397,7 +484,7 @@ export async function acknowledgeInterruptedVmMigration(importerStopped: boolean
 export async function testVmMigrationDatabase(
   input: Pick<TargetInput, 'databaseUrl' | 'databaseSslMode'>,
 ): Promise<void> {
-  assertAvailable();
+  await assertAvailable();
   if (startingJob || runningJob) throw new Error('Migration is already running.');
   runningPreflights += 1;
   try {
@@ -432,7 +519,7 @@ export async function testVmMigrationObjectStorage(
     'bucket' | 'endpoint' | 'region' | 'prefix' | 'forcePathStyle' | 'accessKeyId' | 'secretAccessKey'
   >,
 ): Promise<void> {
-  assertAvailable();
+  await assertAvailable();
   if (startingJob || runningJob) throw new Error('Migration is already running.');
   runningPreflights += 1;
   try {
@@ -491,8 +578,25 @@ async function runImporter(mode: 'precopy' | 'migrate' | 'verify', env: NodeJS.P
   });
 }
 
+function runBackgroundMigration(work: () => Promise<void>): Promise<void> {
+  return work()
+    .catch(() => {
+      // Even recording the failure can fail (for example a full disk). Keep
+      // the last durable active phase for interrupted-job recovery, never
+      // crash the API with an unhandled detached rejection or log credentials.
+      console.error(
+        '[vm-migration] Could not persist migration completion. Keep both installations paused and inspect storage.',
+      );
+    })
+    .finally(() => {
+      runningJob = null;
+    });
+}
+
 export async function startVmMigrationPrecopy(input: TargetInput): Promise<VmMigrationJobStatus> {
-  assertAvailable();
+  await assertAvailable();
+  if (getLocalMetadataServingSelection())
+    throw new Error('SQLite uses a paused copy; pre-copy is not needed or supported.');
   if (maintenanceTransition || isVmMigrationMaintenanceActive()) {
     throw new Error('Pre-copy must run before entering maintenance mode.');
   }
@@ -516,7 +620,7 @@ export async function startVmMigrationPrecopy(input: TargetInput): Promise<VmMig
       targetIdentity,
     };
     await persistJob(job);
-    runningJob = (async () => {
+    runningJob = runBackgroundMigration(async () => {
       try {
         await runImporter('precopy', {
           ...env,
@@ -540,10 +644,8 @@ export async function startVmMigrationPrecopy(input: TargetInput): Promise<VmMig
           finishedAt: new Date().toISOString(),
           message: 'Pre-copy failed. Correct the destination and retry.',
         });
-      } finally {
-        runningJob = null;
       }
-    })();
+    });
     return job;
   } finally {
     startingJob = false;
@@ -551,10 +653,12 @@ export async function startVmMigrationPrecopy(input: TargetInput): Promise<VmMig
 }
 
 export async function startVmMigration(input: TargetInput): Promise<VmMigrationJobStatus> {
-  assertAvailable();
+  await assertAvailable();
   if (maintenanceTransition) throw new Error('Wait for the maintenance transition to finish.');
   if (!isVmMigrationMaintenanceActive()) throw new Error('Enter maintenance mode before migrating.');
   if (!input.targetOffline) throw new Error('Confirm the destination API and execution pods are stopped.');
+  if (!input.runtimePlatformCompatible)
+    throw new Error('Confirm runtime-library platform compatibility before copying.');
   if (startingJob || runningJob) throw new Error('Migration is already running.');
   startingJob = true;
   try {
@@ -568,34 +672,43 @@ export async function startVmMigration(input: TargetInput): Promise<VmMigrationJ
     if (!drain.ready) throw new Error(`Wait for active work to finish: ${drain.blockers.join(', ')}`);
     const env = targetEnvironment(input);
     const targetIdentity = migrationTargetIdentity(readWorkflowMigrationTargetConfig(env));
-    if (previous?.precopyCompleted && previous.targetIdentity !== targetIdentity) {
+    const sourceIdentity = currentSourceIdentity();
+    if (
+      previous?.phase !== 'invalidated' &&
+      previous?.finalCopyStarted &&
+      previous.sourceIdentity &&
+      previous.sourceIdentity !== sourceIdentity
+    )
+      throw new Error('Migration source changed since the previous copy. Keep the destination offline.');
+    if (previous?.phase !== 'invalidated' && previous?.finalCopyStarted && previous.targetIdentity !== targetIdentity)
+      throw new Error('Retry the final copy against its original destination.');
+    if (previous?.phase !== 'invalidated' && previous?.precopyCompleted && previous.targetIdentity !== targetIdentity) {
       throw new Error('Destination changed since pre-copy. Run pre-copy again for this destination.');
     }
+    const sourceEnv: NodeJS.ProcessEnv = {
+      ...env,
+      ...frozenSourceEnvironment(),
+      RIVET_MIGRATION_TARGET_OFFLINE: '1',
+      RIVET_MIGRATION_RUNTIME_PLATFORM_ACK: input.runtimePlatformCompatible ? '1' : '0',
+      RIVET_MIGRATION_REPORT_PATH: reportPath(),
+    };
     const job: VmMigrationJobStatus = {
       id: randomUUID(),
       phase: 'copying',
       startedAt: new Date().toISOString(),
       finishedAt: null,
       message: null,
-      precopyCompleted: previous?.precopyCompleted === true || previous?.phase === 'precopy_complete',
+      precopyCompleted:
+        previous?.phase !== 'invalidated' &&
+        (previous?.precopyCompleted === true || previous?.phase === 'precopy_complete'),
       finalCopyStarted: true,
       targetIdentity,
+      sourceIdentity,
     };
     await persistJob(job);
-    const sourceEnv: NodeJS.ProcessEnv = {
-      ...env,
-      RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT: getWorkflowsRoot(),
-      RIVET_MIGRATION_SOURCE_APP_DATA_ROOT: getAppDataRoot(),
-      RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT: getWorkflowRecordingsRoot(),
-      RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT: process.env.RIVET_RUNTIME_LIBRARIES_ROOT ?? '',
-      RIVET_MIGRATION_SOURCE_QUIESCED: '1',
-      RIVET_MIGRATION_TARGET_OFFLINE: '1',
-      RIVET_MIGRATION_RUNTIME_PLATFORM_ACK: input.runtimePlatformCompatible ? '1' : '0',
-      RIVET_MIGRATION_REPORT_PATH: reportPath(),
-      RIVET_MIGRATION_PROGRESS_PATH: progressPath(job.id),
-      RIVET_MIGRATION_PROGRESS_JOB_ID: job.id,
-    };
-    runningJob = (async () => {
+    sourceEnv.RIVET_MIGRATION_PROGRESS_PATH = progressPath(job.id);
+    sourceEnv.RIVET_MIGRATION_PROGRESS_JOB_ID = job.id;
+    runningJob = runBackgroundMigration(async () => {
       try {
         await fs.rm(reportPath(), { force: true });
         await runImporter('migrate', sourceEnv);
@@ -607,7 +720,7 @@ export async function startVmMigration(input: TargetInput): Promise<VmMigrationJ
           finishedAt: new Date().toISOString(),
           report: await readReport(),
         });
-      } catch (error) {
+      } catch {
         // Never persist a child error: upstream library errors can include the
         // target URL or credentials. The CLI can be retried against partial data.
         console.error('[vm-migration] Copy or verification failed; inspect target connectivity and retry.');
@@ -617,10 +730,8 @@ export async function startVmMigration(input: TargetInput): Promise<VmMigrationJ
           finishedAt: new Date().toISOString(),
           message: 'Copy or verification failed. Correct the destination and retry.',
         });
-      } finally {
-        runningJob = null;
       }
-    })();
+    });
     return job;
   } finally {
     startingJob = false;
@@ -632,10 +743,12 @@ export async function reviewVmMigrationDeployment(
   input: TargetInput,
   checks: VmMigrationDeploymentChecks,
 ): Promise<VmMigrationJobStatus> {
-  assertAvailable();
+  await assertAvailable();
   if (startingJob || runningJob || maintenanceTransition) throw new Error('Migration state is changing.');
   if (!isVmMigrationMaintenanceActive()) throw new Error('The VM must remain in maintenance mode.');
   if (!input.targetOffline) throw new Error('Stop the destination candidate before the final comparison.');
+  if (!input.runtimePlatformCompatible)
+    throw new Error('Confirm runtime-library platform compatibility before review.');
   if (!Object.values(checks).every((value) => value === true)) {
     throw new Error('Complete every deployment review check before approving cutover.');
   }
@@ -649,82 +762,78 @@ export async function reviewVmMigrationDeployment(
       throw new Error('Destination differs from the verified copy.');
     const drain = await drainSnapshot();
     if (!drain.ready) throw new Error(`Wait for active work to finish: ${drain.blockers.join(', ')}`);
-    const runtimeRoot = process.env.RIVET_RUNTIME_LIBRARIES_ROOT?.trim();
-    if (!runtimeRoot) throw new Error('Runtime-library source root is not configured.');
-    const sourceRoots = [getWorkflowsRoot(), getAppDataRoot(), getWorkflowRecordingsRoot(), runtimeRoot].map((root) =>
-      path.resolve(root),
-    );
-    await persistJob({ ...job, phase: 'verifying', finishedAt: null, message: null, deploymentReview: undefined });
-    try {
-      await runImporter('verify', {
-        ...env,
-        RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT: sourceRoots[0],
-        RIVET_MIGRATION_SOURCE_APP_DATA_ROOT: sourceRoots[1],
-        RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT: sourceRoots[2],
-        RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT: sourceRoots[3],
-        RIVET_MIGRATION_SOURCE_QUIESCED: '1',
-        RIVET_MIGRATION_TARGET_OFFLINE: '1',
-        RIVET_MIGRATION_RUNTIME_PLATFORM_ACK: input.runtimePlatformCompatible ? '1' : '0',
-        RIVET_MIGRATION_REPORT_PATH: reportPath(),
-      });
-      const sourceManifestHash = fingerprintVmMigrationSourceParts(
-        await readVmMigrationSourceParts({
-          workflows: sourceRoots[0]!,
-          appData: sourceRoots[1]!,
-          recordings: sourceRoots[2]!,
-          runtimeLibraries: sourceRoots[3]!,
-        }),
-      );
-      const pool = new Pool(getManagedDbPoolConfig(target));
+    const sourceIdentity = currentSourceIdentity();
+    if (job.sourceIdentity && job.sourceIdentity !== sourceIdentity)
+      throw new Error('Migration source selection changed.');
+    const sourceEnv: NodeJS.ProcessEnv = {
+      ...env,
+      ...frozenSourceEnvironment(),
+      RIVET_MIGRATION_TARGET_OFFLINE: '1',
+      RIVET_MIGRATION_RUNTIME_PLATFORM_ACK: '1',
+      RIVET_MIGRATION_REPORT_PATH: reportPath(),
+      RIVET_MIGRATION_PROGRESS_PATH: progressPath(job.id),
+      RIVET_MIGRATION_PROGRESS_JOB_ID: job.id,
+    };
+    const verifying: VmMigrationJobStatus = {
+      ...job,
+      phase: 'verifying',
+      finishedAt: null,
+      message: null,
+      deploymentReview: undefined,
+    };
+    await persistJob(verifying);
+    // Like the copy, final review can take hours on a large source. Return
+    // admission immediately; durable status, not an open HTTP request, owns it.
+    runningJob = runBackgroundMigration(async () => {
       try {
-        await assertVmMigrationSourceManifest(
-          pool,
-          migrationSourceIdentity(sourceRoots),
-          job.targetIdentity!,
-          sourceManifestHash,
-        );
-      } finally {
-        await pool.end();
-      }
-      const reviewed: VmMigrationJobStatus = {
-        ...job,
-        report: await readReport(),
-        deploymentReview: { reviewedAt: new Date().toISOString(), sourceManifestHash },
-      };
-      await persistJob(reviewed);
-      return reviewed;
-    } catch {
-      // The child normally closes the gate before its first read. Close it
-      // again here in case the child never started or a post-verify step failed.
-      let gateClosed = false;
-      const pool = new Pool(getManagedDbPoolConfig(target));
-      try {
-        const releaseLock = await acquireVmMigrationImporterLock(pool);
+        await runImporter('verify', sourceEnv);
+        const sourceManifestHash = await currentSourceManifest();
+        const pool = new Pool(getManagedDbPoolConfig(target));
         try {
-          await invalidateVmMigrationTargetGate(pool, migrationSourceIdentity(sourceRoots), job.targetIdentity!);
-          gateClosed = true;
+          await assertVmMigrationSourceManifest(pool, sourceIdentity, job.targetIdentity!, sourceManifestHash);
         } finally {
-          await releaseLock();
+          await pool.end();
         }
+        const reviewed: VmMigrationJobStatus = {
+          ...job,
+          finishedAt: new Date().toISOString(),
+          report: await readReport(),
+          deploymentReview: { reviewedAt: new Date().toISOString(), sourceManifestHash },
+        };
+        await persistJob(reviewed);
       } catch {
-        console.error('[vm-migration] Could not confirm destination gate closure after final comparison failure.');
-      } finally {
-        await pool.end().catch(() => undefined);
+        // The child normally closes the gate before its first read. Close it
+        // again here in case the child never started or a post-verify step failed.
+        let gateClosed = false;
+        const pool = new Pool(getManagedDbPoolConfig(target));
+        try {
+          const releaseLock = await acquireVmMigrationImporterLock(pool);
+          try {
+            await invalidateVmMigrationTargetGate(pool, sourceIdentity, job.targetIdentity!);
+            gateClosed = true;
+          } finally {
+            await releaseLock();
+          }
+        } catch {
+          console.error('[vm-migration] Could not confirm destination gate closure after final comparison failure.');
+        } finally {
+          await pool.end().catch(() => undefined);
+        }
+        await persistJob({
+          ...job,
+          phase: 'failed',
+          finalCopyStarted: true,
+          finishedAt: new Date().toISOString(),
+          deploymentReview: undefined,
+          report: undefined,
+          message: gateClosed
+            ? 'Final comparison failed; the destination gate is closed. Inspect the target before retrying.'
+            : 'Final comparison failed; destination gate closure is unconfirmed. Keep destination pods stopped.',
+        });
+        console.error('[vm-migration] Final deployment review failed; keep the VM paused and inspect the destination.');
       }
-      await persistJob({
-        ...job,
-        phase: 'failed',
-        finalCopyStarted: true,
-        finishedAt: new Date().toISOString(),
-        deploymentReview: undefined,
-        report: undefined,
-        message: gateClosed
-          ? 'Final comparison failed; the destination gate is closed. Inspect the target before retrying.'
-          : 'Final comparison failed; destination gate closure is unconfirmed. Keep destination pods stopped.',
-      });
-      console.error('[vm-migration] Final deployment review failed; keep the VM paused and inspect the destination.');
-      throw new Error('Final comparison failed. The copy is not approved for cutover.');
-    }
+    });
+    return verifying;
   } finally {
     startingJob = false;
   }

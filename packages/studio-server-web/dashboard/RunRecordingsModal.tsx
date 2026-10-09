@@ -40,7 +40,7 @@ function formatTimestamp(value: string | undefined): string {
 }
 
 function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string {
-  return workflow.project.settings.endpointName || '';
+  return workflow.project.settings.publishedEndpointName || workflow.project.settings.endpointName || '';
 }
 
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({

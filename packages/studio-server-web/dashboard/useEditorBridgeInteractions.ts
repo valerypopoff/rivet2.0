@@ -27,19 +27,15 @@ function isMountedEditorSearchInput(element: Element | null | undefined): elemen
   );
 }
 
-function focusMountedEditorSearchInput(): boolean {
+function findMountedEditorSearchInput(activeDialog: Element | null): HTMLInputElement | undefined {
   for (const selector of MOUNTED_EDITOR_SEARCH_INPUT_SELECTORS) {
-    const input = document.querySelector<HTMLInputElement>(selector);
-    if (!input || !isVisibleEnabledInput(input)) {
-      continue;
+    for (const input of document.querySelectorAll<HTMLInputElement>(selector)) {
+      if (isVisibleEnabledInput(input) && (!activeDialog || input.closest('[role="dialog"]') === activeDialog)) {
+        return input;
+      }
     }
-
-    input.focus({ preventScroll: true });
-    input.select();
-    return true;
   }
-
-  return false;
+  return undefined;
 }
 
 function createEditorKeyboardEvent(modifier: EditorShortcutModifier, key: 'd' | 'f'): KeyboardEvent {
@@ -87,10 +83,19 @@ export function useEditorBridgeInteractions({
         return;
       }
 
+      const activeDialog =
+        targetElement?.closest('[role="dialog"]') ?? activeElement?.closest('[role="dialog"]') ?? null;
+      const searchInput = findMountedEditorSearchInput(activeDialog);
+      // A foreground dialog owns Find; never open graph search or focus a
+      // still-mounted search input in a background dialog.
+      if (activeDialog && !searchInput) return;
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
-      if (focusMountedEditorSearchInput()) {
+      if (searchInput) {
+        searchInput.focus({ preventScroll: true });
+        searchInput.select();
         return;
       }
 

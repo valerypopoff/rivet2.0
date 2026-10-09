@@ -103,6 +103,36 @@ test('mapWorkflowRowToProjectItem exposes freshness for each published web app',
   );
 });
 
+test('managed project statuses keep endpoint unpublish independent from web-app publication', () => {
+  for (const revision of ['revision-a', 'older-revision']) {
+    const item = mapWorkflowRowToProjectItem(
+      createWorkflowRow({
+        published_revision_id: null,
+        published_version_id: null,
+        published_endpoint_name: '',
+        last_published_at: null,
+      }),
+      {
+        webAppRows: [
+          {
+            app_id: 'app',
+            workflow_id: 'workflow-a',
+            revision_id: revision,
+            ui_graph_id: 'ui',
+            slug: 'summary-app',
+            slug_lookup_name: 'summary-app',
+            allowed_emails: [],
+            published_at: '2026-04-07T09:00:00.000Z',
+          },
+        ],
+      },
+    );
+    assert.equal(item.settings.status, 'unpublished');
+    assert.equal(item.settings.publicationStatus, revision === 'revision-a' ? 'published' : 'unpublished_changes');
+    assert.equal(item.settings.publishedWebApps.length, 1);
+  }
+});
+
 test('mapFolderRowToFolderItem preserves managed folder virtual paths', () => {
   const row: FolderRow = {
     relative_path: 'Folder/Subfolder',

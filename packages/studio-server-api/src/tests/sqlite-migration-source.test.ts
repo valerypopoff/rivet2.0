@@ -91,6 +91,39 @@ test('native migration exports the live SQLite generation, compressed recordings
         await withEnvOverride('RIVET_MIGRATION_SOURCE_STOPPED', '0', async () => {
           await assert.rejects(SqliteMigrationSource.open(controlRoot, roots), /acknowledge SOURCE_STOPPED/);
         });
+        const inspection = await SqliteMigrationSource.open(controlRoot, roots, { inspection: true });
+        assert.equal(inspection.catalog.readMigrationCounts().recordingBundles, 1);
+        await inspection.dispose();
+        await assert.rejects(
+          SqliteMigrationSource.open(controlRoot, roots, { inspection: true, expectedIdentity: '0'.repeat(64) }),
+          /differs from the migration source identity/,
+        );
+        await withEnvOverride('RIVET_MIGRATION_SOURCE_STOPPED', '0', async () => {
+          await withEnvOverride('RIVET_VM_MIGRATION_EDITOR_CONTROL', '1', async () => {
+            const migrationId = 'a'.repeat(36);
+            const marker = path.join(roots.appData, 'vm-migration-maintenance.json');
+            await fs.writeFile(
+              marker,
+              JSON.stringify({ version: 1, enteredAt: new Date().toISOString(), migrationId }),
+            );
+            await assert.rejects(
+              SqliteMigrationSource.open(controlRoot, roots, { supervisedBarrier: 'wrong' }),
+              /exact UI-owned/,
+            );
+            const supervised = await SqliteMigrationSource.open(controlRoot, roots, { supervisedBarrier: migrationId });
+            try {
+              await supervised.manifest();
+              await fs.writeFile(
+                marker,
+                JSON.stringify({ version: 1, enteredAt: new Date().toISOString(), migrationId: 'b'.repeat(36) }),
+              );
+              await assert.rejects(supervised.assertFrozen(), /exact UI-owned/);
+            } finally {
+              await supervised.dispose();
+            }
+            await fs.writeFile(marker, JSON.stringify({ version: 1, enteredAt: new Date().toISOString() }));
+          });
+        });
         source = await SqliteMigrationSource.open(controlRoot, roots);
         assert.equal((await source.projectHeaders())[0]?.workflowId, project.workflowId);
         for await (const exported of source.projects()) {

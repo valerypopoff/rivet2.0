@@ -15,6 +15,7 @@ import type {
   RunRecordingsSettingsDraft,
   RuntimeLimitSettings,
   RuntimeLimitSettingsDraft,
+  ServerUiSession,
   TrustedClientSettings,
   TrustedClientSettingsDraft,
   WebAppAuthSettings,
@@ -25,6 +26,10 @@ import type {
 import { parseJsonResponse } from './apiRequest';
 
 const API = `${RIVET_API_BASE_URL}/app-settings`;
+
+export async function readServerUiSession(signal?: AbortSignal): Promise<ServerUiSession> {
+  return appSettingsJsonResponse(await fetch(`${API}/server-ui-session`, { cache: 'no-store', signal }));
+}
 
 export type VmMigrationTarget = {
   databaseUrl: string;
@@ -43,6 +48,9 @@ export type VmMigrationTarget = {
 
 export type VmMigrationStatus = {
   available: boolean;
+  unavailableReason?: string | null;
+  sourceKind?: 'legacy' | 'sqlite';
+  precopyAvailable?: boolean;
   maintenance: { enteredAt: string } | null;
   drain: { ready: boolean; blockers: string[] } | null;
   job: {

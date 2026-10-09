@@ -1,8 +1,8 @@
 import Button, { LoadingButton } from '@atlaskit/button';
 import { useEffect, useState, type FC } from 'react';
 
-import { getAggregateWorkflowProjectStatus } from '../../studio-server-shared/workflow-types';
 import { fetchWorkflowProjectWebApps } from './workflowApi';
+import { getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
 import type { WorkflowProjectItem, WorkflowProjectStatus, WorkflowProjectWebAppSummary } from './types';
 
 const STATUS_LABELS: Record<WorkflowProjectStatus, string> = {
@@ -22,19 +22,20 @@ type ActiveProjectSectionProps = {
 
 type LoadedWebApps = {
   relativePath: string;
-  webApps: WorkflowProjectWebAppSummary[];
+  webApps: WorkflowProjectWebAppSummary[] | null;
 };
 
 type WebAppStatusSummary = {
   label: 'Web app' | 'Web apps';
-  status: WorkflowProjectStatus | 'various' | 'none' | 'loading';
+  status: WorkflowProjectStatus | 'various' | 'none' | 'loading' | 'unavailable';
 };
 
 function getWebAppStatusSummary(
   webAppCount: number,
   webApps: WorkflowProjectWebAppSummary[] | null,
+  loadFailed: boolean,
 ): WebAppStatusSummary {
-  if (webAppCount === 0) {
+  if (webAppCount === 0 && !webApps) {
     return {
       label: 'Web app',
       status: 'none',
@@ -44,27 +45,28 @@ function getWebAppStatusSummary(
   if (!webApps) {
     return {
       label: webAppCount === 1 ? 'Web app' : 'Web apps',
-      status: 'loading',
+      status: loadFailed ? 'unavailable' : 'loading',
     };
   }
 
-  const currentWebApps = webApps.filter((webApp) => !webApp.isMissingFromProject);
-  if (currentWebApps.length === 0) {
+  // A removed draft graph can still have a live, immutable publication.
+  const visibleWebApps = webApps.filter((webApp) => !webApp.isMissingFromProject || webApp.publishedSlug != null);
+  if (visibleWebApps.length === 0) {
     return {
       label: 'Web app',
       status: 'none',
     };
   }
 
-  if (currentWebApps.length === 1) {
+  if (visibleWebApps.length === 1) {
     return {
       label: 'Web app',
-      status: currentWebApps[0]!.status,
+      status: visibleWebApps[0]!.status,
     };
   }
 
-  const firstStatus = currentWebApps[0]!.status;
-  const allSameStatus = currentWebApps.every((webApp) => webApp.status === firstStatus);
+  const firstStatus = visibleWebApps[0]!.status;
+  const allSameStatus = visibleWebApps.every((webApp) => webApp.status === firstStatus);
 
   return {
     label: 'Web apps',
@@ -83,6 +85,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   const activeProjectRelativePath = activeProject?.relativePath ?? null;
   const activeProjectUpdatedAt = activeProject?.updatedAt ?? null;
   const activeProjectStatus = activeProject?.settings.status ?? null;
+  const publicationVersion = activeProject?.settings.publicationVersion ?? null;
   const webAppCount = activeProject?.stats?.webAppCount ?? 0;
   const publishedWebAppCount = activeProject?.settings.publishedWebApps?.length ?? 0;
   const publishedWebAppsSignature = (activeProject?.settings.publishedWebApps ?? [])
@@ -109,7 +112,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
       })
       .catch(() => {
         if (!cancelled) {
-          setLoadedWebApps({ relativePath, webApps: [] });
+          setLoadedWebApps({ relativePath, webApps: null });
         }
       });
 
@@ -120,6 +123,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
     activeProjectRelativePath,
     activeProjectUpdatedAt,
     activeProjectStatus,
+    publicationVersion,
     publishedWebAppsSignature,
     publishedWebAppCount,
     webAppCount,
@@ -137,11 +141,12 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
 
   const statusLabel = STATUS_LABELS[activeProject.settings.status];
   const loadedCurrentWebApps = loadedWebApps?.relativePath === activeProject.relativePath ? loadedWebApps.webApps : null;
-  const webAppStatusSummary = getWebAppStatusSummary(webAppCount, loadedCurrentWebApps);
-  const aggregatePublicationStatus = activeProject.settings.publicationStatus ?? getAggregateWorkflowProjectStatus(
-    activeProject.settings.status,
-    loadedCurrentWebApps?.map((webApp) => webApp.status),
+  const webAppStatusSummary = getWebAppStatusSummary(
+    Math.max(webAppCount, publishedWebAppCount),
+    loadedCurrentWebApps,
+    loadedWebApps?.relativePath === activeProject.relativePath && loadedWebApps.webApps === null,
   );
+  const aggregatePublicationStatus = getWorkflowProjectPublicationStatus(activeProject);
   const baseName = activeProject.fileName.replace(/\.[^.]+$/, '');
   const graphCount = activeProject.stats?.graphCount ?? 0;
   const totalNodeCount = activeProject.stats?.totalNodeCount ?? 0;
@@ -177,6 +182,8 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
                 <span className="active-project-status-text">none</span>
               ) : webAppStatusSummary.status === 'loading' ? (
                 <span className="active-project-status-text">...</span>
+              ) : webAppStatusSummary.status === 'unavailable' ? (
+                <span className="active-project-status-text">Unavailable</span>
               ) : (
                 <span className={`project-status-badge ${webAppStatusSummary.status}`}>
                   {STATUS_LABELS[webAppStatusSummary.status]}

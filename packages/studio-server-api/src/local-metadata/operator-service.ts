@@ -10,6 +10,8 @@ import {
   readVmMigrationMaintenance,
   isVmMigrationMaintenanceActive,
   leaveVmMigrationMaintenance,
+  assertNoManagedMigrationMaintenance,
+  claimLocalStorageControl,
 } from '../vm-migration-maintenance.js';
 import { freezeLocalStorageSource, localStorageDrainSnapshot } from '../vm-migration-service.js';
 import { inspectVmMigrationSource } from '../vm-migration-inventory.js';
@@ -193,6 +195,7 @@ function assertAvailable(): void {
 }
 async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Promise<T>): Promise<T> {
   assertAvailable();
+  assertNoManagedMigrationMaintenance();
   if (activeOperation || runningJob || runningBackup || preparationJobs?.running)
     throw createHttpError(
       409,
@@ -201,6 +204,7 @@ async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Pr
         code: 'local-upgrade-busy',
       },
     );
+  const releaseControl = claimLocalStorageControl();
   activeOperation = operation;
   try {
     if (operation !== 'repair' && operation !== 'inspect' && operation !== 'restart')
@@ -208,6 +212,7 @@ async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Pr
     return await callback();
   } finally {
     activeOperation = null;
+    releaseControl();
   }
 }
 async function assertDrained(): Promise<void> {

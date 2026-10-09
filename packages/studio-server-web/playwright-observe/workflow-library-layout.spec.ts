@@ -4,13 +4,68 @@ import type {
   WorkflowProjectStatus,
   WorkflowProjectWebAppSummary,
 } from '../../studio-server-shared/workflow-types';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 const STATUS_DOT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgb(187, 187, 187)',
   published: 'rgb(126, 226, 148)',
   unpublished_changes: 'rgb(255, 215, 106)',
 };
+
+for (const session of [
+  { mode: 'oauth', email: 'admin@example.test' },
+  { mode: 'oauth', email: null },
+  { mode: 'key', email: null },
+  { mode: 'none', email: null },
+]) {
+  test(`Server UI access sign out for ${session.mode} session ${session.email ?? 'without OAuth email'}`, async ({
+    page,
+  }) => {
+    await installStatusDotTreeRoute(page, []);
+    await installAppSettingsRoute(page);
+    await page.route('**/api/app-settings/server-ui-session', (route) => route.fulfill({ json: session }));
+    await page.route('**/?editor', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const modal = page.getByTestId('app-settings-modal');
+    await modal.getByRole('tab', { name: 'Server UI access' }).click();
+    const panel = modal.locator('.app-settings-server-ui-access-panel');
+    await expect(panel.getByText('Checking sign-in status…')).toHaveCount(0);
+    await expect(panel.getByLabel('Server UI admin emails')).toBeEnabled();
+    const signOut = panel.getByRole('link', { name: 'Sign out', exact: true });
+    if (session.email) {
+      await expect(panel.getByText(`Signed in as ${session.email}`)).toBeVisible();
+      await expect(signOut).toHaveAttribute('href', '/__rivet_auth/logout?return_to=%2F');
+      await expect(panel.getByText('Signing out does not save pending settings changes.')).toBeVisible();
+      let settingsWrites = 0;
+      page.on('request', (request) => {
+        if (request.method() !== 'GET' && request.url().includes('/api/app-settings/')) settingsWrites += 1;
+      });
+      await panel.getByLabel('Server UI admin emails').fill('pending@example.test');
+      await page.route('**/__rivet_auth/logout?return_to=%2F', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: '<h1>Sign in required</h1>',
+        }),
+      );
+      await signOut.click();
+      await expect(page).toHaveURL(/\/__rivet_auth\/logout\?return_to=%2F$/);
+      await expect(page.getByRole('heading', { name: 'Sign in required' })).toBeVisible();
+      expect(settingsWrites).toBe(0);
+    } else {
+      await expect(page.getByText('Could not read your sign-in status.')).toHaveCount(0);
+      await expect(signOut).toHaveCount(0);
+      await expect(panel.getByText(/Signed in as/)).toHaveCount(0);
+    }
+  });
+}
 
 const ACTIVE_PROJECT_BACKGROUND: Record<WorkflowProjectStatus, string> = {
   unpublished: 'rgba(255, 255, 255, 0.07)',
@@ -38,6 +93,7 @@ function createStatusProject(status: WorkflowProjectStatus): WorkflowProjectItem
 }
 
 async function installStatusDotTreeRoute(page: Page, projects: WorkflowProjectItem[]): Promise<void> {
+  await mockHostedEditorBootstrap(page);
   await page.route('**/api/workflows/tree', async (route) => {
     await route.fulfill({
       status: 200,
@@ -1382,6 +1438,59 @@ test.describe('Workflow library layout', () => {
       );
     }
   });
+
+  for (const fails of [false, true]) {
+    const outcome = fails ? 'reports unavailable on read failure' : 'remains visible after removing its draft graph';
+    test(`retained web-app publication ${outcome}`, async ({ page }) => {
+      const project = createStatusProject('unpublished');
+      project.stats = { graphCount: 1, totalNodeCount: 2, webAppCount: 0 };
+      // Older responses omit the aggregate field; tree metadata still knows
+      // that this app remains published with unpublished draft changes.
+      delete project.settings.publicationStatus;
+      project.settings.publishedWebApps = [
+        {
+          uiGraphId: 'removed-app',
+          uiGraphName: 'Still live app',
+          slug: 'still-live-app',
+          allowedEmails: [],
+          publishedAt: '2026-05-15T09:00:00.000Z',
+          status: 'unpublished_changes',
+        },
+      ];
+      await installStatusDotTreeRoute(page, [project]);
+      await page.route('**/api/workflows/projects/web-apps**', (route) =>
+        route.fulfill({
+          status: fails ? 503 : 200,
+          json: fails
+            ? { error: 'Status read unavailable' }
+            : {
+                webApps: [
+                  {
+                    uiGraphId: 'removed-app',
+                    name: 'Still live app',
+                    publishedSlug: 'still-live-app',
+                    publishedAt: '2026-05-15T09:00:00.000Z',
+                    allowedEmails: [],
+                    status: 'unpublished_changes',
+                    isMissingFromProject: true,
+                  },
+                ],
+              },
+        }),
+      );
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.getByRole('button', { name: project.name, exact: true }).click();
+      const lines = page.locator('.active-project-section .active-project-status-line');
+      await expect(page.locator('.active-project-section')).toHaveClass(/\bunpublished_changes\b/);
+      await expect(lines.first()).toContainText('Endpoint:');
+      await expect(lines.first().locator('.project-status-badge')).toHaveText('Unpublished');
+      await expect(lines.nth(1)).toContainText('Web app:');
+      await expect(lines.nth(1)).toContainText(fails ? 'Unavailable' : 'Unpublished changes');
+      await expect(lines.nth(1)).not.toContainText('none');
+    });
+  }
 
   test('shows workflow and web app publication status lines in the active project summary', async ({ page }) => {
     const noAppsProject = createStatusProject('unpublished');

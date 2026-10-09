@@ -143,6 +143,39 @@ The settings sidecar stores endpoint publication fields plus any web-app publica
 
 Important current behavior:
 
+- Project responses use `settings.status` for the endpoint alone and
+  `settings.publicationStatus` for the combined endpoint/web-app state. This
+  contract is identical for legacy filesystem, SQLite and managed PostgreSQL
+  storage, including tree, settings and mutation responses. Unpublishing an
+  endpoint leaves independently published web apps intact: the endpoint status
+  becomes `unpublished` even when the aggregate status remains `published` or
+  `unpublished_changes`. Endpoint badges/actions and migration endpoint checks
+  must use `status`; project-tree coloring uses the aggregate status. SQLite
+  serving certification checks the two fields independently. This is a response
+  mapping correction; existing catalogs do not require a data migration or reset.
+
+- Deletion has the same safeguards across filesystem, SQLite and PostgreSQL:
+  a project with a live endpoint or web-app publication must be unpublished
+  first, and only empty folders can be deleted (no recursive folder deletion).
+  SQLite checks live pointers before project cleanup and uses the existing
+  revision/publication-version checks for the catalog commit. Retained version
+  history alone does not prevent deletion after all live publications are gone.
+
+- The active-project web-app badge includes still-published apps whose UI graph
+  has been removed from the draft; a failed status read is shown as unavailable,
+  not as “none.” The tree and active-project panel share the same aggregate
+  fallback, preserving web-app freshness from compact metadata even when the
+  aggregate field is absent or the detailed status request fails. The recordings
+  picker uses the published endpoint name when present rather than a renamed,
+  unpublished draft name; each recording retains its own historical endpoint
+  identity.
+
+  Regression coverage lives in `sqlite-workflow-backend.test.ts`,
+  `managed-mappers.test.ts` and the native SQLite-to-managed migration fixture.
+  Headless browser coverage lives in `project-settings-modal.spec.ts`,
+  `workflow-library-layout.spec.ts` and `run-recordings-modal.spec.ts`. The
+  compact-status fallback has a pure regression in `published-items.test.ts`.
+
 - Endpoint access help reads "Changes take effect immediately". This is concise
   UI copy only: access changes still apply to both endpoint routes without
   publishing draft changes. The segmented control says "External"
