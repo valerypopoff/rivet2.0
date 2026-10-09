@@ -353,7 +353,8 @@ function validateStructuredScalar(type: string, value: unknown, label: string): 
       if (message.type === 'function') requireString(message.name, `${label}.name`);
       return;
     }
-    case 'llm-config': {
+    case 'llm-config':
+    case 'classifier-config': {
       const profile = requirePlainRecord(value, label);
       if (profile.version !== 1) throw literalError(`${label}.version`, 'must be version 1');
       requirePlainRecord(profile.configuration, `${label}.configuration`);
@@ -452,7 +453,9 @@ export function resolveProjectGlobalVariables(
         continue;
       }
       if (!Object.hasOwn(loadedProjects, reference.id)) {
-        throw new Error(`Referenced project "${reference.id}" was not loaded while resolving project global variables.`);
+        throw new Error(
+          `Referenced project "${reference.id}" was not loaded while resolving project global variables.`,
+        );
       }
       const referencedProject = loadedProjects[reference.id]!;
       visit(referencedProject);

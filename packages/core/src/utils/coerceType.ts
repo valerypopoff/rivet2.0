@@ -115,6 +115,16 @@ export function coerceTypeOptional<T extends DataType>(
 
   const value = wrapped ? unwrapDataValue(wrapped) : undefined;
 
+  // These profiles share a versioned object envelope but configure different
+  // APIs. Do not reinterpret a typed chat profile as a classifier (or vice versa),
+  // including after unwrapping a deferred value. Object/any imports remain valid.
+  if (
+    (type === 'classifier-config' && value?.type === 'llm-config') ||
+    (type === 'llm-config' && value?.type === 'classifier-config')
+  ) {
+    return undefined;
+  }
+
   // Coerce 'true' to [true] for example
   if (isArrayDataType(type) && !isArrayDataValue(value)) {
     const coerced = coerceTypeOptional(value, getScalarTypeOf(type));

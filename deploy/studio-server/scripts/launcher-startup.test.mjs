@@ -23,6 +23,10 @@ for (const [launcher, action, mode, configuredLimit, failureAt] of [
   ['dev-docker', 'recreate', null, null],
   ['dev-docker', 'build', null, null],
   ['dev-docker', 'up', null, null],
+  ['dev-docker', 'config', null, null],
+  ['dev-docker', 'services', null, null],
+  ['prod-docker', 'config', null, null],
+  ['prod-docker', 'services', null, null],
   ['prod-docker', 'prebuilt', null, null, 'pull'],
   ['dev-docker', 'dev', 'tunnel', null, 'up'],
 ]) {
@@ -42,7 +46,8 @@ for (const [launcher, action, mode, configuredLimit, failureAt] of [
       import { appendFileSync } from 'node:fs';
       const args = process.argv.slice(2);
       appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ args,
-        limit: process.env.COMPOSE_PARALLEL_LIMIT, mode: process.env.RIVET_DEV_FRONTEND_MODE }) + '\\n');
+        limit: process.env.COMPOSE_PARALLEL_LIMIT, mode: process.env.RIVET_DEV_FRONTEND_MODE,
+        dotenv: process.env.RIVET_RUNTIME_ENV_FILE }) + '\\n');
       if (args.includes('pull')) console.log('fixture-live-pull');
       if (args.includes('up')) console.log('fixture-live-start');
       if (args.includes('build')) console.log('fixture-live-build');
@@ -99,14 +104,43 @@ for (const [launcher, action, mode, configuredLimit, failureAt] of [
     } else {
       ({ stdout } = await launch());
     }
-    assert.match(stdout, /Reading startup readiness limits…/);
-    assert.match(stdout, /completed \(\d+s\)/);
-    assert.match(stdout, /fixture-live-(pull|start|build)/);
+    const inspection = action === 'config' || action === 'services';
+    if (!inspection) {
+      assert.match(stdout, /Reading startup readiness limits…/);
+      assert.match(stdout, /completed \(\d+s\)/);
+      assert.match(stdout, /fixture-live-(pull|start|build)/);
+    }
     const calls = readFileSync(trace, 'utf8')
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line));
     const starts = calls.filter(({ args }) => args.includes('pull') || args.includes('up') || args.includes('build'));
+    assert.ok(
+      calls
+        .filter(({ args }) => args[0] === 'compose')
+        .every(
+          ({ args, dotenv: selected }) =>
+            selected === dotenv &&
+            args.includes('--env-file') &&
+            args.includes('fixture pull down .env') &&
+            args.some((arg) => arg.endsWith('docker-compose.runtime-env.yml')),
+        ),
+    );
+    if (inspection) {
+      assert.equal(starts.length, 0, 'inspection must never pull, build or start services');
+      const config = calls.find(
+        ({ args }) =>
+          args.includes('config') &&
+          (action === 'services' ? args.includes('--services') : args.includes('--no-interpolate')),
+      );
+      assert.ok(config, 'the requested Compose inspection must execute');
+      if (action === 'config') {
+        for (const flag of ['--no-interpolate', '--no-env-resolution', '--no-path-resolution']) {
+          assert.ok(config.args.includes(flag), `${flag} prevents exposing resolved configuration`);
+        }
+      }
+      return;
+    }
     assert.ok(starts.length);
     if (failureAt) {
       const step =
@@ -137,10 +171,20 @@ for (const [launcher, action, mode, configuredLimit, failureAt] of [
     if (launcher === 'dev-docker' && action === 'recreate') {
       assert.match(stdout, /Stopping development services…/);
       assert.match(stdout, /Building and starting development services; waiting for readiness…/);
+      const down = calls.findIndex(({ args }) => args.includes('down'));
+      const up = calls.findIndex(({ args }) => args.includes('up'));
+      assert.ok(down >= 0 && up > down, 'recreate stops services before rebuilding');
+      assert.ok(calls[up].args.includes('--build'));
     }
     if (launcher === 'dev-docker' && action === 'dev') {
       assert.match(stdout, /Starting development services; waiting for readiness…/);
       assert.doesNotMatch(stdout, /Stopping development services…/);
+      const up = calls.find(({ args }) => args.includes('up'));
+      assert.ok(up && !up.args.includes('--build'), 'ordinary dev start reuses existing images');
+    }
+    if (launcher === 'dev-docker' && ['dev', 'recreate'].includes(action) && !failureAt) {
+      const up = calls.find(({ args }) => args.includes('up'));
+      for (const flag of ['-d', '--remove-orphans', '--wait', '--wait-timeout']) assert.ok(up.args.includes(flag));
     }
     if (mode === 'tunnel') assert.match(stdout, /watched bundles with safe full refresh/);
   });

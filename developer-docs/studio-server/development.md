@@ -1076,7 +1076,10 @@ the unchanged provenance/mount safeguards. `launcher-startup.test.mjs` executes 
 production/development entry points with an isolated fake Docker CLI and dotenv,
 checking phase output (including env-file paths containing operation names),
 failure propagation/no subsequent startup, invocation order, tunnel mode, and concurrency overrides
-without pulling images or touching any running stack. No storage migration or VM restart is
+without relying on the launcher's command-plan source layout. It also verifies
+selected dotenv/Compose overrides, wait/build flags, stop-before-recreate ordering,
+and quiet `config`/`services` actions that never build, pull or start containers.
+These checks never pull real images or touch a running stack. No storage migration or VM restart is
 needed just to install this launcher change; it takes effect on the next invocation.
 
 The older manual route remains available: set exactly one `RIVET_IMAGE_TAG=candidate-<commit SHA>-<run ID>-<run attempt>` from a successful run in the VM `.env`, then run `yarn studio-server:prod`. Do not use the default `latest` tag to test staging; it is the main-branch production alias. If `.env` contains a staging tag or individual image overrides from a VM trial, remove or update them explicitly before a later main-line production deployment. Pulling a staging image does not select it for Compose by itself.

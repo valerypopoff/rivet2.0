@@ -519,7 +519,6 @@ test('Docker launchers attach the selected dotenv only to the combined backend',
   assert.match(prodLauncher, /deploy\/studio-server\/compose\/docker-compose\.runtime-env\.yml/);
   for (const launcher of [devLauncher, prodLauncher]) {
     assert.match(launcher, /config --no-interpolate --no-env-resolution --no-path-resolution/);
-    assert.match(launcher, /services: \[`\$\{composeBase\} config --services`\]/);
   }
 });
 
@@ -623,11 +622,8 @@ test('images and local launchers build directly from the monorepo workspace', ()
   assert.doesNotMatch(dockerLauncher, /composeBase\} down --remove-orphans/);
   assert.match(devDockerLauncher, /Restarting the dev stack because dependency markers changed/);
   assert.match(dockerLauncher, /docker ps -aq --no-trunc/);
-  assert.match(devDockerLauncher, /dev: \[`\$\{composeBase\} up -d --remove-orphans --wait/);
-  assert.match(
-    devDockerLauncher,
-    /down --remove-orphans --timeout 20`,\s*`\$\{composeBase\} up -d --build --remove-orphans --wait/,
-  );
+  // Command order, wait/build flags and dotenv selection are exercised through
+  // the real entry points in launcher-startup.test.mjs, not their source layout.
   assert.match(devDockerLauncher, /readDockerWaitTimeoutSeconds/);
   assert.match(
     prodDockerLauncher,

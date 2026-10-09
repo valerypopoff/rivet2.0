@@ -2,6 +2,23 @@
 
 Classifier is a first-party Core node family, not a plugin. The canonical node types are `classifierQuestion`, `classifierProfile` and `classifierEvaluate`; they are registered by `registerBuiltInNodes` and appear only in the built-in **Classifier** context-menu group. The editor's fixed `addContextMenuGroups` list must include that group: registration and generated Graph Builder catalog entries alone do not make a node discoverable in the palette.
 
+## Built-in type and documentation integration
+
+Adding a profile family must also update the global-variable codec, the complete
+coercion compatibility matrix, and the editor's node-documentation URL map.
+Scalar/array `classifier-config` ports remain incompatible with `llm-config`.
+Deferred ports retain the existing permissive wiring policy, but resolving their
+values still rejects conversion between profile families. Object conversion is permitted, with provider-specific validation
+at Evaluate's bounded boundary. Project global variables accept version-1
+profile envelopes using the same structural rules as LLM profiles. The codec
+preserves values rather than resolving credentials; explicitly persisting a
+resolved profile also persists its credential, so use Profile nodes for secrets.
+
+The Classifier Profile reference page must be registered in the editor Help map,
+Node Reference index and documentation sidebar. `GlobalVariables.test.ts`,
+`coerceType.test.ts` and `nodeDocumentation.test.ts` enforce these contracts;
+include them when validating a new built-in type, not only the node's own tests.
+
 ## Profiles and ordered fallback
 
 `ClassifierProfileNode` produces a version-1 sensitive `classifier-config` value containing resolved provider/model/credentials and optional suspension policy. `classifier/profile.ts` owns selection, validation, cumulative chain limits (1–128 candidates), timing and route identity. Classifier and LLM configuration types are intentionally distinct. Missing credentials make a candidate unavailable; invalid authored configuration fails instead of being hidden by fallback.
