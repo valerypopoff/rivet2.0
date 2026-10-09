@@ -13,6 +13,7 @@ export default defineConfig({
     'modal-sizing.spec.ts',
     'scheduled-runs.spec.ts',
     'fullscreen-output-search-paging.spec.ts',
+    'hosted-modal-focus.spec.ts',
     'hosted-dashboard-contracts.spec.ts',
     'project-bundle.spec.ts',
     'sidebar-name-wrapping.spec.ts',

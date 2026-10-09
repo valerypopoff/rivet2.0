@@ -61,7 +61,6 @@ export function hasSubGraphPortDefinitions(
   referencedProjects: Record<ProjectId, Project>,
 ): boolean {
   const data = node.data;
-  if (data.targetProjectId && data.targetBoundary) return true;
   const target = data.targetProjectId
     ? referencedProjects[
         getSubgraphProjectKey({ projectId: data.targetProjectId, version: data.targetVersion ?? 'latest' })
@@ -92,7 +91,8 @@ function resolveSubGraphPortIds({
   // Missing definitions are not an empty port contract. External previews load
   // asynchronously (and may fail), so pruning here would permanently delete
   // authored wires and dirty a project merely by opening it. A saved external
-  // boundary is authoritative even while its preview is unavailable.
+  // boundary can predate an additive target edit: wait for the exact preview
+  // before treating an unknown saved port as removed.
   if (!hasSubGraphPortDefinitions(node as SubGraphNode, project, referencedProjects)) {
     return undefined;
   }

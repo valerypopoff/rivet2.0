@@ -2,11 +2,13 @@ import { expect, test } from '@playwright/test';
 import {
   createBuiltInRegistry,
   deserializeProject,
+  getGraphBoundary,
   serializeProject,
   type GraphId,
   type NodeConnection,
   type Project,
   type ProjectId,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
@@ -55,6 +57,152 @@ function fixture(version: 'latest' | 'published') {
   const [persisted] = deserializeProject(serializeProject(project));
   return { project: persisted, target, connections: persisted.graphs.main!.connections };
 }
+
+test('new external graph input survives connection, tab switches and saved-file reopen', async ({ page }) => {
+  const { project, target } = fixture('latest');
+  const call = project.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;
+  call.data.targetBoundary = getGraphBoundary(target, 'child' as GraphId);
+  const secondSource = registry.createDynamic('text');
+  secondSource.id = 'second-source' as typeof secondSource.id;
+  secondSource.data.text = 'Second input';
+  secondSource.visualData = { x: 100, y: 500, width: 200 };
+  project.graphs.main!.nodes.push(secondSource);
+  target.metadata.mainGraphId = 'child' as GraphId;
+  target.graphs.child!.nodes.forEach((node, index) => {
+    node.visualData = { x: 100 + index * 400, y: 200, width: 200 };
+  });
+  const paths = new Map([
+    ['/workflows/caller.rivet-project', project],
+    ['/workflows/target.rivet-project', target],
+  ]);
+  const saves = new Map<string, number>();
+  const workflows = [...paths].map(([absolutePath, saved]) => ({
+    id: saved.metadata.id,
+    projectMetadataId: saved.metadata.id,
+    name: saved.metadata.title,
+    fileName: absolutePath.split('/').pop(),
+    relativePath: absolutePath.slice('/workflows/'.length),
+    absolutePath,
+    updatedAt: '2026-10-09T00:00:00.000Z',
+    settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+  }));
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
+  );
+  await page.route('**/api/**', (route) =>
+    route.fulfill({ status: 503, json: { error: 'Unavailable in this fixture' } }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', sync: { epoch: 'expanded-subgraph', revision: 0 }, folders: [], projects: workflows },
+    }),
+  );
+  await page.route('**/api/projects/load', (route) =>
+    route.fulfill({
+      json: {
+        contents: serializeProject(paths.get(route.request().postDataJSON().path)!),
+        datasetsContents: null,
+        revisionId: null,
+      },
+    }),
+  );
+  await page.route('**/api/projects/save', (route) => {
+    const body = route.request().postDataJSON();
+    paths.set(body.path, deserializeProject(body.contents)[0]);
+    saves.set(body.path, (saves.get(body.path) ?? 0) + 1);
+    return route.fulfill({ json: { path: body.path, revisionId: null } });
+  });
+  let previewRequests = 0;
+  let holdPreview = false;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest', async (route) => {
+    previewRequests++;
+    if (holdPreview) await gate;
+    await route.fulfill({ json: { project: paths.get('/workflows/target.rivet-project') } });
+  });
+  try {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    const frame = page.frameLocator('iframe.dashboard-editor-frame');
+    const callerRow = page.locator('.project-row', { hasText: project.metadata.title });
+    await callerRow.dblclick();
+    const node = frame.locator('.node[data-nodeid="external-call"]');
+    await expect(node.locator('.input-port[data-portid="prompt"]')).toBeVisible();
+    await page.locator('.project-row', { hasText: target.metadata.title }).dblclick();
+    // Add the second input using the real editor, then save B. Preview resolves
+    // B's saved content, not an injected atom or an unsaved open-tab snapshot.
+    await frame.locator('.node-canvas').click({ button: 'right', position: { x: 350, y: 450 } });
+    await frame.getByPlaceholder('Type in node name...').fill('Graph Input');
+    await frame
+      .locator('.context-menu-label-text')
+      .filter({ hasText: /^Graph Input$/ })
+      .click();
+    const inputs = frame.locator('.node', { has: frame.locator('.node-title', { hasText: /^Graph Input$/ }) });
+    await expect(inputs).toHaveCount(2);
+    await inputs.last().hover();
+    await inputs.last().locator('.edit-button').click();
+    await frame.getByLabel('ID', { exact: true }).fill('second');
+    await frame.locator('body').press('Escape');
+    await frame.locator('body').press(`${modifier}+S`);
+    await expect.poll(() => saves.get('/workflows/target.rivet-project')).toBe(1);
+    const callerTab = frame.locator('.projects-container .project', { hasText: /^(External caller|caller)$/ });
+    const targetTab = frame.locator('.projects-container .project', { hasText: /^(Reusable target|target)$/ });
+    await callerTab.click();
+    await expect(node.locator('.input-port[data-portid="second"]')).toBeVisible();
+    await expect(callerTab).not.toHaveClass(/has-unsaved-changes/);
+    const output = frame.locator('.node[data-nodeid="second-source"] .output-port[data-portid="output"]');
+    const input = node.locator('.input-port[data-portid="second"]');
+    const from = (await output.boundingBox())!;
+    const to = (await input.boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await frame.locator('body').press(`${modifier}+Z`);
+    await expect(frame.locator('path.wire')).toHaveCount(2);
+    await frame.locator('body').press(`${modifier}+Shift+Z`);
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await frame.locator('body').press(`${modifier}+S`);
+    await expect.poll(() => saves.get('/workflows/caller.rivet-project')).toBe(1);
+    const saved = paths.get('/workflows/caller.rivet-project')!;
+    expect(saved.graphs.main!.connections).toHaveLength(3);
+    expect(
+      (saved.graphs.main!.nodes.find((entry) => entry.id === call.id)! as SubGraphNode).data.targetBoundary!.inputs.map(
+        (port) => port.id,
+      ),
+    ).toEqual(['prompt', 'second']);
+    await targetTab.click();
+    holdPreview = true;
+    const before = previewRequests;
+    await callerTab.click();
+    await expect.poll(() => previewRequests).toBeGreaterThan(before);
+    await expect(node.locator('.input-port[data-portid="second"]')).toBeVisible();
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await expect(callerTab).not.toHaveClass(/has-unsaved-changes/);
+    release();
+    // Close A, then reopen its mocked saved file rather than workspace recovery.
+    await callerTab.hover();
+    await callerTab.locator('.close-project').click();
+    await expect(callerTab).toHaveCount(0);
+    await callerRow.dblclick();
+    await expect(node.locator('.input-port[data-portid="second"]')).toBeVisible();
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await expect(callerTab).not.toHaveClass(/has-unsaved-changes/);
+    await frame.locator('body').press(`${modifier}+S`);
+    await expect.poll(() => saves.get('/workflows/caller.rivet-project')).toBe(2);
+    expect(paths.get('/workflows/caller.rivet-project')!.graphs.main!.connections).toEqual(
+      saved.graphs.main!.connections,
+    );
+  } finally {
+    release();
+  }
+});
 
 for (const version of ['latest', 'published'] as const) {
   for (const scenario of ['delay', 'failure', 'reference-load', 'reference-failure', 'shared-refresh'] as const) {

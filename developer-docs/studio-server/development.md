@@ -49,6 +49,41 @@ dismissal and drawer exclusion. No Kubernetes rehearsal is needed.
 The small dashboard sizing scenario is also in the production-bundle CI browser
 lane, so the stylesheet must work without Vite development style injection.
 
+## Hosted modal focus ownership
+
+The hosted Vite build routes `react-focus-lock` through
+`shims/hosted-focus-lock.tsx`. An editor iframe's modal must not reclaim focus
+while its document is unfocused: the dashboard's inline rename and publication
+inputs are outside that modal's jurisdiction. Two separate document-level
+modal stacks cannot determine foreground ownership across the iframe boundary.
+The adapter uses the library's `whiteList` callback to decline focus handling
+outside the focused iframe document, preserving the caller's existing whitelist,
+refs, named exports, and normal trapping within the active document. Top-level
+dashboard dialogs and standalone desktop Rivet retain their existing behavior.
+The adapter also gates close-time `returnFocus`: dismissing an unfocused editor
+dialog must not restore focus into the iframe and cancel an active sidebar rename.
+Preserve boolean, focus-options, and callback forms of that library prop.
+Fullscreen output's deferred initial focus checks that the active element has
+not changed and that an embedded document still owns focus before applying it.
+Find routing in both the hosted bridge and output search is scoped to the focused
+dialog; mounted background output must not claim Ctrl/Cmd+F from another dialog.
+Canvas hotkeys also decline prevented/composing events and events owned by dialog
+controls (including buttons), so graph undo and navigation cannot run behind a modal.
+Do not disable modal trapping globally or replace rename's blur-to-cancel rule.
+`shouldReturnFocus={false}` only affects closing a dialog, not its active trap.
+
+Verify with headless `yarn studio-server:ui:observe hosted-modal-focus.spec.ts
+fullscreen-output-search-paging.spec.ts`. The focus regression keeps full output
+open while exercising project/folder rename and endpoint typing, then re-enters
+the editor to check search and Tab containment. It also dismisses an unfocused
+editor dialog during rename and checks Find, undo, and navigation ownership across
+stacked dialogs, including controls that are not text inputs. Mocked API writes
+prevent this check from renaming or publishing any real projects. No Kubernetes
+rehearsal is needed. `tests/hosted-focus-lock.test.ts` covers standalone/document ownership and
+preserving the caller's focus exceptions.
+The App DOM tests in `fullscreenOutputKeyboardNavigation.dom.test.ts` use a
+controlled animation-frame clock to cover focus changes before deferred autofocus.
+
 ## Scheduled runs regression checks
 
 See [Scheduled runs](./scheduled-runs.md) for ownership, storage schema 14 and
@@ -1422,8 +1457,10 @@ older saved callers may not contain `targetBoundary`. Until the exact
 project/version/graph resolves, preserve their persisted connections and do not
 mark the caller dirty. Preview failure or a missing local/external graph is not
 permission to delete wires. A saved external boundary remains the authored
-contract even when the preview fails or changes; genuinely stale ports in a
-resolved contract still use the existing pruning behavior.
+contract even when the preview fails or changes, but it can predate a newly
+connected additive port. Pruning external wires therefore requires the exact
+version's graph preview, even when a saved boundary exists; genuinely stale
+ports in a resolved contract still use the existing pruning behavior.
 `connectionValidation.test.ts` covers these cases and latest/published key
 isolation. `cross-project-subgraph-loading.spec.ts` holds or rejects each
 version's preview, checks clean tabs and rendered ports/wires after resolution,
@@ -1448,6 +1485,20 @@ and releases successful/failed legacy-reference loads after the preview arrives;
 the caller's ports, wires and clean saved state must survive both orderings.
 Shared-refresh cases keep two Subgraph controls mounted, refresh one of them,
 and verify both display the same current target without dirtying the caller.
+Creating or rewiring a connection to a newly discovered external input or output
+persists its reconciled boundary in the same graph update as the wire. This is
+an authored command, not an automatic edit on preview completion: viewing a
+project remains clean. Undo/Redo restore both the connection and its boundary,
+and Redo uses the accepted boundary even if the preview cache was cleared.
+Breaking boundary changes still require explicit graph re-selection; port IDs
+for compatible renames remain stable. `connectionBoundaryCommands.test.ts`
+covers input/output creation and rewiring for latest/published targets, cache
+resets, and command history. It also verifies wires between two external
+Subgraphs, restoration of displaced wires including midpoints, isolated
+boundary snapshots, and rejection of type changes or rename collisions.
+The browser regression adds a Graph Input in B, saves B, connects it from A,
+verifies Undo/Redo, switches tabs while the preview
+is delayed, and closes/reopens A from saved storage without losing the wire.
 `node-editor-lifecycle.spec.ts` also verifies that retired preview responses
 cannot contaminate the next project after a tab switch. Its workspace bootstrap
 authenticates when the proxy UI gate is enabled, so the same check works on both

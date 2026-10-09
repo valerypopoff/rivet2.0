@@ -213,7 +213,9 @@ test('a saved external boundary remains authoritative during missing or changed 
     project: makeProject(),
     projectNodeRegistry: registry,
   };
-  assert.deepEqual(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), [valid]);
+  // The saved contract can predate the wire: do not prune before fetching the
+  // exact target, even when a previous targetBoundary is present.
+  assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), options.connections);
   assert.deepEqual(
     filterValidSubGraphConnections({
       ...options,
@@ -222,6 +224,38 @@ test('a saved external boundary remains authoritative during missing or changed 
       },
     }),
     [valid],
+  );
+  assert.deepEqual(
+    filterValidSubGraphConnections({
+      ...options,
+      referencedProjects: { [getSubgraphProjectKey({ projectId, version: 'latest' })]: target },
+    }),
+    [valid],
+  );
+});
+
+test('older external contracts preserve newly saved wires across preview reset and additive refresh', () => {
+  const projectId = 'external' as ProjectId;
+  const oldTarget = makeProjectWithSubGraph([makeGraphInputNode('in', 'input')]);
+  const target = makeProjectWithSubGraph([makeGraphInputNode('in', 'input'), makeGraphInputNode('new', 'second')]);
+  const source = makeTextNode('source');
+  const subgraph = makeSubGraphNode('subgraph', subGraphId, {
+    data: { targetProjectId: projectId, targetBoundary: getGraphBoundary(oldTarget, subGraphId) },
+  });
+  const connections = [makeConnection(), makeConnection({ inputId: 'second' as PortId })];
+  const options = {
+    connections,
+    nodesById: { [source.id]: source, [subgraph.id]: subgraph },
+    project: makeProject(),
+    projectNodeRegistry: registry,
+  };
+  assert.equal(filterValidSubGraphConnections({ ...options, referencedProjects: {} }), connections);
+  assert.equal(
+    filterValidSubGraphConnections({
+      ...options,
+      referencedProjects: { [getSubgraphProjectKey({ projectId, version: 'latest' })]: target },
+    }),
+    connections,
   );
 });
 
