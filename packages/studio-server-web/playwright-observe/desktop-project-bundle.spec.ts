@@ -93,6 +93,19 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
       const datasets = new BrowserDatasetProvider();
       window.bundleDatasets = datasets;
       const io = new TauriIOProvider(datasets, { allowDataFileNeighbor: async () => {} });
+      // Exercise Open through the dialog adapter, not just openProjectPath.
+      // Hosted Vite maps Tauri's dialog API to the browser picker; unit tests
+      // independently assert the options reaching the actual native IPC API.
+      window.showOpenFilePicker = async (options) => {
+        window.bundlePickerOptions = options;
+        return [{ name: '/bundle/rivet-bundle.json' }];
+      };
+      const openWithDialog = io.loadProjectData.bind(io);
+      io.loadProjectData = async (...args) => {
+        window.__TAURI__ = {};
+        try { return await openWithDialog(...args); }
+        finally { delete window.__TAURI__; }
+      };
       io.readProjectBundle = async (path) => {
         if (window.blockNextBundleRead) {
           window.blockNextBundleRead = false;
@@ -124,7 +137,13 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     page.waitForFunction(() => Boolean((window as any).bundleHost), { timeout: 120_000 }),
     initializationError,
   ]);
-  expect(await page.evaluate(() => (window as any).bundleHost.openProjectPath('/bundle/rivet-bundle.json'))).toBe(true);
+  await page.locator('.file-menu-button').click();
+  await page.getByRole('menuitem', { name: 'Open project', exact: true }).click();
+  await page.waitForFunction(() => Boolean((window as any).bundlePickerOptions));
+  expect(await page.evaluate(() => (window as any).bundlePickerOptions.types)).toContainEqual({
+    description: 'Rivet Bundle (rivet-bundle.json)',
+    accept: { 'application/octet-stream': ['.json'] },
+  });
   const childOutput = fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!.nodes.find(
     (node) => node.type === 'graphOutput',
   )!;

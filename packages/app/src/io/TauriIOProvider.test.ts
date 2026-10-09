@@ -10,51 +10,61 @@ function nativeFixture(t: TestContext, asBundle = false) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const project = createBlankProjectWithDefaultGraph();
   const calls: string[] = [];
+  const dialogs: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } }[] = [];
+  let selectedPath: string | null = asBundle ? '/fixture/rivet-bundle.json' : '/fixture/project.rivet-project';
   let failWrite = false;
   const runtime: Record<string, unknown> = { __TAURI__: {}, crypto: globalThis.crypto };
-  runtime.__TAURI_IPC__ = (request: { callback: number; error: number; cmd?: string; message?: { cmd: string } }) => {
+  runtime.__TAURI_IPC__ = (request: {
+    callback: number;
+    error: number;
+    cmd?: string;
+    message?: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } };
+  }) => {
     const command = request.message?.cmd ?? request.cmd!;
     calls.push(command);
+    if (command === 'openDialog' || command === 'saveDialog') dialogs.push(request.message!);
     const error = command === 'writeFile' && failWrite;
     const callback = runtime[`_${error ? request.error : request.callback}`] as (value: unknown) => void;
     callback(
       error
         ? 'native write failed'
-        : command === 'read_project_bundle' && asBundle
-          ? {
-              manifestPath: '/fixture/rivet-bundle.json',
-              selectedProjectPath: null,
-              manifestContents: JSON.stringify({
-                format: 'rivet-project-bundle',
-                schemaVersion: 1,
-                requiredLoaderVersion: 2,
-                exportingRuntimeVersion: 'fixture',
-                rootArtifact: 'root',
-                targets: [],
-                references: [],
-                plugins: [],
-                artifacts: [
+        : command === 'openDialog' || command === 'saveDialog'
+          ? selectedPath
+          : command === 'read_project_bundle' && asBundle
+            ? {
+                manifestPath: '/fixture/rivet-bundle.json',
+                selectedProjectPath: null,
+                manifestContents: JSON.stringify({
+                  format: 'rivet-project-bundle',
+                  schemaVersion: 1,
+                  requiredLoaderVersion: 2,
+                  exportingRuntimeVersion: 'fixture',
+                  rootArtifact: 'root',
+                  targets: [],
+                  references: [],
+                  plugins: [],
+                  artifacts: [
+                    {
+                      id: 'root',
+                      projectId: project.metadata.id,
+                      title: project.metadata.title,
+                      version: 'latest',
+                      revision: 'original',
+                      project: { path: 'projects/root.rivet-project' },
+                    },
+                  ],
+                }),
+                files: [
                   {
-                    id: 'root',
-                    projectId: project.metadata.id,
-                    title: project.metadata.title,
-                    version: 'latest',
-                    revision: 'original',
-                    project: { path: 'projects/root.rivet-project' },
+                    path: 'projects/root.rivet-project',
+                    sourceProjectPath: '/fixture/projects/root.rivet-project',
+                    contents: serializeProject(project),
                   },
                 ],
-              }),
-              files: [
-                {
-                  path: 'projects/root.rivet-project',
-                  sourceProjectPath: '/fixture/projects/root.rivet-project',
-                  contents: serializeProject(project),
-                },
-              ],
-            }
-          : command === 'readTextFile'
-            ? serializeProject(project)
-            : false,
+              }
+            : command === 'readTextFile'
+              ? serializeProject(project)
+              : false,
     );
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: runtime });
@@ -75,6 +85,10 @@ function nativeFixture(t: TestContext, asBundle = false) {
   return {
     provider,
     calls,
+    dialogs,
+    cancelDialog: () => {
+      selectedPath = null;
+    },
     project,
     imports: () => imports,
     failWrite: () => {
@@ -82,6 +96,42 @@ function nativeFixture(t: TestContext, asBundle = false) {
     },
   };
 }
+
+test('native Open picker offers project and explicit bundle filters and opens a selected JSON manifest', async (t) => {
+  const fixture = nativeFixture(t, true);
+  let loadedPath: string | undefined;
+  await fixture.provider.loadProjectData(
+    (loaded) => {
+      loadedPath = loaded.path;
+      assert.equal(loaded.project.metadata.id, fixture.project.metadata.id);
+      assert.equal(fixture.imports(), 0);
+    },
+    { deferCommit: true },
+  );
+  assert.equal(loadedPath, '/fixture/projects/root.rivet-project');
+  assert.deepEqual(fixture.calls, ['openDialog', 'read_project_bundle']);
+  assert.deepEqual(fixture.dialogs[0]?.options?.filters, [
+    { name: 'Rivet Project or Bundle', extensions: ['rivet-project', 'json'] },
+    { name: 'Rivet Bundle (rivet-bundle.json)', extensions: ['json'] },
+    { name: 'Rivet Project', extensions: ['rivet-project'] },
+  ]);
+});
+
+test('cancelling the native Open picker performs no project reads or dataset imports', async (t) => {
+  const fixture = nativeFixture(t, true);
+  fixture.cancelDialog();
+  await fixture.provider.loadProjectData(() => assert.fail('Cancelled picker must not open a project'));
+  assert.deepEqual(fixture.calls, ['openDialog']);
+  assert.equal(fixture.imports(), 0);
+});
+
+test('native Save picker stays project-only', async (t) => {
+  const fixture = nativeFixture(t, true);
+  fixture.cancelDialog();
+  await fixture.provider.saveProjectData(fixture.project);
+  assert.deepEqual(fixture.dialogs[0]?.options?.filters, [{ name: 'Rivet Project', extensions: ['rivet-project'] }]);
+  assert.deepEqual(fixture.calls, ['saveDialog']);
+});
 
 test('native reads prepare datasets without side effects and honor guarded commit', async (t) => {
   const fixture = nativeFixture(t);

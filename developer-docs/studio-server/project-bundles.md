@@ -113,8 +113,16 @@ provenance, not checksums or proof that an extracted file is unchanged.
 ### Desktop opening and execution
 
 Extract the ZIP first. Desktop Open accepts `rivet-bundle.json`, opens every
-declared project in its own tab and selects the root. Actual `.rivet-project`
-paths are used for saves, tabs and recent files. Existing tabs from the same
+declared project in its own tab and selects the root. `.rivet-project`
+files and JSON manifests share the default native Open filter. The file-type
+dropdown also offers explicit **Rivet Bundle (rivet-bundle.json)** (`*.json`) and
+**Rivet Project** (`*.rivet-project`) filters. Only bundle manifests are accepted
+as bundles; the JSON filter does not turn arbitrary JSON into a project. Save
+remains project-only, and bundle opens resolve the actual project save path,
+not the manifest path.
+Native adapter tests exercise the dialog IPC options and selected-manifest load,
+not just the path-based loader; Playwright covers the editor's Open menu path.
+Actual `.rivet-project` paths are used for saves, tabs and recent files. Existing tabs from the same
 paths keep their unsaved edits and datasets; conflicting open project identities
 fail before importing. New inactive members import datasets without activating
 their provider and merge their Evaluation library entries. Workspace opening uses

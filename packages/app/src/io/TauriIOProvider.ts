@@ -126,6 +126,14 @@ export class TauriIOProvider implements PathBasedIOProvider {
           name: 'Rivet Project or Bundle',
           extensions: ['rivet-project', 'json'],
         },
+        {
+          name: 'Rivet Bundle (rivet-bundle.json)',
+          extensions: ['json'],
+        },
+        {
+          name: 'Rivet Project',
+          extensions: ['rivet-project'],
+        },
       ],
       multiple: false,
       directory: false,
