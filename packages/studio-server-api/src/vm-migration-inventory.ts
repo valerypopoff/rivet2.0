@@ -1,23 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
+import { loadProjectFromString } from '@valerypopoff/rivet2-node';
 
 import { getAppDataRoot, getWorkflowRecordingsRoot, getWorkflowsRoot } from './security.js';
 import { readDeploymentStorageRuntimeSettingsSync } from './deployment-storage-settings.js';
-import { listProjectPathsRecursive } from './routes/workflows/fs-helpers.js';
-import {
-  readStoredWorkflowProjectSettings,
-  resolvePublishedWorkflowProjectPath,
-} from './routes/workflows/publication.js';
-import {
-  readFilesystemPublishedVersionsForMigration,
-  validateFilesystemPublishedVersionArchiveForMigration,
-} from './routes/workflows/published-versions.js';
-import { listWorkflowFolders } from './routes/workflows/workflow-query.js';
-import { collectFolderPaths } from './scripts/migrate-workflow-storage-lib.js';
-import { withLocalSourceBudget } from './local-metadata/source-budget.js';
-import { readMigrationSourceUtf8 } from './scripts/migration-source-utf8.js';
+import { collectSourceFolderPaths, iterateSourceWorkflows } from './local-metadata/filesystem-workflow-source.js';
+import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
+import { SqliteMigrationSource } from './scripts/sqlite-migration-source.js';
 
 export type VmMigrationSourceInventory = {
   projects: number;
@@ -35,46 +25,71 @@ export type VmMigrationSourceInventory = {
 
 /** Read-only preview. The frozen importer's deeper validation remains authoritative. */
 export async function inspectVmMigrationSource(): Promise<VmMigrationSourceInventory> {
-  const projectPaths = await listProjectPathsRecursive(getWorkflowsRoot());
-  const folders = collectFolderPaths(await listWorkflowFolders(getWorkflowsRoot()));
+  const selected = getLocalMetadataServingSelection();
+  if (selected) {
+    const source = await SqliteMigrationSource.open(process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!, selected.source, {
+      inspection: true,
+      expectedIdentity: SqliteMigrationSource.identity(
+        process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT!,
+        selected.generationId,
+        selected.source,
+      ),
+    });
+    try {
+      let codeNodes = 0,
+        fileNodes = 0;
+      for (const relativePath of source.catalog.listProjectPaths()) {
+        const draft = await source.catalog.readDraftDefinition(relativePath);
+        if (!draft) throw new Error('Source project changed during inspection. Retry Inspect source.');
+        const project = loadProjectFromString(draft.contents, { logErrors: false });
+        for (const graph of Object.values(project.graphs))
+          for (const node of graph.nodes) {
+            if (node.type === 'code' || node.type === 'codeNew') codeNodes++;
+            if (node.type === 'readFile') fileNodes++;
+          }
+      }
+      return {
+        ...source.catalog.readMigrationCounts(),
+        savedSettingsDomains: source.settings.listKeys().length,
+        sourceDatabaseAuthority: 'Selected live SQLite generation and immutable local artifacts',
+        codeNodes,
+        fileNodes,
+        warnings: [
+          'Back up the complete selected generation and local-metadata control root, plus the original app-data maintenance barrier. Retained legacy files are not current data.',
+          'SQLite migration skips online pre-copy. Pause this server, wait for every writer and run to drain, then copy and verify.',
+          'VM environment, TLS, external secrets, browser-local data and plugins must be reviewed separately.',
+          ...(codeNodes || fileNodes
+            ? [
+                `${codeNodes} Code node(s) and ${fileNodes} Read File node(s) need a manual portability review for VM paths, local modules and external side effects.`,
+              ]
+            : []),
+        ],
+      };
+    } finally {
+      await source.dispose();
+    }
+  }
+  const folders = await collectSourceFolderPaths(getWorkflowsRoot());
+  let projects = 0;
   let codeNodes = 0;
   let fileNodes = 0;
   let publishedEndpoints = 0;
   let publishedWebApps = 0;
   let publishedVersions = 0;
-  const projectIds = new Set<string>();
-  const historicalProjectIds = await validateFilesystemPublishedVersionArchiveForMigration(getWorkflowsRoot());
-  for (const projectPath of projectPaths) {
-    await withLocalSourceBudget(async () => {
-      const stat = await fs.lstat(projectPath);
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Source project is not a regular file.');
-      await readMigrationSourceUtf8(projectPath);
-      const project = await loadProjectFromFile(projectPath);
-      const projectId = project.metadata.id?.trim();
-      if (!projectId || projectIds.has(projectId)) throw new Error('Source has a missing or duplicate project ID.');
-      projectIds.add(projectId);
-      const projectName = path.basename(projectPath, '.rivet-project');
-      const settings = await readStoredWorkflowProjectSettings(projectPath, projectName);
-      if (settings.publishedEndpointName) {
-        if (!(await resolvePublishedWorkflowProjectPath(getWorkflowsRoot(), projectPath, settings))) {
-          throw new Error(
-            `Published endpoint snapshot is missing for ${path.relative(getWorkflowsRoot(), projectPath)}.`,
-          );
-        }
-        publishedEndpoints += 1;
+  // Use conversion's bounded, quiet reader and fixed diagnostics. The previous
+  // inventory duplicated these checks and hid duplicate IDs behind a generic error.
+  for await (const source of iterateSourceWorkflows(getWorkflowsRoot())) {
+    projects++;
+    const project = loadProjectFromString(source.contents, { logErrors: false });
+    if (source.publishedEndpointName) publishedEndpoints++;
+    publishedWebApps += source.publishedWebApps.length;
+    publishedVersions += source.publishedVersions.length;
+    for (const graph of Object.values(project.graphs)) {
+      for (const node of Object.values(graph.nodes)) {
+        if (node.type === 'code' || node.type === 'codeNew') codeNodes += 1;
+        if (node.type === 'readFile') fileNodes += 1;
       }
-      publishedWebApps += settings.publishedWebApps.length;
-      publishedVersions += (await readFilesystemPublishedVersionsForMigration(getWorkflowsRoot(), projectPath)).length;
-      for (const graph of Object.values(project.graphs)) {
-        for (const node of Object.values(graph.nodes)) {
-          if (node.type === 'code' || node.type === 'codeNew') codeNodes += 1;
-          if (node.type === 'readFile') fileNodes += 1;
-        }
-      }
-    });
-  }
-  for (const projectId of historicalProjectIds) {
-    if (!projectIds.has(projectId)) throw new Error('Published history belongs to a missing source project.');
+    }
   }
   let recordingBundles = 0;
   const recordingsRoot = getWorkflowRecordingsRoot();
@@ -115,7 +130,7 @@ export async function inspectVmMigrationSource(): Promise<VmMigrationSourceInven
     );
   }
   return {
-    projects: projectPaths.length,
+    projects,
     folders: folders.length,
     recordingBundles,
     publishedEndpoints,

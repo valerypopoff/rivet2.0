@@ -741,15 +741,6 @@
   margin-top: 16px;
 }
 
-.workflow-library-panel .body-status {
-  font-size: var(--workflow-library-font-size-s);
-  color: var(--grey-light);
-}
-
-.workflow-library-panel .body-status-top {
-  padding: 0 4px 8px 4px;
-}
-
 .workflow-library-panel .link-button {
   border: none;
   background: transparent;

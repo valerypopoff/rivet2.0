@@ -114,7 +114,15 @@ export function useFullscreenOutputSearch(args: { contentKey: FullscreenOutputSe
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isFullscreenOutputSearchShortcut(event)) {
+      if (event.defaultPrevented || !isFullscreenOutputSearchShortcut(event)) {
+        return;
+      }
+
+      const input = searchInputRef.current;
+      if (
+        !input ||
+        input.closest('[role="dialog"]') !== input.ownerDocument.activeElement?.closest('[role="dialog"]')
+      ) {
         return;
       }
 

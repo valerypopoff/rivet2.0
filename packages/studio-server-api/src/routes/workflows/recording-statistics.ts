@@ -34,7 +34,7 @@ const EMPTY_STATUS_COUNTS: WorkflowRunStatisticsStatusCounts = {
 };
 
 export function buildWorkflowRunStatisticsCatalog(
-  rows: readonly WorkflowRecordingStatisticsRow[],
+  rows: readonly (WorkflowRecordingStatisticsRow & { totalRuns?: number })[],
   surface: WorkflowRunStatisticsSurface,
 ): WorkflowRunStatisticsCatalogResponse {
   const targets = new Map<string, WorkflowRunStatisticsTargetSummary>();
@@ -50,7 +50,7 @@ export function buildWorkflowRunStatisticsCatalog(
       target,
       projectName: isLatestRow ? row.sourceProjectName : existing.projectName,
       latestRunAt: isLatestRow ? row.createdAt : existing.latestRunAt,
-      totalRuns: (existing?.totalRuns ?? 0) + 1,
+      totalRuns: (existing?.totalRuns ?? 0) + (row.totalRuns ?? 1),
       uiGraphName: isLatestRow ? row.executionIdentity?.uiGraphName ?? existing?.uiGraphName : existing?.uiGraphName,
       componentType: isLatestRow
         ? row.executionIdentity?.componentType ?? existing?.componentType

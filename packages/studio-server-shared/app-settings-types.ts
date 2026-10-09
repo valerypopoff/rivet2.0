@@ -1,5 +1,10 @@
 export type AppSettingsSource = 'app-settings' | 'default';
 
+export interface ServerUiSession {
+  mode: 'none' | 'key' | 'oauth';
+  email: string | null;
+}
+
 export type NodeExecutorProxySettingsSource = AppSettingsSource;
 
 export interface NodeExecutorProxySettings {

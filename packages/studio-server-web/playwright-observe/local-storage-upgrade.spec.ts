@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { LocalUpgradePreparation } from '../../studio-server-shared/local-upgrade-types';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, waitForDashboardReady, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 
 test.beforeEach(async ({ page }) => {
   // Panel scenarios begin after VM prerequisites. The separate prompt suite
@@ -91,6 +91,212 @@ const inventoryFixture = {
   capacity: { payloadBytes: 1024, requiredBytes: 1024, fits: true },
   backupRequired: 'Restore a separate backup.',
 };
+
+test('guided duplicate repair confirms owners, survives interruption and locks legacy resume', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', sync: { epoch: 'repair-fixture', revision: 0 }, folders: [], projects: [] },
+    }),
+  );
+  await page.route('**/?editor', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+  );
+  const oldId = '408e0df7-433e-4ef2-8772-2781d4e6735d';
+  const provider = 'trash/provider.rivet-project',
+    copy = 'trash/Copy.rivet-project';
+  const token = 'a'.repeat(64);
+  const analysis = {
+    token,
+    groups: [
+      {
+        projectId: oldId,
+        projects: [
+          { path: copy, published: false },
+          { path: provider, published: false },
+        ],
+        history: [{ id: 'history-1', originalPath: 'old/Copy.rivet-project', suggestedOwner: copy, activeOwner: null }],
+        references: ['caller.rivet-project'],
+        recordings: 0,
+        operationalRows: 0,
+      },
+    ],
+    warnings: [
+      'Unresolved library nodes in unrelated.rivet-project; reference discovery is incomplete. Existing references will not be rewritten.',
+    ],
+  };
+  let preparation: LocalUpgradePreparation | null = null;
+  let repair: {
+    id: string;
+    phase: 'applying' | 'complete';
+    archiveHash: string;
+    changedFiles: number;
+    assignments: { path: string; oldId: string; newId: string }[];
+  } | null = null;
+  let starts = 0;
+  let revision = 1;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/preparation')) {
+      const body = route.request().postDataJSON();
+      starts++;
+      if (body.kind === 'repair-inspect') {
+        preparation = {
+          id: body.id,
+          kind: body.kind,
+          revision,
+          stage: 'inspect',
+          phase: 'ready',
+          repairAnalysis: analysis,
+        };
+      } else if (body.kind === 'repair') {
+        expect(body.repairChoices.groups[0].keeperPath).toBe(provider);
+        expect(body.repairChoices.groups[0].historyOwners['history-1']).toBe(copy);
+        expect(body.repairChoices.retainReferences).toBe(true);
+        repair = {
+          id: '899c427b-5131-4e52-8ee5-126f0420692f',
+          phase: 'applying',
+          archiveHash: 'b'.repeat(64),
+          changedFiles: 3,
+          assignments: [{ path: copy, oldId, newId: '43aa7bff-76ca-457d-9ce5-213f30baf9cf' }],
+        };
+        preparation = {
+          id: body.id,
+          kind: body.kind,
+          revision,
+          stage: 'repair',
+          phase: 'interrupted',
+          error: 'Preparation stopped before retaining a completed result. Review current status and retry explicitly.',
+        };
+      } else {
+        expect(body.kind).toBe('repair-recover');
+        repair = { ...repair!, phase: 'complete' };
+        preparation = {
+          id: body.id,
+          kind: body.kind,
+          revision,
+          stage: 'repair',
+          phase: 'ready',
+          repairAnalysis: { token: 'c'.repeat(64), groups: [], warnings: [] },
+        };
+      }
+      return route.fulfill({ status: 202, json: preparation });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({
+          revision,
+          pausedAt: repair ? '2026-10-08T00:00:00Z' : null,
+          operation: preparation?.phase === 'running' ? preparation.stage : null,
+        }),
+        duplicateRepairAvailable: true,
+        repair,
+        settingsEncryptionRequired: false,
+        preparationJobsAvailable: true,
+        preparation,
+      },
+    });
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Postpone', exact: true }).click();
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
+  await openSettings(page);
+  const modal = page.getByTestId('app-settings-modal');
+  await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+  await panel.getByRole('button', { name: 'Inspect conflicting IDs', exact: true }).click();
+  await expect(panel.getByText(/Saved owner path: old\/Copy/)).toBeVisible();
+  const apply = panel.getByRole('button', { name: 'Pause writes and repair project IDs', exact: true });
+  await expect(apply).toBeDisabled();
+  await panel.getByRole('combobox', { name: 'Project keeping the original ID', exact: true }).click();
+  await panel.getByText(provider, { exact: true }).last().click();
+  await panel.getByRole('checkbox', { name: /I confirm publication ownership/ }).check();
+  await expect(apply).toBeEnabled();
+  // A result hidden by a changed authority revision must not preserve choices
+  // or consent when it becomes current again, even with the same content token.
+  revision++;
+  await expect(panel.getByRole('combobox', { name: 'Project keeping the original ID', exact: true })).toHaveCount(0);
+  preparation = { ...preparation!, revision };
+  await expect(panel.getByRole('combobox', { name: 'Project keeping the original ID', exact: true })).toBeVisible();
+  await expect(panel.getByRole('checkbox', { name: /I confirm publication ownership/ })).not.toBeChecked();
+  await expect(apply).toBeDisabled();
+  await panel.getByRole('combobox', { name: 'Project keeping the original ID', exact: true }).click();
+  await panel.getByText(provider, { exact: true }).last().click();
+  await panel.getByRole('checkbox', { name: /I confirm publication ownership/ }).check();
+  await expect(apply).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath('duplicate-repair-preview.png') });
+  await apply.click();
+  await expect(panel.getByRole('button', { name: 'Finish interrupted project-ID repair', exact: true })).toBeEnabled();
+  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  await modal.getByRole('button', { name: 'Close app settings', exact: true }).click();
+  await openSettings(page);
+  await modal.getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Finish interrupted project-ID repair', exact: true }).click();
+  await expect(panel.getByText(/Project-ID repair completed/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Resume legacy with repaired IDs', exact: true })).toBeEnabled();
+  await expect(panel.getByRole('link', { name: 'Download verified repair backup' })).toHaveAttribute(
+    'href',
+    /\/repair\/download\?id=/,
+  );
+  await expect(panel.getByRole('button', { name: 'Create verified backup', exact: true })).toBeEnabled();
+  preparation = { ...preparation!, phase: 'running', stage: 'inspect', repairAnalysis: undefined };
+  await expect(panel.getByRole('button', { name: 'Inspect conflicting IDs', exact: true })).toHaveAttribute(
+    'aria-busy',
+    'true',
+  );
+  await expect(panel.getByRole('button', { name: 'Inspect source', exact: true, includeHidden: true })).toHaveAttribute(
+    'aria-busy',
+    'false',
+  );
+  preparation = {
+    ...preparation,
+    phase: 'failed',
+    error:
+      'Local storage preparation failed. Check source integrity and available space; reload status before retrying. Writes may remain paused.',
+    failure: { code: 'invalid-data', reason: 'project-parse-failed' },
+  };
+  await expect(panel.getByText(/Project-ID repair completed/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Resume legacy with repaired IDs', exact: true })).toBeEnabled();
+  await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  expect(starts).toBe(3);
+});
+
+test('unreadable repair status blocks all storage mutations in the UI', async ({ page }) => {
+  test.setTimeout(60_000);
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', sync: { epoch: 'repair-fixture', revision: 0 }, folders: [], projects: [] },
+    }),
+  );
+  await page.route('**/?editor', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+  );
+  await page.route('**/api/app-settings/local-upgrade', (route) =>
+    route.fulfill({
+      json: {
+        ...upgradeStatusFixture({ pausedAt: '2026-10-08T00:00:00Z' }),
+        duplicateRepairAvailable: true,
+        repairStatusUnreadable: true,
+      },
+    }),
+  );
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toContainText('A project-ID repair needs recovery.');
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).not.toContainText('resume unchanged legacy');
+  await page.getByRole('button', { name: /^(Postpone|Dismiss until next reload)$/ }).click();
+  await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
+  await openSettings(page);
+  await page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }).click();
+  const panel = page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+  await expect(panel.getByText(/Repair status could not be read/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Inspect conflicting IDs', exact: true })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Resume unchanged legacy', exact: true })).toBeDisabled();
+});
 
 test('background preparation survives a gateway error and reopening without repeating inspection or pause', async ({
   page,
@@ -423,6 +629,191 @@ test('guided migration prepares from UI, consolidates backup and waits for both 
   await expect(panel.getByRole('button', { name: 'Return to legacy while paused' })).toHaveCount(0);
 });
 
+for (const scenario of [
+  { phase: 'failed', evidence: 'matching' },
+  { phase: 'interrupted', evidence: 'matching' },
+  { phase: 'failed', evidence: 'whitespace' },
+  { phase: 'failed', evidence: 'changed-source' },
+  { phase: 'failed', evidence: 'changed-backup' },
+  { phase: 'interrupted', evidence: 'changed-both' },
+  { phase: 'failed', evidence: 'missing' },
+]) {
+  test(`copy button selects ${scenario.evidence} evidence for a ${scenario.phase} attempt`, async ({ page }) => {
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: { root: '/workflows', sync: { epoch: 'copy-evidence', revision: 0 }, folders: [], projects: [] },
+      }),
+    );
+    await page.route('**/?editor', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+    );
+    const fingerprint = 'a'.repeat(64);
+    const archiveHash = 'b'.repeat(64);
+    const id = '9921c08b-44df-493c-98bd-02b61a5406d5';
+    const reference = `browser-backup:${id}:${archiveHash}`;
+    const matching = ['matching', 'whitespace'].includes(scenario.evidence);
+    let job = {
+      id: 'old-copy-attempt',
+      phase: scenario.phase,
+      sourceFingerprint:
+        scenario.evidence === 'missing'
+          ? undefined
+          : scenario.evidence.includes('source') || scenario.evidence === 'changed-both'
+            ? 'c'.repeat(64)
+            : fingerprint,
+      backupReference:
+        scenario.evidence === 'missing'
+          ? undefined
+          : scenario.evidence.includes('backup') || scenario.evidence === 'changed-both'
+            ? 'old-backup-reference'
+            : reference,
+      message: 'An earlier copy did not finish.',
+      stage: 'workflows',
+    };
+    let payload: Record<string, unknown> | null = null;
+    const pausedAt = '2026-10-08T00:00:00Z';
+    await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+      if (new URL(route.request().url()).pathname.endsWith('/copy')) {
+        payload = route.request().postDataJSON();
+        job = {
+          ...job,
+          id: matching ? job.id : 'fresh-copy-attempt',
+          phase: 'copying',
+          sourceFingerprint: fingerprint,
+          backupReference: reference,
+        };
+        return route.fulfill({ status: 202, json: { started: true } });
+      }
+      return route.fulfill({
+        json: {
+          ...upgradeStatusFixture({ pausedAt, operation: payload ? 'copy' : null }),
+          settingsEncryptionRequired: false,
+          job,
+          backup: {
+            id,
+            revision: 1,
+            pausedAt,
+            phase: 'ready',
+            sourceFingerprint: fingerprint,
+            archiveHash,
+            bytes: 4096,
+          },
+        },
+      });
+    });
+    const panel = await openLocalUpgrade(page);
+    await expect(panel.getByLabel('Restored backup fingerprint', { exact: true })).toHaveValue(fingerprint);
+    if (scenario.evidence === 'whitespace') {
+      if (!(await panel.getByLabel('Backup reference', { exact: true }).isVisible()))
+        await panel.getByText('Advanced: independently restored backup evidence', { exact: true }).click();
+      await panel.getByLabel('Backup reference', { exact: true }).fill(`  ${reference}  `);
+    }
+    const copy = panel.getByRole('button', {
+      name: matching ? 'Retry copy and verification' : 'Copy and verify',
+      exact: true,
+    });
+    await expect(copy).toBeDisabled();
+    if (!matching) await expect(panel.getByText(/Previous copy status:/)).toBeVisible();
+    await panel.getByLabel('I saved the verified backup download securely outside this VM.').check();
+    await expect(copy).toBeEnabled();
+    await copy.click();
+    await expect.poll(() => payload).not.toBeNull();
+    expect(payload).toEqual({
+      revision: 1,
+      backupReference: reference,
+      backupSourceFingerprint: fingerprint,
+      backupRestored: true,
+      ...(matching ? { retryJobId: 'old-copy-attempt' } : {}),
+    });
+    await expect(panel.getByText(/Copy status: copying/)).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Copy and verify', exact: true })).toBeDisabled();
+  });
+}
+
+test('copy admission conflict reconciles replacement backup and requires a fresh attestation', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', sync: { epoch: 'copy-conflict', revision: 0 }, folders: [], projects: [] },
+    }),
+  );
+  await page.route('**/?editor', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<html><body>Paused editor</body></html>' }),
+  );
+  const pausedAt = '2026-10-08T00:00:00Z';
+  let backup = {
+    id: '9921c08b-44df-493c-98bd-02b61a5406d5',
+    revision: 1,
+    pausedAt,
+    phase: 'ready',
+    sourceFingerprint: 'a'.repeat(64),
+    archiveHash: 'b'.repeat(64),
+    bytes: 4096,
+  };
+  const reference = () => `browser-backup:${backup.id}:${backup.archiveHash}`;
+  let job = {
+    id: 'old-copy',
+    phase: 'failed',
+    sourceFingerprint: backup.sourceFingerprint,
+    backupReference: reference(),
+  };
+  const submissions: Record<string, unknown>[] = [];
+  let accepted = false;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/copy')) {
+      submissions.push(route.request().postDataJSON());
+      if (submissions.length === 1) {
+        backup = { ...backup, id: '42bfd0bf-a606-4af4-a8cd-a0bb94e39c10', archiveHash: 'c'.repeat(64) };
+        return route.fulfill({
+          status: 409,
+          json: { error: 'The browser backup is stale or unverified. Reload status.' },
+        });
+      }
+      accepted = true;
+      job = {
+        id: 'fresh-copy',
+        phase: 'copying',
+        sourceFingerprint: backup.sourceFingerprint,
+        backupReference: reference(),
+      };
+      return route.fulfill({ status: 202, json: { started: true } });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture({ pausedAt, operation: accepted ? 'copy' : null }),
+        settingsEncryptionRequired: false,
+        backup,
+        job,
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  const attestation = panel.getByLabel('I saved the verified backup download securely outside this VM.');
+  await attestation.check();
+  await panel.getByRole('button', { name: 'Retry copy and verification', exact: true }).click();
+  await expect(
+    panel.getByText('The browser backup is stale or unverified. Reload status.', { exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByLabel('Backup reference', { exact: true })).toHaveValue(reference());
+  await expect(attestation).not.toBeChecked();
+  const copy = panel.getByRole('button', { name: 'Copy and verify', exact: true });
+  await expect(copy).toBeDisabled();
+  await expect(panel.getByText(/Previous copy status:/)).toBeVisible();
+  await attestation.check();
+  await copy.click();
+  await expect.poll(() => submissions.length).toBe(2);
+  expect(submissions[0].retryJobId).toBe('old-copy');
+  expect(submissions[1]).toEqual({
+    revision: 1,
+    backupReference: reference(),
+    backupSourceFingerprint: backup.sourceFingerprint,
+    backupRestored: true,
+  });
+  await expect(panel.getByText(/Copy status: copying/)).toBeVisible();
+  await expect(copy).toBeDisabled();
+});
+
 test('browser backup survives reload, downloads archive and key separately and requires explicit attestations', async ({
   page,
   context,
@@ -616,7 +1007,7 @@ const loadingActions = [
     path: '/action',
     phase: 'legacy',
     paused: true,
-    progress: 'Restoring unchanged legacy operation',
+    progress: 'Restoring legacy operation',
   },
   {
     kind: 'report',
@@ -721,11 +1112,14 @@ for (const navigation of ['tab', 'modal'] as const) {
 
 test('editing backup evidence or advancing the transition requires fresh backup attestations', async ({ page }) => {
   let revision = 1;
+  let restartRequired = false;
   const fingerprint = 'c'.repeat(64);
   await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, (route) => {
     if (new URL(route.request().url()).pathname.endsWith('/fingerprint'))
       return route.fulfill({ json: { sourceFingerprint: fingerprint } });
-    return route.fulfill({ json: upgradeStatusFixture({ pausedAt: '2026-09-29T00:00:00Z', revision }) });
+    return route.fulfill({
+      json: { ...upgradeStatusFixture({ pausedAt: '2026-09-29T00:00:00Z', revision }), restartRequired },
+    });
   });
   const panel = await openLocalUpgrade(page);
   const restored = panel.getByLabel('I restored a separate backup of all four source roots.');
@@ -753,9 +1147,15 @@ test('editing backup evidence or advancing the transition requires fresh backup 
   await expect(copy).toBeDisabled();
   await certify();
   revision++;
+  restartRequired = true;
   await expect(copy).toBeDisabled();
   await expect(restored).not.toBeChecked();
   await expect(key).not.toBeChecked();
+  await restored.check();
+  await key.check();
+  await expect(copy).toBeDisabled();
+  restartRequired = false;
+  await expect(copy).toBeEnabled();
 });
 
 for (const unavailable of [false, true]) {
@@ -1683,6 +2083,8 @@ test('capacity refusal blocks retries while a redacted failed-job report remains
   const job = {
     id: 'failed-fixture',
     phase: 'failed',
+    sourceFingerprint: 'a'.repeat(64),
+    backupReference: 'restored-fixture',
     stage: 'settings',
     message: 'Copy failed safely. Legacy data remains selected.',
     failure: { stage: 'settings', code: 'disk-full' },
@@ -1797,7 +2199,8 @@ test('background copy preparation stays busy after acceptance and shows a specif
   page,
 }) => {
   const fingerprint = 'a'.repeat(64),
-    reference = '0123456789abcdef';
+    reference = '0123456789abcdef',
+    backupReference = 'restored-fixture';
   let paused = false,
     started = false,
     failed = false;
@@ -1812,6 +2215,11 @@ test('background copy preparation stays busy after acceptance and shows a specif
       return route.fulfill({ status: 204 });
     }
     if (pathname.endsWith('/copy')) {
+      expect(route.request().postDataJSON()).toMatchObject({
+        backupSourceFingerprint: fingerprint,
+        backupReference,
+        backupRestored: true,
+      });
       started = true;
       return route.fulfill({ status: 202, json: { started: true } });
     }
@@ -1825,6 +2233,8 @@ test('background copy preparation stays busy after acceptance and shows a specif
           ? {
               id: 'background-fixture',
               phase: failed ? 'failed' : 'copying',
+              sourceFingerprint: fingerprint,
+              backupReference,
               stage: failed ? 'workflows' : 'capacity',
               message: 'Legacy source is untouched and writes remain paused.',
               failure: failed
@@ -1844,7 +2254,7 @@ test('background copy preparation stays busy after acceptance and shows a specif
   await panel.getByRole('button', { name: 'Inspect source', exact: true }).click();
   await panel.getByRole('button', { name: 'Pause writes and drain' }).click();
   await panel.getByRole('button', { name: 'Read frozen source fingerprint' }).click();
-  await panel.getByLabel('Backup reference', { exact: true }).fill('restored-fixture');
+  await panel.getByLabel('Backup reference', { exact: true }).fill(backupReference);
   await panel.getByLabel('Restored backup fingerprint', { exact: true }).fill(fingerprint);
   await panel.getByLabel('I restored a separate backup of all four source roots.').check();
   await panel.getByLabel('I backed up the local settings encryption key separately.').check();
@@ -1857,6 +2267,68 @@ test('background copy preparation stays busy after acceptance and shows a specif
   await expect(panel.getByText(/Affected project: Test\/problem.rivet-project/)).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
   await expect(panel.getByRole('button', { name: 'Retry copy and verification', exact: true })).toBeEnabled();
+});
+
+test('preparation diagnostics identify the current conflict without relabeling an older failed copy', async ({
+  page,
+}) => {
+  await mockHostedEditorBootstrap(page);
+  const preparationReference = '0123456789abcdef',
+    copyReference = 'fedcba9876543210';
+  const lookups: string[] = [];
+  let preparationRevision = 1;
+  await page.route(/\/api\/app-settings\/local-upgrade(?:$|\/(?!setup(?:$|\?)))/, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/project-reference')) {
+      const reference = url.searchParams.get('reference')!;
+      lookups.push(reference);
+      return route.fulfill({
+        json: {
+          reference,
+          paths: [reference === preparationReference ? 'New/conflict.rivet-project' : 'Old/copy.rivet-project'],
+        },
+      });
+    }
+    return route.fulfill({
+      json: {
+        ...upgradeStatusFixture(),
+        preparationJobsAvailable: true,
+        preparation: {
+          id: '9c88b867-f67b-4f0d-bf3f-1d9984690d5e',
+          kind: 'inspect',
+          revision: preparationRevision,
+          phase: 'failed',
+          stage: 'inspect',
+          error: 'Local storage preparation failed.',
+          failure: {
+            reason: 'publication-route-conflict',
+            code: 'invalid-data',
+            sourceReference: preparationReference,
+          },
+        },
+        job: {
+          id: 'old-copy',
+          phase: 'failed',
+          stage: 'workflows',
+          message: 'Older copy failed.',
+          failure: { stage: 'workflows', code: 'invalid-data', sourceReference: copyReference },
+        },
+      },
+    });
+  });
+  const panel = await openLocalUpgrade(page);
+  const failure = panel.getByRole('alert').filter({ hasText: 'Local storage preparation failed.' });
+  await expect(failure).toContainText('Projects have conflicting endpoint names or web-app slugs.');
+  await expect(failure).toContainText('Affected project: New/conflict.rivet-project.');
+  const oldCopy = panel.getByRole('status').filter({ hasText: 'Older copy failed.' });
+  await expect(oldCopy).not.toContainText('New/conflict.rivet-project');
+  expect(lookups).toEqual([preparationReference]);
+  // A preparation from a different authority revision cannot displace current diagnostics.
+  preparationRevision = 0;
+  await expect(failure).toHaveCount(0);
+  await expect(oldCopy).toContainText('Affected project: Old/copy.rivet-project.');
+  expect(lookups).toEqual([preparationReference, copyReference]);
+  await expect(panel.getByRole('button', { name: 'Activate SQLite while paused' })).toBeDisabled();
 });
 
 test('Settings recovery controls remain reachable when the editor never becomes ready', async ({ page }) => {

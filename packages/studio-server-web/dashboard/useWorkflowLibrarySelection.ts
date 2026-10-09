@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 
 import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectOpenOptions } from './types';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { readWorkflowLibrarySelection, writeWorkflowLibrarySelection } from './workflowLibrarySelectionStorage';
 
 export function useWorkflowLibrarySelection({
   allProjects,
   expandedFolders,
+  error,
   flattenedFolders,
   loading,
   onActiveWorkflowProjectPathChange,
@@ -17,6 +19,7 @@ export function useWorkflowLibrarySelection({
 }: {
   allProjects: WorkflowProjectItem[];
   expandedFolders: Record<string, boolean>;
+  error: string | null;
   flattenedFolders: WorkflowFolderItem[];
   loading: boolean;
   onActiveWorkflowProjectPathChange: (path: string) => void;
@@ -26,7 +29,8 @@ export function useWorkflowLibrarySelection({
   openedProjectPath: string;
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
 }) {
-  const [selectedProjectPath, setSelectedProjectPath] = useState('');
+  const [selectedProjectPath, setSelectedProjectPath] = useState(readWorkflowLibrarySelection);
+  const observedOpenedProjectRef = useRef(false);
   const projectRowRefs = useRef<Record<string, HTMLElement | null>>({});
   const pendingPreviewPathRef = useRef<string | null>(null);
   const previewOpenTimeoutRef = useRef<number | null>(null);
@@ -75,18 +79,32 @@ export function useWorkflowLibrarySelection({
 
   useEffect(() => {
     if (openedProjectPath) {
-      setSelectedProjectPath(openedProjectPath);
+      if (!observedOpenedProjectRef.current) {
+        observedOpenedProjectRef.current = true;
+        // The first path is the editor's recovered active tab. Keep an
+        // independently recovered sidebar selection; later tab changes follow.
+        setSelectedProjectPath((previous) => previous || openedProjectPath);
+      } else {
+        setSelectedProjectPath(openedProjectPath);
+      }
     }
   }, [openedProjectPath]);
 
   useEffect(() => {
+    writeWorkflowLibrarySelection(selectedProjectPath);
+  }, [selectedProjectPath]);
+
+  useEffect(() => {
+    // The initially empty tree, or an unavailable server, is not evidence that
+    // the recovered selection was deleted. Validate only a loaded tree.
+    if (loading || error) return;
     if (
       selectedProjectPath &&
       !allProjects.some((project) => project.absolutePath === selectedProjectPath)
     ) {
       setSelectedProjectPath(openedWorkflowProject?.absolutePath ?? '');
     }
-  }, [allProjects, openedWorkflowProject, selectedProjectPath]);
+  }, [allProjects, error, loading, openedWorkflowProject, selectedProjectPath]);
 
   useEffect(() => {
     // A remote tree refresh can remove or move an open project. The editor

@@ -14,7 +14,11 @@ import {
   readVmMigrationMaintenance,
   vmMigrationRequestBarrier,
   watchVmMigrationPassiveStream,
+  claimLocalStorageControl,
+  assertNoManagedMigrationMaintenance,
 } from '../vm-migration-maintenance.js';
+
+// test-style: fixture-read: Only the test-owned damaged maintenance marker is read to verify recovery requests preserve it.
 
 async function withAppData(run: (root: string) => Promise<void>): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-vm-migration-'));
@@ -34,6 +38,30 @@ async function withAppData(run: (root: string) => Promise<void>): Promise<void> 
     await fs.rm(root, { recursive: true, force: true });
   }
 }
+
+test('managed migration owns its durable pause barrier and serializes local upgrade control', async () => {
+  await withAppData(async () => {
+    const release = claimLocalStorageControl();
+    assert.throws(claimLocalStorageControl, /Another local storage/);
+    release();
+    const second = claimLocalStorageControl();
+    release(); // A stale release cannot unlock the next owner.
+    assert.throws(claimLocalStorageControl, /Another local storage/);
+    second();
+    await enterVmMigrationMaintenance('11111111-1111-4111-8111-111111111111');
+    assert.throws(assertNoManagedMigrationMaintenance, /Migration recovery/);
+    await assert.rejects(leaveVmMigrationMaintenance(), /Migration recovery/);
+    assert.equal(isVmMigrationMaintenanceActive(), true);
+    await leaveVmMigrationMaintenance({ managedMigration: true });
+    assertNoManagedMigrationMaintenance();
+    await enterVmMigrationMaintenance();
+    await assert.rejects(
+      enterVmMigrationMaintenance('22222222-2222-4222-8222-222222222222'),
+      /Another storage workflow/,
+    );
+    await leaveVmMigrationMaintenance();
+  });
+});
 
 function check(pathname: string, method = 'POST') {
   const req = { path: pathname, method } as Request;
@@ -96,6 +124,14 @@ test('VM maintenance persists across reads, blocks data routes, and permits only
     assert.equal(check('/api/app-settings/vm-migration', 'GET').nextCalled, true);
     assert.equal(check('/api/app-settings/deployment-storage', 'GET').nextCalled, true);
     assert.equal(check('/ui-auth/check', 'GET').nextCalled, true);
+    for (const configuration of ['/internal/app-settings/proxy-config', '/internal/executor-runtime-config']) {
+      assert.equal(check(configuration, 'GET').nextCalled, true);
+      for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+        assert.equal(check(configuration, method).response.code, 503);
+      }
+      assert.equal(check(`${configuration}/anything`, 'GET').response.code, 503);
+    }
+    assert.equal(getVmMigrationActiveRequestCount(), 1, 'Proxy configuration does not delay the write drain.');
 
     active.response.emit('finish');
     active.response.emit('close');
@@ -110,6 +146,9 @@ test('a corrupt maintenance marker fails closed', async () => {
     await fs.writeFile(path.join(root, 'vm-migration-maintenance.json'), '{broken');
     assert.equal(isVmMigrationMaintenanceActive(), true);
     assert.equal(check('/api/workflows/save').response.code, 503);
+    assert.equal(check('/internal/app-settings/proxy-config', 'GET').nextCalled, true);
+    assert.equal(getVmMigrationActiveRequestCount(), 0);
+    assert.equal(await fs.readFile(path.join(root, 'vm-migration-maintenance.json'), 'utf8'), '{broken');
     assert.throws(() => readVmMigrationMaintenance());
   });
 });

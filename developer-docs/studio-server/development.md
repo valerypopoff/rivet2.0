@@ -49,6 +49,41 @@ dismissal and drawer exclusion. No Kubernetes rehearsal is needed.
 The small dashboard sizing scenario is also in the production-bundle CI browser
 lane, so the stylesheet must work without Vite development style injection.
 
+## Hosted modal focus ownership
+
+The hosted Vite build routes `react-focus-lock` through
+`shims/hosted-focus-lock.tsx`. An editor iframe's modal must not reclaim focus
+while its document is unfocused: the dashboard's inline rename and publication
+inputs are outside that modal's jurisdiction. Two separate document-level
+modal stacks cannot determine foreground ownership across the iframe boundary.
+The adapter uses the library's `whiteList` callback to decline focus handling
+outside the focused iframe document, preserving the caller's existing whitelist,
+refs, named exports, and normal trapping within the active document. Top-level
+dashboard dialogs and standalone desktop Rivet retain their existing behavior.
+The adapter also gates close-time `returnFocus`: dismissing an unfocused editor
+dialog must not restore focus into the iframe and cancel an active sidebar rename.
+Preserve boolean, focus-options, and callback forms of that library prop.
+Fullscreen output's deferred initial focus checks that the active element has
+not changed and that an embedded document still owns focus before applying it.
+Find routing in both the hosted bridge and output search is scoped to the focused
+dialog; mounted background output must not claim Ctrl/Cmd+F from another dialog.
+Canvas hotkeys also decline prevented/composing events and events owned by dialog
+controls (including buttons), so graph undo and navigation cannot run behind a modal.
+Do not disable modal trapping globally or replace rename's blur-to-cancel rule.
+`shouldReturnFocus={false}` only affects closing a dialog, not its active trap.
+
+Verify with headless `yarn studio-server:ui:observe hosted-modal-focus.spec.ts
+fullscreen-output-search-paging.spec.ts`. The focus regression keeps full output
+open while exercising project/folder rename and endpoint typing, then re-enters
+the editor to check search and Tab containment. It also dismisses an unfocused
+editor dialog during rename and checks Find, undo, and navigation ownership across
+stacked dialogs, including controls that are not text inputs. Mocked API writes
+prevent this check from renaming or publishing any real projects. No Kubernetes
+rehearsal is needed. `tests/hosted-focus-lock.test.ts` covers standalone/document ownership and
+preserving the caller's focus exceptions.
+The App DOM tests in `fullscreenOutputKeyboardNavigation.dom.test.ts` use a
+controlled animation-frame clock to cover focus changes before deferred autofocus.
+
 ## Scheduled runs regression checks
 
 See [Scheduled runs](./scheduled-runs.md) for ownership, storage schema 14 and
@@ -615,6 +650,9 @@ checks timer release; a successful shutdown must not keep Node alive until an un
 grace timeout. Automatic validation waits for combined readiness, not merely an API
 status response. Headless UI coverage checks the consolidated flow, reconnect,
 readiness delay and explicit final acknowledgement.
+The real supervised flow also reads proxy startup settings without an operator
+cookie and checks UI authentication while paused, both before copy and after the
+SQLite restart. Writes and public workflow GET execution must still return 503.
 
 Run `local-browser-backup.test.ts` for archive/restore, capacity, drift, path
 and permission/link preservation; run it on Linux as well as Windows.
@@ -774,6 +812,19 @@ HTTP body lifecycle regressions live in `src/tests/body-admission.test.ts` in th
 
 ## Project workspace lifecycle regressions
 
+Project-ready assertions must exclude `.project.opening`. Loading placeholders
+already have the requested title and can be `.active` before worker parsing,
+dataset import and workspace commit finish. Selecting another tab at that point
+correctly cancels the pending open; it is not a warm switch. The large-project
+case in `node-editor-lifecycle.spec.ts` holds the second load behind a gate and
+waits for the request to enter that gate before checking that its active placeholder
+does not match the loaded-tab locator. It then releases the gate, waits for the
+committed persistent tab and removal of opening placeholders, and verifies repeated
+warm switches without extra requests, lost edits or mixed datasets. Cold-open
+readiness uses the existing 120-second startup budget; warm-switch assertions
+retain the ordinary 20-second expectation budget. Do not replace readiness with
+sleeps, API-response counts, retries or a longer whole-test timeout.
+
 Tree selection checks must use an overflowing folder list, not only a tiny tree. The `tree selection survives` browser case verifies that distant folder expansion stays in view, keyboard Enter/Space and Ctrl-click expand/collapse preserve the selected card, and reopening its own ancestor reveals the selected project again without reloading it. This catches scroll jumps from an overly broad expansion-map dependency as well as click-away deselection.
 
 Keep opening and dirty-state behavior under the shared app owners (`useActivateOpenedProject`, `useWorkspaceHostOpenProject`, `useSyncProjectDirtyState`). Host wrappers may adapt IO, titles, Evaluation caching and executor policies, but must not duplicate activation or certify a recovered snapshot as clean.
@@ -793,6 +844,10 @@ Its missing-checkpoint case must verify the dashboard actually reveals the ifram
 Also cover close/move during the deferred import itself, not just during file reads. Restoring a valid snapshot must preserve cached datasets and accepted revisions while recovering a missing saved baseline; a verified native snapshot must not require another disk read on every tab switch. `hosted-project-revision-tracker.test.ts` and `editor-project-refresh.test.ts` verify cancelled reload rollback, concurrent path moves, pruned tabs, and save exclusion during reload. A cancelled refresh emits no false load-error notification.
 
 The activation browser spec opens the same project in two windows, saves in one, reloads the other's unsaved snapshot, and checks that its save still uses the original expected revision and preserves dirty state on a 409. It also saves successfully while browser recovery fails, reloads the previous checkpoint, and proves that the recovered tab still uses its earlier expected revision. Wait for the committed checkpoint itself before testing reload, not only the rendered status. Revision authority belongs inside the atomic workspace checkpoint, not a separate session/localStorage cache. Missing revision context must block in-place save until the existing Reload/Keep mine review completes; do not adopt legacy independent caches. Unit coverage restores a checkpoint's own authority after explicit selection, protects initial IO binds through loading-placeholder updates, and keeps provisional load/reload revisions out of durable recovery until registration/replacement succeeds. Identical background observations must not dirty recovery or produce unnecessary unload warnings.
+
+The lifecycle spec's reload scenarios use `waitForWorkspaceCheckpoint` to read the selected IndexedDB checkpoint and verify the active project, complete ordered tab list and any expected unsaved edits before navigating. A visible tab does not acknowledge the debounced recovery write, and `pagehide` cannot guarantee asynchronous IO after document teardown. This prerequisite applies to clean tabs too, including failed-tree and deleted-sidebar-selection scenarios. The helper resolves the current iframe on each read, so successive reloads never reuse a detached frame. It observes normal persistence without forcing a flush, saving to the server or adding fixed sleeps; reload and independent sidebar selection assertions remain unchanged.
+
+The activation and Temperature specs share the read-only checkpoint reader in `playwright-observe/helpers/workspaceRecovery.ts`; scenario-specific assertions stay in their owning specs. Activation reload checks verify the active tab and ordered tab titles as well as node positions, since matching geometry alone can acknowledge an older workspace. Its static-cache and inactive-recovery scenarios also wait for normal persistence before reload. Grouped browser storage retains the one-second idle debounce but schedules checkpoints at least every five seconds during continuous editing; this is a scheduling bound, never an IO durability promise. The fake-clock busy-edit regression must verify the periodic checkpoint and the final trailing edit, alongside explicit-flush, cancellation, backend replacement and failure/retry tests.
 
 Project v4 includes an optional `data` string record for static file/image payloads, separate from plugin `attachedData`. Saves must pass the captured payload to the IO provider before any await; do not clear the static-data dirty flag after persisting graph metadata alone. Run `test/utils/serialization.test.ts` in core for round-trip and malformed-payload coverage, and the app save test for edits arriving during persistence. Older v4 files without this field remain valid.
 
@@ -978,6 +1033,24 @@ The older manual route remains available: set exactly one `RIVET_IMAGE_TAG=candi
 Running staging images against the production VM's existing data is still a live deployment, not an isolated rehearsal. Back up and test restore of the persistent roots and encryption key first; after new writes or a storage/schema upgrade, changing the image tag back may not restore the old data contract. Promote to `main` only after the staging run and VM checks are satisfactory; the `main` run must pass its own gates before it advances `latest` and the production release pointer.
 
 ## Proxy DNS recovery and health
+
+Proxy startup fetches the authenticated, read-only
+`GET /internal/app-settings/proxy-config` snapshot before starting Nginx. The
+migration request barrier must permit this exact method/path during migration
+maintenance and local-selection restart/validation fences; otherwise recreating
+the proxy while storage is paused locks operators out of the recovery UI. The
+route still requires proxy authentication and returns `Cache-Control: no-store`.
+Do not broaden this exception to other internal routes, writes, or public GET
+execution routes. `api-profile.test.ts` recreates combined/control API apps after
+persisting each fence and checks unchanged settings/journal bytes, rejected
+credentials, method/path lookalikes, and continued execution/write fencing.
+`vm-migration-maintenance.test.ts` checks exact-route drain accounting and permits
+the recovery read without clearing or rewriting a damaged maintenance marker.
+These tests read only test-owned temporary journal/marker artifacts, not
+implementation source, and carry the required `test-style: fixture-read`
+annotations; see [repository test guardrails](../BUILD-AND-CI.md#yarn-teststyle).
+The companion executor startup configuration exception is also exact `GET` only;
+its loopback, proxy-token and executor-token requirements remain unchanged.
 
 Proxy service destinations use runtime DNS resolution consistently across the
 development, Compose production, and packaged image templates. Do not add literal
@@ -1377,6 +1450,59 @@ Windows PowerShell override example:
 3. `yarn studio-server:ui:observe`
 
 ### Subgraph output-pruning verification
+
+Canvas connection pruning must distinguish an unavailable Subgraph definition
+from a resolved graph with no ports. Cross-project previews are asynchronous;
+older saved callers may not contain `targetBoundary`. Until the exact
+project/version/graph resolves, preserve their persisted connections and do not
+mark the caller dirty. Preview failure or a missing local/external graph is not
+permission to delete wires. A saved external boundary remains the authored
+contract even when the preview fails or changes, but it can predate a newly
+connected additive port. Pruning external wires therefore requires the exact
+version's graph preview, even when a saved boundary exists; genuinely stale
+ports in a resolved contract still use the existing pruning behavior.
+`connectionValidation.test.ts` covers these cases and latest/published key
+isolation. `cross-project-subgraph-loading.spec.ts` holds or rejects each
+version's preview, checks clean tabs and rendered ports/wires after resolution,
+then checks exact saved connections through mocked storage. It runs in the CI
+editor lane and requires no real project writes or model calls.
+
+The same availability rule applies to node-edit reconciliation, including the
+node at the other end of the edited node's wire. Unknown Subgraph ports preserve
+existing wires; restoring a recoverable wire still requires confirmed ports on
+both ends, and a known removed port on either peer still breaks the connection,
+even if the other peer's definition is unavailable. Keep this rule
+shared with canvas pruning rather than adding loading delays to edits.
+Legacy reference reloads clear their old closure before loading, then merge
+their results with independently loaded, version-keyed Subgraph previews.
+A failed reload must not erase those previews. Subgraph controls and canvas
+ports use one shared, version-keyed preview cache: a control must not retain a
+private preview that shadows a newer refresh from another control. A shared
+cache reset reloads current definitions; unavailable definitions continue to
+preserve authored wires in the meantime.
+The browser regression also edits both connected peers before preview completion
+and releases successful/failed legacy-reference loads after the preview arrives;
+the caller's ports, wires and clean saved state must survive both orderings.
+Shared-refresh cases keep two Subgraph controls mounted, refresh one of them,
+and verify both display the same current target without dirtying the caller.
+Creating or rewiring a connection to a newly discovered external input or output
+persists its reconciled boundary in the same graph update as the wire. This is
+an authored command, not an automatic edit on preview completion: viewing a
+project remains clean. Undo/Redo restore both the connection and its boundary,
+and Redo uses the accepted boundary even if the preview cache was cleared.
+Breaking boundary changes still require explicit graph re-selection; port IDs
+for compatible renames remain stable. `connectionBoundaryCommands.test.ts`
+covers input/output creation and rewiring for latest/published targets, cache
+resets, and command history. It also verifies wires between two external
+Subgraphs, restoration of displaced wires including midpoints, isolated
+boundary snapshots, and rejection of type changes or rename collisions.
+The browser regression adds a Graph Input in B, saves B, connects it from A,
+verifies Undo/Redo, switches tabs while the preview
+is delayed, and closes/reopens A from saved storage without losing the wire.
+`node-editor-lifecycle.spec.ts` also verifies that retired preview responses
+cannot contaminate the next project after a tab switch. Its workspace bootstrap
+authenticates when the proxy UI gate is enabled, so the same check works on both
+the authenticated local tunnel and CI fixtures.
 
 `subgraph-output-pruning.spec.ts` opens a project with two connected Subgraph instances
 sharing a child graph and a third caller with no consumed outputs. It enables
@@ -1803,6 +1929,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - App Settings HTTP resources use `ETag` and `If-Match`; domain writers must merge scoped PATCH drafts into the repository's current value so independent tabs and concurrent browser sessions do not lose unrelated fields
   - missing files mean first-run defaults, schema upgrades require explicit migrations, writes remain atomic owner-only JSON files, and the repository poller is the compatibility path for external proxy/bootstrap writers
 - dashboard controllers belong in `packages/studio-server-web/dashboard/`
+  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows or in their filename tooltips. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
   - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the active project card grey/green/yellow tinted from that same aggregate status where any `Unpublished changes` wins over `Published`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width
@@ -1835,6 +1962,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - Rivet stores them under `projectContext__"<projectId>"`, so hosted open/reopen persistence depends on stable `project.metadata.id` values
   - keep `packages/studio-server-web/overrides/state/savedGraphs.ts` exporting the hosted `clearProjectContextState` compatibility helper by delegating normal tab cleanup to upstream `releaseProjectContextState`, so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` can close tabs without deleting those stored values
   - actual dashboard workflow deletion should forward the project id returned by `DELETE /api/workflows/projects`, then call `deleteHostedProjectContextState` and `clearHostedDatasetsForProject` from the iframe delete handler so stale editor-owned browser state does not remain even when the tab was already closed; the delete helper removes `projectContext__"<projectId>"` through the shared `project` storage group
+  - `HostedDatasetProvider` inherits project-scoped cleanup from `BrowserDatasetProvider`; its only specialization is atomic replacement on import. Do not reintroduce clear-then-import or require duplicated cleanup code in source-contract tests. `hosted-dataset-provider.test.ts` exercises the actual hosted adapter with IndexedDB, including shared dataset IDs across projects, inactive imports, stale selections, quota failure rollback, and cancellation after replacement deletes. The app's `BrowserDatasetProvider.test.ts` covers the shared implementation and schema migration.
 - editor executor transport should prefer Rivet's upstream host/session seam
   - mount the editor through `RivetAppHost`
   - pass the hosted executor websocket through `executor.internalExecutorUrl`; it must come from runtime `/api/config`, defaulting to the current host's `/ws/executor/internal` unless App Settings has a saved websocket override
@@ -2002,6 +2130,7 @@ Current repo-local baseline:
 - Job timing summaries are the current performance evidence. Both the generic Build and the Studio Server verification aggregators report their complete critical paths, while substantive jobs report their own wall time. Treat the former five-minute image note as historical; compare current Build, verification, candidate smoke, and optional Kind timings independently.
 - For image-release predecessor failures, follow [One-time release-lineage cutover](./kubernetes.md#one-time-release-lineage-cutover). Run `node --test deploy/studio-server/scripts/studio-server-release-manifest.test.mjs` and `yarn node scripts/checks/check-ci-workflows.mjs` after changing recovery. Recovery fixtures must prove that the real manifest CLI accepts the staged path, and registry failures must not masquerade as an empty image set. These checks do not require registry writes or a Kubernetes rehearsal.
 - If the full API suite fails with `ERR_MODULE_NOT_FOUND`, distinguish missing dependencies from missing compiled workspace exports. For missing packages, run `yarn install --immutable` and confirm the importing workspace declares the package directly. For missing `packages/{core,node,evaluations}/dist` exports or the executor bundle, run `yarn studio-server:build:dependencies`, then `yarn check:compiled-workspace-exports` before rerunning. Source-level tests can pass without these artifacts, while API subprocess tests require them. Do not run local API suites concurrently with workspace builds (including the Core rebuild inside `yarn test:style`): cleaning `dist` during a test can produce false module-load failures. CI uses isolated jobs and restores/verifies the artifacts before each consumer starts; do not rebuild silently or weaken checks to hide a broken artifact handoff.
+- Core and Node share `packages/core/bundle.esbuild.cjs`, executed from each workspace's directory. Optional Core-only entrypoints (including `serialization`) must be included only when their source exists in that workspace. `packages/core/test/build/cjs.test.ts` runs the real builder against isolated workspaces with and without serialization and loads the generated CJS exports. Verify changes with both `yarn studio-server:build:dependencies` and `yarn check:compiled-workspace-exports`; a Core-only build does not exercise Node's invocation.
 - The test-suite cleanup plan previously lived in the root `tests-refactor.md` working document; after final prune, keep the lasting outcomes in `docs/refactor-history.md` and keep the public verification commands stable for future cleanup.
 - API workflow tests should reuse the shared helpers under `packages/studio-server-api/src/tests/helpers/` before adding local harness code. Workflow HTTP harnesses, JSON response handling, recording waiters, filesystem execution cache invalidation probes, temp workflow roots, root-level published-project fixtures, and the filesystem workflow suite bootstrap/cleanup live there.
 - Multi-process fixtures use `allocateDistinctTestPorts` from `http-server-harness.ts` to reserve their complete loopback port set before releasing any socket. Independently binding and closing three ephemeral listeners can return the same port more than once; the supervisor correctly rejects such configurations. Bind failures reject promptly and release earlier reservations. This prevents reuse within one set, not an atomic socket handoff to child processes; an unrelated process can still claim a released port. Keep the supervisor's distinct-port and startup checks intact rather than hiding collisions with unbounded retries. `local-upgrade-runtime.test.ts` covers immediate reuse, real bindings and partial-allocation cleanup; both supervised and UI-driven migration helpers share this allocator.

@@ -2,12 +2,7 @@ import { describe, it, mock } from 'node:test';
 import { strict as assert } from 'node:assert';
 
 import type { NodeGraph, Project } from '../../src/index.js';
-import {
-  deserializeGraph,
-  deserializeProject,
-  serializeGraph,
-  serializeProject,
-} from '../../src/utils/serialization/serialization.js';
+import { deserializeGraph, deserializeProject, serializeGraph, serializeProject } from '../../src/serialization.js';
 import { prepareSerializedInput } from '../../src/utils/serialization/serializationInput.js';
 import { projectV2Deserializer } from '../../src/utils/serialization/serialization_v2.js';
 import { graphV3Serializer } from '../../src/utils/serialization/serialization_v3.js';

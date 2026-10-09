@@ -92,6 +92,30 @@ async function waitFor(read: () => Promise<any>, matches: (state: any) => boolea
   throw new Error('UI migration stage did not settle.');
 }
 let completionCode: number | undefined;
+async function assertPausedRecoveryReads(backend: 'file' | 'sqlite') {
+  const origin = `http://127.0.0.1:${apiPort}`;
+  const configuration = await fetch(`${origin}/internal/app-settings/proxy-config`, {
+    // The startup proxy has no operator session cookie.
+    headers: { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() },
+    signal: AbortSignal.timeout(10000),
+  });
+  assert.equal(configuration.status, 200, 'Proxy startup settings must remain available while paused.');
+  assert.equal(configuration.headers.get('cache-control'), 'no-store');
+  const settings = await configuration.json();
+  assert.equal(settings.backend, backend);
+  assert.match(settings.revision, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(settings.publishedWorkflowsBasePath, '/workflows');
+  const uiSession = await fetch(`${origin}/ui-auth/check`, { headers, signal: AbortSignal.timeout(10000) });
+  assert.equal(uiSession.status, 204, 'Maintenance must not lock out the authenticated recovery UI.');
+  for (const [pathname, method] of [
+    ['/api/workflows/save', 'POST'],
+    ['/workflows/missing', 'GET'],
+  ]) {
+    const blocked = await fetch(`${origin}${pathname}`, { method, headers, signal: AbortSignal.timeout(10000) });
+    assert.equal(blocked.status, 503);
+    assert.equal((await blocked.json()).code, 'vm_migration_maintenance');
+  }
+}
 try {
   await waitFor(
     () => json('/setup'),
@@ -121,6 +145,7 @@ try {
     () => json(),
     (s) => s.drain?.ready,
   );
+  await assertPausedRecoveryReads('file');
   await post('/backup', { revision: status.transition.revision });
   status = await waitFor(
     () => json(),
@@ -152,6 +177,7 @@ try {
     () => json(),
     (s) => s.runningBackend === 'sqlite' && !s.restartRequired && s.runtimeReady,
   );
+  await assertPausedRecoveryReads('sqlite');
   await post('/action', { action: 'validate', revision: status.transition.revision }, 204);
   status = await json();
   assert.equal(status.transition.validated, true);

@@ -13,11 +13,12 @@ import { createRecoverableIndexedDbConnection, preserveIndexedDbRequestTiming } 
 
 interface DatasetDatabase extends DBSchema {
   datasets: {
-    key: string;
+    key: [ProjectId, DatasetId];
     value: DatasetMetadata;
+    indexes: { 'by-project': ProjectId };
   };
   data: {
-    key: string;
+    key: [ProjectId, DatasetId];
     value: Dataset;
   };
 }
@@ -45,21 +46,11 @@ export class BrowserDatasetProvider implements DatasetProvider {
     const db = await this.#getDatasetDatabase();
 
     const transaction = preserveIndexedDbRequestTiming(db.transaction(['datasets', 'data'], 'readonly'));
-    const store = transaction.objectStore('datasets');
-
-    const metadata: DatasetMetadata[] = [];
-
-    let cursor = await store.openCursor();
-    while (cursor) {
-      if (cursor.value.projectId === projectId) {
-        metadata.push(cursor.value);
-      }
-      cursor = await cursor.continue();
-    }
+    const metadata = await transaction.objectStore('datasets').index('by-project').getAll(projectId);
 
     const dataStore = transaction.objectStore('data');
 
-    const data = await Promise.all(metadata.map((meta) => dataStore.get(meta.id)));
+    const data = await Promise.all(metadata.map((meta) => dataStore.get([projectId, meta.id])));
     await transaction.done;
     return metadata.map(
       (meta, i): CombinedDataset => ({
@@ -105,7 +96,7 @@ export class BrowserDatasetProvider implements DatasetProvider {
     const dataStore = await this.#getDatasetDatabase();
 
     const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
-    await transaction.store.put(data, id);
+    await transaction.store.put(data, [dataset.meta.projectId, id]);
   }
 
   async putDatasetRow(id: DatasetId, row: DatasetRow): Promise<void> {
@@ -126,7 +117,7 @@ export class BrowserDatasetProvider implements DatasetProvider {
     const dataStore = await this.#getDatasetDatabase();
 
     const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
-    await transaction.store.put(dataset.data, id);
+    await transaction.store.put(dataset.data, [dataset.meta.projectId, id]);
   }
 
   async putDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
@@ -148,7 +139,7 @@ export class BrowserDatasetProvider implements DatasetProvider {
     const metadataStore = await this.#getDatasetDatabase();
 
     const transaction = preserveIndexedDbRequestTiming(metadataStore.transaction('datasets', 'readwrite'));
-    await transaction.store.put(metadata, metadata.id);
+    await transaction.store.put(metadata, [metadata.projectId, metadata.id]);
   }
 
   async clearDatasetData(id: DatasetId): Promise<void> {
@@ -166,7 +157,7 @@ export class BrowserDatasetProvider implements DatasetProvider {
     const dataStore = await this.#getDatasetDatabase();
 
     const transaction = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
-    await transaction.store.delete(id);
+    await transaction.store.delete([dataset.meta.projectId, id]);
   }
 
   async deleteDataset(id: DatasetId): Promise<void> {
@@ -175,18 +166,19 @@ export class BrowserDatasetProvider implements DatasetProvider {
       return;
     }
 
-    this.#currentProjectDatasets.splice(index, 1);
+    const [dataset] = this.#currentProjectDatasets.splice(index, 1);
+    const key: [ProjectId, DatasetId] = [dataset!.meta.projectId, id];
 
     // Sync the database
     const metadataStore = await this.#getDatasetDatabase();
 
     const metaTxn = preserveIndexedDbRequestTiming(metadataStore.transaction('datasets', 'readwrite'));
-    await metaTxn.store.delete(id);
+    await metaTxn.store.delete(key);
 
     const dataStore = await this.#getDatasetDatabase();
 
     const dataTxn = preserveIndexedDbRequestTiming(dataStore.transaction('data', 'readwrite'));
-    await dataTxn.store.delete(id);
+    await dataTxn.store.delete(key);
   }
 
   async knnDatasetRows(
@@ -215,6 +207,15 @@ export class BrowserDatasetProvider implements DatasetProvider {
     return this.#readProjectDatasets(projectId);
   }
 
+  async deleteStoredDatasetsForProject(projectId: ProjectId): Promise<void> {
+    const revision = this.#selectionRevision;
+    await this.importDatasetsForProject(projectId, [], { replace: true, activate: false });
+    // Cleanup must never select a project or supersede a pending tab switch.
+    if (revision === this.#selectionRevision && this.currentProjectId === projectId) {
+      this.#currentProjectDatasets = [];
+    }
+  }
+
   async importDatasetsForProject(
     projectId: ProjectId,
     datasets: CombinedDataset[],
@@ -241,12 +242,10 @@ export class BrowserDatasetProvider implements DatasetProvider {
     options.signal?.addEventListener('abort', abort, { once: true });
     try {
       if (options.replace) {
-        let cursor = await metadataStore.openCursor();
+        let cursor = await metadataStore.index('by-project').openCursor(projectId);
         while (cursor) {
-          if (cursor.value.projectId === projectId) {
-            await dataStore.delete(cursor.value.id);
-            await cursor.delete();
-          }
+          await dataStore.delete(cursor.primaryKey);
+          await cursor.delete();
           cursor = await cursor.continue();
         }
       }
@@ -254,13 +253,18 @@ export class BrowserDatasetProvider implements DatasetProvider {
         // Await each issued request before issuing the next. A synchronous
         // clone/quota error must not orphan the preceding request's rejection
         // when the enclosing transaction is rolled back.
-        await metadataStore.put(dataset.meta, dataset.meta.id);
-        await dataStore.put(dataset.data, dataset.data.id);
+        await metadataStore.put({ ...dataset.meta, projectId }, [projectId, dataset.meta.id]);
+        await dataStore.put(dataset.data, [projectId, dataset.data.id]);
       }
       await transaction.done;
       if (!isCurrent()) throw new DOMException('Project load cancelled', 'AbortError');
       if (activate) {
-        this.#currentProjectDatasets = cloneDeep(datasets);
+        this.#currentProjectDatasets = cloneDeep(
+          datasets.map((dataset) => ({
+            ...dataset,
+            meta: { ...dataset.meta, projectId },
+          })),
+        );
         this.currentProjectId = projectId;
       }
     } catch (error) {
@@ -285,14 +289,45 @@ function openDatasetDatabase(onUnavailable?: () => void): Promise<IDBPDatabase<D
   }
   let database: IDBPDatabase<DatasetDatabase> | undefined;
 
-  return openDB<DatasetDatabase>('datasets', 2, {
-    upgrade(upgradeDatabase) {
+  return openDB<DatasetDatabase>('datasets', 4, {
+    upgrade(upgradeDatabase, oldVersion, _newVersion, transaction) {
+      preserveIndexedDbRequestTiming(transaction);
       if (!upgradeDatabase.objectStoreNames.contains('datasets')) {
         upgradeDatabase.createObjectStore('datasets');
       }
 
       if (!upgradeDatabase.objectStoreNames.contains('data')) {
         upgradeDatabase.createObjectStore('data');
+      }
+      const metadataStore = transaction.objectStore('datasets');
+      if (!metadataStore.indexNames.contains('by-project')) {
+        metadataStore.createIndex('by-project', 'projectId');
+      }
+      if (oldVersion > 0 && oldVersion < 4) {
+        // Migrate one legacy dataset at a time within the upgrade transaction.
+        // Keep runtime IDs unchanged; only browser storage keys gain an owner.
+        const nativeTransaction = unwrap(transaction);
+        const metadata = nativeTransaction.objectStore('datasets');
+        const data = nativeTransaction.objectStore('data');
+        const request = metadata.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          if (Array.isArray(cursor.primaryKey)) {
+            cursor.continue();
+            return;
+          }
+          const value = cursor.value as DatasetMetadata;
+          const key = [value.projectId, value.id];
+          const payload = data.get(cursor.primaryKey);
+          payload.onsuccess = () => {
+            metadata.put(value, key);
+            if (payload.result !== undefined) data.put(payload.result, key);
+            data.delete(cursor.primaryKey);
+            cursor.delete();
+            cursor.continue();
+          };
+        };
       }
     },
     blocking() {

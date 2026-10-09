@@ -136,7 +136,7 @@ test('capacity includes committed WAL and recovery-journal storage without openi
   });
 });
 
-test('expanded recordings require one artifact copy, not four copies plus their compressed source', async () => {
+test('compressed recordings require only their stored bytes, not expanded copies', async () => {
   await fixture(async (source, root) => {
     const expanded = Buffer.alloc(8 * 1048576, 'x');
     const compressed = gzipSync(expanded);
@@ -150,13 +150,17 @@ test('expanded recordings require one artifact copy, not four copies plus their 
     const resources = {
       availableMemoryBytes: 1024 ** 3,
       heapLimitBytes: 1024 ** 3,
-      freeDiskBytes: 170 * 1048576,
+      freeDiskBytes: 64 * 1048576,
     };
     const capacity = await inspectLocalCopyCapacity(source, root, resources);
-    assert.equal(capacity.diskEstimate.recordingArtifactsBytes, 12 * expanded.length);
+    assert.equal(capacity.diskEstimate.recordingArtifactsBytes, 12 * compressed.length);
     assert.equal(capacity.diskEstimate.metadataAndLibrariesBytes, 4 * 12 * Buffer.byteLength(metadata));
     assert.equal(capacity.payloadBytes, 12 * (expanded.length + compressed.length + Buffer.byteLength(metadata)));
     assert.equal(capacity.fits, true);
+    assert.ok(
+      capacity.requiredBytes < resources.freeDiskBytes,
+      'Compressed artifacts must fit without expanded disk space.',
+    );
     assert.ok(4 * capacity.payloadBytes > resources.freeDiskBytes, 'The former estimate would refuse this fixture.');
     assert.deepEqual(
       (
@@ -218,7 +222,7 @@ test('capacity covers sampled candidate allocation through real compressed-recor
         const bundle = path.join(source.recordings, project.workflowId, `run-${index}`);
         await fs.mkdir(bundle, { recursive: true });
         const recording = JSON.stringify({ index, padding: 'x'.repeat(2 * 1048576) });
-        const compressed = gzipSync(recording);
+        const compressed = gzipSync(recording, { level: 1 });
         const replay = gzipSync(project.contents);
         await fs.writeFile(getRecordingArtifactPath(bundle, 'recording', 'gzip'), compressed);
         await fs.writeFile(getRecordingArtifactPath(bundle, 'replay-project', 'gzip'), replay);
@@ -300,6 +304,22 @@ test('capacity covers sampled candidate allocation through real compressed-recor
       });
       try {
         catalog.initialize({ verifyOnly: true, requireExisting: true });
+        const metadata = catalog.listRecordingMetadata({ recordingId: 'run-0' })[0]!;
+        const sourceArtifact = await fs.readFile(
+          getRecordingArtifactPath(path.join(source.recordings, project.workflowId, 'run-0'), 'recording', 'gzip'),
+        );
+        assert.deepEqual(
+          await fs.readFile(
+            path.join(candidate.artifactRoot, metadata.recordingHash.slice(0, 2), metadata.recordingHash),
+          ),
+          sourceArtifact,
+          'Migration must preserve the original gzip bytes, not recompress or expand them.',
+        );
+        assert.equal(metadata.recordingBytes, sourceArtifact.length);
+        assert.equal(
+          metadata.recordingDecodedBytes,
+          Buffer.byteLength(JSON.stringify({ index: 0, padding: 'x'.repeat(2 * 1048576) })),
+        );
         const state = await catalog.readRuntimeLibraryState();
         assert.ok(state);
         await materializeLocalRuntimeLibraries(path.join(target, 'runtime-cache'), state);
@@ -317,10 +337,7 @@ test('capacity covers sampled candidate allocation through real compressed-recor
       });
       assert.equal(await sample(), verifiedSize, 'Read-only verification must not duplicate persistent artifacts.');
       assert.ok(peak < capacity.requiredBytes, `Sampled ${peak} bytes exceeds estimate ${capacity.requiredBytes}.`);
-      assert.ok(
-        peak >= capacity.diskEstimate.recordingArtifactsBytes * 0.9,
-        'Measure real expanded artifacts, not only metadata.',
-      );
+      assert.ok(peak < 8 * 1048576, '64 MiB of decoded recordings must remain compressed on disk.');
       console.log(
         JSON.stringify({ capacityFixture: { sampledPeakBytes: peak, estimatedBytes: capacity.requiredBytes, stages } }),
       );

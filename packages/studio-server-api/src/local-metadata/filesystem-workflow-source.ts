@@ -24,6 +24,7 @@ import { readMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { LocalWorkflowCatalogSnapshot } from './workflow-catalog.js';
 import { withLocalSourceBudget } from './source-budget.js';
 import { LocalUpgradeDiagnosticError, localUpgradeSourceError } from './upgrade-diagnostics.js';
+import { LocalWorkflowRouteClaims } from './workflow-route-claims.js';
 
 export type SourceWorkflow = LocalWorkflowCatalogSnapshot;
 
@@ -133,6 +134,7 @@ function readProject(contents: string) {
 export async function* iterateSourceWorkflows(root: string): AsyncGenerator<SourceWorkflow> {
   const projectPaths = await listProjectPathsRecursive(root);
   const projectIds = new Set<string>();
+  const routes = new LocalWorkflowRouteClaims();
   let historicalProjectIds;
   try {
     historicalProjectIds = await validateFilesystemPublishedVersionArchiveForMigration(root);
@@ -144,7 +146,7 @@ export async function* iterateSourceWorkflows(root: string): AsyncGenerator<Sour
   for (const projectPath of projectPaths) {
     const relativePath = normalizeRelativePath(root, projectPath);
     try {
-      yield await withLocalSourceBudget(async () => {
+      const source = await withLocalSourceBudget(async () => {
         const fileName = path.basename(projectPath);
         const name = path.basename(projectPath, PROJECT_EXTENSION);
         const stats = await fs.lstat(projectPath);
@@ -217,6 +219,12 @@ export async function* iterateSourceWorkflows(root: string): AsyncGenerator<Sour
           publishedVersions,
         };
       });
+      if (source.publishedContents !== null) {
+        routes.endpoint(source.workflowId, source.endpointName);
+        routes.endpoint(source.workflowId, source.publishedEndpointName);
+      }
+      for (const app of source.publishedWebApps) routes.webApp(app.slug);
+      yield source;
     } catch (error) {
       throw localUpgradeSourceError(error, relativePath, 'unexpected-error');
     }

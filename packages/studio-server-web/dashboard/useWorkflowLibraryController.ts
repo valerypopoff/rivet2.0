@@ -115,6 +115,7 @@ export function useWorkflowLibraryController(options: {
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
   const selection = useWorkflowLibrarySelection({
+    error,
     allProjects,
     expandedFolders,
     flattenedFolders,

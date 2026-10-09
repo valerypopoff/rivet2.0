@@ -19,9 +19,11 @@ import {
   startLocalUpgradeBrowserBackup,
   getLocalUpgradeBrowserBackupDownload,
   startLocalUpgradePreparation,
+  getLocalUpgradeRepairDownload,
 } from '../local-metadata/operator-service.js';
 import { LOCAL_UPGRADE_PREPARATION_KINDS } from '../../../studio-server-shared/local-upgrade-types.js';
-import type { RuntimeLimitSettingsDraft } from '../../../studio-server-shared/app-settings-types.js';
+import { duplicateRepairChoicesSchema } from '../local-metadata/duplicate-project-repair.js';
+import type { RuntimeLimitSettingsDraft, ServerUiSession } from '../../../studio-server-shared/app-settings-types.js';
 import {
   deploymentStorageSettingsRepository,
   readDeploymentStorageSettings,
@@ -72,6 +74,7 @@ import {
 } from '../workflow-endpoint-auth-settings.js';
 import { createHttpError } from '../utils/httpError.js';
 import { getVerifiedClientAddress, isTrustedClientRequest } from '../auth.js';
+import { getServerUiAuthMode, isServerUiOAuthSessionAllowed, readServerUiOAuthSession } from '../server-ui-auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createControlPlaneJsonBodyParser } from '../middleware/body-parsers.js';
 import { createJsonBodyParser } from '../middleware/body-parsers.js';
@@ -99,6 +102,8 @@ export { readRunRecordingsSettings, writeRunRecordingsSettings } from './workflo
 
 export const appSettingsRouter = Router();
 const migrationJsonBody = createJsonBodyParser(() => 16 * 1024);
+// Ownership choices can include many history entries; still keep admission bounded.
+const localPreparationJsonBody = createJsonBodyParser(() => 1024 * 1024);
 const migrationTargetSchema = z
   .object({
     databaseUrl: z.string().min(1),
@@ -141,6 +146,14 @@ const migrationDeploymentReviewSchema = z
   .strict();
 
 appSettingsRouter.use('/vm-migration', requireVmMigrationOperatorAuth);
+appSettingsRouter.get('/server-ui-session', (req, res) => {
+  const mode = getServerUiAuthMode();
+  const session = mode === 'oauth' ? readServerUiOAuthSession(req) : null;
+  res.set('Cache-Control', 'no-store').json({
+    mode,
+    email: session && isServerUiOAuthSessionAllowed(session) ? session.email : null,
+  } satisfies ServerUiSession);
+});
 appSettingsRouter.get(
   '/local-upgrade/setup',
   requireLocalUpgradeSetupOperatorAuth,
@@ -192,13 +205,14 @@ appSettingsRouter.get(
 );
 appSettingsRouter.post(
   '/local-upgrade/preparation',
-  migrationJsonBody,
+  localPreparationJsonBody,
   asyncHandler(async (req, res) => {
     const input = z
       .object({
         id: z.string().uuid(),
         kind: z.enum(LOCAL_UPGRADE_PREPARATION_KINDS),
         revision: z.number().int().positive(),
+        repairChoices: duplicateRepairChoicesSchema.optional(),
       })
       .strict()
       .parse(req.body);
@@ -206,6 +220,25 @@ appSettingsRouter.post(
       .set('Cache-Control', 'no-store')
       .status(202)
       .json(await startLocalUpgradePreparation(input));
+  }),
+);
+appSettingsRouter.get(
+  '/local-upgrade/repair/download',
+  asyncHandler(async (req, res) => {
+    assertBackupDownloadRequest(req);
+    const id = z.string().uuid().parse(req.query.id);
+    const archive = await getLocalUpgradeRepairDownload(id);
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    await new Promise<void>((resolve, reject) =>
+      res.download(archive, `rivet-project-id-repair-${id}.tar.gz`, (error) => {
+        if (error && res.headersSent) {
+          res.destroy();
+          resolve();
+        } else if (error) reject(error);
+        else resolve();
+      }),
+    );
   }),
 );
 appSettingsRouter.get(
@@ -418,7 +451,10 @@ appSettingsRouter.post(
   migrationJsonBody,
   asyncHandler(async (req, res) => {
     const { target, checks } = migrationDeploymentReviewSchema.parse(req.body);
-    res.set('Cache-Control', 'no-store').json(await reviewVmMigrationDeployment(target, checks));
+    res
+      .status(202)
+      .set('Cache-Control', 'no-store')
+      .json(await reviewVmMigrationDeployment(target, checks));
   }),
 );
 appSettingsRouter.get('/trusted-clients/current-request', (req, res) => {

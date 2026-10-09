@@ -37,6 +37,7 @@ import { createPrecopyAwareMigrationBlobStore, precopyMigrationTexts } from './m
 import { fingerprintVmMigrationSourceParts, readVmMigrationSourceParts } from './vm-migration-source-manifest.js';
 import { recordMigrationProgress } from './migration-progress.js';
 import { collectSourceWorkflows, type SourceWorkflow } from '../local-metadata/filesystem-workflow-source.js';
+import { SqliteMigrationSource } from './sqlite-migration-source.js';
 import {
   acquireVmMigrationImporterLock,
   assertVmMigrationSourceManifest,
@@ -189,12 +190,12 @@ function assertWorkflowSnapshotMatches(source: SourceWorkflow, target: ManagedWo
 }
 
 async function importSourceWorkflows(
-  sourceWorkflows: SourceWorkflow[],
+  sourceWorkflows: Iterable<SourceWorkflow> | AsyncIterable<SourceWorkflow>,
   backend: ManagedWorkflowBackend,
 ): Promise<Map<string, string>> {
   const importedProjects = new Map<string, string>();
 
-  for (const workflow of sourceWorkflows) {
+  for await (const workflow of sourceWorkflows) {
     const existing = await backend.readWorkflowMigrationSnapshot(workflow.relativePath);
     if (existing) {
       assertWorkflowSnapshotMatches(workflow, existing);
@@ -234,8 +235,14 @@ async function importSourceWorkflows(
   return importedProjects;
 }
 
-async function importSourceFolders(root: string, backend: ManagedWorkflowBackend): Promise<void> {
-  const folderPaths = collectFolderPaths(await listWorkflowFolders(root));
+async function importSourceFolders(
+  root: string,
+  backend: ManagedWorkflowBackend,
+  native?: SqliteMigrationSource,
+): Promise<void> {
+  const folderPaths = collectFolderPaths(
+    native ? (await native.workflows.getTree()).folders : await listWorkflowFolders(root),
+  );
   const existingPaths = new Set(collectFolderPaths((await backend.getTree()).folders));
   for (const existingPath of existingPaths) {
     if (!folderPaths.includes(existingPath)) throw new Error(`Unexpected managed workflow folder: ${existingPath}`);
@@ -258,16 +265,19 @@ async function importSourceRecordings(
   root: string,
   backend: ManagedWorkflowBackend,
   importedProjects: Map<string, string>,
+  native?: SqliteMigrationSource,
 ): Promise<void> {
-  await initializeWorkflowRecordingStorage(root);
-  const indexedWorkflows = await listWorkflowRecordingWorkflowStatsRows();
+  if (!native) await initializeWorkflowRecordingStorage(root);
+  const indexedWorkflows = native ? [] : await listWorkflowRecordingWorkflowStatsRows();
   const importedIds = new Set(importedProjects.values());
   for (const workflow of indexedWorkflows) {
     if (workflow.totalRuns > 0 && !importedIds.has(workflow.workflowId)) {
       throw new Error(`Recording index contains runs for a missing source project: ${workflow.workflowId}`);
     }
   }
-  const sourceRecordingWorkflows = await listWorkflowRecordingWorkflows(root);
+  const sourceRecordingWorkflows = native
+    ? await native.workflows.listWorkflowRecordingWorkflows()
+    : await listWorkflowRecordingWorkflows(root);
 
   for (const sourceWorkflow of sourceRecordingWorkflows.workflows) {
     const relativePath = sourceWorkflow.project.relativePath;
@@ -279,13 +289,17 @@ async function importSourceRecordings(
     let page = 1;
     const pageSize = 100;
     while (true) {
-      const runsPage = await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
+      const runsPage = native
+        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, pageSize, 'all')
+        : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
       for (const run of runsPage.runs) {
-        const recordingContents = await readWorkflowRecordingArtifact(root, run.id, 'recording');
-        const replayProjectContents = await readWorkflowRecordingArtifact(root, run.id, 'replay-project');
-        const replayDatasetContents = run.hasReplayDataset
-          ? await readWorkflowRecordingArtifact(root, run.id, 'replay-dataset')
-          : null;
+        const readArtifact = (artifact: 'recording' | 'replay-project' | 'replay-dataset') =>
+          native
+            ? native.workflows.readWorkflowRecordingArtifact(run.id, artifact)
+            : readWorkflowRecordingArtifact(root, run.id, artifact);
+        const recordingContents = await readArtifact('recording');
+        const replayProjectContents = await readArtifact('replay-project');
+        const replayDatasetContents = run.hasReplayDataset ? await readArtifact('replay-dataset') : null;
 
         await backend.importWorkflowRecording({
           recordingId: run.id,
@@ -373,17 +387,21 @@ async function validateSourceRecordingBundles(recordingsRoot: string): Promise<n
   return recordingCount;
 }
 
-async function verifyMigration(root: string, backend: ManagedWorkflowBackend): Promise<VerificationSummary> {
+async function verifyMigration(
+  root: string,
+  backend: ManagedWorkflowBackend,
+  native?: SqliteMigrationSource,
+): Promise<VerificationSummary> {
   const [sourceFolders, sourceWorkflows, sourceRecordingWorkflows, targetTree, targetRecordingWorkflows] =
     await Promise.all([
-      listWorkflowFolders(root),
-      collectSourceWorkflows(root),
-      listWorkflowRecordingWorkflows(root),
+      native ? native.workflows.getTree().then((tree) => tree.folders) : listWorkflowFolders(root),
+      native ? native.projectHeaders() : collectSourceWorkflows(root),
+      native ? native.workflows.listWorkflowRecordingWorkflows() : listWorkflowRecordingWorkflows(root),
       backend.getTree(),
       backend.listWorkflowRecordingWorkflows(),
     ]);
   const sourceIds = new Set(sourceWorkflows.map((workflow) => workflow.workflowId));
-  for (const indexed of await listWorkflowRecordingWorkflowStatsRows()) {
+  for (const indexed of native ? [] : await listWorkflowRecordingWorkflowStatsRows()) {
     if (indexed.totalRuns > 0 && !sourceIds.has(indexed.workflowId)) {
       throw new Error(`Recording index contains runs for a missing source project: ${indexed.workflowId}`);
     }
@@ -426,7 +444,7 @@ async function verifyMigration(root: string, backend: ManagedWorkflowBackend): P
     targetRecordingState,
   });
 
-  for (const source of sourceWorkflows) {
+  for await (const source of native ? native.projects() : (sourceWorkflows as SourceWorkflow[])) {
     assertWorkflowSnapshotMatches(source, await backend.readWorkflowMigrationSnapshot(source.relativePath));
     if (source.publishedEndpointName) {
       const resolved = await backend.loadPublishedExecutionProject(source.publishedEndpointName);
@@ -436,7 +454,7 @@ async function verifyMigration(root: string, backend: ManagedWorkflowBackend): P
       if (resolved.endpointAccess !== source.endpointAccess)
         throw new Error(`Managed published execution access policy differs: ${source.relativePath}`);
     }
-    if (source.endpointName) {
+    if (source.endpointName && source.publishedEndpointName) {
       const latest = await backend.loadLatestExecutionProject(source.endpointName);
       if (latest?.project.metadata.id !== source.workflowId) {
         throw new Error(`Managed latest execution route did not resolve: ${source.relativePath}`);
@@ -466,7 +484,9 @@ async function verifyMigration(root: string, backend: ManagedWorkflowBackend): P
     if (!targetWorkflow)
       throw new Error(`Managed recording workflow is missing: ${sourceWorkflow.project.relativePath}`);
     for (let page = 1; ; page += 1) {
-      const sourceRuns = await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, 100, 'all');
+      const sourceRuns = native
+        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, 100, 'all')
+        : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, 100, 'all');
       const targetRuns = await backend.listWorkflowRecordingRunsPage(targetWorkflow.workflowId, page, 100, 'all');
       if (sourceRuns.runs.length !== targetRuns.runs.length) {
         throw new Error(`Managed recording page differs for ${sourceWorkflow.project.relativePath}`);
@@ -504,7 +524,9 @@ async function verifyMigration(root: string, backend: ManagedWorkflowBackend): P
           : ['recording', 'replay-project'];
         for (const artifact of artifacts) {
           const [sourceContents, targetContents] = await Promise.all([
-            readWorkflowRecordingArtifact(root, run.id, artifact),
+            native
+              ? native.workflows.readWorkflowRecordingArtifact(run.id, artifact)
+              : readWorkflowRecordingArtifact(root, run.id, artifact),
             backend.readWorkflowRecordingArtifact(run.id, artifact),
           ]);
           if (sourceContents !== targetContents) {
@@ -521,22 +543,43 @@ async function verifyMigration(root: string, backend: ManagedWorkflowBackend): P
 
 async function main() {
   const command = process.argv[2];
-  if (command !== 'precopy' && command !== 'migrate' && command !== 'verify') {
-    throw new Error('Expected migration command: precopy, migrate or verify.');
+  if (command !== 'precopy' && command !== 'migrate' && command !== 'verify' && command !== 'freeze-source') {
+    throw new Error('Expected migration command: freeze-source, precopy, migrate or verify.');
   }
   const mode = command;
   const sourceRoot = getSourceRoot();
-  const targetConfig = readWorkflowMigrationTargetConfig(process.env);
   const sourceAppDataRoot = process.env.RIVET_MIGRATION_SOURCE_APP_DATA_ROOT?.trim();
   const sourceRecordingsRoot = process.env.RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT?.trim();
   const sourceRuntimeLibrariesRoot = process.env.RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT?.trim();
   const encryptionKey = process.env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY?.trim();
+  const controlRoot =
+    process.env.RIVET_MIGRATION_SOURCE_LOCAL_METADATA_CONTROL_ROOT?.trim() ||
+    process.env.RIVET_LOCAL_METADATA_CONTROL_ROOT?.trim();
+  if (command === 'freeze-source') {
+    if (!controlRoot || !sourceAppDataRoot || !sourceRecordingsRoot || !sourceRuntimeLibrariesRoot)
+      throw new Error('Native source freeze requires the control root and all four original source roots.');
+    await SqliteMigrationSource.freeze(controlRoot, {
+      workflows: sourceRoot,
+      appData: path.resolve(sourceAppDataRoot),
+      recordings: path.resolve(sourceRecordingsRoot),
+      runtimeLibraries: path.resolve(sourceRuntimeLibrariesRoot),
+    });
+    console.log(
+      '[workflow-storage:freeze-source] Durable SQLite source barrier installed. Keep both source processes stopped until destination verification and cutover.',
+    );
+    return;
+  }
+  const targetConfig = readWorkflowMigrationTargetConfig(process.env);
+  if (controlRoot && mode === 'precopy')
+    throw new Error('Native SQLite migration uses a frozen copy and verification; legacy precopy is not supported.');
   if (!sourceAppDataRoot || !sourceRecordingsRoot || !sourceRuntimeLibrariesRoot || !encryptionKey) {
     throw new Error(
       'Migration requires source App Settings, recordings, and runtime-library roots plus RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY.',
     );
   }
-  for (const sourcePath of [sourceRoot, sourceAppDataRoot, sourceRecordingsRoot, sourceRuntimeLibrariesRoot]) {
+  for (const sourcePath of controlRoot
+    ? [sourceAppDataRoot]
+    : [sourceRoot, sourceAppDataRoot, sourceRecordingsRoot, sourceRuntimeLibrariesRoot]) {
     if (
       !(await fs
         .stat(sourcePath)
@@ -561,20 +604,34 @@ async function main() {
     );
   }
   const gatePool = new Pool(getManagedDbPoolConfig(targetConfig));
-  const sourceIdentity = migrationSourceIdentity([
-    sourceRoot,
-    path.resolve(sourceAppDataRoot),
-    path.resolve(sourceRecordingsRoot),
-    path.resolve(sourceRuntimeLibrariesRoot),
-  ]);
-  const targetIdentity = migrationTargetIdentity(targetConfig);
   const manifestRoots = {
     workflows: sourceRoot,
     recordings: path.resolve(sourceRecordingsRoot),
     appData: path.resolve(sourceAppDataRoot),
     runtimeLibraries: path.resolve(sourceRuntimeLibrariesRoot),
   };
-  const releaseImporterLock = await acquireVmMigrationImporterLock(gatePool);
+  const native = controlRoot
+    ? await SqliteMigrationSource.open(controlRoot, manifestRoots, {
+        expectedIdentity: process.env.RIVET_MIGRATION_SOURCE_IDENTITY,
+      })
+    : undefined;
+  const sourceIdentity =
+    native?.sourceIdentity ??
+    migrationSourceIdentity([
+      sourceRoot,
+      path.resolve(sourceAppDataRoot),
+      path.resolve(sourceRecordingsRoot),
+      path.resolve(sourceRuntimeLibrariesRoot),
+    ]);
+  const targetIdentity = migrationTargetIdentity(targetConfig);
+  let releaseImporterLock;
+  try {
+    releaseImporterLock = await acquireVmMigrationImporterLock(gatePool);
+  } catch (error) {
+    await native?.dispose();
+    await gatePool.end();
+    throw error;
+  }
 
   if (mode === 'precopy') {
     try {
@@ -616,16 +673,19 @@ async function main() {
     // source drift, extra target rows, or a missing object. The importer lock
     // prevents a competing copy from reopening it during this comparison.
     if (mode === 'verify') await invalidateVmMigrationTargetGate(gatePool, sourceIdentity, targetIdentity);
-    const sourceRecordingCount = await validateSourceRecordingBundles(sourceRecordingsRoot);
-    const sourceSettings = await collectSourceAppSettings(sourceAppDataRoot, targetConfig);
+    const sourceRecordingCount = native
+      ? native.catalog.listRecordingIds().length
+      : await validateSourceRecordingBundles(sourceRecordingsRoot);
+    const sourceSettings = await collectSourceAppSettings(sourceAppDataRoot, targetConfig, native?.settings);
     const configuredSettingsCount = sourceSettings.filter((row) => row.sourceHash !== null).length;
     if (configuredSettingsCount === 0 && process.env.RIVET_MIGRATION_ALLOW_DEFAULT_APP_SETTINGS !== '1') {
       throw new Error(
         'The source App Settings root contains no saved settings. Check the path before proceeding, or explicitly set RIVET_MIGRATION_ALLOW_DEFAULT_APP_SETTINGS=1.',
       );
     }
-    if (mode === 'migrate') await initializeFilesystemProjectTransactions(sourceRoot);
-    const sourceWorkflows = await collectSourceWorkflows(sourceRoot);
+    if (mode === 'migrate' && !native) await initializeFilesystemProjectTransactions(sourceRoot);
+    const sourceManifestParts = native ? await native.manifest() : await readVmMigrationSourceParts(manifestRoots);
+    const sourceWorkflows = native ? await native.projectHeaders() : await collectSourceWorkflows(sourceRoot);
     if (sourceWorkflows.length === 0 && process.env.RIVET_MIGRATION_ALLOW_EMPTY_SOURCE !== '1') {
       throw new Error(
         'The source workflows root contains no projects. Check the path before proceeding, or explicitly set RIVET_MIGRATION_ALLOW_EMPTY_SOURCE=1.',
@@ -634,7 +694,6 @@ async function main() {
     console.log(
       `[workflow-storage:${mode}] Source preflight found ${sourceWorkflows.length} projects, ${sourceRecordingCount} recordings, and ${configuredSettingsCount} saved App Settings domains.`,
     );
-    const sourceManifestParts = await readVmMigrationSourceParts(manifestRoots);
     const sourceManifest = fingerprintVmMigrationSourceParts(sourceManifestParts);
     if (mode === 'migrate') {
       if (!(await hasVmMigrationTargetGate(gatePool))) await assertEmptyTargetObjectNamespaces(targetConfig);
@@ -656,19 +715,22 @@ async function main() {
         }
       }
       console.log(`[workflow-storage:${mode}] Importing workflows from ${sourceRoot}...`);
-      await importSourceFolders(sourceRoot, backend);
-      const importedProjects = await importSourceWorkflows(sourceWorkflows, backend);
+      await importSourceFolders(sourceRoot, backend, native);
+      const importedProjects = await importSourceWorkflows(
+        native ? native.projects() : (sourceWorkflows as SourceWorkflow[]),
+        backend,
+      );
       console.log(`[workflow-storage:${mode}] Importing recordings...`);
-      await importSourceRecordings(sourceRoot, backend, importedProjects);
+      await importSourceRecordings(sourceRoot, backend, importedProjects, native);
     }
 
     console.log(`[workflow-storage:${mode}] Verifying managed state...`);
-    const summary = await verifyMigration(sourceRoot, backend);
+    const summary = await verifyMigration(sourceRoot, backend, native);
     console.log(
       `[workflow-storage:${mode}] Verified ${summary.targetProjectCount} workflows, ${summary.targetFolderCount} folders, and ${summary.targetRecordingWorkflowCount} recording workflow summaries.`,
     );
     const operationalRows = await migrateOperationalSqlite({
-      sourceAppDataRoot,
+      sourceAppDataRoot: native?.paths.operationalRoot ?? sourceAppDataRoot,
       target: targetConfig,
       verifyOnly: mode === 'verify',
     });
@@ -686,6 +748,12 @@ async function main() {
       sourceRoot: sourceRuntimeLibrariesRoot,
       target: targetConfig,
       verifyOnly: mode === 'verify',
+      sourceState: native
+        ? (await native.catalog.readRuntimeLibraryState()) ?? {
+            manifest: { packages: {}, updatedAt: '' },
+            archive: null,
+          }
+        : undefined,
     });
     if (mode === 'migrate')
       await recordMigrationProgress({
@@ -699,6 +767,7 @@ async function main() {
       target: targetConfig,
       encryptionKey,
       verifyOnly: mode === 'verify',
+      sourceCatalog: native?.settings,
     });
     if (mode === 'migrate')
       await recordMigrationProgress({
@@ -707,7 +776,7 @@ async function main() {
         sourceHash: sourceManifestParts.settings!,
       });
     console.log(`[workflow-storage:${mode}] Verified ${settingsCount} encrypted App Settings domains.`);
-    const verifiedManifestParts = await readVmMigrationSourceParts(manifestRoots);
+    const verifiedManifestParts = native ? await native.manifest() : await readVmMigrationSourceParts(manifestRoots);
     const changedSourceDomain = Object.keys(sourceManifestParts).find(
       (name) => sourceManifestParts[name] !== verifiedManifestParts[name],
     );
@@ -755,9 +824,13 @@ async function main() {
       await backend.dispose();
     } finally {
       try {
-        await releaseImporterLock();
+        await native?.dispose();
       } finally {
-        await gatePool.end();
+        try {
+          await releaseImporterLock();
+        } finally {
+          await gatePool.end();
+        }
       }
     }
   }

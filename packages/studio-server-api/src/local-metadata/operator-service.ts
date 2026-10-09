@@ -10,6 +10,8 @@ import {
   readVmMigrationMaintenance,
   isVmMigrationMaintenanceActive,
   leaveVmMigrationMaintenance,
+  assertNoManagedMigrationMaintenance,
+  claimLocalStorageControl,
 } from '../vm-migration-maintenance.js';
 import { freezeLocalStorageSource, localStorageDrainSnapshot } from '../vm-migration-service.js';
 import { inspectVmMigrationSource } from '../vm-migration-inventory.js';
@@ -52,12 +54,23 @@ import { createHttpError } from '../utils/httpError.js';
 import type {
   LocalUpgradeOperation,
   LocalUpgradePreparation,
+  LocalUpgradeDuplicateRepairChoices,
+  LocalUpgradeDuplicateRepairStatus,
 } from '../../../studio-server-shared/local-upgrade-types.js';
+import {
+  assertNoPendingDuplicateRepair,
+  duplicateRepairStatus,
+  duplicateRepairDownload,
+  inspectDuplicateProjectIds,
+  repairDuplicateProjectIds,
+  finishDuplicateProjectRepair,
+} from './duplicate-project-repair.js';
 import { LocalUpgradePreparationJobs, waitForLocalUpgradeDrain } from './preparation-jobs.js';
 import {
   browserBackupDirectory,
   createBrowserBackupArchive,
   hashBackupArchive,
+  invalidateBrowserBackup,
   readBrowserBackup,
   saveBrowserBackup,
   type BrowserBackup,
@@ -182,6 +195,7 @@ function assertAvailable(): void {
 }
 async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Promise<T>): Promise<T> {
   assertAvailable();
+  assertNoManagedMigrationMaintenance();
   if (activeOperation || runningJob || runningBackup || preparationJobs?.running)
     throw createHttpError(
       409,
@@ -190,18 +204,28 @@ async function exclusive<T>(operation: LocalUpgradeOperation, callback: () => Pr
         code: 'local-upgrade-busy',
       },
     );
+  const releaseControl = claimLocalStorageControl();
   activeOperation = operation;
   try {
+    if (operation !== 'repair' && operation !== 'inspect' && operation !== 'restart')
+      assertNoPendingDuplicateRepair(localMetadataControlRoot());
     return await callback();
   } finally {
     activeOperation = null;
+    releaseControl();
   }
 }
 async function assertDrained(): Promise<void> {
-  if (!isVmMigrationMaintenanceActive()) throw new Error('Pause writes before copying or changing storage authority.');
+  if (!isVmMigrationMaintenanceActive())
+    throw createHttpError(409, 'Pause writes before copying or changing storage authority.', {
+      code: 'local-upgrade-pause-required',
+    });
   readVmMigrationMaintenance();
   const drain = await localStorageDrainSnapshot();
-  if (!drain.ready) throw new Error(`Wait for active work to drain: ${drain.blockers.join(', ')}.`);
+  if (!drain.ready)
+    throw createHttpError(409, 'Wait for active work to drain; writes remain paused. Reload status before retrying.', {
+      code: 'local-upgrade-drain-required',
+    });
 }
 
 export async function getLocalUpgradeStatus() {
@@ -261,6 +285,13 @@ export async function getLocalUpgradeStatus() {
       (copyRunning ? 'copy' : runningBackup ? 'backup' : null);
     const maintenance = readVmMigrationMaintenance();
     let backup: BrowserBackup | null = null;
+    let repair: LocalUpgradeDuplicateRepairStatus | null = null;
+    let repairStatusUnreadable = false;
+    try {
+      repair = await duplicateRepairStatus(localMetadataControlRoot());
+    } catch {
+      repairStatusUnreadable = true;
+    }
     let backupRunning = false;
     let backupStatusUnreadable = false;
     try {
@@ -280,6 +311,9 @@ export async function getLocalUpgradeStatus() {
       preparationJobsAvailable: true,
       preparation,
       preparationStatusUnreadable,
+      duplicateRepairAvailable: true,
+      repair,
+      repairStatusUnreadable,
       backup: backup?.phase === 'creating' && !backupRunning ? { ...backup, phase: 'interrupted' as const } : backup,
       backupStatusUnreadable,
       copyConfigurationReady: true,
@@ -338,75 +372,157 @@ async function inspectSource() {
 }
 /** Admission does no source traversal. The known ID and retained result make
  * a lost HTTP acknowledgement recoverable without repeating an authorized pause. */
-export async function startLocalUpgradePreparation(input: Pick<LocalUpgradePreparation, 'id' | 'kind' | 'revision'>) {
+export async function startLocalUpgradePreparation(
+  input: Pick<LocalUpgradePreparation, 'id' | 'kind' | 'revision'> & {
+    repairChoices?: LocalUpgradeDuplicateRepairChoices;
+  },
+) {
   assertAvailable();
+  const requestHash = input.repairChoices ? hashLocalUpgradeValue(input.repairChoices) : undefined;
+  if ((input.kind === 'repair') !== !!input.repairChoices)
+    throw createHttpError(400, 'Repair choices are required only for repair.');
   const jobs = preparations();
   const previous = await jobs.status();
   if (previous?.id === input.id) {
-    if (previous.kind !== input.kind || previous.revision !== input.revision)
+    if (previous.kind !== input.kind || previous.revision !== input.revision || previous.requestHash !== requestHash)
       throw createHttpError(409, 'Preparation request identity differs.');
     return previous;
   }
-  return exclusive(input.kind === 'pause-backup' ? 'inspect' : input.kind, async () => {
-    const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
-    if (
-      state.revision !== input.revision ||
-      state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
-      !['legacy', 'legacy-resumed'].includes(state.phase) ||
-      getLocalMetadataServingSelection()
-    )
-      throw createHttpError(409, 'Storage transition changed. Reload status before preparing.');
-    return jobs.start(input, async (job, stage) => {
-      const checkRevision = async () => {
-        const current = await withLocalMetadataControl(async (journal) => journal.read(), true);
-        if (
-          current.revision !== input.revision ||
-          current.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
-          !['legacy', 'legacy-resumed'].includes(current.phase) ||
-          getLocalMetadataServingSelection()
-        )
-          throw new Error('Storage transition changed during preparation.');
-      };
-      await checkRevision();
-      if (input.kind === 'inspect' || input.kind === 'pause-backup') {
-        const inventory = await inspectSource();
-        await checkRevision();
-        job.inventory = inventory;
-        if (input.kind === 'inspect') return;
-        if (!job.inventory.capacity?.fits) throw new Error('Capacity inspection did not pass.');
-      }
-      if (input.kind === 'pause' || input.kind === 'pause-backup') {
-        await stage('pause');
-        await freezeLocalStorageSource();
-        await checkRevision();
-        if (input.kind === 'pause') return;
-        const pausedAt = readVmMigrationMaintenance()!.enteredAt;
-        await waitForLocalUpgradeDrain(localStorageDrainSnapshot, async () => {
+  return exclusive(
+    input.kind === 'pause-backup' || input.kind === 'repair-inspect'
+      ? 'inspect'
+      : input.kind === 'repair-recover'
+        ? 'repair'
+        : input.kind,
+    async () => {
+      if (!['repair-recover', 'repair-inspect', 'inspect'].includes(input.kind))
+        assertNoPendingDuplicateRepair(localMetadataControlRoot());
+      await assertLocalControlPaths(localMetadataControlRoot(), localMetadataSourceRoots());
+      const state = await withLocalMetadataControl(async (journal) => journal.read(), true);
+      if (
+        state.revision !== input.revision ||
+        state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+        !['legacy', 'legacy-resumed'].includes(state.phase) ||
+        getLocalMetadataServingSelection() ||
+        ((input.kind === 'repair' || input.kind === 'repair-recover') && state.generation)
+      )
+        throw createHttpError(409, 'Storage transition changed. Reload status before preparing.');
+      return jobs.start(
+        { id: input.id, kind: input.kind, revision: input.revision, ...(requestHash ? { requestHash } : {}) },
+        async (job, stage) => {
+          const checkRevision = async () => {
+            const current = await withLocalMetadataControl(async (journal) => journal.read(), true);
+            if (
+              current.revision !== input.revision ||
+              current.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+              !['legacy', 'legacy-resumed'].includes(current.phase) ||
+              getLocalMetadataServingSelection()
+            )
+              throw new Error('Storage transition changed during preparation.');
+          };
           await checkRevision();
-          if (readVmMigrationMaintenance()?.enteredAt !== pausedAt)
-            throw new Error('Maintenance session changed during drain.');
-        });
-      }
-      if (input.kind === 'fingerprint') {
-        await assertDrained();
-        const pausedAt = readVmMigrationMaintenance()!.enteredAt;
-        const sourceFingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
-        await assertDrained();
-        await checkRevision();
-        if (readVmMigrationMaintenance()?.enteredAt !== pausedAt) throw new Error('Maintenance session changed.');
-        job.fingerprint = { pausedAt, sourceFingerprint };
-        return;
-      }
-      await stage('backup');
-      await beginBrowserBackup(input.revision);
-    });
-  });
+          if (input.kind === 'repair-inspect') {
+            job.repairAnalysis = await inspectDuplicateProjectIds(localMetadataSourceRoots());
+            await checkRevision();
+            return;
+          }
+          if (input.kind === 'repair' || input.kind === 'repair-recover') {
+            if (input.kind === 'repair') {
+              await stage('pause');
+              await freezeLocalStorageSource();
+            }
+            const pausedAt = readVmMigrationMaintenance()?.enteredAt;
+            if (!pausedAt) throw new Error('Repair requires paused writes.');
+            const assertFrozen = async () => {
+              await checkRevision();
+              await assertDrained();
+              if (readVmMigrationMaintenance()?.enteredAt !== pausedAt)
+                throw new Error('Repair maintenance session changed.');
+            };
+            await waitForLocalUpgradeDrain(localStorageDrainSnapshot, async () => {
+              await checkRevision();
+              if (readVmMigrationMaintenance()?.enteredAt !== pausedAt)
+                throw new Error('Repair maintenance session changed.');
+            });
+            await stage('repair');
+            // Status readers must not publish obsolete archive evidence after
+            // crossing this invalidation, even if a repair completes quickly.
+            backupActivityRevision++;
+            try {
+              await invalidateBrowserBackup(localMetadataControlRoot());
+            } finally {
+              backupActivityRevision++;
+            }
+            const options = {
+              control: localMetadataControlRoot(),
+              source: localMetadataSourceRoots(),
+              revision: input.revision,
+              pausedAt,
+              assertFrozen,
+            };
+            if (input.kind === 'repair') await repairDuplicateProjectIds({ ...options, choices: input.repairChoices! });
+            else await finishDuplicateProjectRepair(options);
+            await assertFrozen();
+            // A completed repair remains complete if deeper source inspection
+            // finds another defect. Retain the correct failure stage in the UI.
+            await stage('inspect');
+            job.repairAnalysis = await inspectDuplicateProjectIds(options.source);
+            job.inventory = await inspectSource();
+            return;
+          }
+          if (input.kind === 'inspect' || input.kind === 'pause-backup') {
+            let inventory;
+            try {
+              inventory = await inspectSource();
+            } catch (error) {
+              if (error instanceof LocalUpgradeDiagnosticError && error.reason === 'project-id-duplicate')
+                job.repairAnalysis = await inspectDuplicateProjectIds(localMetadataSourceRoots());
+              throw error;
+            }
+            await checkRevision();
+            job.inventory = inventory;
+            if (input.kind === 'inspect') return;
+            if (!job.inventory.capacity?.fits) throw new Error('Capacity inspection did not pass.');
+          }
+          if (input.kind === 'pause' || input.kind === 'pause-backup') {
+            await stage('pause');
+            await freezeLocalStorageSource();
+            await checkRevision();
+            if (input.kind === 'pause') return;
+            const pausedAt = readVmMigrationMaintenance()!.enteredAt;
+            await waitForLocalUpgradeDrain(localStorageDrainSnapshot, async () => {
+              await checkRevision();
+              if (readVmMigrationMaintenance()?.enteredAt !== pausedAt)
+                throw new Error('Maintenance session changed during drain.');
+            });
+          }
+          if (input.kind === 'fingerprint') {
+            await assertDrained();
+            const pausedAt = readVmMigrationMaintenance()!.enteredAt;
+            const sourceFingerprint = await fingerprintVmMigrationSource(localMetadataSourceRoots());
+            await assertDrained();
+            await checkRevision();
+            if (readVmMigrationMaintenance()?.enteredAt !== pausedAt) throw new Error('Maintenance session changed.');
+            job.fingerprint = { pausedAt, sourceFingerprint };
+            return;
+          }
+          await stage('backup');
+          await beginBrowserBackup(input.revision);
+        },
+      );
+    },
+  );
 }
 export async function pauseLocalUpgradeSource(): Promise<void> {
   return exclusive('pause', async () => {
     if (getLocalMetadataServingSelection()) throw new Error('This generation is already selected.');
     await freezeLocalStorageSource();
   });
+}
+export async function getLocalUpgradeRepairDownload(id: string) {
+  assertAvailable();
+  await assertLocalControlPaths(localMetadataControlRoot(), localMetadataSourceRoots());
+  return duplicateRepairDownload(localMetadataControlRoot(), id);
 }
 
 export type LocalUpgradeCopyInput = {
@@ -424,7 +540,10 @@ export async function startLocalUpgradeCopy(
   input = { ...input };
   hooks = { ...hooks };
   return exclusive('copy', async () => {
-    if (getLocalMetadataServingSelection()) throw new Error('A SQLite generation is already selected.');
+    if (getLocalMetadataServingSelection())
+      throw createHttpError(409, 'A SQLite generation is already selected. Reload status before copying.', {
+        code: 'local-upgrade-state-mismatch',
+      });
     await assertDrained();
     if (!input.backupRestored || !input.backupReference.trim() || input.backupReference.length > 512)
       throw new Error('A restored backup must be certified.');
@@ -444,12 +563,24 @@ export async function startLocalUpgradeCopy(
         backup.pausedAt !== readVmMigrationMaintenance()?.enteredAt ||
         backup.sourceFingerprint !== sourceFingerprint
       )
-        throw new Error('The browser backup is stale or unverified. Create and download a current backup.');
+        throw createHttpError(
+          409,
+          'The browser backup is stale or unverified. Reload status and confirm a current verified backup before copying.',
+          { code: 'local-upgrade-backup-mismatch' },
+        );
     }
     const job = await withLocalMetadataControl(async (journal, store) => {
       const state = journal.read();
-      if (state.revision !== input.revision || !['legacy', 'legacy-resumed'].includes(state.phase))
-        throw new Error('Stale upgrade request or an existing verified generation. Reload status.');
+      if (
+        state.revision !== input.revision ||
+        state.revision !== Number(process.env.RIVET_LOCAL_METADATA_BOOT_REVISION) ||
+        !['legacy', 'legacy-resumed'].includes(state.phase)
+      )
+        throw createHttpError(
+          409,
+          'Storage authority changed. Reload status and finish any required backend restart before copying or retrying.',
+          { code: 'local-upgrade-state-mismatch' },
+        );
       const old = store.latestJob();
       if (input.retryJobId) {
         if (
@@ -459,7 +590,11 @@ export async function startLocalUpgradeCopy(
           old.sourceFingerprint !== sourceFingerprint ||
           old.backupReference !== input.backupReference
         )
-          throw new Error('Retry must use the same frozen source, backup and interrupted generation.');
+          throw createHttpError(
+            409,
+            'This retry uses a different attempt, source or backup. Reload status and confirm the backup; the copy button will choose Retry or Copy and verify.',
+            { code: 'local-upgrade-retry-mismatch' },
+          );
         const next: LocalUpgradeJob = {
           ...old,
           phase: 'copying',
@@ -471,7 +606,22 @@ export async function startLocalUpgradeCopy(
         store.saveJob(next);
         return next;
       }
-      if (old?.phase === 'copying') throw new Error('Retry the interrupted generation explicitly.');
+      if (old?.phase === 'copying') {
+        // The exclusive gate already rejected a live worker. A retained copying
+        // row is therefore interrupted, not permission to reuse its candidate
+        // with different evidence (for example after a project-ID repair).
+        if (old.sourceFingerprint === sourceFingerprint && old.backupReference === input.backupReference)
+          throw createHttpError(409, 'Retry the interrupted generation explicitly.', {
+            code: 'local-upgrade-retry-required',
+          });
+        store.saveJob({
+          ...old,
+          phase: 'interrupted',
+          finishedAt: new Date().toISOString(),
+          message:
+            'Copy was interrupted. A new attempt uses different source or backup evidence; earlier candidate files are retained.',
+        });
+      }
       const next: LocalUpgradeJob = {
         id: randomUUID(),
         phase: 'copying',

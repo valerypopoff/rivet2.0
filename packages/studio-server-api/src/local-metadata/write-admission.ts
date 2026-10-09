@@ -2,6 +2,7 @@ import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { getLocalMetadataServingSelection } from './serving-selection.js';
+import { assertNoPendingDuplicateRepair } from './duplicate-project-repair-journal.js';
 
 /** Keep this leaf module independent of Settings/security/source importers:
  * those construct repositories during module evaluation. Every selected write
@@ -12,6 +13,8 @@ export function assertLocalMetadataWritesAllowed(): void {
   const appData = process.env.RIVET_APP_DATA_ROOT?.trim();
   if (!path.isAbsolute(root) || !appData || !path.isAbsolute(appData))
     throw new Error('Explicit local metadata control and app-data paths are required.');
+  // A missing maintenance marker cannot revive writes during a durable repair.
+  assertNoPendingDuplicateRepair(root);
   try {
     lstatSync(path.join(appData, 'vm-migration-maintenance.json'));
     throw new Error('Local metadata writes are paused for the storage upgrade.');

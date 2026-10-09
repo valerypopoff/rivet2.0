@@ -84,11 +84,21 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
   const redo = useRedo();
 
   const latestHandler = useLatest((e: KeyboardEvent) => {
-    if (!enabled) {
+    if (!enabled || e.defaultPrevented || e.isComposing) {
       return;
     }
 
     if (openOverlay !== undefined) {
+      return;
+    }
+
+    // Dialog controls own their keyboard events, including buttons: graph
+    // search, navigation and undo must not run behind the foreground modal.
+    const modalSelector = '[role="dialog"], [role="alertdialog"]';
+    if (
+      document.activeElement?.closest(modalSelector) ||
+      (e.target instanceof Element && e.target.closest(modalSelector))
+    ) {
       return;
     }
 
@@ -109,11 +119,11 @@ export function useCanvasHotkeys(options: CanvasHotkeyOptions = true) {
     }
 
     const navigationShortcut = getCanvasNavigationShortcut(e);
-    if (e.key === 'Tab' && (
-      e.defaultPrevented || e.isComposing ||
-      document.activeElement?.closest('select, [role="textbox"], .monaco-editor') ||
-      document.querySelector('[role="dialog"], [role="alertdialog"]')
-    )) {
+    if (
+      e.key === 'Tab' &&
+      (document.activeElement?.closest('select, [role="textbox"], .monaco-editor') ||
+        document.querySelector(modalSelector))
+    ) {
       return;
     }
     if (navigationShortcut) {

@@ -78,9 +78,7 @@ export function getFullscreenOutputKeyboardScrollTarget({
       : clampScrollTop(nextItemTopOffset - stickyHeaderHeight, boundedMaxScrollTop);
   }
 
-  const previousItemTopOffset = sortedItemTopOffsets.findLast(
-    (itemTopOffset) => itemTopOffset < visibleContentTop - 1,
-  );
+  const previousItemTopOffset = sortedItemTopOffsets.findLast((itemTopOffset) => itemTopOffset < visibleContentTop - 1);
   return previousItemTopOffset === undefined
     ? boundedCurrentScrollTop
     : clampScrollTop(previousItemTopOffset - stickyHeaderHeight, boundedMaxScrollTop);
@@ -196,8 +194,14 @@ export function useFullscreenOutputKeyboardNavigation(
     // Do not cancel this frame during a normal effect refresh: React Strict
     // Mode deliberately replays effects, and a detached root is harmlessly
     // rejected below. The identity guard makes this a once-per-mount focus.
+    const document = root.ownerDocument;
+    const activeElement = document.activeElement;
     ownerWindow.requestAnimationFrame(() => {
-      if (root.isConnected && !root.contains(root.ownerDocument.activeElement)) {
+      // A newer input/dialog or the surrounding host may now own focus.
+      if (document.activeElement !== activeElement || (ownerWindow.parent !== ownerWindow && !document.hasFocus())) {
+        return;
+      }
+      if (root.isConnected && !root.contains(document.activeElement)) {
         root.focus({ preventScroll: true });
       }
     });
@@ -224,7 +228,9 @@ export function getFullscreenOutputNavigationItemTopOffsets(
   );
 }
 
-function shouldHandleFullscreenOutputScrollKey(event: KeyboardEvent): event is KeyboardEvent & { key: FullscreenOutputScrollKey } {
+function shouldHandleFullscreenOutputScrollKey(
+  event: KeyboardEvent,
+): event is KeyboardEvent & { key: FullscreenOutputScrollKey } {
   return (
     isFullscreenOutputScrollKey(event.key) &&
     !event.altKey &&
@@ -277,7 +283,11 @@ function isVisibleOutputItem(item: HTMLElement, outputBody: HTMLElement): boolea
       return false;
     }
 
-    if (style && clipsVerticalOverflow(style.overflowY) && !rectanglesIntersect(rect, ancestor.getBoundingClientRect())) {
+    if (
+      style &&
+      clipsVerticalOverflow(style.overflowY) &&
+      !rectanglesIntersect(rect, ancestor.getBoundingClientRect())
+    ) {
       return false;
     }
 
@@ -374,7 +384,11 @@ function createFullscreenOutputScrollAnimator(
   };
 }
 
-function setScrollTopImmediately(scrollContainer: HTMLElement | Window, ownerWindow: Window, targetScrollTop: number): void {
+function setScrollTopImmediately(
+  scrollContainer: HTMLElement | Window,
+  ownerWindow: Window,
+  targetScrollTop: number,
+): void {
   if (isWindowScrollContainer(scrollContainer, ownerWindow)) {
     ownerWindow.scrollTo({ top: targetScrollTop, behavior: 'auto' });
     return;

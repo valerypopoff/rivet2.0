@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import {
   BACKUP_DOMAINS,
   assertNoBackupWriters,
@@ -705,6 +706,60 @@ test('backup checks catalog artifact fields rather than interpreting unrelated h
     const copied = await createLocalUpgradeBackup(selected);
     await verifyLocalUpgradeBackup(options.destination, copied.receipt);
   });
+});
+
+test('v3 and v4 selected backups preserve gzip recording bytes and validate decoded sizes during restore', async () => {
+  for (const version of [3, 4])
+    await fixture(async (options) => {
+      const selected = await sqliteFixture(options);
+      const text = '\ufeff' + 'recording'.repeat(10000);
+      const compressed = gzipSync(text, { level: 1 });
+      const hash = createHash('sha256').update(compressed).digest('hex');
+      const relative = path.join('objects', hash.slice(0, 2), hash);
+      await fs.mkdir(path.dirname(path.join(selected.generation, relative)), { recursive: true });
+      await fs.writeFile(path.join(selected.generation, relative), compressed);
+      const db = new DatabaseSync(path.join(selected.generation, 'catalog.sqlite'));
+      db.exec(`PRAGMA user_version=${version}`);
+      const ref = { hash, size: compressed.length, encoding: 'gzip', decodedSize: Buffer.byteLength(text) };
+      db.prepare('INSERT INTO recordings VALUES (?)').run(
+        JSON.stringify({ recordingContents: ref, replayProjectContents: ref, replayDatasetContents: null }),
+      );
+      db.close();
+      const copied = await createLocalUpgradeBackup(selected);
+      const restored = path.join(options.root, 'compressed-restore');
+      await restoreLocalUpgradeBackup({ backup: options.destination, receipt: copied.receipt, destination: restored });
+      const retained = await fs.readFile(
+        path.join(restored, 'control', 'generations', 'selected-generation', relative),
+      );
+      assert.deepEqual(retained, compressed);
+      assert.equal(gunzipSync(retained).toString(), text);
+    });
+});
+
+test('selected backup refuses gzip corruption, unknown encodings and false decoded sizes', async () => {
+  for (const mutation of ['gzip', 'encoding', 'size', 'version'])
+    await fixture(async (options) => {
+      const selected = await sqliteFixture(options);
+      const bytes = mutation === 'gzip' ? Buffer.from('invalid gzip') : gzipSync('x'.repeat(10000));
+      const hash = createHash('sha256').update(bytes).digest('hex');
+      const file = path.join(selected.generation, 'objects', hash.slice(0, 2), hash);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, bytes);
+      const db = new DatabaseSync(path.join(selected.generation, 'catalog.sqlite'));
+      db.exec(`PRAGMA user_version=${mutation === 'version' ? 2 : 3}`);
+      const ref = {
+        hash,
+        size: bytes.length,
+        encoding: mutation === 'encoding' ? 'zip' : 'gzip',
+        decodedSize: mutation === 'size' ? 1 : 10000,
+      };
+      db.prepare('INSERT INTO recordings VALUES (?)').run(
+        JSON.stringify({ recordingContents: ref, replayProjectContents: ref, replayDatasetContents: null }),
+      );
+      db.close();
+      await assert.rejects(createLocalUpgradeBackup(selected));
+      await assert.rejects(fs.stat(options.destination), /ENOENT/);
+    });
 });
 
 test('selected backup refuses integrity-valid operational databases with missing, extra or incomplete schemas', async () => {

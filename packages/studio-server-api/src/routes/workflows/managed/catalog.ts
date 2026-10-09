@@ -54,6 +54,14 @@ type ManagedWorkflowCatalogServiceDependencies = {
   }): Promise<SaveHostedProjectResult>;
 };
 
+type WorkflowTreeRow = WorkflowRow & {
+  draft_revision_id: string | null;
+  draft_project_blob_key: string | null;
+  stats_graph_count: number | null;
+  stats_total_node_count: number | null;
+  stats_web_app_count: number | null;
+};
+
 export function createManagedWorkflowCatalogService(options: ManagedWorkflowCatalogServiceDependencies) {
   const deps = {
     pool: options.context.pool,
@@ -86,6 +94,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     maintenance: options.context.maintenance,
     isUniqueViolation: options.context.db.isUniqueViolation,
     recordingColumns: options.context.mappers.RECORDING_COLUMNS,
+    workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     getWorkflowProjectStatsFromContents,
   };
   const emptyProjectStats = {
@@ -149,7 +158,12 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     }
   };
 
-  const getRevisionStats = async (revision: RevisionRow): Promise<WorkflowProjectStats> => {
+  const getRevisionStats = async (
+    revision: Pick<
+      RevisionRow,
+      'revision_id' | 'project_blob_key' | 'stats_graph_count' | 'stats_total_node_count' | 'stats_web_app_count'
+    >,
+  ): Promise<WorkflowProjectStats> => {
     if (
       revision.stats_graph_count != null &&
       revision.stats_total_node_count != null &&
@@ -260,7 +274,17 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       await deps.initialize();
       const [folderRows, workflowRows, webAppRows] = await Promise.all([
         deps.listFolderRows(),
-        deps.listWorkflowRows(),
+        deps.queryRows<WorkflowTreeRow>(
+          deps.pool,
+          `
+          SELECT ${deps.workflowColumnsQualified}, r.revision_id AS draft_revision_id,
+            r.project_blob_key AS draft_project_blob_key,
+            r.stats_graph_count, r.stats_total_node_count, r.stats_web_app_count
+          FROM workflows w LEFT JOIN workflow_revisions r
+            ON r.revision_id = w.current_draft_revision_id AND r.workflow_id = w.workflow_id
+          ORDER BY w.relative_path ASC`,
+          [],
+        ),
         deps.queryRows<WebAppPublicationRow>(
           deps.pool,
           `
@@ -298,31 +322,43 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         }
       }
 
-      const workflowProjects = await Promise.all(
-        workflowRows.map(async (row) => {
-          const project = deps.mapWorkflowRowToProjectItem(row, {
-            webAppRows: webAppRowsByWorkflowId.get(row.workflow_id) ?? [],
-          });
-          const revision = await deps.getRevision(deps.pool, row.current_draft_revision_id);
-          if (!revision) {
-            return {
-              row,
-              project: {
-                ...project,
-                stats: emptyProjectStats,
-              },
-            };
-          }
+      const workflowProjects: Array<{ row: WorkflowTreeRow; project: WorkflowProjectItem }> = [];
+      // Current rows need no object reads. Bound compatibility backfills for old
+      // revisions rather than launching one S3 download per project at once.
+      for (let start = 0; start < workflowRows.length; start += 4) {
+        workflowProjects.push(
+          ...(await Promise.all(
+            workflowRows.slice(start, start + 4).map(async (row) => {
+              const project = deps.mapWorkflowRowToProjectItem(row, {
+                webAppRows: webAppRowsByWorkflowId.get(row.workflow_id) ?? [],
+              });
+              if (!row.draft_revision_id || !row.draft_project_blob_key) {
+                return {
+                  row,
+                  project: {
+                    ...project,
+                    stats: emptyProjectStats,
+                  },
+                };
+              }
 
-          return {
-            row,
-            project: {
-              ...project,
-              stats: await getRevisionStats(revision),
-            },
-          };
-        }),
-      );
+              return {
+                row,
+                project: {
+                  ...project,
+                  stats: await getRevisionStats({
+                    revision_id: row.draft_revision_id,
+                    project_blob_key: row.draft_project_blob_key,
+                    stats_graph_count: row.stats_graph_count,
+                    stats_total_node_count: row.stats_total_node_count,
+                    stats_web_app_count: row.stats_web_app_count,
+                  }),
+                },
+              };
+            }),
+          )),
+        );
+      }
 
       for (const { row, project } of workflowProjects) {
         const parent = row.folder_relative_path ? folderMap.get(row.folder_relative_path) : null;
@@ -356,8 +392,12 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
 
     async listProjectPathsForHostedIo(): Promise<string[]> {
       await deps.initialize();
-      const workflows = await deps.listWorkflowRows();
-      return workflows.map((workflow) => getManagedWorkflowProjectVirtualPath(workflow.relative_path));
+      const rows = await deps.queryRows<{ relative_path: string }>(
+        deps.pool,
+        'SELECT relative_path FROM workflows ORDER BY relative_path ASC',
+        [],
+      );
+      return rows.map((row) => getManagedWorkflowProjectVirtualPath(row.relative_path));
     },
 
     async readHostedText(filePath: string): Promise<string> {

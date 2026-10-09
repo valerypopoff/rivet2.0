@@ -10,11 +10,17 @@ import {
   type LocalUpgradeInventory,
   type LocalUpgradePreparation,
   type LocalUpgradePreparationKind,
+  type LocalUpgradeDuplicateRepairChoices,
+  type LocalUpgradeDuplicateRepairStatus,
 } from '../../../../studio-server-shared/local-upgrade-types';
+import { DuplicateProjectRepairPanel } from './DuplicateProjectRepairPanel';
 import { BooleanSetting } from '../SettingsControls';
 import './LocalStorageUpgradeSettingsTab.css';
 
 type Status = {
+  duplicateRepairAvailable?: boolean;
+  repair?: LocalUpgradeDuplicateRepairStatus | null;
+  repairStatusUnreadable?: boolean;
   preparationJobsAvailable?: boolean;
   preparation?: LocalUpgradePreparation | null;
   preparationStatusUnreadable?: boolean;
@@ -50,6 +56,8 @@ type Status = {
     id: string;
     phase: string;
     message: string | null;
+    sourceFingerprint?: string;
+    backupReference?: string;
     stage?: string;
     failure?: { stage: string; code: string; reason?: LocalUpgradeFailureReason; sourceReference?: string } | null;
   } | null;
@@ -63,19 +71,20 @@ const actionProgress = {
   pause: 'Pausing new writes and waiting for active work to drain…',
   fingerprint: 'Reading the frozen source fingerprint…',
   backup: 'Creating the backup archive and checking an isolated restore. Writes remain paused…',
+  repair: 'Verifying a repair backup and updating project identities. Writes remain paused…',
   copy: 'Copy and verification are in progress. Original data remains unchanged.',
   activate: 'Checking the certified candidate and selecting SQLite for paused validation…',
   'return-to-legacy': 'Checking the retained source and selecting the legacy backend…',
   validate: 'Validating the selected runtime. Keep writes paused until validation finishes.',
   resume: 'Recording write resumption. The combined backend will need a restart…',
   'finish-resume': 'Completing durable write resumption. The combined backend will need a restart…',
-  cancel: 'Restoring unchanged legacy operation. The combined backend will need a restart…',
+  cancel: 'Restoring legacy operation. The combined backend will need a restart…',
   report: 'Preparing the verification report download…',
 } as const satisfies Record<LocalUpgradeOperation | 'finish-resume' | 'report', string>;
 type UpgradeAction = keyof typeof actionProgress;
 type UpgradeTransitionAction = Exclude<
   LocalUpgradeOperation,
-  'prepare' | 'restart' | 'inspect' | 'pause' | 'fingerprint' | 'copy' | 'backup'
+  'prepare' | 'restart' | 'inspect' | 'pause' | 'fingerprint' | 'copy' | 'backup' | 'repair'
 >;
 
 function UpgradeActionButton({
@@ -152,8 +161,17 @@ export function LocalStorageUpgradeSettingsTab() {
   const setupSnapshot = useRef(setup);
   const [status, setStatus] = useState<Status | null>(null);
   const [projectDiagnostic, setProjectDiagnostic] = useState<{ token: string; paths: string[] } | null>(null);
-  const diagnosticReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
-  const diagnosticToken = diagnosticReference ? `${status?.job?.id}:${diagnosticReference}` : null;
+  const preparationReference =
+    status?.preparation?.phase === 'failed' && status.preparation.revision === status.transition?.revision
+      ? status.preparation.failure?.sourceReference
+      : undefined;
+  const copyReference = status?.job?.phase === 'failed' ? status.job.failure?.sourceReference : undefined;
+  const preparationDiagnosticToken = preparationReference
+    ? `preparation:${status?.preparation?.id}:${preparationReference}`
+    : null;
+  const copyDiagnosticToken = copyReference ? `copy:${status?.job?.id}:${copyReference}` : null;
+  const diagnosticReference = preparationReference ?? copyReference;
+  const diagnosticToken = preparationDiagnosticToken ?? copyDiagnosticToken;
   useEffect(() => {
     if (!diagnosticToken || !diagnosticReference || !/^[a-f0-9]{16}$/.test(diagnosticReference)) return;
     const controller = new AbortController();
@@ -316,6 +334,17 @@ export function LocalStorageUpgradeSettingsTab() {
   };
   const transition = status?.transition;
   const preparation = status?.preparation;
+  const repairAnalysis =
+    preparation?.revision === transition?.revision && preparation?.phase !== 'running'
+      ? preparation?.repairAnalysis
+      : undefined;
+  useEffect(() => {
+    if (!status?.repair?.id) return;
+    setFrozenSource(null);
+    setBackupRestoredFor(null);
+    setKeyBackedUpFor(null);
+    setInventory(null);
+  }, [status?.repair?.id]);
   useEffect(() => {
     if (status?.preparationStatusUnreadable) {
       setInventory(null);
@@ -325,7 +354,7 @@ export function LocalStorageUpgradeSettingsTab() {
       return;
     }
     if (!preparation || preparation.revision !== transition?.revision) return;
-    if (preparation.kind === 'inspect' || preparation.kind === 'pause-backup')
+    if (['inspect', 'pause-backup', 'repair', 'repair-recover'].includes(preparation.kind))
       setInventory(preparation.phase === 'running' ? null : preparation.inventory ?? null);
     if (preparation.kind === 'fingerprint') {
       // Another operator's retry invalidates old browser evidence too. A failed
@@ -345,25 +374,38 @@ export function LocalStorageUpgradeSettingsTab() {
     status?.maintenance?.enteredAt,
     status?.preparationStatusUnreadable,
   ]);
-  const startPreparation = async (kind: LocalUpgradePreparationKind) => {
+  const startPreparation = async (
+    kind: LocalUpgradePreparationKind,
+    repairChoices?: LocalUpgradeDuplicateRepairChoices,
+  ) => {
     const id = crypto.randomUUID();
     preparationRequest.current = id;
-    await request('/preparation', { id, kind, revision: transition?.revision }, AbortSignal.timeout(10_000));
+    await request(
+      '/preparation',
+      { id, kind, revision: transition?.revision, ...(repairChoices ? { repairChoices } : {}) },
+      AbortSignal.timeout(10_000),
+    );
   };
   const guided = status?.uiRestartAvailable === true || setup?.uiRestartAvailable === true;
   const needsPreparation =
     setup?.eligible && !setup.sqliteSelected && setup.uiPreparationAvailable && !status?.available;
   const resumed = transition?.phase === 'sqlite-live' || transition?.phase === 'legacy-resumed';
+  const repairRunning =
+    preparation?.phase === 'running' && ['repair', 'repair-recover', 'repair-inspect'].includes(preparation.kind);
   const activeAction =
     pendingAction ??
-    (preparation?.phase === 'running' && preparation.kind === 'pause-backup' && preparation.stage !== 'backup'
-      ? 'pause'
-      : status?.operation === 'resume' && resumed
-        ? 'finish-resume'
-        : status?.operation);
+    (repairRunning
+      ? 'repair'
+      : preparation?.phase === 'running' && preparation.kind === 'pause-backup' && preparation.stage !== 'backup'
+        ? 'pause'
+        : status?.operation === 'resume' && resumed
+          ? 'finish-resume'
+          : status?.operation);
   const copying = status?.job?.phase === 'copying';
-  const disabled =
+  const operationDisabled =
     busy || awaitingRestart || !!status?.operation || preparation?.phase === 'running' || copying || !status?.available;
+  const repairBlocked = status?.repair?.phase === 'applying' || status?.repairStatusUnreadable === true;
+  const disabled = operationDisabled || repairBlocked;
   const quiet = !!status?.maintenance && !!status.drain?.ready;
   const initial = transition?.phase === 'legacy' || transition?.phase === 'legacy-resumed';
   const validating = transition?.phase === 'sqlite-validation' || transition?.phase === 'legacy-validation';
@@ -389,8 +431,10 @@ export function LocalStorageUpgradeSettingsTab() {
     setKeyBackedUpFor(null);
     setDownloadStarted(false);
   }, [automatedBackup?.id]);
+  const normalizedBackupReference = backupReference.trim();
   const usesAutomatedBackup =
-    !!automatedBackup && backupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
+    !!automatedBackup &&
+    normalizedBackupReference === `browser-backup:${automatedBackup.id}:${automatedBackup.archiveHash}`;
   const downloadBackup = (key = false) => {
     if (!automatedBackup) return;
     const anchor = document.createElement('a');
@@ -408,15 +452,23 @@ export function LocalStorageUpgradeSettingsTab() {
   const sourceFingerprint =
     frozenSource?.pausedAt === status?.maintenance?.enteredAt ? frozenSource?.fingerprint ?? '' : '';
   const backupToken =
-    sourceFingerprint && backupReference.trim() && backupFingerprint === sourceFingerprint
+    sourceFingerprint && normalizedBackupReference && backupFingerprint === sourceFingerprint
       ? JSON.stringify([
           status?.maintenance?.enteredAt,
           transition?.revision,
           sourceFingerprint,
-          backupReference.trim(),
+          normalizedBackupReference,
         ])
       : null;
   const backupRestored = backupToken !== null && backupRestoredFor === backupToken;
+  const retainedCopy = ['interrupted', 'failed'].includes(status?.job?.phase ?? '') ? status?.job : null;
+  const retryJob =
+    backupToken !== null &&
+    retainedCopy?.sourceFingerprint === sourceFingerprint &&
+    retainedCopy.backupReference === normalizedBackupReference
+      ? retainedCopy
+      : null;
+  const previousCopy = backupToken !== null && !!retainedCopy && !retryJob;
   // Older servers still require key attestation; new plaintext servers do not.
   const settingsEncryptionRequired = status?.settingsEncryptionRequired !== false;
   const keyBackedUp = !settingsEncryptionRequired || (backupToken !== null && keyBackedUpFor === backupToken);
@@ -484,8 +536,7 @@ export function LocalStorageUpgradeSettingsTab() {
     inventory?.capacity?.fits !== false &&
     backupRestored &&
     keyBackedUp &&
-    !!backupReference.trim() &&
-    (!backupReference.trim().startsWith('browser-backup:') || usesAutomatedBackup) &&
+    (!normalizedBackupReference.startsWith('browser-backup:') || usesAutomatedBackup) &&
     /^[a-f0-9]{64}$/.test(backupFingerprint) &&
     backupFingerprint === sourceFingerprint;
   return (
@@ -519,6 +570,13 @@ export function LocalStorageUpgradeSettingsTab() {
         ['failed', 'interrupted'].includes(preparation.phase) && (
           <p role="alert" className="project-settings-error">
             {preparation.error}
+            {preparation.failure?.reason && ` ${LOCAL_UPGRADE_FAILURE_REASONS[preparation.failure.reason]}`}
+            {preparationReference &&
+              /^[a-f0-9]{16}$/.test(preparationReference) &&
+              ` Project reference: ${preparationReference}.`}
+            {projectDiagnostic?.token === preparationDiagnosticToken &&
+              projectDiagnostic.paths.length > 0 &&
+              ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
         )}
       {status?.preparationStatusUnreadable && (
@@ -531,6 +589,32 @@ export function LocalStorageUpgradeSettingsTab() {
         <p className="app-settings-field-help">
           Running backend: {status.runningBackend}. Selected phase: {transition?.phase ?? 'not configured'}.
         </p>
+      )}
+      {status?.repairStatusUnreadable && (
+        <p role="alert" className="project-settings-error">
+          Repair status could not be read. Storage actions remain blocked; do not remove repair or maintenance files.
+        </p>
+      )}
+      {status?.duplicateRepairAvailable && initial && !transition?.generationId && (
+        <DuplicateProjectRepairPanel
+          key={repairAnalysis?.token ?? 'no-analysis'}
+          analysis={repairAnalysis}
+          repair={status.repair}
+          disabled={operationDisabled || !!status.repairStatusUnreadable || restartRequired}
+          running={activeAction === 'repair' || repairRunning}
+          onInspect={() => void act(() => startPreparation('repair-inspect'), 'repair')}
+          onRepair={(choices) =>
+            void act(async () => {
+              setFrozenSource(null);
+              setBackupRestoredFor(null);
+              setKeyBackedUpFor(null);
+              setInventory(null);
+              await startPreparation('repair', choices);
+            }, 'repair')
+          }
+          onRecover={() => void act(() => startPreparation('repair-recover'), 'repair')}
+          downloadUrl={status.repair ? `${base}/repair/download?id=${encodeURIComponent(status.repair.id)}` : undefined}
+        />
       )}
       {status?.operation && !busy && (
         <p role="status" className="app-settings-field-help">
@@ -879,24 +963,27 @@ export function LocalStorageUpgradeSettingsTab() {
             void act(async () => {
               await request('/copy', {
                 revision: transition?.revision,
-                backupReference,
+                backupReference: normalizedBackupReference,
                 backupSourceFingerprint: backupFingerprint,
                 backupRestored,
                 ...(settingsEncryptionRequired ? { encryptionKeyBackedUp: keyBackedUp } : {}),
-                ...(['interrupted', 'failed'].includes(status?.job?.phase ?? '')
-                  ? { retryJobId: status!.job!.id }
-                  : {}),
+                ...(retryJob ? { retryJobId: retryJob.id } : {}),
               });
             }, 'copy')
           }
         >
-          {['interrupted', 'failed'].includes(status?.job?.phase ?? '')
-            ? 'Retry copy and verification'
-            : 'Copy and verify'}
+          {retryJob ? 'Retry copy and verification' : 'Copy and verify'}
         </UpgradeActionButton>
+        {previousCopy && (
+          <p className="app-settings-field-help">
+            The previous attempt used different or unavailable source/backup evidence. Copy and verify starts a new
+            candidate using the confirmed backup; earlier candidate files are retained, not reused or deleted.
+          </p>
+        )}
         {status?.job && (
           <p className="app-settings-field-help" role="status">
-            Copy status: {status.job.phase}. {status.job.stage && `Stage: ${status.job.stage}. `}
+            {previousCopy ? 'Previous copy status' : 'Copy status'}: {status.job.phase}.{' '}
+            {status.job.stage && `Stage: ${status.job.stage}. `}
             {status.job.message}
             {status.job.failure &&
               ` Failure: ${status.job.failure.code} at ${status.job.failure.stage}. Download the diagnostic report; no exception contents or secrets are included.`}
@@ -906,7 +993,7 @@ export function LocalStorageUpgradeSettingsTab() {
             {status.job.failure?.sourceReference &&
               /^[a-f0-9]{16}$/.test(status.job.failure.sourceReference) &&
               ` Project reference: ${status.job.failure.sourceReference}.`}
-            {projectDiagnostic?.token === diagnosticToken &&
+            {projectDiagnostic?.token === copyDiagnosticToken &&
               projectDiagnostic.paths.length > 0 &&
               ` Affected project: ${projectDiagnostic.paths.join(', ')}.`}
           </p>
@@ -1041,7 +1128,7 @@ export function LocalStorageUpgradeSettingsTab() {
               disabled={disabled || !initial || !quiet || restartRequired}
               onClick={() => void action('cancel')}
             >
-              Resume unchanged legacy
+              {status?.repair?.phase === 'complete' ? 'Resume legacy with repaired IDs' : 'Resume unchanged legacy'}
             </UpgradeActionButton>
           </>
         )}

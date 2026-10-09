@@ -893,6 +893,21 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  test('uses the live endpoint name instead of an unpublished draft rename', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    const { workflows } = createRunRecordingsFixture();
+    workflows[1]!.project.settings.endpointName = 'renamed-draft';
+    workflows[1]!.project.settings.publishedEndpointName = 'still-live';
+    await page.route('**/api/workflows/recordings/workflows', (route) => route.fulfill({ json: { workflows } }));
+    const modal = await openLatestFlowRecordings(page);
+    await expect(modal.locator('.run-recordings-workflow-field-wide')).toContainText('/workflows/still-live');
+    await expect(modal.locator('.run-recordings-workflow-field-wide')).not.toContainText('renamed-draft');
+    await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+    const option = page.locator('.run-recordings-select__option', { hasText: 'Latest Flow' });
+    await expect(option).toContainText('/workflows/still-live');
+    await expect(option).not.toContainText('renamed-draft');
+  });
+
   for (const [durationMs, expected] of [
     [2.8421670000243466, '2.84 ms'],
     [0, '0.00 ms'],

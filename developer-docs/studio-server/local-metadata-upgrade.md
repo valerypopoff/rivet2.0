@@ -73,6 +73,17 @@ names this exact tab; selecting a storage backend still does not perform migrati
 
 Graph metadata embedded in project bytes remains part of that artifact. Catalog rows, not scans or sidecars, establish existence, tree position and publication state. New writes never update retained `.wrapper-settings.json`, `.published/*.json`, recording `metadata.json`, App Settings JSON or runtime `manifest.json`.
 
+Normal SQLite browsing selects only the requested project/dataset artifacts;
+history and recordings workflow selectors are metadata-only. These lightweight
+reads are not certification. Copy, serving verification and selected-runtime
+validation still load required artifacts and retained publication history, compare
+source bytes and refuse corruption. A missing old version can be listed, but it
+cannot be opened or pass full verification. Mutation CAS also keeps its complete
+snapshot checks. The performance fix neither rewrites an existing certified
+catalog on a read nor changes the rollback/certification boundary. See
+[SQLite browsing](./workflow-publication.md#local-sqlite-browsing-and-selected-payloads)
+for the reproducible synthetic benchmark and read-budget regressions.
+
 Plugin preparation, stats, temporary files and extracted caches are not metadata authorities. Arbitrary VM file dependencies and browser IndexedDB are not converted. This is not a disk-write-free mode.
 
 ## Delivered workflow and rollback boundary
@@ -107,6 +118,41 @@ Authenticated status also reports a fixed, non-secret `operation` name while any
 - After resumption, old files are stale. Recovery requires a coordinated SQLite-plus-artifacts backup restore or a separately verified reverse export. Do not clear environment flags, edit the journal or downgrade to an unaware image as a rollback shortcut.
 
 Closing the browser does not cancel copying. Restart leaves an interrupted job and maintenance intact. Explicit retry accepts only the same generation, frozen source and backup reference; existing candidate metadata/bytes must match. Failure never selects a partial candidate. If certification committed but the final job-status write did not, the durable transition takes precedence in status reporting.
+
+The copy button offers **Retry copy and verification** only when a failed/interrupted
+job's source fingerprint and backup reference both match the current backup
+evidence. After ID repair, a replacement backup, or missing older job evidence it
+offers **Copy and verify** without `retryJobId`, creating a fresh candidate while
+retaining earlier candidate files and audit records. Old failures are labeled
+**Previous copy status** so they cannot be confused with a newly rejected request.
+Both actions still require explicit backup attestation before the button enables.
+The API rejects mismatched explicit retries with HTTP 409
+`local-upgrade-retry-mismatch`, not a generic 500/invalid-data error. With no live
+worker, an abandoned `copying` row can be superseded by new evidence and is marked
+interrupted; unchanged evidence still requires explicit same-generation retry
+(409 `local-upgrade-retry-required`). No retry or fresh admission bypasses current
+backup, pause/drain, revision, capacity, source or archive verification gates.
+API/browser regressions cover unchanged retries, changed source/backup evidence,
+older missing evidence and retention of earlier candidates.
+
+The browser uses one trimmed backup reference for recognition, attestation,
+retry selection and submission, matching the API's request normalization.
+Incomplete or mismatched fingerprint evidence cannot select a retry. Known
+admission conflicts return HTTP 409 `local-upgrade-backup-mismatch` (stale or
+unverified browser receipt) or `local-upgrade-state-mismatch` (changed journal
+revision/authority); they do not rewrite the prior job or start a worker.
+Reconciliation reloads current status so a replacement backup requires a new
+off-VM attestation. Actual worker failures retain their separate stage diagnostics.
+
+Copy admission also requires the running backend's boot revision to equal the
+current transition revision, including independently restored/manual backup
+receipts. A current request revision alone cannot bypass a pending restart.
+HTTP 409 `local-upgrade-pause-required` and `local-upgrade-drain-required` identify
+ordinary maintenance/drain preconditions with fixed, non-secret guidance rather
+than reporting source corruption. Refused admission creates no job or candidate
+and preserves the maintenance fence. Runtime regressions cover an active HTTP
+execution, a journal revision advanced without restarting, and continuation from
+a new process that has loaded that revision.
 
 Copy admission performs only authorization, maintenance/drain, revision, configuration, retry-identity and backup-metadata checks before durably recording a job and returning HTTP 202. Acceptance is not verification. Capacity traversal, frozen-source hashing and browser archive rehashing run inside that tracked worker, before a candidate is created. Stages `capacity`, `source-fingerprint` and `backup-verification` make preparation observable without keeping one HTTP request open through gigabytes of IO. The submitted fingerprint remains an unverified claim until the fresh source comparison succeeds. The same busy gate covers preparation and conversion; status/reports reconcile a lost response instead of blindly submitting another copy. No resource, backup or exact-copy gate is skipped.
 
@@ -229,6 +275,113 @@ not only successful inspection. Offline operator/recovery commands remain
 available for deployments whose gateway cannot accommodate those checks.
 
 ## Deployment preparation
+
+### Guided duplicate project-ID repair
+
+The authenticated **Local storage upgrade** panel can repair conflicting project
+IDs before a candidate has been certified. A duplicate found during source
+inspection exposes a preview automatically; **Inspect conflicting IDs** can also
+start read-only discovery. These scans and repairs use the existing retained
+preparation worker and return HTTP 202 before traversing source data. Fixed
+preparation failure reasons are retained, rather than only a generic error.
+VM inventory now uses the same bounded project/publication reader as conversion.
+
+For every conflicting group the operator chooses the file retaining the original
+ID and confirms an owner for every archived publication. Exact paths or a unique
+basename after a move provide suggestions, not ownership proof. Active publication
+ownership is constrained; projects receiving new IDs must first be unpublished.
+All current files and archived versions are retained. The official project
+serializer preserves parsed project fields and attached data, with a semantic
+round-trip check. Reassigned snapshot metadata and publication hashes are updated
+using unchanged dataset contents; historical paths, comments, stars and timestamps
+remain intact. Datasets, recording payloads and project settings/stats are not
+rewritten or deleted.
+
+Existing ID-only references, recordings, schedules, evaluations and LLM health
+history remain attached to the operator-selected original-ID owner. The UI shows
+discovered referring projects and recording/operational row counts and requires
+explicit acknowledgement of this policy. This is not an automatic redistribution
+of ambiguous operational history. LLM-health counts also recognize older JSON
+identities when the scalar project-ID column is absent or null, without backfilling
+or mutating the operational database. Discovery scans current drafts and active
+published endpoint/web-app snapshots, including authored graphs and prefab
+source nodes, without invoking strict bundle resolution. Active snapshot hashes
+participate in preview freshness even when the caller itself has a unique ID.
+Missing active snapshots and missing prefab definitions are visible warnings
+that reference discovery is incomplete; they are not silently discarded or repaired.
+Preview output is capped at 512 KiB, discovery at 10,000 entries per collection,
+and retained changed-document payloads at 128 MiB.
+Preparation admission bodies are capped at 1 MiB to accommodate ownership choices
+without using the smaller generic migration-command limit. Ownership selects use
+the same dark control/option treatment as other Studio Server modals.
+
+Repair repeats discovery against the preview token after pausing and draining all
+writers, then again immediately before publishing its journal. It retains a private
+before/after patch plus manifest in `project-id-repairs/<uuid>/`, creates
+`repair-backup.tar.gz`, extracts it and verifies every file hash before the first
+source mutation. Only changed project/history documents are included; no recording
+expansion is involved. Failed preparation removes its own unreferenced patch only.
+The authenticated `/local-upgrade/repair/download?id=<uuid>` route rechecks the
+archive checksum and enforces the same download-origin guard and `nosniff`
+attachment handling as full backups; this backup contains private project/attached data.
+
+`duplicate-project-repair.json` is atomically replaced and fsynced before file
+replacement. Its `applying` phase fences copy, backup and normal legacy recovery,
+including the general maintenance-resume helper. Synchronous write admission
+also checks the journal independently of the maintenance marker, so losing the
+marker cannot revive normal writes during an unfinished repair. The small leaf
+journal reader is bounded at 1 MiB, validates UTF-8/schema and rejects read drift;
+it does not import the discovery, project parser or storage repositories into write
+admission. Corrupt/unreadable journal state fails closed. The reload reminder
+directs pending repairs to recovery instead of offering unchanged legacy cancellation.
+Completed ID repairs are retained when resuming legacy; the recovery button names
+this explicitly. Each source replacement
+checks expected bytes and uses same-directory atomic rename plus directory sync.
+Recovery removes only its exact journal-owned incomplete staging file. Restart
+does not silently resume the worker:
+**Finish interrupted project-ID repair** explicitly replays the saved patch, after
+checking the identity of all four original source roots, transition revision,
+maintenance session, archive and all source/patch hashes. Unexpected foreign edits
+cannot be overwritten. Once all replacements finish, the journal becomes `complete`;
+subsequent source inventory
+may still expose unrelated defects without undoing a completed repair. The worker
+then switches to the `inspect` stage, so a separate inventory failure is not
+reported as failure to apply the repair.
+
+Pre-repair browser backup evidence is invalidated before writes by atomically
+renaming the old status to a private `browser-backup-invalidated-<uuid>.json`.
+The record is not parsed: corrupt obsolete status cannot block repair/recovery.
+Unexpected filesystem entry types still fail closed. Original status bytes and
+archive directories are preserved; no previous backup is certified for the repaired
+source. The UI clears old attestations, and a fresh full verified migration
+backup/download remains required before copying. A repair backup is not a complete
+installation backup and does not
+replace off-VM disaster recovery. Retained completed repair directories are not
+automatically deleted. Recovery requires preserving the control volume and source
+mounts; do not remove the maintenance marker or repair journal manually.
+
+Generated-fixture tests cover history/attached-data preservation, stale choices,
+active publication ownership, published-only references and snapshot freshness,
+unresolved library warnings, retained ID-keyed references/payloads, partial
+application/staging recovery, unexpected edits, archive damage, malformed metadata
+and corrupt/oversized journals. Recovery with
+changed source roots is rejected. The API fixture removes the maintenance marker
+and verifies that pending or unreadable repair journals still block normal writes.
+Tests also cover a crash after the final replacement (unique IDs do not imply
+durable completion), read-only legacy health counting, and obsolete corrupt backup
+status preservation/invalidation.
+Backup status reads crossing invalidation recheck the activity revision; a held
+read of obsolete ready evidence cannot republish it after repair completes.
+Isolated API rehearsal covers authentication, idempotency and recovery fences;
+Playwright covers ownership confirmation, reopening an interrupted repair and
+disabled controls for unreadable status. Repair ownership and consent are reset
+when the preview becomes stale/hidden and later current again; the panel key
+follows the usable preview, not an ineligible retained result.
+Progress remains attached to the repair controls across its pause/repair/inspection
+stages instead of also spinning the independent source-inspection button.
+Browser coverage checks that a subsequent inspection failure retains the completed
+repair result and legacy recovery option while copying still requires fresh backup
+evidence.
 
 ### UI-owned preparation (normal single-host Compose path)
 
@@ -432,6 +585,35 @@ Recovery verifies ownership, journal/schema/integrity, expected revision/generat
 - A missing extracted runtime-cache directory is recreated from the selected SQL archive; it is not part of the authority proof. An existing symlink or non-directory at that cache path still blocks startup. The runtime rehearsal removes the cache before coordinated startup and verifies package loading after reconstruction.
 - SQL recording retention respects health holds, stays paused during conversion/validation and runs only for writable live generations. Unreferenced immutable files are retained: audited artifact GC is a separate feature.
 
+The local workflow tree is a metadata projection, not a full candidate scan.
+New project imports/writes include optional derived `treeIndex` metadata (counts
+and the canonical draft/dataset revision); this does not change catalog format 4
+or add schema objects. Existing format 2/3/4 rows remain compatible. A missing
+summary is derived from only the current draft/datasets and cached in bounded
+process memory; tree reads never backfill certified/read-only database bytes.
+Trees capture existing cache hits before cold reads, preventing scan-order
+thrashing when an older catalog exceeds the 1,024-summary cache limit.
+Normal project writes persist the summary, while exact import retries and failed
+CAS writes preserve the old row. Tree summaries are excluded from editable
+snapshots/CAS comparison, not from database certification. Full snapshot,
+conversion, serving and runtime validation retain their artifact integrity
+checks. Serving validation also compares derived tree revisions and counts with
+the source, not only their metadata shape; valid-looking but stale summaries are
+rejected without rewriting a certified database. Independent web-app freshness
+and aggregate publication status are checked against source snapshots as well.
+See `workflow-publication.md` ->
+`Local SQLite workflow tree` for the read boundary and regression commands.
+Deploying this optimization needs an updated API image, not another local storage upgrade.
+The recordings picker likewise reads owner metadata and SQL aggregates only:
+it does not reload every project/history body or return every recording row to
+JavaScript for counting. Counts and owner metadata share one short read snapshot.
+Recording dates retain the canonical UTC/millisecond format written by Rivet;
+relative, offset or overflowing timestamps fail without rewriting source values.
+Import checks this before artifact writes, so a bad date cannot leave newly
+created orphan payloads. Exact serving/migration checks still load and verify
+the required artifact bytes. No database reset, re-conversion or disk upgrade is
+needed to deploy these read-path optimizations.
+
 ## Limits and release evidence
 
 ### Current production snapshot preparation
@@ -460,7 +642,7 @@ The local converter and exact serving verifier consume one project/history or re
 
 Copy disk inspection exposes additive `diskEstimate` components; their sum is `requiredBytes`, meaning **additional free space on the control filesystem**, not total installation size:
 
-- `recordingArtifactsBytes`: one copy of actual decoded recording/project/dataset artifact bytes. Catalog rows reference these immutable artifacts instead of storing another payload copy in SQLite. Serial publication hard-links the staging file into its hash shard, and exact verification rereads it; neither creates an installation-wide duplicate.
+- `recordingArtifactsBytes`: one copy of the original stored recording/project/dataset artifact bytes, preserving each source file's gzip or identity encoding. Decoding for size/UTF-8 checks and exact verification is bounded in memory; no expanded artifact files are staged. Catalog rows reference these immutable artifacts instead of storing another payload copy in SQLite. Serial publication hard-links the staging file into its hash shard, and exact verification rereads it; neither creates an installation-wide duplicate.
 - `metadataAndLibrariesBytes`: four times the workflow, recording-metadata, settings and library source bytes, retaining conservative headroom for SQLite rows/indexes/journals, settings and the library archive, extraction tar and package cache.
 - `operationalSnapshotsBytes`: twice the operational SQLite main/WAL/journal bytes for coherent snapshots and working space.
 - `filesystemAllowanceBytes`: four allocation blocks (at least 4 KiB each) per visited entry plus eight times the encoded relative-path bytes, covering small-file allocation and derived metadata/path overhead.
@@ -476,6 +658,129 @@ A copy capacity refusal now settles the accepted background job as failed at `ca
 During the disk-estimator audit, the generated 64 MiB recording fixture stayed below its allowance on Windows and Linux Node 24. The Windows supervised UI fixture and four focused Playwright migration/capacity checks also passed. The broader supervised fixture timed out in Linux Docker Desktop with a Windows-mounted checkout; that run does not certify the complete Linux migration lifecycle. The audit retained its existing timeout. These samples do not replace the packaged-image gate and the actual-VM-data rehearsal.
 
 Catalog equality checks compare JSON-domain values directly, ignoring omitted optional `undefined` fields while preserving exact artifact strings and array order. They do not serialize whole project/recording payloads into additional JSON strings merely to compare them. Artifact checksum and size verification still run before returned bytes can be trusted.
+
+### Unpublished endpoint preferences
+
+Format 4 scopes the saved-endpoint unique index to projects with an active endpoint
+publication (`publishedContents !== null`). An unpublished project's saved name,
+last publication timestamp and archived versions are preserved but do not reserve
+an endpoint. Multiple unpublished copies can retain the same preference, including
+the name owned by a live project. Named latest/published execution and serving
+verification use only active endpoint publications; workflow-ID latest execution
+still supports unpublished projects. Web-app publication remains independent.
+
+Web-app binding IDs are project-scoped in format 4. Older settings can derive the
+same `legacy:<uiGraphId>` ID in multiple projects; conversion preserves those IDs,
+permissions and snapshots instead of rejecting them or rotating the binding.
+The catalog key is `(workflow_id, app_id)`; public slugs remain globally unique.
+The transactional format-2/3 upgrade preserves child row order and stored metadata,
+and rolls back the table/index changes together when the write fails.
+
+Active saved and published aliases remain case-insensitively unique across
+projects. Publishing a conflicting preference fails atomically, without changing
+folders, project state or archived versions. A failed conversion can retry its
+existing candidate against the same certified frozen source after deploying the
+compatible image; no legacy filename, ID or saved endpoint preference needs to be
+removed to bypass this check. Backup, fingerprint, maintenance and retry admission
+checks still apply.
+
+Source inspection and catalog writes share the same case-insensitive route-claim
+rules. Genuine active endpoint/web-app slug collisions now fail read-only inspection
+with a fixed diagnostic and opaque project reference, before a verified backup is
+prepared. Unpublished preferences and project-scoped legacy binding IDs do not
+trigger these errors. This preview is not source certification; frozen copy still
+rechecks the constraints inside its transaction.
+
+The browser resolves an opaque project reference for the current failed preparation
+as well as failed copy jobs. Lookups are optional and bounded; their result cannot
+unlock controls. Preparation diagnostics take precedence only at the current
+transition revision, and their paths are never attached to an older copy failure.
+
+Regression coverage exercises frozen filesystem conversion and retry, exact
+history/source preservation, named route ownership, workflow-ID execution,
+publication rollback, serving verification and format-2/3 table/index upgrade rollback.
+Browser copy-failure fixtures retain the accepted source fingerprint and backup
+reference so exact-retry checks do not accidentally exercise fresh-candidate admission.
+These fixtures do not certify an operator's production data.
+
+The 2026-10-08 follow-up passed 100 focused catalog/backend/capacity/candidate/
+recovery/transition tests, 40 standalone backup tests (two platform-specific
+Windows skips), the supervised UI preparation/backup/copy/restart/validation/
+resume runtime scenario, and four headless browser scenarios for guided migration,
+copy failure, current-versus-stale preparation diagnostics and recovery controls.
+API type-check, frontend build, root `yarn test:style`, formatting and diff checks
+also passed. These are working-tree checks, not a production-data or exact-image
+release certification.
+
+### Compressed local recording artifacts
+
+Catalog format 3 adds an explicit `encoding: gzip` and `decodedSize` to compressed
+recording/replay artifact references. Hash and `size` always describe the stored
+bytes. References without these fields remain identity-encoded. Migration copies
+the original validated source files byte-for-byte, including v1 mixed encodings,
+then verifies their decoded text against the frozen snapshot. It never writes
+expanded recording, replay-project or replay-dataset files. Malformed gzip, invalid
+UTF-8, incorrect declared sizes, source changes and per-bundle memory overruns
+still fail conversion; compression does not relax those checks.
+
+New local recording writes honor `RIVET_RECORDINGS_COMPRESS` (default `gzip`) and
+`RIVET_RECORDINGS_GZIP_LEVEL` (default 4). With gzip selected, each payload uses
+compression only when that is smaller than identity encoding; explicit `identity`
+skips compression. Migration always preserves the source encoding independently
+of those new-write settings, including empty gzip payloads. Playback, download,
+replay and exact verification use checksum-verified
+stored bytes and bounded decompression, returning the original text including BOM.
+Artifact reads check the catalog's stored size against the regular file and its
+opened handle before allocating its buffer, then verify the hash and stable file
+identity. A corrupt oversized object cannot bypass size admission by matching the
+name of a smaller referenced artifact.
+Summary compressed sizes and retention quotas use stored bytes; uncompressed
+sizes and input-search memory admission use decoded bytes. Physical artifact GC
+is still separate from removing catalog references.
+
+Existing format-2 and format-3 catalogs remain readable without rewriting certified
+snapshots. A successful project mutation or new recording insertion upgrades the
+route index, project-scoped web-app table and catalog marker to format 4 in the same
+SQLite transaction; failed writes roll all schema changes back, and exact import
+retries do not rewrite the catalog.
+Startup, health checks and write migrations share a schema/identity validator
+that checks the complete DDL in one SQLite read snapshot, not only `user_version`.
+Older development recording writers could advance that marker without applying
+the format-4 DDL. The exact legacy schema marked as 4 remains readable, including
+compressed recordings; its next successful project or recording write upgrades
+DDL transactionally. No reset, header downgrade or bulk payload rewrite is needed.
+Opening/verification never repairs schema or changes the frozen candidate proof.
+Mixed schemas, altered columns, extra objects, foreign identities and future
+versions still fail closed. The literal `sqlite_` prefix (`GLOB 'sqlite_*'`)
+excludes internal objects without hiding similarly named user objects.
+Existing-catalog schema, integrity and route validation precede journal-mode
+normalization, so rejecting an incompatible WAL catalog does not checkpoint it
+into DELETE mode first. Regression tests cover both journal modes, open-connection
+schema changes, concurrent recovery, compressed payload preservation, byte-identical
+read-only/retry behavior and rollback after an injected post-migration write failure.
+Old identity artifacts stay readable; no bulk payload rewrite is performed. Older
+images/backup tools that do not understand the new format must not be used after
+that boundary. The current standalone backup/restore helper accepts formats 2, 3
+and 4, preserves compressed objects in formats 3 and 4, and checks encoding,
+compressed hash, stored size and streamed decoded size before certifying a backup.
+
+Capacity continues to decode gzip in bounded chunks to validate memory limits,
+but counts only its compressed file size for candidate disk space. Diagnostic
+`payloadBytes` includes source-plus-decoded bytes and is not the required disk
+size. This change does not reduce the browser backup's independent staging/restore
+space requirement, delete earlier candidates/backups, or promise a particular
+production peak; fresh inspection and a newly certified frozen backup are required.
+
+Regression coverage belongs to the catalog, immutable-artifact, capacity, SQLite
+backend and standalone-backup suites. It checks byte-for-byte source preservation,
+format-2 identity compatibility, empty gzip artifacts, compression settings,
+corruption/size rejection and exact replay text. The bounded-copy fixture and real
+operator restart/resume test exercise conversion and serving together. Browser
+checks cover replay, downloading the original artifact and corrupt-artifact errors;
+these focused checks do not replace the complete UI suite or production-image
+rehearsal. The broader local recordings UI run also exposed a child-row Delete
+click intercepted by the run-actions container; that separate UI failure remains
+unresolved and must not be counted as a passing full-suite result.
 
 The bounded-copy regression first bundles the current converter, serving verifier and JavaScript dependencies outside the measured process, then runs that worker with a 192 MiB old-space limit and an unchanged 512 MiB peak-RSS ceiling. Inherited `NODE_OPTIONS` loader hooks are cleared, and the report verifies the child arguments and absence of those hooks. Yarn PnP/tsx compiler, ZIP caches and loader threads are test infrastructure, not serving-runtime memory: including them previously consumed about 429 MiB before conversion started on Linux Node 24.21.0 and left a flaky margin. The fixture still converts and exactly verifies 192 distinct gzip recordings exceeding 192 MiB when expanded; neither the dataset nor memory ceiling was reduced. The worker records startup and per-stage RSS, heap and external-memory checkpoints for failures and emits its peak in the test diagnostic. This isolated algorithm check is not a whole-server or production-data capacity qualification.
 

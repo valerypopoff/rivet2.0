@@ -242,6 +242,49 @@ test('fullscreen output navigation does not retake focus after an ordinary rende
   }
 });
 
+test('deferred output autofocus does not override a newer input focus', async () => {
+  const dom = new JSDOM('<!doctype html><body><div id="app"></div></body>', { pretendToBeVisual: true });
+  const animationClock = installAnimationFrameClock(dom.window);
+  const restoreGlobals = installDomGlobals(dom);
+  const reactRoot = createRoot(dom.window.document.getElementById('app')!);
+  try {
+    await renderKeyboardNavigationHarness(reactRoot, true);
+    const input = dom.window.document.createElement('input');
+    dom.window.document.body.append(input);
+    input.focus();
+    animationClock.runNext(0);
+    assert.equal(dom.window.document.activeElement === input, true, 'the newer input retains focus');
+  } finally {
+    await act(async () => reactRoot.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
+test('deferred output autofocus yields when its iframe loses document focus', async () => {
+  const dom = new JSDOM('<!doctype html><body><div id="app"></div></body>', { pretendToBeVisual: true });
+  const animationClock = installAnimationFrameClock(dom.window);
+  const restoreGlobals = installDomGlobals(dom);
+  Object.defineProperty(dom.window, 'parent', { configurable: true, value: {} });
+  let focused = true;
+  dom.window.document.hasFocus = () => focused;
+  const reactRoot = createRoot(dom.window.document.getElementById('app')!);
+  try {
+    await renderKeyboardNavigationHarness(reactRoot, true);
+    focused = false;
+    animationClock.runNext(0);
+    assert.equal(
+      dom.window.document.activeElement === dom.window.document.body,
+      true,
+      'the iframe does not reclaim focus',
+    );
+  } finally {
+    await act(async () => reactRoot.unmount());
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
 test('navigation items prefer visible leaf markers and fall back to visible direct output children', () => {
   const { window } = new JSDOM('<!doctype html><body></body>');
   const outputBody = window.document.createElement('div');
@@ -353,7 +396,10 @@ function KeyboardNavigationHarness({ visible }: { visible: boolean }) {
   );
 }
 
-async function renderKeyboardNavigationHarness(reactRoot: ReturnType<typeof createRoot>, visible: boolean): Promise<void> {
+async function renderKeyboardNavigationHarness(
+  reactRoot: ReturnType<typeof createRoot>,
+  visible: boolean,
+): Promise<void> {
   await act(async () => reactRoot.render(createElement(KeyboardNavigationHarness, { visible })));
 }
 
@@ -372,7 +418,11 @@ function configureKeyboardNavigationHarness(document: Document): {
 }
 
 function pageDown(dom: JSDOM): KeyboardEvent {
-  return new dom.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'PageDown' }) as unknown as KeyboardEvent;
+  return new dom.window.KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key: 'PageDown',
+  }) as unknown as KeyboardEvent;
 }
 
 function installAnimationFrameClock(window: DOMWindow): { runNext: (timestamp: number) => void } {

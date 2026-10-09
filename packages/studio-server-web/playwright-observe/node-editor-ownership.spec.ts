@@ -69,7 +69,8 @@ for (const type of ['object', 'codeNew']) {
     await waitForDashboardReady(page);
     const frame = page.frameLocator('iframe.dashboard-editor-frame');
     const row = (name: string) => page.locator('.project-row', { hasText: `library-${name}` });
-    const tab = (name: string) => frame.locator('.projects-container .project').filter({ hasText: `library-${name}` });
+    const tab = (name: string) =>
+      frame.locator('.projects-container .project:not(.opening)').filter({ hasText: `library-${name}` });
     const view = frame.locator('.monaco-editor .view-lines').first();
     const openSource = async (id: string) => {
       await frame.locator(`.node[data-nodeid="${id}"] .edit-button`).dispatchEvent('click');
@@ -422,7 +423,8 @@ test('JSON object drafts stay with their owner and formatting acknowledgements p
   await page.goto('/');
   await waitForDashboardReady(page);
   const frame = page.frameLocator('iframe.dashboard-editor-frame');
-  const tab = (name: string) => frame.locator('.projects-container .project').filter({ hasText: `json-${name}` });
+  const tab = (name: string) =>
+    frame.locator('.projects-container .project:not(.opening)').filter({ hasText: `json-${name}` });
   const row = (name: string) => page.locator('.project-row', { hasText: `json-${name}` });
   const input = frame.locator('.row.jsonObject .monaco-editor textarea');
   const view = frame.locator('.row.jsonObject .monaco-editor .view-lines');

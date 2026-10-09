@@ -1,6 +1,59 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
+test('editor startup feedback stays in the editor area, not the project tree', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        sync: { epoch: 'editor-loading', revision: 0 },
+        folders: [],
+        projects: [
+          {
+            id: 'loading-fixture',
+            name: 'Loading fixture',
+            fileName: 'loading-fixture.rivet-project',
+            relativePath: 'loading-fixture.rivet-project',
+            absolutePath: '/workflows/loading-fixture.rivet-project',
+            updatedAt: '2026-10-08T00:00:00.000Z',
+            settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+          },
+        ],
+      },
+    }),
+  );
+  let releaseEditor!: () => void;
+  const editorGate = new Promise<void>((resolve) => {
+    releaseEditor = resolve;
+  });
+  await page.route(
+    (url) => url.searchParams.has('editor'),
+    async (route) => {
+      await editorGate;
+      await route.continue();
+    },
+  );
+  try {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    const tree = page.locator('.workflow-library-panel .body');
+    const row = tree.getByRole('button', { name: 'Loading fixture', exact: true });
+    await expect(row).toBeVisible();
+    await expect(row).toBeDisabled();
+    await expect(row).toHaveAttribute('title', 'loading-fixture.rivet-project');
+    await expect(tree).not.toContainText('Loading editor');
+    await expect(page.locator('.dashboard-main .dashboard-app-loading')).toBeVisible();
+    releaseEditor();
+    await waitForDashboardReady(page);
+    await expect(row).toBeEnabled();
+    await expect(tree).not.toContainText('Loading editor');
+    await expect(page.locator('.dashboard-main .dashboard-app-loading')).toBeHidden();
+  } finally {
+    releaseEditor();
+  }
+});
+
 test('hosted dialogs render the shared theme and project health uses the metadata identity', async ({ page }) => {
   const project = {
     id: 'catalog-row-id',

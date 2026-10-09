@@ -25,7 +25,12 @@ const aliasModule = (moduleFrom, moduleTo) => ({
 const hasWebAppRuntimeEntry = existsSync('src/webAppRuntime.ts');
 const hasInterpolationRuntimeEntry = existsSync('src/interpolationRuntime.ts');
 const hasInterpolationSyntaxEntry = existsSync('src/utils/interpolationSyntax.ts');
+// This builder also runs from packages/node, which has no serialization entry.
 const entryPoints = { bundle: 'src/index.ts' };
+
+if (existsSync('src/serialization.ts')) {
+  entryPoints.serialization = 'src/serialization.ts';
+}
 
 if (hasWebAppRuntimeEntry) {
   entryPoints.webAppRuntime = 'src/webAppRuntime.ts';
@@ -43,9 +48,8 @@ const options = {
   entryPoints,
   bundle: true,
   platform: 'node',
-  ...(hasWebAppRuntimeEntry || hasInterpolationRuntimeEntry || hasInterpolationSyntaxEntry
-    ? { outdir: 'dist/cjs', outExtension: { '.js': '.cjs' } }
-    : { outfile: 'dist/cjs/bundle.cjs' }),
+  outdir: 'dist/cjs',
+  outExtension: { '.js': '.cjs' },
   format: 'cjs',
   target: 'node16',
   packages: 'external',

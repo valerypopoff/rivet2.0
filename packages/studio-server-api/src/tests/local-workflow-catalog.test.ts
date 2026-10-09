@@ -16,7 +16,10 @@ import {
 } from '../local-metadata/workflow-catalog.js';
 import { stageFrozenRecordingCatalog, stageFrozenWorkflowCatalog } from '../local-metadata/stage-workflow-catalog.js';
 import { checkLocalWorkflowSource, collectSourceWorkflows } from '../local-metadata/filesystem-workflow-source.js';
-import { collectSourceRecordings } from '../local-metadata/filesystem-recording-source.js';
+import {
+  collectSourceRecordings,
+  iterateSourceRecordingImports,
+} from '../local-metadata/filesystem-recording-source.js';
 import {
   createBlankProjectFile,
   getWorkflowDatasetPath,
@@ -32,6 +35,7 @@ import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import { ImmutableLocalArtifactStore } from '../local-metadata/immutable-artifact-store.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import { localUpgradeFailure, localUpgradeSourceReference } from '../local-metadata/upgrade-diagnostics.js';
+import { verifySqliteWorkflowServing } from '../local-metadata/verify-serving-candidate.js';
 
 function project(overrides: Partial<LocalWorkflowCatalogSnapshot> = {}): LocalWorkflowCatalogSnapshot {
   const relativePath = overrides.relativePath ?? 'folder/story.rivet-project';
@@ -123,6 +127,126 @@ async function fixture(run: (catalog: LocalWorkflowCatalog, root: string) => Pro
   }
 }
 
+function useLegacyCatalogSchema(file: string, version: number): void {
+  const db = new DatabaseSync(file);
+  try {
+    db.exec(`BEGIN;
+      DROP INDEX projects_endpoint_name_unique;
+      CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> '';
+      ALTER TABLE web_apps RENAME TO current_web_apps;
+      CREATE TABLE web_apps (
+        app_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+        slug TEXT NOT NULL UNIQUE,
+        metadata_json TEXT NOT NULL
+      );
+      INSERT INTO web_apps(rowid, app_id, workflow_id, slug, metadata_json)
+        SELECT rowid, app_id, workflow_id, slug, metadata_json FROM current_web_apps;
+      DROP TABLE current_web_apps;
+      PRAGMA user_version=${version}; COMMIT`);
+  } finally {
+    db.close();
+  }
+}
+
+test('focused publication swaps app slugs atomically without reading or rewriting artifacts', async (t) => {
+  await fixture(async (catalog) => {
+    const source = project();
+    source.publishedWebApps.push({
+      ...source.publishedWebApps[0]!,
+      appId: 'app-two',
+      uiGraphId: 'graph-two',
+      slug: 'second-ui',
+    });
+    await catalog.importProject(source);
+    // Warm the compatibility summary for this deliberately minimal fixture.
+    await catalog.readTreeProject(source.relativePath);
+    const reads = t.mock.method(ImmutableLocalArtifactStore.prototype, 'read');
+    const writes = t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes');
+    await catalog.mutatePublication(source.relativePath, (state) => {
+      state.endpointAccess = 'public';
+      const [first, second] = state.publishedWebApps;
+      [first!.slug, second!.slug] = [second!.slug, first!.slug];
+    });
+    assert.equal(reads.mock.callCount(), 0);
+    assert.equal(writes.mock.callCount(), 0);
+    assert.equal(catalog.readWebAppPolicy('second-ui')?.webApp?.appId, 'app-id');
+    assert.equal(catalog.readWebAppPolicy('story-ui')?.webApp?.appId, 'app-two');
+    assert.equal(catalog.readProjectPublicationMetadata(source.relativePath)?.publishedVersions.length, 2);
+  });
+});
+
+test('recording imports require canonical UTC dates before writing artifacts', async (t) => {
+  await fixture(async (catalog) => {
+    catalog.importFolder('folder');
+    await catalog.importProject(project());
+    const writes = t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes');
+    for (const createdAt of [
+      'now',
+      '2026',
+      '2026-02-30T00:00:00.000Z',
+      '2026-10-08T24:00:00.000Z',
+      '2026-10-08T24:01:00.000Z',
+      '2026-10-08T02:00:00.000+02:00',
+      '2026-10-08T00:00:00Z',
+    ]) {
+      await assert.rejects(catalog.importRecording(recording({ createdAt })), /canonical UTC timestamp/);
+    }
+    assert.equal(writes.mock.callCount(), 0);
+    for (const createdAt of ['2026-03-01T00:00:00.001Z', '2026-03-01T00:00:00.999Z', '2024-02-29T00:00:00.000Z']) {
+      await catalog.importRecording(recording({ recordingId: createdAt, createdAt }));
+    }
+    const [summary] = catalog.readRecordingWorkflowProjection();
+    assert.equal(summary!.totalRuns, 3);
+    assert.equal(summary!.latestRunAt, '2026-03-01T00:00:00.999Z');
+    assert.equal(catalog.listRecordingMetadata()[0]!.createdAt, summary!.latestRunAt);
+  });
+});
+
+test('recording picker counts and owner metadata share one snapshot under a competing connection', async (t) => {
+  await fixture(async (catalog, root) => {
+    catalog.importFolder('folder');
+    const owner = project({ endpointAccess: 'public' });
+    await catalog.importProject(owner);
+    await catalog.importRecording(recording());
+    const db = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      const prepare = DatabaseSync.prototype.prepare;
+      let competingWrite = true;
+      t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (/\bFROM recordings\b/i.test(sql)) {
+          const all = statement.all;
+          t.mock.method(statement, 'all', (...args: Parameters<typeof all>) => {
+            const result = all.apply(statement, args);
+            if (competingWrite) {
+              competingWrite = false;
+              db.exec('BEGIN IMMEDIATE');
+              db.prepare(
+                "UPDATE projects SET metadata_json = json_set(metadata_json, '$.endpointAccess', 'internal')",
+              ).run();
+              db.prepare("UPDATE recordings SET metadata_json = json_set(metadata_json, '$.status', 'failed')").run();
+              db.exec('COMMIT');
+            }
+            return result;
+          });
+        }
+        return statement;
+      });
+      const [before] = catalog.readRecordingWorkflowProjection();
+      assert.equal(competingWrite, false);
+      assert.equal(before!.failedRuns, 0);
+      assert.equal(before!.project.endpointAccess, owner.endpointAccess);
+      const [after] = catalog.readRecordingWorkflowProjection();
+      assert.equal(after!.failedRuns, 1);
+      assert.equal(after!.project.endpointAccess, 'internal');
+    } finally {
+      db.close();
+    }
+  });
+});
+
 test('reference scans read only current draft and active publications, not datasets or archived history', async () => {
   await fixture(async (catalog, root) => {
     const source = project();
@@ -211,6 +335,11 @@ test('local catalog change stamp detects same-owner and separate-connection comm
       const treeStamp = catalog.changeStamp();
       await other.importRecording(recording());
       assert.equal(catalog.changeStamp(), treeStamp, 'Recording traffic does not invalidate the project tree');
+      const beforeHistory = (await other.readProject('folder/story.rivet-project'))!;
+      const editedHistory = structuredClone(beforeHistory);
+      editedHistory.publishedVersions[0]!.comment = 'Historical comment only';
+      await other.replaceProject(beforeHistory, editedHistory);
+      assert.equal(catalog.changeStamp(), treeStamp, 'Unrelated historical edits do not invalidate the project tree');
     } finally {
       other.close();
     }
@@ -244,7 +373,19 @@ test('local catalog late route failure rolls back folder and project changes tog
         expectedProjectPaths: [before.relativePath, other.relativePath],
         folders: ['folder', 'new'],
         projects: [
-          { before: other, after: { ...other, relativePath: 'new/other.rivet-project', endpointName: 'STORY' } },
+          {
+            before: other,
+            after: {
+              ...other,
+              relativePath: 'new/other.rivet-project',
+              endpointName: 'STORY',
+              publishedEndpointName: 'other',
+              publishedContents: other.contents,
+              publishedDatasetsContents: other.datasetsContents,
+              endpointStatus: 'unpublished_changes',
+              lastPublishedAt: before.lastPublishedAt,
+            },
+          },
         ],
       }),
       /collision/,
@@ -316,6 +457,204 @@ test('local recording retention is bounded, deterministic and removes references
       catalog.pruneRecordings({ ...policy, maxRunsPerEndpoint: 0, retentionDays: 1 })[0]!.recordingId,
       'run-3',
     );
+  });
+});
+
+test('local orphan collection protects shared references and reclaims only old unreferenced objects', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording());
+    const row = catalog.listRecordingMetadata()[0]!;
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const orphan = await store.putBytes(Buffer.from('unreferenced upload'));
+    assert.deepEqual(await catalog.collectOrphanArtifacts(), { removed: 0, bytes: 0 });
+    assert.ok(await store.read(orphan.hash));
+    const now = Date.now() + 2 * 86400000;
+    assert.equal((await catalog.collectOrphanArtifacts({ now })).removed, 1);
+    await assert.rejects(store.read(orphan.hash), /ENOENT/);
+    assert.ok(await store.read(row.recordingHash));
+    catalog.deleteRecording(row.recordingId);
+    assert.ok((await catalog.collectOrphanArtifacts({ now })).removed >= 1);
+    await assert.rejects(store.read(row.recordingHash), /ENOENT/);
+    assert.ok(await catalog.readProject(project().relativePath));
+    await assert.rejects(catalog.collectOrphanArtifacts({ graceMs: 0 }), /Invalid/);
+  });
+});
+
+test('orphan reference scans yield without a writer lock and reject an intervening primary-connection write', async (t) => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording());
+    const database = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const orphan = await store.putBytes(Buffer.from('old orphan during busy collection'));
+    try {
+      const original = database.prepare('SELECT metadata_json FROM recordings LIMIT 1').get()!.metadata_json as string;
+      for (let index = 0; index < 101; index++) {
+        const metadata = { ...JSON.parse(original), recordingId: `copy-${index}` };
+        database
+          .prepare('INSERT INTO recordings VALUES (?, ?, ?)')
+          .run(metadata.recordingId, 'project-id', JSON.stringify(metadata));
+      }
+      const prepare = DatabaseSync.prototype.prepare;
+      let changed = false;
+      const scan = t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (sql.startsWith('SELECT rowid AS cursor, metadata_json FROM recordings')) {
+          const all = statement.all.bind(statement);
+          t.mock.method(statement, 'all', (...parameters: any[]) => {
+            const rows = all(...parameters);
+            if (!changed) {
+              changed = true;
+              // This succeeds only if the collector is NOT holding its writer
+              // lock. A primary-connection write must invalidate the separate
+              // reader's proof just like a write from another process.
+              catalog.deleteRecording('run-1');
+            }
+            return rows;
+          });
+        }
+        return statement;
+      });
+      const now = Date.now() + 2 * 86400000;
+      assert.deepEqual(await catalog.collectOrphanArtifacts({ now }), { removed: 0, bytes: 0 });
+      assert.equal(changed, true);
+      assert.ok(await store.read(orphan.hash));
+      scan.mock.restore();
+      assert.equal((await catalog.collectOrphanArtifacts({ now })).removed, 1);
+      await assert.rejects(store.read(orphan.hash), /ENOENT/);
+    } finally {
+      database.close();
+    }
+  });
+});
+
+test('recording gzip artifacts round-trip through reopen, replay and decoded metadata without expanded files', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording({
+      recordingContents: '\ufeff' + JSON.stringify({ input: 'x'.repeat(1024 * 1024) }),
+      replayProjectContents: JSON.stringify({ project: 'y'.repeat(1024 * 1024) }),
+      replayDatasetContents: JSON.stringify({ dataset: 'z'.repeat(1024 * 1024) }),
+    });
+    await catalog.importRecording(snapshot);
+    const metadata = catalog.listRecordingMetadata()[0]!;
+    assert.ok(metadata.recordingBytes < 4096);
+    assert.equal(metadata.recordingDecodedBytes, Buffer.byteLength(snapshot.recordingContents));
+    assert.equal(metadata.projectDecodedBytes, Buffer.byteLength(snapshot.replayProjectContents));
+    assert.equal(metadata.datasetDecodedBytes, Buffer.byteLength(snapshot.replayDatasetContents!));
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    const bytes = await store.read(metadata.recordingHash);
+    assert.equal(bytes.length, metadata.recordingBytes);
+    assert.equal(bytes[0], 0x1f);
+    assert.equal(bytes[1], 0x8b);
+    catalog.close();
+    catalog.initialize({ verifyOnly: true, requireExisting: true });
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+    assert.equal(await catalog.readRecordingArtifact('run-1', 'replay-dataset'), snapshot.replayDatasetContents);
+    await catalog.verifyRecordingsExact([snapshot]);
+  });
+});
+
+test('legacy recording catalogs, including a premature v4 marker, upgrade with a new recording write', async () => {
+  for (const version of [2, 3, 4]) {
+    await fixture(async (catalog, root) => {
+      await catalog.importProject(project());
+      const snapshot = recording({ recordingContents: 'original-recording'.repeat(1000) });
+      await catalog.importRecording(snapshot, { compression: version === 2 ? 'identity' : 'gzip' });
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      useLegacyCatalogSchema(file, version);
+      catalog.initialize({ verifyOnly: true });
+      assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+      catalog.checkHealth();
+      catalog.close();
+      const before = new DatabaseSync(file, { readOnly: true });
+      assert.equal(before.prepare('PRAGMA user_version').get()!.user_version, version);
+      before.close();
+      catalog.initialize({ requireExisting: true });
+      await catalog.importRecording(recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }));
+      const after = new DatabaseSync(file, { readOnly: true });
+      assert.equal(after.prepare('PRAGMA user_version').get()!.user_version, 4);
+      after.close();
+      assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+      catalog.close();
+      catalog.initialize({ verifyOnly: true });
+      await catalog.verifyRecordingsExact([
+        snapshot,
+        recording({ recordingId: 'run-2', recordingContents: 'x'.repeat(10000) }),
+      ]);
+    });
+  }
+});
+
+test('new recording writes honor identity encoding and the selected gzip level', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording({ recordingContents: 'recording'.repeat(10000) });
+    await catalog.importRecording(snapshot, { compression: 'identity' });
+    const plain = catalog.listRecordingMetadata({ recordingId: 'run-1' })[0]!;
+    assert.equal(plain.recordingBytes, Buffer.byteLength(snapshot.recordingContents));
+    assert.equal(plain.recordingDecodedBytes, plain.recordingBytes);
+    const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+    assert.deepEqual(await store.read(plain.recordingHash), Buffer.from(snapshot.recordingContents));
+    for (const level of [0, 1, 9]) {
+      const value = recording({ ...snapshot, recordingId: `gzip-${level}` });
+      await catalog.importRecording(value, { compression: 'gzip', gzipLevel: level });
+      const row = catalog.listRecordingMetadata({ recordingId: value.recordingId })[0]!;
+      const gzip = gzipSync(value.recordingContents, { level });
+      const expected = gzip.length < plain.recordingBytes ? gzip : Buffer.from(value.recordingContents);
+      assert.deepEqual(await store.read(row.recordingHash), expected);
+      assert.deepEqual(await catalog.readRecording(value.recordingId), value);
+    }
+  });
+});
+
+test('migrated empty gzip payloads retain their compressed bytes and zero decoded size', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const file = path.join(root, 'empty.gz');
+    const bytes = gzipSync('');
+    await fs.writeFile(file, bytes);
+    const source = { path: file, encoding: 'gzip' as const, decodedSize: 0 };
+    const snapshot = recording({ recordingContents: '', replayProjectContents: '', replayDatasetContents: '' });
+    await catalog.importRecording(snapshot, {
+      sources: { recordingContents: source, replayProjectContents: source, replayDatasetContents: source },
+    });
+    const row = catalog.listRecordingMetadata()[0]!;
+    assert.equal(row.recordingBytes, bytes.length);
+    assert.equal(row.recordingDecodedBytes, 0);
+    assert.equal(row.projectDecodedBytes, 0);
+    assert.equal(row.datasetDecodedBytes, 0);
+    assert.equal(row.hasReplayDataset, true);
+    assert.deepEqual(await catalog.readRecording('run-1'), snapshot);
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyRecordingsExact([snapshot]);
+  });
+});
+
+test('compressed recording references reject invalid encoding, corrupt gzip and incorrect decoded sizes', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    await catalog.importRecording(recording({ recordingContents: 'x'.repeat(10000) }));
+    const db = new DatabaseSync(path.join(root, 'catalog.sqlite'));
+    const original = JSON.parse(db.prepare('SELECT metadata_json FROM recordings').get()!.metadata_json as string);
+    try {
+      for (const changes of [{ encoding: 'zip' }, { decodedSize: -1 }, { decodedSize: 1 }, { decodedSize: 10001 }]) {
+        const data = structuredClone(original);
+        Object.assign(data.recordingContents, changes);
+        db.prepare('UPDATE recordings SET metadata_json=?').run(JSON.stringify(data));
+        await assert.rejects(catalog.readRecording('run-1'));
+      }
+      const store = new ImmutableLocalArtifactStore(path.join(root, 'objects'));
+      const corrupt = await store.putBytes(Buffer.from('not gzip'));
+      original.recordingContents = { ...corrupt, encoding: 'gzip', decodedSize: 10000 };
+      db.prepare('UPDATE recordings SET metadata_json=?').run(JSON.stringify(original));
+      await assert.rejects(catalog.readRecording('run-1'), /gzip|header/i);
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -731,6 +1070,278 @@ test('local catalog retries exactly, rejects drift, extra rows, and route collis
   });
 });
 
+test('unpublished endpoint preferences preserve history without reserving or stealing live routes', async () => {
+  await fixture(async (catalog) => {
+    const live = project();
+    const archived = project({
+      workflowId: 'archived-id',
+      relativePath: 'folder/archived.rivet-project',
+      endpointStatus: 'unpublished',
+      publishedEndpointName: '',
+      publishedVersionId: null,
+      publishedContents: null,
+      publishedDatasetsContents: null,
+      publishedVersions: live.publishedVersions.map((v) => ({ ...v, versionId: `archived-${v.versionId}` })),
+      publishedWebApps: [],
+    });
+    const copy = project({
+      ...archived,
+      workflowId: 'copy-id',
+      relativePath: 'folder/copy.rivet-project',
+      name: 'copy',
+      fileName: 'copy.rivet-project',
+      endpointName: 'STORY',
+      publishedVersions: [],
+    });
+    // Import archived preferences first, as in a failed legacy migration.
+    catalog.importFolder('folder');
+    for (const p of [archived, copy, live]) await catalog.importProject(p);
+    for (const p of [archived, copy, live]) await catalog.importProject(p);
+    await catalog.verifyExact(['folder'], [archived, copy, live]);
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'STORY-LATEST', version: 'latest' }))?.workflowId,
+      live.workflowId,
+    );
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'STORY', version: 'published' }))?.workflowId,
+      live.workflowId,
+    );
+    assert.equal(await catalog.readExecutionSource({ endpointName: 'STORY', version: 'latest' }), null);
+    assert.equal(
+      (await catalog.readExecutionSource({ workflowId: archived.workflowId, version: 'latest' }))?.workflowId,
+      archived.workflowId,
+    );
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyExact(['folder'], [archived, copy, live]);
+    assert.equal(
+      (await catalog.readExecutionSource({ endpointName: 'story-latest', version: 'latest' }))?.workflowId,
+      live.workflowId,
+    );
+  });
+});
+
+test('legacy schemas, including a premature v4 marker, upgrade only with a successful project write', async () => {
+  for (const version of [2, 3, 4]) {
+    await fixture(async (catalog, root) => {
+      const source = project();
+      await catalog.importProject(source);
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      const legacyIndex =
+        "CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name) WHERE endpoint_name <> ''";
+      useLegacyCatalogSchema(file, version);
+      const withoutIndex = new DatabaseSync(file);
+      withoutIndex.exec("UPDATE projects SET metadata_json = json_remove(metadata_json, '$.treeIndex')");
+      withoutIndex.close();
+      const original = new DatabaseSync(file, { readOnly: true });
+      const legacyTable = original.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql;
+      original.close();
+      const bytes = await fs.readFile(file);
+      catalog.initialize({ verifyOnly: true });
+      catalog.checkHealth();
+      assert.deepEqual(await catalog.readProject(source.relativePath), source);
+      const tree = await catalog.readTreeProjection();
+      assert.equal(tree.projects[0]!.workflowId, source.workflowId);
+      assert.equal(tree.projects[0]!.publishedWebApps.length, source.publishedWebApps.length);
+      catalog.close();
+      assert.deepEqual(await fs.readFile(file), bytes, 'Read-only verification preserves certified bytes.');
+      catalog.initialize({ requireExisting: true });
+      await catalog.importProject(source);
+      await assert.rejects(catalog.replaceProject({ ...source, contents: 'stale' }, source), /changed concurrently/);
+      const unchanged = new DatabaseSync(file, { readOnly: true });
+      assert.equal(unchanged.prepare('PRAGMA user_version').get()!.user_version, version);
+      assert.equal(
+        unchanged.prepare("SELECT sql FROM sqlite_master WHERE name='projects_endpoint_name_unique'").get()!.sql,
+        legacyIndex,
+      );
+      assert.equal(unchanged.prepare("SELECT sql FROM sqlite_master WHERE name='web_apps'").get()!.sql, legacyTable);
+      unchanged.close();
+      const copy = project({
+        workflowId: 'copy-id',
+        relativePath: 'copy.rivet-project',
+        endpointStatus: 'unpublished',
+        publishedEndpointName: '',
+        publishedVersionId: null,
+        publishedContents: null,
+        publishedDatasetsContents: null,
+        publishedVersions: [],
+        publishedWebApps: [{ ...source.publishedWebApps[0]!, slug: 'copied-app' }],
+      });
+      await catalog.importProject(copy);
+      await catalog.importProject(copy);
+      const upgraded = new DatabaseSync(file, { readOnly: true });
+      assert.equal(upgraded.prepare('PRAGMA user_version').get()!.user_version, 4);
+      upgraded.close();
+      catalog.close();
+      catalog.initialize({ verifyOnly: true });
+      await catalog.verifyExact([], [source, copy]);
+      assert.equal(
+        (await catalog.readExecutionSource({ endpointName: source.endpointName, version: 'latest' }))?.workflowId,
+        source.workflowId,
+      );
+    });
+  }
+});
+
+test('version annotations preserve certified legacy bytes on no-ops and upgrade atomically on real writes', async (t) => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    const bytes = await fs.readFile(file);
+    catalog.initialize({ verifyOnly: true });
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false }),
+      /verification only/,
+    );
+    catalog.close();
+    catalog.initialize({ requireExisting: true });
+    const treeStamp = catalog.changeStamp();
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', async () => {
+      throw new Error('Unexpected artifact read');
+    });
+    t.mock.method(ImmutableLocalArtifactStore.prototype, 'putBytes', async () => {
+      throw new Error('Unexpected artifact write');
+    });
+    assert.equal(
+      catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: true })?.version.comment,
+      'First version',
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'A no-op must not rewrite or upgrade a certified catalog');
+    assert.throws(
+      () => catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 123 as never }),
+      /metadata/,
+    );
+    assert.deepEqual(await fs.readFile(file), bytes, 'Invalid annotations roll back');
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { isStarred: false });
+    catalog.annotatePublishedVersion(source.relativePath, 'publish-1', { comment: 'Changed' });
+    assert.equal(catalog.changeStamp(), treeStamp, 'Historical annotations do not invalidate tree summaries');
+    const version = catalog
+      .readProjectPublicationMetadata(source.relativePath)!
+      .publishedVersions.find((entry) => entry.versionId === 'publish-1')!;
+    assert.equal(version.isStarred, false);
+    assert.equal(version.comment, 'Changed');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 4);
+    } finally {
+      db.close();
+    }
+    catalog.checkHealth();
+  });
+});
+
+test('a failed recording insert rolls back recovery of legacy DDL marked v4', async (t) => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    const original = await fs.readFile(file);
+    catalog.initialize({ requireExisting: true });
+    const prepare = DatabaseSync.prototype.prepare;
+    const failure = t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+      if (sql.startsWith('INSERT INTO recordings')) throw new Error('Injected recording insert failure');
+      return prepare.call(this, sql);
+    });
+    await assert.rejects(catalog.importRecording(recording()), /Injected recording insert failure/);
+    failure.mock.restore();
+    catalog.close();
+    assert.deepEqual(await fs.readFile(file), original, 'DDL recovery rolls back with the failed recording write.');
+    catalog.initialize({ requireExisting: true });
+    assert.deepEqual(await catalog.readProject(source.relativePath), source);
+    await catalog.importRecording(recording());
+    catalog.close();
+    catalog.initialize({ verifyOnly: true });
+    await catalog.verifyRecordingsExact([recording()]);
+  });
+});
+
+test('two catalog connections tolerate recovery committed by the other writer', async () => {
+  await fixture(async (catalog, root) => {
+    const source = project();
+    await catalog.importProject(source);
+    catalog.close();
+    const file = path.join(root, 'catalog.sqlite');
+    useLegacyCatalogSchema(file, 4);
+    catalog.initialize({ requireExisting: true });
+    const other = new LocalWorkflowCatalog({ databasePath: file, artifactRoot: path.join(root, 'objects') });
+    other.initialize({ requireExisting: true });
+    try {
+      await catalog.importRecording(recording());
+      const edited = { ...source, contents: 'edited after recovery' };
+      await other.replaceProject(source, edited);
+      assert.deepEqual(await catalog.readProject(source.relativePath), edited);
+      assert.deepEqual(await other.readRecording('run-1'), recording());
+      other.checkHealth();
+    } finally {
+      other.close();
+    }
+  });
+});
+
+test('catalog compatibility refuses mixed, modified and future schemas without repairing them', async () => {
+  const mutations = [
+    `DROP INDEX projects_endpoint_name_unique;
+      CREATE UNIQUE INDEX projects_endpoint_name_unique ON projects(endpoint_name)
+      WHERE endpoint_name <> '' AND json_extract(metadata_json, '$.publishedContents') IS NOT NULL`,
+    `ALTER TABLE web_apps RENAME TO old_web_apps;
+      CREATE TABLE web_apps (
+        app_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL REFERENCES projects(workflow_id) ON DELETE CASCADE,
+        slug TEXT NOT NULL UNIQUE,
+        metadata_json TEXT NOT NULL,
+        PRIMARY KEY(workflow_id, app_id)
+      ); DROP TABLE old_web_apps`,
+    'ALTER TABLE projects ADD COLUMN unexpected TEXT',
+    'CREATE TRIGGER unexpected AFTER INSERT ON projects BEGIN SELECT 1; END',
+    'CREATE VIEW sqliteXunexpected AS SELECT workflow_id FROM projects',
+    'PRAGMA journal_mode=WAL; CREATE VIEW unexpected AS SELECT workflow_id FROM projects',
+    'PRAGMA user_version=5',
+  ];
+  for (const mutation of mutations) {
+    await fixture(async (catalog, root) => {
+      catalog.close();
+      const file = path.join(root, 'catalog.sqlite');
+      useLegacyCatalogSchema(file, 4);
+      const raw = new DatabaseSync(file);
+      raw.exec(mutation);
+      raw.close();
+      const original = await fs.readFile(file);
+      for (const verifyOnly of [true, false]) {
+        assert.throws(() => catalog.initialize({ verifyOnly, requireExisting: true }), /schema/);
+        assert.deepEqual(await fs.readFile(file), original);
+      }
+    });
+  }
+});
+
+test('an open catalog detects schema or identity changes before health checks and new writes', async () => {
+  for (const mutation of [
+    'CREATE VIEW sqliteXunexpected AS SELECT workflow_id FROM projects',
+    'ALTER TABLE projects ADD COLUMN unexpected TEXT',
+    'PRAGMA application_id=1',
+    'PRAGMA user_version=5',
+  ]) {
+    await fixture(async (catalog, root) => {
+      await catalog.importProject(project());
+      const file = path.join(root, 'catalog.sqlite');
+      const raw = new DatabaseSync(file);
+      raw.exec(mutation);
+      raw.close();
+      const original = await fs.readFile(file);
+      assert.throws(() => catalog.checkHealth(), /schema|identity|health check/);
+      await assert.rejects(catalog.importRecording(recording()), /schema|identity/);
+      catalog.close();
+      assert.deepEqual(await fs.readFile(file), original, 'Rejected writes must not alter the catalog.');
+    });
+  }
+});
+
 test('local catalog replaces a project atomically and rejects stale writes', async () => {
   await fixture(async (catalog) => {
     const before = project();
@@ -768,10 +1379,16 @@ test('local catalog rejects invalid policies, publication pointers and duplicate
           { ...before.publishedWebApps[0]!, appId: 'second-app', slug: 'second-ui' },
         ],
       }),
+      project({
+        publishedWebApps: [
+          before.publishedWebApps[0]!,
+          { ...before.publishedWebApps[0]!, uiGraphId: 'second-graph', slug: 'second-ui' },
+        ],
+      }),
     ]) {
       await assert.rejects(
         catalog.replaceProject(before, next),
-        /Invalid local|pointer is inconsistent|duplicate web-app/,
+        /Invalid local|pointer is inconsistent|duplicate web-app|UNIQUE constraint failed: web_apps/,
       );
       assert.deepEqual(await catalog.readProject(before.relativePath), before);
     }
@@ -1077,7 +1694,7 @@ test('local catalog refuses unidentified or invalid candidate databases', async 
     const catalog = new LocalWorkflowCatalog({ databasePath, artifactRoot: path.join(root, 'objects') });
     assert.throws(() => catalog.initialize({ verifyOnly: true }), /does not exist/);
     const unrelated = new DatabaseSync(databasePath);
-    unrelated.exec('CREATE TABLE unrelated (id INTEGER)');
+    unrelated.exec('CREATE TABLE sqliteXunrelated (id INTEGER)');
     unrelated.close();
     assert.throws(() => catalog.initialize(), /unidentified database/);
   } finally {
@@ -1132,6 +1749,130 @@ test('frozen filesystem tree stages into the catalog and can be verified without
       }
     });
   } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('frozen conversion preserves shared preferences and project-scoped legacy web-app bindings', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-shared-endpoint-source-'));
+  const sourceRoot = path.join(root, 'workflows');
+  const databasePath = path.join(root, 'catalog.sqlite');
+  const artifactRoot = path.join(root, 'objects');
+  const catalog = new LocalWorkflowCatalog({ databasePath, artifactRoot });
+  try {
+    await fs.mkdir(path.join(sourceRoot, '.published'), { recursive: true });
+    await withEnvOverride('RIVET_EXTRA_ROOTS', root, async () => {
+      const originals = new Map<string, string>();
+      const write = async (file: string, contents: string) => {
+        originals.set(file, contents);
+        await fs.writeFile(file, contents);
+      };
+      for (const name of ['archived', 'copy', 'live']) {
+        await write(path.join(sourceRoot, `${name}.rivet-project`), createBlankProjectFile(name));
+      }
+      const initial = await collectSourceWorkflows(sourceRoot);
+      const publishedAt = '2026-01-01T00:00:00.000Z';
+      for (const source of initial) {
+        const file = path.join(sourceRoot, source.relativePath);
+        const versionId = `${source.name}-version`;
+        const stateHash = createWorkflowPublicationStateHashFromContents(source.contents, null, 'shared');
+        await write(
+          getWorkflowProjectSettingsPath(file),
+          JSON.stringify({
+            endpointName: 'shared',
+            publicationVersion: '2',
+            publishedWebApps:
+              source.name === 'copy'
+                ? []
+                : [
+                    {
+                      uiGraphId: 'shared-ui',
+                      slug: `${source.name}-app`,
+                      publishedSnapshotId: versionId,
+                      publishedAt,
+                    },
+                  ],
+            ...(source.name === 'copy' ? {} : { lastPublishedAt: publishedAt }),
+            ...(source.name === 'live'
+              ? { publishedEndpointName: 'shared', publishedSnapshotId: versionId, publishedStateHash: stateHash }
+              : {}),
+          }),
+        );
+        if (source.name === 'copy') continue;
+        await write(path.join(sourceRoot, '.published', `${versionId}.rivet-project`), source.contents);
+        await write(
+          path.join(sourceRoot, '.published', `${versionId}.json`),
+          JSON.stringify({
+            version: 1,
+            id: versionId,
+            projectId: source.workflowId,
+            projectName: source.name,
+            relativePath: source.relativePath,
+            endpointName: 'shared',
+            publishedAt,
+            stateHash,
+          }),
+        );
+      }
+      const sources = await collectSourceWorkflows(sourceRoot);
+      assert.equal(sources.filter((source) => source.publishedContents !== null).length, 1);
+      assert.deepEqual(
+        sources.flatMap((source) => source.publishedWebApps.map((app) => app.appId)),
+        ['legacy:shared-ui', 'legacy:shared-ui'],
+      );
+      assert.deepEqual(await checkLocalWorkflowSource(sourceRoot), { projects: 3, folders: 0 });
+      const assertFrozen = async () => {};
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const report = await stageFrozenWorkflowCatalog({ sourceRoot, catalog, assertFrozen });
+        assert.deepEqual(report, { folders: 0, projects: 3, publishedVersions: 2, publishedWebApps: 2 });
+      }
+      catalog.close();
+      const report = await verifySqliteWorkflowServing({
+        databasePath,
+        artifactRoot,
+        virtualRoot: sourceRoot,
+        folders: [],
+        projects: sources,
+        recordings: [],
+        assertFrozen,
+      });
+      assert.deepEqual(report, { projects: 3, endpoints: 2, publishedVersions: 2, webApps: 2, recordings: 0 });
+      // A real slug conflict must fail inspection, not first surface after backup/copy.
+      const archivedPath = path.join(sourceRoot, 'archived.rivet-project');
+      const settingsFile = getWorkflowProjectSettingsPath(archivedPath);
+      const settings = JSON.parse(originals.get(settingsFile)!);
+      settings.publishedWebApps[0].slug = 'LIVE-APP';
+      await fs.writeFile(settingsFile, JSON.stringify(settings));
+      await assert.rejects(checkLocalWorkflowSource(sourceRoot), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'publication-route-conflict');
+        assert.ok(failure.sourceReference);
+        return true;
+      });
+      await fs.writeFile(settingsFile, originals.get(settingsFile)!);
+      const activeSettings = JSON.parse(originals.get(settingsFile)!);
+      Object.assign(activeSettings, {
+        endpointName: 'SHARED',
+        publishedEndpointName: 'shared',
+        publishedSnapshotId: 'archived-version',
+        publishedStateHash: createWorkflowPublicationStateHashFromContents(
+          originals.get(archivedPath)!,
+          null,
+          'shared',
+        ),
+      });
+      await fs.writeFile(settingsFile, JSON.stringify(activeSettings));
+      await assert.rejects(checkLocalWorkflowSource(sourceRoot), (error) => {
+        const failure = localUpgradeFailure('workflows', error);
+        assert.equal(failure.reason, 'publication-route-conflict');
+        assert.equal(failure.sourceReference, localUpgradeSourceReference('live.rivet-project'));
+        return true;
+      });
+      await fs.writeFile(settingsFile, originals.get(settingsFile)!);
+      for (const [file, contents] of originals) assert.equal(await fs.readFile(file, 'utf8'), contents);
+    });
+  } finally {
+    catalog.close();
     await fs.rm(root, { recursive: true, force: true });
   }
 });
@@ -1285,10 +2026,53 @@ test('legacy recording bundles may have gzip recording bytes and an identity rep
       assert.equal(source.length, 1);
       assert.equal(source[0]?.recordingContents, '{"input":1}');
       assert.equal(source[0]?.replayProjectContents, 'legacy replay');
+      await fixture(async (catalog, catalogRoot) => {
+        await catalog.importProject(project());
+        for await (const entry of iterateSourceRecordingImports(path.join(root, 'recordings'), [project()])) {
+          await catalog.importRecording(entry.recording, { sources: entry.artifacts, compression: 'identity' });
+          await catalog.verifyRecordingsExact([entry.recording]);
+        }
+        const bytes = gzipSync('{"input":1}');
+        const hash = createHash('sha256').update(bytes).digest('hex');
+        assert.deepEqual(await fs.readFile(path.join(catalogRoot, 'objects', hash.slice(0, 2), hash)), bytes);
+        const [metadata] = catalog.listRecordingMetadata();
+        assert.equal(metadata?.recordingBytes, bytes.length);
+        assert.equal(metadata?.projectBytes, Buffer.byteLength('legacy replay'));
+      });
     });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('recording source bytes must still match the scanned contents before publication', async () => {
+  await fixture(async (catalog, root) => {
+    await catalog.importProject(project());
+    const snapshot = recording();
+    const recordingPath = path.join(root, 'source-recording.gz');
+    const projectPath = path.join(root, 'source-project');
+    await fs.writeFile(recordingPath, gzipSync(snapshot.recordingContents.replace('1', '2')));
+    await fs.writeFile(projectPath, snapshot.replayProjectContents);
+    await assert.rejects(
+      catalog.importRecording(snapshot, {
+        sources: {
+          recordingContents: {
+            path: recordingPath,
+            encoding: 'gzip',
+            decodedSize: Buffer.byteLength(snapshot.recordingContents),
+          },
+          replayProjectContents: {
+            path: projectPath,
+            encoding: 'identity',
+            decodedSize: Buffer.byteLength(snapshot.replayProjectContents),
+          },
+          replayDatasetContents: null,
+        },
+      }),
+      /changed before publication/,
+    );
+    assert.deepEqual(catalog.listRecordingIds(), []);
+  });
 });
 
 test('local recording conversion rejects metadata that would silently reinterpret or omit payloads', async () => {

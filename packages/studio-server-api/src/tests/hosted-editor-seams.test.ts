@@ -75,7 +75,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
     'packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
   );
   const hostedIOProvider = readRepoFile('packages/studio-server-web/io/HostedIOProvider.ts');
-  const hostedDatasetProvider = readRepoFile('packages/studio-server-web/io/HostedDatasetProvider.ts');
 
   assert.match(editorBridgeTypes, /projectId\?: string \| null/);
   assert.match(editorBridgeTypes, /refresh-open-project-from-disk/);
@@ -167,8 +166,6 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(hostedIOProvider, /this\.#datasetProvider\.exportDatasetsForProject/);
   assert.match(hostedIOProvider, /this\.#datasetProvider\.importDatasetsForProject/);
   assert.doesNotMatch(hostedIOProvider, /utils\/globals\/datasetProvider/);
-  assert.match(hostedDatasetProvider, /deleteStoredDatasetsForProject\(projectId: ProjectId\)/);
-  assert.match(hostedDatasetProvider, /metadata\.projectId === projectId/);
 });
 
 test('hosted executor, save, find, and clipboard seams keep clear ownership', () => {

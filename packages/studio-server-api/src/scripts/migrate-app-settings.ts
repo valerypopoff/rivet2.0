@@ -27,6 +27,7 @@ import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { decodeMigrationSourceUtf8 } from './migration-source-utf8.js';
 import { chargeLocalSourceBytes } from '../local-metadata/source-budget.js';
+import type { SqliteAppSettingsBackend } from '../app-settings/sqlite-settings-store.js';
 
 const descriptors: ReadonlyArray<SettingsRepositoryDescriptor<unknown>> = [
   deploymentStorageSettingsRepository.descriptor,
@@ -98,15 +99,23 @@ async function readSourceSettingsFile(filePath: string, mayBeMissing: boolean): 
 export async function collectSourceAppSettings(
   sourceRoot: string,
   target?: ManagedWorkflowStorageConfig,
+  catalog?: SqliteAppSettingsBackend,
 ): Promise<SettingsRow[]> {
   const resolvedRoot = path.resolve(sourceRoot);
   const settingsRoot = path.join(resolvedRoot, 'settings');
   const knownNames = new Set(descriptors.map((descriptor) => path.basename(descriptor.getPath())));
   knownNames.add('web-app-routes.json'); // Legacy routes are folded into the public-route domain.
-  const entries = await fs.readdir(settingsRoot, { withFileTypes: true }).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  });
+  if (catalog)
+    for (const key of catalog.listKeys()) {
+      if (!descriptors.some((descriptor) => descriptor.key === key))
+        throw new Error(`Unrecognized source App Settings domain: ${key}`);
+    }
+  const entries = catalog
+    ? []
+    : await fs.readdir(settingsRoot, { withFileTypes: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+      });
   const initialNames = entries.map((entry) => entry.name).sort();
   const presentNames = new Set(entries.map((entry) => entry.name));
   for (const entry of entries) {
@@ -123,7 +132,10 @@ export async function collectSourceAppSettings(
     const sourcePath = path.join(settingsRoot, path.basename(descriptor.getPath()));
     let raw: string | null = null;
     try {
-      raw = await readSourceSettingsFile(sourcePath, !presentNames.has(path.basename(sourcePath)));
+      if (catalog) {
+        const stored = await catalog.read(descriptor.key);
+        raw = stored ? JSON.stringify(stored.value) : null;
+      } else raw = await readSourceSettingsFile(sourcePath, !presentNames.has(path.basename(sourcePath)));
     } catch (error) {
       throw new Error(`Cannot read source App Settings domain ${descriptor.key}`, { cause: error });
     }
@@ -169,12 +181,14 @@ export async function collectSourceAppSettings(
       sourceHash: sourceTextForHash === null ? null : createHash('sha256').update(sourceTextForHash).digest('hex'),
     });
   }
-  const finalNames = (
-    await fs.readdir(settingsRoot).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    })
-  ).sort();
+  const finalNames = catalog
+    ? []
+    : (
+        await fs.readdir(settingsRoot).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return [];
+          throw error;
+        })
+      ).sort();
   if (finalNames.length !== initialNames.length || finalNames.some((name, index) => name !== initialNames[index])) {
     throw new Error('Source App Settings directory changed while it was read.');
   }
@@ -187,8 +201,9 @@ export async function migrateAppSettings(options: {
   target: ManagedWorkflowStorageConfig;
   encryptionKey: string;
   verifyOnly?: boolean;
+  sourceCatalog?: SqliteAppSettingsBackend;
 }): Promise<number> {
-  const rows = await collectSourceAppSettings(options.sourceRoot, options.target);
+  const rows = await collectSourceAppSettings(options.sourceRoot, options.target, options.sourceCatalog);
   const pool = new Pool(getManagedDbPoolConfig(options.target));
   const backend = new PostgresAppSettingsBackend({
     poolConfig: getManagedDbPoolConfig(options.target),

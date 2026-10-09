@@ -143,6 +143,39 @@ The settings sidecar stores endpoint publication fields plus any web-app publica
 
 Important current behavior:
 
+- Project responses use `settings.status` for the endpoint alone and
+  `settings.publicationStatus` for the combined endpoint/web-app state. This
+  contract is identical for legacy filesystem, SQLite and managed PostgreSQL
+  storage, including tree, settings and mutation responses. Unpublishing an
+  endpoint leaves independently published web apps intact: the endpoint status
+  becomes `unpublished` even when the aggregate status remains `published` or
+  `unpublished_changes`. Endpoint badges/actions and migration endpoint checks
+  must use `status`; project-tree coloring uses the aggregate status. SQLite
+  serving certification checks the two fields independently. This is a response
+  mapping correction; existing catalogs do not require a data migration or reset.
+
+- Deletion has the same safeguards across filesystem, SQLite and PostgreSQL:
+  a project with a live endpoint or web-app publication must be unpublished
+  first, and only empty folders can be deleted (no recursive folder deletion).
+  SQLite checks live pointers before project cleanup and uses the existing
+  revision/publication-version checks for the catalog commit. Retained version
+  history alone does not prevent deletion after all live publications are gone.
+
+- The active-project web-app badge includes still-published apps whose UI graph
+  has been removed from the draft; a failed status read is shown as unavailable,
+  not as “none.” The tree and active-project panel share the same aggregate
+  fallback, preserving web-app freshness from compact metadata even when the
+  aggregate field is absent or the detailed status request fails. The recordings
+  picker uses the published endpoint name when present rather than a renamed,
+  unpublished draft name; each recording retains its own historical endpoint
+  identity.
+
+  Regression coverage lives in `sqlite-workflow-backend.test.ts`,
+  `managed-mappers.test.ts` and the native SQLite-to-managed migration fixture.
+  Headless browser coverage lives in `project-settings-modal.spec.ts`,
+  `workflow-library-layout.spec.ts` and `run-recordings-modal.spec.ts`. The
+  compact-status fallback has a pure regression in `published-items.test.ts`.
+
 - Endpoint access help reads "Changes take effect immediately". This is concise
   UI copy only: access changes still apply to both endpoint routes without
   publishing draft changes. The segmented control says "External"
@@ -211,6 +244,7 @@ Important current behavior:
   access updates against one PostgreSQL publication version and requires one
   success, one `publication_state_changed` response, and exactly one version
   increment.
+
 - The modal pins the read snapshot. A stale response keeps unsaved endpoint,
   slug, and allowed-email drafts, disables further publication commands, and
   offers **Review latest**. Only that explicit action refreshes both the
@@ -275,13 +309,13 @@ The filesystem coordinator lets reads proceed together but excludes every canoni
 
 ### Crash-safe filesystem publication
 
-Filesystem endpoint and web-app publication changes use a separate, versioned `.rivet-publication-transactions` journal beneath the same workflow root. The transaction includes newly frozen project/dataset snapshots, published-version metadata, and the settings sidecar containing endpoint and web-app pointers/access policy. Retired snapshots are checksummed in the journal and removed after commitment; cleanup failures leave them for verified recovery without making the successful publication fail. Restoring a published version also includes the live project and dataset in that *same* transaction. Star and comment edits to version metadata use the same durable write boundary. Existing `.rivet-project`, `.rivet-data`, `.published/*.json`, and settings-sidecar formats are unchanged.
+Filesystem endpoint and web-app publication changes use a separate, versioned `.rivet-publication-transactions` journal beneath the same workflow root. The transaction includes newly frozen project/dataset snapshots, published-version metadata, and the settings sidecar containing endpoint and web-app pointers/access policy. Retired snapshots are checksummed in the journal and removed after commitment; cleanup failures leave them for verified recovery without making the successful publication fail. Restoring a published version also includes the live project and dataset in that _same_ transaction. Star and comment edits to version metadata use the same durable write boundary. Existing `.rivet-project`, `.rivet-data`, `.published/*.json`, and settings-sidecar formats are unchanged.
 
 Before changing canonical files, the API writes and flushes the new artifacts and a journal of safe relative paths, old/new existence, byte lengths, and SHA-256 hashes. The journal is first written to a temporary name, flushed, and renamed into place; an interrupted partial journal therefore cannot be mistaken for a prepared transaction. The API then moves replaced files to transaction-owned backups, promotes staged files, validates the resulting project and JSON metadata plus every artifact's bytes, and writes the committed marker through the same flushed-temporary-file-and-rename sequence. Settings sidecars pass the same field normalizer used by ordinary reads at staging, final verification, and recovery; merely parseable JSON with an invalid access policy or published-web-app entry cannot become a committed publication. The marker is the only publication success boundary. A pre-marker error rolls back the verified old state; a post-marker cleanup error leaves the new state committed and cleanup is retried. Cleanup checks the transaction directory for unexpected evidence and verifies backup checksums before deleting them. Published snapshot datasets retain their historical copy-verbatim compatibility, including older non-JSON sidecars; they are checked by byte length and hash rather than re-serialized. Restoring a version also copies the snapshot dataset bytes verbatim into the live project and its new snapshot; only the existing preview HTTP response decodes those bytes as UTF-8. The publication state hash retains its historical UTF-8 decoding so existing status comparisons do not change for those sidecars.
 
-Workflow-storage initialization probes flush and same-device rename support for the publication journal and `.published` directory, flushes the workflow root after creating those directories on a fresh volume, recovers publication journals before constructing the execution cache or listening, and checks every existing project settings sidecar. A missing settings sidecar still means a never-published legacy project. A malformed or invalid *existing* sidecar is **not** treated as unpublished: startup fails with an operator-facing project-path diagnostic instead of silently removing the endpoint or dropping a malformed published web-app entry. Snapshot IDs must be safe single-component names; older safe non-UUID IDs remain accepted. Recovery refuses transaction entries that are not real same-filesystem directories, including symlinks. If a journal cannot prove the old or new generation, recovery keeps its evidence and fails closed; do not delete its directory or hand-edit one canonical artifact in isolation. Preserve the files and investigate the transaction ID and project path. Read and write operations share the filesystem coordinator, so supported API readers cannot observe the intermediate renames; external filesystem readers/writers remain outside this guarantee. Endpoint/web-app cache invalidation and tree notification occur after the transaction commits.
+Workflow-storage initialization probes flush and same-device rename support for the publication journal and `.published` directory, flushes the workflow root after creating those directories on a fresh volume, recovers publication journals before constructing the execution cache or listening, and checks every existing project settings sidecar. A missing settings sidecar still means a never-published legacy project. A malformed or invalid _existing_ sidecar is **not** treated as unpublished: startup fails with an operator-facing project-path diagnostic instead of silently removing the endpoint or dropping a malformed published web-app entry. Snapshot IDs must be safe single-component names; older safe non-UUID IDs remain accepted. Recovery refuses transaction entries that are not real same-filesystem directories, including symlinks. If a journal cannot prove the old or new generation, recovery keeps its evidence and fails closed; do not delete its directory or hand-edit one canonical artifact in isolation. Preserve the files and investigate the transaction ID and project path. Read and write operations share the filesystem coordinator, so supported API readers cannot observe the intermediate renames; external filesystem readers/writers remain outside this guarantee. Endpoint/web-app cache invalidation and tree notification occur after the transaction commits.
 
-For published-version history, an absent metadata file remains a supported legacy case and may be backfilled from its snapshot. A *present but corrupt current* metadata file is not a legacy absence: history and publication commands surface an error and preserve it for operator repair instead of overwriting stars/comments with defaults. A current metadata file claiming another project is likewise rejected, not treated as an absent entry. Corrupt noncurrent metadata is logged and omitted from history so an unrelated project's history remains available; its file is preserved for repair. Naming that exact older version in a download, preview, star/comment, or restore request reports corruption instead of a misleading 404. Legacy backfill verifies that the snapshot belongs to the current project before assigning ownership. Resolving a version for download, preview, star/comment editing, or restore also verifies the snapshot's embedded project ID; a replaced foreign snapshot cannot be exposed through a valid metadata file. Restore invalidates the filesystem execution cache only after the publication transaction commits; a validation failure leaves its cache state unchanged.
+For published-version history, an absent metadata file remains a supported legacy case and may be backfilled from its snapshot. A _present but corrupt current_ metadata file is not a legacy absence: history and publication commands surface an error and preserve it for operator repair instead of overwriting stars/comments with defaults. A current metadata file claiming another project is likewise rejected, not treated as an absent entry. Corrupt noncurrent metadata is logged and omitted from history so an unrelated project's history remains available; its file is preserved for repair. Naming that exact older version in a download, preview, star/comment, or restore request reports corruption instead of a misleading 404. Legacy backfill verifies that the snapshot belongs to the current project before assigning ownership. Resolving a version for download, preview, star/comment editing, or restore also verifies the snapshot's embedded project ID; a replaced foreign snapshot cannot be exposed through a valid metadata file. Restore invalidates the filesystem execution cache only after the publication transaction commits; a validation failure leaves its cache state unchanged.
 
 This journal is intentionally separate from the older project-save journal so existing `.rivet-transactions` entries remain readable. The currently supported Kubernetes Helm chart requires managed/PostgreSQL workflow storage, so its publication path does not use this filesystem journal. A separately operated filesystem control plane must retain one writer and mount projects, datasets, `.published`, and the hidden transaction directories on one rename-capable persistent filesystem; scaling filesystem API writers horizontally remains unsupported.
 
@@ -1064,6 +1098,145 @@ Single-recording deletion checks for remaining workflow history with an indexed 
 Filesystem published-project reference lookup follows the same lightweight discovery boundary: when hint paths cannot resolve a reference, scan validated project-index IDs rather than deserialize unrelated projects. Missing IDs retain the direct-read fallback. Discovery is not authorization or execution authority: the selected live/published project is still loaded and its actual ID checked before returning it, and published snapshot selection is unchanged. No additional cache of complete projects is introduced; authoritative save/identity-reconciliation scans still read source projects.
 
 These optimizations are backend-scoped, not tied to Docker, a VM, or Kubernetes. Legacy filesystem mode uses the project-index sidecar and recording SQLite index; its metadata cache is optional, and denied cache writes (`EROFS`/`EACCES`) fall back to reading source without changing identity or published-snapshot selection. That fallback can be slower on repeated cold reads. Recording writes/deletes still require writable persistent storage. The selected local SQLite catalog and managed PostgreSQL/S3 backend use their own catalog, recording, and reference-loader methods through `storage-backend.ts`; they do not run legacy filesystem discovery or initialize its recording index for these requests. Managed reference hints are checked against the requested workflow ID before materializing a revision, and the loaded project's embedded ID is checked too. A stale/reused hint falls back to ID lookup; storage failures or foreign revision content fail visibly. These checks remain in place on invalidation retries. No sticky session, shared process-memory cache, or new schema is required. Existing deployment constraints still apply: legacy filesystem and local SQLite serving are single-writer installations; the supported Kubernetes chart uses managed storage, a singleton control-plane backend, and scalable execution replicas.
+
+### Local SQLite workflow tree
+
+`GET /api/workflows/tree` uses `LocalWorkflowCatalog.readTreeProjection`, not
+`readProject`. A consistent SQL metadata snapshot supplies folders, project
+settings, the current publication pointer and web-app metadata. Tree reads do
+not enumerate retained publication history or read its bodies, and do not touch
+recording artifacts. Web-app freshness compares immutable draft/dataset references
+with each app's published references; endpoint and aggregate status retain the
+existing publication contract.
+
+Normal imports and project writes store an optional `treeIndex` (graph/node/app
+counts and the existing `fs-sha256` draft-plus-datasets revision). Indexed trees
+need no artifact reads. Existing catalogs without this field read only current
+draft/dataset bodies to derive the same summary, with at most eight projects in
+flight per tree. A bounded 1,024-entry, process-local cache stores summaries and
+shares pending reads by immutable artifact references; it does not retain project
+bodies. Each metadata snapshot captures its existing cache hits before cold reads
+can evict them. Trees larger than the cache therefore reread only missing summaries,
+not every body on each ordered scan. Returned statistics are independent copies, so a consumer cannot mutate
+another tree or its cached summary. Failed reads are evicted and retryable.
+Existing databases, including read-only certified candidates, are not backfilled
+or rewritten on a tree read; a real project write persists its summary. After a
+process restart, old unsaved rows pay this cold-read cost again.
+
+The tree validates metadata/access rules and the current publication pointer,
+then checks its metadata stamp before responding. Concurrent changes fail with
+a retryable conflict instead of returning mixed state. The stamp excludes
+recording activity and unrelated historical publications, and its final check
+does not parse and validate all metadata a second time. This projection is
+discovery, not an integrity certificate: full project reads and migration/serving
+verification still read and verify the required artifacts and retained history.
+Serving verification compares the tree revision and all three statistics against
+the source draft/datasets too; a well-formed but stale summary cannot be certified.
+It also checks each app's freshness against its own published bytes and checks
+the aggregate project status, including mixed fresh/stale app publications.
+
+Verification: `sqlite-workflow-backend.test.ts` checks zero indexed artifact reads,
+legacy single-flight/retry behavior, read-only byte preservation, revisions,
+dataset-only edits, publication freshness, concurrent mutations, response isolation,
+and rejection of incorrect persisted summaries during serving verification.
+Warmed legacy summaries are tested across another connection's draft/dataset save
+and a backend restart; the new persisted index wins without more tree artifact reads.
+A 1,025-project legacy fixture also checks bounded-cache reloads: 1,025 reads on
+the first tree, then only one read per reload rather than full-scan cache thrashing.
+`local-workflow-catalog.test.ts` also exercises old-format rows without summaries.
+Run `yarn studio-server:ui:observe sqlite-workflow-tree.spec.ts` headlessly to
+render the actual SQLite projection across browser reloads (other API calls use
+an isolated fixture server). These checks establish the I/O boundary; they do not
+qualify production VM latency or memory high-water.
+
+### Local SQLite browsing and selected payloads
+
+Project opening, hosted text reads, relative/library references, subgraph targets,
+project downloads and the web-app settings list use `readProjectPayload`. They
+materialize only the selected immutable project/datasets pair, not every retained
+publication or sibling app body. Version preview/download selects one version
+by its owning workflow ID. Current-pointer/access validation and post-I/O
+concurrency guards remain in place; caller-owned version selections are captured
+before I/O. Missing or corrupt selected artifacts still fail without legacy fallback.
+Related project, current/specified version and app metadata are read in one short
+synchronous SQLite snapshot. Route and stable-ID lookup participate in the same
+snapshot as their owner metadata. The shared savepoint helper is safe inside
+mutation transactions and nested metadata reads, and releases on validation
+failure too. It never holds a read lock while waiting for artifact files; a
+post-I/O comparison still detects later changes.
+Execution cache hits similarly validate only current publication metadata, not
+the complete retained history.
+
+History listing and hosted path existence are metadata-only. Existence means a
+catalog reference exists, not that its bytes have been integrity-certified.
+History listing can still display a version whose body is missing; opening that
+version fails. Full snapshots remain the mutation/CAS and migration/serving
+verification boundary, where every required historical body is checked.
+
+The local SQLite recordings workflow selector uses one SQL `GROUP BY` query with
+`COUNT`, conditional `SUM` and `MAX` for counts and the latest timestamp. Only one
+compact row per workflow crosses into JavaScript, not every run's metadata. The
+query checks recording/owner identity, canonical UTC timestamps and status,
+and refuses the response if any contributing row is invalid (including malformed
+JSON); invalid rows are never silently dropped. Full recording/artifact-reference
+validation remains at import, run-page, artifact-read and migration boundaries,
+not on the metadata-only picker path. `readRecordingWorkflowProjection` reads the
+aggregates and their current owner metadata in one synchronous SQLite snapshot,
+so a competing writer cannot pair old counts with newly changed owner settings.
+It reads current metadata only for recording owners, omitting unused graph statistics and draft
+revision IDs. No project, dataset, publication or replay bodies are loaded, even
+for old catalogs without `treeIndex`. This avoids a full-project read plus an
+all-runs array per project. SQL still scans recording metadata to calculate exact
+counts, but there is no per-run JavaScript parsing or counting. The former
+selector read every full project snapshot (including publication history) and
+materialized all its recording rows just to build this small list. The browser
+waits for the workflow selector before requesting its initial run page, so that
+wasted work delayed the entire modal. No second cache or catalog reset is needed.
+Ordinary run pages retain bounded SQL windows, and input filtering alone reads run bodies
+incrementally. Runtime-library manifests already use the startup-materialized
+authority, rather than decompressing package archives on each UI read.
+
+Run the disposable synthetic benchmark with
+`yarn workspace @valerypopoff/rivet-studio-server-api exec tsx src/scripts/benchmark-local-workflow-reads.ts`.
+It creates its own temporary catalog/artifacts, asserts artifact-read budgets and
+identical owner counts/latest timestamps, then cleans up. It never opens a
+production catalog. A Windows/Node 22.22.3 sample with 100 projects, five historical
+versions each, 128 KiB descriptions, one seed/template project and 10,000 recordings
+measured 621.97 ms/601 artifact reads (75.23 MiB) for the former recordings selector,
+versus 41.97 ms/zero reads for SQL aggregation. Indexed tree discovery took
+2.32 ms/zero reads versus 558.13 ms/601 reads for full-snapshot discovery.
+These are single synthetic local samples with OS-cache effects, not production
+VM latency or resource qualification. The headless browser fixture opens the
+modal against a real SQLite catalog containing 10,000 recordings and checks its
+count and pagination without loading project/replay bodies.
+
+Both `/recordings/workflows` and its compatibility alias expose
+`Server-Timing: recording_catalog;dur=...` for backend selector work, and
+`x-duration-ms` for total route response-header preparation. These timings include
+backend initialization when needed, but exclude earlier auth/proxy/network wait.
+They help compare the same production request before and after deployment;
+neither measurement requires logging project contents or resetting storage.
+
+The focused backend regressions enforce selected-pair reads, missing-history versus
+selected-body behavior, captured selections, concurrent-mutation rejection and
+metadata-only recording counts with corrupt-row refusal. They check that SQL
+returns one aggregate per owner, empty catalogs, latest timestamps, malformed
+JSON, mismatched identities, invalid statuses and non-string/invalid timestamps,
+plus immediate recovery after repair. Recording timestamps must be parseable
+UTC strings in Rivet's `YYYY-MM-DDTHH:mm:ss.sssZ` format, not numbers accepted
+through JavaScript coercion, SQLite-relative dates such as `now`, offsets or
+overflowing dates. This is the format both legacy and SQLite recorders already
+write. Import rejects a noncanonical timestamp before creating artifact files;
+SQL aggregation and individual run reads agree on refusal. Exact source values
+are preserved, never silently normalized during migration. The timestamp checks
+also cover leap days and millisecond ordering, and a competing-connection test
+checks that recording counts and owner metadata cannot come from different commits.
+An interleaved real second-connection writer (WAL fixture) also checks that owner and
+app metadata cannot come from different commits and that failed reads release
+their snapshots. Production DELETE-journal mode instead delays a competing
+commit until the short metadata read completes. History listing retains the
+same project-path validation as project opening, and the web-app settings
+response computes its draft revision once for both returned fields.
 
 Completed bundle publication is crash-aware. Filesystem metadata becomes visible only after all artifacts are written; the completion marker is published by atomic rename, and the corresponding workflow/run index rows are inserted in one SQLite transaction. Recorder serialization and storage remain background work so they do not inflate endpoint response timing. Graceful API shutdown drains queued recording writes after active WebSocket actions are interrupted and their terminal hooks have run, then closes managed workflow storage. This protects accepted recordings during normal Docker/Kubernetes rollouts; forced process termination and queue overflow remain explicit loss boundaries and are logged.
 

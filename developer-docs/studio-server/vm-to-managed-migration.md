@@ -1,4 +1,4 @@
-# VM filesystem to managed PostgreSQL and S3 migration
+# VM local storage to managed PostgreSQL and S3 migration
 
 The operational importer includes legacy `scheduled-runs.sqlite` when present.
 It preserves definitions/history but disables every imported schedule and retires
@@ -8,35 +8,41 @@ schedule database is an error, not an empty domain. Review schedules in the
 destination UI before enabling them. See [Scheduled runs](./scheduled-runs.md).
 
 This is the implementation and safety contract for copying a filesystem-backed
-single-host Rivet Server with legacy file metadata into a separate managed destination. The Settings ->
+single-host Rivet Server with legacy file metadata or a selected live SQLite
+generation into a separate managed destination. The Settings ->
 Migration tab can test a destination, pause the source, run the importer,
 verify it, and record a separate deployment review. **It does not route traffic to Kubernetes or change the VM's active
 Storage setting.** Local-to-managed activation through the Storage tab/API is
-blocked: local files must first migrate to SQLite, and a later selected-SQLite
-transfer needs its own verified adapter (not implemented yet). Existing managed
-installations remain configurable. This legacy importer copies to a separate
+blocked: local files must first migrate to SQLite; selected-SQLite transfer uses
+the migration wizard or offline adapter below, not a blind storage selector. Existing managed
+installations remain configurable. This importer copies to a separate
 destination; it is not an exemption from the source activation policy.
 
-The migration routes are disabled by default. On the single-host VM, set
-`RIVET_VM_MIGRATION_ENABLED=1` and use `RIVET_SERVER_UI_AUTH_MODE=key` or
-`oauth` before restarting the backend. `none` mode and trusted-client bypass
+Migration needs no deployment opt-in or migration-enable environment variable.
+The former `RIVET_VM_MIGRATION_ENABLED` setting is ignored, including a retained
+value of `0`. Use the existing `RIVET_SERVER_UI_AUTH_MODE=key` or `oauth` login:
+`none` mode and trusted-client bypass
 cannot authorize migration, including status and source inventory reads, even
 if they allow ordinary Settings access.
 State-changing migration requests require the signed-in UI session and the
-same-origin migration-intent header. Turn the enablement off again after the
-cutover or abandoned attempt. The separate offline CLI remains an operator
+same-origin migration-intent header. Availability and action admission share the
+same source/topology checks; status reports the specific reason when the source
+is unsupported rather than suggesting an enablement flag. The supervisor supplies
+the editor-coordination capability automatically in supported combined deployments;
+it is not a user opt-in. The separate offline CLI remains an operator
 tool and needs access-controlled source mounts and credentials.
 
 ## Source and destination
 
-This importer does not yet read a selected local SQLite generation. The browser
-workflow is deliberately unavailable whenever local-metadata control is configured,
-including its paused legacy phases. After the local storage upgrade, retained legacy
+The CLI and browser read a selected validated `sqlite-live` generation when local-metadata control is
+configured. The browser requires that the running selection and boot revision
+match the durable transition journal; unfinished local-upgrade phases remain unavailable.
+After the local storage upgrade, retained legacy
 files are not the live authority and must never be supplied to this CLI as a substitute
-for a SQLite export. A selected-SQLite-to-S3/PostgreSQL adapter is a separate future
-feature; do not remove or bypass the control configuration to unlock migration.
+for a SQLite export. Do not remove or bypass the control configuration to unlock
+browser workflow.
 
-The source must still be in legacy filesystem storage mode. It is the VM's workflow
+For the legacy importer, the source must still be in legacy filesystem storage mode. It is the VM's workflow
 root, recording-bundle root, app-data root, and runtime-library root. Preserve
 all four together in a backup before beginning.
 In that mode Rivet's workflow, Evaluation, health, recording and App Settings
@@ -73,9 +79,59 @@ are per-pod reconstructible caches, not durable managed state; app logs, VM
 Docker metadata, browser-local data, and external secrets are outside this
 migration.
 
+## Offline live SQLite source
+
+Use a maintenance window. Back up the complete local-metadata control root and
+selected generation (catalog, settings, immutable objects and operational SQLite
+databases), along with the original app-data root containing the migration
+barrier. Retained pre-upgrade workflow files are not an up-to-date backup.
+
+Stop **both** source API and executor processes and keep the managed destination
+offline. Run the CLI in a separate operator process/container with the source
+mounts and the same source settings decryption key when applicable. Keep the four
+original roots in `RIVET_WORKFLOWS_MIGRATION_SOURCE_ROOT`,
+`RIVET_MIGRATION_SOURCE_APP_DATA_ROOT`, `RIVET_MIGRATION_SOURCE_RECORDINGS_ROOT`,
+`RIVET_MIGRATION_SOURCE_RUNTIME_LIBRARIES_ROOT` unchanged: they identify the selected generation,
+but workflow/recording/runtime contents come from that generation, not those old
+roots. Set `RIVET_MIGRATION_SOURCE_LOCAL_METADATA_CONTROL_ROOT` to its absolute
+control path (the normal `RIVET_LOCAL_METADATA_CONTROL_ROOT` is also recognized).
+Supply the destination `RIVET_MIGRATION_TARGET_*` configuration described below.
+
+After independently confirming all source writers/runs have stopped, set
+`RIVET_MIGRATION_SOURCE_STOPPED=1` and `RIVET_MIGRATION_SOURCE_QUIESCED=1`, then run:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:freeze-source
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:migrate
+yarn workspace @valerypopoff/rivet-studio-server-api workflow-storage:verify
+```
+
+`freeze-source` creates/validates the durable maintenance barrier; these flags
+are operator acknowledgements, not automatic process shutdown. Only validated
+`sqlite-live` generations are accepted. Control/generation directories and the
+barrier must be real, non-symlink paths. Copy and verify use read-only SQLite
+handles, bind the destination gate to the selected generation, compare logical
+database snapshots before/after, and fail if the selector or source changed.
+Every copy/verification pass requires both stopped-source acknowledgements, not
+only barrier creation; the original app-data directory must also be non-symlink.
+Publication histories, settings, Evaluation/health/schedule state and the active
+runtime release are preserved (schedules retain the safety transform above).
+Recordings are decoded within bounded memory and uploaded using managed
+compression; they are not expanded into temporary disk trees. A failed copy can
+be retried against the same frozen source/destination. Native pre-copy is not
+supported.
+
+Only after verification and deployment review should operators start the
+destination and route traffic to it. Keep the source stopped/paused. If abandoning
+the transfer, invalidate the destination serving gate before clearing the source
+maintenance barrier and restarting source writers. This adapter does not switch
+the source's Storage setting. The browser-assisted flow below uses a supervised
+write fence instead of the CLI's stopped-process acknowledgements.
+
 ## Browser-assisted sequence
 
-Use this path only on the combined-backend, single-host, filesystem-backed source. The
+Use this path only on the combined-backend, single-host source with local artifacts
+and either legacy file metadata or a validated live SQLite generation. The
 authenticated Settings -> Migration tab is unavailable to replicated Kubernetes
 pods or a source already using managed workflow storage. It collects the same
 destination connection details listed below, plus the destination App Settings
@@ -87,13 +143,18 @@ must remain stopped; the checkbox is an operator assertion, not a distributed
 lock.
 
 First back up the four source roots and record the published routes and access
-policies. The UI requires its read-only **Inspect source** action before pre-copy. It reports project, folder,
+policies. For SQLite, also back up the complete selected generation and control
+root: those are the current authority, not the retained workflow/recording trees.
+The UI requires its read-only **Inspect source** action before maintenance. It reports project, folder,
 recording-bundle and saved-settings counts, and highlights Code and Read File
 nodes for portability review. It intentionally does not claim to prove that
 arbitrary Code nodes, plugins or external integrations work in Kubernetes;
 the frozen importer performs the authoritative structural validation. Test
 PostgreSQL and S3 independently in the wizard; editing either connection
-resets only its own passed test. The API checks PostgreSQL DDL/read/write permission using a
+resets only its own passed test. Controls are disabled while an action or background
+job is running, so a successful connection test cannot certify credentials edited
+in flight. Status polling is sequential and discards older responses superseded by
+an action refresh. The API checks PostgreSQL DDL/read/write permission using a
 table created inside a rolled-back transaction, then writes,
 reads, then deletes disposable objects in the workflow and runtime-library S3
 namespaces. The test creates the configured bucket if missing, matching the
@@ -106,6 +167,38 @@ managed workflow storage; it does not silently test a different transport.
 For AWS S3, bucket creation supplies the configured location constraint outside
 `us-east-1`; custom S3-compatible endpoints keep their provider-specific bucket
 creation request unchanged.
+
+### SQLite wizard path
+
+The wizard inspects the selected catalog and draft artifacts through read-only
+handles. Counts use SQL, not recording-payload reads or publication-history
+materialization. There is no online pre-copy step for SQLite. Test both target
+connections, confirm the destination is offline and runtime compatibility, then
+**Enter maintenance mode**. The supervised API remains reachable for status and
+recovery while data routes, editor runs, scheduled runs, settings writes, catalog
+writes and retention are fenced and existing work drains.
+
+The persistent maintenance marker has a migration-owner ID. Local storage upgrade
+controls cannot change selection or remove that marker; both UI workflows serialize
+control entry before any asynchronous fence change. Copy admission requires the
+drain to be quiet and passes the exact barrier ID to the read-only importer. This
+is an internal supervision capability, not a new operator environment opt-in and
+not a claim that the API process was stopped. Offline `freeze-source` still requires
+both stopped-process acknowledgements. Out-of-band host writers remain the
+operator's responsibility.
+
+**Copy and verify all data**, deployment review, interrupted-job recovery and
+abandon/resume use the same selected-generation identity as the native adapter.
+The manifest compares logical catalog/settings/operational databases before and
+after each pass. Compressed recordings stay unexpanded on disk. A failed final
+copy can retry only the same destination and source identity. The destination
+gate must close before the VM's barrier is removed; restart the backend before
+serving again. A browser reload does not resume writes: durable status survives,
+but destination secrets must be re-entered. Once the destination accepts writes,
+returning to the VM requires coordinated recovery, not this pre-cutover resume.
+
+The sequence below describes optional online pre-copy for **legacy sources only**;
+SQLite proceeds directly to maintenance and the final copy.
 
 Runtime-library migration archives only the installed `current/` release.
 Relative npm symlinks are supported only when their targets are inside that
@@ -221,9 +314,16 @@ Deployment review action requires the
 operator to affirm backups, matching deployment settings, functional checks,
 external dependencies, and the post-write rollback boundary. It reruns exact
 comparison and the frozen-source manifest check against the same target before
-recording a timestamped review. The durable job returns to verifying while the
+recording a timestamped review. Admission returns HTTP 202 after durably recording
+the verifying phase; the child comparison runs in the background instead of keeping
+an HTTP request open through a multi-gigabyte scan. Status polling reports completion
+or failure, and concurrent review/copy/resume actions are rejected while it runs.
+The durable job returns to verifying while the
 recheck runs; a crash is reported as interrupted, and a failed review is
 recorded as failed rather than leaving an obsolete verified status in the UI.
+All detached migration jobs share an error boundary: if completion/failure status
+cannot be persisted, the last durable active phase remains for interrupted-job
+recovery and the API does not crash or expose upstream credentials in its logs.
 The server attempts to close the target gate again if the recheck fails before
 the child can do so, and warns explicitly if closure cannot be confirmed.
 This is an operator attestation, not an
@@ -360,3 +460,11 @@ the actual managed provider credentials.
 The browser flow still depends on the operator to keep the destination pods
 offline, use matching deployment secrets, and conduct the Kubernetes release
 rehearsal. There is no one-click or atomic cross-cluster traffic cutover.
+
+The disposable integration fixture also exercises the supervised SQLite UI
+service: source inspection, pause/drain, native copy, asynchronous final review,
+concurrent-action rejection and destination-gate closure before source resume.
+The browser regression suite covers legacy/SQLite wizard admission, connection-test
+field locking, asynchronous review, stale status responses and unauthorized sessions:
+`PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe vm-migration.spec.ts`
+(set `PLAYWRIGHT_BASE_URL` to the running Studio Server or preview when needed).

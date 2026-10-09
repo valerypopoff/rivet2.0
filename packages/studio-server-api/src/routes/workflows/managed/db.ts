@@ -1,7 +1,7 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../../managed-health.js';
-import { withManagedPostgresPoolMax } from '../../../managed-postgres-pool.js';
+import { withManagedPostgresPoolMax, withAuthoritativePostgresTls } from '../../../managed-postgres-pool.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import { WORKFLOW_COLUMNS, splitCurrentDraftRevisionRow } from './mappers.js';
@@ -44,15 +44,15 @@ export function getManagedDbConnectionConfig(
   };
 
   if (config.databaseSslMode === 'disable') {
-    return sharedConfig;
+    return withAuthoritativePostgresTls({ ...sharedConfig, ssl: false });
   }
 
-  return {
+  return withAuthoritativePostgresTls({
     ...sharedConfig,
     ssl: {
       rejectUnauthorized: config.databaseSslMode === 'verify-full',
     },
-  };
+  });
 }
 
 export function getManagedDbPoolConfig(config: Pick<ManagedWorkflowStorageConfig, 'databaseUrl' | 'databaseSslMode'>) {

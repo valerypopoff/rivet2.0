@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
+import { lstatSync, unlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -11,8 +12,8 @@ export type LocalArtifact = { hash: string; size: number };
 /**
  * Immutable artifact storage for the local SQLite metadata backend. A caller may
  * commit a reference to an artifact only after putBytes/putFile has resolved.
- * This store deliberately has no delete operation: references must be removed
- * in SQLite before a separate verified orphan collector can remove files.
+ * Physical collection is available only to the catalog while it holds the
+ * SQLite writer lock and has checked every authoritative reference.
  */
 export class ImmutableLocalArtifactStore {
   readonly #root: string;
@@ -50,13 +51,70 @@ export class ImmutableLocalArtifactStore {
     });
   }
 
-  async read(hash: string): Promise<Buffer> {
+  async read(hash: string, expectedSize?: number): Promise<Buffer> {
+    if (expectedSize !== undefined && (!Number.isSafeInteger(expectedSize) || expectedSize < 0))
+      throw new Error('Invalid local artifact expected size.');
     const filePath = this.#artifactPath(hash);
-    const bytes = await this.#withStableFile(filePath, hash, (handle) => handle.readFile());
+    const bytes = await this.#withStableFile(filePath, hash, (handle) => handle.readFile(), expectedSize);
     if (createHash('sha256').update(bytes).digest('hex') !== hash) {
       throw new Error(`Local artifact ${hash} failed its checksum.`);
     }
     return bytes;
+  }
+
+  /** Called synchronously inside the catalog's write transaction. A collector
+   * may have removed an old orphan after preparation but before this lock. */
+  assertPresent(artifact: LocalArtifact): void {
+    const file = this.#artifactPath(artifact.hash);
+    for (const directory of [this.#root, path.dirname(file)]) {
+      const stat = lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe local artifact directory.');
+    }
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== artifact.size)
+      throw new Error('Prepared local artifact is missing or changed; retry the operation.');
+  }
+
+  async listCollectionCandidates(options: { before: number; after?: string; limit: number }) {
+    const candidates: LocalArtifact[] = [];
+    let cursor = options.after ?? '';
+    let scanned = 0;
+    try {
+      await this.#assertDirectory(this.#root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { candidates, cursor: '' };
+      throw error;
+    }
+    // Shards and object names are bounded, validated and sorted. A cursor
+    // prevents protected objects at the start from starving later orphans.
+    for (const shard of (await fs.readdir(this.#root)).filter((name) => /^[a-f0-9]{2}$/.test(name)).sort()) {
+      if (cursor && shard < cursor.slice(0, 2)) continue;
+      const directory = path.join(this.#root, shard);
+      await this.#assertDirectory(directory);
+      for (const hash of (await fs.readdir(directory)).sort()) {
+        if (!/^[a-f0-9]{64}$/.test(hash) || !hash.startsWith(shard) || hash <= cursor) continue;
+        cursor = hash;
+        const stat = await fs.lstat(this.#artifactPath(hash));
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe local artifact object.');
+        if (stat.mtimeMs <= options.before) candidates.push({ hash, size: stat.size });
+        if (++scanned >= options.limit) return { candidates, cursor };
+      }
+    }
+    return { candidates, cursor: '' };
+  }
+
+  /** The catalog must hold BEGIN IMMEDIATE and exclude referenced hashes. */
+  removeUnreferenced(artifact: LocalArtifact, before: number): boolean {
+    try {
+      this.assertPresent(artifact);
+      const file = this.#artifactPath(artifact.hash);
+      if (lstatSync(file).mtimeMs > before) return false;
+      unlinkSync(file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
   }
 
   async #put(produce: (write: (chunk: Uint8Array) => Promise<void>) => Promise<void>): Promise<LocalArtifact> {

@@ -13,7 +13,6 @@ import type {
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
-  WorkflowRunStatisticsTarget,
 } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
@@ -26,6 +25,7 @@ import {
 } from '../../../llm-profile-health/state.js';
 import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
+import { parseManagedArtifactDescriptor } from './artifact-descriptor.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { ManagedWorkflowMaintenanceLease } from './maintenance.js';
@@ -41,11 +41,13 @@ import {
   parseWorkflowRecordingInputAfter,
 } from '../recording-input-filter.js';
 import { getManagedRecordingInputCacheKey, workflowRecordingInputCache } from '../recording-input-cache.js';
+import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from '../recording-statistics.js';
 import {
-  buildWorkflowRunStatistics,
-  buildWorkflowRunStatisticsCatalog,
-  type WorkflowRecordingStatisticsRow,
-} from '../recording-statistics.js';
+  recordingStatisticsCatalogSql,
+  recordingStatisticsRowsSql,
+  statisticsSqlRow,
+  type RecordingStatisticsSqlRow,
+} from '../recording-statistics-sql.js';
 
 type ManagedHealthEntryRow = {
   entry_json: StoredLLMProfileHealthEntry | string | null;
@@ -127,58 +129,6 @@ function getExecutionIdentity(row: RecordingRow) {
   } as const;
 }
 
-function getManagedStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {
-  clause: string;
-  parameters: string[];
-} {
-  if (!target) return { clause: '', parameters: [] };
-  if (target.surface === 'endpoint') {
-    return {
-      clause: `AND workflow_id = $3
-        AND (execution_surface = 'workflow_endpoint'
-          OR (execution_surface IS NULL AND endpoint_name_at_execution NOT LIKE '/%'))`,
-      parameters: [target.workflowId],
-    };
-  }
-  if ('legacyEndpointName' in target) {
-    return {
-      clause: `AND workflow_id = $3
-        AND (
-          execution_surface IS NULL
-          OR (
-            execution_surface = 'web_app_action'
-            AND (ui_graph_id_at_execution IS NULL OR component_id_at_execution IS NULL)
-          )
-        )
-        AND endpoint_name_at_execution = $4`,
-      parameters: [target.workflowId, target.legacyEndpointName],
-    };
-  }
-  return {
-    clause: `AND workflow_id = $3
-      AND execution_surface = 'web_app_action'
-      AND ui_graph_id_at_execution = $4
-      AND component_id_at_execution = $5`,
-    parameters: [target.workflowId, target.uiGraphId, target.componentId],
-  };
-}
-
-function toStatisticsRow(
-  row: RecordingRow,
-  toIsoString: (value: Date | string | null | undefined) => string | null,
-): WorkflowRecordingStatisticsRow {
-  return {
-    workflowId: row.workflow_id,
-    sourceProjectName: row.source_project_name,
-    createdAt: toIsoString(row.created_at) ?? new Date().toISOString(),
-    runKind: row.run_kind,
-    status: row.status,
-    durationMs: row.duration_ms,
-    endpointNameAtExecution: row.endpoint_name_at_execution,
-    executionIdentity: getExecutionIdentity(row),
-  };
-}
-
 export function selectManagedRecordingRowsForCleanup(
   rows: RecordingRow[],
   config: ManagedRecordingRetentionConfig,
@@ -249,6 +199,10 @@ function getUtf8ByteLength(value: string | null | undefined): number {
   return value == null ? 0 : Buffer.byteLength(value, 'utf8');
 }
 
+function getStoredByteLength(key: string | null, text: string | null | undefined): number {
+  return key ? parseManagedArtifactDescriptor(key)?.storedBytes ?? getUtf8ByteLength(text) : 0;
+}
+
 async function filterManagedRecordingRowsByInput(
   loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingRow[]>,
   workflowId: string,
@@ -276,7 +230,9 @@ async function filterManagedRecordingRowsByInput(
               // text-only interface. Built-in stores always provide bytes; this
               // fallback retains cancellation and never changes match semantics.
               Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
-          encoding: 'identity' as const,
+          encoding: blobStore.getBytes
+            ? parseManagedArtifactDescriptor(row.recording_blob_key)?.encoding ?? 'identity'
+            : 'identity',
         }),
         readSignal,
         Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
@@ -512,11 +468,17 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: getUtf8ByteLength(options.recordingContents),
+          recordingCompressedBytes: getStoredByteLength(uploadedBlobs.recordingBlobKey, options.recordingContents),
           recordingUncompressedBytes: getUtf8ByteLength(options.recordingContents),
-          projectCompressedBytes: getUtf8ByteLength(options.replayProjectContents),
+          projectCompressedBytes: getStoredByteLength(
+            uploadedBlobs.replayProjectBlobKey,
+            options.replayProjectContents,
+          ),
           projectUncompressedBytes: getUtf8ByteLength(options.replayProjectContents),
-          datasetCompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
+          datasetCompressedBytes: getStoredByteLength(
+            uploadedBlobs.replayDatasetBlobKey,
+            options.replayDatasetContents,
+          ),
           datasetUncompressedBytes: getUtf8ByteLength(options.replayDatasetContents),
         },
         {
@@ -732,39 +694,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       surface: WorkflowRunStatisticsSurface,
     ): Promise<WorkflowRunStatisticsCatalogResponse> {
       await deps.initialize();
-      const rows = await deps.queryRows<RecordingRow>(
-        deps.pool,
-        `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          ORDER BY created_at ASC, recording_id ASC
-        `,
-        [],
-      );
-      return buildWorkflowRunStatisticsCatalog(
-        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
-        surface,
-      );
+      const query = recordingStatisticsCatalogSql('postgres', surface);
+      const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, query.sql, query.values);
+      return buildWorkflowRunStatisticsCatalog(rows.map(statisticsSqlRow), surface);
     },
 
     async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
       await deps.initialize();
-      const target = getManagedStatisticsTargetClause(query.target);
-      const rows = await deps.queryRows<RecordingRow>(
-        deps.pool,
-        `
-          SELECT ${deps.recordingColumns}
-          FROM workflow_recordings
-          WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
-          ${target.clause}
-          ORDER BY created_at ASC, recording_id ASC
-        `,
-        [query.period.from, query.period.to, ...target.parameters],
-      );
-      return buildWorkflowRunStatistics(
-        rows.map((row) => toStatisticsRow(row, deps.toIsoString)),
-        query,
-      );
+      const statement = recordingStatisticsRowsSql('postgres', query);
+      const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, statement.sql, statement.values);
+      return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query);
     },
 
     async readWorkflowRecordingArtifact(
@@ -881,11 +820,11 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           replayProjectBlobKey: uploadedBlobs.replayProjectBlobKey,
           replayDatasetBlobKey: uploadedBlobs.replayDatasetBlobKey,
           hasReplayDataset: Boolean(uploadedBlobs.replayDatasetBlobKey),
-          recordingCompressedBytes: getUtf8ByteLength(options.recordingSerialized),
+          recordingCompressedBytes: getStoredByteLength(uploadedBlobs.recordingBlobKey, options.recordingSerialized),
           recordingUncompressedBytes: getUtf8ByteLength(options.recordingSerialized),
-          projectCompressedBytes: getUtf8ByteLength(replayProjectSerialized),
+          projectCompressedBytes: getStoredByteLength(uploadedBlobs.replayProjectBlobKey, replayProjectSerialized),
           projectUncompressedBytes: getUtf8ByteLength(replayProjectSerialized),
-          datasetCompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
+          datasetCompressedBytes: getStoredByteLength(uploadedBlobs.replayDatasetBlobKey, replayDatasetSerialized),
           datasetUncompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
         },
         {

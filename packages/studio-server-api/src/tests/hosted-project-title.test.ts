@@ -431,21 +431,28 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
     description: 'managed description from editor save',
   });
   let savedRevisionContents = '';
+  let inTransaction = false;
 
   const revisionService = createManagedWorkflowRevisionService({
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) =>
-        run(
-          {
-            query: async () => ({ rows: [] }),
-          },
-          {
-            onCommit: () => {},
-            onRollback: () => {},
-          },
-        ),
+      withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) => {
+        inTransaction = true;
+        try {
+          return await run(
+            {
+              query: async () => ({ rows: [] }),
+            },
+            {
+              onCommit: () => {},
+              onRollback: () => {},
+            },
+          );
+        } finally {
+          inTransaction = false;
+        }
+      },
       queries: {
         ensureFolderChain: async () => {},
         getWorkflowByRelativePath: async () => workflow,
@@ -454,15 +461,20 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
           revisionId === currentRevision.revision_id ? currentRevision : null,
       },
       revisions: {
-        readRevisionContents: async () => ({
-          contents: currentContents,
-          datasetsContents: null,
-        }),
+        readRevisionContents: async () => {
+          assert.equal(inTransaction, false, 'S3 reads must not hold database locks');
+          return {
+            contents: currentContents,
+            datasetsContents: null,
+          };
+        },
         createRevision: async (workflowId: string, contents: string): Promise<RevisionRow> => {
+          assert.equal(inTransaction, false, 'S3 uploads must not hold database locks');
           savedRevisionContents = contents;
           return createRevisionRow(workflowId, 'revision-saved');
         },
         scheduleRevisionBlobCleanup: () => {},
+        discardPreparedRevision: async () => {},
         insertRevision: async () => {},
       },
       endpointSync: {
@@ -555,6 +567,7 @@ test('managed in-place save follows a remotely renamed project by immutable id a
           return createRevisionRow(workflowId, 'revision-saved-after-rebase');
         },
         scheduleRevisionBlobCleanup: () => {},
+        discardPreparedRevision: async () => {},
         insertRevision: async () => {},
       },
       endpointSync: { syncWorkflowEndpointRows: async () => {} },
@@ -627,6 +640,7 @@ test('managed saveHostedProject invalidates latest web app caches when only web 
         createRevision: async (workflowId: string): Promise<RevisionRow> =>
           createRevisionRow(workflowId, 'revision-saved'),
         scheduleRevisionBlobCleanup: () => {},
+        discardPreparedRevision: async () => {},
         insertRevision: async () => {},
       },
       endpointSync: {
@@ -722,7 +736,9 @@ test('managed project rename changes catalog identity without creating a draft r
         isUniqueViolation: () => false,
       },
     } as never,
-    saveHostedProject: async () => { throw new Error('rename must not save project contents'); },
+    saveHostedProject: async () => {
+      throw new Error('rename must not save project contents');
+    },
   });
 
   const renamed = await catalogService.renameWorkflowProjectItem(workflow.relative_path, 'Managed Renamed Name');

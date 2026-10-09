@@ -2,7 +2,8 @@ import 'fake-indexeddb/auto';
 import { strict as assert } from 'node:assert';
 import { beforeEach, describe, it } from 'node:test';
 import { type Dataset, type DatasetId, type DatasetMetadata, type ProjectId } from '@valerypopoff/rivet2-core';
-import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
+import { IDBFactory, IDBObjectStore, IDBIndex } from 'fake-indexeddb';
+import { openDB } from 'idb';
 import { BrowserDatasetProvider } from './BrowserDatasetProvider.js';
 
 beforeEach(() => {
@@ -19,6 +20,42 @@ beforeEach(() => {
 });
 
 void describe('BrowserDatasetProvider IndexedDB persistence', () => {
+  void it('upgrades an existing v2 catalog without losing data and scopes reads/replacement to the project index', async (t) => {
+    const db = await openDB('datasets', 2, {
+      upgrade(database) {
+        database.createObjectStore('datasets');
+        database.createObjectStore('data');
+      },
+    });
+    const owner = 'owner' as ProjectId;
+    const other = 'other' as ProjectId;
+    const id = 'owned' as DatasetId;
+    const otherId = 'unrelated' as DatasetId;
+    const original = { meta: metadata(id, owner, 'Owned'), data: { id, rows: [{ id: 'row', data: ['kept'] }] } };
+    const unrelated = { meta: metadata(otherId, other, 'Other'), data: { id: otherId, rows: [] } };
+    for (const dataset of [original, unrelated]) {
+      await db.put('datasets', dataset.meta, dataset.meta.id);
+      await db.put('data', dataset.data, dataset.data.id);
+    }
+    db.close();
+    const provider = new BrowserDatasetProvider();
+    // The one-time legacy key migration must visit old records. Ordinary
+    // selections and replacements after that must use the project index.
+    (await provider.getDatasetDatabase()).close();
+    const cursor = t.mock.method(IDBObjectStore.prototype, 'openCursor', function () {
+      throw new Error('Must not scan all dataset owners');
+    });
+    const reads = t.mock.method(IDBIndex.prototype, 'getAll');
+    await provider.loadDatasets(owner);
+    assert.deepEqual(await provider.exportDatasetsForProject(owner), [original]);
+    assert.equal(reads.mock.calls[0]?.arguments[0], owner);
+    await provider.importDatasetsForProject(owner, [], { replace: true });
+    await provider.loadDatasets(owner);
+    assert.deepEqual(await provider.exportDatasetsForProject(owner), []);
+    await provider.loadDatasets(other);
+    assert.deepEqual(await provider.exportDatasetsForProject(other), [unrelated]);
+    assert.equal(cursor.mock.callCount(), 0);
+  });
   void it('missing IndexedDB fails clearly without replacing the current project and permits a later retry', async () => {
     const provider = new BrowserDatasetProvider();
     const first = 'first' as ProjectId;
@@ -38,6 +75,88 @@ void describe('BrowserDatasetProvider IndexedDB persistence', () => {
     } finally {
       Object.defineProperty(globalThis, 'indexedDB', descriptor);
     }
+  });
+
+  void it('migrates the v3 indexed catalog to owner-scoped storage without losing rows', async () => {
+    const db = await openDB('datasets', 3, {
+      upgrade(database) {
+        database.createObjectStore('datasets').createIndex('by-project', 'projectId');
+        database.createObjectStore('data');
+      },
+    });
+    const owner = 'v3-owner' as ProjectId;
+    const id = 'v3-data' as DatasetId;
+    const original = { meta: metadata(id, owner, 'V3'), data: { id, rows: [{ id: 'row', data: ['kept'] }] } };
+    await db.put('datasets', original.meta, id);
+    await db.put('data', original.data, id);
+    db.close();
+    const provider = new BrowserDatasetProvider();
+    await provider.loadDatasets(owner);
+    assert.deepEqual(await provider.exportDatasetsForProject(owner), [original]);
+    const migrated = await provider.getDatasetDatabase();
+    try {
+      assert.equal(migrated.version, 4);
+      const transaction = migrated.transaction(['datasets', 'data']);
+      const old = transaction.objectStore('datasets').get(id);
+      const scoped = transaction.objectStore('data').get([owner, id]);
+      await transactionDone(transaction);
+      assert.equal(old.result, undefined);
+      assert.deepEqual(scoped.result, original.data);
+    } finally {
+      migrated.close();
+    }
+  });
+
+  void it('isolates copied and preview datasets with shared IDs through edits, tab reads and cleanup', async () => {
+    const provider = new BrowserDatasetProvider();
+    const source = 'source' as ProjectId;
+    const copy = 'copy' as ProjectId;
+    const preview = 'published-version-preview:test' as ProjectId;
+    const id = 'shared-data' as DatasetId;
+    const original = { meta: metadata(id, source, 'Source'), data: { id, rows: [{ id: 'row', data: ['source'] }] } };
+    await provider.importDatasetsForProject(source, [original]);
+    await provider.importDatasetsForProject(copy, [original]);
+    assert.equal((await provider.getDatasetMetadata(id))!.projectId, copy);
+    await provider.putDatasetRow(id, { id: 'row', data: ['copy edit'] });
+    await provider.importDatasetsForProject(preview, [original], { replace: true });
+    assert.equal((await provider.getDatasetMetadata(id))!.projectId, preview);
+    await provider.clearDatasetData(id);
+    assert.deepEqual(await provider.exportDatasetsForProject(source), [original]);
+    assert.equal((await provider.exportDatasetsForProject(copy))[0]!.data.rows[0]!.data[0], 'copy edit');
+    await provider.deleteStoredDatasetsForProject(preview);
+    await provider.loadDatasets(copy);
+    await provider.deleteDataset(id);
+    await provider.loadDatasets(source);
+    assert.deepEqual(await provider.exportDatasetsForProject(source), [original]);
+    assert.deepEqual(await provider.exportDatasetsForProject(copy), []);
+    assert.deepEqual(await provider.exportDatasetsForProject(preview), []);
+  });
+
+  void it('a failed key migration retains the legacy database and can be retried', async (t) => {
+    const db = await openDB('datasets', 2, {
+      upgrade(database) {
+        database.createObjectStore('datasets');
+        database.createObjectStore('data');
+      },
+    });
+    const owner = 'owner' as ProjectId;
+    const id = 'data' as DatasetId;
+    const original = { meta: metadata(id, owner, 'Original'), data: { id, rows: [{ id: 'row', data: ['kept'] }] } };
+    await db.put('datasets', original.meta, id);
+    await db.put('data', original.data, id);
+    db.close();
+    const cursor = t.mock.method(IDBObjectStore.prototype, 'openCursor', () => {
+      throw new DOMException('Migration failure', 'UnknownError');
+    });
+    const provider = new BrowserDatasetProvider();
+    await assert.rejects(provider.loadDatasets(owner));
+    cursor.mock.restore();
+    const retained = await openDB('datasets', 2);
+    assert.deepEqual(await retained.get('datasets', id), original.meta);
+    assert.deepEqual(await retained.get('data', id), original.data);
+    retained.close();
+    await provider.loadDatasets(owner);
+    assert.deepEqual(await provider.exportDatasetsForProject(owner), [original]);
   });
   void it('exports the requested inactive project without changing the live owner', async () => {
     const provider = new BrowserDatasetProvider();
@@ -133,6 +252,55 @@ void describe('BrowserDatasetProvider IndexedDB persistence', () => {
     assert.deepEqual(await provider.getDatasetsForProject(active), []);
     await provider.loadDatasets(inactive);
     assert.deepEqual(await provider.getDatasetsForProject(inactive), [metadata(id, inactive, 'Inactive')]);
+  });
+
+  void it('cleanup deletes only its owner and refreshes an active cache without opening a public connection', async (t) => {
+    const provider = new BrowserDatasetProvider();
+    const active = 'active' as ProjectId;
+    const inactive = 'inactive' as ProjectId;
+    const activeId = 'active-data' as DatasetId;
+    const inactiveId = 'inactive-data' as DatasetId;
+    await provider.importDatasetsForProject(inactive, [
+      { meta: metadata(inactiveId, inactive, 'Inactive'), data: { id: inactiveId, rows: [] } },
+    ]);
+    const activeDataset = { meta: metadata(activeId, active, 'Active'), data: { id: activeId, rows: [] } };
+    await provider.importDatasetsForProject(active, [activeDataset]);
+    const publicConnection = t.mock.method(provider, 'getDatasetDatabase', async () => {
+      throw new Error('Cleanup must reuse the internal connection');
+    });
+    await provider.deleteStoredDatasetsForProject(inactive);
+    assert.equal(provider.currentProjectId, active);
+    assert.deepEqual(await provider.exportDatasetsForProject(active), [activeDataset]);
+    assert.deepEqual(await provider.exportDatasetsForProject(inactive), []);
+    await provider.deleteStoredDatasetsForProject(active);
+    assert.equal(provider.currentProjectId, active);
+    assert.deepEqual(await provider.getDatasetsForProject(active), []);
+    assert.equal(publicConnection.mock.callCount(), 0);
+    const reloaded = new BrowserDatasetProvider();
+    await reloaded.loadDatasets(active);
+    assert.deepEqual(await reloaded.getDatasetsForProject(active), []);
+  });
+
+  void it('cleanup cannot supersede a pending tab selection', async (t) => {
+    const provider = new BrowserDatasetProvider();
+    const old = 'old' as ProjectId;
+    const next = 'next' as ProjectId;
+    await provider.loadDatasets(old);
+    const importDatasets = provider.importDatasetsForProject.bind(provider);
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    t.mock.method(provider, 'importDatasetsForProject', async (...args: Parameters<typeof importDatasets>) => {
+      await delayed;
+      return importDatasets(...args);
+    });
+    const cleanup = provider.deleteStoredDatasetsForProject(old);
+    await provider.loadDatasets(next);
+    release();
+    await cleanup;
+    assert.equal(provider.currentProjectId, next);
+    assert.deepEqual(await provider.getDatasetsForProject(next), []);
   });
   void it('cancelled replacement retains the original datasets and current in-memory owner', async () => {
     const provider = new BrowserDatasetProvider();
@@ -258,13 +426,13 @@ void describe('BrowserDatasetProvider IndexedDB persistence', () => {
     await provider.loadDatasets('project' as ProjectId);
 
     const upgradedDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('datasets', 3);
+      const request = indexedDB.open('datasets', 5);
       request.onblocked = () => reject(new Error('The cached dataset connection blocked the version upgrade.'));
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
     });
 
-    assert.equal(upgradedDatabase.version, 3);
+    assert.equal(upgradedDatabase.version, 5);
     upgradedDatabase.close();
   });
 

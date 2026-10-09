@@ -298,6 +298,72 @@ Recovery checkpoint failure after a completed open is separate from open failure
 26. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
 27. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
 
+## Project loading performance
+
+Normal tree opens fetch the selected project/dataset pair once, then prepare both
+in the existing deserialize worker. The worker imports Core's narrow public
+`@valerypopoff/rivet2-core/serialization` entry, not the model/provider runtime
+barrel. This entry re-exports the same parser and migrations, with ESM/CJS package
+exports and shared browser source aliases kept aligned. `hostedProjectPayload.ts`
+parses the sidecar once, returning ordinary datasets and legacy Evaluation datasets
+together; the main thread must not reparse the same sidecar. Replay and publication-preview
+opens use this same preparation path, retaining preview ID remapping and the
+abortable deferred dataset/revision commit. Malformed ordinary or legacy Evaluation
+dataset containers fail before commit.
+
+Already-open tabs use the shared App activation owner and their live snapshots,
+not a second hosted project cache. A server read is still required when restoring
+a missing snapshot, saved baseline or legacy Evaluation session after a reload.
+Ordinary warm switches must not fetch project bytes or import saved datasets over
+local edits. Browser dataset catalog v4 uses `[projectId, datasetId]` storage keys
+and the `by-project` index. Upgrade migrates v2/v3 records atomically, one dataset
+at a time, without changing runtime dataset IDs or resetting their data. Distinct
+project owners, including copies and detached publication previews, cannot
+overwrite each other's cached datasets even when they reuse dataset IDs. Imports
+bind metadata to the receiving project's ID. Tab dataset reads, replacement and
+deletion query that index instead of scanning unrelated projects.
+Hosted cleanup reuses the same atomic replacement transaction and cached database
+connection. It never activates its target or cancels a pending tab selection;
+clearing live data is guarded by the unchanged dataset selection revision.
+
+`node-editor-lifecycle.spec.ts` exercises tree opens and repeated tab switches with
+two 350-node graphs and a roughly 2 MiB sidecar per project, asserting exactly one
+project request per initial open, preserved dirty content and separately retained
+datasets with deliberately reused IDs.
+The loaded-tab locator excludes opening placeholders: an active placeholder is
+an in-flight activation, not a usable warm snapshot. The scenario gates the second
+load to verify this distinction before exercising warm switches. Selecting an
+existing tab while another is still loading intentionally cancels the unfinished
+activation and must continue to do so.
+Its timing attachment is a synthetic local observation, not a VM latency promise.
+Selected project bytes, dataset import, normalization, graph rendering and coherent
+browser recovery remain proportional to the content actually needed; no automatic
+reload, TTL project cache or relaxed revision checks are introduced.
+
+## Reload persistence
+
+A same-browser-tab page reload restores open editor tabs, their order, active tab,
+and unsaved snapshots through App's coherent browser recovery checkpoint. The
+dashboard must not maintain a second tab list, reopen recovered tabs from server
+bytes, or save projects to the API merely because the page reloads. Browser
+recovery must be durable before navigation; pending or failed recovery retains
+App's existing unsaved-work navigation protection.
+
+The left library selection is separate, document-local UI state, stored in
+`sessionStorage` under `rivet-studio-workflow-selection-v1`. The first recovered
+editor path supplies a fallback only when no sidebar selection exists. Subsequent
+tab changes continue to select their matching tree row. Validate the restored
+selection only against a successfully loaded tree: startup loading and API errors
+must not discard it. A missing/deleted selection falls back to the active project
+when it still exists in the tree, otherwise it clears. Selection restoration does
+not issue an open command, and blocked browser storage does not break selection.
+
+`node-editor-lifecycle.spec.ts` covers a real page reload with multiple dirty tabs,
+tab order, active tab and selected row, delayed/failed tree requests, a deleted
+selection, and zero reload-triggered server saves. Missing runtime payloads may
+still require the selected project read described above; they must never replace
+recovered unsaved content.
+
 ## Save behavior
 
 Save can be initiated from either context:

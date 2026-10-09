@@ -167,7 +167,6 @@ export const SubgraphTargetControl: FC<{
   const [tree, setTree] = useState<Tree | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<ProjectId>>(new Set());
-  const [previews, setPreviews] = useState<Record<string, Project>>({});
   const [menuOpen, setMenuOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
@@ -182,7 +181,7 @@ export const SubgraphTargetControl: FC<{
   const selectedKey = node.data.targetProjectId
     ? getSubgraphProjectKey({ projectId: node.data.targetProjectId, version })
     : undefined;
-  const selectedPreview = selectedKey ? previews[selectedKey] ?? referencedProjects[selectedKey] : undefined;
+  const selectedPreview = selectedKey ? referencedProjects[selectedKey] : undefined;
 
   const isCurrent = useCallback(() => {
     const graph = store.get(graphState);
@@ -240,7 +239,6 @@ export const SubgraphTargetControl: FC<{
     void catalog.preview({ projectId, version }).then(
       (project) => {
         if (!active || !isCurrent() || requestGenerations.current.get(selectedKey) !== generation) return;
-        setPreviews((current) => ({ ...current, [selectedKey]: project }));
         setReferencedProjects((current) =>
           Object.hasOwn(current, selectedKey) ? current : { ...current, [selectedKey]: project },
         );
@@ -295,7 +293,6 @@ export const SubgraphTargetControl: FC<{
     );
   }
 
-  const availablePreviews: Record<string, Project> = { ...referencedProjects, ...previews };
   const options = tree
     ? makeTargetOptions(
         tree,
@@ -303,7 +300,7 @@ export const SubgraphTargetControl: FC<{
         version,
         expandedFolders,
         expandedProjects,
-        availablePreviews,
+        referencedProjects,
         !!search.trim(),
       )
     : [];
@@ -333,7 +330,7 @@ export const SubgraphTargetControl: FC<{
   const loadPreview = async (projectId: ProjectId, refresh: boolean) => {
     if (!isCurrent()) return;
     const key = getSubgraphProjectKey({ projectId, version });
-    if (!refresh && availablePreviews[key]) return;
+    if (!refresh && referencedProjects[key]) return;
     const generation = (requestGenerations.current.get(key) ?? 0) + 1;
     requestGenerations.current.set(key, generation);
     setLoadingProjectId(projectId);
@@ -341,7 +338,6 @@ export const SubgraphTargetControl: FC<{
     try {
       const project = await catalog.preview({ projectId, version });
       if (!isCurrent() || requestGenerations.current.get(key) !== generation) return;
-      setPreviews((current) => ({ ...current, [key]: project }));
       setReferencedProjects((current) => ({ ...current, [key]: project }));
       setFailedPreviewKey(undefined);
     } catch (caught) {
@@ -440,7 +436,7 @@ export const SubgraphTargetControl: FC<{
             void loadPreview(option.projectId, false);
           } else if (option.kind === 'graph' && option.projectId && option.graphId) {
             const key = getSubgraphProjectKey({ projectId: option.projectId, version });
-            const preview = availablePreviews[key];
+            const preview = referencedProjects[key];
             if (!preview || failedPreviewKey === key) return;
             const nextBoundary = getGraphBoundary(preview, option.graphId)!;
             const sameTarget = node.data.targetProjectId === option.projectId && node.data.graphId === option.graphId;

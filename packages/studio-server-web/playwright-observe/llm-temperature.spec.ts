@@ -8,6 +8,7 @@ import {
   type Project,
 } from '@valerypopoff/rivet2-core';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
 for (const type of ['llmChatV2', 'llmProfile'] as const) {
   test(`${type}: optional Temperature preserves precision, owner, saved bytes and reload recovery`, async ({
@@ -88,7 +89,7 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
     const frame = page.frameLocator('iframe.dashboard-editor-frame');
     const row = (name: string) => page.locator('.project-row', { hasText: `temperature-${name}` });
     const tab = (name: string) =>
-      frame.locator('.projects-container .project').filter({ hasText: `temperature-${name}` });
+      frame.locator('.projects-container .project:not(.opening)').filter({ hasText: `temperature-${name}` });
     const node = frame.locator('.node[data-nodeid="shared-node"]');
     const openEditor = () => node.locator('.edit-button').dispatchEvent('click');
     const input = frame.getByLabel('Temperature', { exact: true });
@@ -182,36 +183,19 @@ for (const type of ['llmChatV2', 'llmProfile'] as const) {
 
     // Wait for a committed unsaved checkpoint, then reload without server saving B.
     await input.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-    const editorFrame = page.frames().find((entry) => entry.url().includes('editor'))!;
     await expect
-      .poll(() =>
-        editorFrame.evaluate(async () => {
-          const key = sessionStorage.getItem('rivet-workspace-recovery-v1');
-          if (!key) return false;
-          const request = indexedDB.open('jotai-store');
-          const db = await new Promise<IDBDatabase>((resolve, reject) => {
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-          });
-          try {
-            const read = db.transaction('state').objectStore('state').get(key);
-            const raw = await new Promise<string>((resolve, reject) => {
-              read.onsuccess = () => resolve(read.result);
-              read.onerror = () => reject(read.error);
-            });
-            const checkpoint = JSON.parse(raw);
-            const active = checkpoint.groups.project.projectState;
-            const graph = checkpoint.groups.graph.graphState;
-            return (
-              active.metadata.title === 'temperature-B' &&
-              graph.metadata.id === 'shared-graph' &&
-              !Object.hasOwn(graph.nodes[0].data, 'temperature')
-            );
-          } finally {
-            db.close();
-          }
-        }),
-      )
+      .poll(async () => {
+        const raw = await readCommittedWorkspaceCheckpoint(page);
+        if (!raw) return false;
+        const checkpoint = JSON.parse(raw);
+        const active = checkpoint.groups.project.projectState;
+        const graph = checkpoint.groups.graph.graphState;
+        return (
+          active.metadata.title === 'temperature-B' &&
+          graph.metadata.id === 'shared-graph' &&
+          !Object.hasOwn(graph.nodes[0].data, 'temperature')
+        );
+      })
       .toBe(true);
     await page.reload();
     await waitForDashboardReady(page);

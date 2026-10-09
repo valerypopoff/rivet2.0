@@ -4,8 +4,9 @@ import { deserializeDatasets, loadProjectAndAttachedDataFromString } from '@vale
 
 import { SqliteWorkflowBackend } from './sqlite-workflow-backend.js';
 import type { LocalWorkflowCatalogSnapshot, LocalRecordingCatalogSnapshot } from './workflow-catalog.js';
-import { getFilesystemProjectRevisionId } from '../routes/workflows/project-stats.js';
-import type { WorkflowFolderItem } from '../../../studio-server-shared/workflow-types.js';
+import { getWorkflowProjectIndexDataFromContents } from '../routes/workflows/project-stats.js';
+import type { WorkflowFolderItem, WorkflowProjectStatus } from '../../../studio-server-shared/workflow-types.js';
+import { getAggregateWorkflowProjectStatus } from '../../../studio-server-shared/workflow-types.js';
 
 export type LocalServingCheckReport = {
   projects: number;
@@ -94,12 +95,11 @@ export async function verifySqliteWorkflowServing(options: {
       const loaded = await backend.loadHostedProject(absolute(source.relativePath));
       equal(loaded.contents, source.contents, 'draft bytes');
       equal(loaded.datasetsContents, source.datasetsContents, 'draft datasets');
-      equal(
-        loaded.revisionId,
-        getFilesystemProjectRevisionId(source.contents, source.datasetsContents),
-        'draft revision',
-      );
+      const expectedIndex = getWorkflowProjectIndexDataFromContents(source.contents, source.datasetsContents);
+      equal(loaded.revisionId, expectedIndex.revisionId, 'draft revision');
       const item = projects.find((item) => item.relativePath === source.relativePath)!;
+      equal(item.revisionId, expectedIndex.revisionId, 'tree revision');
+      equal(item.stats, expectedIndex.stats, 'tree statistics');
       equal(item.projectMetadataId, source.workflowId, 'project identity');
       equal(
         [item.name, item.fileName, item.updatedAt],
@@ -110,7 +110,7 @@ export async function verifySqliteWorkflowServing(options: {
         [
           item.settings.endpointName,
           item.settings.publishedEndpointName,
-          item.settings.publicationStatus,
+          item.settings.status,
           item.settings.lastPublishedAt,
         ],
         [source.endpointName, source.publishedEndpointName, source.endpointStatus, source.lastPublishedAt],
@@ -122,13 +122,29 @@ export async function verifySqliteWorkflowServing(options: {
         slug: string;
         allowedEmails: string[];
         publishedAt: string;
-      }) => [app.uiGraphId, app.uiGraphName, app.slug, app.allowedEmails, app.publishedAt];
+        status?: WorkflowProjectStatus;
+      }) => [app.uiGraphId, app.uiGraphName, app.slug, app.allowedEmails, app.publishedAt, app.status];
+      const sourceApps = source.publishedWebApps.map((app) => ({
+        ...app,
+        status:
+          app.contents === source.contents && app.datasetsContents === source.datasetsContents
+            ? ('published' as const)
+            : ('unpublished_changes' as const),
+      }));
       equal(
         [...(item.settings.publishedWebApps ?? [])]
           .sort((a, b) => a.uiGraphId.localeCompare(b.uiGraphId))
           .map(appMetadata),
-        [...source.publishedWebApps].sort((a, b) => a.uiGraphId.localeCompare(b.uiGraphId)).map(appMetadata),
+        sourceApps.sort((a, b) => a.uiGraphId.localeCompare(b.uiGraphId)).map(appMetadata),
         'published web-app set',
+      );
+      equal(
+        item.settings.publicationStatus,
+        getAggregateWorkflowProjectStatus(
+          source.endpointStatus,
+          sourceApps.map((app) => app.status),
+        ),
+        'aggregate publication status',
       );
       equal(item.settings.endpointAccess, source.endpointAccess, 'endpoint access');
       equal(item.settings.publicationVersion, source.publicationVersion, 'publication concurrency');
@@ -149,7 +165,7 @@ export async function verifySqliteWorkflowServing(options: {
           'execution datasets',
         );
       };
-      if (source.endpointName) {
+      if (source.endpointName && source.publishedContents !== null) {
         await checkExecution(
           await backend.loadLatestExecutionProject(source.endpointName),
           source.contents,
@@ -157,7 +173,7 @@ export async function verifySqliteWorkflowServing(options: {
         );
         report.endpoints++;
       }
-      if (source.publishedContents !== null) {
+      if (source.publishedEndpointName && source.publishedContents !== null) {
         await checkExecution(
           await backend.loadPublishedExecutionProject(source.publishedEndpointName),
           source.publishedContents,

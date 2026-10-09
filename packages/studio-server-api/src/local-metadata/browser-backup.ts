@@ -71,6 +71,21 @@ export async function saveBrowserBackup(control: string, state: BrowserBackup): 
   await syncDirectory(control);
 }
 
+/** Remove obsolete certification from admission without parsing it. A corrupt
+ * optional status must not block a separately verified project-ID repair.
+ * Preserve both the status bytes and all archives for operator recovery. */
+export async function invalidateBrowserBackup(control: string): Promise<void> {
+  await realDirectory(control);
+  try {
+    const stat = await fs.lstat(stateFile(control));
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid backup status entry.');
+    await fs.rename(stateFile(control), path.join(control, `browser-backup-invalidated-${randomUUID()}.json`));
+    await syncDirectory(control);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
 /** All bytes, modes, directories and confined links, not just migration-owned
  * metadata. Streams each file so recordings do not occupy aggregate RAM. */
 async function scanRoots(roots: LocalMetadataSourceRoots) {
