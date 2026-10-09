@@ -14,8 +14,14 @@ export class ProjectBundleError extends Error {
   }
 }
 
-/** Portable, immutable project snapshots. Paths are relative to the manifest. */
-export type ProjectBundleFile = { path: string; bytes: number; sha256: string };
+/** Portable, editable project files. Paths are relative to the manifest. */
+export type ProjectBundleFile = {
+  path: string;
+  /** Legacy export metadata; not enforced when loading. */
+  bytes?: number;
+  /** Legacy export metadata; not enforced when loading. */
+  sha256?: string;
+};
 export type ProjectBundleArtifact = {
   id: string;
   projectId: string;
@@ -28,7 +34,9 @@ export type ProjectBundleArtifact = {
 export type ProjectBundleManifest = {
   format: 'rivet-project-bundle';
   schemaVersion: 1;
-  requiredLoaderVersion: 1;
+  requiredLoaderVersion: 1 | 2 | 3;
+  /** Explicit export-wide version selection; one artifact per project. */
+  versionPolicy?: 'latest' | 'published';
   exportingRuntimeVersion: string;
   rootArtifact: string;
   artifacts: ProjectBundleArtifact[];
@@ -39,6 +47,7 @@ export type ProjectBundleManifest = {
 
 export const PROJECT_BUNDLE_MANIFEST = 'rivet-bundle.json';
 export const PROJECT_BUNDLE_MAX_ARTIFACTS = 256;
+export const PROJECT_BUNDLE_MAX_MANIFEST_BYTES = 1024 * 1024;
 
 export function projectBundleTargetKey(projectId: string, version: string): string {
   return JSON.stringify([projectId, version]);
@@ -184,8 +193,8 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
     v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : fail('expected object');
   const string = (v: unknown): string =>
     typeof v === 'string' && v.length > 0 && v.length <= 4096 ? v : fail('expected nonempty string');
-  const array = (v: unknown): unknown[] =>
-    Array.isArray(v) && v.length <= PROJECT_BUNDLE_MAX_ARTIFACTS ? v : fail('invalid or oversized list');
+  const array = (v: unknown, limit = PROJECT_BUNDLE_MAX_ARTIFACTS): unknown[] =>
+    Array.isArray(v) && v.length <= limit ? v : fail('invalid or oversized list');
   const version = (v: unknown): 'latest' | 'published' =>
     v === 'latest' || v === 'published' ? v : fail('unknown project version');
   const paths = new Set<string>();
@@ -202,14 +211,20 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
     )
       fail('unsafe or duplicate artifact path');
     paths.add(path.toLowerCase());
-    if (!Number.isSafeInteger(obj.bytes) || (obj.bytes as number) < 0 || (obj.bytes as number) > 64 * 1024 * 1024)
-      fail('invalid artifact size (maximum 64 MiB per file)');
-    if (typeof obj.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(obj.sha256)) fail('invalid checksum');
-    return { path, bytes: obj.bytes as number, sha256: obj.sha256 as string };
+    // Old bundles carry export-time sizes/hashes. Ignore them: edited files are
+    // supported, and the loader enforces resource limits against actual bytes.
+    return { path };
   };
   const obj = object(value);
-  if (obj.format !== 'rivet-project-bundle' || obj.schemaVersion !== 1 || obj.requiredLoaderVersion !== 1)
+  if (
+    obj.format !== 'rivet-project-bundle' ||
+    obj.schemaVersion !== 1 ||
+    (obj.requiredLoaderVersion !== 1 && obj.requiredLoaderVersion !== 2 && obj.requiredLoaderVersion !== 3)
+  )
     fail('unsupported format or loader version; update @valerypopoff/rivet2-node');
+  const versionPolicy = obj.versionPolicy === undefined ? undefined : version(obj.versionPolicy);
+  if (versionPolicy && obj.requiredLoaderVersion !== 3) fail('version selection requires loader version 3');
+  if (obj.requiredLoaderVersion === 3 && !versionPolicy) fail('loader version 3 requires a version selection');
   const artifacts = array(obj.artifacts).map((v): ProjectBundleArtifact => {
     const a = object(v);
     return {
@@ -226,18 +241,24 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
   if (!artifacts.length || byId.size !== artifacts.length) fail('empty or duplicate artifacts');
   if (new Set(artifacts.map((a) => projectBundleTargetKey(a.projectId, a.version))).size !== artifacts.length)
     fail('duplicate project/version artifacts');
+  if (versionPolicy && new Set(artifacts.map((a) => a.projectId)).size !== artifacts.length)
+    fail('version-selected bundles must contain one artifact per project');
+  if (versionPolicy === 'latest' && artifacts.some((a) => a.version !== 'latest'))
+    fail('latest version policy contains a published artifact');
   const rootArtifact = string(obj.rootArtifact);
   if (!byId.has(rootArtifact)) fail('missing root artifact');
   const targetKeys = new Set<string>(),
     referenceIds = new Set<string>();
-  const targets = array(obj.targets).map((v) => {
+  // A version-selected artifact has both latest and published bindings. The
+  // project limit must not accidentally halve when those aliases are emitted.
+  const targets = array(obj.targets, PROJECT_BUNDLE_MAX_ARTIFACTS * 2).map((v) => {
     const t = object(v),
       projectId = string(t.projectId),
       selectedVersion = version(t.version),
       artifact = string(t.artifact);
     const key = projectBundleTargetKey(projectId, selectedVersion),
       a = byId.get(artifact);
-    if (targetKeys.has(key) || !a || a.projectId !== projectId || a.version !== selectedVersion)
+    if (targetKeys.has(key) || !a || a.projectId !== projectId || (!versionPolicy && a.version !== selectedVersion))
       fail('invalid or duplicate target binding');
     targetKeys.add(key);
     return { projectId, version: selectedVersion, artifact };
@@ -268,7 +289,8 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
   return {
     format: 'rivet-project-bundle',
     schemaVersion: 1,
-    requiredLoaderVersion: 1,
+    requiredLoaderVersion: obj.requiredLoaderVersion as 1 | 2 | 3,
+    ...(versionPolicy ? { versionPolicy } : {}),
     exportingRuntimeVersion: string(obj.exportingRuntimeVersion),
     rootArtifact,
     artifacts,

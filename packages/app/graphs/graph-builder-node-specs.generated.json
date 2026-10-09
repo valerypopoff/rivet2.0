@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:3af82c89b65fcd16",
+  "catalogFingerprint": "fnv1a64:d203f2a334b6ab97",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -231,6 +231,21 @@
       "nodeType": "classifierEvaluate",
       "displayName": "Classifier Evaluate",
       "description": "Evaluates one shared state and optional images against a batch of independent typed questions in one provider request, apart from retries. Every question sees the same state and images. It is not an LLM Chat node and does not stream tokens.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:classifierProfile",
+      "nodeType": "classifierProfile",
+      "displayName": "Classifier Profile",
+      "description": "Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI and OpenAI Decisions. Connect Profile directly to Evaluate's Classifier Profiles input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to From profile .",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1006,6 +1021,10 @@
             "llm-config[]",
             "fn<llm-config>",
             "fn<llm-config[]>",
+            "classifier-config",
+            "classifier-config[]",
+            "fn<classifier-config>",
+            "fn<classifier-config[]>",
             "document",
             "document[]",
             "fn<document>",
@@ -1134,6 +1153,10 @@
             "llm-config[]",
             "fn<llm-config>",
             "fn<llm-config[]>",
+            "classifier-config",
+            "classifier-config[]",
+            "fn<classifier-config>",
+            "fn<classifier-config[]>",
             "document",
             "document[]",
             "fn<document>",

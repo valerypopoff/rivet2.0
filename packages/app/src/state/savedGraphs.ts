@@ -167,6 +167,8 @@ export type OpenedProjectInfo = {
   fsPath?: string | null;
   openedGraph?: GraphId;
   executorMode?: ProjectExecutorMode;
+  /** Local bundle membership; never part of the saved project. */
+  bundleManifestPath?: string;
 };
 
 export type OpenedProjectSnapshot = {

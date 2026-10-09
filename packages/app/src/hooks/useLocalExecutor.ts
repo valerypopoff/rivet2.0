@@ -1,5 +1,6 @@
 import {
   GraphProcessor,
+  InMemoryDatasetProvider,
   type NodeId,
   type StringArrayDataValue,
   type DataValue,
@@ -22,6 +23,7 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
+import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { useEffect, useRef } from 'react';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
@@ -58,6 +60,7 @@ import {
 import {
   createEmptyProjectExecutionSnapshot,
   frozenNodeOutputsState,
+  graphRunningState,
   lastRunDataByNodeState,
   projectExecutionSnapshotsState,
 } from '../state/dataFlow';
@@ -65,6 +68,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import {
   useAudioProvider,
+  useIOProvider,
   useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
@@ -158,6 +162,7 @@ function yieldToMacrotask(): Promise<void> {
 }
 
 export function useLocalExecutor() {
+  const ioProvider = useIOProvider();
   const audioProvider = useAudioProvider();
   const dataRefs = useDataRefs();
   const datasetProvider = useDatasetProvider();
@@ -172,7 +177,9 @@ export function useLocalExecutor() {
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphState);
   const store = useStore();
+  const routeBundleExecution = useBundleExecutionRouting();
   const currentProcessorsByProjectId = useRef(new Map<ProjectId, GraphProcessor>());
+  const activeRunControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
   const evaluationAbortControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
   const saveGraph = useSaveCurrentGraph();
   const currentExecution = useCurrentExecution();
@@ -199,6 +206,9 @@ export function useLocalExecutor() {
 
   useEffect(() => {
     const openProjectIds = new Set(Object.keys(openedProjects));
+    for (const [projectId, controller] of activeRunControllersByProjectId.current) {
+      if (!openProjectIds.has(projectId)) controller.abort(new DOMException('Project closed.', 'AbortError'));
+    }
 
     for (const [projectId, processor] of currentProcessorsByProjectId.current) {
       if (openProjectIds.has(projectId)) {
@@ -243,6 +253,7 @@ export function useLocalExecutor() {
     data: ProcessEventMessageMap[K],
     dispatchActive: () => void,
   ) {
+    routeBundleExecution(runProjectId, message, data);
     const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
     const openedProjectsState = store.get(projectsState).openedProjects;
 
@@ -450,6 +461,7 @@ export function useLocalExecutor() {
     options.abortSignal?.throwIfAborted();
 
     if (
+      activeRunControllersByProjectId.current.has(runProjectId) ||
       currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
       (recordingToReplay && recordingPlaybackStartingRef.current)
     ) {
@@ -476,14 +488,31 @@ export function useLocalExecutor() {
     let finalizeCapturedRecording: (() => Promise<void>) | undefined;
     let localRecordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
     let localRecordingErrorMessage: string | undefined;
+    let processorEmittedError = false;
+    const preparation = new AbortController();
+    activeRunControllersByProjectId.current.set(runProjectId, preparation);
+    // Discovery is async and precedes GraphProcessor's start event. Reserve the
+    // run and allow Abort while reading, rather than starting a second run.
+    store.set(graphRunningState, true);
     const handleAbort = () => {
+      preparation.abort(options.abortSignal?.reason);
       void processor?.abort();
     };
+    options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
 
     try {
+      // Capture before any awaited preparation can select another tab's data.
+      const entryDatasets =
+        ioProvider.readProjectBundle && loadedProject.path
+          ? datasetProvider.exportDatasetsForProject(runProjectId)
+          : Promise.resolve([]);
+      // Observe a rejection even if preparation fails before consumption;
+      // awaiting the original promise below still reports that failure.
+      void entryDatasets.catch(() => {});
       if (recordingToReplay) {
         await yieldToMacrotask();
         options.abortSignal?.throwIfAborted();
+        preparation.signal.throwIfAborted();
 
         // The user can close this tab during the repaint yield. Its recording
         // is released synchronously on close, so do not construct a hidden
@@ -550,7 +579,6 @@ export function useLocalExecutor() {
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }
-      options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
       options.abortSignal?.throwIfAborted();
       processor.executor = 'browser';
       processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
@@ -585,6 +613,7 @@ export function useLocalExecutor() {
       }
 
       processor.on('error', (event) => {
+        processorEmittedError = true;
         localRecordingStatus = 'failed';
         localRecordingErrorMessage = event.error instanceof Error ? event.error.message : event.error;
       });
@@ -641,30 +670,42 @@ export function useLocalExecutor() {
       let results: GraphOutputs;
 
       if (recordingToReplay) {
+        preparation.signal.throwIfAborted();
         results = await processor.replayRecording(recordingToReplay.recorder);
       } else {
+        const bundle = loadedProject.path ? await ioProvider.readProjectBundle?.(loadedProject.path) : undefined;
+        options.abortSignal?.throwIfAborted();
+        preparation.signal.throwIfAborted();
+        const bundleRuntime = bundle?.createRuntime(
+          tempProject,
+          new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
+        );
+        preparation.signal.throwIfAborted();
         processor.setFrozenNodeOutputResolver(
           createFrozenNodeOutputResolver(cloneFrozenNodeOutputsForExecutor(frozenNodeOutputs)),
         );
         const contextValues = getProjectContextValues(projectContext);
 
+        const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
+          savedSettings,
+          projectNodeRegistry.getPlugins(),
+          {
+            environmentProvider,
+            extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(tempProject),
+          },
+        );
+        preparation.signal.throwIfAborted();
         results = await processor.processGraph(
           {
-            settings: await fillMissingSettingsFromEnvironmentVariables(
-              savedSettings,
-              projectNodeRegistry.getPlugins(),
-              {
-                environmentProvider,
-                extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(tempProject),
-              },
-            ),
+            settings: runtimeSettings,
             nativeApi: new TauriNativeApi(),
-            datasetProvider,
+            datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
             audioProvider,
             tokenizer: new GptTokenizerTokenizer(),
             projectPath: loadedProject.path ?? undefined,
-            projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
-            subgraphProjectLoader,
+            projectReferenceLoader:
+              bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
+            subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
             onSubgraphProjectRun:
               shouldRecordExecution && localRecordingProvider ? persistSubgraphProjectRun : undefined,
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
@@ -683,6 +724,14 @@ export function useLocalExecutor() {
       if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
+      if (preparation.signal.aborted) {
+        localRecordingStatus = 'failed';
+        localRecordingErrorMessage = 'Run cancelled.';
+        if (store.get(projectState).metadata.id === runProjectId)
+          currentExecution.clearNodeRunDataPreservationForNextStart();
+        if (options.throwOnError) throw preparation.signal.reason;
+        return undefined;
+      }
       localRecordingStatus = 'failed';
       localRecordingErrorMessage = e instanceof Error ? e.message : String(e);
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
@@ -707,13 +756,18 @@ export function useLocalExecutor() {
       if (options.throwOnError) {
         throw e;
       }
+      // Processor errors are presented by its root error event. Preparation
+      // failures never emit that event, so present them at this owning boundary.
+      if (!processorEmittedError && runProjectIsActive) handleError(e, 'Failed to start local graph run');
       return undefined;
     } finally {
       const cleanupProcessorRun = () => {
         responseTraceCollector?.dispose();
         options.abortSignal?.removeEventListener('abort', handleAbort);
 
-        if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
+        const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === preparation;
+        if (ownsRun) activeRunControllersByProjectId.current.delete(runProjectId);
+        if (ownsRun && store.get(projectState).metadata.id === runProjectId) {
           dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
         }
 
@@ -799,6 +853,11 @@ export function useLocalExecutor() {
 
       try {
         ensureActiveEvaluationProject();
+        const entryDatasets =
+          ioProvider.readProjectBundle && loadedProject.path
+            ? datasetProvider.exportDatasetsForProject(runProjectId)
+            : Promise.resolve([]);
+        void entryDatasets.catch(() => {});
         const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
         runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         logRuntimeInfo(`Running local ${runKind}`, { suiteId, suiteName: suite.name });
@@ -879,22 +938,35 @@ export function useLocalExecutor() {
               }
             };
             try {
+              const bundle = loadedProject.path ? await ioProvider.readProjectBundle?.(loadedProject.path) : undefined;
+              signal?.throwIfAborted();
+              const bundleRuntime = bundle?.createRuntime(
+                evaluationProject,
+                new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
+              );
+              signal?.throwIfAborted();
+              const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
+                savedSettings,
+                projectNodeRegistry.getPlugins(),
+                {
+                  environmentProvider,
+                  extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
+                },
+              );
+              signal?.throwIfAborted();
               const outputs = await processor.processGraph(
                 {
-                  settings: await fillMissingSettingsFromEnvironmentVariables(
-                    savedSettings,
-                    projectNodeRegistry.getPlugins(),
-                    {
-                      environmentProvider,
-                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
-                    },
-                  ),
+                  settings: runtimeSettings,
                   nativeApi: new TauriNativeApi(),
-                  datasetProvider,
+                  datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
                   audioProvider,
                   tokenizer: new GptTokenizerTokenizer(),
                   llmProfileHealthStore,
                   evaluation: metadata,
+                  projectPath: loadedProject.path ?? undefined,
+                  projectReferenceLoader:
+                    bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
+                  subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
                 },
                 evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
                 getProjectContextValues(projectContext),
@@ -955,6 +1027,7 @@ export function useLocalExecutor() {
       evaluationAbortController.abort(new DOMException('Evaluation canceled.', 'AbortError'));
       return;
     }
+    activeRunControllersByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
     currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
   }
 

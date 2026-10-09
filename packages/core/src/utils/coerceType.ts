@@ -37,7 +37,8 @@ function isValidatedObjectValueType(type: DataType): boolean {
     type === 'knowledge-source' ||
     type === 'knowledge-document' ||
     type === 'knowledge-evidence' ||
-    type === 'llm-config'
+    type === 'llm-config' ||
+    type === 'classifier-config'
   );
 }
 
@@ -96,6 +97,10 @@ const scalarCoercionRules: ScalarCoercionRuleRegistry = {
   ),
   'llm-config': sameTypeOrObjectScalarRule('llm-config', (value) =>
     coerceValidatedObjectValue(value, normalizeLLMProfileValue),
+  ),
+  // Provider-specific validation belongs to Evaluate's bounded snapshot boundary.
+  'classifier-config': sameTypeOrObjectScalarRule('classifier-config', (value) =>
+    value?.value != null && typeof value.value === 'object' && !Array.isArray(value.value) ? value.value : undefined,
   ),
   document: generalScalarRule('document'),
 };

@@ -66,13 +66,15 @@ function closedPermitRetentionMs(policy: RivetLLMProfileCircuitBreakerPolicy): n
 }
 
 function isRecordingAvailability(value: unknown): value is LLMProfileHealthRecordingAvailability {
-  return value === 'available'
-    || value === 'pending'
-    || value === 'disabled'
-    || value === 'queue-dropped'
-    || value === 'persistence-failed'
-    || value === 'deleted'
-    || value === 'not-recorded';
+  return (
+    value === 'available' ||
+    value === 'pending' ||
+    value === 'disabled' ||
+    value === 'queue-dropped' ||
+    value === 'persistence-failed' ||
+    value === 'deleted' ||
+    value === 'not-recorded'
+  );
 }
 
 function normalizeFailureEvidence(value: unknown): StoredLLMProfileFailureEvidence[] {
@@ -82,21 +84,21 @@ function normalizeFailureEvidence(value: unknown): StoredLLMProfileFailureEviden
     const item = candidate as Partial<StoredLLMProfileFailureEvidence>;
     const occurredAt = Number(item.occurredAt);
     if (typeof item.id !== 'string' || item.id === '' || !Number.isFinite(occurredAt)) return [];
-    return [{
-      id: item.id,
-      occurredAt,
-      ...(typeof item.correlationId === 'string' && item.correlationId !== ''
-        ? { correlationId: item.correlationId }
-        : {}),
-      ...(typeof item.recordingId === 'string' && item.recordingId !== ''
-        ? { recordingId: item.recordingId }
-        : {}),
-      recordingAvailability: isRecordingAvailability(item.recordingAvailability)
-        ? item.recordingAvailability
-        : typeof item.correlationId === 'string' && item.correlationId !== ''
-          ? 'pending'
-          : 'not-recorded',
-    }];
+    return [
+      {
+        id: item.id,
+        occurredAt,
+        ...(typeof item.correlationId === 'string' && item.correlationId !== ''
+          ? { correlationId: item.correlationId }
+          : {}),
+        ...(typeof item.recordingId === 'string' && item.recordingId !== '' ? { recordingId: item.recordingId } : {}),
+        recordingAvailability: isRecordingAvailability(item.recordingAvailability)
+          ? item.recordingAvailability
+          : typeof item.correlationId === 'string' && item.correlationId !== ''
+            ? 'pending'
+            : 'not-recorded',
+      },
+    ];
   });
 }
 
@@ -120,9 +122,7 @@ function normalizeActiveSuspension(
 }
 
 /** Normalizes legacy JSON rows without rewriting history until they transition. */
-export function normalizeStoredLLMProfileHealthEntry(
-  entry: StoredLLMProfileHealthEntry,
-): StoredLLMProfileHealthEntry {
+export function normalizeStoredLLMProfileHealthEntry(entry: StoredLLMProfileHealthEntry): StoredLLMProfileHealthEntry {
   const { activeSuspension: storedActiveSuspension, ...persisted } = entry;
   const failureEvidence = normalizeFailureEvidence(entry.failureEvidence);
   const activeSuspension = normalizeActiveSuspension(storedActiveSuspension, failureEvidence);
@@ -141,11 +141,12 @@ function pruneFailures(
   now: number,
 ): void {
   const windowStart = now - policy.failureWindowMs;
-  entry.failureTimestamps = entry.failureTimestamps
-    .filter((timestamp) => Number.isFinite(timestamp) && timestamp >= windowStart);
+  entry.failureTimestamps = entry.failureTimestamps.filter(
+    (timestamp) => Number.isFinite(timestamp) && timestamp >= windowStart,
+  );
   const activeEvidenceIds = new Set(entry.activeSuspension?.contributorEventIds ?? []);
-  entry.failureEvidence = entry.failureEvidence.filter((evidence) =>
-    activeEvidenceIds.has(evidence.id) || evidence.occurredAt >= windowStart,
+  entry.failureEvidence = entry.failureEvidence.filter(
+    (evidence) => activeEvidenceIds.has(evidence.id) || evidence.occurredAt >= windowStart,
   );
 }
 
@@ -155,9 +156,7 @@ function pruneClosedPermits(
   now: number,
 ): void {
   entry.closedPermits = Object.fromEntries(
-    Object.entries(entry.closedPermits ?? {}).filter(
-      ([, expiresAt]) => Number.isFinite(expiresAt) && expiresAt > now,
-    ),
+    Object.entries(entry.closedPermits ?? {}).filter(([, expiresAt]) => Number.isFinite(expiresAt) && expiresAt > now),
   );
 }
 
@@ -165,14 +164,10 @@ function requireMatchingProjectScope(
   existing: StoredLLMProfileHealthEntry,
   identity: RivetLLMProfileHealthIdentity,
 ): void {
-  const storedProjectId = existing.identity.projectId == null
-    ? undefined
-    : String(existing.identity.projectId);
+  const storedProjectId = existing.identity.projectId == null ? undefined : String(existing.identity.projectId);
   const requestProjectId = identity.projectId == null ? undefined : String(identity.projectId);
-  if (storedProjectId !== requestProjectId) {
-    throw new Error(
-      `LLM profile reliability key ${identity.key} belongs to a different project scope.`,
-    );
+  if (storedProjectId !== requestProjectId || (existing.identity.family ?? 'llm') !== (identity.family ?? 'llm')) {
+    throw new Error(`LLM profile reliability key ${identity.key} belongs to a different project scope.`);
   }
 }
 
@@ -223,13 +218,16 @@ export function getLLMProfileHealthContributorRuns(
   const suspension = entry.activeSuspension;
   if (suspension == null) return [];
   const contributors = new Set(suspension.contributorEventIds);
-  const groups = new Map<string, {
-    occurredAt: number;
-    contributionCount: number;
-    triggeredSuspension: boolean;
-    availability: LLMProfileHealthRecordingAvailability;
-    recordingId?: string;
-  }>();
+  const groups = new Map<
+    string,
+    {
+      occurredAt: number;
+      contributionCount: number;
+      triggeredSuspension: boolean;
+      availability: LLMProfileHealthRecordingAvailability;
+      recordingId?: string;
+    }
+  >();
   for (const evidence of entry.failureEvidence) {
     if (!contributors.has(evidence.id)) continue;
     const groupKey = evidence.recordingId == null ? evidence.id : `recording:${evidence.recordingId}`;
@@ -256,9 +254,7 @@ export function getLLMProfileHealthContributorRuns(
 }
 
 /** Recording IDs held only while their suspension episode remains active. */
-export function getLLMProfileHealthHeldRecordingIds(
-  entry: StoredLLMProfileHealthEntry,
-): readonly string[] {
+export function getLLMProfileHealthHeldRecordingIds(entry: StoredLLMProfileHealthEntry): readonly string[] {
   return getLLMProfileHealthContributorRuns(entry)
     .filter((run) => run.availability === 'available' && run.recordingId != null)
     .map((run) => run.recordingId!);
@@ -278,11 +274,11 @@ function copyEntry(
     ...(normalized.activeSuspension == null
       ? {}
       : {
-        activeSuspension: {
-          ...normalized.activeSuspension,
-          contributorEventIds: [...normalized.activeSuspension.contributorEventIds],
-        },
-      }),
+          activeSuspension: {
+            ...normalized.activeSuspension,
+            contributorEventIds: [...normalized.activeSuspension.contributorEventIds],
+          },
+        }),
     closedPermits: { ...(normalized.closedPermits ?? {}) },
   };
 }
@@ -367,23 +363,26 @@ export function beginLLMProfileHealthAttempt(
 ): { entry: StoredLLMProfileHealthEntry; result: RivetLLMProfileHealthBeginResult } {
   const { identity, policy } = request;
   if (existing != null) requireMatchingProjectScope(existing, identity);
-  const entry: StoredLLMProfileHealthEntry = existing == null
-    ? {
-      identity,
-      failureTimestamps: [],
-      failureEvidence: [],
-      closedPermits: {},
-      updatedAt: now,
-      policy,
-    }
-    : copyEntry(existing, identity, policy);
+  const entry: StoredLLMProfileHealthEntry =
+    existing == null
+      ? {
+          identity,
+          failureTimestamps: [],
+          failureEvidence: [],
+          closedPermits: {},
+          updatedAt: now,
+          policy,
+        }
+      : copyEntry(existing, identity, policy);
   pruneEntry(entry, policy, now);
 
   if (entry.openUntil != null && entry.openUntil > now) {
     return {
       entry,
       result: {
-        disposition: 'deny', state: 'open', retryAt: entry.openUntil,
+        disposition: 'deny',
+        state: 'open',
+        retryAt: entry.openUntil,
         snapshot: createLLMProfileHealthSnapshot(entry, now),
       },
     };
@@ -394,7 +393,9 @@ export function beginLLMProfileHealthAttempt(
       return {
         entry,
         result: {
-          disposition: 'deny', state: 'half-open', retryAt: entry.halfOpenLeaseUntil,
+          disposition: 'deny',
+          state: 'half-open',
+          retryAt: entry.halfOpenLeaseUntil,
           snapshot: createLLMProfileHealthSnapshot(entry, now),
         },
       };
@@ -407,7 +408,9 @@ export function beginLLMProfileHealthAttempt(
     return {
       entry,
       result: {
-        disposition: 'allow', state: 'half-open', permitId,
+        disposition: 'allow',
+        state: 'half-open',
+        permitId,
         snapshot: createLLMProfileHealthSnapshot(entry, now),
       },
     };
@@ -419,7 +422,9 @@ export function beginLLMProfileHealthAttempt(
   return {
     entry,
     result: {
-      disposition: 'allow', state: 'closed', permitId,
+      disposition: 'allow',
+      state: 'closed',
+      permitId,
       snapshot: createLLMProfileHealthSnapshot(entry, now),
     },
   };
@@ -493,10 +498,7 @@ export function renewLLMProfileHealthPermit(
   const entry = copyEntry(existing, request.identity, existing.policy);
   pruneEntry(entry, entry.policy, now);
   if (entry.halfOpenPermitId === request.permitId) {
-    entry.halfOpenLeaseUntil = Math.max(
-      entry.halfOpenLeaseUntil ?? 0,
-      now + request.leaseDurationMs,
-    );
+    entry.halfOpenLeaseUntil = Math.max(entry.halfOpenLeaseUntil ?? 0, now + request.leaseDurationMs);
     entry.updatedAt = now;
   } else if (Object.prototype.hasOwnProperty.call(entry.closedPermits, request.permitId)) {
     entry.closedPermits[request.permitId] = Math.max(

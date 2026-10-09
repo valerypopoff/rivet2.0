@@ -85,6 +85,12 @@ jobs:
         run: yarn tauri build --verbose --ci --bundles "msi,nsis" --config ../../.github/desktop-prebuilt.conf.json
         env:
           NODE_OPTIONS: --max-old-space-size=6000
+      - name: Verify packaged executor project bundles
+        run: |
+          yarn workspace @valerypopoff/rivet2-core run build
+          yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+        env:
+          RIVET_TEST_PACKAGED_EXECUTOR: ${{ github.workspace }}/packages/app-executor/dist/app-executor-x86_64-pc-windows-msvc.exe
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v7
         with:
@@ -150,6 +156,12 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      - name: Verify packaged executor project bundles
+        run: |
+          yarn workspace @valerypopoff/rivet2-core run build
+          yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+        env:
+          RIVET_TEST_PACKAGED_EXECUTOR: ${{ github.workspace }}/packages/app-executor/dist/app-executor-${{ matrix.target }}
       - name: Notarize macOS DMG
         run: bash .github/scripts/notarize-macos-dmg.sh packages/app/src-tauri/target/${{ matrix.target }}/release/bundle
         env:

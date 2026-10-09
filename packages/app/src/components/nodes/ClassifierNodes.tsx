@@ -3,6 +3,7 @@ import {
   getClassifierQuestionBodySections,
   type ClassifierEvaluateNode,
   type ClassifierQuestionNode,
+  type ClassifierProfileNode,
 } from '@valerypopoff/rivet2-core';
 import type { FC } from 'react';
 import type { NodeComponentDescriptor } from '../../hooks/useNodeTypes.js';
@@ -22,4 +23,17 @@ export const classifierQuestionNodeDescriptor: NodeComponentDescriptor<'classifi
 
 export const classifierEvaluateNodeDescriptor: NodeComponentDescriptor<'classifierEvaluate'> = {
   Body: ClassifierEvaluateNodeBody,
+};
+export const classifierProfileNodeDescriptor: NodeComponentDescriptor<'classifierProfile'> = {
+  Body: ({ node }: { node: ClassifierProfileNode }) => (
+    <LLMNodeBody
+      sections={[
+        ...getClassifierEvaluateBodySections({ ...node.data, errorOnNon200: false }),
+        {
+          id: 'suspension',
+          fields: [{ label: 'Automatic suspension', value: node.data.enableCircuitBreaker ? 'Enabled' : 'Disabled' }],
+        },
+      ]}
+    />
+  ),
 };

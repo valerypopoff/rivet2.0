@@ -329,6 +329,11 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
         </div>
       );
     },
+    'classifier-config': ({ value }) => (
+      <div>
+        Classifier profile: <em>{value.value.configuration.provider}</em> / <em>{value.value.configuration.model}</em>
+      </div>
+    ),
     document: ({ value }) => {
       const documentValue = value as DocumentDataValue;
       const documentData = getMediaData(documentValue.value);

@@ -22,6 +22,7 @@ import type {
 import type { GraphProgress } from './GraphProgress.js';
 import type { StreamingOutputWatchHistorySummary } from './StreamingOutputWatchHistory.js';
 import type { RivetWebAppStorage } from './UiGraphWebAppStorage.js';
+import type { CombinedDataset } from '../utils/index.js';
 
 export type GraphInputs = Record<string, DataValue>;
 export type GraphOutputs = Record<string, DataValue>;
@@ -36,7 +37,8 @@ export type CodeConsoleMessage = {
   level: CodeConsoleLevel;
 };
 
-type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming & EventOccurrenceTiming;
+type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming &
+  EventOccurrenceTiming;
 
 export type SerializedProcessEventMap = {
   start: WithExecution<{
@@ -203,6 +205,8 @@ export type OutgoingMessageMap = {
     contextValues: Record<string, DataValue>;
     inputs?: GraphInputs;
     projectPath?: string | null;
+    /** Local desktop executor only. Hosted executors reject client filesystem bundle paths. */
+    projectBundle?: { manifestPath: string; artifactId: string; entryDatasets: CombinedDataset[] };
     useEditorCache?: boolean;
     captureNodeTimings?: boolean;
     /** Hosted editor setting; only the authenticated Node executor uses it. */

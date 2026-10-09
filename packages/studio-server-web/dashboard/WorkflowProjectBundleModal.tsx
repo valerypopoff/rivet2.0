@@ -42,6 +42,8 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
       return;
     latestJob.current = status;
     setJob(status);
+    if (status?.versionPolicy === 'latest' || status?.versionPolicy === 'published')
+      setVersion(status.versionPolicy === 'latest' ? 'live' : 'published');
   };
   const [version, setVersion] = useState<WorkflowProjectDownloadVersion>(
     project.settings.status === 'unpublished' ? 'live' : 'published',
@@ -115,12 +117,8 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             relativePath: project.relativePath,
-            version:
-              project.settings.status === 'unpublished_changes'
-                ? version
-                : project.settings.status === 'unpublished'
-                  ? 'live'
-                  : 'published',
+            version,
+            versionPolicy: version === 'live' ? 'latest' : 'published',
             requestId: id,
           }),
         }),
@@ -189,10 +187,10 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                   files and datasets may contain sensitive values. Credentials and server settings are not copied
                   separately.
                 </p>
-                {!jobId && project.settings.status === 'unpublished_changes' ? (
+                {!jobId ? (
                   <div className="workflow-project-bundle-version">
-                    <span>Root version</span>
-                    <SegmentedControl label="Bundle root version">
+                    <span>Versions for all projects</span>
+                    <SegmentedControl label="Bundle versions">
                       <SegmentedControlButton
                         selected={version === 'published'}
                         disabled={busy}
@@ -209,6 +207,14 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                       </SegmentedControlButton>
                     </SegmentedControl>
                   </div>
+                ) : null}
+                {!jobId ? (
+                  <p className="project-settings-help">
+                    One version per project, including dependencies. Published uses saved latest when a project has no
+                    publication. This selection applies to the whole bundle, overriding individual Subgraph version
+                    choices only inside the downloaded bundle. Incompatible graph interfaces fail export; wires are
+                    never removed automatically.
+                  </p>
                 ) : null}
               </section>
               {jobId ? (

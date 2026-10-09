@@ -89,8 +89,9 @@ test('new external graph input survives connection, tab switches and saved-file 
   await page.addInitScript(() =>
     localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
   );
-  await page.route('**/api/**', (route) =>
-    route.fulfill({ status: 503, json: { error: 'Unavailable in this fixture' } }),
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'Unavailable in this fixture' } }),
   );
   await mockHostedEditorBootstrap(page);
   await page.route('**/api/workflows/tree', (route) =>
@@ -199,6 +200,41 @@ test('new external graph input survives connection, tab switches and saved-file 
     expect(paths.get('/workflows/caller.rivet-project')!.graphs.main!.connections).toEqual(
       saved.graphs.main!.connections,
     );
+    // Rename the very same target nodes through the real editor. Their stable
+    // identities, not editable ID fields, keep both sides of A's wires attached.
+    await targetTab.click();
+    for (const [type, name] of [
+      ['graphInput', 'prompt2'],
+      ['graphOutput', 'answer2'],
+    ] as const) {
+      const targetNode = target.graphs.child!.nodes.find((entry) => entry.type === type)!;
+      const rendered = frame.locator(`.node[data-nodeid="${targetNode.id}"]`);
+      await rendered.hover();
+      await rendered.locator('.edit-button').click();
+      await frame.getByLabel('ID', { exact: true }).fill(name);
+      await frame.locator('body').press('Escape');
+    }
+    await frame.locator('body').press(`${modifier}+S`);
+    await expect.poll(() => saves.get('/workflows/target.rivet-project')).toBe(2);
+    await callerTab.click();
+    await expect(node).toContainText('prompt2');
+    await expect(node).toContainText('answer2');
+    await expect(node.locator('.input-port[data-portid="prompt"]')).toBeVisible();
+    await expect(node.locator('.output-port[data-portid="answer"]')).toBeVisible();
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await expect(callerTab).not.toHaveClass(/has-unsaved-changes/);
+    await callerTab.hover();
+    await callerTab.locator('.close-project').click();
+    await expect(callerTab).toHaveCount(0);
+    await callerRow.dblclick();
+    await expect(node).toContainText('prompt2');
+    await expect(node).toContainText('answer2');
+    await expect(frame.locator('path.wire')).toHaveCount(3);
+    await frame.locator('body').press(`${modifier}+S`);
+    await expect.poll(() => saves.get('/workflows/caller.rivet-project')).toBe(3);
+    expect(paths.get('/workflows/caller.rivet-project')!.graphs.main!.connections).toEqual(
+      saved.graphs.main!.connections,
+    );
   } finally {
     release();
   }
@@ -236,8 +272,9 @@ for (const version of ['latest', 'published'] as const) {
         localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
       );
       // Every API path is isolated from real workflows, including Save.
-      await page.route('**/api/**', (route) =>
-        route.fulfill({ status: 503, json: { error: 'Unavailable in this fixture' } }),
+      await page.route(
+        (url) => url.pathname.startsWith('/api/'),
+        (route) => route.fulfill({ status: 503, json: { error: 'Unavailable in this fixture' } }),
       );
       await mockHostedEditorBootstrap(page);
       await page.route('**/api/workflows/tree', (route) =>

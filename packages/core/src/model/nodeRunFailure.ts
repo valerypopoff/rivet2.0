@@ -50,7 +50,14 @@ export function createCaughtRunFailureOutputs(
   for (const definition of definitions) {
     outputs[definition.id] = { type: 'control-flow-excluded', value: undefined };
   }
-  for (const id of ['requestBody', 'responseBody', 'llmAttempts', 'llmProfileSummary']) {
+  for (const id of [
+    'requestBody',
+    'responseBody',
+    'llmAttempts',
+    'llmProfileSummary',
+    'classifierAttempts',
+    'classifierProfileSummary',
+  ]) {
     const port = id as PortId;
     if (port in outputs && evidence?.[port] != null) outputs[port] = evidence[port]!;
   }

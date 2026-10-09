@@ -23,6 +23,44 @@ When a graph executes, the app must:
 These four concerns are handled by separate but tightly coupled systems. The coupling
 is where bugs tend to hide.
 
+## Terminal execution error notifications
+
+The shared `useGraphExecutionEvents.onError` handler stops active run controls
+and always calls `handleError` with its default visible error toast. This applies
+to Browser, desktop Node and remote execution errors, including failures before
+node output exists (such as a missing cross-project `subgraphProjectLoader`).
+Do not whitelist error text for root notifications: a console message alone is
+not sufficient feedback for an unsuccessful editor run.
+
+Child `graphError` and ordinary `nodeError` events remain node/run diagnostics;
+they can be caught by a parent and must not each generate a toast. The existing
+node-local async-branch safety notification remains, and `handleError` deduplicates
+identical node/root messages within its five-second window. Cancellation uses
+`abort`, not a fabricated execution-error toast. This changes presentation only;
+it does not add desktop cross-project loading or suppress the Core loader guard.
+
+## Desktop bundle dataflow across tabs
+
+Core `GraphExecutionMetadata.projectId` identifies the actual project owning a
+graph snapshot, including legacy referenced-graph aliases. Cross-project child
+processors carry an isolated `projectScope`; same-project children inherit it.
+`useBundleExecutionRouting` observes live Browser and internal desktop Node
+events and projects them only to open tabs sharing the entry's `bundleManifestPath`.
+It updates inactive project execution snapshots or restores the active target's
+snapshot. At a cross-project boundary it clears caller executor/parent identity
+for the target canvas; same-project nested graph identities are retained.
+
+This is display-only: entry run cancellation, prompts, recordings and terminal
+errors stay with the entry tab. Root lifecycle events are not copied as independent
+dependency runs. Replay is not live execution and is excluded. Observer failures
+are non-terminal diagnostics. Older event producers without `projectId` keep their
+existing routing. Root-run owner maps are bounded and released on completion/error.
+
+Both versioned cross-project Subgraphs and legacy referenced-graph aliases emit
+foreign-scoped live events. Root recorders exclude those child events because the
+root snapshot cannot replay foreign nodes; a child recorder owns that scope.
+Do not confuse this recording boundary with missing live dataflow across bundle tabs.
+
 ## Per-Node Run Duration Metadata
 
 Node run duration display is an app preference layered over execution events. The persisted setting lives in [`showNodeRunDurationsState`](../packages/app/src/state/settings.ts) with storage key `showNodeRunDurations` and default `false`. It is not part of core `Settings`, project YAML, node data, output definitions, or DataValue output maps.
@@ -1938,7 +1976,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
 | `nodeOutputsCleared`                        | Removes node data entries                                                                                                          |
-| `streamingOutputWatchSummary`                | Adds one compact synthetic Watch row to Run Activity; never recreates omitted repeated branch history                             |
+| `streamingOutputWatchSummary`               | Adds one compact synthetic Watch row to Run Activity; never recreates omitted repeated branch history                              |
 | `done`                                      | Sets final outputs, marks not running                                                                                              |
 | `userInput`                                 | Replays the historical prompt into Run Activity with `isReplay: true`; the callback is a no-op and no User Input modal is reopened |
 | `globalSet`                                 | Replays global variable changes                                                                                                    |

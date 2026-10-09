@@ -160,6 +160,7 @@ export class ProjectBundleJobs {
       directory = path.join(this.#root, id);
     const job: Job = {
       status: {
+        ...(source.versionPolicy ? { versionPolicy: source.versionPolicy } : {}),
         id,
         phase: 'collecting',
         projects: 0,
@@ -248,14 +249,17 @@ export class ProjectBundleJobs {
       });
       await writer.writeFile(
         'README.txt',
-        'Rivet project bundle\n\nExtract the complete ZIP. Install a release of @valerypopoff/rivet2-node that exports loadProjectBundle (bundle schema 1).\n' +
+        `Rivet project bundle\n\nExtract the complete ZIP. Install a release of @valerypopoff/rivet2-node that supports bundle loader capability ${captured.manifest.requiredLoaderVersion} (bundle schema 1).\n` +
           'Older npm releases cannot load this bundle. Create run.mjs in the extracted directory:\n\n' +
           'import { loadProjectBundle } from "@valerypopoff/rivet2-node";\n' +
           'const bundle = await loadProjectBundle("./rivet-bundle.json");\n' +
           'const runner = bundle.createProcessor({ inputs: {} }); // Add your graph inputs. Main Graph is selected by default.\n' +
           'try { console.log(await runner.run()); } finally { runner.dispose(); }\n\n' +
           'Run node run.mjs from this directory. Configure your provider credentials and environment variables first.\n' +
-          'All targets are frozen saved snapshots from export time, including Saved latest targets of a published root. Unsaved editor changes are excluded.\n' +
+          (captured.manifest.versionPolicy
+            ? `Version selection for all projects: ${captured.manifest.versionPolicy}. Published falls back to saved latest only when no publication exists.\n`
+            : 'Versions follow authored Subgraph choices; a published root can include saved latest targets.\n') +
+          'Files initially contain saved snapshots from export time. Extracted projects and datasets may be edited; reload the bundle to use edits. Unsaved editor changes are excluded.\n' +
           'Datasets are included; modifications during execution remain in memory. Project/dataset files may contain sensitive values.\n' +
           'Configure credentials, custom providers, external services and local file paths separately. Install required Code-node packages locally.\n' +
           'Plugin declarations (no automatic installation):\n' +

@@ -51,9 +51,7 @@ const toolEvent = (overrides: Partial<Extract<AgentTraceEvent, { type: 'tool-cal
     ...overrides,
   }) satisfies Extract<AgentTraceEvent, { type: 'tool-call-finished' }>;
 
-const profileAttemptEvent = (
-  overrides: Partial<Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>> = {},
-) =>
+const profileAttemptEvent = (overrides: Partial<Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>> = {}) =>
   ({
     type: 'llm-profile-attempt',
     execution,
@@ -70,6 +68,26 @@ const profileAttemptEvent = (
   }) satisfies Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>;
 
 void describe('AgentResponseTrace', () => {
+  void it('retains and validates classifier family and response timeout attempts', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      status: 'response-ready',
+      events: [
+        profileAttemptEvent({
+          family: 'classifier',
+          provider: 'liquid',
+          model: 'd1',
+          stage: 'request',
+          outcome: 'failure',
+          timeoutKind: 'response',
+        }),
+      ],
+    });
+    assert.equal(trace.profileAttempts?.[0]?.family, 'classifier');
+    assert.equal(trace.profileAttempts?.[0]?.timeoutKind, 'response');
+    assert.equal(isAgentResponseTrace(trace), true);
+  });
   void it('aggregates physical calls without confusing unrelated profiles or parallel tools with fallbacks', () => {
     const trace = buildAgentResponseTrace({
       scope: 'response',

@@ -3093,7 +3093,16 @@ void describe('GraphProcessor scheduler boundaries', () => {
       const recorded = recorder.events.filter(
         (event) => event.type === 'nodeFinish' && event.data.nodeId === branch.id,
       );
-      assert.equal(recorded.length, route === 'cross-project-renamed' ? 0 : 4);
+      const external = route === 'alias' || route === 'cross-project-renamed';
+      // Live child events are forwarded across projects, but the root recorder
+      // cannot replay a foreign project's nodes from the root snapshot.
+      assert.equal(recorded.length, external ? 0 : 4);
+      if (external) {
+        assert.ok(
+          finishes.filter((event) => event.node.id === branch.id).every((event) => event.execution?.projectScope),
+          'Foreign events retain their scope instead of disappearing from live execution',
+        );
+      }
       if (route !== 'alias' && route !== 'cross-project-renamed') {
         const replayEmitter = new Emittery<ProcessEvents>();
         const replayed: unknown[] = [];

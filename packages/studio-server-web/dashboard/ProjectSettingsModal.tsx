@@ -117,7 +117,7 @@ function normalizeAllowedEmailDraft(value: string): string[] {
   return emails;
 }
 
-type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'history' | 'danger';
+type ProjectSettingsTab = 'workflow' | 'web-apps' | 'llm-health' | 'classifier-health' | 'history' | 'danger';
 
 type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
@@ -251,6 +251,15 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         onClick={() => setActiveTab('llm-health')}
       >
         LLM profile suspension
+      </SegmentedControlButton>
+      <SegmentedControlButton
+        selected={activeTab === 'classifier-health'}
+        role="tab"
+        aria-selected={activeTab === 'classifier-health'}
+        disabled={!canCloseModal}
+        onClick={() => setActiveTab('classifier-health')}
+      >
+        Classifier profile suspension
       </SegmentedControlButton>
       <SegmentedControlButton
         selected={activeTab === 'history'}
@@ -588,6 +597,17 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
                 ) : null}
                 {activeTab === 'workflow' ? renderWorkflowSettings() : null}
                 {activeTab === 'web-apps' ? renderWebAppsSettings() : null}
+                {activeTab === 'classifier-health' ? (
+                  <LLMProfileHealthSettings
+                    key="classifier"
+                    family="classifier"
+                    activeProject={activeProject}
+                    onOpenRecording={(recordingId) => {
+                      onClose();
+                      onOpenRecording(recordingId);
+                    }}
+                  />
+                ) : null}
                 {activeTab === 'llm-health' ? (
                   <LLMProfileHealthSettings
                     activeProject={activeProject}

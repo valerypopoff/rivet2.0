@@ -237,6 +237,8 @@ function buildInvocationSearchTerms(
       formatModelCallProvider(attempt),
       attempt.model,
       attempt.stage,
+      attempt.failureKind,
+      attempt.skipReason,
       attempt.healthState,
       attempt.healthDisposition,
       attempt.healthOutcome,
@@ -341,7 +343,7 @@ function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityC
 
   return {
     id: `profile-attempt:${attempt.eventId}`,
-    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${describeProfileAttemptStage(attempt.stage)}`,
+    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
     secondaryText: context.join(' / '),
     status: getProfileAttemptStatus(attempt),
   };
@@ -361,6 +363,7 @@ function describeProfileAttemptStage(stage: RunActivityProfileAttempt['stage']):
 }
 
 function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): string {
+  if (attempt.skipReason === 'unreached') return 'not reached';
   if (attempt.healthDisposition === 'deny') {
     return attempt.retryAt == null
       ? 'profile suspended; skipped'
@@ -371,6 +374,7 @@ function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): stri
   }
   if (attempt.timeoutKind === 'first-output') return 'first output timed out';
   if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
+  if (attempt.timeoutKind === 'response') return 'response timed out';
   if (attempt.stage === 'health-update' && attempt.healthOutcome) {
     return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
   }
@@ -556,7 +560,7 @@ function buildDetailRows(
     rows.push({ label: 'Model call rows omitted', value: String(invocation.omittedModelCallCount) });
   }
   if ((invocation.omittedProfileAttemptCount ?? 0) > 0) {
-    rows.push({ label: 'LLM profile attempt rows omitted', value: String(invocation.omittedProfileAttemptCount) });
+    rows.push({ label: 'Profile attempt rows omitted', value: String(invocation.omittedProfileAttemptCount) });
   }
   if (invocation.omittedToolCallCount > 0) {
     rows.push({ label: 'Tool call rows omitted', value: String(invocation.omittedToolCallCount) });

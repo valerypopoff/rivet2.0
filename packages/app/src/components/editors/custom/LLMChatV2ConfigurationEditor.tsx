@@ -4,6 +4,7 @@ import { css } from '@emotion/react';
 import { type ChartNode, type CustomEditorDefinition } from '@valerypopoff/rivet2-core';
 import { type FC } from 'react';
 import { useExtractLLMChatProfileCommand } from '../../../commands/extractLLMChatProfileCommand.js';
+import { useExtractClassifierProfileCommand } from '../../../commands/extractClassifierProfileCommand.js';
 import { useProjectWorkspaceTarget } from '../../../hooks/useProjectWorkspaceTarget.js';
 import { FieldHelperMessage } from '../../FieldHelperMessage.js';
 import { Tooltip } from '../../Tooltip.js';
@@ -44,15 +45,17 @@ type Props = SharedEditorProps & {
 
 export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, isReadonly, node, onChange }) => {
   const extractLLMChatProfile = useExtractLLMChatProfileCommand();
+  const extractClassifierProfile = useExtractClassifierProfileCommand();
+  const classifier = node.type === 'classifierEvaluate';
+  const label = classifier ? 'Classifier' : 'LLM';
+  const target = classifier ? 'Classifier Evaluate' : 'LLM Chat';
   const workspaceTarget = useProjectWorkspaceTarget();
   const data = node.data as { configurationMode?: 'inline' | 'profile' };
   const usesProfile = data.configurationMode === 'profile';
   const canExportToProfile = !usesProfile && workspaceTarget?.type !== 'nodeLibrary';
   const isControlDisabled = isReadonly || isDisabled;
-  const exportTooltip =
-    'Creates an LLM Profile from these Inline settings, moves configuration input connections to it, connects it to this LLM Chat, and switches this node to From profile.';
-  const helperMessage =
-    'Inline keeps provider and model settings in this node. From profile adds an LLM Profile input so reusable configurations can be switched without changing Chat behavior. Profile Reliability is enforced only by Rivet Studio Server or another explicitly integrated host.';
+  const exportTooltip = `Creates a ${label} Profile from these Inline settings, moves configuration input connections to it, connects it to ${target}, and switches this node to From profile.`;
+  const helperMessage = `Inline keeps provider and model settings in this node. From profile adds a ${label} Profiles input for one configuration or an ordered fallback chain. Suspension requires Rivet Studio Server or another explicitly integrated host.`;
 
   return (
     <Field name="configurationMode" label={editor.label} isDisabled={isControlDisabled}>
@@ -75,7 +78,7 @@ export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, is
                 isReadonly={isReadonly}
                 isDisabled={isDisabled}
                 label=""
-                ariaLabel="LLM configuration source"
+                ariaLabel={`${label} configuration source`}
                 name="configurationMode"
                 options={[
                   { value: 'inline', label: 'Inline' },
@@ -90,9 +93,13 @@ export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, is
                 <Button
                   appearance="subtle"
                   isDisabled={isControlDisabled}
-                  onClick={() => extractLLMChatProfile({ nodeId: node.id })}
+                  onClick={() =>
+                    classifier
+                      ? extractClassifierProfile({ nodeId: node.id })
+                      : extractLLMChatProfile({ nodeId: node.id })
+                  }
                 >
-                  Export LLM settings to profile node
+                  Export {label} settings to profile node
                 </Button>
               </Tooltip>
             )}

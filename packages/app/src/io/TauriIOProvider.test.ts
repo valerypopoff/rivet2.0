@@ -6,18 +6,56 @@ import { TauriIOProvider } from './TauriIOProvider.js';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 
 /** Exercise the real Tauri API adapter without a native process or real files. */
-function nativeFixture(t: TestContext) {
+function nativeFixture(t: TestContext, asBundle = false) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const project = createBlankProjectWithDefaultGraph();
   const calls: string[] = [];
   let failWrite = false;
   const runtime: Record<string, unknown> = { __TAURI__: {}, crypto: globalThis.crypto };
-  runtime.__TAURI_IPC__ = (request: { callback: number; error: number; message: { cmd: string } }) => {
-    const command = request.message.cmd;
+  runtime.__TAURI_IPC__ = (request: { callback: number; error: number; cmd?: string; message?: { cmd: string } }) => {
+    const command = request.message?.cmd ?? request.cmd!;
     calls.push(command);
     const error = command === 'writeFile' && failWrite;
     const callback = runtime[`_${error ? request.error : request.callback}`] as (value: unknown) => void;
-    callback(error ? 'native write failed' : command === 'readTextFile' ? serializeProject(project) : false);
+    callback(
+      error
+        ? 'native write failed'
+        : command === 'read_project_bundle' && asBundle
+          ? {
+              manifestPath: '/fixture/rivet-bundle.json',
+              selectedProjectPath: null,
+              manifestContents: JSON.stringify({
+                format: 'rivet-project-bundle',
+                schemaVersion: 1,
+                requiredLoaderVersion: 2,
+                exportingRuntimeVersion: 'fixture',
+                rootArtifact: 'root',
+                targets: [],
+                references: [],
+                plugins: [],
+                artifacts: [
+                  {
+                    id: 'root',
+                    projectId: project.metadata.id,
+                    title: project.metadata.title,
+                    version: 'latest',
+                    revision: 'original',
+                    project: { path: 'projects/root.rivet-project' },
+                  },
+                ],
+              }),
+              files: [
+                {
+                  path: 'projects/root.rivet-project',
+                  sourceProjectPath: '/fixture/projects/root.rivet-project',
+                  contents: serializeProject(project),
+                },
+              ],
+            }
+          : command === 'readTextFile'
+            ? serializeProject(project)
+            : false,
+    );
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: runtime });
   t.after(() => {
@@ -61,6 +99,17 @@ test('native reads prepare datasets without side effects and honor guarded commi
   controller.abort();
   assert.equal(await result.commit!(() => true), false);
   assert.equal(fixture.imports(), 1);
+});
+
+test('opening a native bundle manifest returns its actual project save path and imports only after guarded commit', async (t) => {
+  const fixture = nativeFixture(t, true);
+  const result = await fixture.provider.loadProjectDataNoPrompt('/fixture/rivet-bundle.json', { deferCommit: true });
+  assert.equal(result.path, '/fixture/projects/root.rivet-project');
+  assert.equal(result.project.metadata.id, fixture.project.metadata.id);
+  assert.equal(fixture.imports(), 0);
+  assert.equal(await result.commit!(() => true), true);
+  assert.equal(fixture.imports(), 1);
+  assert.deepEqual(fixture.calls, ['read_project_bundle']);
 });
 
 test('a pre-cancelled native load performs no filesystem IO', async (t) => {

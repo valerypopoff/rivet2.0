@@ -3,8 +3,9 @@ import { getError } from '@valerypopoff/rivet2-core';
 const ASYNC_BRANCH_ERROR_PREFIX = 'Start Async Branch ';
 
 /**
- * Whether an execution error is an actionable Start Async Branch safety
- * violation that needs an editor toast in addition to the failed node/run UI.
+ * Whether a node-local error is an actionable Start Async Branch safety
+ * violation needing an early editor toast. Terminal root failures always toast
+ * independently; ordinary/caught node errors stay local to their node.
  *
  * Browser execution keeps Error.message, while the Node and remote executor
  * transports serialize errors using Error#toString(). Strip one or more

@@ -24,12 +24,12 @@ In Rivet Studio Server, open the Subgraph node settings and choose **This projec
 
 For **Other projects**, choose a **Version** below the graph selector:
 
-| Version | What each new run uses | When future runs can change |
-| --- | --- | --- |
-| **Saved latest** (default) | The target project's latest saved graph and datasets. It works even if that project has never been published; unsaved editor changes are not used. | After someone saves the target project. |
-| **Published** | The target project's currently published snapshot. The target must be published. | After someone updates or unpublishes that publication; an unpublished target cannot run in this mode. |
+| Version                    | What each new run uses                                                                                                                             | When future runs can change                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **Saved latest** (default) | The target project's latest saved graph and datasets. It works even if that project has never been published; unsaved editor changes are not used. | After someone saves the target project.                                                               |
+| **Published**              | The target project's currently published snapshot. The target must be published.                                                                   | After someone updates or unpublishes that publication; an unpublished target cannot run in this mode. |
 
-Neither choice pins one immutable target revision forever. A server run keeps the snapshot it selected for its duration, but the next server run resolves the selected version again. For local Node execution, use **Download with dependencies** and [`loadProjectBundle`](../api-reference/node/loadProjectBundle) to freeze and resolve the selected saved snapshots. Outside Studio Server, new Subgraphs use **This project** without the project/version controls; an existing cross-project target requires a compatible project loader rather than silently running a different graph.
+Neither choice pins one immutable target revision forever. A server run keeps the snapshot it selected for its duration, but the next server run resolves the selected version again. For local execution, use **Download with dependencies** and choose Published or Saved latest for the whole bundle. Each project is exported once with its matching datasets; Published falls back to saved latest if that project has no publication. This selection overrides individual Subgraph version settings only inside the bundle. Open the extracted `rivet-bundle.json` in desktop Rivet, or use [`loadProjectBundle`](../api-reference/node/loadProjectBundle) in Node. Extracted files remain editable. Outside Studio Server, new Subgraphs use **This project** without the project/version controls; an existing cross-project target requires a bundle or another compatible project loader rather than silently running a different graph. See [desktop bundle instructions](./working-with-projects#opening-and-running-a-bundle-in-desktop-rivet).
 
 Cross-project Subgraphs expose the target graph's Graph Input and Graph Output ports on the caller. Their direct named output streams can be watched by the caller just like same-project streams. As with a same-project Subgraph, the called graph shares the caller run's global and stored-value state; it is not an isolated workflow invocation. The called project's authored global defaults are not installed into that run, so pass required values through Graph Inputs or initialize them in the caller. When Run recordings are enabled, an invoked target graph gets a separate recording under the called project, in addition to the caller's run. The server's dataset-snapshot setting determines whether a replay retains the called project's datasets. A skipped Subgraph does not create a target run. If a target graph is missing, Rivet reports that instead of opening or running a different graph.
 
@@ -47,8 +47,8 @@ The same setting applies when running headlessly through Node, the CLI, or Studi
 
 ### Streaming a named output to a parent graph
 
-To send a finished ordinary value to the caller *before other work in the child
-graph has finished*, put **Stream value** after the value's producer and
+To send a finished ordinary value to the caller _before other work in the child
+graph has finished_, put **Stream value** after the value's producer and
 connect its Value output directly to a named Graph Output. In the caller,
 connect that Subgraph port to **Catch streaming chunks** with **Number of chunks**
 set to `1`. Catch returns one ordinary value and runs its downstream nodes once;

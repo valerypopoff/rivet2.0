@@ -17,6 +17,72 @@ const baseAttempt = {
   'roundIndex' | 'profileIndex' | 'profileName' | 'nodeId' | 'processId' | 'provider' | 'customProviderApi' | 'model'
 >;
 
+test('presents classifier response timeouts without streaming terminology', () => {
+  const [row] = buildAgentProfileAttemptInspectorRows([
+    {
+      ...baseAttempt,
+      family: 'classifier',
+      provider: 'liquid',
+      model: 'd1',
+      customProviderApi: undefined,
+      eventId: 'classifier-timeout',
+      stage: 'request',
+      outcome: 'failure',
+      timeoutKind: 'response',
+    },
+  ]);
+  assert.equal(row?.providerAndModel, 'Profile: Primary route · liquid / d1');
+  assert.equal(row?.context, 'request / response timed out / profile 1 / round 1');
+});
+
+test('classifier failure categories are readable without interpreting provider error strings', () => {
+  const [row] = buildAgentProfileAttemptInspectorRows([
+    {
+      ...baseAttempt,
+      family: 'classifier',
+      eventId: 'parse-failure',
+      stage: 'response-validation',
+      outcome: 'failure',
+      failureKind: 'response-parsing',
+    },
+  ]);
+  assert.equal(row?.context, 'response parsing / failure / profile 1 / round 1');
+});
+
+test('unreached candidates are not presented as suspended profiles', () => {
+  const [row] = buildAgentProfileAttemptInspectorRows([
+    {
+      ...baseAttempt,
+      family: 'classifier',
+      eventId: 'unreached',
+      stage: 'configuration',
+      outcome: 'skipped',
+      skipReason: 'unreached',
+    },
+  ]);
+  assert.equal(row?.context, 'configuration / not reached / profile 1 / round 1');
+});
+
+test('classifier receipts preserve failed usage and explicitly identify unpriced costs', () => {
+  const attempts = [0.00004, undefined].map((estimatedCostUsd, index) => ({
+    ...baseAttempt,
+    family: 'classifier' as const,
+    eventId: `receipt-${index}`,
+    stage: 'response-validation' as const,
+    outcome: 'failure' as const,
+    failureKind: 'response-validation' as const,
+    attemptIndex: 0,
+    classifierUsage: {
+      inputTokens: 1000,
+      outputTokens: 0,
+      ...(estimatedCostUsd == null ? {} : { estimatedCostUsd }),
+    },
+  }));
+  const rows = buildAgentProfileAttemptInspectorRows(attempts);
+  assert.match(rows[0]!.context, /1000 input \/ 0 output tokens \/ estimated \$0\.00004000$/);
+  assert.match(rows[1]!.context, /1000 input \/ 0 output tokens \/ cost unknown$/);
+});
+
 test('presents suspension skips, reliability-service decisions, and timeout failures for Response Inspector', () => {
   const rows = buildAgentProfileAttemptInspectorRows([
     {

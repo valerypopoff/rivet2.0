@@ -18,6 +18,8 @@ import {
   type ProjectBundleManifest,
   type DatasetId,
   type SubgraphProjectRun,
+  InMemoryDatasetProvider,
+  createProcessor,
   loadProjectFromString,
   ReferencedGraphAliasNodeImpl,
   GetDatasetRowNodeImpl,
@@ -103,7 +105,117 @@ async function fixture() {
   return { directory, manifest, manifestPath, save };
 }
 
-test('bundle runs independent saved versions after relocation and isolates mutable child datasets', async () => {
+void test('bundle-wide policies run one child snapshot through source and public ESM/CJS loaders', async () => {
+  for (const policy of ['latest', 'published'] as const) {
+    const f = await fixture();
+    try {
+      f.manifest.requiredLoaderVersion = 3;
+      f.manifest.versionPolicy = policy;
+      f.manifest.artifacts = f.manifest.artifacts.filter(
+        (artifact) => artifact.id === 'root' || artifact.id === policy,
+      );
+      f.manifest.targets = f.manifest.targets.map((binding) => ({ ...binding, artifact: policy }));
+      await f.save();
+      const esm = await import('../dist/esm/index.js');
+      const cjs = createRequire(import.meta.url)('../dist/cjs/bundle.cjs') as typeof esm;
+      for (const load of [loadProjectBundle, esm.loadProjectBundle, cjs.loadProjectBundle]) {
+        const bundle = await load(f.manifestPath);
+        assert.equal(bundle.manifest.artifacts.length, 2);
+        const processor = bundle.createProcessor({ inputs: { input: 'visible' } });
+        assert.equal((await processor.run()).result?.value, policy === 'latest' ? 'visiblexx' : 'visiblepp');
+      }
+    } finally {
+      await fs.rm(f.directory, { recursive: true, force: true });
+    }
+  }
+});
+
+void test('desktop entry overrides use unsaved content and active data without changing dependency version bindings', async () => {
+  const f = await fixture();
+  try {
+    const original = await loadProjectBundle(f.manifestPath);
+    const disk = loadProjectFromString(
+      await fs.readFile(path.join(f.directory, 'projects/root.rivet-project'), 'utf8'),
+    );
+    const edited = structuredClone(disk);
+    const calls = edited.graphs[edited.metadata.mainGraphId!]!.nodes.filter(
+      (node) => node.type === 'subGraph',
+    ) as SubGraphNode[];
+    calls[1]!.data.targetVersion = 'latest';
+    const activeData = new InMemoryDatasetProvider([]);
+    const context = original.createExecutionContext({ project: edited, datasetProvider: activeData });
+    assert.equal(context.datasetProvider, activeData);
+    const runner = createProcessor(context.project, { ...context, inputs: { input: 'visible' } });
+    try {
+      assert.equal((await runner.run()).result?.value, 'visiblexx');
+    } finally {
+      runner.dispose();
+    }
+    assert.equal(
+      (disk.graphs[disk.metadata.mainGraphId!]!.nodes.filter((node) => node.type === 'subGraph')[1] as SubGraphNode)
+        .data.targetVersion,
+      'published',
+    );
+    const latest = await context.subgraphProjectLoader.loadTarget({
+      projectId: 'child' as ProjectId,
+      version: 'latest',
+    });
+    const published = await context.subgraphProjectLoader.loadTarget({
+      projectId: 'child' as ProjectId,
+      version: 'published',
+    });
+    assert.equal((await latest.datasetProvider!.getDatasetData('shared' as DatasetId))!.rows[0]!.data[0], 'latest');
+    assert.equal(
+      (await published.datasetProvider!.getDatasetData('shared' as DatasetId))!.rows[0]!.data[0],
+      'published',
+    );
+    const member = original.createExecutionContext({ artifactId: 'published' });
+    assert.equal(member.projectPath, path.join(f.directory, 'projects/published.rivet-project'));
+    assert.equal(
+      (
+        member.project.graphs['runtime-speed-subgraph' as GraphId]!.nodes.find((node) => node.type === 'text')!
+          .data as { text: string }
+      ).text,
+      '{{input}}p',
+    );
+    assert.throws(() => original.createExecutionContext({ artifactId: 'missing' }), /not a member/);
+    assert.throws(
+      () =>
+        original.createExecutionContext({
+          project: { ...edited, metadata: { ...edited.metadata, id: 'foreign' as ProjectId } },
+        }),
+      /identity/,
+    );
+  } finally {
+    await fs.rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+void test('desktop can run a corrected unsaved entry even when its disk graph boundary is stale', async () => {
+  const f = await fixture();
+  try {
+    const entryPath = path.join(f.directory, 'projects/root.rivet-project');
+    const corrected = loadProjectFromString(await fs.readFile(entryPath, 'utf8'));
+    const stale = structuredClone(corrected);
+    const subgraph = stale.graphs[stale.metadata.mainGraphId!]!.nodes.find(
+      (node) => node.type === 'subGraph',
+    ) as SubGraphNode;
+    subgraph.data.graphId = 'missing' as GraphId;
+    await fs.writeFile(entryPath, serializeProject(stale) as string);
+    await assert.rejects(loadProjectBundle(f.manifestPath), /graph|boundary/);
+    const bundle = await loadProjectBundle(f.manifestPath, { entry: { artifactId: 'root', project: corrected } });
+    const runner = bundle.createProcessor({ inputs: { input: 'corrected' } });
+    try {
+      assert.equal((await runner.run()).result?.value, 'correctedxp');
+    } finally {
+      runner.dispose();
+    }
+  } finally {
+    await fs.rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+void test('bundle runs independent saved versions after relocation and isolates mutable child datasets', async () => {
   const f = await fixture();
   const moved = `${f.directory}-moved`;
   try {
@@ -166,7 +278,7 @@ test('bundle runs independent saved versions after relocation and isolates mutab
   }
 });
 
-test('bundle rejects corrupt, incomplete, oversized and unsafe artifacts before execution', async () => {
+void test('bundle rejects incompatible, incomplete, oversized and unsafe artifacts before execution', async () => {
   const f = await fixture();
   try {
     const original = structuredClone(f.manifest);
@@ -203,9 +315,15 @@ test('bundle rejects corrupt, incomplete, oversized and unsafe artifacts before 
       ],
       [
         () => {
-          f.manifest.artifacts[0]!.project.sha256 = '0'.repeat(64);
+          f.manifest.requiredLoaderVersion = 4 as never;
         },
-        /checksum/,
+        /unsupported/,
+      ],
+      [
+        () => {
+          f.manifest.requiredLoaderVersion = 3;
+        },
+        /requires a version selection/,
       ],
       [
         () => {
@@ -233,12 +351,16 @@ test('bundle rejects corrupt, incomplete, oversized and unsafe artifacts before 
     await assert.rejects(loadProjectBundle(f.manifestPath, { maxTotalBytes: 1 }), /byte limit/);
     const childFile = f.manifest.artifacts[1]!.project;
     const originalChild = await fs.readFile(path.join(f.directory, childFile.path), 'utf8');
+    await fs.writeFile(
+      path.join(f.directory, childFile.path),
+      Buffer.concat([Buffer.from(originalChild), Buffer.from([0xff])]),
+    );
+    await assert.rejects(loadProjectBundle(f.manifestPath), /not valid UTF-8/);
+    await fs.writeFile(path.join(f.directory, childFile.path), originalChild);
     const child = loadProjectFromString(originalChild);
     child.plugins = [{ type: 'package', id: 'fixture-external', package: 'not-installed', tag: '1.0.0' }];
     const pluginChild = serializeProject(child) as string;
     await fs.writeFile(path.join(f.directory, childFile.path), pluginChild);
-    childFile.bytes = Buffer.byteLength(pluginChild);
-    childFile.sha256 = createHash('sha256').update(pluginChild).digest('hex');
     await f.save();
     await assert.rejects(loadProjectBundle(f.manifestPath), /missing the required plugin declaration/);
     f.manifest.plugins = [{ type: 'package', id: 'fixture-external', package: 'not-installed', tag: '2.0.0' }];
@@ -249,8 +371,6 @@ test('bundle rejects corrupt, incomplete, oversized and unsafe artifacts before 
     const pluginBundle = await loadProjectBundle(f.manifestPath);
     assert.throws(() => pluginBundle.createProcessor(), /requires plugin fixture-external/);
     await fs.writeFile(path.join(f.directory, childFile.path), originalChild);
-    childFile.bytes = Buffer.byteLength(originalChild);
-    childFile.sha256 = createHash('sha256').update(originalChild).digest('hex');
     f.manifest.plugins = [];
     await f.save();
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bundle-escape-'));
@@ -271,7 +391,7 @@ test('bundle rejects corrupt, incomplete, oversized and unsafe artifacts before 
   }
 });
 
-test('legacy aliases use child datasets, not root datasets, and reject missing alias graphs', async () => {
+void test('legacy aliases use child datasets, not root datasets, and reject missing alias graphs', async () => {
   const f = await fixture();
   try {
     const rootArtifact = f.manifest.artifacts[0]!;
@@ -303,8 +423,6 @@ test('legacy aliases use child datasets, not root datasets, and reject missing a
     ];
     const replace = async (file: typeof rootArtifact.project, contents: string) => {
       await fs.writeFile(path.join(f.directory, file.path), contents);
-      file.bytes = Buffer.byteLength(contents);
-      file.sha256 = createHash('sha256').update(contents).digest('hex');
     };
     await replace(rootArtifact.project, serializeProject(root) as string);
     await replace(childArtifact.project, serializeProject(child) as string);
@@ -346,12 +464,56 @@ test('legacy aliases use child datasets, not root datasets, and reject missing a
   }
 });
 
-test('artifact growth after stat is rejected without reading beyond the captured size', async (t) => {
+void test('bundle cancellation stops reads and closes the current artifact handle', async (t) => {
+  const f = await fixture();
+  const controller = new AbortController();
+  const reason = new Error('fixture cancelled');
+  const originalOpen = fs.open;
+  const opened: string[] = [];
+  let closed = false;
+  try {
+    t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+      opened.push(String(args[0]));
+      const handle = await originalOpen(...args);
+      if (String(args[0]).endsWith('root.rivet-project')) {
+        const read = handle.read.bind(handle);
+        t.mock.method(handle, 'read', async (buffer: Buffer, offset: number, length: number, position: null) => {
+          const result = await read(buffer, offset, length, position);
+          controller.abort(reason);
+          return result;
+        });
+        const close = handle.close.bind(handle);
+        t.mock.method(handle, 'close', async () => {
+          await close();
+          closed = true;
+        });
+      }
+      return handle;
+    });
+    await assert.rejects(loadProjectBundle(f.manifestPath, { signal: controller.signal }), (error) => error === reason);
+    assert.equal(closed, true, 'abort must close the acquired handle');
+    assert.deepEqual(
+      opened.map((file) => path.basename(file)),
+      ['rivet-bundle.json', 'root.rivet-project'],
+    );
+    opened.length = 0;
+    await assert.rejects(
+      loadProjectBundle(path.join(f.directory, 'does-not-exist/rivet-bundle.json'), { signal: controller.signal }),
+      (error) => error === reason,
+    );
+    assert.deepEqual(opened, [], 'pre-cancelled loads must perform no reads');
+  } finally {
+    t.mock.restoreAll();
+    await fs.rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+void test('artifact growth after stat is rejected without reading beyond the captured size', async (t) => {
   const f = await fixture();
   const target = path.join(f.directory, f.manifest.artifacts[0]!.project.path);
   const originalOpen = fs.open;
   let bytesRead = 0;
-  const originalSize = f.manifest.artifacts[0]!.project.bytes;
+  const originalSize = (await fs.stat(target)).size;
   try {
     t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
       const handle = await originalOpen(...args);
@@ -375,6 +537,100 @@ test('artifact growth after stat is rejected without reading beyond the captured
     assert.equal(bytesRead, originalSize + 1, 'only one overflow byte may be read');
   } finally {
     t.mock.restoreAll();
+    await fs.rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+void test('edited legacy bundles run current project and dataset files without updating export metadata', async () => {
+  const f = await fixture();
+  try {
+    const latest = f.manifest.artifacts[1]!;
+    const file = path.join(f.directory, latest.project.path);
+    const child = loadProjectFromString(await fs.readFile(file, 'utf8'));
+    (
+      child.graphs[child.metadata.mainGraphId!]!.nodes.find((node) => node.type === 'text')!.data as { text: string }
+    ).text = '{{input}}edited-and-longer';
+    await fs.writeFile(file, serializeProject(child) as string);
+    await fs.writeFile(
+      path.join(f.directory, latest.datasets!.path),
+      serializeDatasets([
+        {
+          meta: { id: 'shared' as DatasetId, projectId: 'child' as ProjectId, name: 'Edited', description: '' },
+          data: { id: 'shared' as DatasetId, rows: [{ id: 'row', data: ['edited dataset contents'] }] },
+        },
+      ]),
+    );
+    // Legacy sizes and checksums are advisory even when stale or malformed.
+    latest.project.bytes = 0;
+    latest.project.sha256 = 'stale';
+    await f.save();
+    await fs.writeFile(f.manifestPath, `\uFEFF${await fs.readFile(f.manifestPath, 'utf8')}`);
+    const seen: SubgraphProjectRun[] = [];
+    const runner = (await loadProjectBundle(f.manifestPath)).createProcessor({
+      inputs: { input: 'hello' },
+      onSubgraphProjectRun: (run) => {
+        seen.push(run);
+      },
+    });
+    try {
+      assert.equal((await runner.run()).result?.value, 'helloedited-and-longerp');
+      assert.equal(
+        (await seen
+          .find((run) => run.target.version === 'latest')!
+          .resolved.datasetProvider!.getDatasetData('shared' as DatasetId))!.rows[0]!.data[0],
+        'edited dataset contents',
+      );
+      assert.equal(
+        (await seen
+          .find((run) => run.target.version === 'published')!
+          .resolved.datasetProvider!.getDatasetData('shared' as DatasetId))!.rows[0]!.data[0],
+        'published',
+      );
+    } finally {
+      runner.dispose();
+    }
+  } finally {
+    await fs.rm(f.directory, { recursive: true, force: true });
+  }
+});
+
+void test('path-only bundles run through source and public loaders and enforce actual byte limits', async () => {
+  const f = await fixture();
+  try {
+    f.manifest.requiredLoaderVersion = 2;
+    for (const artifact of f.manifest.artifacts) {
+      artifact.project = { path: artifact.project.path };
+      if (artifact.datasets) artifact.datasets = { path: artifact.datasets.path };
+    }
+    await f.save();
+    const loaders = [
+      loadProjectBundle,
+      (await import('@valerypopoff/rivet2-node')).loadProjectBundle,
+      createRequire(import.meta.url)('@valerypopoff/rivet2-node').loadProjectBundle as typeof loadProjectBundle,
+    ];
+    for (const loader of loaders) {
+      const runner = (await loader(f.manifestPath)).createProcessor({ inputs: { input: 'editable' } });
+      try {
+        assert.equal((await runner.run()).result?.value, 'editablexp');
+      } finally {
+        runner.dispose();
+      }
+      await assert.rejects(loader(f.manifestPath, { maxTotalBytes: 1 }), /byte limit/);
+    }
+    // Limits must include datasets, not just project files or manifest estimates.
+    let actualBytes = 0;
+    for (const artifact of f.manifest.artifacts) {
+      actualBytes += (await fs.stat(path.join(f.directory, artifact.project.path))).size;
+      if (artifact.datasets) actualBytes += (await fs.stat(path.join(f.directory, artifact.datasets.path))).size;
+    }
+    await assert.rejects(loadProjectBundle(f.manifestPath, { maxTotalBytes: actualBytes - 1 }), /byte limit/);
+    await loadProjectBundle(f.manifestPath, { maxTotalBytes: actualBytes });
+    const target = path.join(f.directory, f.manifest.artifacts[0]!.project.path);
+    await fs.appendFile(target, ' '.repeat(1024));
+    await assert.rejects(loadProjectBundle(f.manifestPath, { maxTotalBytes: actualBytes }), /byte limit/);
+    await fs.truncate(target, 64 * 1024 * 1024 + 1);
+    await assert.rejects(loadProjectBundle(f.manifestPath), /size limit/);
+  } finally {
     await fs.rm(f.directory, { recursive: true, force: true });
   }
 });

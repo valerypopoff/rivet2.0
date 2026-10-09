@@ -1,16 +1,10 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
-import {
-  normalizeEvaluationLibrary,
-  normalizeEvaluationRun,
-} from '@valerypopoff/rivet2-evaluations';
+import { normalizeEvaluationLibrary, normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
 import type { ProviderOverrides } from '../../app/src/host';
 import { LocalEvaluationRunStore } from '../../app/src/providers/EvaluationRunStore';
 import { HostedDatasetProvider } from '../io/HostedDatasetProvider';
 import { HostedIOProvider } from '../io/HostedIOProvider';
-import {
-  getDefaultEnvironmentProvider,
-  getDefaultPathPolicyProvider,
-} from '../overrides/utils/tauri';
+import { getDefaultEnvironmentProvider, getDefaultPathPolicyProvider } from '../overrides/utils/tauri';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import {
   createHttpLLMProfileHealthAdminProvider,
@@ -19,7 +13,11 @@ import {
 import { createHttpEvaluationStore } from '../../studio-server-shared/evaluationRunHttpStore';
 import { createHostedEvaluationCoordinator } from './hostedEvaluationCoordinator';
 import { createHostedLocalExecutionRecordingPersistence } from './hostedLocalExecutionRecordingPersistence';
-import { hostedSubgraphProjectCatalog, hostedSubgraphProjectLoader, persistHostedSubgraphProjectRun } from './hostedSubgraphProjects';
+import {
+  hostedSubgraphProjectCatalog,
+  hostedSubgraphProjectLoader,
+  persistHostedSubgraphProjectRun,
+} from './hostedSubgraphProjects';
 
 const hostedDatasetProvider = new HostedDatasetProvider();
 const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
@@ -27,6 +25,10 @@ const hostedLLMProfileHealthStore = createHttpRivetLLMProfileHealthStore({
 });
 export const hostedLLMProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
+});
+export const hostedClassifierProfileHealthAdmin = createHttpLLMProfileHealthAdminProvider({
+  baseUrl: `${RIVET_API_BASE_URL}/workflows/llm-profile-health`,
+  family: 'classifier',
 });
 const hostedEvaluationStore = createHttpEvaluationStore({
   baseUrl: `${RIVET_API_BASE_URL}/workflows/evaluation-runs`,

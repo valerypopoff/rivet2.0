@@ -21,9 +21,12 @@ import {
   ClassifierValueBudget,
   CLASSIFIER_LIMITS,
   ClassifierResourceLimitError,
+  ClassifierResponseReadError,
   readClassifierResponse,
 } from './limits.js';
 import type {
+  ClassifierFailureKind,
+  ClassifierAttemptUsage,
   ClassifierEvaluationResponse,
   ClassifierQuestionDefinition,
   PreparedClassifierQuestion,
@@ -98,6 +101,14 @@ export type ClassifierProviderEvaluationResult = {
 };
 
 export type ClassifierProviderEvaluateArgs = {
+  /** Privacy-bounded physical-attempt observer; never includes bodies or credentials. */
+  onAttempt?: (attempt: {
+    attemptIndex: number;
+    outcome: 'success' | 'failure';
+    status?: number;
+    kind?: ClassifierProviderError['kind'];
+    classifierUsage?: ClassifierAttemptUsage;
+  }) => void;
   apiKey: string;
   model: string;
   questions: readonly ClassifierQuestionDefinition[];
@@ -227,6 +238,29 @@ type ClassifierOperation = {
   check(attemptSignal?: AbortSignal): void;
 };
 
+export class ClassifierProviderError extends Error {
+  constructor(
+    message: string,
+    readonly kind:
+      | 'configuration'
+      | 'capability'
+      | 'timeout'
+      | 'transport'
+      | 'http'
+      | 'response-parsing'
+      | 'response-validation',
+    readonly statusCode?: number,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'ClassifierProviderError';
+  }
+}
+
+export function classifierFailureKind(kind: ClassifierProviderError['kind'], status?: number): ClassifierFailureKind {
+  return kind === 'http' && (status === 401 || status === 403) ? 'authentication' : kind;
+}
+
 function createOperation(args: ClassifierProviderEvaluateArgs, label: string): ClassifierOperation {
   if (
     !Number.isFinite(args.timeoutMs) ||
@@ -239,7 +273,8 @@ function createOperation(args: ClassifierProviderEvaluateArgs, label: string): C
   // Node turns overflowing setTimeout delays into 1 ms, not a long timeout.
   if (deadline - now > MAX_TIMER_DELAY_MS)
     throw new Error(`Classifier effective timeout must not exceed ${MAX_TIMER_DELAY_MS} ms.`);
-  const timeoutError = () => new Error(`${label} request timed out after ${args.timeoutMs} ms.`);
+  const timeoutError = () =>
+    new ClassifierProviderError(`${label} request timed out after ${args.timeoutMs} ms.`, 'timeout');
   return {
     signal: args.signal,
     deadline,
@@ -281,12 +316,25 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
       questions.push(question);
     }
     if (state.kind === 'messages' && state.images.length && !provider.supportsImages?.(args.model))
-      throw new Error(`${provider.label} model '${args.model}' does not support classifier images.`);
-    checkState?.(state, operation.check);
+      throw new ClassifierProviderError(
+        `${provider.label} model '${args.model}' does not support classifier images.`,
+        'capability',
+      );
+    try {
+      checkState?.(state, operation.check);
+    } catch (error) {
+      operation.check();
+      throw new ClassifierProviderError(
+        error instanceof Error ? error.message : `${provider.label} does not support this classifier evidence.`,
+        'capability',
+        undefined,
+        { cause: error },
+      );
+    }
     operation.check();
     const result = await callClassifierHttp(
       args,
-      { endpoint, validateResponse, label: provider.label, maxRequestBytes: provider.maxRequestBytes },
+      { ...provider, endpoint, validateResponse },
       { model: args.model, state, questions },
       buildRequest,
       operation,
@@ -375,7 +423,10 @@ function createQuestionMap(
 
 async function callClassifierHttp(
   args: ClassifierProviderEvaluateArgs & { fetchImplementation: typeof fetch },
-  spec: Pick<ClassifierProviderSpec, 'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse'>,
+  spec: Pick<
+    ClassifierProviderSpec,
+    'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse' | 'defaultModel' | 'pricing' | 'modelPricing'
+  >,
   prepared: PreparedClassifierEvaluation,
   buildRequest: ClassifierProviderSpec['buildRequest'],
   operation: ClassifierOperation,
@@ -393,15 +444,30 @@ async function callClassifierHttp(
   assertClassifierResourceLimits(request, operation.check);
   const requestJson = JSON.stringify(request);
   if (maxRequestBytes !== undefined && new TextEncoder().encode(requestJson).byteLength >= maxRequestBytes) {
-    throw new Error(
+    throw new ClassifierProviderError(
       `${providerLabel} request must be smaller than ${maxRequestBytes / 1_000_000} MB, including State, images, and questions. Resize images or reduce input content.`,
+      'capability',
     );
   }
   let requestBody: Record<string, unknown> | undefined;
+  let attemptIndex = -1;
+  const report = (
+    outcome: 'success' | 'failure',
+    status?: number,
+    kind?: ClassifierProviderError['kind'],
+    classifierUsage?: ClassifierAttemptUsage,
+  ) => {
+    try {
+      args.onAttempt?.({ attemptIndex, outcome, status, kind, ...(classifierUsage ? { classifierUsage } : {}) });
+    } catch {
+      /* Observers cannot alter execution. */
+    }
+  };
   operation.check();
 
   for (;;) {
     operation.check();
+    attemptIndex++;
     const remainingMs = deadline - Date.now();
 
     const controller = new AbortController();
@@ -429,10 +495,13 @@ async function callClassifierHttp(
       );
     } catch (error) {
       cleanupAttempt();
+      report('failure', undefined, controller.signal.aborted && !signal.aborted ? 'timeout' : 'transport');
       operation.check(controller.signal);
       if (automaticRetryCount >= MAX_AUTOMATIC_ATTEMPTS - 1) {
-        throw new Error(
+        throw new ClassifierProviderError(
           `${providerLabel} request failed after ${MAX_AUTOMATIC_ATTEMPTS} attempts due to a transport error.`,
+          'transport',
+          undefined,
           { cause: error },
         );
       }
@@ -450,6 +519,7 @@ async function callClassifierHttp(
     }
 
     if (!response.ok) {
+      report('failure', response.status, 'http');
       cleanupAttempt();
       // Rejected bodies are not answer outputs. Release every response, not just
       // retries, so caught terminal failures cannot leave connections occupied.
@@ -463,23 +533,29 @@ async function callClassifierHttp(
         continue;
       }
       if (response.status === 401 || response.status === 403) {
-        throw Object.assign(new Error(`${providerLabel} authentication failed. Check the ${providerLabel} API key.`), {
-          statusCode: response.status,
-        });
+        throw new ClassifierProviderError(
+          `${providerLabel} authentication failed. Check the ${providerLabel} API key.`,
+          'http',
+          response.status,
+        );
       }
       if (response.status === 422 || response.status === 400) {
-        throw Object.assign(new Error(`${providerLabel} rejected the request (HTTP ${response.status}).`), {
-          statusCode: response.status,
-        });
+        throw new ClassifierProviderError(
+          `${providerLabel} rejected the request (HTTP ${response.status}).`,
+          'http',
+          response.status,
+        );
       }
       if (configuredRetryCountUsed < configuredRetryCount && !RETRYABLE_STATUSES.has(response.status)) {
         configuredRetryCountUsed += 1;
         await waitForRetry(Math.min(configuredCooldownMs, deadline - Date.now()), signal, providerLabel);
         continue;
       }
-      throw Object.assign(new Error(`${providerLabel} request failed (HTTP ${response.status}).`), {
-        statusCode: response.status,
-      });
+      throw new ClassifierProviderError(
+        `${providerLabel} request failed (HTTP ${response.status}).`,
+        'http',
+        response.status,
+      );
     }
 
     let body: unknown;
@@ -490,14 +566,40 @@ async function callClassifierHttp(
       );
       assertAttemptActive();
     } catch (error) {
+      const kind =
+        controller.signal.aborted && !signal.aborted
+          ? 'timeout'
+          : error instanceof ClassifierResponseReadError
+            ? 'transport'
+            : 'response-parsing';
+      report('failure', response.status, kind);
       discardResponseBody(response);
       operation.check(controller.signal);
       if (error instanceof ClassifierResourceLimitError) throw error;
-      throw new Error(`${providerLabel} returned an invalid JSON response.`, { cause: error });
+      throw new ClassifierProviderError(
+        kind === 'transport'
+          ? `${providerLabel} response body could not be read.`
+          : `${providerLabel} returned an invalid JSON response.`,
+        kind,
+        undefined,
+        { cause: error },
+      );
     } finally {
       cleanupAttempt();
     }
-    const validatedResponse = validateResponse(body, prepared.questions, providerLabel);
+    let validatedResponse: ClassifierEvaluationResponse;
+    try {
+      validatedResponse = validateResponse(body, prepared.questions, providerLabel);
+    } catch (error) {
+      report('failure', response.status, 'response-validation', classifierAttemptUsage(body, spec, args.model));
+      throw new ClassifierProviderError(
+        error instanceof Error ? error.message : `${providerLabel} returned an invalid classifier response.`,
+        'response-validation',
+        undefined,
+        { cause: error },
+      );
+    }
+    report('success', response.status, undefined, classifierAttemptUsage(body, spec, args.model));
     return {
       // Preserve the direct-provider result contract, but graph runs with the
       // diagnostic disabled never allocate this second representation.
@@ -513,6 +615,37 @@ async function callClassifierHttp(
       responseBody: body as Record<string, unknown>,
     };
   }
+}
+
+/** The bounded reader produced plain JSON; do not require valid answers to retain usable usage. */
+function classifierAttemptUsage(
+  body: unknown,
+  provider: Pick<ClassifierProvider, 'defaultModel' | 'pricing' | 'modelPricing'>,
+  requestedModel: string,
+): ClassifierAttemptUsage | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'usage')) return;
+  const { usage, model } = body as { usage?: ClassifierEvaluationResponse['usage']; model?: string };
+  if (
+    !usage ||
+    typeof usage !== 'object' ||
+    Array.isArray(usage) ||
+    !Object.hasOwn(usage, 'input_tokens') ||
+    !Object.hasOwn(usage, 'output_tokens') ||
+    !Number.isSafeInteger(usage.input_tokens) ||
+    usage.input_tokens < 0 ||
+    !Number.isSafeInteger(usage.output_tokens) ||
+    usage.output_tokens < 0
+  )
+    return;
+  const estimatedCostUsd =
+    typeof model === 'string' && Object.hasOwn(body, 'model')
+      ? calculateClassifierUsageCost(provider, usage, { requestedModel, responseModel: model })
+      : undefined;
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }),
+  };
 }
 
 /** Bound awaiting even when a custom transport ignores its abort signal. */

@@ -61,6 +61,37 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
 const owned: string[] = [];
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-vm-migration-'));
+const classifierHealthEntry = {
+  identity: {
+    key: 'classifier-profile:migration-fixture',
+    family: 'classifier',
+    projectId: 'project-a',
+    profileNodeId: 'classifier-node',
+    profileName: 'Decision route',
+    provider: 'liquid',
+    model: 'd1',
+    configurationFingerprint: 'sha256:classifier-fixture',
+  },
+  failureTimestamps: [Date.parse('2026-09-26T12:00:00.000Z')],
+  failureEvidence: [
+    {
+      id: 'classifier-failure',
+      occurredAt: Date.parse('2026-09-26T12:00:00.000Z'),
+      correlationId: 'migration-correlation',
+      recordingId: 'migration-recording',
+      recordingAvailability: 'available',
+    },
+  ],
+  activeSuspension: {
+    id: 'classifier-suspension',
+    contributorEventIds: ['classifier-failure'],
+    triggerEventId: 'classifier-failure',
+  },
+  openUntil: Date.parse('2026-09-26T12:01:00.000Z'),
+  closedPermits: {},
+  updatedAt: Date.parse('2026-09-26T12:00:00.000Z'),
+  policy: { failureThreshold: 1, failureWindowMs: 60_000, openDurationMs: 60_000, halfOpenLeaseMs: 10_000 },
+};
 let pool: Pool | undefined;
 
 try {
@@ -172,6 +203,9 @@ try {
       }),
       Date.parse('2026-09-26T12:00:00.000Z'),
     );
+    health
+      .prepare('INSERT INTO llm_profile_health VALUES (?, ?, ?)')
+      .run(classifierHealthEntry.identity.key, JSON.stringify(classifierHealthEntry), classifierHealthEntry.updatedAt);
   } finally {
     health.close();
   }
@@ -683,7 +717,17 @@ try {
   }
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_recordings')).rows[0]?.count, 1);
   assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM evaluation_dataset_snapshots')).rows[0]?.count, 1);
-  assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM llm_profile_health')).rows[0]?.count, 1);
+  assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM llm_profile_health')).rows[0]?.count, 2);
+  const assertClassifierHealthMigrated = async () => {
+    const row = (
+      await pool!.query('SELECT project_id, entry_json FROM llm_profile_health WHERE key = $1', [
+        classifierHealthEntry.identity.key,
+      ])
+    ).rows[0];
+    assert.equal(row?.project_id, classifierHealthEntry.identity.projectId);
+    assert.deepEqual(row?.entry_json, classifierHealthEntry);
+  };
+  await assertClassifierHealthMigrated();
   assert.equal((await pool.query('SELECT project_id FROM llm_profile_health')).rows[0]?.project_id, 'project-a');
   assert.equal(
     (await pool.query('SELECT active_release_id FROM runtime_library_activation')).rows[0]?.active_release_id != null,
@@ -891,6 +935,7 @@ try {
     run('migrate', nativeEnv);
     run('migrate', nativeEnv);
     run('verify', nativeEnv);
+    await assertClassifierHealthMigrated();
     const target = new ManagedWorkflowBackend(readWorkflowMigrationTargetConfig({ ...env, ...nativeEnv }), undefined, {
       migrationMode: 'verify',
     });

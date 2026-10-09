@@ -58,6 +58,11 @@ export async function readDatasetsFile(
 
   const fileContents = await nativeReadTextFile(datasetsFilePath);
 
+  return parseDatasetsFileContents(fileContents, project);
+}
+
+/** Shared sidecar parsing for standalone files and manifest-declared bundle data. */
+export function parseDatasetsFileContents(fileContents: string, project: Project) {
   const datasets = deserializeDatasets(fileContents);
   const parsed = JSON.parse(fileContents) as { evaluationDatasets?: unknown };
   const evaluationDatasets = Array.isArray(parsed.evaluationDatasets)

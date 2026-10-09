@@ -16,6 +16,7 @@ export type HttpLLMProfileHealthAdminProvider = {
 };
 
 export type HttpRivetLLMProfileHealthStoreOptions = {
+  family?: 'llm' | 'classifier';
   baseUrl: string;
   fetch?: typeof globalThis.fetch;
   headers?: HeadersInit | (() => HeadersInit);
@@ -40,10 +41,12 @@ function createHealthServiceCaller(options: HttpRivetLLMProfileHealthStoreOption
     });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(`LLM Profile health service failed (${response.status} ${response.statusText})${body ? `: ${body}` : ''}`);
+      throw new Error(
+        `LLM Profile health service failed (${response.status} ${response.statusText})${body ? `: ${body}` : ''}`,
+      );
     }
     if (response.status === 204) return undefined as T;
-    return await response.json() as T;
+    return (await response.json()) as T;
   };
 }
 
@@ -53,27 +56,36 @@ export function createHttpRivetLLMProfileHealthStore(
   const call = createHealthServiceCaller(options);
 
   return {
-    begin: (value: RivetLLMProfileHealthBeginRequest) => call<RivetLLMProfileHealthBeginResult>('/begin', {
-      method: 'POST', body: JSON.stringify(value),
-    }),
-    finish: (value: RivetLLMProfileHealthFinishRequest) => call<RivetLLMProfileHealthSnapshot>('/finish', {
-      method: 'POST', body: JSON.stringify(value),
-    }),
-    renew: (value: RivetLLMProfileHealthRenewRequest) => call<RivetLLMProfileHealthSnapshot>('/renew', {
-      method: 'POST', body: JSON.stringify(value),
-    }),
+    begin: (value: RivetLLMProfileHealthBeginRequest) =>
+      call<RivetLLMProfileHealthBeginResult>('/begin', {
+        method: 'POST',
+        body: JSON.stringify(value),
+      }),
+    finish: (value: RivetLLMProfileHealthFinishRequest) =>
+      call<RivetLLMProfileHealthSnapshot>('/finish', {
+        method: 'POST',
+        body: JSON.stringify(value),
+      }),
+    renew: (value: RivetLLMProfileHealthRenewRequest) =>
+      call<RivetLLMProfileHealthSnapshot>('/renew', {
+        method: 'POST',
+        body: JSON.stringify(value),
+      }),
     async reset(value) {
       if (value.projectId == null) {
         throw new Error('Hosted LLM Profile health reset requires a projectId.');
       }
-      await call<void>('/reset', { method: 'POST', body: JSON.stringify(value) });
+      await call<void>('/reset', {
+        method: 'POST',
+        body: JSON.stringify({ ...value, family: value.family ?? options.family ?? 'llm' }),
+      });
     },
     async list(value: RivetLLMProfileHealthListRequest = {}) {
       if (value.projectId == null) {
         throw new Error('Hosted LLM Profile health listing requires a projectId.');
       }
       return await call<RivetLLMProfileHealthSnapshot[]>(
-        `/?projectId=${encodeURIComponent(String(value.projectId))}`,
+        `/?projectId=${encodeURIComponent(String(value.projectId))}&family=${value.family ?? options.family ?? 'llm'}`,
       );
     },
   };
@@ -87,11 +99,14 @@ export function createHttpLLMProfileHealthAdminProvider(
   return {
     async list({ projectId }) {
       return await call<LLMProfileHealthAdminEntry[]>(
-        `/admin?projectId=${encodeURIComponent(String(projectId))}`,
+        `/admin?projectId=${encodeURIComponent(String(projectId))}&family=${options.family ?? 'llm'}`,
       );
     },
     async reset(input) {
-      await call<void>('/reset', { method: 'POST', body: JSON.stringify(input) });
+      await call<void>('/reset', {
+        method: 'POST',
+        body: JSON.stringify({ ...input, family: options.family ?? 'llm' }),
+      });
     },
   };
 }

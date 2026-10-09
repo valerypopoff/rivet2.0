@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid/non-secure';
-import type { EditorDefinition } from '../EditorDefinition.js';
+import type { EditorDefinition, EditorDefinitionGroup } from '../EditorDefinition.js';
 import type { Inputs, Outputs } from '../GraphProcessor.js';
 import type { NodeBodySpec } from '../NodeBodySpec.js';
 import type {
@@ -22,16 +22,13 @@ import {
   withRunSuccessOutputs,
 } from '../nodeRunFailure.js';
 import { getNextVariadicPortIndex } from './variadicPortIndex.js';
-import {
-  type ClassifierApiKeySource,
-  type ClassifierCredentialNames,
-  resolveClassifierApiKey,
-} from '../classifier/credentials.js';
+import { resolveClassifierApiKey } from '../classifier/credentials.js';
 import { classifierArrayValues, classifierInputDataValue } from '../classifier/json.js';
 import { normalizeClassifierState } from '../classifier/state.js';
 import { CLASSIFIER_LIMITS, classifierPreparationCheck, ClassifierValueBudget } from '../classifier/limits.js';
 import {
   calculateClassifierUsageCost,
+  classifierFailureKind,
   classifierProviders,
   DEFAULT_CLASSIFIER_RETRY_ON_NON_200_COOLDOWN_MS,
   DEFAULT_CLASSIFIER_RETRY_ON_NON_200_REPEAT_TIMES,
@@ -40,12 +37,20 @@ import {
   normalizeClassifierNon200RetryCount,
 } from '../classifier/providers.js';
 import type { ClassifierQuestionDefinition } from '../classifier/types.js';
+import { normalizeClassifierProfiles, type ClassifierProfileConfiguration } from '../classifier/profile.js';
+import {
+  classifierProfileSummary,
+  ClassifierProfileExhaustedError,
+  runClassifierProfiles,
+} from '../classifier/profileExecution.js';
+import { prepareClassifierQuestion } from '../classifier/questions.js';
+import type { LLMAttempt } from '../chat-v2/llmProfileFallback.js';
 
-export type ClassifierEvaluateNodeData = {
-  provider?: string;
-  /** Empty or absent uses the selected provider's default model. */
-  model?: string;
-  useModelInput?: boolean;
+export type ClassifierEvaluateNodeData = ClassifierProfileConfiguration & {
+  configurationMode?: 'inline' | 'profile';
+  outputClassifierAttempts?: boolean;
+  outputClassifierProfileSummary?: boolean;
+  profileChainTimeoutMs?: number;
   /** Adds the exact JSON body sent to the provider, excluding its auth header. */
   outputRequestBody?: boolean;
   /** Adds the complete parsed JSON body returned by the provider. */
@@ -58,10 +63,6 @@ export type ClassifierEvaluateNodeData = {
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   timeoutMs?: number;
-  apiKeySource?: ClassifierApiKeySource;
-  apiKeyNamesByProvider?: Record<string, ClassifierCredentialNames | undefined>;
-  /** @deprecated Migrated into apiKeyNamesByProvider. */
-  apiKeyNames?: ClassifierCredentialNames;
 };
 
 export type ClassifierEvaluateNode = ChartNode<'classifierEvaluate', ClassifierEvaluateNodeData>;
@@ -110,10 +111,21 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         splitRunBehavior: 'preserve-array',
       },
     ];
-    if (this.data.useModelInput) {
+    if (this.data.configurationMode === 'profile') {
+      inputs.unshift({
+        id: 'classifierProfile' as PortId,
+        title: 'Classifier Profiles',
+        dataType: ['classifier-config', 'classifier-config[]'],
+        required: true,
+        coerced: true,
+        splitRunBehavior: 'preserve-array',
+        description: 'One Classifier Profile or an ordered fallback chain.',
+      });
+    }
+    if (this.data.configurationMode !== 'profile' && this.data.useModelInput) {
       inputs.push({ id: 'model' as PortId, title: 'Model', dataType: 'string', required: true });
     }
-    if (this.data.apiKeySource === 'input') {
+    if (this.data.configurationMode !== 'profile' && this.data.apiKeySource === 'input') {
       inputs.push({ id: 'apiKey' as PortId, title: 'API Key', dataType: 'string', required: true });
     }
     const count = getNextVariadicPortIndex(connections, this.chartNode.id, 'question', 'strict-positive');
@@ -146,51 +158,21 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     if (this.data.outputResponseBody === true) {
       outputs.push({ id: 'responseBody' as PortId, title: 'Response body', dataType: 'object' });
     }
+    if (this.data.outputClassifierAttempts)
+      outputs.push({ id: 'classifierAttempts' as PortId, title: 'Classifier Attempts', dataType: 'object[]' });
+    if (this.data.configurationMode === 'profile' && this.data.outputClassifierProfileSummary)
+      outputs.push({
+        id: 'classifierProfileSummary' as PortId,
+        title: 'Classifier Profile Summary',
+        dataType: 'string',
+      });
     return [...outputs, ...getRunFailureOutputDefinitions({ catchRequestFailed: this.data.catchRequestFailed })];
   }
 
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
     return [
-      {
-        type: 'group',
-        label: 'Model',
-        defaultOpen: true,
-        editors: [
-          {
-            type: 'dropdown',
-            label: 'Provider',
-            dataKey: 'provider',
-            defaultValue: 'jev',
-            options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
-          },
-          {
-            type: 'string',
-            label: 'Model',
-            dataKey: 'model',
-            useInputToggleDataKey: 'useModelInput',
-            placeholder: getProviderForDisplay(this.data.provider).defaultModel,
-          },
-          {
-            type: 'segmented',
-            label: 'API key source',
-            ariaLabel: 'API key source',
-            dataKey: 'apiKeySource',
-            defaultValue: 'configured',
-            options: [
-              { value: 'configured', label: 'Automatic' },
-              { value: 'classifier-settings', label: 'Classifier settings' },
-              { value: 'input', label: 'Input port' },
-            ],
-            helperMessage: getApiKeySourceHelperMessage,
-          },
-          {
-            type: 'custom',
-            label: 'Configured API key names',
-            customEditorId: 'ClassifierCredentialNames',
-            hideIf: (data) => data.apiKeySource === 'input' || data.apiKeySource === 'classifier-settings',
-          },
-        ],
-      },
+      { type: 'custom', label: 'Configuration', customEditorId: 'ClassifierConfiguration' },
+      { ...getClassifierModelEditor(this.data), hideIf: (data) => data.configurationMode === 'profile' },
       {
         type: 'group',
         label: 'Outputs',
@@ -216,6 +198,13 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             helperMessage:
               'Adds the complete classifier JSON response returned by the provider after validation. Rivet does not redact or truncate captured content.',
           },
+          { type: 'toggle', label: 'Output classifier attempts', dataKey: 'outputClassifierAttempts' },
+          {
+            type: 'toggle',
+            label: 'Output classifier profile summary',
+            dataKey: 'outputClassifierProfileSummary',
+            hideIf: (data) => data.configurationMode !== 'profile',
+          },
         ],
       },
       {
@@ -225,8 +214,8 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
           {
             type: 'number',
             label: 'Overall timeout (seconds)',
-            dataKey: 'timeoutMs',
-            defaultValue: 30,
+            dataKey: this.data.configurationMode === 'profile' ? 'profileChainTimeoutMs' : 'timeoutMs',
+            defaultValue: this.data.configurationMode === 'profile' ? 180 : 30,
             storageMultiplier: 1000,
             min: 1,
             max: 600,
@@ -312,24 +301,44 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   }
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
+    const attempts: LLMAttempt[] = [];
     try {
       context.signal.throwIfAborted();
-      const outputs = await this.processRun(inputs, context);
+      const outputs = await this.processRun(inputs, context, attempts);
       context.signal.throwIfAborted();
       return withRunSuccessOutputs({ catchRequestFailed: this.data.catchRequestFailed }, outputs);
     } catch (error) {
-      if (!shouldCatchRunFailure(this.data, error, context.signal)) throw error;
+      const failure = error instanceof ClassifierProfileExhaustedError ? { statusCode: error.statusCode } : error;
+      if (!shouldCatchRunFailure(this.data, failure, context.signal)) throw error;
       return this.data.catchRequestFailed === true
-        ? createCaughtRunFailureOutputs(this.getOutputDefinitions(), error)
+        ? createCaughtRunFailureOutputs(
+            this.getOutputDefinitions(),
+            error,
+            this.profileEvidence(
+              attempts,
+              error instanceof ClassifierProfileExhaustedError ? error.summary : undefined,
+            ),
+          )
         : createExcludedNodeOutputs(this.chartNode, this.getOutputDefinitions());
     }
   }
 
-  private async processRun(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
-    const timeoutMs = normalizeTimeout(this.data.timeoutMs);
+  private async processRun(inputs: Inputs, context: InternalProcessContext, attempts: LLMAttempt[]): Promise<Outputs> {
+    if (
+      this.data.configurationMode !== undefined &&
+      this.data.configurationMode !== 'inline' &&
+      this.data.configurationMode !== 'profile'
+    )
+      throw new Error('Unknown classifier configuration mode.');
+    const timeoutMs =
+      this.data.configurationMode === 'profile'
+        ? normalizeTimeout(this.data.profileChainTimeoutMs ?? 180_000)
+        : normalizeTimeout(this.data.timeoutMs);
     const deadline = Date.now() + timeoutMs;
     const checkPreparation = classifierPreparationCheck(context.signal, deadline, timeoutMs);
     checkPreparation();
+    if (this.data.configurationMode === 'profile')
+      return this.processProfiles(inputs, context, deadline, checkPreparation, attempts);
     const provider = getClassifierProvider(this.data.provider);
     if (!provider.browserExecutionSupported && context.executor === 'browser') {
       throw new Error(
@@ -396,10 +405,38 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       ...state,
       timeoutMs,
       deadline,
+      onAttempt: ({ kind, ...attempt }) => {
+        const event: LLMAttempt = {
+          ...attempt,
+          family: 'classifier',
+          roundIndex: 0,
+          provider: provider.id,
+          model: modelValue,
+          stage: kind === 'response-validation' || kind === 'response-parsing' ? 'response-validation' : 'request',
+          failureKind: kind ? classifierFailureKind(kind, attempt.status) : undefined,
+          timeoutKind: kind === 'timeout' ? 'response' : undefined,
+        };
+        attempts.push(event);
+        context.onLLMProfileAttempt?.({
+          ...event,
+          eventId: nanoid(),
+          nodeId: this.chartNode.id,
+          processId: context.processId,
+        });
+      },
     });
     // Custom providers still own their asynchronous transport, but no late
     // result may become a successful node output after the original deadline.
     checkPreparation();
+    return { ...this.projectResult(provider, modelValue, result, checkPreparation), ...this.profileEvidence(attempts) };
+  }
+
+  private projectResult(
+    provider: ReturnType<typeof getClassifierProvider>,
+    modelValue: string,
+    result: Awaited<ReturnType<ReturnType<typeof getClassifierProvider>['evaluate']>>,
+    checkPreparation: () => void,
+  ): Outputs {
     const totalCost = calculateClassifierUsageCost(provider, result.response.usage, {
       requestedModel: modelValue,
       responseModel: result.response.model,
@@ -429,6 +466,126 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     }
     return outputs;
   }
+
+  private profileEvidence(attempts: LLMAttempt[], summary?: string): Outputs {
+    return {
+      ...(this.data.outputClassifierAttempts
+        ? { ['classifierAttempts' as PortId]: { type: 'object[]' as const, value: attempts } }
+        : {}),
+      ...(this.data.configurationMode === 'profile' && this.data.outputClassifierProfileSummary && summary !== undefined
+        ? { ['classifierProfileSummary' as PortId]: { type: 'string' as const, value: summary } }
+        : {}),
+    };
+  }
+
+  private async processProfiles(
+    inputs: Inputs,
+    context: InternalProcessContext,
+    deadline: number,
+    check: () => void,
+    attempts: LLMAttempt[],
+  ): Promise<Outputs> {
+    const profiles = normalizeClassifierProfiles(classifierInputDataValue(inputs, 'classifierProfile')?.value, check);
+    const graph = context.project?.graphs[context.execution?.graphId];
+    if (
+      classifierInputDataValue(inputs, 'images') !== undefined ||
+      graph?.connections.some((connection) => connection.inputNodeId === this.id && connection.inputId === 'images')
+    )
+      throw new Error(
+        'The separate Images input has been removed. Connect images or an assembled user message to State.',
+      );
+    const state = normalizeClassifierState(classifierInputDataValue(inputs, 'state'), check);
+    const budget = new ClassifierValueBudget(check);
+    budget.inspect(state);
+    const values: ClassifierQuestionDefinition[] = [];
+    const work = { values: 0 };
+    for (const port of Object.keys(inputs)
+      .filter((id) => /^question\d+$/.test(id))
+      .sort(compareQuestionPorts)) {
+      const input = classifierInputDataValue(inputs, port);
+      if (input) flattenQuestions(input.value, values, check, new Set(), 0, work);
+    }
+    if (!values.length) throw new Error('Classifier Evaluate requires at least one question.');
+    const ids = new Set<string>();
+    const questions = values.map((value) => {
+      const question = prepareClassifierQuestion(value, budget);
+      if (ids.has(question.questionId))
+        throw new Error(`Question ID '${question.questionId}' is duplicated in this evaluation.`);
+      ids.add(question.questionId);
+      return question;
+    });
+    const selected = await runClassifierProfiles({
+      profiles,
+      state,
+      questions,
+      context,
+      nodeId: this.chartNode.id,
+      deadline,
+      retryOnNon200: this.data.retryOnNon200,
+      retryOnNon200RepeatTimes: this.data.retryOnNon200RepeatTimes,
+      retryOnNon200CooldownMs: this.data.retryOnNon200CooldownMs,
+      onAttempt: (attempt) => {
+        attempts.push(attempt);
+        context.onLLMProfileAttempt?.({
+          ...attempt,
+          eventId: nanoid(),
+          nodeId: this.chartNode.id,
+          processId: context.processId,
+        });
+      },
+    });
+    check();
+    return {
+      ...this.projectResult(selected.provider, selected.model, selected.result, check),
+      ...this.profileEvidence(attempts, classifierProfileSummary(profiles, attempts)),
+    };
+  }
+}
+
+/** Shared settings definition; constructing an unrelated node is unnecessary. */
+export function getClassifierModelEditor(
+  data: ClassifierProfileConfiguration,
+): EditorDefinitionGroup<ClassifierEvaluateNode> {
+  return {
+    type: 'group',
+    label: 'Model',
+    defaultOpen: true,
+    editors: [
+      {
+        type: 'dropdown',
+        label: 'Provider',
+        dataKey: 'provider',
+        defaultValue: 'jev',
+        options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
+      },
+      {
+        type: 'string',
+        label: 'Model',
+        dataKey: 'model',
+        useInputToggleDataKey: 'useModelInput',
+        placeholder: getProviderForDisplay(data.provider).defaultModel,
+      },
+      {
+        type: 'segmented',
+        label: 'API key source',
+        ariaLabel: 'API key source',
+        dataKey: 'apiKeySource',
+        defaultValue: 'configured',
+        options: [
+          { value: 'configured', label: 'Automatic' },
+          { value: 'classifier-settings', label: 'Classifier settings' },
+          { value: 'input', label: 'Input port' },
+        ],
+        helperMessage: getApiKeySourceHelperMessage,
+      },
+      {
+        type: 'custom',
+        label: 'Configured API key names',
+        customEditorId: 'ClassifierCredentialNames',
+        hideIf: (data) => data.apiKeySource === 'input' || data.apiKeySource === 'classifier-settings',
+      },
+    ],
+  };
 }
 
 function getProviderForDisplay(id: string | undefined) {
@@ -452,8 +609,15 @@ export function getClassifierEvaluateBodySections(
     {
       id: 'configuration',
       fields: [
-        { label: 'Provider', value: provider.label },
-        { label: 'Model', value: data.useModelInput ? 'input' : getStaticModel(data.model, provider.defaultModel) },
+        ...(data.configurationMode === 'profile'
+          ? [{ label: 'Configuration', value: 'From profile' }]
+          : [
+              { label: 'Provider', value: provider.label },
+              {
+                label: 'Model',
+                value: data.useModelInput ? 'input' : getStaticModel(data.model, provider.defaultModel),
+              },
+            ]),
       ],
     },
   ];
@@ -487,7 +651,7 @@ function getApiKeySourceHelperMessage(data: ClassifierEvaluateNodeData): string 
   if (data.apiKeySource === 'input') return 'Uses the API Key input port instead of a configured provider key.';
   const provider = getProviderForDisplay(data.provider);
   if (data.apiKeySource === 'classifier-settings')
-    return `Uses only Settings > Classifier > ${provider.label} API Key on the executor. A missing key fails without fallback.`;
+    return `Uses only Settings > Classifier > ${provider.label} API Key on the executor. Does not fall back to named or environment credentials.`;
   return 'Automatic checks the named programmatic setting, then the named environment variable, then the saved Classifier key (default names only). OpenAI also accepts its legacy general key; Jev accepts its legacy plugin key last. Resolution happens on the executor, not in this editor.';
 }
 

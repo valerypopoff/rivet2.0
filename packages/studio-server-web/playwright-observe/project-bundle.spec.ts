@@ -75,6 +75,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
         const body = request.postDataJSON();
         expect(body.relativePath).toBe('root.rivet-project');
         expect(body.version).toBe('live');
+        expect(body.versionPolicy).toBe('latest');
         const source = failPreparation
           ? {
               ...fixture.source,
@@ -140,7 +141,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     const dialog = page.getByTestId('workflow-project-bundle-modal');
     const spinner = dialog.locator('.workflow-project-bundle-spinner');
     await expect(spinner).toHaveCount(0);
-    const rootVersions = dialog.getByRole('group', { name: 'Bundle root version' });
+    const rootVersions = dialog.getByRole('group', { name: 'Bundle versions' });
     await expect(dialog.locator('select')).toHaveCount(0);
     await expect(rootVersions.getByRole('button', { name: 'Published', exact: true })).toHaveAttribute(
       'aria-pressed',
@@ -280,6 +281,68 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await jobs.dispose();
     await fs.rm(temporary, { recursive: true, force: true });
   }
+});
+
+test('reopened failed export retries the durable version choice rather than the project default', async ({ page }) => {
+  const project = bundleProject('bundle-retry-policy');
+  const oldId = 'd16225ba-b6a6-4c02-bd73-67daab3eb5da';
+  let posted: { version: string; versionPolicy: string; requestId: string } | undefined;
+  await page.addInitScript(({ key, id }) => sessionStorage.setItem(key, id), {
+    key: `rivet-project-bundle:${project.id}`,
+    id: oldId,
+  });
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/api/workflows/tree')
+        return route.fulfill({ json: { root: '/workflows', folders: [], projects: [project] } });
+      if (url.pathname === '/api/workflows/project-bundles') {
+        posted = route.request().postDataJSON();
+        return route.fulfill({
+          status: 202,
+          json: {
+            id: posted!.requestId,
+            phase: 'collecting',
+            versionPolicy: 'latest',
+            projects: 0,
+            bytes: 0,
+            expiresAt: '2099-01-01T00:00:00Z',
+          },
+        });
+      }
+      if (url.pathname.startsWith('/api/workflows/project-bundles/')) {
+        if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 });
+        const id = url.pathname.split('/').at(-1);
+        return route.fulfill({
+          json: {
+            id,
+            phase: id === oldId ? 'failed' : 'collecting',
+            versionPolicy: 'latest',
+            projects: 0,
+            bytes: 0,
+            expiresAt: '2099-01-01T00:00:00Z',
+            error: id === oldId ? 'Fixture export failed.' : undefined,
+          },
+        });
+      }
+      if (url.pathname === '/api/app-settings/local-upgrade/setup') return route.fulfill({ json: { eligible: false } });
+      return route.fulfill({ status: 503, json: { error: 'Unknown fixture API route' } });
+    },
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
+  const dialog = page.getByTestId('workflow-project-bundle-modal');
+  await expect(dialog.getByRole('status')).toContainText('Export: failed.');
+  await dialog.getByRole('button', { name: 'Retry export', exact: true }).click();
+  await expect.poll(() => posted?.versionPolicy).toBe('latest');
+  expect(posted!.version).toBe('live');
+  expect(posted!.requestId).not.toBe(oldId);
+  await expect(dialog.getByRole('status')).toContainText('Export: collecting.');
 });
 
 test('late bundle admission cannot regress packaging and duplicate clicks admit only once', async ({ page }) => {

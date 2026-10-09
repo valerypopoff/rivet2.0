@@ -227,6 +227,15 @@ and checks the rendered artifact bind mounts and named data volumes against the 
 before recreating anything. It uses the same data volumes and does not migrate
 storage or change `.env`. See the [staging VM procedure](../../developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
 
+Startup launchers report named phases and elapsed time every 10 seconds during
+quiet finite work. Staging image pulls stream Docker output and run at most two
+at a time; production Compose defaults to two parallel operations, respecting an
+existing `COMPOSE_PARALLEL_LIMIT`. Custom/development builds keep their serialized
+default. Revision, digest, data-mount, and readiness checks remain mandatory.
+Docker development (including tunnel), local-process development, and Kubernetes
+development also report startup progress; captured configuration/secrets are not
+printed. See [startup progress](../../developer-docs/studio-server/development.md#startup-progress-across-launchers).
+
 ## Development
 
 Fresh single-host Compose installations initialize SQLite automatically before

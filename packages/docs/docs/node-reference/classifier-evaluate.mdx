@@ -10,6 +10,10 @@ Evaluates one shared state and optional images against a batch of independent ty
 
 ## Settings
 
+**Configuration** selects **Inline** (the existing default) or **From profile**. Profile mode adds a required **Classifier Profiles** input accepting one [Classifier Profile](./classifier-profile.mdx) or an ordered Array of profiles. It hides inline model/credential inputs without deleting saved settings. **Export Classifier settings to profile node** creates and wires a Profile, moves active model/key connections, and preserves evidence connections; the command supports Undo/Redo.
+
+In profile mode, the overall timeout defaults to 180 seconds; each profile has its own response deadline (30 seconds by default). Retry controls remain owned by Evaluate. Optional **Classifier Attempts** and **Classifier Profile Summary** outputs report candidate outcomes. On caught exhaustion these diagnostics remain available while answer/body/cost outputs are excluded. Native request and response bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
+
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
 - **Provider**: choose **Jev**, **Liquid AI**, or **OpenAI**. All use the same Choice, Score, and Noul question definitions.

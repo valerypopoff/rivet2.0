@@ -7,6 +7,7 @@ import type {
   RivetKnowledgeSourceReference,
 } from '../integrations/KnowledgeStore.js';
 import { createDefaultLLMProfileValue, type LLMProfileValue } from './chat-v2/llmProfileTypes.js';
+import type { ClassifierProfileValue } from './classifier/profile.js';
 
 export type DataValueDef<Type extends string, RuntimeType> = {
   type: Type;
@@ -115,6 +116,7 @@ export type KnowledgeSourceDataValue = DataValueDef<'knowledge-source', RivetKno
 export type KnowledgeDocumentDataValue = DataValueDef<'knowledge-document', RivetKnowledgeDocument>;
 export type KnowledgeEvidenceDataValue = DataValueDef<'knowledge-evidence', RivetKnowledgeEvidence>;
 export type LLMProfileDataValue = DataValueDef<'llm-config', LLMProfileValue>;
+export type ClassifierProfileDataValue = DataValueDef<'classifier-config', ClassifierProfileValue>;
 export type DocumentDataValue = DataValueDef<
   'document',
   {
@@ -164,6 +166,7 @@ export type ScalarDataValue =
   | KnowledgeDocumentDataValue
   | KnowledgeEvidenceDataValue
   | LLMProfileDataValue
+  | ClassifierProfileDataValue
   | DocumentDataValue;
 
 export type ScalarType = ScalarDataValue['type'];
@@ -285,6 +288,10 @@ export const dataTypes = exhaustiveTuple<DataType>()(
   'llm-config[]',
   'fn<llm-config>',
   'fn<llm-config[]>',
+  'classifier-config',
+  'classifier-config[]',
+  'fn<classifier-config>',
+  'fn<classifier-config[]>',
   'document',
   'document[]',
   'fn<document>',
@@ -312,6 +319,7 @@ export const scalarTypes = exhaustiveTuple<ScalarType>()(
   'knowledge-document',
   'knowledge-evidence',
   'llm-config',
+  'classifier-config',
   'document',
 );
 
@@ -393,6 +401,10 @@ export const dataTypeDisplayNames: Record<DataType, string> = {
   'fn<knowledge-evidence>': 'Function<Knowledge Evidence>',
   'fn<knowledge-evidence[]>': 'Function<Knowledge Evidence Array>',
   'llm-config': 'LLM Profile',
+  'classifier-config': 'Classifier Profile',
+  'classifier-config[]': 'Classifier Profile Array',
+  'fn<classifier-config>': 'Function<Classifier Profile>',
+  'fn<classifier-config[]>': 'Function<Classifier Profile Array>',
   'llm-config[]': 'LLM Profile Array',
   'fn<llm-config>': 'Function<LLM Profile>',
   'fn<llm-config[]>': 'Function<LLM Profile Array>',
@@ -545,6 +557,11 @@ export const scalarDefaults: { [P in ScalarDataType]: Extract<ScalarDataValue, {
     documentId: '',
   },
   'llm-config': createDefaultLLMProfileValue(),
+  'classifier-config': {
+    version: 1,
+    configuration: { provider: 'jev', model: 'jev-latest' },
+    credential: {},
+  } satisfies ClassifierProfileValue,
   document: {
     mediaType: 'text/plain',
     data: new Uint8Array(),

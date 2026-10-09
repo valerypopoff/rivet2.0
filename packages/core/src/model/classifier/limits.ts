@@ -13,6 +13,9 @@ export type ClassifierPreparationCheck = () => void;
 
 export class ClassifierResourceLimitError extends Error {}
 
+/** Receipt failed before JSON decoding/validation, rather than malformed evidence. */
+export class ClassifierResponseReadError extends Error {}
+
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const byteBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')!.get!;
 const byteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')!.get!;
@@ -248,7 +251,9 @@ export async function readClassifierResponse(
   try {
     for (;;) {
       check();
-      const { done, value } = await reader.read();
+      const { done, value } = await reader.read().catch((cause: unknown) => {
+        throw new ClassifierResponseReadError('Classifier response body could not be read.', { cause });
+      });
       check();
       if (done) break;
       const chunk = classifierByteView(value);

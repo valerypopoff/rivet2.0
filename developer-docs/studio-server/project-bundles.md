@@ -5,9 +5,12 @@ project and its recursive dependency closure as a ZIP. Ordinary **Download** and
 published-history downloads retain their single-file contract. Closing the bundle
 dialog does not cancel export, activate a project, refresh the tree or discard edits.
 Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
-must succeed before creating a fresh job with the selected root version. Ready
-jobs retain **Prepare another bundle** for choosing a different version. Status
-responses and polling errors are fenced by the current job ID, so late replies
+must succeed before creating a fresh job with the selected bundle-wide version. Ready
+jobs retain **Prepare another bundle** for choosing a different version. Job status
+includes the optional durable `versionPolicy`; reopening or retrying a new-format
+job restores its actual choice instead of the root project's publication default.
+Legacy jobs without that field retain the existing default behavior.
+Status responses and polling errors are fenced by the current job ID, so late replies
 from a disposed job cannot overwrite the retry's progress or download link.
 Late start acknowledgements cannot regress packaging back to collection, or
 replace a terminal result with active progress.
@@ -25,7 +28,7 @@ The progress card shows an indeterminate spinner while loading initial status,
 collecting snapshots or packaging, including after reopening an active export.
 Terminal states remove the spinner; reduced-motion preferences disable rotation.
 The existing live status text announces progress without exposing a decorative icon.
-Root-version selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
+Bundle-wide version selection uses `SegmentedControl`, not an OS-native select. Atlaskit actions live
 in a non-scrolling footer; Prepare/Download are blue primary actions on the right.
 The body alone scrolls, keeping the title, close control and actions visible on
 short viewports. Download remains a real anchor with the authenticated archive
@@ -40,15 +43,23 @@ URL, preserving native browser downloads and resume rather than buffering a blob
   storage, including the datasets belonging to the selected revision. Raw project
   bytes, project/graph/node IDs and attached data are preserved; no graph flattening
   or reference rewriting is performed.
-- Cross-project targets are keyed by `(projectId, latest|published)`. Different
-  versions of one project are separate artifacts. Legacy `Project.references`
-  use a separate ID binding and select published, falling back to latest only
-  when there is no published version. Stale hint paths are not export authority.
+- The dialog selects **Published** or **Saved latest** for the entire closure,
+  exporting one artifact per project. Published falls back to saved latest only
+  for projects with no publication. Both latest/published Subgraph bindings and
+  legacy reference bindings resolve to that project's selected artifact. Authored
+  Subgraph version settings are not rewritten; the selection overrides them only
+  inside the bundle. Incompatible saved graph boundaries reject export rather
+  than remove wires or silently choose another version. Stale hint paths are not
+  export authority.
+- API clients omitting `versionPolicy` retain the legacy per-call selection:
+  `(projectId, latest|published)` artifacts and published-first legacy references.
 - Every captured source is re-read once after the ZIP closes, before publication. A changed
-  project or dataset rejects publication; an export is not a transaction spanning
+  project, dataset, selected version or source revision rejects publication; this
+  live-source consistency barrier does not checksum editable extracted files.
+  An export is not a transaction spanning
   databases, but it never knowingly publishes a mixed, changed capture.
 - Node `loadProjectBundle` validates the extracted manifest, contained real paths,
-  lengths, SHA-256 hashes, identities, target graphs and wire boundaries before
+  actual file resource limits, identities, target graphs and wire boundaries before
   processor creation. Each processor receives separate mutable project clones and
   in-memory dataset providers per artifact. Legacy references and versioned calls
   resolve only through the manifest; there is no server lookup or filename guessing.
@@ -64,10 +75,131 @@ URL, preserving native browser downloads and resume rather than buffering a blob
   unresolved library instances are rejected before execution.
 
 The archive contains `rivet-bundle.json`, `README.txt`, and opaque numbered
-`projects/*.rivet-project` / optional `.rivet-data` artifacts. Schema and loader
-capability are both version 1; `exportingRuntimeVersion` records the installed Node
-runtime version independently of the loader capability. Checksums detect corruption, not malicious authoring:
+`projects/*.rivet-project` / optional `.rivet-data` artifacts. Schema
+version is 1; loader capability is 3 for bundle-wide version selection. `exportingRuntimeVersion` records the installed Node
+runtime version independently of the loader capability. Bundles are not a trust boundary:
 executing a bundle can execute its Code nodes and network requests.
+The generated `README.txt` describes the actual bundle-wide policy; legacy API
+exports retain the authored per-call version explanation. Keep the user guide's
+Working with Projects, Subgraphs and Node `loadProjectBundle` reference aligned
+with these version, editable-file and desktop execution contracts.
+
+### Editable extracted files and compatibility
+
+Extracted project and dataset files may be edited without updating the manifest.
+New manifests contain only `path` in each file descriptor; per-file checksums and
+export-time lengths are no longer calculated or enforced. The loader accepts old
+capability-1 bundles too, ignoring their legacy `bytes`/`sha256` fields, including
+stale values. New UI exports declare `requiredLoaderVersion: 3` and
+`versionPolicy: latest|published`; capability 3 requires that policy and rejects
+duplicate project identities. Latest policy rejects published artifacts. Older loaders
+fail with an upgrade instruction rather than misinterpreting the new descriptors.
+
+File limits (64 MiB per artifact, the configured total budget, and 1 MiB for the
+manifest) use actual sizes before allocation, with bounded reads detecting growth
+or truncation during loading. Path containment, identities, version bindings,
+plugins, dependency closure, cycles and saved wire boundaries still apply.
+Renaming an existing Graph Input or Graph Output keeps its stable node identity:
+the caller retains its connected port ID while displaying and executing the new
+name, just like same-project Subgraphs. Removing/replacing a boundary node,
+changing its type, or introducing conflicting names requires reviewing the caller
+contract; removing checksums does not make incompatible graph connections valid.
+
+`loadProjectBundle` captures current disk contents once. Processors made from that
+loaded bundle use isolated in-memory copies. Call it again after editing files to
+use the edits; existing processors do not hot-reload. Export revision labels are
+provenance, not checksums or proof that an extracted file is unchanged.
+
+### Desktop opening and execution
+
+Extract the ZIP first. Desktop Open accepts `rivet-bundle.json`, opens every
+declared project in its own tab and selects the root. Actual `.rivet-project`
+paths are used for saves, tabs and recent files. Existing tabs from the same
+paths keep their unsaved edits and datasets; conflicting open project identities
+fail before importing. New inactive members import datasets without activating
+their provider and merge their Evaluation library entries. Workspace opening uses
+the same guarded owner for file-picker and path-based opens, including when the
+root is already open. Reusing activation does not start a competing intent.
+Closing or moving a member during deferred dataset import invalidates the open
+before any new tabs are registered. Parsed member datasets are imported directly,
+without rescanning the snapshot map for each member.
+Opening any declared project directly inside the bundle's `projects/` folder
+discovers the sibling manifest and opens only that member as the entry point.
+Legacy mixed-version bundles still execute through the public Node loader or
+individual-member opening. Opening their manifest as a desktop workspace rejects
+duplicate project IDs, with guidance to re-export using the global version choice.
+Discovery does not walk arbitrary ancestors or guess dependencies from filenames.
+An existing malformed manifest or undeclared member is an error, not a silent
+fallback to standalone execution. Moving a project outside the bundle removes
+automatic discovery; move the complete extracted directory to retain bindings.
+
+Both Browser mode and the standalone desktop Node executor support live runs and
+Evaluations. The current entry project/graph and its active editor datasets override
+its disk snapshot, including unsaved edits. Dependencies are reread from disk for
+each run, with separate latest/published artifact and dataset identities. Unsaved
+edits in another open dependency tab must be saved before running the caller.
+Each run gets isolated dependency projects and datasets; mutations do not leak
+into another run or another version of the same project.
+Root runs project live dependency node/graph events into matching bundle tabs,
+including inactive tabs, in Browser and desktop Node mode. Core event metadata
+identifies the actual owning project. This is a display projection: run controls,
+cancellation, user-input prompts, recording and terminal errors remain entry-owned.
+Cross-project graph entries are rebased for the dependency's graph view; nested
+graphs within that project retain their parent identity. Replay events and unrelated
+open projects are excluded. Display observer errors cannot fail the processor.
+The desktop entry datasets are also captured at Run time and isolated per run
+(or per Evaluation trial). Switching tabs cannot redirect a pending/running
+bundle to the new tab's dataset provider. Dataset writes inside a bundle run
+remain run-local; they do not modify the editor's datasets or extracted files.
+
+Browser run preparation owns an abort controller before asynchronous bundle reads
+begin, so repeated Run clicks cannot start duplicate work. Abort or closing the
+entry tab prevents late reads from starting execution. The desktop Node executor
+also acknowledges cancellation during bundle preparation and checks it before
+starting the processor; subsequent runs remain usable. The public Node loader
+accepts an optional `signal: AbortSignal`. The executor passes its preparation
+signal to it, stopping further reads/parsing between filesystem awaits and closing
+the current handle on cancellation. A pre-cancelled load performs no filesystem IO.
+The Browser run reservation remains owned until processor completion, including
+runs returning outputs early. Bundle/preparation failures show an error toast even
+when no processor start/error event was emitted. Cancellation is checked after
+asynchronous environment preparation in both ordinary runs and Evaluations, so a
+late completion cannot start a cancelled run.
+
+Opening checks manifest structure, project identities and membership, but allows
+stale graph interfaces to be repaired in the editor. Execution then checks the
+complete closure, cycle rules and saved wire boundaries against the visible entry.
+`createProjectBundleRuntime` owns this shared browser/Node resolution contract;
+Node's `createExecutionContext` and loader `entry` override use the same boundary.
+Package plugins still require normal local installation; a manifest cannot grant
+permission to install or execute a new plugin automatically.
+
+Tauri's `read_project_bundle` reads on a blocking worker, validates the selected
+file's existing scope and grants access only to contained declared files. Reads
+are bounded at 1 MiB for the manifest, 64 MiB per artifact and 512 MiB total;
+traversal, escaping symlinks and size changes fail clearly. Valid UTF-8 text is
+required by both native and Node readers; an initial UTF-8 BOM in the manifest is
+accepted by both (for compatibility with Windows text editors). Invalid UTF-8
+remains an error. The Node reader opens
+the contained canonical path rather than re-following the original symlink alias.
+Node mode sends the manifest location, artifact ID and captured entry datasets
+over the desktop executor protocol, not dependency bodies. The app and executor
+must be updated together; a bundle request missing its entry dataset snapshot is
+rejected instead of borrowing whichever tab is now selected.
+A hosted/authenticated executor refuses local bundle locations
+by default. External-debugger mode is unsupported for desktop bundle resolution
+and reports an actionable error; Studio Server retains its server-owned loaders.
+
+Ordinary saves edit the selected project and its neighboring data sidecar, never
+the manifest itself. Dependency/version bindings are not rewritten automatically:
+adding new projects or dataset sidecars to a previously data-free artifact requires
+updating the manifest or exporting a new bundle. Existing declared data sidecars
+should keep their standard neighboring `.rivet-data` location.
+
+Server export still checks source consistency while collecting and before
+publishing the ZIP, and retains the archive hash/ETag for resumable downloads.
+Storage artifact integrity, backups and migration certification are unchanged;
+none of these checks restrict editing extracted bundle files.
 
 ## Job and download lifecycle
 
@@ -85,9 +217,9 @@ source reader. Bundle preparation uses the same saved-version resolver as execut
 Managed mode never reconstructs project files in the legacy workflows directory
 or hands the browser an S3 object URL. Authenticated ZIP download and Range resume
 are identical across the three setups, independent of bucket prefixes or virtual
-project paths. Root **Published**/**Saved latest**, explicit Subgraph versions and
-legacy references retain their existing selection policies. Both versions of the
-same child receive separate datasets. Source changes reject publication.
+project paths. UI **Published**/**Saved latest** applies to every project and its
+matching datasets. Legacy clients without a policy retain per-call versions and
+separate datasets. Source changes reject publication.
 
 All setups still require writable export scratch and enough space for compressed
 output plus headroom. Managed source storage does not eliminate that requirement.
@@ -101,9 +233,11 @@ export creates neither database migrations nor new bucket permissions.
 
 Authenticated API routes under `/api/workflows/project-bundles` are:
 
-- `POST /` with `{relativePath, version: live|published, requestId?: UUID}` returns
+- `POST /` with `{relativePath, version: live|published, versionPolicy?: latest|published, requestId?: UUID}` returns
   202 promptly. The client creates and remembers the UUID before POST, allowing
   progress recovery after a lost acknowledgement.
+  The UI always sends `versionPolicy`; `version` remains the backward-compatible
+  root selector for older clients. With a policy the root also follows the policy.
 - `GET /:id` reports collecting, packaging, ready, failed, cancelled or interrupted.
 - `GET /:id/download` serves a ready immutable ZIP with a strong archive-hash ETag,
   Range/If-Range support, attachment disposition and no-store headers.
@@ -169,8 +303,12 @@ and published. Keeping this ZIP (rather than regenerating on download) preserves
 stable length, checksum, selected versions and browser Range resume.
 
 Defaults: 256 project/version artifacts, 64 MiB per project or dataset file, 512 MiB
-total captured payload, 2 GiB scratch budget, and 32 MiB free-space reserve. Operators
-may deliberately set `RIVET_PROJECT_BUNDLE_MAX_BYTES` (up to 8 GiB) and
+total captured payload, 2 GiB scratch budget, and 32 MiB free-space reserve.
+Version-selected bundles keep one artifact per project and allow up to 512 target
+bindings (latest and published aliases), so both modes support all 256 projects.
+Export also enforces the loaders' 1 MiB manifest limit against serialized UTF-8
+bytes before publishing an archive; large titles cannot produce an unloadable ZIP.
+Operators may deliberately set `RIVET_PROJECT_BUNDLE_MAX_BYTES` (up to 8 GiB) and
 `RIVET_PROJECT_BUNDLE_SCRATCH_MAX_BYTES` (up to 32 GiB), and
 `RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` (1 MiB to 1 GiB). Scratch accounting
 counts retained archives plus actual compressed output, including ZIP headers,
@@ -231,8 +369,9 @@ Updating only the API image cannot add the mount or its environment setting.
 ## Portability limits
 
 Only saved server content is exported; unsaved browser edits are excluded.
-Published roots can still reference **Saved latest** children, frozen at export
-time. Server settings, credentials, recordings, runtime libraries, environment
+Published selection uses saved latest only for children without publications;
+legacy exports without a policy still honor individual Subgraph version choices.
+Server settings, credentials, recordings, runtime libraries, environment
 values, external services and arbitrary referenced files are not packaged. Values
 already embedded in projects/datasets are included and may be sensitive.
 
@@ -272,6 +411,9 @@ Do not describe the feature as available in npm until this release gate passes.
 
 ```powershell
 yarn workspace @valerypopoff/rivet2-node exec tsx --test test/projectBundle.test.ts
+yarn workspace @valerypopoff/rivet-app test:files src/io/DesktopProjectBundle.test.ts src/io/TauriIOProvider.test.ts src/hooks/useLoadProject.test.tsx
+yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts bin/executor.outputSelection.test.mts
+cargo test --manifest-path packages/app/src-tauri/Cargo.toml --offline project_bundle --no-default-features
 yarn workspace @valerypopoff/rivet-studio-server-api exec tsx --test src/tests/project-bundle.test.ts src/tests/project-bundle-sqlite.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/managed-execution-service.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/kubernetes-contract.test.ts src/tests/proxy-image-contract.test.ts
 node --test deploy/studio-server/scripts/staging-docker.test.mjs deploy/studio-server/scripts/local-upgrade-rehearsal-safety.test.mjs
@@ -280,6 +422,7 @@ $env:PLAYWRIGHT_HEADLESS='1'
 $env:PLAYWRIGHT_SLOW_MO='0'
 $env:PLAYWRIGHT_BASE_URL='http://127.0.0.1:5174'
 yarn studio-server:ui:observe project-bundle.spec.ts
+yarn studio-server:ui:observe desktop-project-bundle.spec.ts
 ```
 
 The browser fixture uses owned API responses and a real exporter, browser download,
@@ -292,6 +435,31 @@ failed expiry removal and unclaimed scratch preservation.
 Held-journal fixtures cover both success/failure acknowledgements and prevent
 downloads from escaping a failed publication; they use explicit gates,
 not sleep-based race timing.
+The desktop-editor Playwright fixture exercises the real editor and desktop IO
+adapter with owned native read replies: manifest/member save paths, unsaved entry
+execution, preflight error toasts, cancellation during bundle and environment
+preparation, recovery, and entry dataset capture while the selected provider changes.
+The standalone executor WebSocket fixture checks cancellation, unsaved entry/member
+execution and the captured entry dataset protocol against a real Node process.
+It can also execute the built native sidecar rather than the development Node
+runtime. On Windows, after building the executor, run:
+
+```powershell
+yarn workspace @valerypopoff/rivet-app-executor run build
+$env:RIVET_TEST_PACKAGED_EXECUTOR=(Resolve-Path packages/app-executor/dist/app-executor-x86_64-pc-windows-msvc.exe).Path
+yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+Remove-Item Env:RIVET_TEST_PACKAGED_EXECUTOR
+```
+
+The native smoke covers cross-project execution, member entry points, unsaved
+entry edits and captured datasets. The deterministic preparation-cancellation
+gate remains in the source-process variant; native smoke does not inject code
+into the executable. Desktop release workflows run the native smoke on each
+platform before release promotion. Build Core first when using a downloaded
+frontend artifact, since that artifact does not include Core's test imports.
+An installed older desktop release does not gain this feature from server updates;
+the app and its bundled executor must both be rebuilt or updated.
+
 The real ZIP execution fixture includes a valid mutual-project call through a
 different graph; an indirect cross-project cycle through a local helper is rejected.
 Node tests cover two versions of one target, repeated processor isolation,
@@ -299,6 +467,9 @@ public ESM/CommonJS entry points, legacy alias datasets (including empty snapsho
 corrupt/incomplete mappings, size bounds and escaping paths. Artifact reads are
 bounded by the captured file size plus one overflow byte, including when a file
 grows after its size check; whole-file reads cannot bypass the memory limit.
+Cancellation tests abort during an artifact read and check that its handle closes
+without opening the remaining artifacts. Native tests cover BOM compatibility and
+invalid UTF-8 rather than relying on mocked browser-native replies for decoding.
 Node's `pretest` builds both package entry formats so this check does not depend
 on stale local artifacts.
 The `test` command invokes that preparation explicitly because Yarn does not
@@ -310,8 +481,9 @@ No Kubernetes rehearsal or production migration is required.
 The shared `project-bundle-download-contract.ts` fixture exercises actual HTTP
 upload/save/publish/export/download routes, full and Range ZIP responses, unauthenticated
 download rejection, extraction into another directory and local Node execution.
-It exports both root versions, two versions of one child, a dependency in a non-main
-graph and a stale-hint legacy reference. Root/child/version datasets share an ID
+It exercises legacy mixed-version exports and both bundle-wide policies (one
+artifact per project), a dependency in a non-main graph and a stale-hint legacy
+reference. Root/child/version datasets share an ID
 but contain distinct rows, proving isolation rather than merely checking metadata.
 Every fixture HTTP request, including download bodies and disposal, has a deadline
 so an unresponsive endpoint cannot strand the test runner.

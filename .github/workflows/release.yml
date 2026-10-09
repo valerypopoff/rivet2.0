@@ -88,6 +88,12 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NODE_OPTIONS: --max-old-space-size=6000
           RIVET_DESKTOP_TARGET: ${{ matrix.desktop_target }}
+      - name: Verify packaged executor project bundles
+        run: |
+          yarn workspace @valerypopoff/rivet2-core run build
+          yarn workspace @valerypopoff/rivet-app-executor exec tsx --test bin/executor.projectBundle.test.mts
+        env:
+          RIVET_TEST_PACKAGED_EXECUTOR: ${{ github.workspace }}/packages/app-executor/dist/rivet-app-executor${{ matrix.runner == 'windows-latest' && '.exe' || '' }}
       - name: Verify packaged macOS sidecars
         if: matrix.desktop_target != ''
         shell: bash

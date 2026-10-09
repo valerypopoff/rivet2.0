@@ -2,9 +2,10 @@
 
 Loads an extracted **Download with dependencies** bundle from Rivet Studio Server
 and resolves its cross-project Subgraphs locally, without contacting that server.
-The loader is introduced in the `2.16.0` public npm release family; older releases
-cannot load this format. Use that version or a later compatible release once
-published, or build the matching workspace packages from source.
+The loader was introduced in the `2.16.0` public npm release family. New bundles
+can require newer loader capabilities, including bundle-wide version selection.
+Use a compatible Node package or build the matching workspace packages from source;
+an older loader reports that an upgrade is required.
 
 ## Example
 
@@ -53,7 +54,7 @@ host. Download and browser resume use the same authenticated server URL in eithe
 ```typescript
 loadProjectBundle(
   manifestPath: string,
-  options?: { maxTotalBytes?: number },
+  options?: { maxTotalBytes?: number; signal?: AbortSignal },
 ): Promise<NodeProjectBundle>
 ```
 
@@ -64,33 +65,51 @@ normal Node processor options except `projectPath`, `datasetProvider`,
 overrides are rejected. Events, inputs, context, settings, debugger and custom
 runtime providers remain available as usual.
 
-The loader checks paths, sizes, checksums, project identities, dependencies and
+The loader checks paths, actual file sizes, project identities, dependencies and
 Subgraph port compatibility before execution. Move the entire extracted directory
 anywhere; project titles and original server paths are not used to guess filenames.
 Each processor has independent project snapshots and datasets, including legacy
 referenced-graph aliases. An empty child snapshot never inherits the root's datasets.
 Dataset changes during a run remain in memory and do not rewrite the exported files.
 
-Both **Published** and **Saved latest** dependency choices are frozen at export
-time, including latest targets called by a published root. Unsaved editor changes
+New UI exports select **Published** or **Saved latest** for the entire bundle,
+with one artifact per project. Published falls back to saved latest only for
+projects without a publication. This bundle-wide choice overrides authored
+Subgraph version settings inside the bundle without rewriting those settings.
+Older bundles retain their per-call version mappings. Unsaved server editor changes
 are not exported. A missing dependency fails explicitly; the loader never silently
 substitutes another version or calls Studio Server.
+
+Extracted project and dataset files are editable. No manifest checksums need to be
+recalculated; legacy checksum fields are ignored too. The loader captures current
+file contents once, and each processor gets isolated copies. Load the bundle again
+after editing files to use those changes. Adding a project or dataset file requires
+updating the manifest; identities, graph interfaces and dependency mappings must
+still remain valid. This does not disable storage or backup integrity checks on
+Studio Server.
 
 Projects may call back into different graphs in each other. Only an actual recursive
 graph-call cycle containing a cross-project call is rejected, not mutual project references.
 
-The default total payload limit is 512 MiB, with 64 MiB per artifact file and 256
-project/version artifacts. Increase `maxTotalBytes` deliberately for larger bundles
-exported with a raised server limit. Files must still match their manifest hashes.
+The default total payload limit is 512 MiB, with 64 MiB per artifact file, a 1 MiB
+manifest and 256 project/version artifacts. New version-selected bundles support
+all 256 projects; the latest and published bindings point to the same selected
+artifact rather than consuming extra project slots. Export rejects an oversized
+manifest before publishing the ZIP. Increase `maxTotalBytes` deliberately for
+larger payloads exported with a raised server limit; the other limits still apply.
+Limits use actual file bytes, not old manifest lengths. Pass `signal` to cancel
+asynchronous preparation.
 
 Builtin plugins are resolved by the Node package. Install and register external
 plugins yourself and pass the registry; bundles do not download or install plugins.
 Install Code-node npm dependencies, provide external services and adjust local file
 paths separately. Server settings, credentials and runtime libraries are not copied
 separately, but sensitive values already stored inside a project or dataset are
-included. Only execute bundles you trust: checksums are not a safety sandbox.
+included. Only execute bundles you trust: a bundle can execute Code nodes and make
+network requests.
 
 ## See also
 
 - [createProcessor](./createProcessor)
 - [Subgraphs](../../user-guide/subgraphs)
+- [Opening bundles in desktop Rivet](../../user-guide/working-with-projects#opening-and-running-a-bundle-in-desktop-rivet)

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHttpLLMProfileHealthAdminProvider } from '../../studio-server-shared/llmProfileHealthHttpStore.js';
 
 import type { Project, ProjectId, RivetLLMProfileHealthSnapshot } from '@valerypopoff/rivet2-core';
 
@@ -31,6 +32,22 @@ function snapshot(
     updatedAt: key === 'newer' ? 2 : 1,
   };
 }
+
+test('Classifier suspension administration scopes both list and reset to its family', async () => {
+  const requests: { url: string; body: unknown }[] = [];
+  const provider = createHttpLLMProfileHealthAdminProvider({
+    baseUrl: 'https://rivet.example/api/workflows/llm-profile-health',
+    family: 'classifier',
+    fetch: async (url, options) => {
+      requests.push({ url: String(url), body: options?.body ? JSON.parse(String(options.body)) : null });
+      return options?.method === 'POST' ? new Response(null, { status: 204 }) : Response.json([]);
+    },
+  });
+  await provider.list({ projectId: 'project a' as never });
+  await provider.reset({ projectId: 'project a' as never });
+  assert.match(requests[0]!.url, /projectId=project%20a&family=classifier$/);
+  assert.deepEqual(requests[1]!.body, { projectId: 'project a', family: 'classifier' });
+});
 
 test('LLM profile suspension settings show suspensions and recovery states in the active project', () => {
   const entries = getOperationalLLMProfileHealthEntries('project-a' as ProjectId, [

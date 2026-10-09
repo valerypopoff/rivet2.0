@@ -13,15 +13,25 @@ export function buildAgentProfileAttemptInspectorRows(
   return attempts.map((attempt) => ({
     eventId: attempt.eventId,
     providerAndModel: [
-      ...(attempt.profileName == null || attempt.profileName.trim() === '' ? [] : [`Profile: ${attempt.profileName.trim()}`]),
+      ...(attempt.profileName == null || attempt.profileName.trim() === ''
+        ? []
+        : [`Profile: ${attempt.profileName.trim()}`]),
       `${formatProvider(attempt)} / ${attempt.model}`,
     ].join(' · '),
     context: [
-      describeStage(attempt.stage),
+      attempt.failureKind?.replaceAll('-', ' ') ?? describeStage(attempt.stage),
       describeOutcome(attempt),
       attempt.profileIndex == null ? undefined : `profile ${attempt.profileIndex + 1}`,
       `round ${attempt.roundIndex + 1}`,
       attempt.attemptIndex == null ? undefined : `attempt ${attempt.attemptIndex + 1}`,
+      attempt.classifierUsage == null
+        ? undefined
+        : `${attempt.classifierUsage.inputTokens} input / ${attempt.classifierUsage.outputTokens} output tokens`,
+      attempt.classifierUsage == null
+        ? undefined
+        : attempt.classifierUsage.estimatedCostUsd == null
+          ? 'cost unknown'
+          : `estimated $${attempt.classifierUsage.estimatedCostUsd.toPrecision(4)}`,
     ]
       .filter((value): value is string => value != null)
       .join(' / '),
@@ -49,6 +59,7 @@ function describeStage(stage: AgentLLMProfileAttemptTrace['stage']): string {
 }
 
 function describeOutcome(attempt: AgentLLMProfileAttemptTrace): string {
+  if (attempt.skipReason === 'unreached') return 'not reached';
   if (attempt.healthDisposition === 'deny') {
     return attempt.retryAt == null
       ? 'profile suspended; skipped'
@@ -59,6 +70,7 @@ function describeOutcome(attempt: AgentLLMProfileAttemptTrace): string {
   }
   if (attempt.timeoutKind === 'first-output') return 'first output timed out';
   if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
+  if (attempt.timeoutKind === 'response') return 'response timed out';
   if (attempt.stage === 'health-update' && attempt.healthOutcome) {
     return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
   }

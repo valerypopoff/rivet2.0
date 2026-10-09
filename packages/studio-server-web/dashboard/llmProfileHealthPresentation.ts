@@ -7,11 +7,7 @@ export function getOperationalLLMProfileHealthEntries(
   entries: readonly RivetLLMProfileHealthSnapshot[],
 ): readonly RivetLLMProfileHealthSnapshot[] {
   return entries
-    .filter(
-      (entry) =>
-        entry.identity.projectId === projectId &&
-        entry.state !== 'closed',
-    )
+    .filter((entry) => entry.identity.projectId === projectId && entry.state !== 'closed')
     .sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
@@ -20,31 +16,30 @@ export function getLLMProfileHealthDisplayName(
   snapshot: RivetLLMProfileHealthSnapshot,
 ): string {
   const profileNodeId = snapshot.identity.profileNodeId;
+  const label = snapshot.identity.family === 'classifier' ? 'Classifier Profile' : 'LLM Profile';
   if (project && profileNodeId != null) {
     for (const graph of Object.values(project.graphs)) {
       const node = graph.nodes.find((candidate) => candidate.id === profileNodeId);
       if (node) {
-        return `${node.title || 'LLM Profile'} in ${graph.metadata?.name || 'unnamed graph'}`;
+        return `${node.title || label} in ${graph.metadata?.name || 'unnamed graph'}`;
       }
     }
   }
 
   const profileName = snapshot.identity.profileName?.trim();
   if (profileName) return profileName;
-  return profileNodeId == null ? 'LLM Profile' : `LLM Profile ${profileNodeId}`;
+  return profileNodeId == null ? label : `${label} ${profileNodeId}`;
 }
 
 export function getLLMProfileHealthIdentityLabel(snapshot: RivetLLMProfileHealthSnapshot): string {
-  const provider = snapshot.identity.provider === 'custom'
-    ? `Custom ${snapshot.identity.customProviderApi === 'responses' ? 'Responses' : 'Completions'}`
-    : snapshot.identity.provider;
+  const provider =
+    snapshot.identity.provider === 'custom'
+      ? `Custom ${snapshot.identity.customProviderApi === 'responses' ? 'Responses' : 'Completions'}`
+      : snapshot.identity.provider;
   return `${provider}/${snapshot.identity.model}`;
 }
 
-export function getLLMProfileHealthStatusDetail(
-  snapshot: RivetLLMProfileHealthSnapshot,
-  now = Date.now(),
-): string {
+export function getLLMProfileHealthStatusDetail(snapshot: RivetLLMProfileHealthSnapshot, now = Date.now()): string {
   const failureLabel = `${snapshot.failureCount} recent failure${snapshot.failureCount === 1 ? '' : 's'}`;
   if (snapshot.state === 'open' && snapshot.openUntil != null && snapshot.openUntil > now) {
     return `${failureLabel} - suspended until ${new Date(snapshot.openUntil).toLocaleString()}`;
@@ -59,7 +54,5 @@ export function getLLMProfileHealthStatusTone(
   snapshot: RivetLLMProfileHealthSnapshot,
   now = Date.now(),
 ): LLMProfileHealthStatusTone {
-  return snapshot.state === 'open' && snapshot.openUntil != null && snapshot.openUntil > now
-    ? 'suspended'
-    : 'recovery';
+  return snapshot.state === 'open' && snapshot.openUntil != null && snapshot.openUntil > now ? 'suspended' : 'recovery';
 }

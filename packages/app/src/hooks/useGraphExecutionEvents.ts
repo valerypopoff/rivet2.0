@@ -26,7 +26,6 @@ import {
 import { userInputModalQuestionsState } from '../state/userInput';
 import { keys } from '../utils/typeSafety';
 import { handleError } from '../utils/errorHandling.js';
-import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import type { ExecutionDataFlowApi } from './useExecutionDataFlow';
@@ -70,7 +69,9 @@ export function useGraphExecutionEvents(
     evaluationRunningLatest,
   }: Pick<
     ExecutionDataFlowApi,
-    'clearNodeRunDataPreservationForNextStart' | 'consumeNodeRunDataPreservationForNextStart' | 'evaluationRunningLatest'
+    | 'clearNodeRunDataPreservationForNextStart'
+    | 'consumeNodeRunDataPreservationForNextStart'
+    | 'evaluationRunningLatest'
   >,
   options: GraphExecutionEventsOptions = {},
 ): GraphExecutionEventsApi {
@@ -177,12 +178,10 @@ export function useGraphExecutionEvents(
     rootRunIdsForDoneReconciliationRef.current = [];
     clearNodeRunDataPreservationForNextStart();
     stopAll();
-    handleError(data.error, 'Graph execution error', {
-      // Ordinary node failures already have node-local status. Async branch
-      // safety violations can reject a malformed persisted graph before a
-      // useful node error is visible, so surface those actionable messages.
-      toastError: shouldToastAsyncBranchSafetyError(data.error),
-    });
+    // A terminal failure may happen before any node has visible error output
+    // (for example, cross-project preflight). Do not gate this on error text.
+    // handleError deduplicates matching node/root notifications.
+    handleError(data.error, 'Graph execution error');
   };
 
   const onGraphStart = (data: ProcessEvents['graphStart']) => {

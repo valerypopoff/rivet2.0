@@ -271,18 +271,8 @@ test('keeps delayed Watch node evidence out of the live root replay timeline', (
   let journal = createRunActivityJournal();
   journal = apply(journal, 'start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 10_000);
   journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 10_001);
-  journal = apply(
-    journal,
-    'nodeStart',
-    { node, processId, inputs: {}, execution, eventOccurredAt: 10_050 },
-    10_200,
-  );
-  journal = apply(
-    journal,
-    'nodeFinish',
-    { node, processId, execution, outputs: {}, eventOccurredAt: 10_060 },
-    10_201,
-  );
+  journal = apply(journal, 'nodeStart', { node, processId, inputs: {}, execution, eventOccurredAt: 10_050 }, 10_200);
+  journal = apply(journal, 'nodeFinish', { node, processId, execution, outputs: {}, eventOccurredAt: 10_060 }, 10_201);
   journal = apply(journal, 'graphFinish', { graph, execution, outputs: {} }, 10_100);
 
   const root = journal.rootsById[rootRunId]!;
@@ -341,6 +331,40 @@ test('retains circuit-breaker decisions on failed LLM invocations and deduplicat
   assert.equal(invocation.profileAttempts?.[0]?.retryAt, 12_000);
   assert.equal(invocation.profileAttempts?.[0]?.sequence, 3);
   assert.equal(invocation.omittedProfileAttemptCount, 0);
+});
+
+test('preserves classifier family and response timeout through replay', () => {
+  let journal = createRunActivityJournal();
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 1);
+  journal = apply(journal, 'nodeStart', { node, processId, inputs: {}, execution }, 2);
+  journal = apply(
+    journal,
+    'llmProfileAttempt',
+    {
+      eventId: 'classifier-timeout',
+      family: 'classifier',
+      roundIndex: 0,
+      profileIndex: 0,
+      nodeId,
+      processId,
+      provider: 'liquid',
+      model: 'd1',
+      stage: 'request',
+      outcome: 'failure',
+      timeoutKind: 'response',
+      failureKind: 'timeout',
+      classifierUsage: { inputTokens: 1000, outputTokens: 0, estimatedCostUsd: 0.00004 },
+      execution,
+    },
+    3,
+  );
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  const [attempt] = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.profileAttempts!;
+  assert.equal(attempt?.family, 'classifier');
+  assert.equal(attempt?.failureKind, 'timeout');
+  assert.deepEqual(attempt?.classifierUsage, { inputTokens: 1000, outputTokens: 0, estimatedCostUsd: 0.00004 });
+  assert.equal(attempt?.timeoutKind, 'response');
+  assert.equal(attempt?.provider, 'liquid');
 });
 
 test('keeps first-seen invocation order while parallel nodes finish out of order', () => {

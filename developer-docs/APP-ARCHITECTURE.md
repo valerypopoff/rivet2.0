@@ -28,6 +28,43 @@ feature-specific detail.
 
 The app is not just a thin client over `rivet-core`. A large amount of product behavior lives here in React components, Jotai state, commands, and hooks.
 
+## Extracted project bundles
+
+Desktop project IO accepts the manifest itself or a declared member in its
+`projects/` directory. `TauriIOProvider` prepares the root/member snapshot and
+returns its real save path; workspace opening must honor `LoadedProjectData.path`.
+Manifest opening additionally returns `bundleProjects` and `bundleManifestPath`.
+`useWorkspaceHostOpenProject.openLoadedProject` imports new members, registers
+inactive clean snapshots and selects the root without replacing existing edits.
+Existing roots reuse the caller's activation intent rather than superseding it.
+Deferred imports guard every member's open path; closed/moved tabs invalidate the
+pending workspace open before sibling registration.
+Member-file opening remains single-tab. Tab normalization preserves the additive
+manifest identity used for execution display routing; it is not serialized to YAML.
+The native `project_bundle` module performs bounded contained reads off the UI
+thread. `DesktopProjectBundle` prepares editor snapshots without enforcing graph
+compatibility until Run, allowing users to repair outdated Subgraph boundaries.
+`useReloadProjectReferences` supplies bundle-bound graph definitions to the editor.
+
+Browser and desktop Node execution use Core's `createProjectBundleRuntime` for
+isolated dependencies and data while retaining the visible entry project and
+capturing its datasets before asynchronous Run preparation. Each run (and each
+Evaluation trial) gets an isolated dataset provider, so tab switches cannot redirect
+reads or writes to another project's data. Bundle dataset mutations are run-local.
+The Node protocol carries a manifest path/artifact ID, the captured entry datasets,
+and the usual uploaded entry snapshot. Hosted executors reject that local capability
+unless explicitly opted in; external debugger runs fail with guidance to choose
+Browser or desktop Node mode. See [Project bundles](./studio-server/project-bundles.md)
+for discovery, saving, plugin and compatibility limits.
+`useBundleExecutionRouting` projects live dependency events into their owning
+project snapshots using additive `GraphExecutionMetadata.projectId`, shared by
+Browser and desktop Node transports. It does not transfer run ownership or
+terminal/user-input controls away from the entry project.
+
+Desktop release promotion also requires the bundle WebSocket smoke to pass
+against the built native executor, not just a source-level Node process. See the
+bundle regression checks for `RIVET_TEST_PACKAGED_EXECUTOR` and local commands.
+
 ## Stack
 
 Current major libraries:

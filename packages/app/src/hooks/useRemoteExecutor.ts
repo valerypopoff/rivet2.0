@@ -14,6 +14,7 @@ import {
   type GraphId,
   type GraphInputNode,
   type Project,
+  type CombinedDataset,
   serializeDatasets,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
@@ -56,6 +57,7 @@ import { handleError } from '../utils/errorHandling.js';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv.js';
 import {
   useDatasetProvider,
+  useIOProvider,
   useEnvironmentProvider,
   useEvaluationRunStore,
   useHostedEvaluationCoordinator,
@@ -192,6 +194,7 @@ function createRemoteEvaluationRecordingReference(): EvaluationRecordingReferenc
 }
 
 export function useRemoteExecutor() {
+  const ioProvider = useIOProvider();
   const executorSession = useExecutorSessionRuntime();
   const datasetProvider = useDatasetProvider();
   const environmentProvider = useEnvironmentProvider();
@@ -245,6 +248,14 @@ export function useRemoteExecutor() {
   const loadedProject = useAtomValue(loadedProjectState);
   const pluginStates = useAtomValue(pluginsState);
   const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
+
+  const getDesktopBundleRunLocation = async (path: string, entryDatasets: Promise<CombinedDataset[]>) => {
+    const bundle = await ioProvider.readProjectBundle?.(path);
+    if (!bundle) return undefined;
+    if (executorSession.getRuntimeState().target?.type !== 'internal-desktop')
+      throw new Error('Local bundles require Browser mode or the desktop Node executor, not an external debugger.');
+    return { manifestPath: bundle.manifestPath, artifactId: bundle.artifactId, entryDatasets: await entryDatasets };
+  };
 
   const finalizeRemoteLocalExecutionRecording = useStableCallback(async (requestId: RemoteRunRequestId) => {
     const capture = localRecordingCapturesByRequestIdRef.current.get(requestId);
@@ -638,6 +649,11 @@ export function useRemoteExecutor() {
     const graphToRun = options.graphId ?? graph.metadata!.id!;
 
     try {
+      const entryDatasets =
+        ioProvider.readProjectBundle && loadedProject.path
+          ? datasetProvider.exportDatasetsForProject(project.metadata.id)
+          : Promise.resolve([]);
+      void entryDatasets.catch(() => {});
       const projectWithCurrentGraph = withDerivedProjectPluginSpecs(
         {
           ...project,
@@ -796,6 +812,10 @@ export function useRemoteExecutor() {
         contextValues,
         inputs: options.inputs,
         projectPath: loadedProject.path,
+        projectBundle:
+          loadedProject.path && ioProvider.readProjectBundle
+            ? await getDesktopBundleRunLocation(loadedProject.path, entryDatasets)
+            : undefined,
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
         recordSubgraphProjectRuns: Boolean(remoteLocalRecordingProvider),
@@ -805,6 +825,7 @@ export function useRemoteExecutor() {
           : { llmProfileHealthExecutionCorrelationId: remoteLocalRecordingCorrelationId }),
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
+      options.abortSignal?.throwIfAborted();
 
       if (options.waitForResults) {
         try {
@@ -1042,6 +1063,11 @@ export function useRemoteExecutor() {
       let runningToastId: ToastId | undefined;
       try {
         ensureActiveEvaluationProject();
+        const entryDatasets =
+          ioProvider.readProjectBundle && loadedProject.path
+            ? datasetProvider.exportDatasetsForProject(evaluationProjectId)
+            : Promise.resolve([]);
+        void entryDatasets.catch(() => {});
         const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
         runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         currentExecution.onEvaluationStart();
@@ -1170,6 +1196,10 @@ export function useRemoteExecutor() {
                   inputs: evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
                   contextValues: getProjectContextValues(projectContext),
                   projectPath: loadedProject.path,
+                  projectBundle:
+                    loadedProject.path && ioProvider.readProjectBundle
+                      ? await getDesktopBundleRunLocation(loadedProject.path, entryDatasets)
+                      : undefined,
                   captureNodeTimings: showNodeRunDurations,
                   evaluation: metadata,
                 },

@@ -6,6 +6,7 @@ import {
   PROJECT_BUNDLE_MANIFEST,
   ProjectBundleError,
   PROJECT_BUNDLE_MAX_ARTIFACTS,
+  PROJECT_BUNDLE_MAX_MANIFEST_BYTES,
   listProjectBundleCalls,
   loadProjectFromString,
   projectBundleTargetKey,
@@ -28,6 +29,7 @@ export type BundleSnapshot = ResolvedSubgraphProject & {
   selectedVersion: 'latest' | 'published';
 };
 export type BundleSource = {
+  versionPolicy?: 'latest' | 'published';
   root(): Promise<BundleSnapshot>;
   target(target: SubgraphProjectTarget): Promise<BundleSnapshot>;
   reference(projectId: string): Promise<BundleSnapshot>;
@@ -54,27 +56,49 @@ function abortableRead<T>(read: () => Promise<T>, signal: AbortSignal): Promise<
 }
 
 /** Adapter reuses saved execution snapshots for every backend, including matching datasets. */
-export function createSavedBundleSource(relativePath: string, version: WorkflowProjectDownloadVersion): BundleSource {
+export function createSavedBundleSource(
+  relativePath: string,
+  version: WorkflowProjectDownloadVersion,
+  versionPolicy?: 'latest' | 'published',
+): BundleSource {
   const loader = createExecutionSubgraphProjectLoader();
   const target = async (requested: SubgraphProjectTarget): Promise<BundleSnapshot> => {
-    const snapshot = await loader.loadTarget(requested);
+    const selection = { ...requested, version: versionPolicy ?? requested.version };
+    let snapshot;
+    try {
+      snapshot = await loader.loadTarget(selection);
+    } catch (error) {
+      if (
+        versionPolicy !== 'published' ||
+        (error as { status?: number }).status !== 409 ||
+        !(error instanceof Error) ||
+        !error.message.includes('no published version')
+      )
+        throw error;
+      selection.version = 'latest';
+      snapshot = await loader.loadTarget(selection);
+    }
     if (snapshot.projectContents === undefined) throw new Error('Saved project snapshot is unavailable.');
-    return { ...snapshot, projectContents: snapshot.projectContents, selectedVersion: requested.version };
+    return { ...snapshot, projectContents: snapshot.projectContents, selectedVersion: selection.version };
   };
   return {
+    versionPolicy,
     async root() {
-      const download = await readWorkflowProjectDownloadWithBackend(relativePath, version);
+      let download = await readWorkflowProjectDownloadWithBackend(relativePath, versionPolicy ? 'live' : version);
       const project = loadProjectFromString(download.contents);
       const snapshot = await target({
         projectId: project.metadata.id,
         version: version === 'live' ? 'latest' : 'published',
       });
+      if (versionPolicy && snapshot.selectedVersion === 'published')
+        download = await readWorkflowProjectDownloadWithBackend(relativePath, 'published');
       if (snapshot.projectContents !== download.contents)
         throw createHttpError(409, 'Project changed while exporting. Retry the export.');
       return snapshot;
     },
     target,
     async reference(projectId) {
+      if (versionPolicy) return target({ projectId: projectId as ProjectId, version: versionPolicy });
       try {
         return await target({ projectId: projectId as ProjectId, version: 'published' });
       } catch (error) {
@@ -90,9 +114,10 @@ export function createSavedBundleSource(relativePath: string, version: WorkflowP
   };
 }
 
-const digest = (contents: string) => createHash('sha256').update(contents).digest('hex');
 const identity = (snapshot: BundleSnapshot) =>
   createHash('sha256')
+    .update(JSON.stringify([snapshot.project.metadata.id, snapshot.selectedVersion, snapshot.revisionKey ?? null]))
+    .update('\0')
     .update(snapshot.projectContents)
     .update(snapshot.datasetsContents === undefined ? '\0absent' : '\0present')
     .update(snapshot.datasetsContents ?? '')
@@ -124,7 +149,11 @@ export async function collectProjectBundle(options: {
     root: () => readSnapshot(() => options.source.root()),
     target: async (target) => {
       const snapshot = await readSnapshot(() => options.source.target(target));
-      if (snapshot.project.metadata.id !== target.projectId || snapshot.selectedVersion !== target.version)
+      if (
+        snapshot.project.metadata.id !== target.projectId ||
+        (options.source.versionPolicy === undefined && snapshot.selectedVersion !== target.version) ||
+        (options.source.versionPolicy === 'latest' && snapshot.selectedVersion !== 'latest')
+      )
         throw new ProjectBundleError('Subgraph dependency resolved to the wrong project or version.');
       return snapshot;
     },
@@ -133,7 +162,8 @@ export async function collectProjectBundle(options: {
   const manifest: ProjectBundleManifest = {
     format: 'rivet-project-bundle',
     schemaVersion: 1,
-    requiredLoaderVersion: 1,
+    requiredLoaderVersion: options.source.versionPolicy ? 3 : 2,
+    ...(options.source.versionPolicy ? { versionPolicy: options.source.versionPolicy } : {}),
     exportingRuntimeVersion,
     rootArtifact: '',
     artifacts: [],
@@ -142,6 +172,8 @@ export async function collectProjectBundle(options: {
     plugins: [],
   };
   const byTarget = new Map<string, ProjectBundleArtifact>();
+  const byProject = new Map<string, ProjectBundleArtifact>();
+  const capturedIdentities = new Map<string, string>();
   const checks: { fingerprint: string; read(): Promise<BundleSnapshot> }[] = [];
   // Keep graph definitions for closure validation, but release raw project and
   // dataset strings once consumed by the writer. Do not retain every dataset in RAM.
@@ -156,7 +188,7 @@ export async function collectProjectBundle(options: {
     if (bytes > 64 * 1024 * 1024 || totalBytes > (options.maxBytes ?? DEFAULT_BUNDLE_MAX_BYTES))
       throw new ProjectBundleError('Project bundle exceeds the configured size limit (64 MiB per artifact file).');
     await options.writeFile(location, contents);
-    return { path: location, bytes, sha256: digest(contents) };
+    return { path: location };
   };
   const add = async (
     snapshot: BundleSnapshot,
@@ -165,15 +197,12 @@ export async function collectProjectBundle(options: {
   ) => {
     signal.throwIfAborted();
     const key = projectBundleTargetKey(snapshot.project.metadata.id, version);
+    const fingerprint = identity(snapshot);
     const existing = byTarget.get(key);
     if (existing) {
-      if (
-        existing.project.sha256 !== digest(snapshot.projectContents) ||
-        existing.datasets?.sha256 !==
-          (snapshot.datasetsContents === undefined ? undefined : digest(snapshot.datasetsContents))
-      )
+      if (capturedIdentities.get(key) !== fingerprint)
         throw new ProjectBundleError('A project changed while collecting dependencies. Retry the export.');
-      checks.push({ fingerprint: identity(snapshot), read });
+      checks.push({ fingerprint, read });
       return existing;
     }
     if (manifest.artifacts.length >= PROJECT_BUNDLE_MAX_ARTIFACTS)
@@ -184,16 +213,19 @@ export async function collectProjectBundle(options: {
       projectId: snapshot.project.metadata.id,
       title: snapshot.project.metadata.title || snapshot.project.metadata.id,
       version,
-      revision: snapshot.revisionKey ?? identity(snapshot),
+      revision: snapshot.revisionKey ?? fingerprint,
       project: await file(`projects/${id}.rivet-project`, snapshot.projectContents),
       ...(snapshot.datasetsContents === undefined
         ? {}
         : { datasets: await file(`projects/${id}.rivet-data`, snapshot.datasetsContents) }),
     };
     manifest.artifacts.push(artifact);
-    manifest.targets.push({ projectId: artifact.projectId, version, artifact: id });
+    for (const bindingVersion of manifest.versionPolicy ? (['latest', 'published'] as const) : [version])
+      manifest.targets.push({ projectId: artifact.projectId, version: bindingVersion, artifact: id });
     byTarget.set(key, artifact);
-    checks.push({ fingerprint: identity(snapshot), read });
+    byProject.set(artifact.projectId, artifact);
+    capturedIdentities.set(key, fingerprint);
+    checks.push({ fingerprint, read });
     snapshots.set(id, { project: snapshot.project, selectedVersion: snapshot.selectedVersion });
     for (const plugin of snapshot.project.plugins ?? []) {
       const serialized = JSON.stringify(plugin);
@@ -207,9 +239,9 @@ export async function collectProjectBundle(options: {
   };
   {
     const root = await source.root();
-    if (root.selectedVersion !== options.rootVersion)
+    if (!manifest.versionPolicy && root.selectedVersion !== options.rootVersion)
       throw new ProjectBundleError('Subgraph root snapshot resolved to the wrong version.');
-    manifest.rootArtifact = (await add(root, options.rootVersion, source.root)).id;
+    manifest.rootArtifact = (await add(root, root.selectedVersion, source.root)).id;
     // An old reference to the active root is already fulfilled by its in-memory snapshot.
     references.add(root.project.metadata.id);
     manifest.references.push({ projectId: root.project.metadata.id, artifact: manifest.rootArtifact });
@@ -220,11 +252,12 @@ export async function collectProjectBundle(options: {
     const owner = byTarget.get(projectBundleTargetKey(snapshot.project.metadata.id, snapshot.selectedVersion))!;
     for (const call of listProjectBundleCalls(snapshot.project)) {
       const key = projectBundleTargetKey(call.projectId, call.version);
-      let artifact = byTarget.get(key);
+      let artifact = manifest.versionPolicy ? byProject.get(call.projectId) : byTarget.get(key);
       if (!artifact) {
         const requested = { projectId: call.projectId as ProjectId, version: call.version };
         try {
-          artifact = await add(await source.target(requested), call.version, () => source.target(requested));
+          const resolved = await source.target(requested);
+          artifact = await add(resolved, resolved.selectedVersion, () => source.target(requested));
         } catch (error) {
           throw new ProjectBundleError(
             `Dependency ${owner.title} → ${call.projectId} (${call.version}) could not be captured.`,
@@ -239,6 +272,11 @@ export async function collectProjectBundle(options: {
     for (const reference of snapshot.project.references ?? []) {
       if (references.has(reference.id)) continue;
       references.add(reference.id);
+      const selected = manifest.versionPolicy ? byProject.get(reference.id) : undefined;
+      if (selected) {
+        manifest.references.push({ projectId: reference.id, artifact: selected.id });
+        continue;
+      }
       let resolved: BundleSnapshot;
       try {
         resolved = await source.reference(reference.id);
@@ -256,7 +294,12 @@ export async function collectProjectBundle(options: {
   }
   const validated = validateProjectBundleManifest(manifest);
   validateProjectBundleProjects(validated, new Map([...snapshots].map(([id, snapshot]) => [id, snapshot.project])));
-  await options.writeFile(PROJECT_BUNDLE_MANIFEST, JSON.stringify(validated, null, 2));
+  const manifestContents = JSON.stringify(validated, null, 2);
+  if (Buffer.byteLength(manifestContents) > PROJECT_BUNDLE_MAX_MANIFEST_BYTES)
+    throw new ProjectBundleError(
+      'Project bundle manifest exceeds the 1 MiB loader limit. Shorten project titles or reduce the dependency set.',
+    );
+  await options.writeFile(PROJECT_BUNDLE_MANIFEST, manifestContents);
   return {
     manifest: validated,
     async verify() {

@@ -1,5 +1,14 @@
 # Development
 
+## Browser fixture API isolation
+
+Mocked browser API catch-alls must use `url.pathname.startsWith('/api/')`, not
+`**/api/**`: ordinary Vite serves source modules such as `core/src/api/streaming.ts`
+under `/@fs/`, and a broad glob intercepts those modules too. The cross-project
+Subgraph browser regression edits connected target inputs and outputs through the
+real editor, saves the target, then verifies renamed labels, preserved wires,
+clean caller state, tab switching and saved-file reopening.
+
 ## Shared dropdown styling
 
 `packages/studio-server-web/dropdown-styles.css` is loaded in both the dashboard
@@ -1026,7 +1035,49 @@ Push Studio Server changes to `develop` for the normal Build and Verify Studio S
 
 A relevant `staging` push runs Build Images, whose reusable verifier checks Studio Server once before the VM candidate is promoted. It builds four immutable candidate images and runs the candidate image and local-upgrade rehearsals, but skips the desktop/Rust Build matrix, duplicate standalone verification, and managed Kubernetes Kind gate. The separate protected Kubernetes provider/capacity/Evaluation gates remain explicit manual dispatches. `staging` never updates `latest` or the durable production release pointer; those remain `main`-only. Retagging the four images is not atomic, so a failed promotion can leave `staging` aliases at different versions. The alias alone is never proof that the latest push passed or that all four images match.
 
-For a VM rehearsal, wait for the **Build Images** run for the intended `staging` commit to succeed, switch the VM checkout to that commit on the `staging` branch, and run `yarn studio-server:staging`. It uses the same Compose project, dotenv, TLS overlay, durable volumes, and launcher-derived artifact paths as production. Before recreating containers it requires a clean tracked checkout and an existing API container in the selected Compose project; it checks the API/initializer artifact bind mounts and named app-data, workspace, and SQLite metadata volumes against that container. It then pulls all four `:staging` image aliases, verifies their source-revision labels against Git HEAD, and pins the three running services to the pulled immutable digests. It renders Compose again and requires every service, including the artifact initializer, to use the verified digest and unchanged mounts. It also checks that the API image contains the combined-backend supervisor. A failed check leaves the running containers alone. If the old API container was deleted, restore or inspect the intended Compose project and data volumes before using another deployment method; this command will not guess which state belongs to the VM. The command neither edits `.env` nor starts the local storage upgrade. Do not infer a green CI run merely from matching aliases: image promotion is not atomic, so confirm the intended Build Images run in GitHub first.
+For a VM rehearsal, wait for the **Build Images** run for the intended `staging` commit to succeed, switch the VM checkout to that commit on the `staging` branch, and run `yarn studio-server:staging`. It uses the same Compose project, dotenv, TLS overlay, durable volumes, and launcher-derived artifact paths as production. Before recreating containers it requires a clean tracked checkout and an existing API container in the selected Compose project; it checks the API/initializer artifact bind mounts and named app-data, workspace, and SQLite metadata volumes against that container. It then pulls all four `:staging` image aliases (at most two concurrently, with live Docker output), verifies their source-revision labels against Git HEAD, and pins the three running services to the pulled immutable digests. It renders Compose again and requires every service, including the artifact initializer, to use the verified digest and unchanged mounts. It also checks that the API image contains the combined-backend supervisor. A failed check leaves the running containers alone; in-flight pulls are drained and no queued image checks are started after failure. If the old API container was deleted, restore or inspect the intended Compose project and data volumes before using another deployment method; this command will not guess which state belongs to the VM. The command neither edits `.env` nor starts the local storage upgrade. Do not infer a green CI run merely from matching aliases: image promotion is not atomic, so confirm the intended Build Images run in GitHub first.
+
+### Startup progress across launchers
+
+Production (prebuilt, staging, restart, custom) and Docker development (including
+tunnel/recreate/build) print named preflight/build/start/readiness phases immediately,
+with elapsed-time heartbeats every 10 seconds and completion/failure duration.
+Docker pull/build/Compose output remains live; captured staging pulls are explicitly
+teed to the terminal while their original output is retained for digest verification.
+Config/inspection/secret commands remain captured and are never streamed implicitly.
+Phase labels do not include command arguments or dotenv values.
+Command plans carry their phase names explicitly: never infer the operation from
+the rendered shell command, since an env-file path can contain words such as
+`pull` or `down`. A failed pull/start stops subsequent recreation/proxy reload;
+diagnostics may still run, but cannot turn the failed phase into success.
+
+Production Compose defaults to two parallel operations unless the operator already
+set `COMPOSE_PARALLEL_LIMIT`; custom production and Docker development keep their
+one-operation build default. The staging image verifier independently caps pulls
+at two and completes all provenance checks before any service recreation. Concurrency
+does not relax mount continuity, digest pinning, revision, or supervisor checks.
+Elapsed messages describe work in progress, not readiness; existing `--wait` health
+checks and saved startup deadlines are still authoritative. Attached development
+`up` streams service logs without a perpetual startup timer.
+
+The local-process development launcher marks watcher launch separately from service
+readiness and adds elapsed time to its existing API/web/executor log prefixes.
+Single-watcher launch commands report process launch without claiming the service is
+ready. Kubernetes development wraps finite tool invocations with the same timed phases;
+its builds remain serialized and secret/config captures remain private. Captured
+tool invocations settle on child `close`, after their output streams drain, not
+on `exit`; progress completion must not race the final captured output.
+
+`launcher-progress.test.mjs` (included by the production-cutover test entry point)
+covers heartbeat cleanup, failures, streaming before child completion, private
+captures, complete Kubernetes tool output and nonzero-exit propagation with real disposable Node
+processes (no cluster access). `staging-docker.test.mjs` covers the two-pull bound, failure draining, and
+the unchanged provenance/mount safeguards. `launcher-startup.test.mjs` executes the
+production/development entry points with an isolated fake Docker CLI and dotenv,
+checking phase output (including env-file paths containing operation names),
+failure propagation/no subsequent startup, invocation order, tunnel mode, and concurrency overrides
+without pulling images or touching any running stack. No storage migration or VM restart is
+needed just to install this launcher change; it takes effect on the next invocation.
 
 The older manual route remains available: set exactly one `RIVET_IMAGE_TAG=candidate-<commit SHA>-<run ID>-<run attempt>` from a successful run in the VM `.env`, then run `yarn studio-server:prod`. Do not use the default `latest` tag to test staging; it is the main-branch production alias. If `.env` contains a staging tag or individual image overrides from a VM trial, remove or update them explicitly before a later main-line production deployment. Pulling a staging image does not select it for Compose by itself.
 

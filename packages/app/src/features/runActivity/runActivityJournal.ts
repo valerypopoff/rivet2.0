@@ -773,6 +773,10 @@ function applyLlmProfileAttempt(
     ...(data.healthOutcome == null ? {} : { healthOutcome: data.healthOutcome }),
     ...(data.retryAt == null ? {} : { retryAt: data.retryAt }),
     ...(data.timeoutKind == null ? {} : { timeoutKind: data.timeoutKind }),
+    ...(data.family == null ? {} : { family: data.family }),
+    ...(data.failureKind == null ? {} : { failureKind: data.failureKind }),
+    ...(data.skipReason == null ? {} : { skipReason: data.skipReason }),
+    ...(data.classifierUsage == null ? {} : { classifierUsage: { ...data.classifierUsage } }),
     sequence: existingIndex < 0 ? takeSequence(journal) : invocation.profileAttempts[existingIndex]!.sequence,
   };
 

@@ -19,6 +19,7 @@ const jsonBody = createControlPlaneJsonBodyParser();
 const identitySchema = z
   .object({
     key: z.string().min(1),
+    family: z.enum(['llm', 'classifier']).optional(),
     // Studio Server health is shared durable state. Every runtime operation
     // must carry the owning project so one hosted project cannot mutate another.
     projectId: z.string().min(1),
@@ -66,11 +67,19 @@ const renewSchema = z
   })
   .strict();
 
-const listQuerySchema = z.object({ projectId: z.string().min(1) }).strict();
+const listQuerySchema = z
+  .object({ projectId: z.string().min(1), family: z.enum(['llm', 'classifier']).default('llm') })
+  .strict();
 
 const resetSchema = z.union([
-  z.object({ projectId: z.string().min(1) }).strict(),
-  z.object({ projectId: z.string().min(1), key: z.string().min(1) }).strict(),
+  z.object({ projectId: z.string().min(1), family: z.enum(['llm', 'classifier']).default('llm') }).strict(),
+  z
+    .object({
+      projectId: z.string().min(1),
+      key: z.string().min(1),
+      family: z.enum(['llm', 'classifier']).default('llm'),
+    })
+    .strict(),
 ]);
 
 llmProfileHealthRouter.get(
@@ -79,7 +88,7 @@ llmProfileHealthRouter.get(
     const parsed = listQuerySchema.safeParse(req.query);
     if (!parsed.success) throw badRequest('projectId query parameter is required.');
     const store = await getLLMProfileHealthStore();
-    res.json(await store.listAdmin({ projectId: parsed.data.projectId as ProjectId }));
+    res.json(await store.listAdmin({ projectId: parsed.data.projectId as ProjectId, family: parsed.data.family }));
   }),
 );
 llmProfileHealthRouter.get(
@@ -89,7 +98,7 @@ llmProfileHealthRouter.get(
     if (!parsed.success) throw badRequest('projectId query parameter is required.');
     const { projectId } = parsed.data;
     const store = await getLLMProfileHealthStore();
-    res.json(await store.list({ projectId: projectId as ProjectId }));
+    res.json(await store.list({ projectId: projectId as ProjectId, family: parsed.data.family }));
   }),
 );
 
@@ -129,13 +138,13 @@ llmProfileHealthRouter.post(
   validateBody(resetSchema),
   asyncHandler(async (req, res) => {
     const store = await getLLMProfileHealthStore();
-    const input = req.body as { key?: string; projectId: string };
+    const input = req.body as { key?: string; projectId: string; family: 'llm' | 'classifier' };
     if (input.key == null) {
-      await store.reset({ projectId: input.projectId as ProjectId });
+      await store.reset({ projectId: input.projectId as ProjectId, family: input.family });
     } else {
-      const deleted = await store.resetProjectKey(input.projectId as ProjectId, input.key);
+      const deleted = await store.resetProjectKey(input.projectId as ProjectId, input.key, input.family);
       if (!deleted) {
-        res.status(404).json({ error: 'No LLM Profile health entry exists for this project and key.' });
+        res.status(404).json({ error: 'No profile health entry exists for this project, family and key.' });
         return;
       }
     }

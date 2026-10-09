@@ -1,0 +1,31 @@
+---
+id: classifier-profile
+title: Classifier Profile Node
+sidebar_label: Classifier Profile
+---
+
+## Overview
+
+Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI and OpenAI Decisions. Connect **Profile** directly to Evaluate's **Classifier Profiles** input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to **From profile**.
+
+## Settings and ports
+
+The Model section mirrors Evaluate's inline provider/model/API-key settings. Credentials are resolved on the executor. Optional **Model** and **API Key** inputs are enabled by their settings. A missing key is represented as an unavailable candidate so Evaluate can try the next profile; malformed configuration still fails.
+
+**Response timeout** defaults to 30 seconds per candidate, including its preparation, retries and validation. Evaluate also enforces a total chain deadline, defaulting to 180 seconds.
+
+**Automatic suspension** is off by default. When enabled, defaults are three availability failures within 300 seconds and a 300-second suspension. Transport failures, timeouts, HTTP 408/429 and 5XX responses count once per exhausted candidate. Authentication, malformed responses, unsupported evidence and graph cancellation do not count. Suspended candidates are skipped; one recovery probe is permitted after expiry.
+
+Studio Server supplies a durable health store and a **Classifier profile suspension** tab in Project Settings. Standalone integrations must supply the optional profile-health store to share suspension across runs; profiles and fallback still work without it.
+
+**Profile** has type `classifier-config`. Its runtime value contains the resolved credential: treat it as sensitive, like LLM Profile output. Node settings do not persist API keys. Only sanitized attempts are safe for reliability diagnostics.
+
+## Fallback
+
+For example, create two Classifier Profile nodes, choose **Liquid AI / d1** on the first and **OpenAI / gpt-6-luna** on the second, and configure their credentials. Connect them to Array's first and second inputs, then connect Array's output to Evaluate's **Classifier Profiles** input. Set Evaluate to **From profile**. Connect State and all Classifier Questions to Evaluate as usual. Liquid answers the whole batch when available; OpenAI receives the same evidence when Liquid fails or is suspended. Save/reload, linked node prefabs and cross-project Subgraphs preserve this configuration. Enabling Evaluate's split execution does not split the profile array into independent evaluations.
+
+Array order determines priority. Evaluate tries the next candidate after a provider, credential, capability or response-validation failure. State and questions are shared and snapshotted before attempts; invalid shared evidence fails before HTTP. Each candidate must support the same evidence. Rivet never drops images to make fallback succeed.
+
+The first fully validated response supplies Answers, Usage, Cost and native request/response diagnostics. Evaluate's Cost output estimates that successful response. Optional Classifier Attempts retain usable provider-reported token counts and known cost estimates even when an answer batch fails validation. Response Inspector aggregates those receipts and marks unavailable or unpriced request costs partial/unknown; it does not assume failed requests are free. Classifier Profile Summary explains the chain without credentials or request bodies. Explicit graph cancellation stops the chain immediately.
+
+Attempts distinguish configuration, capability, authentication, transport, HTTP, timeout, response-parsing and response-validation failures. Unsupported images are a capability failure, never silently dropped. Malformed JSON and malformed answer shapes are distinct diagnostics; neither triggers suspension.

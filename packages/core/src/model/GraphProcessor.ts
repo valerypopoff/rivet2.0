@@ -1087,6 +1087,7 @@ export class GraphProcessor {
       rootRunId: this.#rootRunId,
       graphRunId: this.#graphRunId,
       graphId: this.#graph.metadata!.id!,
+      projectId: this.#project.metadata.id,
       ...(this.#recordingProjectScope ? { projectScope: this.#recordingProjectScope } : {}),
       parentGraphRunId: this.#parentGraphRunId,
       executor: this.#executor
@@ -2238,7 +2239,9 @@ export class GraphProcessor {
             let resolved = this.#subgraphTargetCache.get(key);
             if (!resolved) {
               if (!this.#context.subgraphProjectLoader) {
-                throw new Error('Subgraph calls to another project require a subgraphProjectLoader. Use a project bundle locally or run through Rivet Studio Server.');
+                throw new Error(
+                  'Subgraph calls to another project require a subgraphProjectLoader. Use a project bundle locally or run through Rivet Studio Server.',
+                );
               }
               resolved = await this.#context.subgraphProjectLoader.loadTarget(target);
               if (resolved.project.metadata.id !== target.projectId) {
@@ -4255,11 +4258,8 @@ export class GraphProcessor {
       this.#isDefinitionValidConnection(connection),
     );
     for (const node of this.#executionGraphNodes) {
-      if (
-        node.type !== 'catchStreamingChunks' ||
-        node.disabled ||
-        (relevantNodeIds && !relevantNodeIds.has(node.id))
-      ) continue;
+      if (node.type !== 'catchStreamingChunks' || node.disabled || (relevantNodeIds && !relevantNodeIds.has(node.id)))
+        continue;
       // A saved Catch result is an ordinary once-only value. Run-from may reuse
       // it, but a live Catch still needs its own streaming coordinator.
       if (this.#nodeResults.has(node.id)) continue;
@@ -4272,7 +4272,9 @@ export class GraphProcessor {
         continue;
       }
       if (incoming.length !== 1 || incoming[0]!.inputId !== ('stream' as PortId)) {
-        throw new Error(`Catch streaming chunks "${node.title}" must have exactly one Streaming Output input connection.`);
+        throw new Error(
+          `Catch streaming chunks "${node.title}" must have exactly one Streaming Output input connection.`,
+        );
       }
       const source = this.#nodesById[incoming[0]!.outputNodeId];
       if (!source || source.disabled || source.isSplitRun) {
@@ -4297,7 +4299,11 @@ export class GraphProcessor {
   }
 
   #isStreamingOutputWatchBoundary(node: ChartNode): boolean {
-    return node.type === 'watchStreamingOutput' || node.type === 'stopWatchingStreamingOutput' || node.type === 'catchStreamingChunks';
+    return (
+      node.type === 'watchStreamingOutput' ||
+      node.type === 'stopWatchingStreamingOutput' ||
+      node.type === 'catchStreamingChunks'
+    );
   }
 
   #assertStreamingOutputWatchPreloadCanBeAdded(nodeId: NodeId): void {
@@ -4416,9 +4422,7 @@ export class GraphProcessor {
     const processId = nanoid() as ProcessId;
     const chunks = plan.chunks.slice(0, plan.count);
     const output: DataValue =
-      plan.count === 1
-        ? chunks[0]!
-        : { type: 'any[]', value: chunks.map((chunk) => chunk.value) };
+      plan.count === 1 ? chunks[0]! : { type: 'any[]', value: chunks.map((chunk) => chunk.value) };
     const outputs: Outputs = { ['value' as PortId]: output };
     plan.chunks.length = 0;
     await this.#emitter.emit(
@@ -4685,11 +4689,7 @@ export class GraphProcessor {
     for (const plan of this.#streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
       if (plan.settled) continue;
       const finalValue = outputs[plan.sourceOutputId];
-      if (
-        finalValue &&
-        finalValue.type !== 'control-flow-excluded' &&
-        !isEqual(plan.chunks.at(-1), finalValue)
-      ) {
+      if (finalValue && finalValue.type !== 'control-flow-excluded' && !isEqual(plan.chunks.at(-1), finalValue)) {
         plan.chunks.push(cloneExecutionOutputs({ ['value' as PortId]: finalValue })['value' as PortId]!);
       }
       if (plan.chunks.length > 0) {
@@ -5455,7 +5455,9 @@ export class GraphProcessor {
             projectId: (node as SubGraphNode).data.targetProjectId!,
             version: (node as SubGraphNode).data.targetVersion ?? 'latest',
           })
-        : this.#recordingProjectScope;
+        : subprocessorProject.metadata.id !== this.#project.metadata.id
+          ? getSubgraphProjectKey({ projectId: subprocessorProject.metadata.id, version: 'latest' })
+          : this.#recordingProjectScope;
     processor.#graphCallPath = Object.freeze([
       ...this.#graphCallPath,
       processor.#graph.metadata?.name || '(Unnamed Graph)',

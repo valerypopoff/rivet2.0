@@ -5,6 +5,7 @@ import {
   resolveBuiltInPlugin,
   DebuggerDatasetProvider,
   NodeProjectReferenceLoader,
+  loadProjectBundle,
 } from '@valerypopoff/rivet2-node';
 import * as Rivet from '@valerypopoff/rivet2-core';
 import {
@@ -278,6 +279,7 @@ const rivetDebugger = startDebuggerServer({
     frozenNodeOutputs,
     contextValues,
     projectPath,
+    projectBundle,
     useEditorCache,
     captureNodeTimings,
     recordSubgraphProjectRuns,
@@ -321,45 +323,86 @@ const rivetDebugger = startDebuggerServer({
     }
 
     let processorForConsole: ReturnType<typeof createProcessor>['processor'] | undefined;
+    const bundlePreparation = projectBundle ? new AbortController() : undefined;
+    let preparingBundle = projectBundle != null;
+    const abortBundlePreparation = () => bundlePreparation?.abort();
+    const onBundleControl = (data: { toString(): string }) => {
+      if (!bundlePreparation || bundlePreparation.signal.aborted) return;
+      try {
+        const message = JSON.parse(data.toString()) as { type?: string; data?: { requestId?: string } };
+        if (message.type !== 'abort' || (message.data?.requestId && message.data.requestId !== requestId)) return;
+        bundlePreparation.abort();
+        if (preparingBundle && client.readyState === 1)
+          client.send(JSON.stringify({ message: 'abort', data: { successful: false }, requestId }));
+      } catch {
+        /* The debugger owns malformed-message handling. */
+      }
+    };
+    if (bundlePreparation) {
+      client.on('message', onBundleControl);
+      client.once('close', abortBundlePreparation);
+    }
 
     try {
-      const { registry, results } = await assembleRegistry(project.plugins ?? [], async (spec: PluginLoadSpec) => {
-        return match(spec)
-          .with({ type: 'built-in' }, async (s) => resolveBuiltInPlugin(s.id))
-          .with({ type: 'uri' }, async (s) => {
-            const mod = await importPluginInitializer(s.uri, s.id);
-            const initialized = mod(Rivet);
-            if (!initialized?.id) {
-              throw new Error(`Plugin ${s.id} does not have an id`);
-            }
-            return initialized;
+      const host = getAppExecutorHostOptions();
+      if (projectBundle && !(host.allowLocalProjectBundles ?? (!host.createProcessorOptions && !host.authorizeClient)))
+        throw new Error('This executor does not accept local desktop project bundles.');
+      if (projectBundle && !Array.isArray(projectBundle.entryDatasets))
+        throw new Error(
+          'Desktop bundle runs require an entry dataset snapshot. Update the Rivet app and executor together.',
+        );
+      const bundle = projectBundle
+        ? await loadProjectBundle(projectBundle.manifestPath, {
+            entry: { artifactId: projectBundle.artifactId, project },
+            signal: bundlePreparation!.signal,
           })
-          .with({ type: 'package' }, async (s) => {
-            const localDataDir = getAppDataLocalPath();
-            const pluginDir = join(localDataDir, `plugins/${s.package}-${s.tag}/package`);
-            const packageJsonPath = join(pluginDir, 'package.json');
-
-            try {
-              await access(packageJsonPath);
-            } catch (err) {
-              throw new Error(`Plugin ${s.id} is not installed, could not access ${packageJsonPath}`);
-            }
-
-            const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf-8'));
-            if (packageJson.name !== s.package) {
-              throw new Error(`Plugin ${s.id} is not installed, found ${packageJson.name} instead of ${s.package}`);
-            }
-
-            const mainPath = join(pluginDir, packageJson.main);
-            const mod = await importPluginInitializer(pathToFileURL(mainPath).href, s.id);
-            const initialized = mod(Rivet);
-            if (!initialized?.id) {
-              throw new Error(`Plugin ${s.id} does not have an id`);
-            }
-            return initialized;
-          })
-          .exhaustive();
+        : undefined;
+      const bundleContext = bundle?.createExecutionContext({
+        artifactId: projectBundle!.artifactId,
+        project,
+        datasetProvider: new Rivet.InMemoryDatasetProvider(structuredClone(projectBundle!.entryDatasets)),
       });
+      bundlePreparation?.signal.throwIfAborted();
+      const { registry, results } = await assembleRegistry(
+        bundle?.manifest.plugins ?? project.plugins ?? [],
+        async (spec: PluginLoadSpec) => {
+          return match(spec)
+            .with({ type: 'built-in' }, async (s) => resolveBuiltInPlugin(s.id))
+            .with({ type: 'uri' }, async (s) => {
+              const mod = await importPluginInitializer(s.uri, s.id);
+              const initialized = mod(Rivet);
+              if (!initialized?.id) {
+                throw new Error(`Plugin ${s.id} does not have an id`);
+              }
+              return initialized;
+            })
+            .with({ type: 'package' }, async (s) => {
+              const localDataDir = getAppDataLocalPath();
+              const pluginDir = join(localDataDir, `plugins/${s.package}-${s.tag}/package`);
+              const packageJsonPath = join(pluginDir, 'package.json');
+
+              try {
+                await access(packageJsonPath);
+              } catch (err) {
+                throw new Error(`Plugin ${s.id} is not installed, could not access ${packageJsonPath}`);
+              }
+
+              const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf-8'));
+              if (packageJson.name !== s.package) {
+                throw new Error(`Plugin ${s.id} is not installed, found ${packageJson.name} instead of ${s.package}`);
+              }
+
+              const mainPath = join(pluginDir, packageJson.main);
+              const mod = await importPluginInitializer(pathToFileURL(mainPath).href, s.id);
+              const initialized = mod(Rivet);
+              if (!initialized?.id) {
+                throw new Error(`Plugin ${s.id} does not have an id`);
+              }
+              return initialized;
+            })
+            .exhaustive();
+        },
+      );
 
       for (const plugin of results.loaded) {
         logRuntimeInfo(`Enabled plugin ${plugin.id}.`);
@@ -415,6 +458,13 @@ const rivetDebugger = startDebuggerServer({
         : undefined;
       const processor = createProcessor(project, {
         ...hostProcessorOptions,
+        ...(bundlePreparation
+          ? {
+              abortSignal: hostProcessorOptions.abortSignal
+                ? AbortSignal.any([hostProcessorOptions.abortSignal, bundlePreparation.signal])
+                : bundlePreparation.signal,
+            }
+          : {}),
         graph: graphId,
         inputs,
         ...uploadedSettings,
@@ -425,7 +475,7 @@ const rivetDebugger = startDebuggerServer({
         evaluation,
         returnWhenGraphOutputsReady,
         registry,
-        datasetProvider: getDatasetProviderForClient(client),
+        datasetProvider: bundleContext?.datasetProvider ?? getDatasetProviderForClient(client),
         codeRunner,
         editorExecutionCache: useEditorCache ? getEditorExecutionCache(client, project) : undefined,
         onGraphFinish: publishWebAppStoragePatch,
@@ -436,7 +486,11 @@ const rivetDebugger = startDebuggerServer({
         context: contextValues,
         storedValueStore: webAppStorage?.store,
         projectPath,
-        projectReferenceLoader: hostProcessorOptions.projectReferenceLoader ?? new NodeProjectReferenceLoader(),
+        projectReferenceLoader:
+          bundleContext?.projectReferenceLoader ??
+          hostProcessorOptions.projectReferenceLoader ??
+          new NodeProjectReferenceLoader(),
+        subgraphProjectLoader: bundleContext?.subgraphProjectLoader ?? hostProcessorOptions.subgraphProjectLoader,
       });
       processorForConsole = processor.processor;
 
@@ -451,6 +505,8 @@ const rivetDebugger = startDebuggerServer({
       }
 
       try {
+        bundlePreparation?.signal.throwIfAborted();
+        preparingBundle = false;
         await processor.run();
       } finally {
         if (processor.processor.isRunning) {
@@ -458,9 +514,12 @@ const rivetDebugger = startDebuggerServer({
         }
       }
     } catch (err) {
+      if (bundlePreparation?.signal.aborted) return;
       logRuntimeError(`Graph ${graphId} failed.`, err, { requestId });
       sendGraphRunError(client, requestId, err);
     } finally {
+      client.off('message', onBundleControl);
+      client.off('close', abortBundlePreparation);
       releaseMigrationLease();
       if (processorForConsole) {
         rivetDebugger.detach(processorForConsole);

@@ -18,6 +18,156 @@ import {
 const revision = 'a'.repeat(40);
 const digest = 'sha256:' + 'b'.repeat(64);
 
+function imageInspection() {
+  return {
+    stdout: JSON.stringify([
+      { Id: 'sha256:' + 'c'.repeat(64), Config: { Labels: { 'org.opencontainers.image.revision': revision } } },
+    ]),
+  };
+}
+
+test('staging pulls at most two images concurrently, streams each pull, and verifies all before probing the image', async () => {
+  let active = 0;
+  let maxActive = 0;
+  let inspected = 0;
+  const pulls = [];
+  const releases = [];
+  const pending = pinStagingImages(async (args, options) => {
+    if (args[0] === 'pull') {
+      assert.equal(options.streamOutput, true);
+      active++;
+      maxActive = Math.max(maxActive, active);
+      pulls.push(args[1]);
+      await new Promise((resolve) => releases.push(resolve));
+      active--;
+      return { stdout: `Digest: ${digest}\n` };
+    }
+    if (args[0] === 'image') {
+      inspected++;
+      return imageInspection();
+    }
+    assert.equal(inspected, 4);
+    assert.equal(active, 0);
+    return { stdout: '' };
+  }, revision);
+  assert.equal(pulls.length, 2);
+  releases[0]();
+  // Drain promise continuations, not wall-clock sleeps.
+  await new Promise(setImmediate);
+  assert.equal(pulls.length, 3);
+  releases[1]();
+  await new Promise(setImmediate);
+  assert.equal(pulls.length, 4);
+  releases[2]();
+  releases[3]();
+  const pinned = await pending;
+  assert.equal(Object.keys(pinned).length, 4);
+  assert.equal(maxActive, 2);
+});
+
+test('a failed staging pull stops queued work and drains the other pull before rejecting', async () => {
+  let release;
+  let drained = false;
+  let settled = false;
+  const calls = [];
+  const failure = new Error('registry unavailable');
+  const pending = pinStagingImages(async (args) => {
+    calls.push(args);
+    assert.equal(args[0], 'pull', 'failed verification must not run a probe');
+    if (args[1].includes('/proxy:')) throw failure;
+    await new Promise((resolve) => {
+      release = resolve;
+    });
+    drained = true;
+    throw new Error('second failure');
+  }, revision);
+  const checked = assert.rejects(pending, (error) => {
+    settled = true;
+    assert.equal(drained, true);
+    return error === failure;
+  });
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  assert.equal(calls.length, 2);
+  release();
+  await checked;
+  assert.equal(calls.length, 2);
+});
+
+for (const failureAt of ['digest', 'inspection', 'revision']) {
+  test(`a staging ${failureAt} failure drains in-flight work without starting queued pulls or the runtime probe`, async () => {
+    const pulls = [];
+    let release;
+    let drained = false;
+    const pending = pinStagingImages(async (args) => {
+      if (args[0] === 'pull') {
+        pulls.push(args[1]);
+        if (args[1].includes('/web:')) {
+          await new Promise((resolve) => {
+            release = resolve;
+          });
+          drained = true;
+        }
+        return { stdout: failureAt === 'digest' && args[1].includes('/proxy:') ? 'no digest' : `Digest: ${digest}\n` };
+      }
+      assert.equal(args[0], 'image', 'runtime probes must not run after failed provenance checks');
+      if (failureAt === 'inspection') return { stdout: 'not JSON' };
+      const inspection = imageInspection();
+      return failureAt === 'revision' ? { stdout: inspection.stdout.replace(revision, 'd'.repeat(40)) } : inspection;
+    }, revision);
+    const checked = assert.rejects(pending, (error) => {
+      assert.equal(drained, true, 'the launcher must await in-flight work even when inspection fails');
+      return failureAt === 'digest'
+        ? /immutable/.test(error.message)
+        : failureAt === 'inspection'
+          ? error instanceof SyntaxError
+          : /does not match/.test(error.message);
+    });
+    await new Promise(setImmediate);
+    assert.equal(pulls.length, 2);
+    release();
+    await checked;
+    assert.equal(pulls.length, 2);
+  });
+}
+
+for (const failureAt of ['digest', 'inspection', 'revision']) {
+  test(`a staging ${failureAt} failure drains in-flight work without starting queued pulls or the runtime probe`, async () => {
+    const pulls = [];
+    let release;
+    let drained = false;
+    const pending = pinStagingImages(async (args) => {
+      if (args[0] === 'pull') {
+        pulls.push(args[1]);
+        if (args[1].includes('/web:')) {
+          await new Promise((resolve) => {
+            release = resolve;
+          });
+          drained = true;
+        }
+        return { stdout: failureAt === 'digest' && args[1].includes('/proxy:') ? 'no digest' : `Digest: ${digest}\n` };
+      }
+      assert.equal(args[0], 'image', 'runtime probes must not run after failed provenance checks');
+      if (failureAt === 'inspection') return { stdout: 'not JSON' };
+      const inspection = imageInspection();
+      return failureAt === 'revision' ? { stdout: inspection.stdout.replace(revision, 'd'.repeat(40)) } : inspection;
+    }, revision);
+    const checked = assert.rejects(pending, (error) => {
+      assert.equal(drained, true, 'the launcher must await in-flight work even when inspection fails');
+      return failureAt === 'digest'
+        ? /immutable/.test(error.message)
+        : failureAt === 'inspection'
+          ? error instanceof SyntaxError
+          : /does not match/.test(error.message);
+    });
+    await new Promise(setImmediate);
+    assert.equal(pulls.length, 2);
+    release();
+    await checked;
+    assert.equal(pulls.length, 2);
+  });
+}
+
 test('staging requires its exact clean checkout before touching containers', () => {
   assert.equal(assertStagingCheckout({ branch: 'staging\n', revision, status: '' }), revision);
   assert.throws(() => assertStagingCheckout({ branch: 'main', revision, status: '' }), /staging Git branch/);

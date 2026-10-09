@@ -17,6 +17,7 @@ const input = z
   .object({
     relativePath: z.string().min(1).max(4096),
     version: z.enum(['live', 'published']),
+    versionPolicy: z.enum(['latest', 'published']).optional(),
     requestId: z.string().uuid().optional(),
   })
   .strict();
@@ -27,12 +28,12 @@ projectBundleRouter.post(
   asyncHandler(async (req, res) => {
     if (req.get('Sec-Fetch-Site') === 'cross-site')
       throw createHttpError(403, 'Cross-site bundle preparation is not allowed.');
-    const { relativePath, version, requestId } = input.parse(req.body);
+    const { relativePath, version, versionPolicy, requestId } = input.parse(req.body);
     res
       .status(202)
       .json(
         await projectBundleJobs.start(
-          createSavedBundleSource(relativePath, version),
+          createSavedBundleSource(relativePath, version, versionPolicy),
           version === 'live' ? 'latest' : 'published',
           requestId,
         ),

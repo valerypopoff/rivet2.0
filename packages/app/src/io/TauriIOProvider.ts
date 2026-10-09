@@ -18,8 +18,10 @@ import { saveDatasetsFile, readDatasetsFile } from './datasets.js';
 import { type AppDatasetProvider, type PathPolicyProvider } from '../providers/ProvidersContext.js';
 import { openDialog, saveDialog } from '../utils/platform/dialog.js';
 import { nativeReadBinaryFile, nativeReadTextFile, nativeWriteFile } from '../utils/platform/fs.js';
+import { readDesktopProjectBundle } from './DesktopProjectBundle.js';
 
 export class TauriIOProvider implements PathBasedIOProvider {
+  readonly readProjectBundle = readDesktopProjectBundle;
   readonly #datasetProvider: AppDatasetProvider;
   readonly #pathPolicy: PathPolicyProvider;
 
@@ -121,34 +123,60 @@ export class TauriIOProvider implements PathBasedIOProvider {
     const path = (await openDialog({
       filters: [
         {
-          name: 'Rivet Project',
-          extensions: ['rivet-project'],
+          name: 'Rivet Project or Bundle',
+          extensions: ['rivet-project', 'json'],
         },
       ],
       multiple: false,
       directory: false,
       recursive: false,
-      title: 'Open graph',
+      title: 'Open project or bundle',
     })) as string | undefined;
 
     if (path) {
       const projectData = await this.loadProjectDataNoPrompt(path, options);
-      await callback({ ...projectData, path });
+      await callback({ ...projectData, path: projectData.path ?? path });
     }
   }
 
   async loadProjectDataNoPrompt(path: string, options: ProjectLoadOptions = {}): Promise<LoadedProjectData> {
     options.signal?.throwIfAborted();
-    const data = await nativeReadTextFile(path);
+    const bundle = await this.readProjectBundle(path);
     options.signal?.throwIfAborted();
-    const [projectData, attachedData] = deserializeProject(data, path);
+    const [projectData, attachedData] = bundle
+      ? [structuredClone(bundle.snapshot.project), bundle.attachments]
+      : deserializeProject(await nativeReadTextFile(path), path);
+    if (bundle) projectData.plugins = structuredClone(bundle.manifest.plugins);
 
     const evaluationData = deserializeLegacyEvaluationProjectData(attachedData.evaluations);
 
-    const { datasets, evaluationDatasets } = await readDatasetsFile(path, projectData, this.#pathPolicy);
+    const { datasets, evaluationDatasets } = bundle
+      ? { datasets: bundle.snapshot.datasets, evaluationDatasets: bundle.evaluationDatasets }
+      : await readDatasetsFile(path, projectData, this.#pathPolicy);
     options.signal?.throwIfAborted();
-    const commit = async (isCurrent: () => boolean) => {
+    const bundleProjects = bundle?.workspaceProjects?.map((member) => ({
+      path: member.path,
+      project: { ...structuredClone(member.project), plugins: structuredClone(bundle.manifest.plugins) },
+      evaluation: {
+        evaluationData: deserializeLegacyEvaluationProjectData(member.attachments.evaluations),
+        evaluationDatasets: member.evaluationDatasets,
+      },
+    }));
+    const commit: NonNullable<LoadedProjectData['commit']> = async (isCurrent, skipProjects) => {
       if (!isCurrent() || options.signal?.aborted) return false;
+      if (bundle?.workspaceProjects) {
+        for (const member of bundle.workspaceProjects) {
+          if (!isCurrent() || options.signal?.aborted) return false;
+          if (skipProjects?.has(member.project.metadata.id) || member.project.metadata.id === projectData.metadata.id)
+            continue;
+          await this.#datasetProvider.importDatasetsForProject?.(member.project.metadata.id, member.datasets, {
+            isCurrent,
+            signal: options.signal,
+            activate: false,
+          });
+        }
+      }
+      if (skipProjects?.has(projectData.metadata.id)) return isCurrent() && !options.signal?.aborted;
       await this.#datasetProvider.importDatasetsForProject?.(projectData.metadata.id, datasets, {
         isCurrent,
         signal: options.signal,
@@ -156,7 +184,12 @@ export class TauriIOProvider implements PathBasedIOProvider {
       });
       return isCurrent() && !options.signal?.aborted;
     };
-    const result = { project: projectData, evaluation: { evaluationData, evaluationDatasets } };
+    const result = {
+      project: projectData,
+      evaluation: { evaluationData, evaluationDatasets },
+      ...(bundleProjects ? { bundleProjects, bundleManifestPath: bundle!.manifestPath } : {}),
+      ...(bundle ? { path: bundle.snapshot.sourceProjectPath } : {}),
+    };
     if (options.deferCommit) return { ...result, commit };
     if (!(await commit(() => !options.signal?.aborted))) throw new DOMException('Project load cancelled', 'AbortError');
     return result;

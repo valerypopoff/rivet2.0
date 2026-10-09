@@ -34,9 +34,14 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
   const workspaceTransitions = useWorkspaceTransitions();
   const store = useStore();
 
-  return (projectInfo: OpenedProjectInfo, options?: { preferredGraphId?: GraphId }): Promise<boolean> =>
-    runLatestProjectActivation(store, async (isCurrent, signal) => {
+  return (
+    projectInfo: OpenedProjectInfo,
+    options?: { preferredGraphId?: GraphId },
+    intent?: { isCurrent(): boolean; signal: AbortSignal },
+  ): Promise<boolean> => {
+    const activate = async (isCurrent: () => boolean, signal: AbortSignal) => {
       try {
+        if (!isCurrent() || signal.aborted) return false;
         const currentInfo = store.get(projectsState).openedProjects[projectInfo.projectId];
         if (!currentInfo) {
           return false;
@@ -184,5 +189,9 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         });
         return false;
       }
-    });
+    };
+    // A bundle open already owns a guarded intent. Starting another intent
+    // here would cancel the caller and allow late sibling-tab registration.
+    return intent ? activate(intent.isCurrent, intent.signal) : runLatestProjectActivation(store, activate);
+  };
 }

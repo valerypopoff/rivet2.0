@@ -1,4 +1,5 @@
 import type { PortId } from '../NodeBase.js';
+import type { ClassifierFailureKind, ClassifierAttemptUsage } from '../classifier/types.js';
 import { isChatV2ResponseValidationError, runChatV2PipelineExecution } from './chatV2Pipeline.js';
 import {
   type ChatV2Provider,
@@ -37,7 +38,7 @@ class LLMProfileHealthOperationTimeoutError extends Error {
  * the attached handlers also consume any rejection that arrives after the
  * deadline or caller abort won the race.
  */
-function runBoundedHealthOperation<T>(params: {
+export function runBoundedHealthOperation<T>(params: {
   operation: string;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -108,12 +109,17 @@ function runBoundedHealthOperation<T>(params: {
 }
 
 export type LLMAttempt = {
+  family?: 'llm' | 'classifier';
+  failureKind?: ClassifierFailureKind;
+  /** Unreached candidates are observability only, not a fallback attempt. */
+  skipReason?: 'unreached';
+  classifierUsage?: ClassifierAttemptUsage;
   roundIndex: number;
   /** Present when a From profile candidate produced this attempt. */
   profileIndex?: number;
   /** User-facing title captured from the source LLM Profile node. */
   profileName?: string;
-  provider: ChatV2Provider;
+  provider: string;
   model: string;
   customProviderApi?: CustomProviderApi;
   stage: 'configuration' | 'request' | 'response-validation' | 'health-gate' | 'health-update';
@@ -126,7 +132,7 @@ export type LLMAttempt = {
   healthDisposition?: 'allow' | 'deny' | 'fail-open';
   healthOutcome?: RivetLLMProfileHealthOutcome;
   retryAt?: number;
-  timeoutKind?: 'first-output' | 'stream-inactivity';
+  timeoutKind?: 'first-output' | 'stream-inactivity' | 'response';
 };
 
 export type LLMProfileFallbackHealth = {
@@ -146,7 +152,7 @@ export type LLMProfileFallbackCandidate = {
 };
 
 function formatCandidateIdentity(candidate: {
-  provider: ChatV2Provider;
+  provider: string;
   model: string;
   customProviderApi?: CustomProviderApi;
 }): string {
@@ -180,12 +186,14 @@ export function getLLMAttemptErrorMessage(error: unknown): string {
 }
 
 function formatCandidateProfileIdentity(
-  candidate: Pick<LLMProfileFallbackCandidate, 'provider' | 'model' | 'customProviderApi' | 'profileName'>,
+  candidate: { provider: string; model: string; customProviderApi?: CustomProviderApi; profileName?: string },
   profileIndex: number,
 ): string {
   const profileName = candidate.profileName?.trim();
   const identity = formatCandidateIdentity(candidate);
-  return profileName ? `${profileName} (profile ${profileIndex + 1}; ${identity})` : `Profile ${profileIndex + 1} (${identity})`;
+  return profileName
+    ? `${profileName} (profile ${profileIndex + 1}; ${identity})`
+    : `Profile ${profileIndex + 1} (${identity})`;
 }
 
 function buildExhaustedMessage(attempts: readonly LLMAttempt[]): string {
@@ -402,8 +410,13 @@ export function isUnhealthyLLMProfileProviderFailure(error: unknown): boolean {
   return status === 408 || status === 429 || (status != null && status >= 500);
 }
 
-function createHealthPermit(params: {
-  candidate: LLMProfileFallbackCandidate & { health: LLMProfileFallbackHealth };
+export function createProfileHealthPermit(params: {
+  candidate: {
+    provider: string;
+    model: string;
+    customProviderApi?: CustomProviderApi;
+    health: Pick<LLMProfileFallbackHealth, 'identity' | 'policy'>;
+  };
   healthStore: RivetLLMProfileHealthStore;
   permitId: string;
   state: RivetLLMProfileHealthState;
@@ -677,7 +690,7 @@ export function createLLMProfileFallbackRunner(params: {
               healthState: begin.state,
               healthDisposition: 'allow',
             });
-            healthPermit = createHealthPermit({
+            healthPermit = createProfileHealthPermit({
               candidate: { ...candidate, health: activeHealth },
               healthStore,
               permitId,

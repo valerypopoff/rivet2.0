@@ -5,7 +5,9 @@ import { useIOProvider } from '../../providers/ProvidersContext.js';
 import { openedProjectSnapshotsState, projectsState, projectState } from '../../state/savedGraphs.js';
 import { openingProjectTabsState, selectedOpeningProjectTabIdState } from '../../state/openingProjectTabs.js';
 import { projectTabUiState, updateProjectTabUiState } from '../../state/projectTabUi.js';
-import { isPathBasedIOProvider } from '../../io/IOProvider.js';
+import { isPathBasedIOProvider, type LoadedProjectData } from '../../io/IOProvider.js';
+import { useWorkspaceHostCleanBaseline } from './useWorkspaceHostCleanBaseline.js';
+import { evaluationLibraryState, mergeLegacyEvaluationLibrary } from '../../state/evaluations.js';
 import { addOpenedProject, removeOpenedProject } from '../../utils/openedProjects.js';
 import { handleError } from '../../utils/errorHandling.js';
 import { useLoadProject } from '../useLoadProject.js';
@@ -14,7 +16,7 @@ import { useWorkspaceTransitions } from '../useWorkspaceTransitions.js';
 import { normalizeProjectSnapshot } from './projectSnapshot.js';
 import { useWorkspaceHostProjectCleanup } from './useWorkspaceHostProjectCleanup.js';
 import { flushHybridStorageGroup } from '../../state/storage.js';
-import { runLatestProjectActivation } from '../../utils/projectActivationCoordinator.js';
+import { getProjectActivationSignal, runLatestProjectActivation } from '../../utils/projectActivationCoordinator.js';
 import type {
   RivetProjectReplaceOptions,
   RivetProjectSnapshotInput,
@@ -32,19 +34,27 @@ export function useWorkspaceHostOpenProject() {
   const setProjectTabUiStates = useSetAtom(projectTabUiState);
   const setSelectedOpeningProjectTabId = useSetAtom(selectedOpeningProjectTabIdState);
   const cleanupClosedProject = useWorkspaceHostProjectCleanup();
+  const { markProjectClean } = useWorkspaceHostCleanBaseline();
 
-  const activateProject = useStableCallback(async (projectId: ProjectId, options?: { preferredGraphId?: GraphId }) => {
-    const projectInfo = store.get(projectsState).openedProjects[projectId];
-    if (!projectInfo) {
-      return false;
-    }
+  const activateProject = useStableCallback(
+    async (
+      projectId: ProjectId,
+      options?: { preferredGraphId?: GraphId },
+      intent?: Parameters<typeof loadProject>[2],
+    ) => {
+      const projectInfo = store.get(projectsState).openedProjects[projectId];
+      if (!projectInfo) {
+        return false;
+      }
 
-    const loaded = await loadProject(projectInfo, options);
-    if (loaded) {
-      setSelectedOpeningProjectTabId(undefined);
-    }
-    return loaded;
-  });
+      const loaded = await loadProject(projectInfo, options, intent);
+      const current = !intent || intent.isCurrent();
+      if (loaded && current) {
+        setSelectedOpeningProjectTabId(undefined);
+      }
+      return loaded && current;
+    },
+  );
 
   const commitProjectSnapshot = useStableCallback(
     async (snapshot: RivetProjectSnapshotInput, options: WorkspaceHostOpenProjectSnapshotOptions = {}) => {
@@ -195,6 +205,77 @@ export function useWorkspaceHostOpenProject() {
     },
   );
 
+  const openLoadedProject = useStableCallback(async (loaded: LoadedProjectData, isCurrent: () => boolean) => {
+    if (!isCurrent()) return false;
+    const members = loaded.bundleProjects ?? [
+      { project: loaded.project, path: loaded.path, evaluation: loaded.evaluation },
+    ];
+    const existingProjects = store.get(projectsState).openedProjects;
+    for (const member of members) {
+      const existing = existingProjects[member.project.metadata.id];
+      if (existing && existing.fsPath !== member.path)
+        throw new Error(
+          `A different project with ID ${member.project.metadata.id} is already open. Close its tab first.`,
+        );
+    }
+    const isWorkspaceCurrent = () =>
+      isCurrent() &&
+      members.every((member) => {
+        const id = member.project.metadata.id;
+        const current = store.get(projectsState).openedProjects[id];
+        const previous = existingProjects[id];
+        return previous ? current?.fsPath === member.path : current === undefined;
+      });
+    const activateExisting = () =>
+      activateProject(loaded.project.metadata.id, undefined, {
+        isCurrent: isWorkspaceCurrent,
+        signal: getProjectActivationSignal(store),
+      });
+    if (!loaded.bundleProjects && existingProjects[loaded.project.metadata.id]) return activateExisting();
+    const skip = new Set(Object.keys(existingProjects) as ProjectId[]);
+    if (loaded.commit && !(await loaded.commit(isWorkspaceCurrent, skip))) return false;
+    if (!isWorkspaceCurrent()) return false;
+    const { data, ...project } = loaded.project;
+    const opened = skip.has(loaded.project.metadata.id)
+      ? await activateExisting()
+      : await commitProjectSnapshot({
+          project,
+          data,
+          path: loaded.path,
+          evaluationData: loaded.evaluation.evaluationData,
+          evaluationDatasets: loaded.evaluation.evaluationDatasets,
+        });
+    if (!opened || !isCurrent()) return false;
+    // Register inactive snapshots without switching tabs or replacing existing edits.
+    for (const member of members) {
+      const id = member.project.metadata.id;
+      if (!store.get(projectsState).openedProjects[id]) {
+        const { data, ...project } = member.project;
+        setOpenedProjectSnapshots((previous) => ({ ...previous, [id]: { project, data } }));
+        setProjects((previous) => addOpenedProject(previous, member.project, { fsPath: member.path }));
+        store.set(evaluationLibraryState, (library) =>
+          mergeLegacyEvaluationLibrary(
+            library,
+            member.evaluation.evaluationData,
+            member.evaluation.evaluationDatasets,
+            id,
+          ),
+        );
+        void markProjectClean(id, { project, data });
+      }
+      if (loaded.bundleManifestPath)
+        store.set(projectsState, (previous) => ({
+          ...previous,
+          openedProjects: {
+            ...previous.openedProjects,
+            [id]: { ...previous.openedProjects[id]!, bundleManifestPath: loaded.bundleManifestPath },
+          },
+        }));
+    }
+    void flushHybridStorageGroup('project').catch((error) => console.error('Failed to persist bundle tabs:', error));
+    return true;
+  });
+
   const openProjectPath = useStableCallback((path: string) => {
     const alreadyOpenedProject = Object.values(store.get(projectsState).openedProjects).find(
       (project) => project.fsPath === path,
@@ -207,23 +288,7 @@ export function useWorkspaceHostOpenProject() {
         }
 
         const loadedProject = await ioProvider.loadProjectDataNoPrompt(path, { signal, deferCommit: true });
-        const { project, evaluation } = loadedProject;
-        if (!isCurrent()) return false;
-        const existing = store.get(projectsState).openedProjects[project.metadata.id];
-        if (existing) {
-          throw new Error('A project with this ID is already open. Select its existing tab instead.');
-        }
-        if (loadedProject.commit && !(await loadedProject.commit(isCurrent))) return false;
-        if (!isCurrent()) return false;
-        const { data, ...projectWithoutData } = project;
-
-        return await commitProjectSnapshot({
-          project: projectWithoutData,
-          data,
-          path,
-          evaluationData: evaluation.evaluationData,
-          evaluationDatasets: evaluation.evaluationDatasets,
-        });
+        return await openLoadedProject({ ...loadedProject, path: loadedProject.path ?? path }, isCurrent);
       } catch (error) {
         if (!isCurrent()) return false;
         callbacks.onOpenError?.({
@@ -250,6 +315,7 @@ export function useWorkspaceHostOpenProject() {
     activateProject,
     openProjectSnapshot,
     openProjectPath,
+    openLoadedProject,
     replaceCurrent,
   };
 }

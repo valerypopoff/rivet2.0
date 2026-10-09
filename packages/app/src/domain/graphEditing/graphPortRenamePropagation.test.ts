@@ -98,13 +98,58 @@ test('shared propagation snapshots every changed external caller without aliasin
   assert.deepEqual(result.projectGraphSnapshots[secondParentGraphId]!.nextGraph.connections, [
     { ...secondConnection, inputId: 'new' as PortId },
   ]);
-  (result.projectGraphSnapshots[firstParentGraphId]!.previousGraph.nodes[0]!.data as { inputData: Record<string, unknown> }).inputData.old =
-    'changed snapshot';
+  (
+    result.projectGraphSnapshots[firstParentGraphId]!.previousGraph.nodes[0]!.data as {
+      inputData: Record<string, unknown>;
+    }
+  ).inputData.old = 'changed snapshot';
   assert.deepEqual(
     (project.graphs[firstParentGraphId]!.nodes[0]!.data as { inputData: Record<string, unknown> }).inputData.old,
     { type: 'string', value: 'first' },
   );
 });
+
+for (const kind of ['input', 'output'] as const) {
+  test(`local ${kind} renames do not touch external callers with the same graph ID`, () => {
+    const makePort = kind === 'input' ? makeGraphInputNode : makeGraphOutputNode;
+    const previous = makePort('port', 'old');
+    const next = makePort('port', 'new');
+    const local = makeSubGraphNode('local', childGraphId);
+    const external = makeSubGraphNode('external', childGraphId, {
+      data: {
+        targetProjectId: 'other-project',
+        inputData: { old: { type: 'string', value: 'external default' } },
+        inputPortOrder: ['old'],
+        outputPortOrder: ['old'],
+      },
+    });
+    const incomplete = makeSubGraphNode('incomplete', childGraphId, { data: { targetScope: 'other-projects' } });
+    const wire = (node: ChartNode) =>
+      makeConnection(
+        kind === 'input'
+          ? { inputNodeId: node.id, inputId: 'old' as PortId }
+          : { outputNodeId: node.id, outputId: 'old' as PortId },
+      );
+    const parent = makeGraph(
+      firstParentGraphId,
+      [local, external, incomplete],
+      [wire(local), wire(external), wire(incomplete)],
+    );
+    const result = propagateGraphPortRename({
+      currentGraphId: childGraphId,
+      editedNodeId: previous.id,
+      kind,
+      nextCurrentConnections: [],
+      nextCurrentNodes: [next],
+      previousCurrentNodes: [previous],
+      project: makeProject([parent]),
+    });
+    const changed = result.projectGraphSnapshots[firstParentGraphId]!.nextGraph;
+    assert.equal(changed.connections[0]![kind === 'input' ? 'inputId' : 'outputId'], 'new');
+    assert.deepEqual(changed.connections.slice(1), parent.connections.slice(1));
+    assert.deepEqual(changed.nodes.slice(1), [external, incomplete]);
+  });
+}
 
 test('shared propagation keeps empty input IDs as ordinary exact rename values', () => {
   const previousInput = makeGraphInputNode('input', '');
@@ -202,7 +247,9 @@ test('shared propagation synthesizes an absent current graph for a recursive cal
 
   assert.deepEqual(result.nextCurrentConnections, [{ ...connection, inputId: 'new' as PortId }]);
   const nextRecursiveCaller = result.nextCurrentNodes.find((node) => node.id === recursiveCaller.id)!;
-  assert.deepEqual((nextRecursiveCaller.data as { inputData?: Record<string, unknown> }).inputData, { new: 'old default' });
+  assert.deepEqual((nextRecursiveCaller.data as { inputData?: Record<string, unknown> }).inputData, {
+    new: 'old default',
+  });
   assert.deepEqual((nextRecursiveCaller.data as { inputPortOrder?: string[] }).inputPortOrder, ['new']);
   assert.deepEqual(result.projectGraphSnapshots, {});
 });

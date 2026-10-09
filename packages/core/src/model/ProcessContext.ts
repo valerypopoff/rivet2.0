@@ -1,4 +1,5 @@
 import type { Opaque } from 'type-fest';
+import type { ClassifierFailureKind, ClassifierAttemptUsage } from './classifier/types.js';
 import {
   type RuntimeSettings,
   type NativeApi,
@@ -162,6 +163,10 @@ export type ChatV2CallTraceEvent = Omit<ChatV2CallFinishedEvent, 'rawUsage'>;
  * skipped by an open circuit and health-store fail-open decisions.
  */
 export type LLMProfileAttemptTraceEvent = {
+  family?: 'llm' | 'classifier';
+  failureKind?: ClassifierFailureKind;
+  skipReason?: 'unreached';
+  classifierUsage?: ClassifierAttemptUsage;
   eventId: string;
   roundIndex: number;
   /** Present when this attempt belongs to a From profile fallback candidate. */
@@ -170,7 +175,7 @@ export type LLMProfileAttemptTraceEvent = {
   profileName?: string;
   nodeId: NodeId;
   processId: ProcessId;
-  provider: ChatV2Provider;
+  provider: string;
   model: string;
   customProviderApi?: CustomProviderApi;
   stage: 'configuration' | 'request' | 'response-validation' | 'health-gate' | 'health-update';
@@ -183,7 +188,7 @@ export type LLMProfileAttemptTraceEvent = {
   healthDisposition?: 'allow' | 'deny' | 'fail-open';
   healthOutcome?: RivetLLMProfileHealthOutcome;
   retryAt?: number;
-  timeoutKind?: 'first-output' | 'stream-inactivity';
+  timeoutKind?: 'first-output' | 'stream-inactivity' | 'response';
 };
 
 export type LLMProfileAttemptObserver = (event: LLMProfileAttemptTraceEvent) => void;
@@ -321,6 +326,8 @@ export type GraphExecutionMetadata = {
   rootRunId: RootRunId;
   graphRunId: GraphRunId;
   graphId: GraphId;
+  /** Actual snapshot owner, including legacy referenced-graph execution. */
+  projectId?: ProjectId;
   /** Present for a hosted Subgraph call into another saved project. */
   projectScope?: string;
   parentGraphRunId?: GraphRunId;

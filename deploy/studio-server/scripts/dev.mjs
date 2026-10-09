@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { loadDevEnv } from './lib/dev-env.mjs';
+import { performance } from 'node:perf_hooks';
+import { withLauncherProgress } from './lib/launcher-progress.mjs';
 
 const rootDir = process.cwd();
 const { mergedEnv } = loadDevEnv(rootDir);
@@ -9,6 +11,7 @@ console.log('[dev] Open http://localhost:5174 once Vite is ready.');
 console.log('[dev] This command stays running and watches for code changes. Press Ctrl+C to stop.');
 
 const processes = [];
+const started = performance.now();
 
 function start(name, command) {
   const child = spawn(command, {
@@ -18,22 +21,34 @@ function start(name, command) {
     stdio: 'pipe',
   });
 
-  const prefix = `[${name}]`;
+  const prefix = () => `[${name} +${Math.floor((performance.now() - started) / 1000)}s]`;
 
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(`${prefix} ${chunk}`);
+    process.stdout.write(`${prefix()} ${chunk}`);
   });
 
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(`${prefix} ${chunk}`);
+    process.stderr.write(`${prefix()} ${chunk}`);
   });
 
   child.on('exit', (code) => {
-    process.stderr.write(`${prefix} exited with code ${code ?? 1}\n`);
+    process.stderr.write(`${prefix()} exited with code ${code ?? 1}\n`);
     shutdown(code ?? 1);
   });
 
   processes.push(child);
+  void withLauncherProgress(
+    'dev',
+    `Launching ${name} watcher`,
+    () =>
+      new Promise((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+      }),
+  ).catch((error) => {
+    console.error(`[dev] ${name} watcher failed: ${error.message}`);
+    shutdown(1);
+  });
 }
 
 let shuttingDown = false;

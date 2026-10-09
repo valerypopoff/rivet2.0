@@ -343,7 +343,7 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
       .filter((input) => input.id === 'state' || input.id.startsWith('question'))
       .every((input) => input.splitRunBehavior === 'preserve-array'),
   );
-  const modelGroup = instance.getEditors()[0];
+  const modelGroup = instance.getEditors().find((editor) => editor.type === 'group' && editor.label === 'Model');
   assert.ok(modelGroup?.type === 'group');
   const providerEditor = modelGroup.editors.find(
     (editor) => editor.type === 'dropdown' && editor.dataKey === 'provider',
@@ -440,7 +440,7 @@ test('Classifier Evaluate sends an empty string when optional State is omitted',
 
 test('Classifier Evaluate groups provider, model and credentials in an initially expanded Model section', () => {
   const editors = evaluateNode().getEditors();
-  const modelGroup = editors[0];
+  const modelGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Model');
   assert.ok(modelGroup?.type === 'group');
   assert.equal(modelGroup.label, 'Model');
   assert.equal(modelGroup.defaultOpen, true);
@@ -450,7 +450,7 @@ test('Classifier Evaluate groups provider, model and credentials in an initially
   );
   assert.deepEqual(
     editors.map((editor) => editor.label),
-    ['Model', 'Outputs', 'Advanced', 'Error behavior'],
+    ['Configuration', 'Model', 'Outputs', 'Advanced', 'Error behavior'],
   );
   const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
   assert.ok(modelEditor?.type === 'string');
@@ -759,7 +759,7 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
   assert.deepEqual(outputs.requestBody!.value, calls[0]!.body);
   assert.deepEqual(outputs.responseBody!.value, providerResponse);
   assert.equal(JSON.stringify(outputs).includes('liquid-test-key'), false);
-  const modelGroup = instance.getEditors()[0];
+  const modelGroup = instance.getEditors().find((editor) => editor.type === 'group' && editor.label === 'Model');
   assert.ok(modelGroup?.type === 'group');
   const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
   assert.ok(modelEditor?.type === 'string');

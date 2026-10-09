@@ -223,6 +223,7 @@ test('hosted dialogs render the shared theme and project health uses the metadat
     'Endpoint',
     'Web apps',
     'LLM profile suspension',
+    'Classifier profile suspension',
     'Published version history',
     'Danger zone',
   ]);

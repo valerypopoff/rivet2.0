@@ -16,6 +16,7 @@ use tauri::{CustomMenuItem, Menu, Submenu};
 use tauri_plugin_window_state::StateFlags;
 mod evaluation_store;
 mod plugins;
+mod project_bundle;
 
 #[cfg(target_os = "windows")]
 const WINDOWS_MIN_WINDOW_WIDTH: f64 = 800.0;
@@ -43,7 +44,8 @@ fn main() {
             evaluation_store::evaluation_store_import_legacy,
             plugins::extract_package_plugin_tarball,
             allow_data_file_scope,
-            read_relative_project_file
+            read_relative_project_file,
+            read_project_bundle
         ]);
 
     #[cfg(target_os = "macos")]
@@ -135,6 +137,34 @@ fn allow_data_file_scope(
     scope.allow_file(&data_file_path)?;
 
     Ok(())
+}
+
+#[tauri::command]
+async fn read_project_bundle(
+    app_handle: AppHandle,
+    project_file_path: String,
+) -> Result<Option<project_bundle::NativeProjectBundle>, InvokeError> {
+    let scope = app_handle.fs_scope();
+    let selected = Path::new(&project_file_path);
+    if !scope.is_allowed(selected) {
+        return Err(InvokeError::from(
+            "Project path is outside the permitted filesystem scope.",
+        ));
+    }
+    let bundle = tauri::async_runtime::spawn_blocking(move || {
+        project_bundle::read_bundle(Path::new(&project_file_path))
+    })
+    .await
+    .map_err(|_| InvokeError::from("Bundle reader failed."))?
+    .map_err(InvokeError::from)?;
+    if let Some(bundle) = &bundle {
+        // Permit only explicitly listed, contained files, never the whole parent directory.
+        scope.allow_file(&bundle.manifest_path)?;
+        for file in &bundle.files {
+            scope.allow_file(&file.source_project_path)?;
+        }
+    }
+    Ok(bundle)
 }
 
 #[tauri::command]

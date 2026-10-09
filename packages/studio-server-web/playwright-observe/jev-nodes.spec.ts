@@ -53,6 +53,7 @@ data:
 
 const project: WorkflowProjectItem = {
   id: 'hosted-jev-node-family',
+  projectMetadataId: 'hosted-jev-node-family',
   name: projectName,
   fileName: `${projectName}.rivet-project`,
   relativePath: `${projectName}.rivet-project`,
@@ -129,6 +130,57 @@ function classifierSection(editor: FrameLocator, heading: 'Instructions' | 'Crit
   return editor.getByRole('heading', { name: heading, exact: true }).locator('..');
 }
 
+test('Classifier configuration exports a wired profile and suspension administration is family scoped', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByRole('group', { name: 'Classifier configuration source' })).toBeVisible();
+  await editor.getByRole('button', { name: 'From profile', exact: true }).click();
+  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(1);
+  await expect(editor.getByRole('group', { name: 'API key source' })).toHaveCount(0);
+  await editor.getByRole('button', { name: 'Inline', exact: true }).click();
+  await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+  const profileNode = editor
+    .locator('.node')
+    .filter({ hasText: 'Classifier Profile' })
+    .filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+  await expect(profileNode).toHaveCount(1);
+  await expect(evaluate).toContainText('From profile');
+  const profileId = await profileNode.getAttribute('data-nodeid');
+  await editor.locator('body').press('ControlOrMeta+z');
+  await expect(profileNode).toHaveCount(0);
+  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(0);
+  await editor.locator('body').press('ControlOrMeta+Shift+z');
+  await expect(profileNode).toHaveCount(1);
+  await expect(profileNode).toHaveAttribute('data-nodeid', profileId!);
+  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(1);
+  await expect(profileNode).toContainText('Automatic suspension: Disabled');
+  await profileNode.locator('button.edit-button').dispatchEvent('click');
+  await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
+  await expect(editor.getByText('Response timeout (seconds)', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  const families: string[] = [];
+  await page.route('**/api/workflows/llm-profile-health/admin?**', async (route) => {
+    families.push(new URL(route.request().url()).searchParams.get('family')!);
+    await route.fulfill({ json: [] });
+  });
+  await page.locator('.project-row', { hasText: projectName }).click();
+  await page.locator('.active-project-more-button').click();
+  const modal = page.locator('[data-testid="workflow-project-settings-modal"]');
+  await modal.getByRole('tab', { name: 'Classifier profile suspension', exact: true }).click();
+  await expect(
+    modal.getByText('No Classifier profiles are currently suspended or awaiting recovery.', { exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => families).toEqual(['classifier']);
+  await modal.getByRole('tab', { name: 'LLM profile suspension', exact: true }).click();
+  await expect(
+    modal.getByText('No LLM profiles are currently suspended or awaiting recovery.', { exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => families).toEqual(['classifier', 'llm']);
+});
+
 async function expectNoExtraEditorGap(control: Locator, content: Locator) {
   await expect
     .poll(async () => {
@@ -137,6 +189,39 @@ async function expectNoExtraEditorGap(control: Locator, content: Locator) {
     })
     .toBeLessThan(30);
 }
+
+test('Classifier Profile copy/paste preserves provider configuration and creates a new source identity', async ({
+  page,
+}) => {
+  const editor = await openFixture(page);
+  await editor.locator('.node[data-nodeid="evaluate"] button.edit-button').dispatchEvent('click');
+  await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+  const profiles = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+  await expect(profiles).toHaveCount(1);
+  const first = profiles.first();
+  const originalId = await first.getAttribute('data-nodeid');
+  await first.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('Liquid AI');
+  await provider.press('Enter');
+  const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+  await model.fill('');
+  await model.blur();
+  await expect(first).toContainText('Model: d1');
+  await page.keyboard.press('Escape');
+  await first.locator('.node-title').click();
+  await page.keyboard.press('ControlOrMeta+c');
+  await page.keyboard.press('ControlOrMeta+v');
+  await expect(profiles).toHaveCount(2);
+  const ids = await profiles.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-nodeid')));
+  expect(ids).toContain(originalId);
+  expect(new Set(ids).size).toBe(2);
+  for (const profile of await profiles.all()) {
+    await expect(profile).toContainText('Provider: Liquid AI');
+    await expect(profile).toContainText('Model: d1');
+    await expect(profile).toContainText('Automatic suspension: Disabled');
+  }
+});
 
 async function expectInputToggleOnRight(field: Locator) {
   const content = field.locator(':scope > :first-child');
@@ -380,7 +465,7 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await editor.getByRole('button', { name: 'Classifier settings', exact: true }).click();
   await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
-  await expect(editor.getByText(/A missing key fails without fallback/)).toBeVisible();
+  await expect(editor.getByText(/Does not fall back to named or environment credentials/)).toBeVisible();
   await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await evaluate.locator('button.edit-button').dispatchEvent('click');

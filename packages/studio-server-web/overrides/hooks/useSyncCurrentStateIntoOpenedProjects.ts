@@ -84,6 +84,9 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     projectId,
     title,
     fsPath,
+    ...(getPersistedString(entry.bundleManifestPath)
+      ? { bundleManifestPath: getPersistedString(entry.bundleManifestPath) }
+      : {}),
     ...(executorMode ? { executorMode } : {}),
     ...(openedGraph ? { openedGraph: openedGraph as GraphId } : {}),
   };

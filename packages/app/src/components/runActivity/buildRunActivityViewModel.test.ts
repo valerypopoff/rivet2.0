@@ -828,9 +828,9 @@ test('renders suspension skips, reliability-service decisions, timeouts, and omi
   );
   assert.equal(item.hasErrors, true);
   assert.deepEqual(
-    item.detailRows?.find((row) => row.label === 'LLM profile attempt rows omitted'),
+    item.detailRows?.find((row) => row.label === 'Profile attempt rows omitted'),
     {
-      label: 'LLM profile attempt rows omitted',
+      label: 'Profile attempt rows omitted',
       value: '2',
     },
   );

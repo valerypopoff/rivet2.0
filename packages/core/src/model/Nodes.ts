@@ -340,6 +340,10 @@ import { classifierQuestionNode } from './nodes/ClassifierQuestionNode.js';
 export * from './nodes/ClassifierQuestionNode.js';
 
 import { classifierEvaluateNode } from './nodes/ClassifierEvaluateNode.js';
+import { classifierProfileNode } from './nodes/ClassifierProfileNode.js';
+export * from './nodes/ClassifierProfileNode.js';
+export * from './classifier/profile.js';
+export { classifierFailureKinds, type ClassifierFailureKind, type ClassifierAttemptUsage } from './classifier/types.js';
 export * from './nodes/ClassifierEvaluateNode.js';
 
 export const registerBuiltInNodes = (registry: NodeRegistration) => {
@@ -456,6 +460,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(referencedGraphAliasNode)
     .register(classifierQuestionNode)
     .register(classifierEvaluateNode)
+    .register(classifierProfileNode)
     .register(nodePrefabInstanceNode);
 };
 

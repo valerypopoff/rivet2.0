@@ -1,4 +1,5 @@
-import { type NodeGraph, type Project, type ExecutionRecorder } from '@valerypopoff/rivet2-core';
+import { type NodeGraph, type Project, type ProjectId, type ExecutionRecorder } from '@valerypopoff/rivet2-core';
+import type { readDesktopProjectBundle } from './DesktopProjectBundle.js';
 import {
   createEmptyEvaluationProjectData,
   deserializeEvaluationProjectData,
@@ -20,10 +21,15 @@ export type ProjectLoadOptions = {
   activateDatasets?: boolean;
 };
 export type LoadedProjectData = {
+  /** Manifest opening resolves to the real entry-project path for saving/recent tabs. */
+  path?: string;
   project: Project;
   evaluation: EvaluationProjectFileData;
+  /** Opening a manifest publishes the whole workspace, not just its entry. */
+  bundleProjects?: { path: string; project: Project; evaluation: EvaluationProjectFileData }[];
+  bundleManifestPath?: string;
   /** Optional provider preparation, invoked only while this selection is current. */
-  commit?: (isCurrent: () => boolean) => Promise<boolean>;
+  commit?: (isCurrent: () => boolean, skipProjects?: ReadonlySet<ProjectId>) => Promise<boolean>;
 };
 
 /**
@@ -42,6 +48,8 @@ export function deserializeLegacyEvaluationProjectData(value: unknown): Evaluati
 
 /** Base IO interface - all platforms (browser, Tauri, web) support these methods. */
 export interface IOProvider {
+  /** Desktop only; hosted providers keep server-owned dependency resolution. */
+  readProjectBundle?: typeof readDesktopProjectBundle;
   /** Download-only providers cannot confirm a completed storage write. */
   readonly projectSaveConfirmation?: 'download-only';
   saveGraphData(graphData: NodeGraph): Promise<void>;

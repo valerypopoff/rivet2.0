@@ -13,6 +13,7 @@ import {
   runCapture,
 } from './lib/docker-launcher.mjs';
 import { assertNoRetiredEnv, dropAmbientNodeOptionsForDocker } from './lib/docker-launcher-env.mjs';
+import { withLauncherProgress } from './lib/launcher-progress.mjs';
 const rootDir = process.cwd();
 const composeProject = 'rivet-studio-server-dev';
 const composeConfigFiles = [
@@ -21,6 +22,7 @@ const composeConfigFiles = [
 ];
 let composeBase = `docker compose -p ${composeProject} -f ${composeConfigFiles[0]} -f ${composeConfigFiles[1]}`;
 const diagnosticServices = 'api web proxy';
+const progress = (step, operation) => withLauncherProgress('dev-docker', step, operation);
 let envFileLabel = '.env';
 
 const devDependencyMarkerChecks = {
@@ -70,7 +72,7 @@ async function assertWorkspaceBindMountReadable(env) {
   const result = await runCapture(
     `${composeBase} run --rm --no-deps --entrypoint sh api -lc \"${workspaceSourceProbe}\"`,
     env,
-    { allowFailure: true, cwd: rootDir },
+    { allowFailure: true, cwd: rootDir, streamOutput: true },
   );
   if (!hasBindMountInputOutputError(`${result.stdout}\n${result.stderr}`)) {
     return;
@@ -91,8 +93,8 @@ async function devStackHasBindMountInputOutputError(env) {
 
 async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSeconds) {
   try {
-    for (const command of commands) {
-      await run(command, env, { cwd: rootDir });
+    for (const { step, command } of commands) {
+      await progress(step, () => run(command, env, { cwd: rootDir }));
     }
   } catch (error) {
     if ((await devStackHasBindMountInputOutputError(env)) === false) {
@@ -102,11 +104,15 @@ async function runCommandsWithBindMountRecovery(commands, env, waitTimeoutSecond
     console.warn(
       '[dev-docker] Docker Desktop lost access to the mounted workspace during startup. Recreating this dev stack once to refresh the bind mount; named volumes and mounted project data are preserved.',
     );
-    await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
+    await progress('Stopping services for bind-mount recovery', () =>
+      run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir }),
+    );
     try {
-      await run(`${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`, env, {
-        cwd: rootDir,
-      });
+      await progress('Retrying development startup; waiting for readiness', () =>
+        run(`${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`, env, {
+          cwd: rootDir,
+        }),
+      );
     } catch (retryError) {
       await run(`${composeBase} down --remove-orphans --timeout 20`, env, { allowFailure: true, cwd: rootDir });
       throw new Error(
@@ -141,18 +147,24 @@ async function main() {
   mergedEnv.RIVET_NODE_EXECUTOR_PROXY_BYPASS_HOSTS = 'host.docker.internal';
 
   assertNoRetiredEnv(mergedEnv, { launcherName: 'dev-docker', envFileLabel });
-  const projectInputFingerprint = await composeProjectInputFingerprint({
-    composeConfigFiles,
-    cwd: rootDir,
-  });
+  const starting = ['dev', 'up', 'recreate', 'build'].includes(action);
+  const phase = (step, operation) => (starting ? progress(step, operation) : operation());
+  const projectInputFingerprint = await phase('Checking development Compose inputs', () =>
+    composeProjectInputFingerprint({
+      composeConfigFiles,
+      cwd: rootDir,
+    }),
+  );
   mergedEnv.RIVET_DEV_STACK_INPUT_FINGERPRINT = projectInputFingerprint;
 
-  const waitTimeoutSeconds = await readDockerWaitTimeoutSeconds({
-    composeBase,
-    cwd: rootDir,
-    env: mergedEnv,
-    label: 'dev-docker',
-  });
+  const waitTimeoutSeconds = await phase('Reading startup readiness limits', () =>
+    readDockerWaitTimeoutSeconds({
+      composeBase,
+      cwd: rootDir,
+      env: mergedEnv,
+      label: 'dev-docker',
+    }),
+  );
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
   if (action === 'dev')
     console.log(
@@ -164,19 +176,26 @@ async function main() {
     );
   const staleDependencyServices = [];
 
+  const composeStep = (step, args) => ({ step, command: `${composeBase} ${args}` });
+  const stopStep = composeStep('Stopping development services', 'down --remove-orphans --timeout 20');
+  const startStep = composeStep(
+    'Starting development services; waiting for readiness',
+    `up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+  );
+  const buildStartStep = composeStep(
+    'Building and starting development services; waiting for readiness',
+    `up -d --build --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+  );
   const commandsByAction = {
-    build: [`${composeBase} build api`],
-    up: [`${composeBase} up --build --remove-orphans`],
-    down: [`${composeBase} down --remove-orphans`],
-    config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
-    services: [`${composeBase} config --services`],
-    ps: [`${composeBase} ps`],
-    logs: [`${composeBase} logs -f --tail=120 ${diagnosticServices}`],
-    dev: [`${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`],
-    recreate: [
-      `${composeBase} down --remove-orphans --timeout 20`,
-      `${composeBase} up -d --build --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-    ],
+    build: [composeStep('Building development images', 'build api')],
+    up: [composeStep(null, 'up --build --remove-orphans')],
+    down: [composeStep(null, 'down --remove-orphans')],
+    config: [composeStep(null, 'config --no-interpolate --no-env-resolution --no-path-resolution')],
+    services: [composeStep(null, 'config --services')],
+    ps: [composeStep(null, 'ps')],
+    logs: [composeStep(null, `logs -f --tail=120 ${diagnosticServices}`)],
+    dev: [startStep],
+    recreate: [stopStep, buildStartStep],
   };
 
   let commands = commandsByAction[action];
@@ -189,71 +208,78 @@ async function main() {
 
   try {
     if (action === 'dev' || action === 'up') {
-      await reconcileComposeProjectConfiguration({
-        composeProject,
-        expectedConfigFiles: composeConfigFiles,
-        expectedProjectFingerprint: projectInputFingerprint,
-        cwd: rootDir,
-        env: mergedEnv,
-        label: 'dev-docker',
-      });
+      await phase('Reconciling the development stack configuration', () =>
+        reconcileComposeProjectConfiguration({
+          composeProject,
+          expectedConfigFiles: composeConfigFiles,
+          expectedProjectFingerprint: projectInputFingerprint,
+          cwd: rootDir,
+          env: mergedEnv,
+          label: 'dev-docker',
+        }),
+      );
     }
 
     if (action === 'dev' || action === 'up') {
-      const proxyAlreadyRunning = await isComposeServiceRunning('proxy', {
-        composeBase,
-        cwd: rootDir,
-        env: mergedEnv,
-      });
-      if (!proxyAlreadyRunning) {
-        await ensurePortAvailable(proxyPort, {
-          envFileLabel,
-          label: 'dev-docker',
-        });
-      }
-
-      await assertWorkspaceBindMountReadable(mergedEnv);
-    }
-
-    if (action === 'dev') {
-      if (await runningWorkspaceBindMountNeedsRecovery(mergedEnv)) {
-        console.warn(
-          '[dev-docker] Docker Desktop returned an input/output error while reading the mounted Core source. Recreating only this dev stack to refresh the bind mount; named volumes and mounted project data are preserved.',
-        );
-        commands = [
-          `${composeBase} down --remove-orphans --timeout 20`,
-          `${composeBase} up -d --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-        ];
-      }
-
-      for (const service of ['web', 'api']) {
-        const alreadyRunning = await isComposeServiceRunning(service, {
+      await phase('Checking published ports', async () => {
+        const proxyAlreadyRunning = await isComposeServiceRunning('proxy', {
           composeBase,
           cwd: rootDir,
           env: mergedEnv,
         });
-
-        if (alreadyRunning && (await runningServiceDependenciesNeedRefresh(service, mergedEnv))) {
-          staleDependencyServices.push(service);
+        if (!proxyAlreadyRunning) {
+          await ensurePortAvailable(proxyPort, {
+            envFileLabel,
+            label: 'dev-docker',
+          });
         }
-      }
+      });
 
-      if (staleDependencyServices.length > 0) {
-        console.log(
-          `[dev-docker] Restarting the dev stack because dependency markers changed for ${staleDependencyServices.join(', ')}.`,
-        );
-        commands = [
-          `${composeBase} down --remove-orphans --timeout 20`,
-          `${composeBase} up -d --build --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
-        ];
-      }
+      await phase('Checking workspace access inside Docker', () => assertWorkspaceBindMountReadable(mergedEnv));
+    }
+
+    if (action === 'dev') {
+      await phase('Checking workspace health and dependency markers', async () => {
+        if (await runningWorkspaceBindMountNeedsRecovery(mergedEnv)) {
+          console.warn(
+            '[dev-docker] Docker Desktop returned an input/output error while reading the mounted Core source. Recreating only this dev stack to refresh the bind mount; named volumes and mounted project data are preserved.',
+          );
+          commands = [stopStep, startStep];
+        }
+
+        for (const service of ['web', 'api']) {
+          const alreadyRunning = await isComposeServiceRunning(service, {
+            composeBase,
+            cwd: rootDir,
+            env: mergedEnv,
+          });
+
+          if (alreadyRunning && (await runningServiceDependenciesNeedRefresh(service, mergedEnv))) {
+            staleDependencyServices.push(service);
+          }
+        }
+
+        if (staleDependencyServices.length > 0) {
+          console.log(
+            `[dev-docker] Restarting the dev stack because dependency markers changed for ${staleDependencyServices.join(', ')}.`,
+          );
+          commands = [stopStep, buildStartStep];
+        }
+      });
     }
 
     if (action === 'dev') {
       await runCommandsWithBindMountRecovery(commands, mergedEnv, waitTimeoutSeconds);
     } else {
-      for (const command of commands) {
-        await run(command, mergedEnv, { cwd: rootDir });
+      for (const { step, command } of commands) {
+        // Attached `up` stays alive to stream service logs; it is not a finite
+        // readiness phase. Do not print perpetual "starting" heartbeats.
+        if (action === 'up') {
+          console.log('[dev-docker] Starting services in attached mode; streaming Docker output.');
+          await run(command, mergedEnv, { cwd: rootDir });
+          continue;
+        }
+        await phase(step, () => run(command, mergedEnv, { cwd: rootDir }));
       }
     }
 
@@ -262,7 +288,9 @@ async function main() {
       // API/web containers can be recreated with new bridge-network addresses
       // while the proxy itself stays up, so refresh that resolution after every
       // normal dev bring-up without recreating the proxy or its dependencies.
-      await run(`${composeBase} exec -T proxy nginx -s reload`, mergedEnv, { cwd: rootDir });
+      await phase('Refreshing proxy upstream addresses', () =>
+        run(`${composeBase} exec -T proxy nginx -s reload`, mergedEnv, { cwd: rootDir }),
+      );
     }
   } catch (error) {
     if (action === 'dev' || action === 'up') {

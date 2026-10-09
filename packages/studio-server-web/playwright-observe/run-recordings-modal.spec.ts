@@ -161,6 +161,44 @@ function createResponseInspectorRecording(recordingId: string): string {
           ts: startedAt,
         },
         {
+          type: 'llmProfileAttempt',
+          data: {
+            eventId: 'classifier-parse-failure',
+            family: 'classifier',
+            nodeId,
+            processId,
+            provider: 'liquid',
+            model: 'd1',
+            roundIndex: 0,
+            profileIndex: 0,
+            stage: 'response-validation',
+            outcome: 'failure',
+            failureKind: 'response-parsing',
+            execution,
+          },
+          ts: startedAt + 20_000,
+        },
+        {
+          type: 'llmProfileAttempt',
+          data: {
+            eventId: 'classifier-invalid-answer-receipt',
+            family: 'classifier',
+            nodeId,
+            processId,
+            provider: 'liquid',
+            model: 'd1',
+            roundIndex: 0,
+            profileIndex: 1,
+            attemptIndex: 0,
+            stage: 'response-validation',
+            outcome: 'failure',
+            failureKind: 'response-validation',
+            classifierUsage: { inputTokens: 1000, outputTokens: 0 },
+            execution,
+          },
+          ts: startedAt + 21_000,
+        },
+        {
           type: 'llmCallFinished',
           data: {
             callId: 'fallback-one',
@@ -2264,6 +2302,18 @@ test.describe('Run recordings modal', () => {
     await inspectorButton.click();
 
     await expect(editorFrame.getByText('Response inspector', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('Profile fallbacks', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('Profile attempts', { exact: true })).toBeVisible();
+    await expect(editorFrame.getByText('liquid / d1', { exact: true })).toHaveCount(2);
+    await expect(
+      editorFrame.getByText('response parsing / failure / profile 1 / round 1', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      editorFrame.getByText(
+        'response validation / failure / profile 2 / round 1 / attempt 1 / 1000 input / 0 output tokens / cost unknown',
+        { exact: true },
+      ),
+    ).toBeVisible();
     await expect(editorFrame.getByText('95.0 sec', { exact: true })).toBeVisible();
     await expect(editorFrame.getByText('0.00 sec', { exact: true })).toHaveCount(0);
     await expect(editorFrame.getByText(/^15\.0 sec/)).toBeVisible();

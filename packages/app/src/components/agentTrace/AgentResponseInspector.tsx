@@ -293,10 +293,10 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
         </MetricGroup>
         <MetricGroup
           title="Recovery behavior"
-          description="Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile."
+          description="Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or classifier profile."
         >
           <Metric label="Provider request retries" value={String(trace.summary.retryCount)} />
-          <Metric label="LLM profile fallbacks" value={String(trace.summary.fallbackCount)} />
+          <Metric label="Profile fallbacks" value={String(trace.summary.fallbackCount)} />
         </MetricGroup>
         <MetricGroup title="Usage and cost">
           <Metric label="Input tokens" value={formatTokens(trace.summary.promptTokens)} />
@@ -349,7 +349,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
           ))}
         </TraceSection>
         <TraceSection
-          title="LLM profile attempts"
+          title="Profile attempts"
           omitted={trace.omittedProfileAttemptCount ?? 0}
           empty="No profile fallback or suspension decisions recorded."
         >
