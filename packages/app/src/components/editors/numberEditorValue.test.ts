@@ -24,6 +24,17 @@ test('only optional blank fields commit unset; invalid drafts never commit NaN',
 });
 
 test('explicit unit conversion retains integer storage and rejects overflow', () => {
+  for (const [seconds, milliseconds] of [
+    [0.001, 1],
+    [0.25, 250],
+    [0.5, 500],
+    [1.25, 1250],
+  ] as const) {
+    assert.deepEqual(resolveNumberEditorChange(String(seconds), seconds, false, 1000), {
+      valid: true,
+      value: milliseconds,
+    });
+  }
   assert.deepEqual(resolveNumberEditorChange('0.3505', 0.3505, false, 1000), { valid: true, value: 351 });
   assert.deepEqual(resolveNumberEditorChange('0', 0, false, 1000), { valid: true, value: 0 });
   assert.deepEqual(resolveNumberEditorChange('1e308', 1e308, false, 1000), { valid: false });

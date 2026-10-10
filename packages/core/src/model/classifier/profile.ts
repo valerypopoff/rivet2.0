@@ -41,6 +41,11 @@ export type ClassifierProfileValue = {
   sourceNodeId?: NodeId;
 };
 
+export const DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS = 500;
+export const DEFAULT_CLASSIFIER_PROFILE_FAILURE_THRESHOLD = 3;
+export const DEFAULT_CLASSIFIER_PROFILE_FAILURE_WINDOW_MS = 300_000;
+export const DEFAULT_CLASSIFIER_PROFILE_OPEN_DURATION_MS = 300_000;
+
 export const classifierProfileInputIds = ['model', 'apiKey'] as const;
 export const classifierProfileDataKeys = [
   'provider',
@@ -70,7 +75,7 @@ function positive(value: number | undefined, fallback: number, label: string, ma
 }
 
 export function classifierProfileResponseTimeout(configuration: ClassifierProfileConfiguration): number {
-  return positive(configuration.responseTimeoutMs, 30_000, 'response timeout');
+  return positive(configuration.responseTimeoutMs, DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS, 'response timeout');
 }
 
 export function classifierProfileHealthPolicy(
@@ -78,9 +83,24 @@ export function classifierProfileHealthPolicy(
 ): RivetLLMProfileCircuitBreakerPolicy | undefined {
   if (configuration.enableCircuitBreaker !== true) return undefined;
   return {
-    failureThreshold: positive(configuration.circuitBreakerFailureThreshold, 3, 'failure threshold', 1000),
-    failureWindowMs: positive(configuration.circuitBreakerFailureWindowMs, 300_000, 'failure window', 86_400_000),
-    openDurationMs: positive(configuration.circuitBreakerOpenDurationMs, 300_000, 'suspension duration', 86_400_000),
+    failureThreshold: positive(
+      configuration.circuitBreakerFailureThreshold,
+      DEFAULT_CLASSIFIER_PROFILE_FAILURE_THRESHOLD,
+      'failure threshold',
+      1000,
+    ),
+    failureWindowMs: positive(
+      configuration.circuitBreakerFailureWindowMs,
+      DEFAULT_CLASSIFIER_PROFILE_FAILURE_WINDOW_MS,
+      'failure window',
+      86_400_000,
+    ),
+    openDurationMs: positive(
+      configuration.circuitBreakerOpenDurationMs,
+      DEFAULT_CLASSIFIER_PROFILE_OPEN_DURATION_MS,
+      'suspension duration',
+      86_400_000,
+    ),
     halfOpenLeaseMs: classifierProfileResponseTimeout(configuration) + 5000,
   };
 }

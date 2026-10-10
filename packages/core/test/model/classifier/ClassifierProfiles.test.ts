@@ -5,6 +5,8 @@ import { ClassifierProfileNodeImpl } from '../../../src/model/nodes/ClassifierPr
 import { InMemoryRivetLLMProfileHealthStore } from '../../../src/model/chat-v2/llmProfileHealthStore.js';
 import {
   classifierProfileHealthIdentity,
+  classifierProfileHealthPolicy,
+  classifierProfileResponseTimeout,
   normalizeClassifierProfiles,
   resolveClassifierProfile,
   type ClassifierProfileValue,
@@ -85,6 +87,83 @@ function evaluate(profiles: ClassifierProfileValue[], ctx = context(), extra: In
     ctx,
   );
 }
+
+test('Classifier Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
+  const node = ClassifierProfileNodeImpl.create();
+  const originalData = structuredClone(node.data);
+  assert.equal(node.data.responseTimeoutMs, 500);
+  assert.equal(classifierProfileResponseTimeout({}), 500, 'Missing settings must use the same half-second default');
+  assert.equal(classifierProfileResponseTimeout({ responseTimeoutMs: 30_000 }), 30_000, 'Keep explicit saved timeouts');
+  const editors = new ClassifierProfileNodeImpl(node).getEditors();
+  const group = editors.find((editor) => editor.label === 'Classifier profile suspension');
+  assert.ok(group?.type === 'group');
+  assert.deepEqual(
+    group.editors.map((editor) => editor.label),
+    [
+      "It's a hosted runtime capability",
+      'Enable automatic suspension',
+      'Response timeout, seconds',
+      'Failures before suspension',
+      'Failure window, seconds',
+      'Suspension duration, seconds',
+    ],
+  );
+  assert.equal(group.editors[0]!.type, 'info');
+  assert.match(group.editors[0]!.helperMessage as string, /Not available in standalone Rivet/);
+  assert.deepEqual(
+    group.editors.filter((editor) => !(editor.hideIf?.(node.data) ?? false)).map((editor) => editor.label),
+    ["It's a hosted runtime capability", 'Enable automatic suspension'],
+    'Disabled suspension must display only the same notice and toggle as the LLM section',
+  );
+  assert.ok(
+    group.editors.every((editor) => typeof editor.helperMessage === 'string' && editor.helperMessage.length > 0),
+  );
+  assert.equal(
+    editors.some((editor) => editor.type === 'number' && editor.dataKey === 'responseTimeoutMs'),
+    false,
+  );
+  const policy = classifierProfileHealthPolicy({ enableCircuitBreaker: true })!;
+  for (const [key, expectedDefault, expectedMaximum] of [
+    ['responseTimeoutMs', classifierProfileResponseTimeout({}), 600_000],
+    ['circuitBreakerFailureWindowMs', policy.failureWindowMs, 86_400_000],
+    ['circuitBreakerOpenDurationMs', policy.openDurationMs, 86_400_000],
+  ] as const) {
+    const editor = group.editors.find((editor) => editor.type === 'number' && editor.dataKey === key);
+    assert.ok(editor?.type === 'number');
+    assert.equal(editor.defaultValue, expectedDefault);
+    assert.equal(editor.storageMultiplier, 1_000);
+    assert.equal(editor.min, key === 'responseTimeoutMs' ? 1 : 1_000);
+    assert.equal(editor.max, expectedMaximum);
+    assert.equal(editor.step, key === 'responseTimeoutMs' ? 1 : 1_000);
+    assert.equal(editor.hideIf?.(node.data), true);
+    assert.equal(editor.hideIf?.({ ...node.data, enableCircuitBreaker: true }), false);
+  }
+  assert.deepEqual(node.data, originalData, 'Reading editor defaults must not modify stored settings');
+  for (const responseTimeoutMs of [1, 250, 500, 1_250]) {
+    assert.equal(classifierProfileResponseTimeout({ responseTimeoutMs }), responseTimeoutMs);
+  }
+  assert.equal(
+    classifierProfileHealthPolicy({ enableCircuitBreaker: true, circuitBreakerFailureWindowMs: 300 })!.failureWindowMs,
+    300,
+    'Explicit saved millisecond values must not be reinterpreted as seconds',
+  );
+});
+
+test('Classifier Evaluate overall timeout editor uses milliseconds for defaults and constraints', () => {
+  for (const configurationMode of ['inline', 'profile'] as const) {
+    const node = ClassifierEvaluateNodeImpl.create();
+    node.data.configurationMode = configurationMode;
+    const group = new ClassifierEvaluateNodeImpl(node).getEditors().find((editor) => editor.label === 'Advanced');
+    assert.ok(group?.type === 'group');
+    const editor = group.editors.find((editor) => editor.label === 'Overall timeout (seconds)');
+    assert.ok(editor?.type === 'number');
+    assert.equal(editor.defaultValue, configurationMode === 'profile' ? 180_000 : 30_000);
+    assert.equal(editor.min, 1_000);
+    assert.equal(editor.max, 600_000);
+    assert.equal(editor.step, 1_000);
+    assert.equal(editor.storageMultiplier, 1_000);
+  }
+});
 
 test('Every classifier provider has inline/profile request, answer and cost parity', async () => {
   for (const provider of ['jev', 'liquid', 'openai']) {
@@ -432,7 +511,11 @@ test('A deadline exhausted during rejected-request cleanup cannot be suppressed 
   const caught = await run(true);
   assert.equal(caught.runFailed!.value, true);
   assert.equal(caught.answers!.type, 'control-flow-excluded');
-  assert.equal((caught.classifierAttempts!.value as any[]).at(-1).timeoutKind, 'response');
+  assert.equal(
+    (caught.classifierAttempts!.value as any[]).at(-1).timeoutKind,
+    undefined,
+    'Overall deadline expiry is not a suspension response timeout',
+  );
   assert.equal(store.list()[0]!.failureCount, 0);
 });
 
@@ -582,14 +665,58 @@ test('Interrupted response receipt advances fallback and suspends the route, unl
   assert.match(result.classifierProfileSummary!.value as string, /2\..*succeeded/);
 });
 
-test('Profile timeout advances fallback, but cancellation is never caught or retried', async () => {
+test('Classifier response deadlines are inert without enabled hosted suspension', async () => {
+  let now = originalNow();
+  Date.now = () => now;
+  for (const enableCircuitBreaker of [false, true]) {
+    const store = new InMemoryRivetLLMProfileHealthStore();
+    let calls = 0;
+    globalThis.fetch = async () => {
+      now += 10;
+      return ++calls === 1 ? new Response('', { status: 503 }) : reply('jev');
+    };
+    const result = await evaluate(
+      [profile('jev', { enableCircuitBreaker, responseTimeoutMs: 1 })],
+      context({ llmProfileHealthStore: enableCircuitBreaker ? undefined : store }),
+      {},
+      { retryOnNon200: true },
+    );
+    assert.equal(calls, 2, 'Inactive suspension must not apply a 1 ms deadline to requests or retries');
+    assert.ok(result.answers?.type !== 'control-flow-excluded');
+    assert.equal(store.list({ family: 'classifier' }).length, 0);
+  }
+});
+
+test('Evaluate overall deadline still bounds runs with suspension disabled', async () => {
+  globalThis.fetch = async () => new Promise<Response>(() => {});
+  const result = await evaluate(
+    [profile('jev', { enableCircuitBreaker: false, responseTimeoutMs: 1 })],
+    context({ llmProfileHealthStore: new InMemoryRivetLLMProfileHealthStore() }),
+    {},
+    { profileChainTimeoutMs: 30, catchRequestFailed: true },
+  );
+  assert.equal(result.runFailed!.value, true);
+  assert.ok(
+    (result.classifierAttempts!.value as Array<{ timeoutKind?: string }>).every((attempt) => !attempt.timeoutKind),
+  );
+});
+
+test('Enabled hosted profile timeout advances fallback, but cancellation is never caught or retried', async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
     return calls === 1 ? new Promise<Response>(() => {}) : reply('liquid');
   };
-  await evaluate([profile('jev', { responseTimeoutMs: 30 }), profile('liquid')]);
+  const store = new InMemoryRivetLLMProfileHealthStore();
+  await evaluate(
+    [
+      profile('jev', { enableCircuitBreaker: true, responseTimeoutMs: 30, circuitBreakerFailureThreshold: 1 }),
+      profile('liquid'),
+    ],
+    context({ llmProfileHealthStore: store }),
+  );
   assert.equal(calls, 2);
+  assert.equal(store.list({ family: 'classifier' })[0]!.state, 'open');
   const controller = new AbortController();
   calls = 0;
   globalThis.fetch = async () => {

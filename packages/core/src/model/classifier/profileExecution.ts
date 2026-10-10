@@ -174,7 +174,11 @@ export async function runClassifierProfiles(input: {
         throw new ClassifierProviderError('Classifier provider requires the Node executor.', 'capability');
       if (!profile.credential.value?.trim())
         throw new ClassifierProviderError('Classifier Profile API key is not set.', 'configuration');
-      const timeoutMs = Math.min(classifierProfileResponseTimeout(profile.configuration), input.deadline - Date.now());
+      const remainingMs = input.deadline - Date.now();
+      // Match LLM profiles: suspension deadlines require enabled, host-backed health.
+      const timeoutMs = health
+        ? Math.min(classifierProfileResponseTimeout(profile.configuration), remainingMs)
+        : remainingMs;
       if (timeoutMs <= 0) throw new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
       const result = await provider.evaluate({
         ...input.state,
@@ -195,7 +199,7 @@ export async function runClassifierProfiles(input: {
             ...attempt,
             stage: kind === 'response-validation' || kind === 'response-parsing' ? 'response-validation' : 'request',
             failureKind: kind ? classifierFailureKind(kind, attempt.status) : undefined,
-            timeoutKind: kind === 'timeout' ? 'response' : undefined,
+            timeoutKind: kind === 'timeout' && health ? 'response' : undefined,
           });
         },
       });
@@ -250,7 +254,7 @@ export async function runClassifierProfiles(input: {
           error: providerError
             ? `Classifier ${providerError.kind} failure${providerError.statusCode ? ` (HTTP ${providerError.statusCode})` : ''}.`
             : 'Classifier profile configuration or evidence capability failed.',
-          timeoutKind: providerError?.kind === 'timeout' ? 'response' : undefined,
+          timeoutKind: providerError?.kind === 'timeout' && health ? 'response' : undefined,
         });
       const unhealthy =
         providerError?.kind === 'timeout' ||
@@ -273,7 +277,6 @@ export async function runClassifierProfiles(input: {
             outcome: 'failure',
             error: 'Classifier overall deadline expired.',
             failureKind: 'timeout',
-            timeoutKind: 'response',
           });
         break;
       }

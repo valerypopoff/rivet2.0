@@ -5,9 +5,17 @@ import type { InternalProcessContext } from '../ProcessContext.js';
 import type { EditorDefinition } from '../EditorDefinition.js';
 import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
 import { nodeDefinition } from '../NodeDefinition.js';
-import { resolveClassifierProfile, type ClassifierProfileConfiguration } from '../classifier/profile.js';
+import {
+  resolveClassifierProfile,
+  DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS,
+  DEFAULT_CLASSIFIER_PROFILE_FAILURE_THRESHOLD,
+  DEFAULT_CLASSIFIER_PROFILE_FAILURE_WINDOW_MS,
+  DEFAULT_CLASSIFIER_PROFILE_OPEN_DURATION_MS,
+  type ClassifierProfileConfiguration,
+} from '../classifier/profile.js';
 import { getClassifierModelEditor, getClassifierEvaluateBodySections } from './ClassifierEvaluateNode.js';
 import { formatNodeBodyMarkdownField } from '../nodeBodyMarkdown.js';
+import { profileSuspensionHints } from '../profileSuspensionHints.js';
 
 export type ClassifierProfileNode = ChartNode<'classifierProfile', ClassifierProfileConfiguration>;
 export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
@@ -17,7 +25,7 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
       title: 'Classifier Profile',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 260 },
-      data: { provider: 'jev', responseTimeoutMs: 30_000 },
+      data: { provider: 'jev', responseTimeoutMs: DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS },
     };
   }
   getInputDefinitions(): NodeInputDefinition[] {
@@ -44,53 +52,66 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
     return [
       getClassifierModelEditor(this.data) as EditorDefinition<ClassifierProfileNode>,
       {
-        type: 'number',
-        label: 'Response timeout (seconds)',
-        dataKey: 'responseTimeoutMs',
-        defaultValue: 30,
-        storageMultiplier: 1000,
-        min: 1,
-        max: 600,
-      },
-      {
         type: 'group',
         label: 'Classifier profile suspension',
         editors: [
           {
+            type: 'info',
+            label: "It's a hosted runtime capability",
+            helperMessage: profileSuspensionHints.host,
+          },
+          {
             type: 'toggle',
-            label: 'Automatic suspension',
+            label: 'Enable automatic suspension',
             dataKey: 'enableCircuitBreaker',
-            helperMessage:
-              'Studio Server shares suspension across runs. Other hosts must supply a profile health store.',
+            helperMessage: profileSuspensionHints.enable,
+          },
+          {
+            type: 'number',
+            label: 'Response timeout, seconds',
+            dataKey: 'responseTimeoutMs',
+            defaultValue: DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS,
+            storageMultiplier: 1_000,
+            min: 1,
+            max: 600_000,
+            step: 1,
+            helperMessage: 'Batch time limit, including retries and retry waits. Minimum 0.001 s.',
+            hideIf: (data) => data.enableCircuitBreaker !== true,
           },
           {
             type: 'number',
             label: 'Failures before suspension',
             dataKey: 'circuitBreakerFailureThreshold',
-            defaultValue: 3,
+            defaultValue: DEFAULT_CLASSIFIER_PROFILE_FAILURE_THRESHOLD,
             min: 1,
             max: 1000,
-            hideIf: (data) => !data.enableCircuitBreaker,
+            step: 1,
+            helperMessage: profileSuspensionHints.threshold,
+            hideIf: (data) => data.enableCircuitBreaker !== true,
           },
           {
             type: 'number',
-            label: 'Failure window (seconds)',
+            label: 'Failure window, seconds',
             dataKey: 'circuitBreakerFailureWindowMs',
-            defaultValue: 300,
-            storageMultiplier: 1000,
-            min: 1,
-            max: 86400,
-            hideIf: (data) => !data.enableCircuitBreaker,
+            defaultValue: DEFAULT_CLASSIFIER_PROFILE_FAILURE_WINDOW_MS,
+            storageMultiplier: 1_000,
+            min: 1_000,
+            max: 86_400_000,
+            step: 1_000,
+            helperMessage: profileSuspensionHints.window,
+            hideIf: (data) => data.enableCircuitBreaker !== true,
           },
           {
             type: 'number',
-            label: 'Suspension duration (seconds)',
+            label: 'Suspension duration, seconds',
             dataKey: 'circuitBreakerOpenDurationMs',
-            defaultValue: 300,
-            storageMultiplier: 1000,
-            min: 1,
-            max: 86400,
-            hideIf: (data) => !data.enableCircuitBreaker,
+            defaultValue: DEFAULT_CLASSIFIER_PROFILE_OPEN_DURATION_MS,
+            storageMultiplier: 1_000,
+            min: 1_000,
+            max: 86_400_000,
+            step: 1_000,
+            helperMessage: profileSuspensionHints.duration,
+            hideIf: (data) => data.enableCircuitBreaker !== true,
           },
         ],
       },

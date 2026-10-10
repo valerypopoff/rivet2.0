@@ -12,11 +12,26 @@ Defines reusable provider, model, credential resolution and suspension settings 
 
 The Model section mirrors Evaluate's inline provider/model/API-key settings. Credentials are resolved on the executor. Optional **Model** and **API Key** inputs are enabled by their settings. A missing key is represented as an unavailable candidate so Evaluate can try the next profile; malformed configuration still fails.
 
-**Response timeout** defaults to 30 seconds per candidate, including its preparation, retries and validation. Evaluate also enforces a total chain deadline, defaulting to 180 seconds.
+With automatic suspension enabled on a supported host, **Response timeout** defaults to **0.5 seconds** per candidate. Existing saved values are kept. Fractional seconds are supported with millisecond precision: enter **0.25** for 250 ms or **0.5** for half a second. The minimum is **0.001** seconds. Evaluate also enforces a total chain deadline, defaulting to 180 seconds.
+
+The limit includes preparation, response validation, repeat requests to the same
+provider and the waits between them. These retries are automatic for connection
+failures and rate limits, or configured in Evaluate's **Retry on non-200** settings.
+They do not get a fresh timeout each time.
+
+The **Classifier profile suspension** section follows the LLM Profile layout:
+an explanation of the host requirement, **Enable automatic suspension**,
+then **Response timeout**, **Failures before suspension**, **Failure window** and
+**Suspension duration** when enabled, with help beside each setting. When disabled, only
+the explanation and enable toggle appear in the section. Timing fields display
+seconds. There is no stream-inactivity setting because classifiers return a
+complete response rather than a stream. **Response timeout** appears inside the
+section, immediately after the enable toggle. Values remain saved when disabled.
+Evaluate's separate overall execution deadline remains in effect.
 
 **Automatic suspension** is off by default. When enabled, defaults are three availability failures within 300 seconds and a 300-second suspension. Transport failures, timeouts, HTTP 408/429 and 5XX responses count once per exhausted candidate. Authentication, malformed responses, unsupported evidence and graph cancellation do not count. Suspended candidates are skipped; one recovery probe is permitted after expiry.
 
-Studio Server supplies a durable health store and a **Classifier profile suspension** tab in Project Settings. Standalone integrations must supply the optional profile-health store to share suspension across runs; profiles and fallback still work without it.
+Studio Server supplies a durable health store and a **Classifier profile suspension** tab in Project Settings. Standalone integrations must supply the optional profile-health store to activate suspension and its response deadlines; profiles and fallback still work without it.
 
 **Profile** has type `classifier-config`. Its runtime value contains the resolved credential: treat it as sensitive, like LLM Profile output. Node settings do not persist API keys. Only sanitized attempts are safe for reliability diagnostics.
 

@@ -62,7 +62,7 @@ const project: WorkflowProjectItem = {
   settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
 };
 
-async function openFixture(page: Page): Promise<FrameLocator> {
+async function openFixture(page: Page, contents = fixture): Promise<FrameLocator> {
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -100,7 +100,7 @@ async function openFixture(page: Page): Promise<FrameLocator> {
       };
       await route.fulfill({ json: tree });
     } else if (path === '/api/projects/load' && request.method() === 'POST') {
-      await route.fulfill({ json: { contents: fixture, datasetsContents: null, revisionId: null } });
+      await route.fulfill({ json: { contents, datasetsContents: null, revisionId: null } });
     } else if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) {
       await route.abort('blockedbyclient');
     } else {
@@ -130,6 +130,30 @@ function classifierSection(editor: FrameLocator, heading: 'Instructions' | 'Crit
   return editor.getByRole('heading', { name: heading, exact: true }).locator('..');
 }
 
+test('Classifier Profile defaults to a half-second response deadline', async ({ page }) => {
+  const contents = fixture.replace(
+    "        '[evaluate]:jevEvaluate",
+    `        '[default-profile]:classifierProfile "Classifier Profile"':
+          data:
+            provider: jev
+          visualData: 500/450/300/null//
+          outgoingConnections: []
+        '[evaluate]:jevEvaluate`,
+  );
+  const editor = await openFixture(page, contents);
+  await editor.locator('.node[data-nodeid="default-profile"] button.edit-button').dispatchEvent('click');
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Model$/ })
+    .click();
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Classifier profile suspension$/ })
+    .click();
+  await editor.getByText('Enable automatic suspension', { exact: true }).click();
+  await expect(editor.getByRole('spinbutton', { name: 'Response timeout, seconds', exact: true })).toHaveValue('0.5');
+});
+
 test('Classifier configuration exports a wired profile and suspension administration is family scoped', async ({
   page,
 }) => {
@@ -140,7 +164,21 @@ test('Classifier configuration exports a wired profile and suspension administra
   await editor.getByRole('button', { name: 'From profile', exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(1);
   await expect(editor.getByRole('group', { name: 'API key source' })).toHaveCount(0);
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Advanced$/ })
+    .click();
+  const overallTimeout = editor.getByRole('spinbutton', { name: 'Overall timeout (seconds)', exact: true });
+  await expect(overallTimeout).toHaveValue('180');
+  await expect(overallTimeout).toHaveAttribute('min', '1');
+  await expect(overallTimeout).toHaveAttribute('max', '600');
+  await expect(overallTimeout).toHaveAttribute('step', '1');
   await editor.getByRole('button', { name: 'Inline', exact: true }).click();
+  await expect(overallTimeout).toHaveValue('30');
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Advanced$/ })
+    .click();
   await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
   const profileNode = editor
     .locator('.node')
@@ -159,7 +197,108 @@ test('Classifier configuration exports a wired profile and suspension administra
   await expect(profileNode).toContainText('Automatic suspension: Disabled');
   await profileNode.locator('button.edit-button').dispatchEvent('click');
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
-  await expect(editor.getByText('Response timeout (seconds)', { exact: true })).toBeVisible();
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Model$/ })
+    .click();
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Classifier profile suspension$/ })
+    .click();
+  await expect(editor.getByText("It's a hosted runtime capability", { exact: true })).toBeVisible();
+  await expect(
+    editor.getByText(
+      'Requires Studio Server or a host with shared profile health. Not available in standalone Rivet.',
+      {
+        exact: true,
+      },
+    ),
+  ).toBeVisible();
+  await expect(
+    editor.getByText(
+      'Suspend this profile after provider failures or timeouts. After suspension, allow one recovery attempt.',
+      {
+        exact: true,
+      },
+    ),
+  ).toBeVisible();
+  const suspensionSection = editor.locator('.Collapsible').filter({
+    has: editor.locator('button.collapsible-panel-toggle').filter({ hasText: /^Classifier profile suspension$/ }),
+  });
+  await expect(suspensionSection.getByRole('spinbutton')).toHaveCount(0);
+  const responseTimeout = suspensionSection.getByRole('spinbutton', { name: 'Response timeout, seconds', exact: true });
+  await expect(editor.getByRole('spinbutton', { name: 'Response timeout, seconds', exact: true })).toHaveCount(0);
+  const automaticSuspension = editor.getByRole('checkbox', { name: /^Enable automatic suspension/ });
+  const suspensionToggleLabel = editor.getByText('Enable automatic suspension', { exact: true });
+  await expect(automaticSuspension).not.toBeChecked();
+  await expect(editor.getByRole('spinbutton', { name: 'Failure window, seconds', exact: true })).toHaveCount(0);
+  await suspensionToggleLabel.click();
+  await expect(automaticSuspension).toBeChecked();
+  await expect(suspensionSection.getByRole('spinbutton')).toHaveCount(4);
+  await expect(responseTimeout).toHaveValue('30'); // Preserve the inline timeout from the legacy fixture.
+  const failureThreshold = editor.getByRole('spinbutton', { name: 'Failures before suspension', exact: true });
+  const failureWindow = editor.getByRole('spinbutton', { name: 'Failure window, seconds', exact: true });
+  const suspensionDuration = editor.getByRole('spinbutton', { name: 'Suspension duration, seconds', exact: true });
+  await expect(failureThreshold).toHaveValue('3');
+  await expect(failureWindow).toHaveValue('300');
+  await expect(suspensionDuration).toHaveValue('300');
+  await expect(responseTimeout).toHaveAttribute('min', '0.001');
+  await expect(responseTimeout).toHaveAttribute('step', '0.001');
+  for (const seconds of ['0.001', '0.25', '0.5', '1.25', '0.25']) {
+    await responseTimeout.fill(seconds);
+    await responseTimeout.blur();
+    await expect(responseTimeout).toHaveValue(seconds);
+    expect(await responseTimeout.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(true);
+  }
+  for (const input of [failureWindow, suspensionDuration]) {
+    await expect(input).toHaveAttribute('min', '1');
+    await expect(input).toHaveAttribute('step', '1');
+  }
+  await expect(responseTimeout).toHaveAttribute('max', '600');
+  await expect(failureWindow).toHaveAttribute('max', '86400');
+  await expect(suspensionDuration).toHaveAttribute('max', '86400');
+  await expect(
+    editor.getByText('Batch time limit, including retries and retry waits. Minimum 0.001 s.', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    editor.getByText('Failures or timeouts within the failure window needed to suspend this profile.', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    editor.getByText('Rolling period for counting failures and timeouts.', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    editor.getByText('Time to suspend this profile before one recovery attempt.', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(editor.getByText('Stream inactivity timeout, seconds', { exact: true })).toHaveCount(0);
+  await failureWindow.fill('120');
+  await suspensionDuration.fill('240');
+  await suspensionToggleLabel.click();
+  await expect(automaticSuspension).not.toBeChecked();
+  await expect(suspensionSection.getByRole('spinbutton')).toHaveCount(0);
+  await expect(responseTimeout).toHaveCount(0);
+  await expect(failureWindow).toHaveCount(0);
+  await suspensionSection.screenshot({ path: test.info().outputPath('classifier-suspension-disabled.png') });
+  await suspensionToggleLabel.click();
+  await expect(automaticSuspension).toBeChecked();
+  await expect(responseTimeout).toHaveValue('0.25');
+  await expect(failureWindow).toHaveValue('120');
+  await expect(suspensionDuration).toHaveValue('240');
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Classifier profile suspension$/ })
+    .click();
+  await expect(suspensionSection.locator('button.collapsible-panel-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(suspensionSection.locator('.Collapsible__contentOuter')).toHaveCSS('height', '0px');
+  await editor
+    .locator('button.collapsible-panel-toggle')
+    .filter({ hasText: /^Classifier profile suspension$/ })
+    .click();
+  await expect(responseTimeout).toHaveValue('0.25');
+  await suspensionSection.screenshot({ path: test.info().outputPath('classifier-suspension-enabled.png') });
   await page.keyboard.press('Escape');
   const families: string[] = [];
   await page.route('**/api/workflows/llm-profile-health/admin?**', async (route) => {

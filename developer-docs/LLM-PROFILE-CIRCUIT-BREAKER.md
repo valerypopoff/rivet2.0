@@ -43,6 +43,15 @@ inspectable.
 The `LLM profile suspension` section belongs to the `LLM Profile` node. It is
 not available on inline LLM Chat configuration.
 
+The inspector shares concise host, enable and failure-policy hints with
+Classifier Profiles through `model/profileSuspensionHints.ts`. Only deadline
+hints differ: LLM describes first useful output and streaming inactivity;
+Classifier describes a complete-batch deadline. Keep common wording in that
+shared module; presentation tests enforce parity across both families.
+Describe the policy as suspending a profile. Skipping a suspended candidate is
+the fallback chain's behavior, not the suspension setting's definition. Both
+families leave profile deadlines inert when hosted suspension is inactive.
+
 | Setting                    | Default | Meaning                                                                     |
 | -------------------------- | ------: | --------------------------------------------------------------------------- |
 | Automatic suspension       |     Off | Enables automatic suspension for this resolved profile.                     |

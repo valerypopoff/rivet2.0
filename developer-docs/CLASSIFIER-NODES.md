@@ -21,9 +21,44 @@ include them when validating a new built-in type, not only the node's own tests.
 
 ## Profiles and ordered fallback
 
+The Profile inspector mirrors the LLM Profile's collapsible suspension section:
+host-capability notice and enable toggle, followed by response timeout, failure
+threshold, rolling failure window and suspension duration only when enabled.
+Each setting retains the corresponding LLM hint, adapted for classifiers. With
+suspension disabled, only the notice and toggle appear inside the section, just
+like LLM profiles.
+Classifiers are non-streaming, so there is no stream-inactivity field. Their
+response deadline sits inside the section, immediately after the toggle. The
+entire suspension policy, including response deadlines, is inert when disabled
+or without an executing project and host-supplied health store, matching LLM
+profiles. Saved values remain intact when disabled. Evaluate's separate overall
+execution deadline still bounds the run. Do not describe response deadlines as
+independent of suspension, or suspension itself as merely skipping a profile.
+
+Both families import the same concise notice, toggle and failure-policy hints
+from `model/profileSuspensionHints.ts`; do not maintain family-specific copies.
+Classifier batch deadlines and LLM first-output/stream deadlines retain short,
+execution-specific hints. Presentation tests compare the actual shared editor
+hints across both families to prevent wording drift.
+
+Timing editor defaults, bounds and steps use **stored milliseconds**, with
+`storageMultiplier: 1_000` converting to displayed seconds. Profile defaults
+come from the same constants as runtime resolution: 0.5 seconds for response,
+three failures, 300 seconds for the rolling window and suspension. Evaluate's
+overall timeout uses the same units (30 seconds inline, 180 seconds in profile
+mode). Reading defaults never writes them to the node or reinterprets explicit
+saved values. The 500 ms response default applies to new profiles and absent
+settings; explicit saved timeouts remain unchanged. The profile response timeout
+accepts fractional seconds with millisecond precision (minimum and step: 0.001
+seconds); for example, 0.25 seconds stores 250 ms. The failure window, suspension
+duration and Evaluate overall
+timeout retain a one-second editing step. Tests cover native definitions and
+rendered defaults, fractional response deadlines, constraints, hints and toggle
+behavior.
+
 `ClassifierProfileNode` produces a version-1 sensitive `classifier-config` value containing resolved provider/model/credentials and optional suspension policy. `classifier/profile.ts` owns selection, validation, cumulative chain limits (1–128 candidates), timing and route identity. Classifier and LLM configuration types are intentionally distinct. Missing credentials make a candidate unavailable; invalid authored configuration fails instead of being hidden by fallback.
 
-Evaluate keeps legacy Inline mode as the default. From profile hides inline configuration inputs and accepts one profile or a preserved ordered array (including Array's `any[]` output). Its total chain budget defaults to 180 seconds, independent of the retained inline 30-second setting. Profile response budgets default to 30 seconds and include retries. Profiles use one cumulative deadline-aware validation/snapshot traversal, rather than a whole-chain scan plus fresh per-candidate scans. Shared State/questions are validated and detached before health or provider calls. A candidate's unsupported evidence fails that candidate without discarding content; malformed shared evidence fails the node before attempts. The first validated response wins. There is no cross-candidate answer merging, numerical reinterpretation or stream timing.
+Evaluate keeps legacy Inline mode as the default. From profile hides inline configuration inputs and accepts one profile or a preserved ordered array (including Array's `any[]` output). Its total chain budget defaults to 180 seconds, independent of the retained inline 30-second setting. When hosted suspension is enabled, profile response budgets default to 0.5 seconds and include retries and their waits. These are repeated requests to the same provider (automatic transport/rate-limit retries and Evaluate's opt-in non-200 retries), not attempts of subsequent profiles. Each candidate gets one budget, not a fresh timeout per retry; a short budget may expire before a retry can occur. When suspension is inactive, only the remaining overall execution budget limits a candidate. Profiles use one cumulative deadline-aware validation/snapshot traversal, rather than a whole-chain scan plus fresh per-candidate scans. Shared State/questions are validated and detached before health or provider calls. A candidate's unsupported evidence fails that candidate without discarding content; malformed shared evidence fails the node before attempts. The first validated response wins. There is no cross-candidate answer merging, numerical reinterpretation or stream timing.
 
 `classifier/profileExecution.ts` runs classifier-specific fallback while reusing bounded health operations and atomic permits from the LLM reliability infrastructure. Transport/timeouts/408/429/5XX count once per failed candidate, not per physical retry. Interrupted response-body receipt is a transport failure; invalid UTF-8/JSON is response parsing, while an invalid answer shape is response validation. Authentication, input/capability failures, malformed responses and cancellation finish permits as ignored. Suspension is opt-in and requires an injected `llmProfileHealthStore`; its absence disables durable suspension, not fallback. Health-service errors fail open with bounded diagnostics, and stale completions cannot resurrect cleared entries. Classifier keys use a separate namespace and `family: classifier`; legacy entries without a family are LLM. Provider/model/credential and project/source-node identity determine health; display-name/policy edits do not reset it.
 
