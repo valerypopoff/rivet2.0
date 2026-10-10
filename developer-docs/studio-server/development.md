@@ -1,5 +1,75 @@
 # Development
 
+## Extending serving services
+
+- Put workflow-facing contracts in `routes/workflows/data-backend.ts`; do not
+  derive another adapter's contract with `Pick<ManagedWorkflowBackend, ...>`.
+  Use its narrow project/publication/execution/recording interfaces for consumers.
+  Untrusted mutation payloads remain `unknown` until adapter-owned normalization;
+  unioning a draft type with `unknown` does not strengthen that boundary.
+- Add common publication rules to `publication-policy.ts`. Supply each adapter's
+  actual project/draft/publication state and recheck inside its commit boundary.
+  Preserve adapter-specific route ownership, artifact validation and rollback.
+  Endpoint access changes must reject unpublished endpoints, including after
+  unpublish when historical versions still exist.
+  Capture publication preconditions before any asynchronous adapter acquisition,
+  filesystem writer wait or database lock. Do not retain caller-owned reviewed
+  state across an await, including access, unpublish and version-restore commands.
+- Construct serving resources in `storage-composition.ts` under one
+  `WorkflowStorageServices` owner. Never add independent module-global stores or
+  timers. Do not release an owner on an unknown cleanup outcome. Accepted recording
+  tasks may use existing stores during drain, but may not create new resources.
+  Obtain health/Evaluation stores from the owner rather than repeating mode
+  dispatch in consumers; managed owners must never create their local counterparts.
+- Extend `hosted-runtime-policy.ts` when adding execution dependencies. Supply
+  explicit loaders for hosted Evaluation execution as well as serving runs.
+  Keep transport credentials and request-context filtering in their owning
+  transport; keep durable scheduler/trial acceptance outside processor setup.
+- Use `ExecutionSession` for one processor run. Attach surface-specific listeners
+  before running it, await its full terminal, and leave recording persistence to
+  the caller. Prepared but unaccepted scheduled processors still need disposal.
+  A delivered HTTP response is not evidence that background execution finished.
+  Evaluation recording should use the session's recorder, not allocate a second
+  placeholder recorder during preparation; failed preparation has no run to record.
+
+Regression coverage for these seams: `workflow-storage-services.test.ts`,
+`workflow-publication-policy.test.ts`, `hosted-runtime-policy.test.ts`,
+`sqlite-workflow-backend.test.ts`, `managed-publication-history.test.ts`,
+`workflow-publication-filesystem.test.ts`, `workflow-web-apps-filesystem.test.ts`,
+`workflow-async-response.test.ts`, `hosted-evaluation-execution.test.ts`,
+`scheduled-run-execution.test.ts` and `scheduled-runs.test.ts`.
+The storage-owner tests cover single-flight construction, late initialization,
+independent owners, retention drain, evidence ordering and failed cleanup fencing.
+They distinguish deferred construction from an initializer already in progress,
+and require managed producer admission to close before waiting for that initializer.
+The runtime-policy/session tests cover cancellation at preparation boundaries,
+configuration isolation, disconnected foreground delivery and late graph failures.
+They also cover mode-correct operational stores, synchronous close failures,
+recorder-attachment cleanup and preservation of graph outcomes on disposal errors.
+Catalog shutdown must settle accepted operations before closing their health and
+Evaluation stores; unknown SQL termination must keep those dependent stores open.
+Use the owner's `drain()` to settle producer/persistence work without closing its
+stores; `dispose()` shares that same drain and then closes resources. Do not add
+another mode-dispatch or independent shutdown sequence in a feature.
+
+`helpers/workflow-publication-contract.ts` is one unchanged behavioral contract
+run by the direct and worker SQLite fixtures and by `test:async-managed` against
+real PostgreSQL/MinIO. It covers project/draft/publication preconditions, atomic
+route conflicts, access changes after draft edits, endpoint/web-app independence,
+unpublished access rejection, retained history and compact-tree status agreement.
+Extend that contract for shared policy changes rather than copying assertions
+into divergent adapter suites. Adapter-specific races/integrity remain separate.
+
+Run `test:async-managed` and `test:scheduled-managed` against their disposable
+PostgreSQL/MinIO fixtures when changing managed lifecycle or shared execution.
+For browser-visible execution/recording changes, use the required headless observe
+runner with `workflow-async-recording.spec.ts` (the disposable API serves real
+recordings; the hosted UI may be a local preview). Keep performance workloads
+separate from concurrent builds/tests; passing correctness checks does not measure
+production throughput or latency.
+Run `yarn test:style` separately from runtime/browser suites: its asset checks
+rebuild Core outputs, which runtime fixtures import from `dist`.
+
 ## Serving-path regression checks
 
 Catalog serving uses `worker: true`; direct adapters remain useful for stopped

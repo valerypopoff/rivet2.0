@@ -2,17 +2,19 @@ import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { getLocalMetadataServingSelection } from '../../local-metadata/serving-selection.js';
-import { assertLocalMetadataWritesAllowed } from '../../local-metadata/runtime-control.js';
-import { SqliteWorkflowBackend } from '../../local-metadata/sqlite-workflow-backend.js';
-import type { WorkflowDataBackend } from './data-backend.js';
+import type { WorkflowDataBackend, WorkflowExecutionDefinition } from './data-backend.js';
+import {
+  getWorkflowStorageServices,
+  peekWorkflowStorageServices,
+  disposeWorkflowStorageServices,
+} from './storage-composition.js';
 import { createHash } from 'node:crypto';
 import {
   deserializeDatasets,
   loadProjectAndAttachedDataFromFile,
   loadProjectAndAttachedDataFromString,
 } from '@valerypopoff/rivet2-node';
-import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopoff/rivet2-node';
+import type { ResolvedSubgraphProject, SubgraphProjectTarget, ProjectReferenceLoader } from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowFolderItem,
@@ -43,12 +45,7 @@ import type {
 import { getWorkflowsRoot } from '../../security.js';
 import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import { createHttpError } from '../../utils/httpError.js';
-import {
-  getManagedWorkflowStorageConfig,
-  getWorkflowStorageBackendMode,
-  isManagedWorkflowStorageEnabled,
-} from './storage-config.js';
-import { ManagedWorkflowBackend } from './managed/backend.js';
+import { getWorkflowStorageBackendMode } from './storage-config.js';
 import type { WorkflowPublicationCommand } from './publication-command.js';
 import type { ManagedReconciliationFindingDetailQuery } from './managed/reconciliation.js';
 import {
@@ -101,8 +98,6 @@ import {
 } from './published-versions.js';
 import {
   deleteWorkflowRecording,
-  flushWorkflowExecutionRecordingPersistence,
-  initializeWorkflowRecordingStorage,
   listWorkflowRecordingRunsPage,
   getWorkflowRunStatistics,
   listWorkflowRunStatisticsCatalog,
@@ -127,20 +122,12 @@ import { normalizeHostedProjectTitle, parseHostedProjectContents } from './hoste
 import { getFilesystemProjectRevisionId, writeWorkflowProjectStatsCacheFromContents } from './project-stats.js';
 import {
   checkFilesystemProjectTransactionHealth,
-  initializeFilesystemProjectTransactions,
   saveFilesystemProjectTransaction,
-  waitForFilesystemWorkflowStorageIdle,
   withFilesystemWorkflowProjectRead,
   withFilesystemWorkflowStorageRead,
   withFilesystemWorkflowStorageWrite,
 } from './filesystem-project-transactions.js';
-import {
-  FilesystemRivetLLMProfileHealthStore,
-  getFilesystemLLMProfileHealthDatabasePath,
-} from '../../llm-profile-health/filesystem-store.js';
-import { flushLLMProfileHealthRecordingOutcomes } from '../../llm-profile-health/recording-outcomes.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
-import { FilesystemRivetEvaluationStore } from '../../evaluation-runs/filesystem-store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
 import type { HostedEvaluationCoordinator } from '../../evaluation-runs/hosted-coordinator.js';
 
@@ -248,25 +235,7 @@ async function resolveFilesystemInPlaceSaveTarget(
   );
 }
 
-type ExecutionProjectResult = {
-  project: Project;
-  attachedData: AttachedData;
-  datasetProvider: NodeDatasetProvider;
-  projectVirtualPath: string;
-  revisionKey: string;
-  endpointAccess?: 'public' | 'internal';
-  webAppUiGraphId?: string;
-  webAppAllowedEmails?: string[];
-  /** Immutable identity of the published app binding, independent of its executable revision. */
-  webAppBindingId?: string;
-  /** Process-local invalidation key for this app's owning workflow. */
-  webAppPolicyInvalidationKey?: string;
-  debug?: {
-    cacheStatus: 'hit' | 'miss' | 'bypass';
-    resolveMs: number;
-    materializeMs: number;
-  };
-};
+type ExecutionProjectResult = WorkflowExecutionDefinition;
 
 export type WebAppAccessPolicy = {
   projectVirtualPath: string;
@@ -275,127 +244,24 @@ export type WebAppAccessPolicy = {
   bindingId: string;
 };
 
-let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
-let sqliteBackend: SqliteWorkflowBackend | null = null;
-let sqliteBackendPromise: Promise<SqliteWorkflowBackend> | null = null;
-let sqliteRetentionTimer: ReturnType<typeof setInterval> | null = null;
-let sqliteRetentionRunning = false;
 export function getLocalWorkflowActiveWriteCount(): number {
-  return sqliteBackend?.getActiveWriteCount() ?? 0;
+  return peekWorkflowStorageServices()?.getLocalActiveWriteCount() ?? 0;
 }
 export function getLocalWorkflowPendingCatalogOperationCount(): number {
-  return sqliteBackend?.getPendingCatalogOperationCount() ?? 0;
+  return peekWorkflowStorageServices()?.getLocalPendingOperationCount() ?? 0;
 }
-function startLocalRecordingRetention(): void {
-  if (sqliteRetentionTimer) return;
-  const cleanup = async () => {
-    if (sqliteRetentionRunning || !sqliteBackend) return;
-    try {
-      assertLocalMetadataWritesAllowed();
-    } catch {
-      return;
-    }
-    sqliteRetentionRunning = true;
-    try {
-      await sqliteBackend.cleanupRecordings();
-    } catch {
-      console.warn('[local-metadata] Recording retention stopped without deleting unverified artifacts.');
-    } finally {
-      sqliteRetentionRunning = false;
-    }
-  };
-  sqliteRetentionTimer = setInterval(() => void cleanup(), 60_000);
-  sqliteRetentionTimer.unref();
-  void cleanup();
-}
-
-async function getDataBackend(): Promise<WorkflowDataBackend> {
-  const local = getLocalMetadataServingSelection();
-  if (!local) return getManagedBackend();
-  if (!sqliteBackendPromise) {
-    const backend = new SqliteWorkflowBackend({
-      ...local,
-      databasePath: local.catalogDatabasePath,
-      worker: true,
-      virtualRoot: local.source.workflows,
-      withWrite: async (operation) => {
-        assertLocalMetadataWritesAllowed();
-        return operation();
-      },
-      beforeDeleteProject: async (id) => {
-        await getFilesystemLLMProfileHealthStore().reset({ projectId: id as ProjectId });
-        await getFilesystemEvaluationStore().deleteProject(id as ProjectId);
-      },
-    });
-    sqliteBackend = backend;
-    sqliteBackendPromise = Promise.resolve().then(async () => {
-      try {
-        await backend.initialize();
-        return backend;
-      } catch (error) {
-        await backend.dispose().catch(() => undefined);
-        if (sqliteBackend === backend) {
-          sqliteBackend = null;
-          sqliteBackendPromise = null;
-        }
-        throw error;
-      }
-    });
-  }
-  return sqliteBackendPromise;
-}
+const getDataBackend = () => getWorkflowStorageServices().getData();
+const getManagedBackend = () => getWorkflowStorageServices().getManaged();
+const resetFilesystemLLMProfileHealthForProject = (id: ProjectId) =>
+  getWorkflowStorageServices().resetLocalProjectHealth(id);
 function usesDatabaseCatalog(): boolean {
-  return getLocalMetadataServingSelection() !== null || isManagedWorkflowStorageEnabled();
-}
-let filesystemLLMProfileHealthStore: FilesystemRivetLLMProfileHealthStore | null = null;
-let filesystemEvaluationStore: FilesystemRivetEvaluationStore | null = null;
-
-function getFilesystemLLMProfileHealthStore(): FilesystemRivetLLMProfileHealthStore {
-  filesystemLLMProfileHealthStore ??= new FilesystemRivetLLMProfileHealthStore();
-  return filesystemLLMProfileHealthStore;
-}
-
-function getFilesystemEvaluationStore(): FilesystemRivetEvaluationStore {
-  filesystemEvaluationStore ??= new FilesystemRivetEvaluationStore();
-  return filesystemEvaluationStore;
-}
-
-async function resetFilesystemLLMProfileHealthForProject(projectId: ProjectId): Promise<void> {
-  const existingStore = filesystemLLMProfileHealthStore;
-  if (existingStore != null) {
-    await existingStore.reset({ projectId });
-    return;
-  }
-
-  if (!(await pathExists(getFilesystemLLMProfileHealthDatabasePath()))) {
-    // Avoid creating an empty health database just because a project is deleted.
-    // Recheck the singleton after the asynchronous filesystem lookup in case an
-    // execution initialized it while the lookup was in progress.
-    if (filesystemLLMProfileHealthStore == null) return;
-  }
-
-  await getFilesystemLLMProfileHealthStore().reset({ projectId });
-}
-
-async function getManagedBackend(): Promise<ManagedWorkflowBackend> {
-  if (!managedBackendPromise) {
-    managedBackendPromise = (async () => {
-      const backend = new ManagedWorkflowBackend(getManagedWorkflowStorageConfig());
-      await backend.initialize();
-      return backend;
-    })().catch((error) => {
-      managedBackendPromise = null;
-      throw error;
-    });
-  }
-
-  return managedBackendPromise;
+  return getWorkflowStorageServices().mode !== 'legacy';
 }
 
 export async function listManagedReconciliationFindingDetailsWithBackend(
   query: ManagedReconciliationFindingDetailQuery,
 ) {
-  if (!isManagedWorkflowStorageEnabled()) {
+  if (getWorkflowStorageServices().mode !== 'managed') {
     throw createHttpError(409, 'Detailed reconciliation findings require managed workflow storage.', { expose: true });
   }
   return (await getManagedBackend()).listManagedReconciliationFindingDetails(query);
@@ -595,12 +461,11 @@ function invalidateFilesystemExecutionMove(movedProjectPaths: WorkflowProjectPat
 }
 
 export async function checkWorkflowStorageHealth(context?: RuntimeHealthCheckContext): Promise<void> {
-  if (getLocalMetadataServingSelection()) {
-    await getDataBackend();
-    await sqliteBackend!.checkHealth(context);
+  if (getWorkflowStorageServices().mode === 'sqlite') {
+    await (await getWorkflowStorageServices().getLocal()).checkHealth(context);
     return;
   }
-  if (isManagedWorkflowStorageEnabled()) {
+  if (getWorkflowStorageServices().mode === 'managed') {
     await (await getManagedBackend()).checkHealth(context);
     return;
   }
@@ -611,23 +476,7 @@ export async function checkWorkflowStorageHealth(context?: RuntimeHealthCheckCon
 }
 
 export async function initializeWorkflowStorage(): Promise<void> {
-  await delegate(
-    async () => {
-      await getDataBackend();
-    },
-    async () => {
-      const root = await ensureWorkflowsRoot();
-      await initializeFilesystemProjectTransactions(root);
-      // A corrupt sidecar must not silently make a published endpoint disappear.
-      // Check existing settings before readiness and execution-cache construction.
-      for (const projectPath of await listProjectPathsRecursive(root)) {
-        await readStoredWorkflowProjectSettings(projectPath, path.basename(projectPath, PROJECT_EXTENSION));
-      }
-      await getFilesystemExecutionCache().initialize(root);
-      await initializeWorkflowRecordingStorage(root);
-    },
-  );
-  if (getLocalMetadataServingSelection()) startLocalRecordingRetention();
+  await getWorkflowStorageServices().initialize();
 }
 
 export async function getWorkflowTree() {
@@ -879,20 +728,16 @@ export async function listWorkflowRecordingRunsPageWithBackend(
 }
 
 export async function getLLMProfileHealthStore(): Promise<RivetStudioLLMProfileHealthStore> {
-  return isManagedWorkflowStorageEnabled()
-    ? (await getManagedBackend()).getLLMProfileHealthStore()
-    : getFilesystemLLMProfileHealthStore();
+  return getWorkflowStorageServices().getProfileHealth();
 }
 
 export async function getEvaluationStore(): Promise<RivetStudioEvaluationStore> {
-  return isManagedWorkflowStorageEnabled()
-    ? (await getManagedBackend()).getEvaluationStore()
-    : getFilesystemEvaluationStore();
+  return getWorkflowStorageServices().getEvaluations();
 }
 
 /** Returns the durable hosted-Evaluations scheduler only in managed storage mode. */
 export async function getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator | null> {
-  if (!isManagedWorkflowStorageEnabled()) return null;
+  if (getWorkflowStorageServices().mode !== 'managed') return null;
   return (await getManagedBackend()).getHostedEvaluationCoordinator();
 }
 
@@ -915,31 +760,7 @@ export async function getWorkflowRunStatisticsWithBackend(
 }
 
 export async function disposeWorkflowStorage(): Promise<void> {
-  if (sqliteRetentionTimer) clearInterval(sqliteRetentionTimer);
-  sqliteRetentionTimer = null;
-  if (!usesDatabaseCatalog()) {
-    await waitForFilesystemWorkflowStorageIdle();
-  }
-  // Recording persistence can schedule its final health-evidence update after
-  // the bundle write. Drain both layers before their shared stores close.
-  await flushWorkflowExecutionRecordingPersistence();
-  await flushLLMProfileHealthRecordingOutcomes();
-
-  const backendPromise = managedBackendPromise;
-  const localBackendPromise = sqliteBackendPromise;
-  sqliteBackend = null;
-  sqliteBackendPromise = null;
-  managedBackendPromise = null;
-  const filesystemStore = filesystemLLMProfileHealthStore;
-  const evaluationStore = filesystemEvaluationStore;
-  filesystemLLMProfileHealthStore = null;
-  filesystemEvaluationStore = null;
-  await Promise.all([
-    backendPromise?.then((backend) => backend.dispose()),
-    localBackendPromise?.then((backend) => backend.dispose(), () => undefined),
-    filesystemStore?.dispose(),
-    evaluationStore?.dispose(),
-  ]);
+  await disposeWorkflowStorageServices();
 }
 
 export async function readWorkflowRecordingArtifactWithBackend(
@@ -1287,6 +1108,10 @@ export function executeWorkflowPublicationCommandWithBackend(
 export async function executeWorkflowPublicationCommandWithBackend(
   command: WorkflowPublicationCommand,
 ): Promise<WorkflowProjectItem | WorkflowPublishedVersionRestoreResponse> {
+  // Capture reviewed state before adapter acquisition or a filesystem writer
+  // wait. A caller changing its object cannot authorize a different command.
+  command = { ...command };
+  command.preconditions = { ...command.preconditions };
   switch (command.kind) {
     case 'publish-endpoint':
       return publishWorkflowProjectItemWithBackend(
@@ -1337,7 +1162,7 @@ export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown
           beforeDelete: async (projectMetadataId) => {
             if (projectMetadataId != null) {
               await resetFilesystemLLMProfileHealthForProject(projectMetadataId as ProjectId);
-              await getFilesystemEvaluationStore().deleteProject(projectMetadataId as ProjectId);
+              await (await getEvaluationStore()).deleteProject(projectMetadataId as ProjectId);
             }
           },
         });
@@ -1387,7 +1212,7 @@ export async function resolveWebAppAccessPolicy(
   slug: string,
   expectedProjectVirtualPath?: string,
 ): Promise<WebAppAccessPolicy | null> {
-  if (getLocalMetadataServingSelection()) {
+  if (getWorkflowStorageServices().mode === 'sqlite') {
     const policy = await (await getDataBackend()).resolveWebAppAccessPolicy(slug);
     return policy == null
       ? null
@@ -1398,7 +1223,7 @@ export async function resolveWebAppAccessPolicy(
           bindingId: `filesystem:${policy.appId}`,
         };
   }
-  if (isManagedWorkflowStorageEnabled()) {
+  if (getWorkflowStorageServices().mode === 'managed') {
     const policy = await (await getManagedBackend()).resolveWebAppAccessPolicy(slug);
     return policy == null
       ? null
@@ -1433,7 +1258,7 @@ export async function resolveLatestExecutionProject(
 }
 
 export async function createExecutionProjectReferenceLoader(projectPath: string) {
-  return delegate(
+  return delegate<ProjectReferenceLoader>(
     async (backend) => backend.createProjectReferenceLoader(),
     async () => {
       const loader = createPublishedWorkflowProjectReferenceLoader(getWorkflowsRoot(), projectPath);

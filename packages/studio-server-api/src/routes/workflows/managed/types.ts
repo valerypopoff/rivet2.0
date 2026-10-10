@@ -1,7 +1,4 @@
-import type { AttachedData, CombinedDataset, Project } from '@valerypopoff/rivet2-node';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../../studio-server-shared/workflow-recording-types.js';
-
-import type { WorkflowProjectItem } from '../../../../../studio-server-shared/workflow-types.js';
 
 type TimestampValue = Date | string;
 
@@ -149,39 +146,15 @@ export type EndpointAggregateRow = {
 
 export type WorkflowRecordingListRow = WorkflowRow & Partial<EndpointAggregateRow>;
 
-export type SaveHostedProjectResult = {
-  path: string;
-  revisionId: string;
-  project: WorkflowProjectItem;
-  created: boolean;
-};
-
-export type LoadHostedProjectResult = {
-  contents: string;
-  datasetsContents: string | null;
-  revisionId: string;
-};
+export type {
+  SaveHostedProjectResult,
+  LoadHostedProjectResult,
+  PersistWorkflowExecutionRecordingOptions,
+} from '../data-backend.js';
 
 export type TransactionHooks = {
   onCommit(task: () => Promise<void>): void;
   onRollback(task: () => Promise<void>): void;
-};
-
-export type PersistWorkflowExecutionRecordingOptions = {
-  sourceProject: Project;
-  sourceProjectPath: string;
-  executedProject: Project;
-  executedAttachedData: AttachedData;
-  executedDatasets: CombinedDataset[];
-  endpointName: string;
-  recordingSerialized: string;
-  runKind: 'published' | 'latest' | 'editor';
-  status: 'succeeded' | 'failed' | 'suspicious';
-  durationMs: number;
-  errorMessage?: string;
-  executionIdentity?: WorkflowRecordingExecutionIdentity;
-  /** Runs after durable recording metadata commits. */
-  onPersisted?: (recordingId: string) => Promise<void>;
 };
 
 export type ImportManagedWorkflowOptions = {

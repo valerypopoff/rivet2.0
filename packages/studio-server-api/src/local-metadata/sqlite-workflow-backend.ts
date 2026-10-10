@@ -8,7 +8,7 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-node';
 import type { Project, SubgraphProjectTarget, ResolvedSubgraphProject } from '@valerypopoff/rivet2-node';
-import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/managed/types.js';
+import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/data-backend.js';
 import type {
   WorkflowRecordingInputFilter,
   WorkflowRecordingFilterStatus,
@@ -52,6 +52,12 @@ import {
   type LocalWorkflowTreeProject,
 } from './workflow-catalog.js';
 import { badRequest, conflict, createHttpError } from '../utils/httpError.js';
+import {
+  createEndpointPublication,
+  assertEndpointAccess,
+  assertPublicationPreconditions,
+  nextPublicationVersion,
+} from '../routes/workflows/publication-policy.js';
 import { createBlankProjectFile, sanitizeWorkflowName } from '../routes/workflows/fs-helpers.js';
 import {
   normalizeHostedProjectTitle,
@@ -62,14 +68,7 @@ import {
   getWorkflowProjectStatsFromContents,
 } from '../routes/workflows/project-stats.js';
 import { normalizeManagedWorkflowRelativePath } from '../routes/workflows/virtual-paths.js';
-import {
-  normalizeStoredEndpointName,
-  normalizeWorkflowEndpointLookupName,
-} from '../routes/workflows/endpoint-names.js';
-import {
-  assertPublicationPreconditions,
-  nextPublicationVersion,
-} from '../routes/workflows/publication-preconditions.js';
+import { normalizeWorkflowEndpointLookupName } from '../routes/workflows/endpoint-names.js';
 import {
   normalizeWebAppPublicationDrafts,
   normalizeWebAppAccessDrafts,
@@ -688,7 +687,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           (next, revisionId) => {
             assertPublicationPreconditions(
               preconditions,
-              { projectId: next.workflowId, publicationVersion: next.publicationVersion, draftRevisionId: revisionId },
+              {
+                projectId: next.workflowId,
+                publicationVersion: next.publicationVersion,
+                draftRevisionId: revisionId,
+                endpointPublished: next.publishedContents != null,
+              },
               kind,
             );
             const publicationVersion = nextPublicationVersion(next.publicationVersion);
@@ -712,13 +716,10 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     settings: unknown,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
-    const endpointName = normalizeStoredEndpointName((settings as { endpointName?: string })?.endpointName ?? '');
-    if (!endpointName) throw badRequest('Missing endpoint name');
+    const { endpointName, publishedAt, versionId } = createEndpointPublication(settings);
     return this.#treeItem(
       await this.#publication(value, preconditions, 'publish-endpoint', (next) => {
         requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(next.draftText)[0]);
-        const publishedAt = new Date().toISOString(),
-          versionId = randomUUID();
         next.endpointName = next.publishedEndpointName = endpointName;
         next.publishedVersionId = versionId;
         next.lastPublishedAt = publishedAt;
@@ -752,7 +753,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     access: 'public' | 'internal',
     preconditions: WorkflowPublicationPreconditions,
   ) {
-    if (access !== 'public' && access !== 'internal') throw badRequest('Invalid endpoint access');
+    assertEndpointAccess(access);
     return this.#treeItem(
       await this.#publication(value, preconditions, 'set-endpoint-access', (next) => {
         next.endpointAccess = access;

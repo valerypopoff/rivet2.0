@@ -17,6 +17,7 @@ import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import { collectProjectBundle, type BundleSnapshot } from '../routes/workflows/project-bundle.js';
 import { getWorkflowProjectIndexDataFromContents } from '../routes/workflows/project-stats.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
+import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
 
 async function fixture(
   run: (
@@ -63,55 +64,76 @@ const conditions = (item: WorkflowProjectItem) => ({
   expectedDraftRevisionId: item.revisionId!,
 });
 
+test('SQLite direct and serving-worker adapters satisfy the shared SQL publication contract', async () => {
+  for (const worker of [false, true]) {
+    await fixture(verifyWorkflowPublicationContract, { worker });
+  }
+});
+
 test('serving worker preserves save/publication CAS, detached execution and maintenance ownership', async () => {
-  await fixture(async (backend, _options, setPaused) => {
-    let item = await createExecutable(backend);
-    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'worker-contract' }, conditions(item));
-    const first = await backend.loadPublishedExecutionProject('worker-contract');
-    assert.ok(first);
-    first.project.metadata.title = 'mutated runtime';
-    const second = await backend.loadPublishedExecutionProject('worker-contract');
-    assert.ok(second);
-    assert.notEqual(second.project.metadata.title, 'mutated runtime');
-    const target = await backend.loadSubgraphTarget({ projectId: second.project.metadata.id, version: 'published' });
-    assert.equal(target.project.metadata.title, second.project.metadata.title);
-    const unpublished = await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
-    await assert.rejects(backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'worker-contract' }, conditions(item)), { status: 409 });
-    assert.equal(await backend.loadPublishedExecutionProject('worker-contract'), null);
-    assert.equal(unpublished.settings.publicationStatus, 'unpublished');
-    setPaused(true);
-    await assert.rejects(backend.createWorkflowFolderItem('blocked', ''), /maintenance/);
-    assert.equal(backend.getActiveWriteCount(), 0);
-    await backend.checkHealth();
-  }, { worker: true });
+  await fixture(
+    async (backend, _options, setPaused) => {
+      let item = await createExecutable(backend);
+      item = await backend.publishWorkflowProjectItem(
+        item.relativePath,
+        { endpointName: 'worker-contract' },
+        conditions(item),
+      );
+      const first = await backend.loadPublishedExecutionProject('worker-contract');
+      assert.ok(first);
+      first.project.metadata.title = 'mutated runtime';
+      const second = await backend.loadPublishedExecutionProject('worker-contract');
+      assert.ok(second);
+      assert.notEqual(second.project.metadata.title, 'mutated runtime');
+      const target = await backend.loadSubgraphTarget({ projectId: second.project.metadata.id, version: 'published' });
+      assert.equal(target.project.metadata.title, second.project.metadata.title);
+      const unpublished = await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
+      await assert.rejects(
+        backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'worker-contract' }, conditions(item)),
+        { status: 409 },
+      );
+      assert.equal(await backend.loadPublishedExecutionProject('worker-contract'), null);
+      assert.equal(unpublished.settings.publicationStatus, 'unpublished');
+      setPaused(true);
+      await assert.rejects(backend.createWorkflowFolderItem('blocked', ''), /maintenance/);
+      assert.equal(backend.getActiveWriteCount(), 0);
+      await backend.checkHealth();
+    },
+    { worker: true },
+  );
 });
 
 test('worker drain includes catalog reads and canceled readiness probes leave the queue', async () => {
-  await fixture(async (backend, options) => {
-    const blocker = new DatabaseSync(options.databasePath);
-    blocker.exec('BEGIN EXCLUSIVE');
-    const tree = backend.getTree();
-    const controller = new AbortController();
-    const health = backend.checkHealth({ signal: controller.signal });
-    const canceled = assert.rejects(health, /expired readiness probe/);
-    let idle = false;
-    const draining = backend.waitForIdle().then(() => { idle = true; });
-    try {
-      assert.equal(backend.getActiveWriteCount(), 0);
-      assert.ok(backend.getPendingCatalogOperationCount() >= 2);
-      controller.abort(new Error('expired readiness probe'));
-      await canceled;
-      assert.equal(backend.getPendingCatalogOperationCount(), 1);
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      assert.equal(idle, false, 'an outstanding catalog read still prevents drain');
-    } finally {
-      blocker.exec('ROLLBACK');
-      blocker.close();
-      await Promise.all([tree, draining]);
-    }
-    assert.equal(idle, true);
-    assert.equal(backend.getPendingCatalogOperationCount(), 0);
-  }, { worker: true });
+  await fixture(
+    async (backend, options) => {
+      const blocker = new DatabaseSync(options.databasePath);
+      blocker.exec('BEGIN EXCLUSIVE');
+      const tree = backend.getTree();
+      const controller = new AbortController();
+      const health = backend.checkHealth({ signal: controller.signal });
+      const canceled = assert.rejects(health, /expired readiness probe/);
+      let idle = false;
+      const draining = backend.waitForIdle().then(() => {
+        idle = true;
+      });
+      try {
+        assert.equal(backend.getActiveWriteCount(), 0);
+        assert.ok(backend.getPendingCatalogOperationCount() >= 2);
+        controller.abort(new Error('expired readiness probe'));
+        await canceled;
+        assert.equal(backend.getPendingCatalogOperationCount(), 1);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(idle, false, 'an outstanding catalog read still prevents drain');
+      } finally {
+        blocker.exec('ROLLBACK');
+        blocker.close();
+        await Promise.all([tree, draining]);
+      }
+      assert.equal(idle, true);
+      assert.equal(backend.getPendingCatalogOperationCount(), 0);
+    },
+    { worker: true },
+  );
 });
 
 test('SQLite draft saves preserve publication artifacts without reading history', async (t) => {
@@ -839,12 +861,12 @@ test('SQLite tree rejects malformed persisted summaries instead of returning inv
 test('SQLite endpoint lookup reads only its selected artifact, not unrelated projects or retained history', async () => {
   await fixture(async (backend, options) => {
     let item = await createExecutable(backend);
-    item = await backend.updateWorkflowEndpointAccess(item.relativePath, 'internal', conditions(item));
     item = await backend.publishWorkflowProjectItem(
       item.relativePath,
       { endpointName: 'Story', endpointAccess: 'internal' },
       conditions(item),
     );
+    item = await backend.updateWorkflowEndpointAccess(item.relativePath, 'internal', conditions(item));
     const oldContents = (await backend.loadHostedProject(item.absolutePath)).contents;
     const [project, attached] = loadProjectAndAttachedDataFromString(oldContents);
     project.metadata.description = 'new published';
@@ -956,10 +978,15 @@ test('SQLite project browsing reads only the selected pair, and metadata discove
     );
     const beforeReference = reads;
     assert.equal(
-      (await backend.createProjectReferenceLoader().loadProject(undefined, { id: item.projectMetadataId! })).metadata.description,
+      (await backend.createProjectReferenceLoader().loadProject(undefined, { id: item.projectMetadataId! })).metadata
+        .description,
       project.metadata.description,
     );
-    assert.equal(reads, beforeReference, 'The reference loader reuses the verified immutable source loaded by the Subgraph.');
+    assert.equal(
+      reads,
+      beforeReference,
+      'The reference loader reuses the verified immutable source loaded by the Subgraph.',
+    );
     await checkPair(async () =>
       assert.deepEqual(await backend.readWorkflowPublishedVersionPreview(item.relativePath, firstVersion), {
         contents: firstContents,
@@ -1763,7 +1790,10 @@ test('SQLite folder moves are atomic and keep historical recording identities', 
       await assert.rejects(backend.deleteWorkflowFolderItem('B'), /Only empty folders/);
       await backend.deleteWorkflowFolderItem('B/nested');
       await backend.deleteWorkflowFolderItem('B');
-      assert.deepEqual((await backend.getTree()).folders.map((folder) => folder.name), ['C']);
+      assert.deepEqual(
+        (await backend.getTree()).folders.map((folder) => folder.name),
+        ['C'],
+      );
     } finally {
       catalog.close();
     }

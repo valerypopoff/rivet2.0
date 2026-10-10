@@ -18,6 +18,9 @@ import { verifyClassifierHealthContract } from './helpers/classifier-health-cont
 import { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
 import { verifyManagedEvaluationHistoryCursorContract } from './helpers/evaluation-history-managed-contract.js';
 import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evaluation-projection-contract.js';
+import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
+import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
+import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -278,6 +281,30 @@ try {
   // the isolated executor bootstrap check has finished.
   await s3.send(new DeleteBucketCommand({ Bucket: 'async-recordings' }));
   api = await startAsyncWorkflowProcess({ storage: storageSettings });
+  // Run after the empty-bucket/first-install check. Publication writes immutable
+  // objects whose deletion is intentionally deferred, even after project deletion.
+  const publicationBackend = new ManagedWorkflowBackend(
+    getManagedWorkflowStorageConfigFromSettings({
+      ...storageSettings,
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseSslMode: 'disable',
+      source: 'default',
+      updatedAt: null,
+      artifactsHostPath: '',
+    }),
+    undefined,
+    { migrationMode: 'copy' },
+  );
+  try {
+    await publicationBackend.initialize();
+    await verifyWorkflowPublicationContract(publicationBackend);
+    console.log(
+      'Shared SQL publication contract: PostgreSQL route ownership, reviewed state and endpoint/web-app independence passed.',
+    );
+  } finally {
+    await publicationBackend.dispose();
+  }
   await verifyProjectBundleDownload({
     workflowsBaseUrl: `${api.baseUrl}/api/workflows`,
     projectsBaseUrl: `${api.baseUrl}/api/projects`,

@@ -44,6 +44,7 @@ import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
 import { createManagedWorkflowRevisionService } from './revisions.js';
 import { readManagedWorkflowMigrationSnapshot } from './migration-snapshot.js';
+import type { WorkflowDataBackend } from '../data-backend.js';
 import type {
   ImportManagedWorkflowOptions,
   ImportManagedWorkflowRecordingOptions,
@@ -55,7 +56,7 @@ import type {
 
 export { resolveManagedHostedProjectSaveTarget } from './revision-factory.js';
 
-export class ManagedWorkflowBackend {
+export class ManagedWorkflowBackend implements WorkflowDataBackend {
   readonly #context;
   readonly #executionService: ManagedWorkflowExecutionService;
   readonly #catalog: ReturnType<typeof createManagedWorkflowCatalogService>;
@@ -66,6 +67,10 @@ export class ManagedWorkflowBackend {
   readonly #evaluationStore: PostgresRivetEvaluationStore;
   readonly #hostedEvaluationCoordinator?: HostedEvaluationCoordinator;
   readonly #runBackgroundTasks: boolean;
+  #phase: 'open' | 'draining' | 'closed' = 'open';
+  #initializing?: Promise<void>;
+  #draining?: Promise<void>;
+  #disposing?: Promise<void>;
 
   constructor(
     config: ManagedWorkflowStorageConfig,
@@ -101,22 +106,41 @@ export class ManagedWorkflowBackend {
           evaluationStore: this.#evaluationStore,
           llmProfileHealthStore: this.#llmProfileHealthStore,
           createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
+          createSubgraphProjectLoader: () => ({
+            loadTarget: (target) => this.#executionService.loadSubgraphTarget(target),
+          }),
         }),
       });
     }
   }
 
   async initialize(): Promise<void> {
+    if (this.#phase === 'closed' || (this.#phase === 'draining' && !this.#initializing)) {
+      throw new Error('Managed workflow storage is shutting down.');
+    }
     // Migration verification must not run startup retention or start a
     // scheduler against an offline destination being compared byte-for-byte.
-    if (this.#runBackgroundTasks) await this.#recordings.initialize();
-    else await this.#context.initialize();
-    this.#hostedEvaluationCoordinator?.start();
+    return (this.#initializing ??= (async () => {
+      if (this.#runBackgroundTasks) await this.#recordings.initialize();
+      else await this.#context.initialize();
+      if (this.#phase === 'open') this.#hostedEvaluationCoordinator?.start();
+    })());
   }
 
   async dispose(): Promise<void> {
-    await this.#hostedEvaluationCoordinator?.stop();
-    await this.#context.dispose();
+    return (this.#disposing ??= (async () => {
+      await this.drain();
+      this.#phase = 'closed';
+      await this.#context.dispose();
+    })());
+  }
+
+  async drain(): Promise<void> {
+    this.#phase = this.#phase === 'closed' ? 'closed' : 'draining';
+    return (this.#draining ??= (async () => {
+      await this.#initializing?.catch(() => undefined);
+      await this.#hostedEvaluationCoordinator?.stop();
+    })());
   }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {

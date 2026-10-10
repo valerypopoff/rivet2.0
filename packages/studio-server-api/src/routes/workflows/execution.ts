@@ -11,7 +11,6 @@ import {
   resolveUiGraphActionInputs,
   resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
-  type DataValue,
   type LooseDataValue,
   type RivetWebAppActionResult,
   type RivetWebAppProcessorOptions,
@@ -42,10 +41,8 @@ import {
   createManagedCodeRunnerTelemetry,
   getManagedCodeRunnerTelemetrySnapshot,
   isManagedCodeRunnerTelemetryEnabled,
-  ManagedCodeRunner,
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
-import { getRootPath } from '../../runtime-libraries/manifest.js';
 import { isTrustedProxyRequest, isTrustedClientRequest } from '../../auth.js';
 import { getRequestCorrelationId, RIVET_CORRELATION_HEADER } from '../../request-correlation.js';
 import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
@@ -60,12 +57,9 @@ import {
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { readRuntimeLimitSettingsSync } from '../../runtime-limit-settings.js';
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
-import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
-  createExecutionProjectReferenceLoader,
-  createExecutionSubgraphProjectLoader,
   getLLMProfileHealthStore,
   persistWorkflowExecutionRecordingWithBackend,
   resolveLatestExecutionProject,
@@ -82,8 +76,8 @@ import {
 } from './recordings-config.js';
 import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
-import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
-import { createHostedProcessor } from './hosted-processor.js';
+import { createHostedProcessor, createServingRuntimeOptions } from './hosted-processor.js';
+import { ExecutionSession, getExecutionErrorMessage, getExecutionOutputStatus } from './execution-session.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -221,11 +215,7 @@ function getWorkflowResponsePayload(outputs: Record<string, { type?: string; val
   return outputValue.value ?? null;
 }
 
-export function getWorkflowRecordingStatusFromOutputs(
-  outputs: Record<string, { type?: string; value?: unknown }>,
-): 'succeeded' | 'suspicious' {
-  return outputs.output?.type === 'control-flow-excluded' ? 'suspicious' : 'succeeded';
-}
+export const getWorkflowRecordingStatusFromOutputs = getExecutionOutputStatus;
 
 function sendJsonWithDuration(res: Response, statusCode: number, payload: unknown, requestStartedAt: number): void {
   const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
@@ -307,13 +297,7 @@ function isEnvFlagEnabled(value: string | undefined, defaultValue = false): bool
   return defaultValue;
 }
 
-export function getWorkflowErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-}
+export const getWorkflowErrorMessage = getExecutionErrorMessage;
 
 function shouldEmitWorkflowExecutionDebugHeaders(): boolean {
   return isEnvFlagEnabled(process.env.RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS, false);
@@ -1079,6 +1063,7 @@ async function runRecordedWebAppAction(
 
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
   const processorOptions = await createWebAppProcessorOptions(executionProject, req, codeRunnerTelemetry, {
+    abortSignal: options.abortSignal,
     enableRemoteDebugger: options.enableRemoteDebugger,
     llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
   });
@@ -1097,39 +1082,25 @@ async function runRecordedWebAppAction(
     inputs,
     storedValueStore: processorOptions.storedValueStore ?? browserStoredValues!.store,
   });
-  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
-  recorder?.record(processor.processor);
-
+  const session = new ExecutionSession(processor, {
+    recording: isWorkflowRecordingEnabled(),
+    recorderOptions: getWorkflowExecutionRecorderOptions(),
+  });
   let result: RivetWebAppActionResult | undefined;
-  let executionError: unknown;
-  let status: WebAppActionExecutionSnapshot['status'] = 'succeeded';
-  let errorMessage: string | undefined;
-  let durationMs = 0;
-  const executionStartedAt = performance.now();
-
-  try {
-    const outputs = (await processor.run()) as Record<string, DataValue>;
-    status = getWorkflowRecordingStatusFromOutputs(outputs);
+  const snapshot = await session.run((outputs) => {
     result = {
       outputs,
       statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
       storagePatch: browserStoredValues?.getPatch() ?? {},
     };
-  } catch (error) {
-    status = 'failed';
-    errorMessage = getWorkflowErrorMessage(error);
-    executionError = error;
-  } finally {
-    durationMs = performance.now() - executionStartedAt;
-  }
-
+  });
   return {
-    recorder,
-    status,
-    durationMs,
-    errorMessage,
+    ...snapshot,
+    ...(snapshot.failure
+      ? { status: 'failed' as const, errorMessage: getWorkflowErrorMessage(snapshot.failure.error) }
+      : {}),
     result,
-    executionError,
+    executionError: snapshot.failure?.error,
     executionIdentity,
   };
 }
@@ -1480,37 +1451,21 @@ export async function createWebAppProcessorOptions(
   req: Request | IncomingMessage,
   codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
   options?: {
+    abortSignal?: AbortSignal;
     enableRemoteDebugger?: boolean;
     llmProfileHealthExecutionCorrelationId?: string;
   },
 ): Promise<RivetWebAppProcessorOptions> {
-  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
-  const executionEnvironment = await readExecutionEnvironmentVariables();
-
-  return {
-    codeRunner: new ManagedCodeRunner(getRootPath(), {
-      ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
-      executionEnvironment,
-    }) as any,
-    context: getWebAppWorkflowExecutionContext(req),
+  const runtime = await createServingRuntimeOptions({
+    abortSignal: options?.abortSignal,
     datasetProvider: executionProject.datasetProvider,
     projectPath: executionProject.projectVirtualPath,
-    nativeApi: createLocalCatalogNativeApi(),
-    projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
-    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
-    ...(isWorkflowRecordingEnabled()
-      ? {
-          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
-          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
-        }
-      : {}),
-    llmProfileHealthStore: await getLLMProfileHealthStore(),
-    ...(options?.llmProfileHealthExecutionCorrelationId == null
-      ? {}
-      : { llmProfileHealthExecutionCorrelationId: options.llmProfileHealthExecutionCorrelationId }),
-    executionEnvironment,
-    remoteDebugger,
-  };
+    telemetry: codeRunnerTelemetry,
+    correlationId: options?.llmProfileHealthExecutionCorrelationId,
+    remoteDebugger: getLatestRemoteDebuggerForExecution(options),
+    recording: isWorkflowRecordingEnabled(),
+  });
+  return { ...runtime, context: getWebAppWorkflowExecutionContext(req) };
 }
 
 function enqueueExecutionRecording(
@@ -1658,59 +1613,24 @@ async function executeWorkflowEndpoint(
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),
   });
-  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
-  recorder?.record(processor.processor);
-
-  let recordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
-  let recordingErrorMessage: string | undefined;
-  let failure: { error: unknown } | undefined;
-  let executionDurationMs = 0;
+  const session = new ExecutionSession(processor, {
+    recording: isWorkflowRecordingEnabled(),
+    recorderOptions: getWorkflowExecutionRecorderOptions(),
+  });
   const executionStartedAt = performance.now();
-
-  try {
-    const outputs = await processor.run();
-    recordingStatus = getWorkflowRecordingStatusFromOutputs(
-      outputs as Record<string, { type?: string; value?: unknown }>,
-    );
-
-    try {
-      const responsePayload = getWorkflowResponsePayload(outputs as Record<string, { type?: string; value?: unknown }>);
-      setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
-      setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-      if (!res.destroyed && !res.writableEnded) {
-        sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
-      }
-    } catch (error) {
-      // A response conversion/transport failure must not release a running tail.
-      failure = { error };
-    }
-
-    // Keep this handler pending after sending the response: its callers own
-    // execution capacity, shutdown registration, and parsed-body reservations.
-    const finalOutputs = await processor.processor.waitForRunCompletion();
-    recordingStatus = getWorkflowRecordingStatusFromOutputs(finalOutputs);
-  } catch (error) {
-    recordingStatus = 'failed';
-    recordingErrorMessage = getWorkflowErrorMessage(error);
-    failure = { error };
-  } finally {
-    executionDurationMs = performance.now() - executionStartedAt;
-  }
-
-  enqueueExecutionRecording(
-    executionProject,
-    {
-      recorder,
-      status: recordingStatus,
-      durationMs: executionDurationMs,
-      errorMessage: recordingErrorMessage,
-    },
-    {
-      endpointName: options.endpointName,
-      runKind: options.runKind,
-      executionIdentity,
-    },
-  );
+  const snapshot = await session.run((outputs) => {
+    const responsePayload = getWorkflowResponsePayload(outputs);
+    setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
+    setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
+    if (!res.destroyed && !res.writableEnded) sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
+  });
+  const failure = snapshot.failure;
+  const executionDurationMs = snapshot.durationMs;
+  enqueueExecutionRecording(executionProject, snapshot, {
+    endpointName: options.endpointName,
+    runKind: options.runKind,
+    executionIdentity,
+  });
 
   if (failure) {
     if (res.headersSent || res.writableEnded || res.destroyed) {
@@ -1985,4 +1905,3 @@ latestWebAppsRouter.get(
     await handleWebAppHtmlRequest(req, res, 'latest');
   }),
 );
-import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';

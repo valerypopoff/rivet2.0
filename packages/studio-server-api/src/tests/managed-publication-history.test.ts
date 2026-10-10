@@ -131,6 +131,7 @@ function createPublicationHarness(
     revisionContents?: Record<string, string>;
     forbidDatasetReads?: boolean;
     beforeArtifactRead?: () => void;
+    beforeWorkflowRead?: () => void;
   } = {},
 ) {
   const workflow = options.workflow ?? createWorkflow();
@@ -252,6 +253,7 @@ function createPublicationHarness(
         relativePath: string,
         lookupOptions: { forUpdate?: boolean } = {},
       ) => {
+        options.beforeWorkflowRead?.();
         workflowLookups.push({
           relativePath,
           forUpdate: lookupOptions.forUpdate === true,
@@ -327,6 +329,43 @@ function createPublicationHarness(
     workflowLookups,
   };
 }
+
+test('managed policy and restore commands retain reviewed state while waiting for a workflow lock', async () => {
+  for (const kind of [
+    'endpoint-access',
+    'web-app-access',
+    'unpublish-endpoint',
+    'unpublish-web-app',
+    'restore',
+  ] as const) {
+    const workflow = createWorkflow({ publication_version: '7', published_revision_id: 'draft-revision' });
+    let expected!: ReturnType<typeof createPublicationHarness>['reviewedPreconditions'];
+    const harness = createPublicationHarness({
+      workflow,
+      beforeWorkflowRead: () => {
+        workflow.publication_version = '8';
+        expected.expectedPublicationVersion = '8';
+      },
+    });
+    expected = harness.reviewedPreconditions;
+    const run = {
+      'endpoint-access': () => harness.service.updateWorkflowEndpointAccess('Main.rivet-project', 'internal', expected),
+      'web-app-access': () =>
+        harness.service.updateWorkflowProjectWebAppAccess(
+          'Main.rivet-project',
+          [{ uiGraphId: 'ui-current', allowedEmails: [] }],
+          expected,
+        ),
+      'unpublish-endpoint': () => harness.service.unpublishWorkflowProjectItem('Main.rivet-project', expected),
+      'unpublish-web-app': () =>
+        harness.service.unpublishWorkflowProjectWebApp('Main.rivet-project', 'ui-current', expected),
+      restore: () => harness.service.restoreWorkflowPublishedVersion('Main.rivet-project', 'version-a', expected),
+    }[kind];
+    await assert.rejects(run(), { status: 409, code: 'publication_state_changed' });
+    assert.deepEqual(harness.clientQueries, [], kind);
+    assert.deepEqual(harness.invalidationRequests, [], kind);
+  }
+});
 
 test('managed endpoint access updates publication policy without creating a revision', async () => {
   const unpublished = createPublicationHarness();

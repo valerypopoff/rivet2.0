@@ -39,6 +39,7 @@ export const defaultApiTestFiles = [
   'src/tests/hosted-evaluation-execution.test.ts',
   'src/tests/hosted-evaluations-config.test.ts',
   'src/tests/hosted-project-title.test.ts',
+  'src/tests/hosted-runtime-policy.test.ts',
   'src/tests/immutable-local-artifact-store.test.ts',
   'src/tests/latest-workflow-remote-debugger.test.ts',
   'src/tests/llm-profile-health.test.ts',
@@ -132,8 +133,10 @@ export const defaultApiTestFiles = [
   'src/tests/workflow-execution-filesystem.test.ts',
   'src/tests/workflow-filesystem-tree.test.ts',
   'src/tests/workflow-publication-filesystem.test.ts',
+  'src/tests/workflow-publication-policy.test.ts',
   'src/tests/workflow-published-history-filesystem.test.ts',
   'src/tests/workflow-recordings-http.test.ts',
   'src/tests/workflow-storage-config.test.ts',
+  'src/tests/workflow-storage-services.test.ts',
   'src/tests/workflow-web-apps-filesystem.test.ts',
 ];

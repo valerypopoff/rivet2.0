@@ -1,5 +1,4 @@
-import type { AttachedData, Project } from '@valerypopoff/rivet2-node';
-import type { NodeDatasetProvider } from '@valerypopoff/rivet2-node';
+import type { WorkflowExecutionDefinition, WorkflowWebAppPolicy } from '../data-backend.js';
 
 import type { ManagedEndpointPointerCacheEntry } from './execution-cache.js';
 
@@ -9,27 +8,10 @@ export type ManagedExecutionDebugInfo = {
   materializeMs: number;
 };
 
-export type ManagedExecutionProjectResult = {
-  project: Project;
-  attachedData: AttachedData;
-  datasetProvider: NodeDatasetProvider;
-  projectVirtualPath: string;
-  revisionKey: string;
-  endpointAccess?: 'public' | 'internal';
-  webAppUiGraphId?: string;
-  webAppAllowedEmails?: string[];
-  webAppBindingId?: string;
-  webAppPolicyInvalidationKey?: string;
-  debug: ManagedExecutionDebugInfo;
-};
+export type ManagedExecutionProjectResult = WorkflowExecutionDefinition & { debug: ManagedExecutionDebugInfo };
 
 /** Current web-app policy without executable revision contents. */
-export type ManagedWebAppAccessPolicy = {
-  appId: string;
-  relativePath: string;
-  uiGraphId: string;
-  allowedEmails: string[];
-};
+export type ManagedWebAppAccessPolicy = WorkflowWebAppPolicy;
 
 export type ManagedExecutionRevisionRecord = {
   revision_id: string;

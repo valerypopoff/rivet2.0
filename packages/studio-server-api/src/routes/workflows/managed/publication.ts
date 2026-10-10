@@ -7,7 +7,6 @@ import type {
   WorkflowEndpointAccess,
   WorkflowPublicationPreconditions,
   WorkflowProjectItem,
-  WorkflowProjectSettingsDraft,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionPreviewResponse,
   WorkflowPublishedVersionRestoreResponse,
@@ -16,9 +15,13 @@ import type {
 } from '../../../../../studio-server-shared/workflow-types.js';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../../studio-server-shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
-import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
+import { normalizeWorkflowEndpointLookupName } from '../endpoint-names.js';
 import { hasProjectMainGraph, requireProjectMainGraphForEndpoint } from '../main-graph.js';
-import { assertPublicationPreconditions } from '../publication-preconditions.js';
+import {
+  assertPublicationPreconditions,
+  createEndpointPublication,
+  assertEndpointAccess,
+} from '../publication-policy.js';
 import type { WorkflowPublicationCommandKind } from '../publication-command.js';
 import { normalizeWebAppAccessDrafts, normalizeWebAppPublicationDrafts } from '../web-app-publication-drafts.js';
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
@@ -107,9 +110,6 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     }));
   };
 
-  const getUiGraphsFromProjectContents = (contents: string): Array<{ uiGraphId: string; name: string }> =>
-    getUiGraphsFromProject(loadProjectFromString(contents));
-
   const listWebAppPublicationRows = async (
     client: ManagedWorkflowDbClient,
     workflowId: string,
@@ -136,6 +136,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         projectId: workflow.workflow_id,
         draftRevisionId: workflow.current_draft_revision_id,
         publicationVersion: workflow.publication_version ?? '0',
+        endpointPublished: workflow.published_revision_id != null,
       },
       kind,
     );
@@ -483,6 +484,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       versionId: unknown,
       preconditions: WorkflowDraftPublicationPreconditions,
     ): Promise<WorkflowPublishedVersionRestoreResponse> {
+      preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedVersionId = typeof versionId === 'string' ? versionId.trim() : '';
       if (!normalizedVersionId) {
@@ -730,6 +732,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       accessUpdates: unknown,
       preconditions: WorkflowPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
+      preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedAccessUpdates = normalizeWebAppAccessDrafts(accessUpdates);
 
@@ -768,6 +771,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       uiGraphId: unknown,
       preconditions: WorkflowPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
+      preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       const normalizedUiGraphId = typeof uiGraphId === 'string' ? uiGraphId.trim() : '';
       if (!normalizedUiGraphId) {
@@ -803,12 +807,13 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       access: WorkflowEndpointAccess,
       preconditions: WorkflowPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
+      preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
       return deps.withTransaction(async (client, hooks) => {
         const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
         if (!workflow) throw createHttpError(404, 'Project not found');
         assertManagedPublicationPreconditions(workflow, preconditions, 'set-endpoint-access');
-        if (!workflow.published_revision_id) throw conflict('Publish the workflow before changing endpoint access');
+        assertEndpointAccess(access);
 
         await client.query(
           'UPDATE workflows SET endpoint_access = $2, publication_version = publication_version + 1 WHERE workflow_id = $1',
@@ -828,16 +833,8 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
     ): Promise<WorkflowProjectItem> {
       preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
-      const normalizedSettings = (() => {
-        const raw = (settings ?? {}) as WorkflowProjectSettingsDraft;
-        return {
-          endpointName: normalizeStoredEndpointName(String(raw.endpointName ?? '')),
-        };
-      })();
-
-      if (!normalizedSettings.endpointName) {
-        throw badRequest('Endpoint name is required');
-      }
+      const publication = createEndpointPublication(settings);
+      const normalizedSettings = { endpointName: publication.endpointName };
 
       const prepared = await prepareDraftPublication(normalizedRelativePath, preconditions, 'publish-endpoint');
       requireProjectMainGraphForEndpoint(prepared.project);
@@ -851,7 +848,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
         assertManagedPublicationPreconditions(workflow, preconditions, 'publish-endpoint');
         const currentDraftRevision = prepared.revision;
 
-        const publishedVersionId = randomUUID();
+        const publishedVersionId = publication.versionId;
         await backfillLegacyPublishedVersion(client, workflow);
 
         await deps.syncWorkflowEndpointRows(client, workflow, {
@@ -899,6 +896,7 @@ export function createManagedWorkflowPublicationService(options: ManagedWorkflow
       relativePath: unknown,
       preconditions: WorkflowPublicationPreconditions,
     ): Promise<WorkflowProjectItem> {
+      preconditions = { ...preconditions };
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
 
       return deps.withTransaction(async (client, hooks) => {

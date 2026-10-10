@@ -1,5 +1,77 @@
 # Architecture
 
+## Serving module boundaries
+
+Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
+the PostgreSQL implementation. Project IO, publication, execution sources and
+recording repositories are separate interfaces; `WorkflowDataBackend` composes
+them for adapter registration. New consumers should depend on the smallest
+repository they need. Managed compatibility types re-export these contracts,
+rather than making SQLite derive its API from the managed backend class.
+
+`publication-policy.ts` owns reviewed-state validation, version increments,
+endpoint-name/access validation and endpoint publication identity. Adapters
+translate their pointer representation into that policy and recheck it inside
+their existing atomic mutation boundary. Draft-publishing commands check the
+reviewed draft; access/unpublish commands check project identity and publication
+version without requiring an unchanged draft. Endpoint access requires an active
+endpoint publication, not merely a saved endpoint preference or retained history.
+Route uniqueness, artifact integrity, locking, rollback and invalidation remain
+adapter-owned. No generic transaction abstraction replaces those guarantees.
+The command dispatcher snapshots reviewed preconditions before asynchronous
+delegation; SQL adapters also snapshot them at direct-call boundaries. A caller
+mutating its request object during a writer/row-lock wait cannot change the
+publication state that the command was authorized to act on.
+
+`WorkflowStorageServices` owns one serving installation's workflow adapter,
+operational stores and retention timer. `storage-composition.ts` is the serving
+construction site and captures the selected generation and managed connection
+configuration. The mode cannot change during that owner's lifetime. Existing
+route entry points forward to the owner; offline migration adapters remain
+separate and never join serving timers. On shutdown, reject new resource
+construction and fence managed producer startup immediately, then wait for
+initialization/retention and producer shutdown, flush recordings and their health
+evidence, and close resources. Existing
+resources remain available during persistence drain. Failed initialization is
+retryable only after confirmed resource cleanup; unknown cleanup outcomes retain
+the old owner. Failed disposal must never detach it or admit a replacement.
+Managed initialization is single-flight and cannot restart the coordinator after
+drain begins, including through health/Evaluation store getters.
+Shutdown fences an already-constructed managed adapter before awaiting its late
+initialization, so the initializer cannot start a coordinator during shutdown.
+Deferred adapter construction that has not begun is canceled without allocating
+resources; an initializer already running is still awaited and disposed.
+The owner's public operational-store getters route to the selected backend;
+managed owners never construct filesystem health/Evaluation stores. Resource
+shutdown confirms catalog termination before closing local operational stores,
+so accepted deletion hooks retain access to them. An unconfirmed catalog close
+keeps those stores open and the owner fenced. Operational-store closes are
+independently settled even if a disposer throws synchronously.
+The owner exposes a single-flight `drain()` independently of `dispose()`:
+drain fences new construction, stops producers and flushes persistence, while
+disposal reuses that drain and confirms catalog termination before closing stores.
+HTTP/WebSocket admission and active-run waits still belong to the server; do not
+close storage merely because a transport has delivered its foreground response.
+
+`hosted-runtime-policy.ts` supplies environment, code runner, native IO, reference
+and cross-project loaders, health store, debugger and child-recording options for
+endpoint, web-app, scheduled and hosted Evaluation execution. Preparation checks
+cancellation between asynchronous boundaries and returns run-local configuration.
+`hosted-processor.ts` binds that policy to serving dependencies.
+`ExecutionSession` owns a processor's recording attachment, foreground execution,
+full terminal completion, timing and disposal. A response delivery failure never
+releases a still-running background tail. HTTP authorization/admission, WebSocket
+session handling, scheduled acceptance and Evaluation persistence remain owned by
+their respective callers. WebSocket handlers already own their Node execution
+lifecycle and consume the same runtime policy without wrapping a second session.
+No cross-run processor, mutable dataset provider or compiled plan is shared.
+Failed recorder construction or attachment disposes a prepared processor before invocation.
+Post-terminal disposal failures are reported without exception contents and
+cannot replace the graph outcome or prevent recording persistence.
+
+These boundaries are maintainability refactors, not a measured production latency
+claim. They do not alter database schemas, artifact formats or API revision IDs.
+
 ## Serving-path refactors
 
 The serving SQLite workflow catalog has one worker-thread connection owner.

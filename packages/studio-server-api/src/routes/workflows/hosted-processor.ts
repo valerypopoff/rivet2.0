@@ -1,8 +1,16 @@
-import { createProcessor, type Project, type DatasetProvider, type LooseDataValue } from '@valerypopoff/rivet2-node';
-import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
-import { ManagedCodeRunner, type ManagedCodeRunnerTelemetry } from '../../runtime-libraries/managed-code-runner.js';
-import { getRootPath } from '../../runtime-libraries/manifest.js';
-import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';
+import {
+  createProcessor,
+  type Project,
+  type DatasetProvider,
+  type LooseDataValue,
+  type NodeCreateProcessorOptions,
+} from '@valerypopoff/rivet2-node';
+import type { ManagedCodeRunnerTelemetry } from '../../runtime-libraries/managed-code-runner.js';
+import {
+  createHostedRuntimeOptions,
+  type HostedRuntimeInput,
+  type HostedRuntimeDependencies,
+} from './hosted-runtime-policy.js';
 import {
   createExecutionProjectReferenceLoader,
   createExecutionSubgraphProjectLoader,
@@ -13,7 +21,7 @@ import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
 
 /** Common server runtime policy. Request transport and durable scheduling are
  * callers; neither may invent alternate credentials, datasets or child loaders. */
-export async function createHostedProcessor(input: {
+export type HostedProcessorInput = {
   project: Project;
   datasetProvider: DatasetProvider;
   projectPath: string;
@@ -22,39 +30,34 @@ export async function createHostedProcessor(input: {
   abortSignal?: AbortSignal;
   recording: boolean;
   correlationId: string;
-  remoteDebugger?: any;
+  remoteDebugger?: NodeCreateProcessorOptions['remoteDebugger'];
   telemetry?: ManagedCodeRunnerTelemetry | null;
   earlyOutputs?: boolean;
-}) {
-  input.abortSignal?.throwIfAborted();
-  const executionEnvironment = await readExecutionEnvironmentVariables();
-  input.abortSignal?.throwIfAborted();
-  const projectReferenceLoader = await createExecutionProjectReferenceLoader(input.projectPath);
-  input.abortSignal?.throwIfAborted();
-  const llmProfileHealthStore = await getLLMProfileHealthStore();
-  input.abortSignal?.throwIfAborted();
+};
+const servingRuntimeDependencies: HostedRuntimeDependencies = {
+  createProjectReferenceLoader: createExecutionProjectReferenceLoader,
+  createSubgraphProjectLoader: createExecutionSubgraphProjectLoader,
+  getProfileHealth: getLLMProfileHealthStore,
+};
+export function createServingRuntimeOptions(input: HostedRuntimeInput & { recording: boolean }) {
+  return createHostedRuntimeOptions(
+    {
+      ...input,
+      childRecording: input.recording
+        ? {
+            onSubgraphProjectRun: enqueueSubgraphProjectRecording,
+            subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
+          }
+        : undefined,
+    },
+    servingRuntimeDependencies,
+  );
+}
+export async function createHostedProcessor(input: HostedProcessorInput) {
+  const runtime = await createServingRuntimeOptions(input);
   return createProcessor(input.project, {
+    ...runtime,
     returnWhenGraphOutputsReady: input.earlyOutputs ?? false,
-    abortSignal: input.abortSignal,
-    codeRunner: new ManagedCodeRunner(getRootPath(), {
-      ...(input.telemetry ? { telemetry: input.telemetry } : {}),
-      executionEnvironment,
-    }) as any,
-    projectPath: input.projectPath,
-    nativeApi: createLocalCatalogNativeApi(),
-    datasetProvider: input.datasetProvider,
-    projectReferenceLoader,
-    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
-    ...(input.recording
-      ? {
-          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
-          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
-        }
-      : {}),
-    llmProfileHealthStore,
-    llmProfileHealthExecutionCorrelationId: input.correlationId,
-    executionEnvironment,
-    remoteDebugger: input.remoteDebugger,
     context: input.context,
     inputs: input.inputs,
   });
