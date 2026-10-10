@@ -298,6 +298,37 @@ Recovery checkpoint failure after a completed open is separate from open failure
 26. On `project-opened`, both sides of the hosted bridge explicitly move focus to the editor iframe so keyboard shortcuts target the editor instead of the workflow-library row that triggered the open.
 27. If the iframe reloads, `onLoad` resets `editorReady` to `false`, re-enabling the command buffer until `editor-ready` is sent again.
 
+## Project-tab keyboard navigation
+
+App's `ProjectSelector` owns adjacent project-tab shortcuts: Windows/Linux use
+Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+Page Down / Ctrl+Page Up; macOS uses
+Command+Option+Right / Left. Navigation follows the visible project-tab order,
+including opening placeholders, wraps at either end, and leaves workspace
+navigation buttons (Settings, Plugins, etc.) outside the cycle. Selecting a
+project closes the current workspace overlay through the normal tab-click path.
+Zero/one-tab workspaces do not consume these keys. Modal dialogs (including
+alert dialogs and native dialogs) and inert editor/host input locks block
+switching; ordinary text fields do not. In particular, window-level capture
+handling must not bypass the inert lock used by development-refresh preparation.
+
+`useProjectTabHotkeys` installs one capture listener with current callbacks.
+`projectTabHotkeys.ts` matches exact modifiers and tracks the last keyboard
+selection only while its activation revision is pending. Mouse/host intents,
+closed tabs and failed activations cannot leave a stale keyboard cursor. An
+inactive close need not advance the activation revision, so a pending keyboard
+target must also still exist in the current visible list before using that cursor.
+Use the existing guarded `useLoadProject`/opening-tab selection paths: shortcuts
+must not independently load project bytes, replace snapshots or mark edits clean.
+Keyboard handling does not alter hosted Save shortcut ownership or native menus.
+
+These shortcuts work when key events reach Rivet (including desktop webviews).
+Browsers may reserve them for their own tabs before a page/iframe can intercept
+them; no JavaScript listener or iframe forwarding can override that reservation.
+The headless `project-tab-shortcuts` observer exercises the real selector,
+wraparound, edited snapshots, opening tabs and modal blocking. Synthetic events
+cover OS/browser-reserved combinations without claiming to verify delivery by
+Chrome's browser chrome or native Windows/Linux/macOS webviews.
+
 ## Project loading performance
 
 Normal tree opens fetch the selected project/dataset pair once, then prepare both

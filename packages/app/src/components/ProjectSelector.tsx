@@ -5,6 +5,7 @@ import { useAtom, useAtomValue, useStore } from 'jotai';
 import { type CSSProperties, type FC, useMemo, useSyncExternalStore } from 'react';
 
 import { useLoadProject } from '../hooks/useLoadProject';
+import { useProjectTabHotkeys } from '../hooks/useProjectTabHotkeys.js';
 import { useRivetWorkspaceHost } from '../hooks/useRivetWorkspaceHost.js';
 import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { useSyncCurrentStateIntoOpenedProjects } from '../hooks/useSyncCurrentStateIntoOpenedProjects';
@@ -15,7 +16,7 @@ import {
   type OpeningProjectTabId,
 } from '../state/openingProjectTabs.js';
 import { sidebarOpenState } from '../state/graphBuilder.js';
-import { openedProjectsSortedIdsState, openedProjectsState } from '../state/savedGraphs';
+import { openedProjectsSortedIdsState, openedProjectsState, projectState } from '../state/savedGraphs';
 import { leftSidebarLiveWidthState, overlayOpenState } from '../state/ui.js';
 import { buildProjectTabListItems } from '../utils/openingProjectTabs.js';
 import { isMacOSPlatform, isWindowsPlatform } from '../utils/platform/os.js';
@@ -29,6 +30,7 @@ import { ProjectTabRow } from './projectSelector/ProjectTabRow.js';
 import {
   supersedeProjectActivation,
   getProjectActivationStatus,
+  getProjectActivationRevision,
   subscribeProjectActivation,
 } from '../utils/projectActivationCoordinator.js';
 import { useProjectCloseConfirmation } from './projectSelector/useProjectCloseConfirmation.js';
@@ -105,7 +107,7 @@ export const ProjectSelector: FC<{
 
     // Even selecting the active tab is an activation intent: it cancels a
     // pending restore of another tab without replacing this tab's live content.
-    const projectInfo = openedProjects[projectId];
+    const projectInfo = store.get(openedProjectsState)[projectId];
     if (projectInfo) {
       void loadProject(projectInfo).then((loaded) => {
         if (loaded) {
@@ -120,6 +122,39 @@ export const ProjectSelector: FC<{
     setSelectedOpeningProjectTabId(openingTabId);
     setOpenOverlay(undefined);
   };
+
+  useProjectTabHotkeys(
+    () => {
+      const projects = store.get(openedProjectsState);
+      const openingTabId = store.get(selectedOpeningProjectTabIdState);
+      return {
+        // Respect host input locks as well as dialogs, including alert dialogs.
+        // Ordinary text inputs still support tab navigation.
+        enabled:
+          projectMode &&
+          !document.documentElement.inert &&
+          !document.body.inert &&
+          !document.querySelector('[aria-modal="true"], dialog[open], .app[inert], [inert] .app'),
+        platform: isMacOSPlatform() ? 'macos' : isWindowsPlatform() ? 'windows' : 'linux',
+        tabs: buildProjectTabListItems({
+          openedProjectIds: store.get(openedProjectsSortedIdsState).filter((id) => projects[id] != null),
+          openingTabIds: store.get(openingProjectTabsSortedIdsState),
+          openingTabs: store.get(openingProjectTabsState),
+        }),
+        selected: openingTabId
+          ? { type: 'opening', openingTabId }
+          : { type: 'project', projectId: store.get(projectState).metadata.id },
+        activation: {
+          revision: getProjectActivationRevision(store),
+          pending: getProjectActivationStatus(store).pending,
+        },
+      };
+    },
+    (tab) => {
+      if (tab.type === 'opening') handleSelectOpeningProjectTab(tab.openingTabId);
+      else handleSelectProject(tab.projectId);
+    },
+  );
 
   return (
     <div
