@@ -1,5 +1,41 @@
 # Architecture
 
+## Hosted editor integration boundaries
+
+Editor Browser/Node transports share authored run capture and selection in
+`packages/app/src/hooks/preparedEditorRun.ts`; `EditorRunSession` owns per-run
+cancellation/cleanup without taking ownership from the project-scoped executor
+runtime registry. Remote preparation rechecks the original project and ready socket and
+uploads immediately before dispatch. Early HTTP/graph output remains distinct
+from terminal completion and must not dispose recording/event owners.
+Remote Evaluation preparation and trial dispatch use the same captured
+ready-connection fence. A reconnect, even to the same URL, cannot redirect a
+prepared trial, attach its recorder to a replacement socket, or receive its
+cancellation. Durable hosted Evaluations retain coordinator-owned cancellation.
+Evaluation upload keys are prepared once, but each trial checks the shared
+upload slot immediately before dispatch and restores its definition if needed.
+Upload caches are weakly keyed by socket identity, not active-tab lifetime or
+executor URL; separate project runtimes and reconnects cannot share a warm slot.
+Partial upload failures invalidate the previous slot key rather than silently
+reusing an executor that already accepted some replacement data.
+
+Evaluation UI uses separate definition/dataset/history/comparison views and a
+dedicated history hook. Durable run commands remain project-scoped; navigation
+does not cancel already accepted persistence. Suites/datasets/baselines remain
+instance-library resources, including when a baseline command finishes after
+switching projects. Server storage contracts and transactions are unchanged.
+An off-screen completed mutation invalidates only its originating history cache.
+Same-run renames are ordered at the stable store boundary, independently of panel
+lifetime; this is client coordination, not a replacement for adapter transactions.
+
+Library creation/reassignment/removal and file transfer have separate command
+owners. Commands recheck current dependencies and running-suite constraints;
+asynchronous dataset replacement rejects newer edits. Recording hydration cannot
+change a workspace after its originating scope has disappeared. Editor sessions
+also own recording finalization, so cleanup waits for the accepted recording tail
+without taking over the executor connection. See the
+[ownership and verification checklist](../EXECUTION-REFACTOR-ACCEPTANCE.md).
+
 ## Serving module boundaries
 
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of

@@ -1,5 +1,13 @@
+import { GraphInvocationState, GraphSharedExecutionState } from './GraphExecutionState.js';
 import {
-  type DataType,
+  GraphSchedulerBoundaryState,
+  type SchedulerBoundaryFailure,
+  type StreamingOutputWatchPlan,
+  type StreamingOutputCatchPlan,
+  type StreamingOutputWatchInvocation,
+  type StreamingOutputWatchStopClaim,
+} from './GraphSchedulerBoundaryState.js';
+import {
   type DataValue,
   type StringArrayDataValue,
   type ControlFlowExcludedDataValue,
@@ -49,7 +57,7 @@ import {
   toReusableGraphExecutionPlan,
 } from './GraphPreprocessor.js';
 import { getGraphBoundary, type GraphBoundary, type GraphBoundaryCache } from './GraphBoundaryCache.js';
-import { createGraphOutputSelection, type GraphOutputSelection } from './GraphOutputSelection.js';
+import { createGraphOutputSelection } from './GraphOutputSelection.js';
 import {
   applyFrozenGraphBoundaryEffects,
   commitGraphOutputValue,
@@ -58,7 +66,7 @@ import {
 import { coerceGraphOutputValue, type GraphOutputNode } from './nodes/GraphOutputNode.js';
 import { replayExecutionRecording } from './RecordingPlayer.js';
 import { didLoopControllerBreak, LOOP_NOT_BROKEN_SENTINEL } from './loopControllerBreak.js';
-import { buildNodeProcessContext, type NodeProcessContextBase } from './ProcessContextBuilder.js';
+import { buildNodeProcessContext } from './ProcessContextBuilder.js';
 import { processSplitRunNode } from './SplitRunProcessor.js';
 import {
   type ExecutionState,
@@ -140,12 +148,7 @@ import {
 } from './ConnectedToolContinuationHost.js';
 import { resolveProjectGlobalVariables } from './GlobalVariables.js';
 import { loadProjectReferenceTree } from './ProjectReferenceLoader.js';
-import {
-  getSubgraphProjectKey,
-  isSubgraphProjectKey,
-  type ResolvedSubgraphProject,
-  type SubgraphProjectTarget,
-} from './SubgraphProjectTarget.js';
+import { getSubgraphProjectKey, isSubgraphProjectKey, type SubgraphProjectTarget } from './SubgraphProjectTarget.js';
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
 import { MAX_CAUGHT_STREAMING_CHUNKS, type CatchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
 import { isEqual } from 'lodash-es';
@@ -174,75 +177,11 @@ export type EventOccurrenceTiming = {
 type WithExecution<T extends object> = T & { execution: GraphExecutionMetadata } & ReplayEventTiming &
   EventOccurrenceTiming;
 type NodeTimingStart = number | undefined;
-type NodeAbortControllerEntry = AbortController | Set<AbortController>;
+export type NodeAbortControllerEntry = AbortController | Set<AbortController>;
 const graphProcessorGraphOverride = Symbol('graphProcessorGraphOverride');
 const consumedAsyncBranchTriggerOverride = Symbol('consumedAsyncBranchTriggerOverride');
 const asyncBranchInputAnchorsOverride = Symbol('asyncBranchInputAnchorsOverride');
 const consumedStreamingWatchNodeOverride = Symbol('consumedStreamingWatchNodeOverride');
-type SchedulerBoundaryFailure = {
-  error: Error;
-  triggerNode: ChartNode;
-  nodeErrors: Array<{ error: Error | string; node: ChartNode }>;
-};
-type StreamingOutputWatchPlan = {
-  graph: NodeGraph;
-  /** Only retain and snapshot the cumulative history when a branch consumes it. */
-  includeAllStreamedOutput: boolean;
-  sourceOutputId: PortId;
-  /**
-   * A Stop boundary is optional. Without one, every snapshot runs the entire
-   * contained branch and the watch completes normally with its producer.
-   */
-  stopNodeId?: NodeId;
-  /**
-   * Immutable stream increments observed for this run. Cumulative string
-   * snapshots contribute only their new suffix so an LLM response does not
-   * retain N copies of its whole prefix.
-   */
-  streamedOutput: unknown[];
-  previousStreamedValue: unknown;
-  watchNode: ChartNode;
-  nextUpdateIndex: number;
-  history: StreamingOutputWatchHistory;
-  historySummaryEmitted: boolean;
-  /** True once normal stream exhaustion has excluded the parent Stop boundary. */
-  unmatchedStopResolved: boolean;
-};
-type StreamingOutputCatchPlan = {
-  node: CatchStreamingChunksNode;
-  sourceOutputId: PortId;
-  count: number;
-  chunks: DataValue[];
-  settled: boolean;
-};
-type StreamingOutputWatchInvocation = {
-  plan: StreamingOutputWatchPlan;
-  historyIteration: StreamingOutputWatchHistoryIteration;
-  /**
-   * Atomically claims the parent Watch's one accepted Stop value. The claim is
-   * made before the child's nodeFinish is emitted so that event can identify
-   * the actual terminal branch, but its parent-dataflow effects are committed
-   * only after that lifecycle event has been published.
-   */
-  claimStop: (value: DataValue) => StreamingOutputWatchStopClaim | undefined;
-  /**
-   * Set only by the live Stop node implementation. The output that re-enters
-   * the parent is deliberately taken from the completed node result instead:
-   * split nodes aggregate their per-item outputs only at that boundary.
-   */
-  stopReached: boolean;
-};
-
-type StreamingOutputWatchStopClaim = {
-  commit: () => void;
-};
-
-type GraphOutputPartialBinding = {
-  dataType: DataType;
-  graphOutputId: string;
-  sourceOutputId: PortId;
-};
-
 function createGraphOutputsOverlay(parent: GraphOutputs): { view: GraphOutputs; writes: GraphOutputs } {
   const writes: GraphOutputs = {};
   const view = new Proxy(writes, {
@@ -679,6 +618,9 @@ export type AttachedNodeData = {
 };
 
 export class GraphProcessor {
+  #run = new GraphInvocationState();
+  #shared = new GraphSharedExecutionState();
+  #boundaries = new GraphSchedulerBoundaryState();
   // Per-instance state
   readonly #graph: NodeGraph;
   #graphCallPath: readonly string[];
@@ -713,21 +655,9 @@ export class GraphProcessor {
   #asyncBranchPlansByTriggerNodeId = new Map<NodeId, ToolCallContinuationAsyncBranchPlan>();
   readonly #consumedAsyncBranchTriggerNodeId: NodeId | undefined;
   readonly #asyncBranchInputAnchors: GraphNodeDefinitions | undefined;
-  #streamingWatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputWatchPlan[]>();
-  #streamingWatchPlansByWatchNodeId = new Map<NodeId, StreamingOutputWatchPlan>();
-  #streamingOutputWatches = new Map<NodeId, StreamingOutputWatch>();
-  #streamingCatchPlansBySourceNodeId = new Map<NodeId, StreamingOutputCatchPlan[]>();
-  #streamingCatchTasks = new Set<Promise<void>>();
-  #graphOutputPartialBindingsBySourceNodeId = new Map<NodeId, GraphOutputPartialBinding[]>();
   #graphOutputPartialListener: GraphOutputPartialListener | undefined;
   readonly #consumedStreamingWatchNodeId: NodeId | undefined;
   #streamingWatchInvocation: StreamingOutputWatchInvocation | undefined;
-  #graphInputStreams: Readonly<Record<string, GraphInputStream>> = {};
-  #callerInputStreams = new Map<NodeId, Record<string, GraphInputStreamRelay>>();
-  #inputStreamRoutes = new Map<NodeId, Array<{ port: PortId; relay: GraphInputStreamRelay }>>();
-  #streamCallerTasks = new Set<Promise<unknown>>();
-  #inputStreamDisposers: Array<() => void> = [];
-  #pendingGraphInputFinals = new Map<NodeId, Outputs>();
   readonly #registry: NodeRegistration<any, any>;
   readonly #concurrency: Required<GraphProcessorConcurrency>;
   readonly #executionPlanCacheMode: GraphProcessorExecutionPlanCacheMode;
@@ -762,71 +692,27 @@ export class GraphProcessor {
       }
     | undefined;
 
-  #rootRunId: RootRunId = undefined!;
-  #graphRunId: GraphRunId = undefined!;
-  #parentGraphRunId: GraphRunId | undefined = undefined;
-
   /** The interval between nodeFinish events when playing back a recording. I.e. how fast the playback is. */
   recordingPlaybackChatLatency = 1000;
 
   warnOnInvalidGraph = false;
 
-  // Per-process state
-  #erroredNodes: Map<NodeId, Error | string> = undefined!; // Values are strings in recordings
-  #failureOutputsByProcessId: Map<ProcessId, Map<number, Outputs>> = undefined!;
-  #remainingNodes: Set<NodeId> = undefined!;
-  #visitedNodes: Set<NodeId> = undefined!;
-  #currentlyProcessing: Set<NodeId> = undefined!;
-  #context: ProcessContext = undefined!;
-  #nodeResults: NodeResults = undefined!;
-  #abortController: AbortController = undefined!;
-  #processingQueue: InstanceType<typeof PQueue> = undefined!;
-  #graphInputs: GraphInputs = undefined!;
-  #graphOutputs: GraphOutputs = undefined!;
-  #executionCache: Map<string, unknown> = undefined!;
-  #queuedNodes: Set<NodeId> = undefined!;
-  /**
-   * Nodes deferred only because Run To reached its initial scheduler quiescence.
-   * A streaming Stop can legitimately resume one of those selected paths later.
-   */
-  #deferredRunToIgnoredNodes: Set<NodeId> = undefined!;
-  #loopControllersSeen: Set<NodeId> = undefined!;
-  #subprocessors: Set<GraphProcessor> = undefined!;
+  // Instance configuration and compiled definitions remain outside run state.
   #contextValues: Record<string, DataValue> = undefined!;
-  #globals: Map<string, ScalarOrArrayDataValue> = undefined!;
   /** IDs assigned by the previous root invocation, retained only to reset project globals on reuse. */
   #projectGlobalVariableIdsAssignedByPreviousRootRun = new Set<string>();
   /** Snapshot for lifecycle recording, populated only while a root run starts. */
   #initialProjectGlobalVariablesForRun = new Map<string, ScalarOrArrayDataValue>();
-  #storedValueController: RivetStoredValueController = undefined!;
-  #knowledgeStoreController: KnowledgeStoreController = undefined!;
-  #attachedNodeData: Map<NodeId, AttachedNodeData> = undefined!;
-  #successfulAbortTerminalProcessIds: Set<ProcessId> = undefined!;
-  #totalCost: number = 0;
-  #ignoreNodes: Set<NodeId> = undefined!;
-  #hasPreloadedData = false;
-  #loadedProjects: Record<ProjectId, Project> = undefined!;
-  #subgraphTargetCache = new Map<ProjectId, ResolvedSubgraphProject>();
   #definitions: Record<NodeId, { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] }> = undefined!;
   #scc: ChartNode[][] = undefined!;
   #graphExecutionPlan: GraphExecutionPlan | undefined;
-  #nodeProcessContextBase: NodeProcessContextBase = undefined!;
-  #runToRelevantNodeIds: Set<NodeId> | undefined;
-  #graphOutputSelection: GraphOutputSelection | undefined;
   #managedAsyncBranches: ManagedAsyncBranches | undefined;
   #managedAsyncBranchFailures: SchedulerBoundaryFailure[] = [];
-  #streamingWatchFailures: SchedulerBoundaryFailure[] = [];
   #runCompletionPromise: Promise<GraphOutputs> | undefined;
 
   #nodesNotInCycle: ChartNode[] = undefined!;
   #executionGraphNodes: ChartNode[] = undefined!;
 
-  #nodeAbortControllers = new Map<NodeId, NodeAbortControllerEntry>();
-
-  #graphInputNodeValues: Record<string, DataValue> = {};
-
-  /** User input nodes that are pending user input. */
-  #pendingUserInputs: Record<NodeId, { resolve: (values: StringArrayDataValue) => void }> = undefined!;
   #unsubscribeTokenizerError: (() => void) | undefined;
 
   get isRunning() {
@@ -967,7 +853,7 @@ export class GraphProcessor {
       const preprocessedGraph = preprocessGraphState({
         inputAnchorDefinitions: this.#asyncBranchInputAnchors,
         graph: this.#graph,
-        loadedProjects: this.#loadedProjects,
+        loadedProjects: this.#run.loadedProjects,
         project: this.#project,
         registry: this.#registry,
         warnOnInvalidGraph: this.warnOnInvalidGraph,
@@ -1050,7 +936,7 @@ export class GraphProcessor {
     this.#scc = preprocessedGraph.stronglyConnectedComponents;
     this.#nodesNotInCycle = preprocessedGraph.nodesNotInCycle;
     this.#executionGraphNodes = preprocessedGraph.graphNodes;
-    this.#remainingNodes = new Set(this.#executionGraphNodes.map((node) => node.id));
+    this.#run.remainingNodes = new Set(this.#executionGraphNodes.map((node) => node.id));
     this.#graphExecutionPlan = isGraphExecutionPlan(preprocessedGraph) ? preprocessedGraph : undefined;
   }
 
@@ -1084,12 +970,12 @@ export class GraphProcessor {
 
   #buildExecutionMetadata(): GraphExecutionMetadata {
     return {
-      rootRunId: this.#rootRunId,
-      graphRunId: this.#graphRunId,
+      rootRunId: this.#run.rootRunId,
+      graphRunId: this.#run.graphRunId,
       graphId: this.#graph.metadata!.id!,
       projectId: this.#project.metadata.id,
       ...(this.#recordingProjectScope ? { projectScope: this.#recordingProjectScope } : {}),
-      parentGraphRunId: this.#parentGraphRunId,
+      parentGraphRunId: this.#run.parentGraphRunId,
       executor: this.#executor
         ? {
             nodeId: this.#executor.nodeId,
@@ -1098,7 +984,7 @@ export class GraphProcessor {
             splitIndex: this.#executor.index,
           }
         : undefined,
-      ...(this.#context?.evaluation === undefined ? {} : { evaluation: this.#context.evaluation }),
+      ...(this.#run.context?.evaluation === undefined ? {} : { evaluation: this.#run.context.evaluation }),
     };
   }
 
@@ -1148,12 +1034,12 @@ export class GraphProcessor {
   }
 
   userInput(nodeId: NodeId, values: StringArrayDataValue): void {
-    const pending = this.#pendingUserInputs[nodeId];
+    const pending = this.#run.pendingUserInputs[nodeId];
     if (pending) {
       pending.resolve(values);
     }
 
-    for (const processor of this.#subprocessors) {
+    for (const processor of this.#run.subprocessors) {
       processor.userInput(nodeId, values);
     }
   }
@@ -1182,7 +1068,7 @@ export class GraphProcessor {
     }
 
     const abortReason = createGraphAbortReason(successful, error);
-    this.#abortController.abort(abortReason);
+    this.#run.abortController.abort(abortReason);
     this.#abortActiveNodeControllers(abortReason);
     this.#cancelStreamingOutputWatches();
 
@@ -1194,7 +1080,7 @@ export class GraphProcessor {
       }
     }
 
-    await this.#processingQueue.onIdle();
+    await this.#run.processingQueue.onIdle();
     if (!this.#isSubProcessor) {
       await this.#managedAsyncBranches?.drain();
     }
@@ -1222,7 +1108,7 @@ export class GraphProcessor {
       return;
     }
 
-    if (this.#abortController.signal.aborted) {
+    if (this.#run.abortController.signal.aborted) {
       throw this.#lifecycle.getAbortError();
     }
 
@@ -1238,11 +1124,11 @@ export class GraphProcessor {
       });
 
       const cleanup = () => {
-        this.#abortController.signal.removeEventListener('abort', abortListener);
+        this.#run.abortController.signal.removeEventListener('abort', abortListener);
         unsubscribeResume();
       };
 
-      this.#abortController.signal.addEventListener('abort', abortListener, { once: true });
+      this.#run.abortController.signal.addEventListener('abort', abortListener, { once: true });
     });
   }
 
@@ -1279,13 +1165,13 @@ export class GraphProcessor {
     this.#assertStreamingOutputWatchPreloadCanBeAdded(nodeId);
 
     this.#preloadedNodeResults.set(nodeId, data);
-    this.#hasPreloadedData = true;
+    this.#run.hasPreloadedData = true;
 
     // Preserve the historical ability to preload an idle processor as well as
     // inject a boundary into a run that has already initialized.
     if (this.#lifecycle.isRunning && this.#isNodeSelected(nodeId)) {
-      this.#nodeResults.set(nodeId, data);
-      this.#visitedNodes.add(nodeId);
+      this.#run.nodeResults.set(nodeId, data);
+      this.#run.visitedNodes.add(nodeId);
     }
   }
 
@@ -1315,7 +1201,7 @@ export class GraphProcessor {
       return;
     }
 
-    this.#loadedProjects ??= {};
+    this.#run.loadedProjects ??= {};
     // This synchronous inspection API can be called before processGraph has
     // loaded references. Its provisional definitions must never be reused as
     // a runtime plan for a later fully loaded invocation.
@@ -1361,13 +1247,13 @@ export class GraphProcessor {
     this.#initProcessState();
     return await replayExecutionRecording({
       emitter: this.#emitter,
-      erroredNodes: this.#erroredNodes,
-      graphInputs: this.#graphInputs,
-      graphOutputs: this.#graphOutputs,
+      erroredNodes: this.#run.erroredNodes,
+      graphInputs: this.#run.graphInputs,
+      graphOutputs: this.#run.graphOutputs,
       fallbackGraphId: this.#graph.metadata!.id!,
       initialReplayExecution: this.#buildExecutionMetadata(),
       isAborted: () => this.#lifecycle.isAborted,
-      nodeResults: this.#nodeResults,
+      nodeResults: this.#run.nodeResults,
       project: this.#project,
       recorder,
       recordingPlaybackChatLatency: this.recordingPlaybackChatLatency,
@@ -1375,78 +1261,51 @@ export class GraphProcessor {
         this.#contextValues = contextValues;
       },
       setGraphInputs: (graphInputs) => {
-        this.#graphInputs = graphInputs;
+        this.#run.graphInputs = graphInputs;
       },
       setGraphOutputs: (graphOutputs) => {
-        this.#graphOutputs = graphOutputs;
+        this.#run.graphOutputs = graphOutputs;
       },
       setRunning: (running) => {
         if (!running) this.#lifecycle.complete();
       },
-      visitedNodes: this.#visitedNodes,
+      visitedNodes: this.#run.visitedNodes,
       waitUntilUnpaused: () => this.#waitUntilUnpaused(),
     });
   }
 
   #initProcessState() {
     this.#lifecycle.begin();
-
-    this.#nodeResults = new Map(this.#preloadedNodeResults);
-    this.#visitedNodes = new Set(this.#preloadedNodeResults.keys());
-    this.#hasPreloadedData = this.#preloadedNodeResults.size > 0;
-
-    this.#erroredNodes = new Map();
-    this.#failureOutputsByProcessId = new Map();
-    this.#currentlyProcessing = new Set();
+    // Retain the invocation owner; child events and async cost accounting use it.
+    if (!this.#isSubProcessor) this.#shared = this.#shared.nextRootRun();
     // A processor may be constructed with a reusable execution plan. In that
     // case preprocessing happened before this run, so retain the compiled
     // execution-node set rather than restoring the authored graph nodes (which
     // may include topology-only Data Bus nodes).
-    this.#remainingNodes = new Set(this.#seededExecutionPlanForNextRun()?.nodeIds ?? []);
-    this.#pendingUserInputs = {};
-    this.#processingQueue = new PQueue({ concurrency: this.#concurrency.nodeConcurrency });
-    this.#graphOutputs = this.#sharedRunStateOverride?.graphOutputs ?? {};
-    this.#executionCache ??= new Map();
-    this.#queuedNodes = new Set();
-    this.#deferredRunToIgnoredNodes = new Set();
+    this.#run.initialize({
+      preloadedNodeResults: this.#preloadedNodeResults,
+      remainingNodeIds: this.#seededExecutionPlanForNextRun()?.nodeIds ?? [],
+      processingQueue: new PQueue({ concurrency: this.#concurrency.nodeConcurrency }),
+      createAbortController: () => this.#newAbortController(),
+      loadedProjects:
+        this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects ? { ...this.#runtimeCache.loadedProjects } : {},
+      sharedOverride: this.#sharedRunStateOverride,
+    });
+    this.#shared.executionCache ??= new Map();
     this.#connectedToolContinuationHost.reset();
     this.#continuationCompletionOwnerByNodeId = new Map();
     this.#effectiveConnectionsForRun = undefined;
     this.#asyncBranchPlansByTriggerNodeId = new Map();
-    this.#streamingWatchPlansBySourceNodeId = new Map();
-    this.#streamingWatchPlansByWatchNodeId = new Map();
-    this.#streamingOutputWatches = new Map();
-    this.#streamingCatchPlansBySourceNodeId = new Map();
-    this.#streamingCatchTasks = new Set();
-    this.#graphOutputPartialBindingsBySourceNodeId = new Map();
-    this.#loopControllersSeen = new Set();
-    this.#subprocessors = new Set();
-    this.#attachedNodeData = this.#sharedRunStateOverride?.attachedNodeData ?? new Map();
-    this.#globals ??= new Map();
+    this.#boundaries.resetTopology();
+    this.#shared.globals ??= new Map();
     if (!this.#isSubProcessor) {
-      this.#storedValueController = new RivetStoredValueController(this.#storedValueStore);
-      this.#knowledgeStoreController = new KnowledgeStoreController(this.#knowledgeStores);
+      this.#shared.storedValueController = new RivetStoredValueController(this.#storedValueStore);
+      this.#shared.knowledgeStoreController = new KnowledgeStoreController(this.#knowledgeStores);
     }
-    this.#ignoreNodes = new Set();
-    this.#nodeProcessContextBase = undefined!;
-    this.#runToRelevantNodeIds = undefined;
-    this.#graphOutputSelection = undefined;
 
     if (!this.#isSubProcessor) {
       this.#managedAsyncBranches = new ManagedAsyncBranches();
       this.#managedAsyncBranchFailures = [];
-    }
-    this.#streamingWatchFailures = [];
-
-    this.#abortController = this.#newAbortController();
-    this.#successfulAbortTerminalProcessIds = new Set();
-    this.#totalCost = 0;
-    this.#nodeAbortControllers = new Map();
-    this.#loadedProjects =
-      this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects ? { ...this.#runtimeCache.loadedProjects } : {};
-    if (!this.#isSubProcessor) {
-      // Latest and Published are selected afresh for each root invocation.
-      this.#subgraphTargetCache = new Map();
     }
     // Referenced projects can be reloaded per run when loaded-project caching is disabled.
     if (!this.#cacheLoadedProjects && (this.#project.references?.length ?? 0) > 0) {
@@ -1454,7 +1313,6 @@ export class GraphProcessor {
         this.#runtimeCache.graphBoundaries = undefined;
       }
     }
-    this.#graphInputNodeValues = this.#sharedRunStateOverride?.graphInputNodeValues ?? {};
   }
 
   /** Main function for running a graph. Runs a graph and returns the outputs from the output nodes of the graph. */
@@ -1508,12 +1366,7 @@ export class GraphProcessor {
           this.#profileRuntimeSync('initializeGraphRun', () =>
             this.#initializeGraphRun(context, inputs, contextValues),
           );
-          this.#graphInputStreams = options.graphInputStreams ?? {};
-          this.#callerInputStreams = new Map();
-          this.#inputStreamRoutes = new Map();
-          this.#streamCallerTasks = new Set();
-          this.#inputStreamDisposers = [];
-          this.#pendingGraphInputFinals = new Map();
+          this.#boundaries.initializeInputStreams(options.graphInputStreams);
           await this.#profileRuntimeAsync('loadProjectReferences', () => this.#loadProjectReferences());
           this.#profileRuntimeSync('initializeProjectGlobalVariables', () =>
             this.#initializeProjectGlobalVariablesForRootRun(),
@@ -1530,15 +1383,15 @@ export class GraphProcessor {
             if (this.runToNodeIds !== undefined) {
               throw new Error('requestedGraphOutputIds cannot be combined with runToNodeIds');
             }
-            this.#graphOutputSelection = createGraphOutputSelection(
+            this.#run.graphOutputSelection = createGraphOutputSelection(
               { nodes: this.#executionGraphNodes, connections: this.#getEffectiveConnections() },
               requestedGraphOutputIds,
               (node) => getInputNodesTo(this.#executionState, node),
             );
-            for (const nodeId of this.#nodeResults.keys()) {
+            for (const nodeId of this.#run.nodeResults.keys()) {
               if (!this.#isNodeSelected(nodeId)) {
-                this.#nodeResults.delete(nodeId);
-                this.#visitedNodes.delete(nodeId);
+                this.#run.nodeResults.delete(nodeId);
+                this.#run.visitedNodes.delete(nodeId);
               }
             }
           }
@@ -1577,8 +1430,8 @@ export class GraphProcessor {
           // Publish a snapshot instead of the live root output object. In particular,
           // the provisional cost must not occupy the root cost port before managed
           // async branches contribute their cost during finalization.
-          const outputsReady = { ...this.#graphOutputs };
-          ensureGraphCostOutput(outputsReady, this.#totalCost);
+          const outputsReady = { ...this.#run.graphOutputs };
+          ensureGraphCostOutput(outputsReady, this.#run.totalCost);
           await this.#emitter.emit(
             'graphOutputsReady',
             this.#withExecution({ graph: this.#graph, outputs: outputsReady }),
@@ -1592,18 +1445,18 @@ export class GraphProcessor {
         await this.#profileRuntimeAsync('throwIfGraphErrored', () => this.#throwIfGraphErrored());
         return await this.#profileRuntimeAsync('finalizeGraphRun', () => this.#finalizeGraphRun());
       } finally {
-        for (const dispose of this.#inputStreamDisposers) dispose();
-        this.#pendingGraphInputFinals.clear();
-        for (const streams of this.#callerInputStreams.values()) {
-          for (const relay of Object.values(streams))
-            relay.finish({ error: new Error('Graph input stream owner finished') });
+        try {
+          try {
+            this.#boundaries.releaseInputStreams();
+          } finally {
+            await this.#drainSchedulerBoundaries();
+          }
+        } finally {
+          this.#graphOutputPartialListener = undefined;
+          this.#lifecycle.complete();
+          this.#cleanupTokenizerErrorListener();
+          await this.#profileRuntimeAsync('emitFinish', () => this.#emitFinishIfNeeded());
         }
-        await this.#drainSchedulerBoundaries();
-        this.#graphOutputPartialListener = undefined;
-        this.#lifecycle.complete();
-        this.#cleanupTokenizerErrorListener();
-
-        await this.#profileRuntimeAsync('emitFinish', () => this.#emitFinishIfNeeded());
       }
     })();
 
@@ -1644,12 +1497,12 @@ export class GraphProcessor {
 
     this.#initProcessState();
 
-    this.#context = context;
-    this.#graphInputs = inputs;
+    this.#run.context = context;
+    this.#run.graphInputs = inputs;
     this.#contextValues = contextValues;
 
     this.#cleanupTokenizerErrorListener();
-    const unsubscribeTokenizerError = this.#context.tokenizer.on('error', (error) => {
+    const unsubscribeTokenizerError = this.#run.context.tokenizer.on('error', (error) => {
       emitDetached(this.#emitter, 'error', { error });
     });
     this.#unsubscribeTokenizerError =
@@ -1663,15 +1516,15 @@ export class GraphProcessor {
     // Resolve before touching the shared map. An invalid reference or definition
     // must fail startup without leaving a partial new set of authored globals.
     const legacyProjects = Object.fromEntries(
-      Object.entries(this.#loadedProjects).filter(([key]) => !isSubgraphProjectKey(key)),
+      Object.entries(this.#run.loadedProjects).filter(([key]) => !isSubgraphProjectKey(key)),
     ) as Record<ProjectId, Project>;
     const resolved = resolveProjectGlobalVariables(this.#project, legacyProjects);
 
     for (const id of this.#projectGlobalVariableIdsAssignedByPreviousRootRun) {
-      this.#globals.delete(id);
+      this.#shared.globals.delete(id);
     }
     for (const [id, value] of resolved) {
-      this.#globals.set(id, value);
+      this.#shared.globals.set(id, value);
     }
 
     this.#projectGlobalVariableIdsAssignedByPreviousRootRun = new Set(resolved.keys());
@@ -1680,13 +1533,13 @@ export class GraphProcessor {
 
   #initializeExecutionIdentity(): void {
     if (this.#executionIdentityOverride) {
-      this.#rootRunId = this.#executionIdentityOverride.rootRunId;
-      this.#graphRunId = this.#executionIdentityOverride.graphRunId;
-      this.#parentGraphRunId = this.#executionIdentityOverride.parentGraphRunId;
+      this.#run.rootRunId = this.#executionIdentityOverride.rootRunId;
+      this.#run.graphRunId = this.#executionIdentityOverride.graphRunId;
+      this.#run.parentGraphRunId = this.#executionIdentityOverride.parentGraphRunId;
     } else {
-      this.#rootRunId = this.#parent ? this.#parent.#rootRunId : (nanoid() as RootRunId);
-      this.#graphRunId = nanoid() as GraphRunId;
-      this.#parentGraphRunId = this.#parent ? this.#parent.#graphRunId : undefined;
+      this.#run.rootRunId = this.#parent ? this.#parent.#run.rootRunId : (nanoid() as RootRunId);
+      this.#run.graphRunId = nanoid() as GraphRunId;
+      this.#run.parentGraphRunId = this.#parent ? this.#parent.#run.graphRunId : undefined;
     }
   }
 
@@ -1708,27 +1561,27 @@ export class GraphProcessor {
     // is already a GraphProcessor wrapper. Always resolve the original host
     // observer from the root run so nested LLM calls are not emitted once by
     // every ancestor before their own event is bridged to the root emitter.
-    const hostChatV2Observer = this.getRootProcessor().#context.onChatV2CallFinished;
-    const hostLLMChatOutputSnapshotObserver = this.getRootProcessor().#context.onLLMChatOutputSnapshot;
-    const hostLLMProfileAttemptObserver = this.getRootProcessor().#context.onLLMProfileAttempt;
-    this.#nodeProcessContextBase = {
-      ...this.#context,
+    const hostChatV2Observer = this.getRootProcessor().#run.context.onChatV2CallFinished;
+    const hostLLMChatOutputSnapshotObserver = this.getRootProcessor().#run.context.onLLMChatOutputSnapshot;
+    const hostLLMProfileAttemptObserver = this.getRootProcessor().#run.context.onLLMProfileAttempt;
+    this.#run.nodeProcessContextBase = {
+      ...this.#run.context,
       abortGraph: (error) => {
         void (this.#abortOwnerOverride ?? this).abort(error === undefined, error);
       },
-      codeRunner: this.#context.codeRunner ?? DEFAULT_ISOMORPHIC_CODE_RUNNER,
+      codeRunner: this.#run.context.codeRunner ?? DEFAULT_ISOMORPHIC_CODE_RUNNER,
       contextValues: this.#contextValues,
-      executionCache: this.#executionCache,
+      executionCache: this.#shared.executionCache,
       executor: this.executor ?? 'nodejs',
-      getGlobal: (id) => this.#globals.get(id),
-      getCachedStoredValue: (key) => this.#storedValueController.getCached(key),
-      getStoredValue: (key) => this.#storedValueController.get(key),
+      getGlobal: (id) => this.#shared.globals.get(id),
+      getCachedStoredValue: (key) => this.#shared.storedValueController.getCached(key),
+      getStoredValue: (key) => this.#shared.storedValueController.get(key),
       getKnowledgeStore: (connectionId) =>
-        this.#knowledgeStoreController.resolve(connectionId, this.#nodeProcessContextBase),
+        this.#shared.knowledgeStoreController.resolve(connectionId, this.#run.nodeProcessContextBase),
       getGraphBoundary: (project, graphId) => this.#getGraphBoundary(project, graphId),
-      graphInputNodeValues: this.#graphInputNodeValues,
-      graphInputs: this.#graphInputs,
-      graphOutputs: this.#graphOutputs,
+      graphInputNodeValues: this.#run.graphInputNodeValues,
+      graphInputs: this.#run.graphInputs,
+      graphOutputs: this.#run.graphOutputs,
       graphCallPath: this.#graphCallPath,
       onChatV2CallFinished: (event) => {
         try {
@@ -1775,18 +1628,18 @@ export class GraphProcessor {
       raiseEvent: (event, data) => {
         this.getRootProcessor().raiseEvent(event, data as DataValue);
       },
-      referencedProjects: this.#loadedProjects,
+      referencedProjects: this.#run.loadedProjects,
       tokenizer: this.#getTokenizer(),
       trace: (message) => {
         this.#emitTraceEvent(message);
       },
-      setStoredValue: (key, value) => this.#storedValueController.set(key, value),
-      waitForGlobal: async (id, signal = this.#abortController.signal) => {
+      setStoredValue: (key, value) => this.#shared.storedValueController.set(key, value),
+      waitForGlobal: async (id, signal = this.#run.abortController.signal) => {
         if (signal.aborted) {
           throw createGraphAbortErrorFromSignal(signal);
         }
-        if (this.#globals.has(id)) {
-          return this.#globals.get(id)!;
+        if (this.#shared.globals.has(id)) {
+          return this.#shared.globals.get(id)!;
         }
         return await new Promise<ScalarOrArrayDataValue>((resolve, reject) => {
           const abortListener = () => {
@@ -1795,7 +1648,7 @@ export class GraphProcessor {
           };
           const unsubscribe = this.getRootProcessor().#emitter.on(`globalSet:${id}`, () => {
             cleanup();
-            resolve(this.#globals.get(id)!);
+            resolve(this.#shared.globals.get(id)!);
           });
           const cleanup = () => {
             unsubscribe();
@@ -1807,7 +1660,7 @@ export class GraphProcessor {
           }
         });
       },
-      waitForStoredValue: (key, signal) => this.#storedValueController.waitForSet(key, signal),
+      waitForStoredValue: (key, signal) => this.#shared.storedValueController.waitForSet(key, signal),
     };
   }
 
@@ -1832,14 +1685,14 @@ export class GraphProcessor {
         'start',
         this.#withExecution({
           contextValues: this.#contextValues,
-          inputs: this.#graphInputs,
+          inputs: this.#run.graphInputs,
           project: this.#project,
           startGraph: this.#graph,
         }),
       );
     }
 
-    await this.#emitter.emit('graphStart', this.#withExecution({ graph: this.#graph, inputs: this.#graphInputs }));
+    await this.#emitter.emit('graphStart', this.#withExecution({ graph: this.#graph, inputs: this.#run.graphInputs }));
   }
 
   async #emitInitialProjectGlobalVariables(): Promise<void> {
@@ -1854,12 +1707,12 @@ export class GraphProcessor {
   }
 
   async #emitPreloadedNodeResults(): Promise<void> {
-    if (!this.#hasPreloadedData) {
+    if (!this.#run.hasPreloadedData) {
       return;
     }
 
     for (const node of this.#executionGraphNodes) {
-      if (!this.#isNodeSelected(node.id) || !this.#nodeResults.has(node.id)) {
+      if (!this.#isNodeSelected(node.id) || !this.#run.nodeResults.has(node.id)) {
         continue;
       }
 
@@ -1867,7 +1720,7 @@ export class GraphProcessor {
         continue;
       }
 
-      const outputs = this.#nodeResults.get(node.id)!;
+      const outputs = this.#run.nodeResults.get(node.id)!;
       // A preloaded producer is complete evidence, not a reconstructed token
       // stream. Watch receives it once as the producer's final snapshot.
       this.#assertStreamingOutputWatchFinalOutputs(node, outputs);
@@ -1899,7 +1752,7 @@ export class GraphProcessor {
 
   async #queueStartNodes(startNodes: ChartNode[]): Promise<void> {
     for (const startNode of startNodes) {
-      void this.#processingQueue.add(async () => {
+      void this.#run.processingQueue.add(async () => {
         await this.#fetchNodeDataAndProcessNode(startNode);
       });
     }
@@ -1907,37 +1760,37 @@ export class GraphProcessor {
 
   async #processCompatibleGraph(): Promise<void> {
     await this.#queueStartNodes(
-      this.#graphOutputSelection?.startNodes ??
+      this.#run.graphOutputSelection?.startNodes ??
         getStartNodes(this.#executionState, this.#executionGraphNodes, this.runToNodeIds),
     );
-    await this.#processingQueue.onIdle();
-    if (Object.keys(this.#graphInputStreams).length) {
+    await this.#run.processingQueue.onIdle();
+    if (Object.keys(this.#boundaries.graphInputStreams).length) {
       await this.#waitForGraphInputStreams();
-      for (const [nodeId, outputs] of this.#pendingGraphInputFinals) {
+      for (const [nodeId, outputs] of this.#boundaries.pendingGraphInputFinals) {
         this.#finishStreamingOutputWatches(this.#nodesById[nodeId]!, outputs);
       }
-      this.#pendingGraphInputFinals.clear();
+      this.#boundaries.pendingGraphInputFinals.clear();
       for (const node of this.#executionGraphNodes) {
         if (!this.#isNodeSelected(node.id)) continue;
-        void this.#processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
+        void this.#run.processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
       }
-      await this.#processingQueue.onIdle();
+      await this.#run.processingQueue.onIdle();
     }
-    while (this.#streamCallerTasks.size) {
+    while (this.#boundaries.streamCallerTasks.size) {
       // A producer skipped transitively after an upstream failure never emits
       // nodeError itself. Settle its consumers once ordinary work is quiescent.
-      for (const [sourceId, routes] of this.#inputStreamRoutes) {
-        if (this.#currentlyProcessing.has(sourceId) || routes.every(({ relay }) => relay.result)) continue;
-        const failedDependency = this.getDependencyNodesDeep(sourceId).find((id) => this.#erroredNodes.has(id));
+      for (const [sourceId, routes] of this.#boundaries.inputStreamRoutes) {
+        if (this.#run.currentlyProcessing.has(sourceId) || routes.every(({ relay }) => relay.result)) continue;
+        const failedDependency = this.getDependencyNodesDeep(sourceId).find((id) => this.#run.erroredNodes.has(id));
         if (failedDependency) {
-          const error = getError(this.#erroredNodes.get(failedDependency));
+          const error = getError(this.#run.erroredNodes.get(failedDependency));
           for (const { relay } of routes) relay.finish({ error });
         }
       }
       // Recheck skipped producers after each caller settles; another caller may
       // depend on ordinary nodes skipped because this caller failed.
-      await Promise.race(this.#streamCallerTasks);
-      await this.#processingQueue.onIdle();
+      await Promise.race(this.#boundaries.streamCallerTasks);
+      await this.#run.processingQueue.onIdle();
     }
     await this.#drainStreamingCatchTasks();
     this.#markUnqueuedNodesIgnored();
@@ -1949,10 +1802,10 @@ export class GraphProcessor {
     }
 
     if (
-      this.#graphOutputSelection ||
-      this.#callerInputStreams.size > 0 ||
-      Object.keys(this.#graphInputStreams).length > 0 ||
-      this.#hasPreloadedData ||
+      this.#run.graphOutputSelection ||
+      this.#boundaries.callerInputStreams.size > 0 ||
+      Object.keys(this.#boundaries.graphInputStreams).length > 0 ||
+      this.#run.hasPreloadedData ||
       this.runToNodeIds ||
       this.slowMode ||
       this.#includeTrace
@@ -2083,15 +1936,15 @@ export class GraphProcessor {
     }
 
     for (const node of this.#executionGraphNodes) {
-      if (this.#queuedNodes.has(node.id) === false && !this.#ignoreNodes.has(node.id)) {
-        this.#ignoreNodes.add(node.id);
-        this.#deferredRunToIgnoredNodes.add(node.id);
+      if (this.#run.queuedNodes.has(node.id) === false && !this.#run.ignoreNodes.has(node.id)) {
+        this.#run.ignoreNodes.add(node.id);
+        this.#run.deferredRunToIgnoredNodes.add(node.id);
       }
     }
   }
 
   #getUnhandledErroredNodes(): [NodeId, Error | string][] {
-    return [...this.#erroredNodes.entries()].filter(([nodeId]) => {
+    return [...this.#run.erroredNodes.entries()].filter(([nodeId]) => {
       const erroredNodeAttachedData = this.#getAttachedDataTo(nodeId);
       return erroredNodeAttachedData.races == null || erroredNodeAttachedData.races.completed === false;
     });
@@ -2129,7 +1982,7 @@ export class GraphProcessor {
     const erroredNodes = this.#getUnhandledErroredNodes();
     const branchFailures = [
       ...(includeManagedAsyncFailures ? this.#managedAsyncBranchFailures : []),
-      ...this.#streamingWatchFailures,
+      ...this.#boundaries.streamingWatchFailures,
     ];
     if (
       this.#lifecycle.abortSuccessful ||
@@ -2151,13 +2004,13 @@ export class GraphProcessor {
   }
 
   async #finalizeGraphRun(): Promise<GraphOutputs> {
-    const outputValues = this.#graphOutputs;
+    const outputValues = this.#run.graphOutputs;
 
     if (this.#suppressGraphLifecycleEvents) {
       return outputValues;
     }
 
-    ensureGraphCostOutput(this.#graphOutputs, this.#totalCost);
+    ensureGraphCostOutput(this.#run.graphOutputs, this.#run.totalCost);
 
     await this.#emitter.emit('graphFinish', this.#withExecution({ graph: this.#graph, outputs: outputValues }));
 
@@ -2171,25 +2024,25 @@ export class GraphProcessor {
   async #loadProjectReferences() {
     if ((this.#project.references?.length ?? 0) > 0) {
       if (this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects) {
-        this.#loadedProjects = { ...this.#runtimeCache.loadedProjects };
+        this.#run.loadedProjects = { ...this.#runtimeCache.loadedProjects };
         await this.#loadSubgraphProjectTargets();
         return;
       }
 
-      if (!this.#context.projectReferenceLoader) {
+      if (!this.#run.context.projectReferenceLoader) {
         throw new Error(
           'Project references are set, but no projectReferenceLoader is set in the context. Since this project uses project references, you must provide a projectReferenceLoader in the context.',
         );
       }
 
-      this.#loadedProjects = await loadProjectReferenceTree(
+      this.#run.loadedProjects = await loadProjectReferenceTree(
         this.#project,
-        this.#context.projectPath,
-        this.#context.projectReferenceLoader,
+        this.#run.context.projectPath,
+        this.#run.context.projectReferenceLoader,
       );
 
       if (this.#cacheLoadedProjects && this.#runtimeCache) {
-        this.#runtimeCache.loadedProjects = { ...this.#loadedProjects };
+        this.#runtimeCache.loadedProjects = { ...this.#run.loadedProjects };
       }
     }
     await this.#loadSubgraphProjectTargets();
@@ -2236,24 +2089,24 @@ export class GraphProcessor {
               version: node.data.targetVersion ?? 'latest',
             };
             const key = getSubgraphProjectKey(target);
-            let resolved = this.#subgraphTargetCache.get(key);
+            let resolved = this.#shared.subgraphTargetCache.get(key);
             if (!resolved) {
-              if (!this.#context.subgraphProjectLoader) {
+              if (!this.#run.context.subgraphProjectLoader) {
                 throw new Error(
                   'Subgraph calls to another project require a subgraphProjectLoader. Use a project bundle locally or run through Rivet Studio Server.',
                 );
               }
-              resolved = await this.#context.subgraphProjectLoader.loadTarget(target);
+              resolved = await this.#run.context.subgraphProjectLoader.loadTarget(target);
               if (resolved.project.metadata.id !== target.projectId) {
                 throw new Error(`Subgraph target ${target.projectId} resolved to a different project.`);
               }
-              this.#subgraphTargetCache.set(key, resolved);
+              this.#shared.subgraphTargetCache.set(key, resolved);
             }
             childOwner = resolved.project;
-            if (Object.hasOwn(this.#loadedProjects, key) && this.#loadedProjects[key] !== childOwner) {
+            if (Object.hasOwn(this.#run.loadedProjects, key) && this.#run.loadedProjects[key] !== childOwner) {
               throw new Error('Subgraph target collides with an existing project reference.');
             }
-            Object.defineProperty(this.#loadedProjects, key, {
+            Object.defineProperty(this.#run.loadedProjects, key, {
               configurable: true,
               enumerable: true,
               value: childOwner,
@@ -2269,9 +2122,9 @@ export class GraphProcessor {
     await visit(this.#project, this.#graph.metadata!.id!, 0);
     // Streaming topology may visit any resolved target, including a version of
     // a project with the same metadata ID as another selected target.
-    for (const [key, resolved] of this.#subgraphTargetCache) {
-      if (!Object.hasOwn(this.#loadedProjects, key)) {
-        Object.defineProperty(this.#loadedProjects, key, {
+    for (const [key, resolved] of this.#shared.subgraphTargetCache) {
+      if (!Object.hasOwn(this.#run.loadedProjects, key)) {
+        Object.defineProperty(this.#run.loadedProjects, key, {
           configurable: true,
           enumerable: true,
           value: resolved.project,
@@ -2299,7 +2152,7 @@ export class GraphProcessor {
   /** Accumulates cost from a node's output. */
   #accumulateCost(output: Outputs): void {
     if (output['cost' as PortId]?.type === 'number') {
-      this.#totalCost += coerceTypeOptional(output['cost' as PortId], 'number') ?? 0;
+      this.#run.totalCost += coerceTypeOptional(output['cost' as PortId], 'number') ?? 0;
     }
   }
 
@@ -2308,7 +2161,7 @@ export class GraphProcessor {
     const profileStart = this.#startRuntimeProfile();
 
     try {
-      if (this.#currentlyProcessing.has(node.id)) {
+      if (this.#run.currentlyProcessing.has(node.id)) {
         return;
       }
 
@@ -2316,11 +2169,11 @@ export class GraphProcessor {
         return;
       }
 
-      if (this.#queuedNodes.has(node.id)) {
+      if (this.#run.queuedNodes.has(node.id)) {
         return;
       }
 
-      if (this.#nodeResults.has(node.id) || this.#erroredNodes.has(node.id)) {
+      if (this.#run.nodeResults.has(node.id) || this.#run.erroredNodes.has(node.id)) {
         return;
       }
 
@@ -2353,9 +2206,9 @@ export class GraphProcessor {
         }
       }
 
-      this.#queuedNodes.add(node.id);
+      this.#run.queuedNodes.add(node.id);
 
-      void this.#processingQueue.addAll(
+      void this.#run.processingQueue.addAll(
         inputNodes.map((inputNode) => {
           return async () => {
             this.#emitTraceEvent(`Fetching required data for node ${inputNode.title} (${inputNode.id})`);
@@ -2378,14 +2231,14 @@ export class GraphProcessor {
   ): Promise<ChartNode[]> {
     if (!this.#isNodeSelected(node.id)) return [];
     // Waiting graph callers must not occupy a queue slot needed by their producer.
-    if (this.#callerInputStreams.has(node.id) && !options.streamingDispatch) {
+    if (this.#boundaries.callerInputStreams.has(node.id) && !options.streamingDispatch) {
       const task = this.#processNodeIfAllInputsAvailable(node, { ...options, streamingDispatch: true }).catch(
         (error: unknown) => this.#nodeErrored(node, error, nanoid() as ProcessId),
       );
-      this.#streamCallerTasks.add(task);
+      this.#boundaries.streamCallerTasks.add(task);
       void task.then(
-        () => this.#streamCallerTasks.delete(task),
-        () => this.#streamCallerTasks.delete(task),
+        () => this.#boundaries.streamCallerTasks.delete(task),
+        () => this.#boundaries.streamCallerTasks.delete(task),
       );
       return [];
     }
@@ -2406,11 +2259,11 @@ export class GraphProcessor {
 
     const namedInput = node.type === 'graphInput' ? (node as GraphInputNode).data.id : undefined;
     const inputStream =
-      namedInput != null && Object.hasOwn(this.#graphInputStreams, namedInput)
-        ? this.#graphInputStreams[namedInput]
+      namedInput != null && Object.hasOwn(this.#boundaries.graphInputStreams, namedInput)
+        ? this.#boundaries.graphInputStreams[namedInput]
         : undefined;
     if (inputStream) {
-      const terminals = Object.values(this.#graphInputStreams).map((stream) => stream.result);
+      const terminals = Object.values(this.#boundaries.graphInputStreams).map((stream) => stream.result);
       // A containing invocation cannot release a successful final into a deeper
       // caller when another required input failed or was excluded.
       const terminal =
@@ -2431,8 +2284,8 @@ export class GraphProcessor {
       if (terminals.some((result) => !result)) return [];
     } else if (
       node.type !== 'graphInput' &&
-      !this.#callerInputStreams.has(node.id) &&
-      Object.values(this.#graphInputStreams).some(
+      !this.#boundaries.callerInputStreams.has(node.id) &&
+      Object.values(this.#boundaries.graphInputStreams).some(
         (stream) => !stream.result || stream.result.error || stream.result.value?.type === 'control-flow-excluded',
       )
     ) {
@@ -2461,7 +2314,7 @@ export class GraphProcessor {
       return loopExclusion === true ? [] : loopExclusion;
     }
 
-    const streamedInputs = this.#callerInputStreams.get(node.id);
+    const streamedInputs = this.#boundaries.callerInputStreams.get(node.id);
     const blockingInputNodes = streamedInputs
       ? inputNodes.filter((inputNode) =>
           this.#getInputConnectionsForNode(node).some(
@@ -2521,9 +2374,9 @@ export class GraphProcessor {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     this.#emitTraceEvent(`Finished processing node ${node.title} (${node.id})`);
-    this.#visitedNodes.add(node.id);
-    this.#currentlyProcessing.delete(node.id);
-    this.#remainingNodes.delete(node.id);
+    this.#run.visitedNodes.add(node.id);
+    this.#run.currentlyProcessing.delete(node.id);
+    this.#run.remainingNodes.delete(node.id);
 
     const outputNodesProfileStart = this.#startRuntimeProfile();
     const outputNodes = getOutputNodesFrom(this.#executionState, node);
@@ -2554,7 +2407,7 @@ export class GraphProcessor {
 
   #propagateCompletedContinuationNode(node: ChartNode, queueOutputNodes: boolean): ChartNode[] | undefined {
     const ownerLLMNodeId = this.#continuationCompletionOwnerByNodeId.get(node.id);
-    if (ownerLLMNodeId == null || !this.#nodeResults.has(ownerLLMNodeId)) {
+    if (ownerLLMNodeId == null || !this.#run.nodeResults.has(ownerLLMNodeId)) {
       return undefined;
     }
     this.#continuationCompletionOwnerByNodeId.delete(node.id);
@@ -2570,7 +2423,7 @@ export class GraphProcessor {
   }
 
   #shouldSkipNodeProcessing(node: ChartNode, inputNodes: ChartNode[]): boolean {
-    if (this.#ignoreNodes.has(node.id)) {
+    if (this.#run.ignoreNodes.has(node.id)) {
       this.#emitTraceEvent(`Node ${node.title} is ignored`);
       return true;
     }
@@ -2583,17 +2436,17 @@ export class GraphProcessor {
       }
     }
 
-    if (this.#currentlyProcessing.has(node.id)) {
+    if (this.#run.currentlyProcessing.has(node.id)) {
       this.#emitTraceEvent(`Node ${node.title} is already being processed`);
       return true;
     }
 
-    if (this.#visitedNodes.has(node.id) && node.type !== 'loopController') {
+    if (this.#run.visitedNodes.has(node.id) && node.type !== 'loopController') {
       this.#emitTraceEvent(`Node ${node.title} has already been processed`);
       return true;
     }
 
-    if (this.#erroredNodes.has(node.id)) {
+    if (this.#run.erroredNodes.has(node.id)) {
       this.#emitTraceEvent(`Node ${node.title} has already errored`);
       return true;
     }
@@ -2623,10 +2476,10 @@ export class GraphProcessor {
       return false;
     }
 
-    this.#currentlyProcessing.add(node.id);
+    this.#run.currentlyProcessing.add(node.id);
 
     if (node.type === 'loopController') {
-      this.#loopControllersSeen.add(node.id);
+      this.#run.loopControllersSeen.add(node.id);
     }
 
     this.#registerNodeInActiveLoop(node, attachedData);
@@ -2654,7 +2507,7 @@ export class GraphProcessor {
       return;
     }
 
-    const loopControllerResults = this.#nodeResults.get(node.id)!;
+    const loopControllerResults = this.#run.nodeResults.get(node.id)!;
     const breakValue = loopControllerResults['break' as PortId];
     const didBreak = didLoopControllerBreak(breakValue);
 
@@ -2666,10 +2519,10 @@ export class GraphProcessor {
     for (const loopNodeId of attachedData.loopInfo?.nodes ?? []) {
       const cycleNode = this.#nodesById[loopNodeId]!;
       this.#emitTraceEvent(`Clearing cycle node ${cycleNode.title} (${cycleNode.id})`);
-      this.#visitedNodes.delete(cycleNode.id);
-      this.#currentlyProcessing.delete(cycleNode.id);
-      this.#remainingNodes.add(cycleNode.id);
-      this.#nodeResults.delete(cycleNode.id);
+      this.#run.visitedNodes.delete(cycleNode.id);
+      this.#run.currentlyProcessing.delete(cycleNode.id);
+      this.#run.remainingNodes.add(cycleNode.id);
+      this.#run.nodeResults.delete(cycleNode.id);
     }
   }
 
@@ -2679,7 +2532,7 @@ export class GraphProcessor {
     }
 
     const raceId = `race-${node.id}` as RaceId;
-    const allNodesForRace = [...this.#attachedNodeData.entries()].filter(([, { races }]) =>
+    const allNodesForRace = [...this.#run.attachedNodeData.entries()].filter(([, { races }]) =>
       races?.raceIds.includes(raceId),
     );
 
@@ -2750,16 +2603,16 @@ export class GraphProcessor {
   }
 
   #queueOutputNodes(node: ChartNode, outputNodes: ChartNode[]): void {
-    const selectedOutputs = this.#graphOutputSelection
+    const selectedOutputs = this.#run.graphOutputSelection
       ? outputNodes.filter((outputNode) => this.#isNodeSelected(outputNode.id))
       : outputNodes;
     const relevantNodeIds = this.#getExecutionRelevantNodeIds();
     for (const outputNode of selectedOutputs) {
-      if (relevantNodeIds?.has(outputNode.id) && this.#deferredRunToIgnoredNodes.delete(outputNode.id)) {
-        this.#ignoreNodes.delete(outputNode.id);
+      if (relevantNodeIds?.has(outputNode.id) && this.#run.deferredRunToIgnoredNodes.delete(outputNode.id)) {
+        this.#run.ignoreNodes.delete(outputNode.id);
       }
     }
-    void this.#processingQueue.addAll(
+    void this.#run.processingQueue.addAll(
       selectedOutputs.map((outputNode) => async () => {
         this.#emitTraceEvent(`Trying to run output node from ${node.title}: ${outputNode.title} (${outputNode.id})`);
         await this.#processNodeIfAllInputsAvailable(outputNode);
@@ -2768,7 +2621,7 @@ export class GraphProcessor {
   }
 
   #startManagedAsyncBranch(triggerNode: ChartNode): void {
-    const outputs = this.#nodeResults.get(triggerNode.id);
+    const outputs = this.#run.nodeResults.get(triggerNode.id);
     if (!outputs) {
       return;
     }
@@ -2824,8 +2677,8 @@ export class GraphProcessor {
     const root = this.getRootProcessor();
     const sameGraphOwner = this.#sameGraphRunOwnerOverride ?? this;
     const isRootGraphOrigin = !sameGraphOwner.#isSubProcessor;
-    if (root.#abortController.signal.aborted) {
-      throw createGraphAbortErrorFromSignal(root.#abortController.signal, 'Async branch aborted before it started');
+    if (root.#run.abortController.signal.aborted) {
+      throw createGraphAbortErrorFromSignal(root.#run.abortController.signal, 'Async branch aborted before it started');
     }
 
     const graphId = plan.graph.metadata?.id;
@@ -2836,7 +2689,7 @@ export class GraphProcessor {
     const branchRuntimeCache: GraphProcessorRuntimeCache = {
       ...this.#runtimeCache,
       graphBoundaries: undefined,
-      loadedProjects: { ...this.#loadedProjects },
+      loadedProjects: { ...this.#run.loadedProjects },
     };
     const processor = new GraphProcessor(this.#project, graphId, this.#registry, this.#includeTrace, {
       cacheLoadedProjects: true,
@@ -2858,24 +2711,20 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
-    processor.#subgraphTargetCache = this.#subgraphTargetCache;
     processor.#recordingProjectScope = this.#recordingProjectScope;
-    processor.#executionCache = this.#executionCache;
+    processor.#shared = this.#shared;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = sameGraphOwner;
     processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = root;
     processor.#suppressGraphPartialOutputs = true;
-    processor.#globals = this.#globals;
-    processor.#storedValueController = this.#storedValueController;
-    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
     processor.#suppressGraphLifecycleEvents = isRootGraphOrigin;
     processor.#sharedRunStateOverride = {
-      attachedNodeData: this.#attachedNodeData,
-      graphInputNodeValues: this.#graphInputNodeValues,
+      attachedNodeData: this.#run.attachedNodeData,
+      graphInputNodeValues: this.#run.graphInputNodeValues,
       // Async branches cannot contain Graph Output nodes. Keep their synthetic
       // boundary outputs private so branch finalization cannot seed the root's
       // derived cost output before the root has accumulated every path.
@@ -2885,14 +2734,14 @@ export class GraphProcessor {
     processor.runToNodeIds = branchRunToNodeIds?.length ? branchRunToNodeIds : undefined;
     processor.#executionIdentityOverride = isRootGraphOrigin
       ? {
-          rootRunId: this.#rootRunId,
-          graphRunId: this.#graphRunId,
-          parentGraphRunId: this.#parentGraphRunId,
+          rootRunId: this.#run.rootRunId,
+          graphRunId: this.#run.graphRunId,
+          parentGraphRunId: this.#run.parentGraphRunId,
         }
       : {
-          rootRunId: root.#rootRunId,
+          rootRunId: root.#run.rootRunId,
           graphRunId: nanoid() as GraphRunId,
-          parentGraphRunId: sameGraphOwner.#graphRunId,
+          parentGraphRunId: sameGraphOwner.#run.graphRunId,
         };
     processor.preloadNodeData(triggerNode.id, triggerOutputs);
     processor.#suppressedPreloadedNodeIds.add(triggerNode.id);
@@ -2909,8 +2758,8 @@ export class GraphProcessor {
     });
     const unwireLifecycle = wireSubprocessorLifecycle(processor, {
       autoCleanup: false,
-      signal: sameGraphOwner === root ? undefined : sameGraphOwner.#abortController.signal,
-      parentAbortSignal: root.#abortController.signal,
+      signal: sameGraphOwner === root ? undefined : sameGraphOwner.#run.abortController.signal,
+      parentAbortSignal: root.#run.abortController.signal,
       onParentPause: (listener) => {
         root.on('pause', listener);
         return () => {
@@ -2924,18 +2773,18 @@ export class GraphProcessor {
         };
       },
     });
-    root.#subprocessors.add(processor);
+    root.#run.subprocessors.add(processor);
 
     try {
       if (root.#lifecycle.isPaused) {
         processor.pause();
       }
-      await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
+      await processor.processGraph(this.#run.context, this.#run.graphInputs, this.#contextValues);
     } finally {
-      root.#totalCost += processor.#totalCost;
+      root.#run.totalCost += processor.#run.totalCost;
       unwireLifecycle();
       unwireEvents();
-      root.#subprocessors.delete(processor);
+      root.#run.subprocessors.delete(processor);
     }
   }
 
@@ -2952,25 +2801,25 @@ export class GraphProcessor {
   }
 
   #getSubprocessorNodeErrors(processor: GraphProcessor | undefined): Array<{ error: Error | string; node: ChartNode }> {
-    if (!processor || !processor.#erroredNodes) {
+    if (!processor || !processor.#run.erroredNodes) {
       return [];
     }
 
-    return [...processor.#erroredNodes.entries()].flatMap(([nodeId, nodeError]) => {
+    return [...processor.#run.erroredNodes.entries()].flatMap(([nodeId, nodeError]) => {
       const node = processor.#nodesById[nodeId];
       return node ? [{ error: nodeError, node }] : [];
     });
   }
 
   #recordStreamingWatchFailure(watchNode: ChartNode, error: Error, processor?: GraphProcessor): void {
-    if (this.#streamingWatchFailures.some((failure) => failure.error === error)) {
+    if (this.#boundaries.streamingWatchFailures.some((failure) => failure.error === error)) {
       return;
     }
 
     // The child processor already emitted the precise nodeError before its
     // failure reaches the coordinator. Keep a root-owned failure too so the
     // normal graphError/error lifecycle remains truthful after draining.
-    this.#streamingWatchFailures.push({
+    this.#boundaries.streamingWatchFailures.push({
       error,
       nodeErrors: this.#getSubprocessorNodeErrors(processor),
       triggerNode: watchNode,
@@ -2979,10 +2828,10 @@ export class GraphProcessor {
 
   #getAttachedDataTo(node: ChartNode | NodeId): AttachedNodeData {
     const nodeId = typeof node === 'string' ? node : node.id;
-    let nodeData = this.#attachedNodeData.get(nodeId);
+    let nodeData = this.#run.attachedNodeData.get(nodeId);
     if (nodeData == null) {
       nodeData = {};
-      this.#attachedNodeData.set(nodeId, nodeData);
+      this.#run.attachedNodeData.set(nodeId, nodeData);
     }
     return nodeData;
   }
@@ -2990,9 +2839,9 @@ export class GraphProcessor {
   async #processNode(node: ChartNode, inputValues: Inputs) {
     const processId = nanoid() as ProcessId;
 
-    if (this.#abortController.signal.aborted) {
-      await this.#nodeErrored(node, createGraphAbortErrorFromSignal(this.#abortController.signal), processId);
-      this.#successfulAbortTerminalProcessIds.delete(processId);
+    if (this.#run.abortController.signal.aborted) {
+      await this.#nodeErrored(node, createGraphAbortErrorFromSignal(this.#run.abortController.signal), processId);
+      this.#run.successfulAbortTerminalProcessIds.delete(processId);
       return { processId, shouldQueueOutputNodes: false };
     }
 
@@ -3025,7 +2874,7 @@ export class GraphProcessor {
       await this.#processNormalNode(node, processId, inputValues);
     }
 
-    const successfulAbortTerminal = this.#successfulAbortTerminalProcessIds.delete(processId);
+    const successfulAbortTerminal = this.#run.successfulAbortTerminalProcessIds.delete(processId);
     return { processId, shouldQueueOutputNodes: !successfulAbortTerminal };
   }
 
@@ -3039,13 +2888,13 @@ export class GraphProcessor {
         this.#processNodeWithInputData(n, inputs, idx, pid, partial, markResultAsEditorCacheHit),
       splitRunConcurrency: this.#concurrency.splitRunConcurrency,
       accumulateCost: (output) => this.#accumulateCost(output),
-      setNodeResults: (nodeId, outputs) => this.#nodeResults.set(nodeId, outputs),
-      markNodeVisited: (nodeId) => this.#visitedNodes.add(nodeId),
+      setNodeResults: (nodeId, outputs) => this.#run.nodeResults.set(nodeId, outputs),
+      markNodeVisited: (nodeId) => this.#run.visitedNodes.add(nodeId),
       nodeErrored: (n, err, pid, durationMs, splitRunDurationMs, resultOrigin, splitOutputs) =>
         this.#nodeErrored(n, err, pid, durationMs, splitRunDurationMs, resultOrigin, undefined, splitOutputs),
       takeFailureOutputs: (pid, index) => this.#takeFailureOutputs(pid, index),
       isAborted: () => this.#lifecycle.isAborted,
-      getAbortError: () => createGraphAbortErrorFromSignal(this.#abortController.signal),
+      getAbortError: () => createGraphAbortErrorFromSignal(this.#run.abortController.signal),
       emit: (event, data) => {
         if (event === 'partialOutput') {
           emitDetached(this.#emitter, event, this.#withExecution(data));
@@ -3089,8 +2938,8 @@ export class GraphProcessor {
     );
 
     const timingStart = this.#startNodeTiming();
-    this.#nodeResults.set(node.id, outputValues);
-    this.#visitedNodes.add(node.id);
+    this.#run.nodeResults.set(node.id, outputValues);
+    this.#run.visitedNodes.add(node.id);
     this.#accumulateCost(outputValues);
     await this.#applyFrozenNodeDataflowEffects(node, outputValues, processId);
     this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
@@ -3113,17 +2962,17 @@ export class GraphProcessor {
   }
 
   async #applyFrozenNodeDataflowEffects(node: ChartNode, outputValues: Outputs, processId: ProcessId): Promise<void> {
-    const effect = applyFrozenGraphBoundaryEffects(this.#graphOutputs, node, outputValues);
+    const effect = applyFrozenGraphBoundaryEffects(this.#run.graphOutputs, node, outputValues);
     if (!effect) {
       return;
     }
 
     if (effect.type === 'setStoredValue') {
-      await this.#storedValueController.seed(effect.key, effect.value);
+      await this.#shared.storedValueController.seed(effect.key, effect.value);
       return;
     }
 
-    this.#globals.set(effect.variableId, effect.value);
+    this.#shared.globals.set(effect.variableId, effect.value);
     emitDetached(
       this.#emitter,
       'globalSet',
@@ -3160,8 +3009,8 @@ export class GraphProcessor {
         },
       );
 
-      this.#nodeResults.set(node.id, outputValues);
-      this.#visitedNodes.add(node.id);
+      this.#run.nodeResults.set(node.id, outputValues);
+      this.#run.visitedNodes.add(node.id);
       this.#accumulateCost(outputValues);
       this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
       const stopClaim = this.#claimStreamingWatchStopFromInvocation(node, outputValues);
@@ -3206,7 +3055,7 @@ export class GraphProcessor {
     splitOutputs?: Record<number, Outputs>,
   ): Promise<void> {
     const error = getError(e);
-    for (const route of this.#inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error });
+    for (const route of this.#boundaries.inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error });
     // Most callers are ordinary (non-split) node executions. Let those retain
     // any checkpoint without requiring every error path to know about the
     // internal map. Split callers provide their per-index map explicitly.
@@ -3220,7 +3069,7 @@ export class GraphProcessor {
 
     this.#cancelStreamingOutputWatchesForSource(node.id);
     this.#cancelStreamingCatchesForSource(node.id);
-    this.#erroredNodes.set(node.id, error);
+    this.#run.erroredNodes.set(node.id, error);
     await this.#emitter.emit(
       'nodeError',
       this.#withExecution(
@@ -3250,20 +3099,20 @@ export class GraphProcessor {
   }
 
   #setFailureOutputs(processId: ProcessId, index: number, outputs: Outputs): void {
-    let outputsByIndex = this.#failureOutputsByProcessId.get(processId);
+    let outputsByIndex = this.#run.failureOutputsByProcessId.get(processId);
     if (!outputsByIndex) {
       outputsByIndex = new Map();
-      this.#failureOutputsByProcessId.set(processId, outputsByIndex);
+      this.#run.failureOutputsByProcessId.set(processId, outputsByIndex);
     }
     outputsByIndex.set(index, outputs);
   }
 
   #takeFailureOutputs(processId: ProcessId, index: number): Outputs | undefined {
-    const outputsByIndex = this.#failureOutputsByProcessId.get(processId);
+    const outputsByIndex = this.#run.failureOutputsByProcessId.get(processId);
     const outputs = outputsByIndex?.get(index);
     outputsByIndex?.delete(index);
     if (outputsByIndex?.size === 0) {
-      this.#failureOutputsByProcessId.delete(processId);
+      this.#run.failureOutputsByProcessId.delete(processId);
     }
     return outputs;
   }
@@ -3283,7 +3132,7 @@ export class GraphProcessor {
     }
 
     if (isSuccessfulNonRaceGraphAbortReason(abortReason)) {
-      this.#successfulAbortTerminalProcessIds.add(processId);
+      this.#run.successfulAbortTerminalProcessIds.add(processId);
       return SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON;
     }
 
@@ -3293,7 +3142,7 @@ export class GraphProcessor {
           ? RACE_LOSER_EXCLUSION_REASON
           : SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON;
       if (exclusionReason === SUCCESSFUL_GRAPH_ABORT_EXCLUSION_REASON) {
-        this.#successfulAbortTerminalProcessIds.add(processId);
+        this.#run.successfulAbortTerminalProcessIds.add(processId);
       }
       return exclusionReason;
     }
@@ -3336,7 +3185,7 @@ export class GraphProcessor {
   raiseEvent(event: string, data: DataValue) {
     emitDetached(this.#emitter, `userEvent:${event}`, data);
 
-    for (const subprocessor of this.#subprocessors) {
+    for (const subprocessor of this.#run.subprocessors) {
       subprocessor.raiseEvent(event, data);
     }
   }
@@ -3348,9 +3197,9 @@ export class GraphProcessor {
   }
 
   #registerNodeAbortController(nodeId: NodeId, abortController: AbortController): void {
-    const existingAbortControllers = this.#nodeAbortControllers.get(nodeId);
+    const existingAbortControllers = this.#run.nodeAbortControllers.get(nodeId);
     if (!existingAbortControllers) {
-      this.#nodeAbortControllers.set(nodeId, abortController);
+      this.#run.nodeAbortControllers.set(nodeId, abortController);
       return;
     }
 
@@ -3363,17 +3212,17 @@ export class GraphProcessor {
       return;
     }
 
-    this.#nodeAbortControllers.set(nodeId, new Set([existingAbortControllers, abortController]));
+    this.#run.nodeAbortControllers.set(nodeId, new Set([existingAbortControllers, abortController]));
   }
 
   #unregisterNodeAbortController(nodeId: NodeId, abortController: AbortController): void {
-    const existingAbortControllers = this.#nodeAbortControllers.get(nodeId);
+    const existingAbortControllers = this.#run.nodeAbortControllers.get(nodeId);
     if (!existingAbortControllers) {
       return;
     }
 
     if (existingAbortControllers === abortController) {
-      this.#nodeAbortControllers.delete(nodeId);
+      this.#run.nodeAbortControllers.delete(nodeId);
       return;
     }
 
@@ -3383,14 +3232,14 @@ export class GraphProcessor {
 
     existingAbortControllers.delete(abortController);
     if (existingAbortControllers.size === 0) {
-      this.#nodeAbortControllers.delete(nodeId);
+      this.#run.nodeAbortControllers.delete(nodeId);
     } else if (existingAbortControllers.size === 1) {
-      this.#nodeAbortControllers.set(nodeId, existingAbortControllers.values().next().value!);
+      this.#run.nodeAbortControllers.set(nodeId, existingAbortControllers.values().next().value!);
     }
   }
 
   #abortNodeControllersForNode(nodeId: NodeId, traceMessage?: string, reason?: unknown): void {
-    const abortControllerEntry = this.#nodeAbortControllers.get(nodeId);
+    const abortControllerEntry = this.#run.nodeAbortControllers.get(nodeId);
     if (!abortControllerEntry) {
       return;
     }
@@ -3412,7 +3261,7 @@ export class GraphProcessor {
   }
 
   #abortActiveNodeControllers(reason?: unknown): void {
-    for (const nodeId of [...this.#nodeAbortControllers.keys()]) {
+    for (const nodeId of [...this.#run.nodeAbortControllers.keys()]) {
       this.#abortNodeControllersForNode(nodeId, undefined, reason);
     }
   }
@@ -3433,8 +3282,8 @@ export class GraphProcessor {
     const instance = this.#nodeInstances[node.id]!;
     const nodeAbortController = this.#newAbortController();
     this.#registerNodeAbortController(node.id, nodeAbortController);
-    if (this.#abortController.signal.aborted) {
-      nodeAbortController.abort(getAbortSignalReason(this.#abortController.signal));
+    if (this.#run.abortController.signal.aborted) {
+      nodeAbortController.abort(getAbortSignalReason(this.#run.abortController.signal));
     }
     let continuationFinalized = false;
     try {
@@ -3470,7 +3319,7 @@ export class GraphProcessor {
       const abortReason = getGraphAbortReasonFromSignal(nodeAbortController.signal);
       if (nodeAbortController.signal.aborted) {
         if (isSuccessfulNonRaceGraphAbortReason(abortReason)) {
-          this.#successfulAbortTerminalProcessIds.add(processId);
+          this.#run.successfulAbortTerminalProcessIds.add(processId);
           this.#discardFailureOutputs(processId, index);
           return results;
         } else {
@@ -3491,7 +3340,7 @@ export class GraphProcessor {
   }
 
   #getTokenizer() {
-    return this.#context.tokenizer;
+    return this.#run.context.tokenizer;
   }
 
   #createNodeProcessContext(
@@ -3507,15 +3356,15 @@ export class GraphProcessor {
     const plugin = this.#registry.getPluginFor(node.type);
     const acceptsPartialOutputs = () => {
       if (nodeAbortController.signal.aborted) return false;
-      const active = this.#nodeAbortControllers.get(node.id);
+      const active = this.#run.nodeAbortControllers.get(node.id);
       return active === nodeAbortController || (active instanceof Set && active.has(nodeAbortController));
     };
     const onGraphOutputPartial =
       canForwardGraphCallerOutputPartials(node) &&
-      (this.#streamingWatchPlansBySourceNodeId.has(node.id) ||
-        this.#streamingCatchPlansBySourceNodeId.has(node.id) ||
-        this.#inputStreamRoutes.has(node.id) ||
-        this.#graphOutputPartialBindingsBySourceNodeId.has(node.id))
+      (this.#boundaries.streamingWatchPlansBySourceNodeId.has(node.id) ||
+        this.#boundaries.streamingCatchPlansBySourceNodeId.has(node.id) ||
+        this.#boundaries.inputStreamRoutes.has(node.id) ||
+        this.#boundaries.graphOutputPartialBindingsBySourceNodeId.has(node.id))
         ? (partialOutputs: Outputs) => {
             if (!acceptsPartialOutputs()) return;
             this.#publishStreamingOutputWatchPartial(node, partialOutputs);
@@ -3533,18 +3382,18 @@ export class GraphProcessor {
     const processContext = buildNodeProcessContext({
       activeOutputPortIds: this.#getActiveOutputPortIds(node),
       attachedData: this.#getAttachedDataTo(node),
-      base: this.#nodeProcessContextBase,
+      base: this.#run.nodeProcessContextBase,
       createSubProcessor: (subGraphId, options = {}) =>
         this.#createSubProcessor(node, index, processId, subGraphId, options),
       execution: this.#buildExecutionMetadata(),
       externalFunctions: this.#externalFunctions,
-      getPluginConfig: (name) => getPluginConfig(plugin, this.#context.settings, name),
+      getPluginConfig: (name) => getPluginConfig(plugin, this.#run.context.settings, name),
       isDirectRunTarget: this.runToNodeIds?.includes(node.id) ?? false,
       markResultAsEditorCacheHit,
       node,
       nodeAbortController,
       onGraphOutputPartial,
-      graphInputStreams: this.#callerInputStreams.get(node.id),
+      graphInputStreams: this.#boundaries.callerInputStreams.get(node.id),
       onPartialOutputs: (partialOutputs) => {
         if (!acceptsPartialOutputs()) return;
         partialOutput?.(node, partialOutputs, index);
@@ -3573,7 +3422,7 @@ export class GraphProcessor {
       },
       splitIndex: node.isSplitRun ? index : 0,
       setGlobal: (id, value) => {
-        this.#globals.set(id, value);
+        this.#shared.globals.set(id, value);
         emitDetached(this.#emitter, 'globalSet', this.#withExecution({ id, value, processId }));
       },
       toolCallContinuation,
@@ -3605,7 +3454,7 @@ export class GraphProcessor {
     });
     if (node.type === 'subGraph' && (node as SubGraphNode).data.targetProjectId) {
       const data = (node as SubGraphNode).data;
-      processContext.subgraphTarget = this.#subgraphTargetCache.get(
+      processContext.subgraphTarget = this.#shared.subgraphTargetCache.get(
         getSubgraphProjectKey({
           projectId: data.targetProjectId!,
           version: data.targetVersion ?? 'latest',
@@ -3676,9 +3525,9 @@ export class GraphProcessor {
       },
       commit: (invocation) => {
         for (const [nodeId, outputs] of invocation.latestOutputs) {
-          this.#nodeResults.set(nodeId, outputs);
-          this.#visitedNodes.add(nodeId);
-          this.#remainingNodes.delete(nodeId);
+          this.#run.nodeResults.set(nodeId, outputs);
+          this.#run.visitedNodes.add(nodeId);
+          this.#run.remainingNodes.delete(nodeId);
           this.#continuationCompletionOwnerByNodeId.set(nodeId, invocation.llmNodeId);
         }
       },
@@ -3798,11 +3647,12 @@ export class GraphProcessor {
           }),
         ),
       getActiveOutputPortIds: (node) => this.#getActiveOutputPortIds(node),
-      getContinuationBranchBoundaryNodeIds: (llmNode) => new Set<NodeId>([llmNode.id, ...this.#currentlyProcessing]),
+      getContinuationBranchBoundaryNodeIds: (llmNode) =>
+        new Set<NodeId>([llmNode.id, ...this.#run.currentlyProcessing]),
       hasPreloadedOrFrozenDelegateOutput: (node, inputs, processId) =>
-        this.#nodeResults.has(node.id) || this.#resolveFrozenNodeOutputs(node, inputs, processId) != null,
+        this.#run.nodeResults.has(node.id) || this.#resolveFrozenNodeOutputs(node, inputs, processId) != null,
       registerNodeAbortController: (nodeId, controller) => this.#registerNodeAbortController(nodeId, controller),
-      rootAbortSignal: this.#abortController.signal,
+      rootAbortSignal: this.#run.abortController.signal,
       unregisterNodeAbortController: (nodeId, controller) => this.#unregisterNodeAbortController(nodeId, controller),
       startNodeTiming: () => this.#startNodeTiming(),
       waitUntilUnpaused: () => this.#waitUntilUnpaused(),
@@ -3844,9 +3694,9 @@ export class GraphProcessor {
     const branchRuntimeCache: GraphProcessorRuntimeCache = {
       ...this.#runtimeCache,
       graphBoundaries: undefined,
-      loadedProjects: { ...this.#loadedProjects },
+      loadedProjects: { ...this.#run.loadedProjects },
     };
-    const branchGraphOutputs = createGraphOutputsOverlay(this.#graphOutputs);
+    const branchGraphOutputs = createGraphOutputsOverlay(this.#run.graphOutputs);
     const processor = new GraphProcessor(this.#project, graphId, this.#registry, this.#includeTrace, {
       cacheLoadedProjects: true,
       captureNodeTimings: this.#captureNodeTimings,
@@ -3860,8 +3710,7 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
-    processor.#subgraphTargetCache = this.#subgraphTargetCache;
-    processor.#executionCache = this.#executionCache;
+    processor.#shared = this.#shared;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
@@ -3869,24 +3718,21 @@ export class GraphProcessor {
     processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = this.#abortOwnerOverride ?? this;
     processor.#sameGraphRunOwnerOverride = this.#sameGraphRunOwnerOverride ?? this;
-    processor.#globals = this.#globals;
-    processor.#storedValueController = this.#storedValueController;
-    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
     processor.#suppressGraphLifecycleEvents = true;
     processor.#sharedRunStateOverride = {
-      attachedNodeData: this.#attachedNodeData,
-      graphInputNodeValues: this.#graphInputNodeValues,
+      attachedNodeData: this.#run.attachedNodeData,
+      graphInputNodeValues: this.#run.graphInputNodeValues,
       graphOutputs: branchGraphOutputs.view,
     };
     const branchNodeIds = new Set(branchPlan.graph.nodes.map((node) => node.id));
     const branchRunToNodeIds = this.runToNodeIds?.filter((nodeId) => branchNodeIds.has(nodeId));
     processor.runToNodeIds = branchRunToNodeIds?.length ? branchRunToNodeIds : undefined;
     processor.#executionIdentityOverride = {
-      rootRunId: this.#rootRunId,
-      graphRunId: this.#graphRunId,
-      parentGraphRunId: this.#parentGraphRunId,
+      rootRunId: this.#run.rootRunId,
+      graphRunId: this.#run.graphRunId,
+      parentGraphRunId: this.#run.parentGraphRunId,
     };
 
     for (const [nodeId, outputs] of branchPlan.preloadedOutputs) {
@@ -3907,7 +3753,7 @@ export class GraphProcessor {
     const unwireLifecycle = wireSubprocessorLifecycle(processor, {
       autoCleanup: false,
       signal,
-      parentAbortSignal: this.#abortController.signal,
+      parentAbortSignal: this.#run.abortController.signal,
       onParentPause: (listener) => {
         this.on('pause', listener);
         return () => {
@@ -3921,13 +3767,13 @@ export class GraphProcessor {
         };
       },
     });
-    this.#subprocessors.add(processor);
+    this.#run.subprocessors.add(processor);
 
     try {
       if (signal.aborted) {
         throw createGraphAbortErrorFromSignal(signal, 'Tool continuation branch aborted');
       }
-      await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
+      await processor.processGraph(this.#run.context, this.#run.graphInputs, this.#contextValues);
       if (!deferGraphOutputCommit) {
         this.#commitContinuationGraphOutputs(branchGraphOutputs.writes);
       }
@@ -3936,18 +3782,18 @@ export class GraphProcessor {
         nodeOutputs: this.#getContinuationBranchResults(processor, branchPlan),
       };
     } finally {
-      this.#totalCost += processor.#totalCost;
+      this.#run.totalCost += processor.#run.totalCost;
       unwireLifecycle();
       unwireEvents();
-      this.#subprocessors.delete(processor);
+      this.#run.subprocessors.delete(processor);
     }
   }
 
   #commitContinuationGraphOutputs(writes: GraphOutputs): void {
     for (const [outputId, value] of Object.entries(writes)) {
-      const existingValue = this.#graphOutputs[outputId];
+      const existingValue = this.#run.graphOutputs[outputId];
       if (existingValue == null || existingValue.type === 'control-flow-excluded') {
-        this.#graphOutputs[outputId] = value;
+        this.#run.graphOutputs[outputId] = value;
       }
     }
   }
@@ -3957,8 +3803,8 @@ export class GraphProcessor {
     branchPlan: ToolCallContinuationBranchPlan,
   ): Map<NodeId, Outputs> {
     const results = new Map<NodeId, Outputs>();
-    for (const [nodeId, outputs] of processor.#nodeResults) {
-      if (branchPlan.preloadedOutputs.has(nodeId) || !processor.#visitedNodes.has(nodeId)) {
+    for (const [nodeId, outputs] of processor.#run.nodeResults) {
+      if (branchPlan.preloadedOutputs.has(nodeId) || !processor.#run.visitedNodes.has(nodeId)) {
         continue;
       }
       results.set(nodeId, outputs);
@@ -3983,10 +3829,10 @@ export class GraphProcessor {
       sourceNode,
       sourceOutputs,
       state: {
-        erroredNodeIds: new Set(this.#erroredNodes.keys()),
-        nodeOutputs: this.#nodeResults,
+        erroredNodeIds: new Set(this.#run.erroredNodes.keys()),
+        nodeOutputs: this.#run.nodeResults,
         runToRelevantNodeIds: this.#getExecutionRelevantNodeIds(),
-        visitedNodeIds: this.#visitedNodes,
+        visitedNodeIds: this.#run.visitedNodes,
       },
     });
   }
@@ -3994,7 +3840,7 @@ export class GraphProcessor {
   #createToolCallContinuationBranchPlanner(): ToolCallContinuationBranchPlanner {
     return createToolCallContinuationBranchPlanner({
       asyncBranchPlansByTriggerNodeId: this.#asyncBranchPlansByTriggerNodeId,
-      attachedNodeDataByNodeId: this.#attachedNodeData,
+      attachedNodeDataByNodeId: this.#run.attachedNodeData,
       effectiveConnections: this.#getEffectiveConnections(),
       graph: this.#getExecutionGraph(),
       isDefinitionValidConnection: (connection) => this.#isDefinitionValidConnection(connection),
@@ -4077,7 +3923,7 @@ export class GraphProcessor {
             `"${enclosingWatchInvocation.plan.watchNode.title}". A Watch branch cannot contain another Watch, including through Subgraph.`,
         );
       }
-      if (this.#nodeResults.has(watchNode.id)) {
+      if (this.#run.nodeResults.has(watchNode.id)) {
         throw new Error(
           `Cannot preload ${watchNode.title} because a streaming boundary must be scheduled. ` +
             "Run from Watch Streaming Output to reuse a producer's saved final value, or run from the producer to stream again.",
@@ -4088,7 +3934,7 @@ export class GraphProcessor {
       if (incoming.length === 0) {
         // An unattached Watch is an ordinary in-progress authoring state. Keep
         // it dormant rather than making an incomplete canvas fail to run.
-        this.#ignoreNodes.add(watchNode.id);
+        this.#run.ignoreNodes.add(watchNode.id);
         continue;
       }
       if (incoming.length !== 1 || incoming[0]!.inputId !== ('stream' as PortId)) {
@@ -4173,7 +4019,7 @@ export class GraphProcessor {
       if (branchNodeIds.size === 0) {
         // Source -> Watch is also a useful intermediate authoring state. There
         // is no downstream work to schedule yet, so do not create a coordinator.
-        this.#ignoreNodes.add(watchNode.id);
+        this.#run.ignoreNodes.add(watchNode.id);
         continue;
       }
 
@@ -4233,19 +4079,19 @@ export class GraphProcessor {
         historySummaryEmitted: false,
         unmatchedStopResolved: false,
       };
-      const plans = this.#streamingWatchPlansBySourceNodeId.get(sourceNode.id) ?? [];
+      const plans = this.#boundaries.streamingWatchPlansBySourceNodeId.get(sourceNode.id) ?? [];
       plans.push(plan);
-      this.#streamingWatchPlansBySourceNodeId.set(sourceNode.id, plans);
-      this.#streamingWatchPlansByWatchNodeId.set(watchNode.id, plan);
+      this.#boundaries.streamingWatchPlansBySourceNodeId.set(sourceNode.id, plans);
+      this.#boundaries.streamingWatchPlansByWatchNodeId.set(watchNode.id, plan);
 
       const watch = new StreamingOutputWatch(
         watchNode.data as Partial<StreamingOutputWatchOptions>,
         (snapshot, registerCancel) => this.#runStreamingOutputWatchInvocation(plan, snapshot, registerCancel),
         (error) => this.#recordStreamingWatchFailure(watchNode, error),
       );
-      this.#streamingOutputWatches.set(watchNode.id, watch);
+      this.#boundaries.streamingOutputWatches.set(watchNode.id, watch);
       for (const nodeId of [watchNode.id, ...branchNodeIds]) {
-        this.#ignoreNodes.add(nodeId);
+        this.#run.ignoreNodes.add(nodeId);
       }
     }
 
@@ -4262,13 +4108,13 @@ export class GraphProcessor {
         continue;
       // A saved Catch result is an ordinary once-only value. Run-from may reuse
       // it, but a live Catch still needs its own streaming coordinator.
-      if (this.#nodeResults.has(node.id)) continue;
+      if (this.#run.nodeResults.has(node.id)) continue;
       if (node.isConditional || node.isSplitRun) {
         throw new Error(`Catch streaming chunks "${node.title}" cannot use Conditional or Many runs.`);
       }
       const incoming = connections.filter((connection) => connection.inputNodeId === node.id);
       if (incoming.length === 0) {
-        this.#ignoreNodes.add(node.id);
+        this.#run.ignoreNodes.add(node.id);
         continue;
       }
       if (incoming.length !== 1 || incoming[0]!.inputId !== ('stream' as PortId)) {
@@ -4291,10 +4137,10 @@ export class GraphProcessor {
         chunks: [],
         settled: false,
       };
-      const plans = this.#streamingCatchPlansBySourceNodeId.get(source.id) ?? [];
+      const plans = this.#boundaries.streamingCatchPlansBySourceNodeId.get(source.id) ?? [];
       plans.push(plan);
-      this.#streamingCatchPlansBySourceNodeId.set(source.id, plans);
-      this.#ignoreNodes.add(node.id);
+      this.#boundaries.streamingCatchPlansBySourceNodeId.set(source.id, plans);
+      this.#run.ignoreNodes.add(node.id);
     }
   }
 
@@ -4326,7 +4172,7 @@ export class GraphProcessor {
       );
     }
 
-    for (const [sourceNodeId, plans] of this.#streamingWatchPlansBySourceNodeId) {
+    for (const [sourceNodeId, plans] of this.#boundaries.streamingWatchPlansBySourceNodeId) {
       for (const plan of plans) {
         if (sourceNodeId === node.id || plan.graph.nodes.some((branchNode) => branchNode.id === node.id)) {
           throw new Error(
@@ -4353,7 +4199,7 @@ export class GraphProcessor {
       }
     }
 
-    for (const [sourceNodeId, plans] of this.#streamingWatchPlansBySourceNodeId) {
+    for (const [sourceNodeId, plans] of this.#boundaries.streamingWatchPlansBySourceNodeId) {
       const sourceOutputs = this.#preloadedNodeResults.get(sourceNodeId);
       for (const plan of plans) {
         const preloadedBranchNode = plan.graph.nodes.find(
@@ -4379,7 +4225,7 @@ export class GraphProcessor {
   }
 
   #publishStreamingOutputWatchPartial(node: ChartNode, partialOutputs: Outputs, coalesced = 0): void {
-    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
+    for (const plan of this.#boundaries.streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
       if (plan.settled) continue;
       const value = partialOutputs[plan.sourceOutputId];
       if (!value || value.type === 'control-flow-excluded') continue;
@@ -4387,12 +4233,12 @@ export class GraphProcessor {
       plan.chunks.push(chunk);
       if (plan.chunks.length >= plan.count) this.#scheduleStreamingCatchCompletion(plan);
     }
-    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+    for (const plan of this.#boundaries.streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
       const value = partialOutputs[plan.sourceOutputId];
       if (value == null || value.type === 'control-flow-excluded') {
         continue;
       }
-      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+      const watch = this.#boundaries.streamingOutputWatches.get(plan.watchNode.id);
       if (!watch || watch.stopped) {
         continue;
       }
@@ -4409,15 +4255,15 @@ export class GraphProcessor {
     const task = this.#completeStreamingCatch(plan).catch((error: unknown) =>
       this.#nodeErrored(plan.node, error, nanoid() as ProcessId),
     );
-    this.#streamingCatchTasks.add(task);
+    this.#boundaries.streamingCatchTasks.add(task);
     void task.then(
-      () => this.#streamingCatchTasks.delete(task),
-      () => this.#streamingCatchTasks.delete(task),
+      () => this.#boundaries.streamingCatchTasks.delete(task),
+      () => this.#boundaries.streamingCatchTasks.delete(task),
     );
   }
 
   async #completeStreamingCatch(plan: StreamingOutputCatchPlan): Promise<void> {
-    if (this.#abortController.signal.aborted) return;
+    if (this.#run.abortController.signal.aborted) return;
     const node = plan.node;
     const processId = nanoid() as ProcessId;
     const chunks = plan.chunks.slice(0, plan.count);
@@ -4429,10 +4275,10 @@ export class GraphProcessor {
       'nodeStart',
       this.#withExecution({ node, inputs: {}, processId, resultOrigin: 'executed' as const }),
     );
-    if (this.#abortController.signal.aborted) return;
-    this.#nodeResults.set(node.id, outputs);
-    this.#visitedNodes.add(node.id);
-    this.#remainingNodes.delete(node.id);
+    if (this.#run.abortController.signal.aborted) return;
+    this.#run.nodeResults.set(node.id, outputs);
+    this.#run.visitedNodes.add(node.id);
+    this.#run.remainingNodes.delete(node.id);
     await this.#emitter.emit(
       'nodeFinish',
       this.#withExecution({ node, outputs, processId, resultOrigin: 'executed' as const }),
@@ -4444,10 +4290,7 @@ export class GraphProcessor {
   }
 
   async #drainStreamingCatchTasks(): Promise<void> {
-    while (this.#streamingCatchTasks.size > 0) {
-      await Promise.all([...this.#streamingCatchTasks]);
-      await this.#processingQueue.onIdle();
-    }
+    await this.#boundaries.drainCatchTasks(() => this.#run.processingQueue.onIdle());
   }
 
   #prepareGraphInputStreamRoutes(): void {
@@ -4456,7 +4299,7 @@ export class GraphProcessor {
     const marked = getProjectStreamingOutputWatchConnections({
       project: this.#project,
       graph: this.#graph,
-      referencedProjects: this.#loadedProjects,
+      referencedProjects: this.#run.loadedProjects,
       registry: this.#registry,
       fullGraphCallers: new Set(this.runToNodeIds ?? []),
       isNodeFrozen: (_owner, candidate, node) =>
@@ -4497,31 +4340,33 @@ export class GraphProcessor {
           continue;
         const relay = new GraphInputStreamRelay();
         streams[edge.inputId] = relay;
-        const routes = this.#inputStreamRoutes.get(source.id) ?? [];
+        const routes = this.#boundaries.inputStreamRoutes.get(source.id) ?? [];
         routes.push({ port: edge.outputId, relay });
-        this.#inputStreamRoutes.set(source.id, routes);
+        this.#boundaries.inputStreamRoutes.set(source.id, routes);
       }
-      if (Object.keys(streams).length) this.#callerInputStreams.set(node.id, streams);
+      if (Object.keys(streams).length) this.#boundaries.callerInputStreams.set(node.id, streams);
     }
     const abort = () => {
-      const error = createGraphAbortErrorFromSignal(this.#abortController.signal);
-      for (const streams of this.#callerInputStreams.values()) {
+      const error = createGraphAbortErrorFromSignal(this.#run.abortController.signal);
+      for (const streams of this.#boundaries.callerInputStreams.values()) {
         for (const relay of Object.values(streams)) relay.finish({ error });
       }
     };
-    this.#abortController.signal.addEventListener('abort', abort, { once: true });
-    this.#inputStreamDisposers.push(() => this.#abortController.signal.removeEventListener('abort', abort));
+    this.#run.abortController.signal.addEventListener('abort', abort, { once: true });
+    this.#boundaries.inputStreamDisposers.push(() =>
+      this.#run.abortController.signal.removeEventListener('abort', abort),
+    );
   }
 
   #publishGraphInputStreamPartial(node: ChartNode, outputs: Outputs, coalesced = 0): void {
-    for (const { port, relay } of this.#inputStreamRoutes.get(node.id) ?? []) {
+    for (const { port, relay } of this.#boundaries.inputStreamRoutes.get(node.id) ?? []) {
       const value = outputs[port];
       if (value && value.type !== 'control-flow-excluded') relay.publish(value, coalesced);
     }
   }
 
   #subscribeGraphInputStreams(): void {
-    for (const [name, stream] of Object.entries(this.#graphInputStreams)) {
+    for (const [name, stream] of Object.entries(this.#boundaries.graphInputStreams)) {
       const inputs = this.#executionGraphNodes.filter(
         (node): node is GraphInputNode =>
           node.type === 'graphInput' &&
@@ -4531,7 +4376,7 @@ export class GraphProcessor {
       );
       let active = true;
       const unsubscribe = stream.subscribe((value, coalesced) => {
-        if (!active || this.#abortController.signal.aborted) return;
+        if (!active || this.#run.abortController.signal.aborted) return;
         for (const node of inputs) {
           if (!canStreamThroughGraphInput(node) || this.#hasFrozenNodeOutputOrUnknownResolver(node)) continue;
           const output = {
@@ -4541,25 +4386,26 @@ export class GraphProcessor {
           this.#publishGraphInputStreamPartial(node, output, coalesced);
         }
       });
-      this.#inputStreamDisposers.push(() => {
+      this.#boundaries.inputStreamDisposers.push(() => {
         active = false;
         unsubscribe();
       });
       void stream.settled.then((result) => {
-        if (!active || this.#abortController.signal.aborted) return;
-        if (result.value) this.#graphInputs[name] = result.value;
-        for (const node of inputs) void this.#processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
+        if (!active || this.#run.abortController.signal.aborted) return;
+        if (result.value) this.#run.graphInputs[name] = result.value;
+        for (const node of inputs)
+          void this.#run.processingQueue.add(() => this.#processNodeIfAllInputsAvailable(node));
       });
     }
   }
 
   async #waitForGraphInputStreams(): Promise<void> {
-    const signal = this.#abortController.signal;
+    const signal = this.#run.abortController.signal;
     if (signal.aborted) throw createGraphAbortErrorFromSignal(signal);
     let abort!: () => void;
     try {
       await Promise.race([
-        Promise.all(Object.values(this.#graphInputStreams).map((stream) => stream.settled)),
+        Promise.all(Object.values(this.#boundaries.graphInputStreams).map((stream) => stream.settled)),
         new Promise<never>((_resolve, reject) => {
           abort = () => reject(createGraphAbortErrorFromSignal(signal));
           signal.addEventListener('abort', abort, { once: true });
@@ -4614,13 +4460,13 @@ export class GraphProcessor {
       ) {
         continue;
       }
-      const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(connection.outputNodeId) ?? [];
+      const bindings = this.#boundaries.graphOutputPartialBindingsBySourceNodeId.get(connection.outputNodeId) ?? [];
       bindings.push({
         dataType: graphOutputData.dataType,
         graphOutputId: graphOutputData.id,
         sourceOutputId: connection.outputId,
       });
-      this.#graphOutputPartialBindingsBySourceNodeId.set(connection.outputNodeId, bindings);
+      this.#boundaries.graphOutputPartialBindingsBySourceNodeId.set(connection.outputNodeId, bindings);
     }
   }
 
@@ -4645,7 +4491,7 @@ export class GraphProcessor {
    */
   #publishGraphOutputPartial(node: ChartNode, partialOutputs: Outputs): void {
     const listener = this.#graphOutputPartialListener;
-    const bindings = this.#graphOutputPartialBindingsBySourceNodeId.get(node.id);
+    const bindings = this.#boundaries.graphOutputPartialBindingsBySourceNodeId.get(node.id);
     if (!listener || !bindings) {
       return;
     }
@@ -4666,16 +4512,17 @@ export class GraphProcessor {
 
   #finishStreamingOutputWatches(node: ChartNode, outputs: Outputs): void {
     if (node.type === 'graphInput') {
-      const terminals = Object.values(this.#graphInputStreams).map((stream) => stream.result);
+      const terminals = Object.values(this.#boundaries.graphInputStreams).map((stream) => stream.result);
       if (terminals.some((result) => !result)) {
         // Defaults/non-streamed arguments may be needed for caller startup, but
         // their final Watch delivery must not release ordinary nested work early.
-        this.#pendingGraphInputFinals.set(node.id, cloneExecutionOutputs(outputs));
+        this.#boundaries.pendingGraphInputFinals.set(node.id, cloneExecutionOutputs(outputs));
         return;
       }
       const failure = terminals.find((result) => result?.error);
       if (failure?.error) {
-        for (const route of this.#inputStreamRoutes.get(node.id) ?? []) route.relay.finish({ error: failure.error });
+        for (const route of this.#boundaries.inputStreamRoutes.get(node.id) ?? [])
+          route.relay.finish({ error: failure.error });
         this.#cancelStreamingOutputWatchesForSource(node.id);
         this.#cancelStreamingCatchesForSource(node.id);
         return;
@@ -4686,7 +4533,7 @@ export class GraphProcessor {
         );
       }
     }
-    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
+    for (const plan of this.#boundaries.streamingCatchPlansBySourceNodeId.get(node.id) ?? []) {
       if (plan.settled) continue;
       const finalValue = outputs[plan.sourceOutputId];
       if (finalValue && finalValue.type !== 'control-flow-excluded' && !isEqual(plan.chunks.at(-1), finalValue)) {
@@ -4699,13 +4546,13 @@ export class GraphProcessor {
         this.#excludeNode(plan.node, nanoid() as ProcessId, {}, 'stream completed without a value');
       }
     }
-    for (const { port, relay } of this.#inputStreamRoutes.get(node.id) ?? []) {
+    for (const { port, relay } of this.#boundaries.inputStreamRoutes.get(node.id) ?? []) {
       const value = outputs[port];
       relay.finish(value ? { value } : { error: new Error(`Missing final streamed output ${port}`) });
     }
-    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+    for (const plan of this.#boundaries.streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
       const value = outputs[plan.sourceOutputId];
-      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+      const watch = this.#boundaries.streamingOutputWatches.get(plan.watchNode.id);
       if (!watch || watch.stopped) {
         continue;
       }
@@ -4727,8 +4574,8 @@ export class GraphProcessor {
   }
 
   #assertStreamingOutputWatchFinalOutputs(node: ChartNode, outputs: Outputs): void {
-    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
-      const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+    for (const plan of this.#boundaries.streamingWatchPlansBySourceNodeId.get(node.id) ?? []) {
+      const watch = this.#boundaries.streamingOutputWatches.get(plan.watchNode.id);
       if (!watch || watch.stopped || outputs[plan.sourceOutputId] != null) {
         continue;
       }
@@ -4814,9 +4661,9 @@ export class GraphProcessor {
     registerCancel: (cancel: () => void) => void,
   ): Promise<void> {
     const root = this.getRootProcessor();
-    if (root.#abortController.signal.aborted) {
+    if (root.#run.abortController.signal.aborted) {
       throw createGraphAbortErrorFromSignal(
-        root.#abortController.signal,
+        root.#run.abortController.signal,
         'Streaming watch branch aborted before it started',
       );
     }
@@ -4829,7 +4676,7 @@ export class GraphProcessor {
     const branchRuntimeCache: GraphProcessorRuntimeCache = {
       ...this.#runtimeCache,
       graphBoundaries: undefined,
-      loadedProjects: { ...this.#loadedProjects },
+      loadedProjects: { ...this.#run.loadedProjects },
     };
     const processor = new GraphProcessor(this.#project, graphId, this.#registry, this.#includeTrace, {
       cacheLoadedProjects: true,
@@ -4844,8 +4691,7 @@ export class GraphProcessor {
     });
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
-    processor.#subgraphTargetCache = this.#subgraphTargetCache;
-    processor.#executionCache = this.#executionCache;
+    processor.#shared = this.#shared;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
@@ -4853,22 +4699,19 @@ export class GraphProcessor {
     processor.#graphCallPath = this.#graphCallPath;
     processor.#abortOwnerOverride = root;
     processor.#suppressGraphPartialOutputs = true;
-    processor.#globals = this.#globals;
-    processor.#storedValueController = this.#storedValueController;
-    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
     processor.#suppressGraphLifecycleEvents = true;
     processor.#sharedRunStateOverride = {
       // Repeated node IDs do not imply shared race/loop state between snapshots.
       attachedNodeData: new Map(),
-      graphInputNodeValues: { ...this.#graphInputNodeValues },
+      graphInputNodeValues: { ...this.#run.graphInputNodeValues },
       graphOutputs: {},
     };
     processor.#executionIdentityOverride = {
-      rootRunId: root.#rootRunId,
+      rootRunId: root.#run.rootRunId,
       graphRunId: historyIteration.graphRunId,
-      parentGraphRunId: this.#graphRunId,
+      parentGraphRunId: this.#run.graphRunId,
     };
     processor.#streamingWatchInvocation = {
       plan,
@@ -4914,8 +4757,8 @@ export class GraphProcessor {
     });
     const unwireLifecycle = wireSubprocessorLifecycle(processor, {
       autoCleanup: false,
-      signal: this.#abortController.signal,
-      parentAbortSignal: root.#abortController.signal,
+      signal: this.#run.abortController.signal,
+      parentAbortSignal: root.#run.abortController.signal,
       onParentPause: (listener) => {
         root.on('pause', listener);
         return () => root.off('pause', listener);
@@ -4925,16 +4768,16 @@ export class GraphProcessor {
         return () => root.off('resume', listener);
       },
     });
-    root.#subprocessors.add(processor);
+    root.#run.subprocessors.add(processor);
     try {
       if (root.#lifecycle.isPaused) {
         processor.pause();
       }
-      await processor.processGraph(this.#context, this.#graphInputs, this.#contextValues);
+      await processor.processGraph(this.#run.context, this.#run.graphInputs, this.#contextValues);
     } catch (error) {
       const normalizedError = getError(error);
       const wasCancelled =
-        isAbortLikeError(normalizedError) || root.#abortController.signal.aborted || cancellationRequested;
+        isAbortLikeError(normalizedError) || root.#run.abortController.signal.aborted || cancellationRequested;
       if (wasCancelled) {
         plan.history.cancel(historyIteration);
       } else {
@@ -4951,10 +4794,10 @@ export class GraphProcessor {
         plan.history.cancel(historyIteration);
       }
       plan.history.complete(historyIteration);
-      this.#totalCost += processor.#totalCost;
+      this.#run.totalCost += processor.#run.totalCost;
       unwireLifecycle();
       unwireEvents();
-      root.#subprocessors.delete(processor);
+      root.#run.subprocessors.delete(processor);
     }
   }
 
@@ -4982,7 +4825,7 @@ export class GraphProcessor {
     if (!stopNodeId) {
       return undefined;
     }
-    const watch = this.#streamingOutputWatches.get(plan.watchNode.id);
+    const watch = this.#boundaries.streamingOutputWatches.get(plan.watchNode.id);
     if (!watch || watch.stopped) {
       return undefined;
     }
@@ -4998,9 +4841,9 @@ export class GraphProcessor {
       commit: () => {
         if (committed) return;
         committed = true;
-        this.#nodeResults.set(stopNode.id, { ['value' as PortId]: acceptedValue });
-        this.#visitedNodes.add(stopNode.id);
-        this.#remainingNodes.delete(stopNode.id);
+        this.#run.nodeResults.set(stopNode.id, { ['value' as PortId]: acceptedValue });
+        this.#run.visitedNodes.add(stopNode.id);
+        this.#run.remainingNodes.delete(stopNode.id);
         const attachedData = this.#getAttachedDataTo(stopNode);
         const outputNodes = getOutputNodesFrom(this.#executionState, stopNode);
         this.#propagateAttachedDataToOutputNodes(stopNode, attachedData, outputNodes.connectionsToNodes);
@@ -5010,13 +4853,13 @@ export class GraphProcessor {
   }
 
   #cancelStreamingOutputWatchesForSource(nodeId: NodeId): void {
-    for (const plan of this.#streamingWatchPlansBySourceNodeId.get(nodeId) ?? []) {
-      this.#streamingOutputWatches.get(plan.watchNode.id)?.stop();
+    for (const plan of this.#boundaries.streamingWatchPlansBySourceNodeId.get(nodeId) ?? []) {
+      this.#boundaries.streamingOutputWatches.get(plan.watchNode.id)?.stop();
     }
   }
 
   #cancelStreamingCatchesForSource(nodeId: NodeId): void {
-    for (const plan of this.#streamingCatchPlansBySourceNodeId.get(nodeId) ?? []) {
+    for (const plan of this.#boundaries.streamingCatchPlansBySourceNodeId.get(nodeId) ?? []) {
       if (plan.settled) continue;
       plan.settled = true;
       plan.chunks.length = 0;
@@ -5024,24 +4867,26 @@ export class GraphProcessor {
   }
 
   #cancelStreamingOutputWatches(): void {
-    for (const watch of this.#streamingOutputWatches.values()) {
+    for (const watch of this.#boundaries.streamingOutputWatches.values()) {
       watch.stop();
     }
   }
 
   #hasPendingStreamingOutputWatches(): boolean {
-    return [...this.#streamingOutputWatches.values()].some((watch) => watch.hasPending);
+    return [...this.#boundaries.streamingOutputWatches.values()].some((watch) => watch.hasPending);
   }
 
   #hasUnresolvedForegroundOutputStreamingWatch(): boolean {
-    return [...this.#streamingOutputWatches].some(([watchNodeId, watch]) => {
-      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+    return [...this.#boundaries.streamingOutputWatches].some(([watchNodeId, watch]) => {
+      const plan = this.#boundaries.streamingWatchPlansByWatchNodeId.get(watchNodeId);
       return plan?.stopNodeId != null && !plan.unmatchedStopResolved && !watch.stopped;
     });
   }
 
   #hasDrainableStreamingOutputWatches(): boolean {
-    return [...this.#streamingOutputWatches.values()].some((watch) => watch.hasPending && !watch.isAwaitingProducer);
+    return [...this.#boundaries.streamingOutputWatches.values()].some(
+      (watch) => watch.hasPending && !watch.isAwaitingProducer,
+    );
   }
 
   async #drainSchedulerBoundaries(): Promise<void> {
@@ -5054,28 +4899,28 @@ export class GraphProcessor {
     } while (
       (!this.#isSubProcessor && this.#managedAsyncBranches!.hasPending) ||
       this.#hasDrainableStreamingOutputWatches() ||
-      this.#streamingCatchTasks.size > 0
+      this.#boundaries.streamingCatchTasks.size > 0
     );
   }
 
   async #drainStreamingOutputWatches(): Promise<void> {
     do {
-      for (const watch of this.#streamingOutputWatches.values()) {
+      for (const watch of this.#boundaries.streamingOutputWatches.values()) {
         await watch.drain();
       }
       // Accepting Stop happens in a child run. It can enqueue ordinary parent
       // work after the compatible scheduler has returned, so wait for that work
       // before deciding every Watch boundary is quiet.
-      await this.#processingQueue.onIdle();
+      await this.#run.processingQueue.onIdle();
       this.#resolveUnmatchedStreamingWatchStops();
       // Excluding the parent Stop queues its ordinary downstream nodes. Let
       // their normal control-flow rules run before emitting the settled Watch
       // summary or finalizing the root graph.
-      await this.#processingQueue.onIdle();
+      await this.#run.processingQueue.onIdle();
     } while (this.#hasDrainableStreamingOutputWatches());
 
-    for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
-      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+    for (const [watchNodeId, watch] of this.#boundaries.streamingOutputWatches) {
+      const plan = this.#boundaries.streamingWatchPlansByWatchNodeId.get(watchNodeId);
       if (!plan || plan.historySummaryEmitted || !watch.isSettled) continue;
       const summary = await plan.history.finalize(watch.runtimeSummary, (event, data) =>
         this.#emitter.emit(event, data),
@@ -5089,8 +4934,8 @@ export class GraphProcessor {
   }
 
   #resolveUnmatchedStreamingWatchStops(): void {
-    for (const [watchNodeId, watch] of this.#streamingOutputWatches) {
-      const plan = this.#streamingWatchPlansByWatchNodeId.get(watchNodeId);
+    for (const [watchNodeId, watch] of this.#boundaries.streamingOutputWatches) {
+      const plan = this.#boundaries.streamingWatchPlansByWatchNodeId.get(watchNodeId);
       if (!plan?.stopNodeId || plan.unmatchedStopResolved || !watch.finishedNormally) {
         continue;
       }
@@ -5138,7 +4983,7 @@ export class GraphProcessor {
       if (triggerNode.type !== 'startBackgroundBranch' || triggerNode.disabled || !isRelevant(triggerNode.id)) {
         continue;
       }
-      if (triggerNode.id !== this.#consumedAsyncBranchTriggerNodeId && this.#nodeResults.has(triggerNode.id)) {
+      if (triggerNode.id !== this.#consumedAsyncBranchTriggerNodeId && this.#run.nodeResults.has(triggerNode.id)) {
         throw new Error(
           `Start Async Branch "${triggerNode.title}" cannot use preloaded outputs because replaying it could repeat async side effects.`,
         );
@@ -5204,7 +5049,7 @@ export class GraphProcessor {
         throw managedAsyncBranchWatchViolation;
       }
 
-      const preloadedNodeId = [...nodeIds].find((nodeId) => this.#nodeResults.has(nodeId));
+      const preloadedNodeId = [...nodeIds].find((nodeId) => this.#run.nodeResults.has(nodeId));
       if (preloadedNodeId) {
         const preloadedNode = this.#nodesById[preloadedNodeId]!;
         throw new Error(
@@ -5231,7 +5076,7 @@ export class GraphProcessor {
 
       if (triggerNode.id !== this.#consumedAsyncBranchTriggerNodeId) {
         for (const nodeId of nodeIds) {
-          this.#ignoreNodes.add(nodeId);
+          this.#run.ignoreNodes.add(nodeId);
         }
       }
     }
@@ -5350,14 +5195,14 @@ export class GraphProcessor {
   }
 
   #isNodeSelected(nodeId: NodeId): boolean {
-    return !this.#graphOutputSelection || this.#graphOutputSelection.nodeIds.has(nodeId);
+    return !this.#run.graphOutputSelection || this.#run.graphOutputSelection.nodeIds.has(nodeId);
   }
 
   #getExecutionRelevantNodeIds(): ReadonlySet<NodeId> | undefined {
     if (this.#sameGraphRunOwnerOverride) {
       return this.#sameGraphRunOwnerOverride.#getExecutionRelevantNodeIds();
     }
-    return this.#graphOutputSelection?.nodeIds ?? this.#getRunToRelevantNodeIds();
+    return this.#run.graphOutputSelection?.nodeIds ?? this.#getRunToRelevantNodeIds();
   }
 
   #getRunToRelevantNodeIds(): Set<NodeId> | undefined {
@@ -5365,8 +5210,8 @@ export class GraphProcessor {
       return undefined;
     }
 
-    if (this.#runToRelevantNodeIds) {
-      return this.#runToRelevantNodeIds;
+    if (this.#run.runToRelevantNodeIds) {
+      return this.#run.runToRelevantNodeIds;
     }
 
     const relevantNodeIds = new Set<NodeId>();
@@ -5376,7 +5221,7 @@ export class GraphProcessor {
       }
     }
 
-    this.#runToRelevantNodeIds = relevantNodeIds;
+    this.#run.runToRelevantNodeIds = relevantNodeIds;
     return relevantNodeIds;
   }
 
@@ -5444,8 +5289,7 @@ export class GraphProcessor {
 
     processor.executor = this.executor;
     processor.#isSubProcessor = true;
-    processor.#subgraphTargetCache = this.#subgraphTargetCache;
-    processor.#executionCache = this.#executionCache;
+    processor.#shared = this.#shared;
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
@@ -5462,9 +5306,6 @@ export class GraphProcessor {
       ...this.#graphCallPath,
       processor.#graph.metadata?.name || '(Unnamed Graph)',
     ]);
-    processor.#globals = this.#globals;
-    processor.#storedValueController = this.#storedValueController;
-    processor.#knowledgeStoreController = this.#knowledgeStoreController;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = {
       nodeId: node.id,
@@ -5487,13 +5328,13 @@ export class GraphProcessor {
     } finally {
       this.#finishRuntimeProfile('wireSubProcessorEvents', wireEventsProfileStart);
     }
-    this.#subprocessors.add(processor);
+    this.#run.subprocessors.add(processor);
 
     const wireLifecycleProfileStart = this.#startRuntimeProfile();
     try {
       wireSubprocessorLifecycle(processor, {
         signal,
-        parentAbortSignal: this.#abortController.signal,
+        parentAbortSignal: this.#run.abortController.signal,
         onParentPause: (listener) => {
           this.on('pause', listener);
           return () => {
@@ -5529,8 +5370,8 @@ export class GraphProcessor {
       let settled = false;
       const cleanup = () => {
         signal.removeEventListener('abort', abortListener);
-        if (this.#pendingUserInputs[node.id] === pending) {
-          delete this.#pendingUserInputs[node.id];
+        if (this.#run.pendingUserInputs[node.id] === pending) {
+          delete this.#run.pendingUserInputs[node.id];
         }
       };
       const abortListener = () => {
@@ -5546,7 +5387,7 @@ export class GraphProcessor {
         resolve(results);
       };
       const pending = { resolve: respond };
-      this.#pendingUserInputs[node.id] = pending;
+      this.#run.pendingUserInputs[node.id] = pending;
       signal.addEventListener('abort', abortListener, { once: true });
       if (signal.aborted) {
         abortListener();
@@ -5600,11 +5441,11 @@ export class GraphProcessor {
     const attachedData = this.#getAttachedDataTo(node);
     this.#registerNodeInActiveLoop(node, attachedData);
 
-    this.#visitedNodes.add(node.id);
+    this.#run.visitedNodes.add(node.id);
     this.#markAsExcluded(node, processId, inputValues, reason);
-    this.#finishStreamingOutputWatches(node, this.#nodeResults.get(node.id)!);
-    this.#currentlyProcessing.delete(node.id);
-    this.#remainingNodes.delete(node.id);
+    this.#finishStreamingOutputWatches(node, this.#run.nodeResults.get(node.id)!);
+    this.#run.currentlyProcessing.delete(node.id);
+    this.#run.remainingNodes.delete(node.id);
 
     const outputNodes = getOutputNodesFrom(this.#executionState, node);
     this.#propagateAttachedDataToOutputNodes(node, attachedData, outputNodes.connectionsToNodes);
@@ -5630,7 +5471,7 @@ export class GraphProcessor {
       'nodeExcluded',
       this.#createNodeExcludedEvent(node, processId, inputValues, reason, resultOrigin),
     );
-    this.#finishStreamingOutputWatches(node, this.#nodeResults.get(node.id)!);
+    this.#finishStreamingOutputWatches(node, this.#run.nodeResults.get(node.id)!);
   }
 
   #createNodeExcludedEvent(
@@ -5642,7 +5483,7 @@ export class GraphProcessor {
   ) {
     const outputs = createExcludedNodeOutputs(node, this.#definitions[node.id]!.outputs);
 
-    this.#nodeResults.set(node.id, outputs);
+    this.#run.nodeResults.set(node.id, outputs);
     this.#commitExcludedGraphOutput(node, inputValues, outputs);
 
     return this.#withExecution({
@@ -5664,7 +5505,7 @@ export class GraphProcessor {
     const outputId = (node as GraphOutputNode).data.id;
     const value = outputs['valueOutput' as PortId];
     if (value) {
-      commitGraphOutputValue(this.#graphOutputs, outputId, value);
+      commitGraphOutputValue(this.#run.graphOutputs, outputId, value);
     }
   }
 
@@ -5677,7 +5518,7 @@ export class GraphProcessor {
           connections?.find((conn) => conn.inputId === input.id && conn.inputNodeId === node.id);
         if (connection) {
           const outputNode = this.#nodeInstances[connection.outputNodeId]!.chartNode;
-          const outputNodeOutputs = this.#nodeResults.get(outputNode.id);
+          const outputNodeOutputs = this.#run.nodeResults.get(outputNode.id);
           const outputResult = outputNodeOutputs?.[connection.outputId];
 
           values[input.id] = outputResult;
@@ -5703,12 +5544,12 @@ export class GraphProcessor {
     return {
       connections: this.#connections,
       definitions: this.#definitions,
-      erroredNodes: this.#erroredNodes,
+      erroredNodes: this.#run.erroredNodes,
       executionPlan: this.#graphExecutionPlan,
-      loopControllersSeen: this.#loopControllersSeen,
+      loopControllersSeen: this.#run.loopControllersSeen,
       nodesById: this.#nodesById,
       stronglyConnectedComponents: this.#scc,
-      visitedNodes: this.#visitedNodes,
+      visitedNodes: this.#run.visitedNodes,
     };
   }
 }

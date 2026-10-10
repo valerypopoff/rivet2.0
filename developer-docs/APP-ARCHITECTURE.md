@@ -1456,6 +1456,9 @@ project-keyed runtime registry. Together they centralize:
 
 Current architectural detail:
 
+- `preparedEditorRun.ts` owns the shared authored-project capture and run-from/run-to selection policy. Capture happens before asynchronous preparation; authored graph/data and supplied inputs are copied once, while host callbacks and runtime handles retain identity. Browser and remote adapters use the same selection result. `prepareEvaluationRun` resolves the suite's target graph and dataset independently of the visible canvas.
+- `EditorRunSession` owns one run's parent cancellation subscription and cleanup. It does not own a socket or replace `executorSession`. Cancellation during preparation propagates when execution is bound later; disposal is single-flight and attempts all cleanups. Early graph outputs and abort notifications are not disposal boundaries: Browser runs retain the owner until processor completion, remote early-output runs until root done/error or disconnect.
+- Remote preparation binds to the selected target and ready socket. Closing the originating project or replacing that connection prevents dispatch. Prepared project upload and run dispatch are consecutive synchronous operations, after bundle/environment/recording preparation, so an asynchronous preparation cannot interleave another upload between them. Cancellation must never address a replacement socket.
 - `RivetApp` mounts `useExecutorSessionCoordinator` once so executor session ownership does not follow every `useGraphExecutor` consumer
 - `RivetApp` freezes the persisted `defaultExecutorState` into transient `selectedExecutorState` on startup, so changing the Settings modal's `Default executor` value only affects the next app start
 - `useGraphExecutor` is now thinner and mainly selects local vs remote execution from shared session state
@@ -1467,9 +1470,24 @@ Current architectural detail:
 - other live-execution features such as Evaluations test runs continue to follow the selected live executor.
 - recording load/unload is blocked while any execution is running, and while loaded-recording playback is in the short pre-start phase, so the active Abort/Pause/Resume controls keep targeting the executor that actually owns the run.
 
+### Shared preparation and run lifetime
+
+Session disposal owns recording finalization as well as processor/request
+cleanup. Terminal transport callbacks observe cleanup failures instead of leaving
+unhandled promises. A recorder failure cannot prevent the other cleanup actions.
+Evaluation graph-input conversion is shared in `preparedEditorRun`, so Browser
+and Node apply the same target-port types and unknown-input validation.
+Authored capture is one detached project snapshot, not a clone of the entire
+runtime: providers, sockets, signals and callbacks retain their identities.
+Settings, project context and bundle datasets are captured by each adapter before
+its asynchronous work; bundle discovery and transport upload remain adapter work.
+The [execution refactor acceptance checklist](EXECUTION-REFACTOR-ACCEPTANCE.md)
+documents scope ownership, inheritance and the protected verification workload.
+
 ### Local executor
 
 `useLocalExecutor` runs `GraphProcessor` in-process.
+Browser repaint yields close both MessageChannel ports after delivery.
 
 Current responsibilities:
 
@@ -1506,6 +1524,16 @@ Freeze node output is attached only for normal live editor runs. Browser executi
 
 `useRemoteExecutor` runs graphs through the remote-debugger protocol, usually talking to the internal sidecar.
 
+`remoteExecutorRunRequest.ts` owns request registration/send/settlement, not the
+socket. Registration is inside the pending-request failure boundary: a throwing
+attachment callback rejects/removes the pending execution and settles its owner
+before sending. Fire-and-forget registration/send failures also release their
+session/recorder without clearing a newer active request. Neither path retries
+execution automatically after a transport error.
+Cancellation requested synchronously during sending waits for the send result:
+an accepted run receives a targeted abort and retains ownership until terminal
+completion; a failed send rejects locally. Sending an abort is not completion.
+
 Current responsibilities:
 
 - bridge remote debugger events into `useCurrentExecution`
@@ -1523,8 +1551,8 @@ Current architectural detail:
 - it does not reconnect the internal sidecar directly on disconnect; `executorSession` owns reconnect timing so callers do not race ahead of Tauri sidecar startup
 - remote graph and Evaluation runs now carry request IDs through the debugger protocol so multiple pending remote runs can resolve independently
 - read-only UI consumers should use shared session/debugger state directly rather than mounting `useRemoteExecutor`, because that hook still owns remote event subscriptions and execution side effects
-- shared graph/Evaluation orchestration helpers now live in [`packages/app/src/hooks/remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)
-- that helper module holds context-value shaping, editor run-from planning/preload derivation, and event-dispatch fan-out without depending on React state; Evaluations suite/dataset selection remains in the application-local Evaluations state
+- shared authored capture, Evaluation target/input preparation and selection policy live in [`preparedEditorRun.ts`](../packages/app/src/hooks/preparedEditorRun.ts)
+- [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts) remains the pure planner/preload, frozen-output policy and event-dispatch helper; project context shaping belongs to [`projectContextValues.ts`](../packages/app/src/utils/projectContextValues.ts). None owns the socket or Evaluation persistence.
 - frozen-output snapshots are sent only to internal executor targets (`internal-desktop` and `internal-hosted`) and only for normal graph runs. External Remote Debugger runs, recording playback, and evaluation execution must not receive frozen payloads or frozen run-from preload data. The app validates and prepares internal-executor frozen payloads before serializing the run message because the app-to-executor command channel is JSON; explicit `undefined` values are represented with debugger transport sentinels and decoded only on the `frozenNodeOutputs` field in [`packages/node/src/debugger.ts`](../packages/node/src/debugger.ts), while genuinely non-JSON-safe frozen values must fail with a user-visible error before websocket send. The app-executor sidecar attaches the same core frozen-output resolver before `processor.run()`, so Browser and internal Node executor modes share replay semantics for JSON-transportable values.
 - execution-data sanitization now lives in [`packages/app/src/utils/executionDataSanitization.ts`](../packages/app/src/utils/executionDataSanitization.ts), so node-event persistence does not duplicate Uint8Array repair across event branches
 - execution-data storage/ref ownership now lives in [`packages/app/src/utils/executionDataStorage.ts`](../packages/app/src/utils/executionDataStorage.ts): it stores node data, creates stable execution-scoped ref ids, restores ref-backed values, collects refs, and clears removed/preserved refs. New storage behavior and tests should target this owner directly rather than adding app-private compatibility facades.

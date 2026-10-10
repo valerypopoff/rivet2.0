@@ -1,5 +1,22 @@
 # Development
 
+## Extending the shared editor after the ownership refactor
+
+Hosted editor execution and Evaluation workspace behavior use the app-owned
+modules, not wrapper aliases or a second runner. Start with
+[App Architecture](../APP-ARCHITECTURE.md#execution-architecture),
+[Evaluation workspace owners](../EVALUATIONS.md#workspace-source-owners) and the
+[ownership/verification matrix](../EXECUTION-REFACTOR-ACCEPTANCE.md).
+Use the existing provider contracts to supply hosted storage/runtime capabilities;
+do not put database coordination into the extracted view components.
+
+For editor changes, run the official `yarn test:app` runner and relevant builds,
+then the required headless `studio-server:ui:observe` scenarios. Source-level
+Node sidecar integration and a packaged Windows executor smoke are separate
+checks; passing Browser tests alone does not verify desktop bundle execution.
+Documentation-only reconciliations need documentation link checks, not a
+Kubernetes rehearsal or a new browser run.
+
 ## Extending serving services
 
 - Put workflow-facing contracts in `routes/workflows/data-backend.ts`; do not

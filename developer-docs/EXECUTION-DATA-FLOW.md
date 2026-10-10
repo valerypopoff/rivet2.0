@@ -23,6 +23,24 @@ When a graph executes, the app must:
 These four concerns are handled by separate but tightly coupled systems. The coupling
 is where bugs tend to hide.
 
+## Execution ownership versus display ownership
+
+[`preparedEditorRun`](../packages/app/src/hooks/preparedEditorRun.ts) captures
+the originating authored project before asynchronous preparation.
+[`EditorRunSession`](../packages/app/src/hooks/editorRunSession.ts) owns that
+invocation's cancellation and terminal cleanup. These are separate from the
+project's displayed execution snapshot: switching tabs can change what is drawn
+without changing which processor/request, recording or abort signal owns a run.
+
+The Browser processor registry and remote request/session registry release only
+their matching run. An outputs-ready result or abort notification must not
+discard the remaining event/recording tail. Remote connection ownership remains
+in `executorSession`; display routing and pending-request settlement continue
+using their existing helpers. Core invocation/shared/boundary state extraction
+does not change execution IDs or event ordering. See the
+[ownership and inheritance matrix](./EXECUTION-REFACTOR-ACCEPTANCE.md) for current
+reset rules and acceptance checks.
+
 ## Terminal execution error notifications
 
 The shared `useGraphExecutionEvents.onError` handler stops active run controls
@@ -633,16 +651,26 @@ available to low-level runtime code and tests, but product UI should use the
 selector and capability layer.
 
 `useRemoteExecutor` caches the last successfully uploaded
-project/settings/static-data payload per executor session. Upload cache decisions
-are planned in `remoteExecutorUploadCache.ts`: `planRemoteExecutorProjectUpload`
-compares the session key, derived project graph/plugin state, resolved runtime
-settings, and sorted static project data before the hook sends anything.
+project/settings/static-data payload per actual WebSocket connection. A weak
+socket-keyed cache is shared by callers of that connection, not by project tabs
+or equal target URLs. Independent project runtimes and reconnects cannot reuse
+another socket's uploaded definition, and old sockets do not stay alive because
+of the cache. In
+`remoteExecutorUploadCache.ts`, `prepareRemoteExecutorProjectUpload` captures a
+key from the session, derived project graph/plugin state, resolved runtime
+settings and sorted static project data before the hook sends anything. Its
+returned uploader rechecks the shared slot at dispatch time, so an Evaluation
+can restore its prepared definition after another request without serializing
+the entire project again for each trial. `uploadRemoteExecutorProjectIfNeeded`
+is the one-shot adapter over this same implementation.
 Identical consecutive runs can therefore send only the lightweight `run`
 message, while graph edits, settings/env changes, static data changes, or a new
 session force a fresh upload. The imperative upload path sends dynamic project
 data first, then each static-data payload, and marks the cache fresh only after
-every send succeeds. The cache is cleared on executor connect/disconnect, and
-failed project or static-data sends do not update it.
+every send succeeds. A replacement socket naturally gets a cold cache without
+depending on a mounted hook's lifecycle listeners. The cache is invalidated
+before any replacement upload starts. Failed project or static-data sends leave
+it invalid, because the executor may already hold partial replacement data.
 
 Remote run request ids are managed by `remoteExecutorRunRequest.ts`.
 Editor graph runs register one active request id before sending the `run`

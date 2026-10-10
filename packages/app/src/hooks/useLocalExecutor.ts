@@ -10,7 +10,6 @@ import {
   type GraphOutputs,
   type Project,
   type GraphId,
-  type GraphInputNode,
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
@@ -82,14 +81,8 @@ import {
 } from '../providers/ProvidersContext';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import { handleError } from '../utils/errorHandling.js';
-import {
-  createProcessEventDispatcher,
-  getDependentDataForNodeForPreload,
-  getEditorRunFromPlan,
-  getEditorRunToPlan,
-} from './remoteExecutorHelpers.js';
+import { createProcessEventDispatcher } from './remoteExecutorHelpers.js';
 import { pluginsState } from '../state/plugins.js';
-import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
 import { recordingStatusAfterAbort, shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
@@ -101,31 +94,13 @@ import {
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
 import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
-
-function evaluationInputsToGraphOutputs(
-  project: Project,
-  graphId: GraphId,
-  inputs: Record<string, PortableJson>,
-): GraphOutputs {
-  const graph = project.graphs[graphId];
-  if (!graph) {
-    throw new Error(`Evaluation target graph "${graphId}" does not exist.`);
-  }
-  const inputsById = new Map(
-    graph.nodes
-      .filter((node): node is GraphInputNode => node.type === 'graphInput')
-      .map((node) => [node.data.id, node]),
-  );
-  return Object.fromEntries(
-    Object.entries(inputs).map(([inputId, value]) => {
-      const graphInput = inputsById.get(inputId);
-      if (!graphInput) {
-        throw new Error(`Evaluation provided unknown graph input "${inputId}".`);
-      }
-      return [inputId, { type: graphInput.data.dataType, value }];
-    }),
-  ) as GraphOutputs;
-}
+import {
+  captureEditorRun,
+  evaluationInputsToGraphOutputs,
+  prepareEditorRunSelection,
+  prepareEvaluationRun,
+} from './preparedEditorRun.js';
+import { EditorRunSession } from './editorRunSession.js';
 
 function createEvaluationRecordingReference(): EvaluationRecordingReference {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -157,7 +132,11 @@ function createEvaluationRecordingReference(): EvaluationRecordingReference {
 function yieldToMacrotask(): Promise<void> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    channel.port1.onmessage = () => resolve();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      resolve();
+    };
     channel.port2.postMessage(undefined);
   });
 }
@@ -180,7 +159,7 @@ export function useLocalExecutor() {
   const store = useStore();
   const routeBundleExecution = useBundleExecutionRouting();
   const currentProcessorsByProjectId = useRef(new Map<ProjectId, GraphProcessor>());
-  const activeRunControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
+  const activeRunControllersByProjectId = useRef(new Map<ProjectId, EditorRunSession>());
   const evaluationAbortControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
   const saveGraph = useSaveCurrentGraph();
   const currentExecution = useCurrentExecution();
@@ -491,18 +470,26 @@ export function useLocalExecutor() {
     let localRecordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
     let localRecordingErrorMessage: string | undefined;
     let processorEmittedError = false;
-    const preparation = new AbortController();
-    activeRunControllersByProjectId.current.set(runProjectId, preparation);
+    const runSession = new EditorRunSession(options.abortSignal);
+    const preparation = runSession.controller;
+    activeRunControllersByProjectId.current.set(runProjectId, runSession);
     // Discovery is async and precedes GraphProcessor's start event. Reserve the
     // run and allow Abort while reading, rather than starting a second run.
     store.set(graphRunningState, true);
-    const handleAbort = () => {
-      preparation.abort(options.abortSignal?.reason);
-      void processor?.abort();
-    };
-    options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
-
     try {
+      const savedGraph = saveGraph() ?? graph;
+      const captured = captureEditorRun({
+        project,
+        currentGraph: savedGraph,
+        projectData,
+        plugins: { appPluginStates: pluginStates, currentGraph: savedGraph, registry: projectNodeRegistry },
+        options,
+      });
+      options = captured.options;
+      const tempProject = captured.project;
+      const graphToRun = captured.graphId;
+      const contextValues = getProjectContextValues(projectContext);
+      const runSettings = structuredClone(savedSettings);
       // Capture before any awaited preparation can select another tab's data.
       const entryDatasets =
         ioProvider.readProjectBundle && loadedProject.path
@@ -523,27 +510,6 @@ export function useLocalExecutor() {
           return undefined;
         }
       }
-
-      const savedGraph = saveGraph() ?? graph;
-
-      const graphToRun = options.graphId ?? graph.metadata!.id!;
-
-      const tempProject = withDerivedProjectPluginSpecs(
-        {
-          ...project,
-          // Include the just-saved version of the currently selected graph, because saveGraph won't update the `project` until next render
-          graphs: {
-            ...project.graphs,
-            [savedGraph.metadata!.id!]: savedGraph,
-          },
-          data: projectData,
-        },
-        {
-          appPluginStates: pluginStates,
-          currentGraph: savedGraph,
-          registry: projectNodeRegistry,
-        },
-      );
 
       // Playback only re-emits evidence from a previous execution. Recording
       // those delivery events would replace the live recording with a fast,
@@ -572,6 +538,7 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      runSession.bindCancellation(() => processor!.abort());
       responseTraceCollector = options.onResponseTrace ? new AgentResponseTraceCollector(processor) : undefined;
       for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
         processor.setExternalFunction(name, externalFunction);
@@ -585,30 +552,23 @@ export function useLocalExecutor() {
       processor.executor = 'browser';
       processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
 
-      if (options.from) {
-        const runFromPlan = getEditorRunFromPlan(tempProject, graphToRun, options.from, projectNodeRegistry);
-        processor.runToNodeIds = runFromPlan.runToNodeIds;
-        const preloadData = getDependentDataForNodeForPreload(
-          runFromPlan.preloadNodeIds,
-          lastRunData,
-          loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
-        );
-        for (const [nodeId, outputs] of Object.entries(preloadData)) {
+      const selection = prepareEditorRunSelection({
+        project: tempProject,
+        graphId: graphToRun,
+        options,
+        registry: projectNodeRegistry,
+        previousRunData: lastRunData,
+        frozen: loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
+      });
+      processor.runToNodeIds = selection.runToNodeIds;
+      if (selection.preloadData) {
+        for (const [nodeId, outputs] of Object.entries(selection.preloadData)) {
           processor.preloadNodeData(nodeId as NodeId, outputs);
         }
-        currentExecution.preserveNodeRunDataForNextStart(runFromPlan.preserveNodeIds);
-        currentExecution.suppressPreloadedNodeEventsForCurrentRun(runFromPlan.preloadNodeIds);
-      } else if (options.to) {
-        const runToPlan = getEditorRunToPlan(
-          tempProject,
-          graphToRun,
-          options.to,
-          projectNodeRegistry,
-          loadedRecording ? undefined : { frozenNodeOutputs },
-        );
-        processor.runToNodeIds = runToPlan.runToNodeIds;
-        currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
       }
+      if (selection.preserveNodeIds) currentExecution.preserveNodeRunDataForNextStart(selection.preserveNodeIds);
+      if (selection.suppressPreloadedNodeIds)
+        currentExecution.suppressPreloadedNodeEventsForCurrentRun(selection.suppressPreloadedNodeIds);
 
       if (recorder) {
         recorder.record(processor);
@@ -686,10 +646,8 @@ export function useLocalExecutor() {
         processor.setFrozenNodeOutputResolver(
           createFrozenNodeOutputResolver(cloneFrozenNodeOutputsForExecutor(frozenNodeOutputs)),
         );
-        const contextValues = getProjectContextValues(projectContext);
-
         const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
-          savedSettings,
+          runSettings,
           projectNodeRegistry.getPlugins(),
           {
             environmentProvider,
@@ -765,9 +723,7 @@ export function useLocalExecutor() {
     } finally {
       const cleanupProcessorRun = () => {
         responseTraceCollector?.dispose();
-        options.abortSignal?.removeEventListener('abort', handleAbort);
-
-        const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === preparation;
+        const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === runSession;
         if (ownsRun) activeRunControllersByProjectId.current.delete(runProjectId);
         if (ownsRun && store.get(projectState).metadata.id === runProjectId) {
           dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
@@ -781,10 +737,11 @@ export function useLocalExecutor() {
       const completion = processor?.isRunning
         ? processor.waitForRunCompletion().catch(() => undefined)
         : Promise.resolve();
-      void completion.finally(cleanupProcessorRun);
-      if (finalizeCapturedRecording) {
-        void completion.then(() => finalizeCapturedRecording!()).catch(() => undefined);
-      }
+      runSession.onDispose(cleanupProcessorRun);
+      if (finalizeCapturedRecording) runSession.onDispose(finalizeCapturedRecording);
+      void completion
+        .then(() => runSession.dispose())
+        .catch((error) => logRuntimeDebug('Editor run cleanup failed.', { error, projectId: runProjectId }));
 
       if (recordingToReplay) {
         // A closed owner can be replaced by another tab's recording while this
@@ -808,24 +765,16 @@ export function useLocalExecutor() {
       projectOverride?: Project;
       purpose: EvaluationRunPurpose;
     }) => {
-      const suite = evaluations.data.suites.find((candidate) => candidate.id === suiteId);
-      const dataset = evaluations.datasets.find((candidate) => candidate.id === suite?.datasetId);
-      if (!suite || !dataset) {
-        throw new Error('The selected evaluation suite or its dataset no longer exists.');
-      }
-
-      const evaluationBaseProject = projectOverride ?? project;
-      // A suite can target any graph, not just the canvas graph that happened
-      // to be open when the user pressed Run. Derive plugin requirements from
-      // the suite target so the execution project and the runner agree.
-      const evaluationGraph = evaluationBaseProject.graphs[suite.targetGraphId];
-      if (!evaluationGraph) {
-        throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
-      }
-      const projectForEvaluation = withDerivedProjectPluginSpecs(evaluationBaseProject, {
-        appPluginStates: pluginStates,
-        currentGraph: evaluationGraph,
-        registry: projectNodeRegistry,
+      const {
+        suite,
+        dataset,
+        project: projectForEvaluation,
+      } = prepareEvaluationRun({
+        suiteId,
+        suites: evaluations.data.suites,
+        datasets: evaluations.datasets,
+        project: projectOverride ?? project,
+        plugins: { appPluginStates: pluginStates, registry: projectNodeRegistry },
       });
       const runProjectId = projectForEvaluation.metadata.id;
       const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;

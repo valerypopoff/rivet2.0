@@ -7,9 +7,13 @@ for (const scenario of [
   'superseded initial read',
   'superseded older page',
   'superseded older page failure',
+  'rename during older page',
+  'retryable older page',
+  'rename after overlay close',
 ] as const) {
   const supersedeInitialDetails = scenario === 'superseded initial read';
-  const supersedeOlderPage = scenario.startsWith('superseded older page');
+  const renameDuringOlderPage = scenario === 'rename during older page';
+  const supersedeOlderPage = scenario.startsWith('superseded older page') || renameDuringOlderPage;
   test(`Evaluation history pages headers and hydrates only the selected run (${scenario})`, async ({ page }) => {
     await mockHostedEditorBootstrap(page);
     await seedHostedEditorProject(page, {
@@ -42,13 +46,14 @@ for (const scenario of [
         },
       }),
     );
+    let newestName = 'Newest';
     const run = (id: string) => ({
       version: 2,
       id,
       projectId: 'history-project',
       suiteId: 'suite',
       suiteName: 'History suite',
-      name: id,
+      name: id === 'Newest' ? newestName : id,
       startedAt: '2026-10-08T00:00:00.000Z',
       purpose: 'execution-benchmark',
       executionStatus: 'completed',
@@ -81,17 +86,33 @@ for (const scenario of [
     let releaseOlderPage!: () => void;
     const pendingOlderPage = new Promise<void>((resolve) => (releaseOlderPage = resolve));
     let fullLists = 0;
+    let renameRequests = 0;
+    let releaseRename!: () => void;
+    const pendingRename = new Promise<void>((resolve) => (releaseRename = resolve));
+    await page.route('**/api/workflows/evaluation-runs/Newest', async (route) => {
+      expect(route.request().method()).toBe('PATCH');
+      expect(route.request().postDataJSON().name).toBe('Renamed');
+      renameRequests++;
+      if (scenario === 'rename after overlay close') await pendingRename;
+      newestName = 'Renamed';
+      return route.fulfill({ json: { ...run('Newest'), name: 'Renamed' } });
+    });
     await page.route('**/api/workflows/evaluation-runs?*', (route) => {
       fullLists++;
       return route.fulfill({ json: [] });
     });
     await page.route('**/api/workflows/evaluation-runs/history?*', async (route) => {
       if (new URL(route.request().url()).searchParams.has('after')) {
-        if (++olderPages === 1 && supersedeOlderPage) {
+        ++olderPages;
+        if (olderPages === 1 && scenario === 'retryable older page')
+          return route.fulfill({ status: 503, json: { error: 'Temporary page failure' } });
+        if (olderPages === 1 && supersedeOlderPage) {
           await pendingOlderPage;
           if (scenario === 'superseded older page failure')
             return route.fulfill({ status: 503, json: { error: 'Obsolete page failure' } });
-          return route.fulfill({ json: { runs: [header('Stale')], nextCursor: 'stale-page' } });
+          return route.fulfill({
+            json: { runs: [header('Stale'), { ...header('Newest'), name: 'Newest' }], nextCursor: 'stale-page' },
+          });
         }
         return route.fulfill({ json: { runs: [header('Older')] } });
       }
@@ -143,17 +164,49 @@ for (const scenario of [
       await page.getByRole('button', { name: 'Retry loading run' }).click();
     }
     await expect(page.getByText('Detail evidence for Newest', { exact: true })).toBeVisible();
-    const initialRequests = supersedeInitialDetails ? ['Newest', 'Previous', 'Newest'] : ['Newest', 'Newest'];
+    let initialRequests = supersedeInitialDetails ? ['Newest', 'Previous', 'Newest'] : ['Newest', 'Newest'];
     expect(details).toEqual(initialRequests);
+    if (scenario === 'rename after overlay close') {
+      await page.getByRole('button', { name: 'Rename evaluation run', exact: true }).click();
+      const input = page.getByRole('textbox', { name: 'Rename evaluation run', exact: true });
+      await input.fill('Renamed');
+      await input.press('Enter');
+      await expect.poll(() => renameRequests).toBe(1);
+      const navigation = page.getByRole('navigation', { name: 'Workspace navigation' });
+      await navigation.getByRole('button', { name: 'Data Studio' }).click();
+      const response = page.waitForResponse((result) => result.request().method() === 'PATCH');
+      releaseRename();
+      await (await response).finished();
+      await navigation.getByRole('button', { name: 'Evaluations' }).click();
+      await expect(page.getByRole('heading', { name: 'Renamed', exact: true })).toBeVisible();
+      initialRequests = [...initialRequests, 'Newest'];
+      expect(details).toEqual(initialRequests);
+    }
     if (supersedeOlderPage) {
       await page.getByRole('button', { name: 'Load older runs' }).click();
       await expect.poll(() => olderPages).toBe(1);
-      const navigation = page.getByRole('navigation', { name: 'Workspace navigation' });
-      await navigation.getByRole('button', { name: 'Data Studio' }).click();
-      await navigation.getByRole('button', { name: 'Evaluations' }).click();
+      if (renameDuringOlderPage) {
+        await page.getByRole('button', { name: 'Rename evaluation run', exact: true }).click();
+        await page.getByRole('textbox', { name: 'Rename evaluation run', exact: true }).fill('Renamed');
+        await page.getByRole('textbox', { name: 'Rename evaluation run', exact: true }).press('Enter');
+        await expect(page.getByRole('heading', { name: 'Renamed', exact: true })).toBeVisible();
+      } else {
+        const navigation = page.getByRole('navigation', { name: 'Workspace navigation' });
+        await navigation.getByRole('button', { name: 'Data Studio' }).click();
+        await navigation.getByRole('button', { name: 'Evaluations' }).click();
+      }
+    }
+    if (scenario === 'retryable older page') {
+      await page.getByRole('button', { name: 'Load older runs' }).click();
+      await expect(
+        page.getByText('Could not refresh run history: Temporary page failure', { exact: true }),
+      ).toBeVisible();
     }
     await page.getByRole('button', { name: 'Load older runs' }).click();
     await expect(page.getByRole('button', { name: 'Load older runs' })).toHaveCount(0);
+    await expect(page.getByText('Could not refresh run history: Temporary page failure', { exact: true })).toHaveCount(
+      0,
+    );
     if (supersedeOlderPage) {
       const response = page.waitForResponse((result) => {
         const url = new URL(result.url());
@@ -168,6 +221,13 @@ for (const scenario of [
       await page.keyboard.press('Escape');
       await expect(page.getByRole('button', { name: 'Load older runs' })).toHaveCount(0);
       await expect(page.getByText('Obsolete page failure', { exact: true })).toHaveCount(0);
+      if (renameDuringOlderPage) {
+        await expect(page.getByRole('heading', { name: 'Renamed', exact: true })).toBeVisible();
+        await page.getByRole('combobox').last().click();
+        await expect(page.getByText(/^Renamed ·/).last()).toBeVisible();
+        await expect(page.getByText(/^Newest ·/)).toHaveCount(0);
+        await page.keyboard.press('Escape');
+      }
     }
     expect(details).toEqual(initialRequests);
     await page.getByRole('combobox').last().click();

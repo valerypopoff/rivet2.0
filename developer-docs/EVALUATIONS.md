@@ -4,13 +4,101 @@
 
 ## Ownership boundaries
 
+Library creation, reassignment and field/resource removal belong to
+`evaluationLibraryCommands.ts`, not the rendering component. These operations
+evaluate current library state when accepted, including dependencies or running
+suites created after a confirmation opened. Creating/importing a new suite must
+not discard an independently running Evaluation. `evaluationTransferCommands.ts`
+owns file IO and the existing JSON/CSV serializers. File replacement uses the
+captured destination object as a compare-and-set precondition; a delayed file
+dialog cannot overwrite a newer edit or recreate a deleted dataset. Outcomes
+distinguish success, missing resource, conflict and failure. Accepted shared-library
+imports can finish after navigation without selecting their resources in the new
+workspace. Recording hydration checks its captured scope and artifact identity
+before switching the editor into playback.
+
+See [execution refactor acceptance](EXECUTION-REFACTOR-ACCEPTANCE.md) for the
+cross-package ownership matrix and verification workload.
+
+WebSocket Evaluation preparation captures its ready executor connection before
+the asynchronous capability lookup. It rechecks socket identity, target kind and
+URL before uploads, recorder registration and trial dispatch. A same-URL reconnect
+does not preserve that binding, and a canceled trial cannot send an abort to the
+replacement connection. This does not replace the durable hosted coordinator's
+job ownership or cancellation path.
+The WebSocket adapter prepares one upload key and rechecks the shared executor
+upload slot before every trial. Upload restoration and run dispatch have no
+asynchronous gap. Failed partial uploads invalidate the slot; they cannot make
+an older cached definition appear current. Authored upload inputs remain stable
+for the Evaluation lifetime and are not serialized again for every trial.
+
+### Workspace source owners
+
+The app workspace remains under `packages/app/src/components/evaluations/`.
+`Evaluations.tsx` composes state, dialogs, executor actions and the selected view;
+it is not a second Evaluation engine or storage adapter.
+
+| Change | Owning source |
+| --- | --- |
+| Definition, dataset, run history or comparison rendering | `EvaluationDefinitionView.tsx`, `EvaluationDatasetView.tsx`, `EvaluationRunsView.tsx`, `EvaluationCompareView.tsx` |
+| Shared presentation styles and resource headings | `evaluationPresentation.tsx` |
+| Pure library creation/reassignment/removal rules | `evaluationLibraryCommands.ts`; existing `evaluationWorkspaceModel.ts` owns workspace selection/presentation rules |
+| File dialogs, JSON/CSV import/export and replacement preconditions | `evaluationTransferCommands.ts` |
+| Durable run names, retention, deletion and baseline promotion | `evaluationRunCommands.ts` |
+| History loading, pagination, selected details and request generations | `useEvaluationHistory.ts` |
+| Dataset snapshotting, runner/checkpoint persistence and recording finalization | `utils/evaluationExecutionLifecycle.ts`, with runtime-specific execution supplied by the executor hooks |
+
+Views receive actions from the workspace. Keep confirmations in React and
+storage coordination in commands; moving JSX does not make multiple writes
+atomic. Library resources are shared, while run commands and history are bound
+to an originating project. Keep commands accepted by storage alive after
+navigation and suppress only obsolete presentation updates.
+Views do not acquire run stores or perform history mutations. The interrupted
+trial control retains its narrow hosted-coordinator dependency.
+
+### History capability and cache lifetime
+
+`EvaluationRunStore.listPage` is optional and already used by the hosted stores.
+It returns compact `EvaluationRunSummary` headers and an opaque keyset cursor;
+the app hydrates the selected full run through `get`, rather than fetching every
+listed run's trials. `useEvaluationHistory` uses `list` for stores without that
+capability, including the built-in desktop/browser stores. Pagination in the UI
+therefore does not mean every storage implementation has compact physical reads.
+The current contract still hydrates a selected run as one full body; it does not
+provide separately paginated trial details.
+
+The warm cache is one exact project/suite scope, not an unbounded cache per tab.
+Scope changes, disposal and committed mutations fence outstanding initial-page,
+older-page and detail reads. Same-scope overlay reopening can reuse warm state;
+an accepted mutation completed off-screen marks only its matching cache cold.
+Do not use progress events to certify that a durable history page is complete.
+Every successful durable run mutation, including partial retention success,
+fences older reads before projecting its result; failed writes do not invalidate
+history. The hook releases obsolete page admission and restarts needed cold
+page/detail reads. Pagination retries clear earlier errors. Presentation and
+live-run merging require both project and suite identity, because suite IDs are
+shared across projects.
+
+Renames serialize by stable store/project/run across renders and panel remounts,
+with at most eight pending names per run. Other runs remain independent, failed
+saves release admission and settled tails are removed. This client ordering does
+not replace storage adapters' cross-client concurrency guarantees.
+
+Baseline promotion verifies project/suite ownership and rechecks that the suite
+still exists before installing its shared-library baseline, including after
+navigation. A concurrent deletion cannot create a dangling baseline. Already
+committed recording pins are not rolled back speculatively. Multi-step recording
+retention reports partial completion explicitly rather than claiming atomicity.
+
+### Library and durable storage
+
 - The active `EvaluationStore` owns the complete instance-local Evaluations domain: suites, datasets, compact baselines, project migration markers, terminal run history, immutable dataset snapshots, recording references, and recording artifacts. None of it is saved into `.rivet-project` or `.rivet-data`. Library recovery validates resources independently: one malformed suite, dataset, or baseline is discarded without hiding unrelated valid resources. Baselines whose suite could not be recovered are also discarded rather than left dangling. Durable validation permits temporarily empty display names while an inline rename is in progress; execution and explicit transfer still enforce the result-affecting contracts.
 - Project files remain a one-time legacy import source. On open, Rivet reads a pre-library `attachedData.evaluations` block and legacy `.rivet-data.evaluationDatasets`, validates them, converts datasets to library resources, and then stops writing evaluation data to those files. Legacy IDs were project-scoped, so a collision receives a deterministic project-derived local ID and suite/baseline references are remapped with it. Rivet records each completed source-project migration, preventing repeated opens from duplicating resources or resurrecting a resource the user later deleted. Project save flushes the local library before replacing a legacy file or sidecar. A malformed legacy entry is ignored, so it cannot prevent the project from opening or overwrite a valid local library.
 - Storage is selected once during app bootstrap. The desktop app uses `TauriEvaluationStore`, backed by the bundled SQLite database `evaluations.sqlite3` in Tauri's application-local-data directory. A first desktop launch imports every existing evaluation key from the old WebView IndexedDB/local-storage stores into one SQLite transaction, verifies every stored value, and commits the migration marker only with the data. A conflict, native-open failure, or temporarily inaccessible legacy IndexedDB leaves the old source intact, keeps that entire app session on the browser store instead of splitting writes between backends, and retries native adoption on a later launch. The standalone browser uses `LocalEvaluationRunStore` and application-local IndexedDB, with its established local-storage fallback only when IndexedDB cannot be used before the first successful access. Desktop and browser installations are deliberately separate Rivet instances and do not synchronize automatically.
 - Hosted wrappers replace the whole store through `ProvidersContext.providers.evaluationStore`. This is one ownership seam rather than separate library and history adapters: a tenant/database-backed implementation receives every definition and evidence operation, and Rivet does not open a local evaluation database when that override is supplied. The adapter must isolate tenant and project ownership, make `putLibrary` and artifact mutations durable/atomic at its own boundary, and implement the inherited run-history methods. A hosted adapter that exposes resource versions should also expose the optional sync-issue subscription, conflict-resolution, and retry capabilities: the app keeps a conflicting local suite/dataset visible until the author explicitly accepts the server version or saves their put as a new copy. Transport and server-transient failures are retryable save states, not edit conflicts. A deprecated run-only `evaluationRunStore` override remains a compatibility bridge, but new wrappers must use `evaluationStore`; Rivet never requires the wrapper to expose that database as an HTTP server.
 - In Studio Server, suite and dataset definitions are tenant-wide shared application resources, never project-file resources. A suite references graph and dataset IDs, but does not belong to the project currently open in the editor; run history, snapshots, and recordings remain separately project-scoped. An evaluation-library rename must therefore synchronize and notify through the evaluation boundary, never through workflow-tree or project-content reconciliation.
 - At execution start the adapter writes an immutable, project-scoped `EvaluationDatasetSnapshot`, keyed by the stable dataset ID plus canonical fields and cases. Distinct dataset resources therefore cannot alias the same historical snapshot even when their content is identical. The durable boundary rejects missing or mismatched project ownership, invalid creation timestamps, and fingerprints that do not match the canonical dataset content. Stores keep the first value for a valid key, so a later live-dataset edit cannot rewrite historical evidence; cosmetic resource names do not invalidate the snapshot.
-- `EvaluationRunStore` owns full runs, observations, content-addressed dataset snapshots, and recording references. Its V2 physical layout stores a small per-project run index, one record per run, one record per dataset snapshot, and one record per replay artifact. Run append, rename, delete, snapshot creation, recording-manifest changes, and library replacement use compare-and-swap batches. IndexedDB performs each batch in one read/write transaction; Tauri performs it in one SQLite transaction. A custom key/value backend gets the same logical operations, but provides strong cross-client atomicity only when it implements `applyBatch`. The old aggregate run and snapshot keys remain read-only migration sources: migration is lazy, restartable, commits the V2 index/artifacts as one batch, and keeps V1 values for rollback rather than deleting the only copy. Run listing still materializes every selected project's full run records; summary pagination and separate trial-detail records require the future repository contract and must not be claimed by a host adapter today.
+- `EvaluationRunStore` owns full runs, observations, content-addressed dataset snapshots, and recording references. The built-in desktop/browser stores' V2 physical layout stores a small per-project run index, one record per run, one record per dataset snapshot, and one record per replay artifact. Run append, rename, delete, snapshot creation, recording-manifest changes, and library replacement use compare-and-swap batches. IndexedDB performs each batch in one read/write transaction; Tauri performs it in one SQLite transaction. A custom key/value backend gets the same logical operations, but provides strong cross-client atomicity only when it implements `applyBatch`. The old aggregate run and snapshot keys remain read-only migration sources: migration is lazy, restartable, commits the V2 index/artifacts as one batch, and keeps V1 values for rollback rather than deleting the only copy. These stores still use full-body `list`; hosted stores can supply compact `listPage` through the existing contract described above. Separate trial-detail records are not part of that capability.
 - Replay artifacts are individual database values referenced by a small per-project manifest, not one repeatedly rewritten project blob and not a fixed-size project cache. Normal successful artifacts therefore remain available for their 24-hour temporary-retention period instead of older trials disappearing as later recordings arrive. The old aggregate recording array migrates in place on first access. A failed migration leaves its source readable and retries on a later access; it never deletes the source before the database transaction commits. Malformed run-history envelopes, snapshot envelopes, recording manifests, and individual recording artifacts fail closed: reads and dependent writes report the storage problem and leave the raw value untouched instead of replacing it with an empty collection. Recording artifacts are validated on writes as well as durable reads. A shell that cannot initialize IndexedDB falls back to legacy storage only before it has successfully used IndexedDB; it never splits a history across backends after that point.
 - `runEvaluationSuite` publishes revisioned `run-started`, single `trial-settled`, and `run-finalized` events. The application applies one trial at a time with structural sharing and serializes `applyRunEvent` writes per run. The initial run shell is durably attempted before the first graph starts; each settled trial is checkpointed before that worker takes another item. The legacy `onUpdate` callback remains available for compatibility and pays for detached full snapshots only when requested. Checkpoints make already-settled evidence survive an application failure, but the current product does not yet own a cross-window execution lease, classify abandoned running records as interrupted, or offer resume. A persisted nonterminal record must therefore not be presented as safely resumable.
 - The Runs tab merges a delayed history read with the in-memory run by revision, preferring a terminal snapshot on an equal revision without ever replacing a fuller equal-revision trial set with a partial copy. Recording references and warnings may enrich that fuller evidence. A read that began just before the final write must never turn a completed run back into “in progress.” History loading is keyed only to the selected project and suite, never to an evaluation lifecycle transition: the terminal runner event atomically installs and selects the terminal in-memory run before recording retention and final history persistence begin, and the later persistence refresh enriches that same selected entry. A completion therefore cannot briefly render an older selected history entry. Each asynchronous history read carries a generation token, so a suite/project switch or a completed run deletion invalidates an earlier read rather than letting it restore stale history. Deleting a terminal run removes that run and its replay recordings only after confirmation; dataset snapshots and compact baselines remain immutable evidence, including a baseline that was promoted from the deleted run. If run or replay persistence fails, the run UI must show the specific storage failure as a history warning without changing the evaluation's execution or quality result. `EvaluationRun.name` is separately user-owned history metadata: the inline Runs-header rename persists through the run store and later progress/final events preserve it. An absent or blank name renders as **Unnamed**. Suite and dataset names are edited inline from their workspace H1s, so definition and dataset panes never duplicate name fields.

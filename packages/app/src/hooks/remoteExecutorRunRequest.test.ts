@@ -24,6 +24,7 @@ import {
   startActiveRemoteGraphRunRequest,
   type ActiveRemoteRunRequestRef,
 } from './remoteExecutorRunRequest.js';
+import { createExecutorSessionPendingExecutions } from './executorSessionPendingExecutions.js';
 
 function makeRunPayload(): Omit<OutgoingMessageMap['run'], 'requestId'> {
   return {
@@ -525,6 +526,72 @@ test('startActiveRemoteGraphRunRequest clears the active request after send fail
   assert.equal(activeRequestIdRef.current, null);
 });
 
+test('active request registration/send failures release only their own owner', () => {
+  for (const stage of ['register', 'send'] as const) {
+    const activeRequestIdRef: ActiveRemoteRunRequestRef = { current: null };
+    const released: RemoteRunRequestId[] = [];
+    assert.throws(
+      () =>
+        startActiveRemoteGraphRunRequest({
+          activeRequestIdRef,
+          createRequestId: () => 'request-1' as RemoteRunRequestId,
+          payload: makeRunPayload(),
+          onRequestCreated: () => {
+            if (stage === 'register') throw new Error('registration failed');
+          },
+          onRequestFailed: (id) => released.push(id),
+          sendRun: () => {
+            activeRequestIdRef.current = 'newer-request' as RemoteRunRequestId;
+            throw new Error('send failed');
+          },
+        }),
+      /failed/,
+    );
+    assert.deepEqual(released, ['request-1']);
+    assert.equal(activeRequestIdRef.current, stage === 'register' ? null : 'newer-request');
+  }
+});
+
+test('pending request registration failure settles and removes the actual pending execution', async () => {
+  const pending = createExecutorSessionPendingExecutions();
+  let rejected = 0;
+  let settled = 0;
+  let sent = 0;
+  const runtime = {
+    ...pending,
+    rejectPendingGraphExecution: (id: RemoteRunRequestId | undefined, error: unknown) => {
+      rejected++;
+      pending.rejectPendingGraphExecution(id, error);
+    },
+  };
+  await assert.rejects(
+    sendPendingRemoteGraphRunRequest({
+      executorSession: runtime,
+      disconnectErrorMessage: 'disconnected',
+      payload: makeRunPayload(),
+      onRequestCreated: () => {
+        throw new Error('recording attachment failed');
+      },
+      onRequestSettled: () => {
+        settled++;
+      },
+      sendRun: () => {
+        sent++;
+        return true;
+      },
+    }),
+    /recording attachment failed/,
+  );
+  assert.equal(rejected, 1);
+  assert.equal(settled, 1);
+  assert.equal(sent, 0);
+  // An orphan would make the unscoped completion ambiguous, stranding this
+  // new request. Exercising the real registry verifies removal, not just calls.
+  const next = pending.createPendingGraphExecution();
+  pending.resolvePendingGraphExecution(undefined, {});
+  assert.deepEqual(await next.promise, {});
+});
+
 test('sendPendingRemoteGraphRunRequest returns pending results after a successful send', async () => {
   let resolvePending!: (value: GraphOutputs) => void;
   const pending = new Promise<GraphOutputs>((resolve) => {
@@ -685,6 +752,42 @@ test('sendPendingRemoteGraphRunRequest keeps ownership until the targeted abort 
   rejectPending(new Error('graph execution aborted'));
   await rejection;
   assert.deepEqual(lifecycle, ['created:request-1', 'settled:request-1']);
+});
+
+test('cancellation during synchronous send waits for the accepted run terminal event', async () => {
+  const abort = new AbortController();
+  const pending = createExecutorSessionPendingExecutions();
+  let requestId: RemoteRunRequestId | undefined;
+  let settled = 0;
+  let aborted = 0;
+  const running = sendPendingRemoteGraphRunRequest({
+    abortSignal: abort.signal,
+    executorSession: pending,
+    disconnectErrorMessage: 'disconnected',
+    payload: makeRunPayload(),
+    onRequestCreated: (id) => {
+      requestId = id;
+    },
+    onRequestSettled: () => {
+      settled++;
+    },
+    sendRun: () => {
+      abort.abort();
+      return true;
+    },
+    sendAbort: (id) => {
+      assert.equal(id, requestId);
+      aborted++;
+      return true;
+    },
+  });
+  await Promise.resolve();
+  assert.equal(aborted, 1);
+  assert.equal(settled, 0);
+  const failure = assert.rejects(running, /remote terminal/);
+  pending.rejectPendingGraphExecution(requestId, new Error('remote terminal'));
+  await failure;
+  assert.equal(settled, 1);
 });
 
 test('sendPendingRemoteGraphRunRequest rejects locally when a targeted abort cannot be sent', async () => {

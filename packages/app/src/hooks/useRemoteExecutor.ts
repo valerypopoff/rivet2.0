@@ -12,7 +12,6 @@ import {
   type RivetWebAppStorage,
   type StringArrayDataValue,
   type GraphId,
-  type GraphInputNode,
   type Project,
   type CombinedDataset,
   serializeDatasets,
@@ -53,9 +52,6 @@ import { type RefObject, useEffect, useRef } from 'react';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import {
   createProcessEventDispatcher,
-  getDependentDataForNodeForPreload,
-  getEditorRunFromPlan,
-  getEditorRunToPlan,
   getFrozenNodeOptionsForExecutorTarget,
   getFrozenNodeOutputsForExecutorRunPayload,
   shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent,
@@ -72,11 +68,10 @@ import {
   type LocalExecutionRecordingPersistenceProvider,
 } from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
-import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import {
-  resetRemoteExecutorUploadCache,
-  type RemoteExecutorUploadCache,
+  getRemoteExecutorUploadCacheForSocket,
+  prepareRemoteExecutorProjectUpload,
   uploadRemoteExecutorProjectIfNeeded,
 } from './remoteExecutorUploadCache.js';
 import type { ExecutorSessionRuntime } from './executorSession.js';
@@ -97,7 +92,7 @@ import {
   summarizeRemoteDebuggerRoutingState,
 } from './remoteDebuggerDiagnostics.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
-import { waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
+import { bindExecutorSessionRun, waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
 import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
 import {
@@ -108,6 +103,13 @@ import {
 } from './remoteResponseTrace.js';
 import { withRemoteEvaluationAccounting } from './remoteEvaluationEventCollection.js';
 import { recordingStatusAfterAbort } from '../utils/recordingCapturePolicy.js';
+import {
+  captureEditorRun,
+  evaluationInputsToGraphOutputs,
+  prepareEditorRunSelection,
+  prepareEvaluationRun,
+} from './preparedEditorRun.js';
+import { EditorRunSession } from './editorRunSession.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
@@ -170,27 +172,6 @@ function captureRemoteLocalExecutionTerminal(
   }
 }
 
-function evaluationInputsToGraphOutputs(
-  project: Project,
-  graphId: GraphId,
-  inputs: Record<string, PortableJson>,
-): GraphOutputs {
-  const graph = project.graphs[graphId];
-  if (!graph) throw new Error(`Evaluation target graph "${graphId}" does not exist.`);
-  const graphInputs = new Map(
-    graph.nodes
-      .filter((node): node is GraphInputNode => node.type === 'graphInput')
-      .map((node) => [node.data.id, node]),
-  );
-  return Object.fromEntries(
-    Object.entries(inputs).map(([inputId, value]) => {
-      const graphInput = graphInputs.get(inputId);
-      if (!graphInput) throw new Error(`Evaluation provided unknown graph input "${inputId}".`);
-      return [inputId, { type: graphInput.data.dataType, value }];
-    }),
-  ) as GraphOutputs;
-}
-
 function createRemoteEvaluationRecordingReference(): EvaluationRecordingReference {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return {
@@ -209,6 +190,7 @@ export function useRemoteExecutor() {
   const hostedEvaluationCoordinator = useHostedEvaluationCoordinator();
   const store = useStore();
   const activeGraphRequestIdRef = useRef<RemoteRunRequestId | null>(null);
+  const editorRunSessions = useRef(new Map<RemoteRunRequestId, EditorRunSession>());
   // An evaluation owns several remote graph requests at once, so it cannot
   // share the normal one-request editor abort state.
   const evaluationAbortControllerRef = useRef<AbortController | null>(null);
@@ -227,7 +209,6 @@ export function useRemoteExecutor() {
   const externalDebuggerRunFlushedFrozenOutputsRef = useRef(false);
   const remoteDebuggerDiagnosticsRef = useRef(createRemoteDebuggerDiagnostics());
   const unscopedEventRoutingRef = useRef(createUnscopedRemoteExecutionRoutingState());
-  const uploadCacheRef = useRef<RemoteExecutorUploadCache>({});
   const projectNodeRegistry = useProjectNodeRegistry();
   const project = useAtomValue(projectState);
   const projectData = useAtomValue(projectDataState);
@@ -321,6 +302,8 @@ export function useRemoteExecutor() {
 
   const remoteDebugger = useRemoteDebugger({
     onDisconnect: () => {
+      for (const session of editorRunSessions.current.values()) session.disposeInBackground();
+      editorRunSessions.current.clear();
       evaluationAbortControllerRef.current?.abort(
         new DOMException('Remote executor disconnected while an evaluation was running.', 'AbortError'),
       );
@@ -369,7 +352,6 @@ export function useRemoteExecutor() {
     const resetSessionCaches = () => {
       externalDebuggerRunFlushedFrozenOutputsRef.current = false;
       remoteDebuggerDiagnosticsRef.current.reset();
-      resetRemoteExecutorUploadCache(uploadCacheRef.current);
     };
     const unsubscribeConnect = executorSession.subscribeLifecycle('connect', resetSessionCaches);
     const unsubscribeDisconnect = executorSession.subscribeLifecycle('disconnect', resetSessionCaches);
@@ -381,6 +363,13 @@ export function useRemoteExecutor() {
   }, [executorSession]);
 
   const handleExecutorMessage: RemoteExecutorMessageHandler = useStableCallback((message, data, requestId) => {
+    // Request completion is independent of the visible tab. Abort and early
+    // outputs are not terminal; retain ownership until done/error or disconnect.
+    if (requestId && (message === 'done' || message === 'error')) {
+      const session = editorRunSessions.current.get(requestId);
+      editorRunSessions.current.delete(requestId);
+      if (session) session.disposeInBackground();
+    }
     captureRemoteLocalExecutionTerminal(
       requestId == null ? undefined : localRecordingCapturesByRequestIdRef.current.get(requestId),
       message,
@@ -405,6 +394,16 @@ export function useRemoteExecutor() {
       unscopedRoutingState: unscopedEventRoutingRef.current,
     });
     const shouldDispatchExecutionEvent = dispatchDecision.shouldDispatch;
+    // Legacy debuggers may omit request IDs. Release only the active request
+    // whose terminal event the existing routing policy actually accepted.
+    if (!requestId && shouldDispatchExecutionEvent && (message === 'done' || message === 'error')) {
+      const activeRequestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+      if (activeRequestId) {
+        const session = editorRunSessions.current.get(activeRequestId);
+        editorRunSessions.current.delete(activeRequestId);
+        if (session) session.disposeInBackground();
+      }
+    }
     const routingAfter = externalDebuggerTarget
       ? summarizeRemoteDebuggerRoutingState(unscopedEventRoutingRef.current)
       : undefined;
@@ -640,51 +639,66 @@ export function useRemoteExecutor() {
 
   const tryRunGraph = async (options: EditorGraphRunOptions = {}): Promise<GraphOutputs | undefined> => {
     options.abortSignal?.throwIfAborted();
-    let sessionState = executorSession.getRuntimeState();
-    if (!sessionState.capabilities.canSendRun && options.waitForResults) {
-      sessionState = await waitForExecutorSessionRunCapability(executorSession);
-      options.abortSignal?.throwIfAborted();
-    }
-
-    if (!sessionState.capabilities.canSendRun) {
-      logRuntimeDebug('Remote graph run skipped because executor session cannot send runs.', {
-        status: sessionState.status,
-        target: sessionState.target?.type ?? 'none',
-      });
-      if (options.throwOnError) {
-        throw new Error(`Executor cannot run graphs right now (status: ${sessionState.status}).`);
-      }
-      return undefined;
-    }
-
-    const graphToRun = options.graphId ?? graph.metadata!.id!;
-    const bundleManifestPath = store.get(projectsState).openedProjects[project.metadata.id]?.bundleManifestPath;
-
+    const runSession = new EditorRunSession(options.abortSignal);
+    let requestOwnsSession = false;
     try {
+      const captured = captureEditorRun({
+        project,
+        currentGraph: graph,
+        projectData,
+        plugins: { appPluginStates: pluginStates, currentGraph: graph, registry: projectNodeRegistry },
+        options,
+      });
+      options = { ...captured.options, abortSignal: runSession.signal };
+      const contextValues = getProjectContextValues(projectContext);
+      const runSettings = structuredClone(savedSettings);
+      let sessionState = executorSession.getRuntimeState();
+      const selectedTargetKey = getRemoteExecutorUploadSessionKey(sessionState);
+      if (!sessionState.capabilities.canSendRun && options.waitForResults) {
+        sessionState = await waitForExecutorSessionRunCapability(executorSession, undefined, runSession.signal);
+        options.abortSignal?.throwIfAborted();
+      }
+
+      if (!sessionState.capabilities.canSendRun) {
+        logRuntimeDebug('Remote graph run skipped because executor session cannot send runs.', {
+          status: sessionState.status,
+          target: sessionState.target?.type ?? 'none',
+        });
+        if (options.throwOnError) {
+          throw new Error(`Executor cannot run graphs right now (status: ${sessionState.status}).`);
+        }
+        return undefined;
+      }
+
+      const graphToRun = captured.graphId;
+      const connection = bindExecutorSessionRun(executorSession, sessionState);
+      const assertPreparationCurrent = () => {
+        runSession.signal.throwIfAborted();
+        const current = executorSession.getRuntimeState();
+        if (getRemoteExecutorUploadSessionKey(current) !== selectedTargetKey)
+          throw new Error('Executor changed while preparing the run. Run it again on the selected executor.');
+        connection.assertCurrent();
+        if (!store.get(projectsState).openedProjects[captured.projectId])
+          throw new Error('The project was closed while preparing the run.');
+      };
+      const sendOwnedAbort = (requestId: RemoteRunRequestId) => {
+        if (!connection.isCurrent()) return false;
+        return remoteDebugger.send('abort', { requestId });
+      };
+      const bundleManifestPath = store.get(projectsState).openedProjects[project.metadata.id]?.bundleManifestPath;
+
       const entryDatasets =
         ioProvider.readProjectBundle && loadedProject.path
           ? datasetProvider.exportDatasetsForProject(project.metadata.id)
           : Promise.resolve([]);
       void entryDatasets.catch(() => {});
-      const projectWithCurrentGraph = withDerivedProjectPluginSpecs(
-        {
-          ...project,
-          graphs: {
-            ...project.graphs,
-            [graph.metadata!.id!]: graph,
-          },
-        },
-        {
-          appPluginStates: pluginStates,
-          currentGraph: graph,
-          registry: projectNodeRegistry,
-        },
-      );
+      const projectWithCurrentGraph = captured.project;
 
+      let uploadPreparedProject: (() => void) | undefined;
       if (executorSession.getRuntimeState().capabilities.canUploadProject) {
         const projectToUpload = projectWithCurrentGraph;
         const settings = await fillMissingSettingsFromEnvironmentVariables(
-          savedSettings,
+          runSettings,
           projectNodeRegistry.getPlugins(),
           {
             environmentProvider,
@@ -692,17 +706,18 @@ export function useRemoteExecutor() {
           },
         );
 
-        uploadRemoteExecutorProjectIfNeeded({
-          cache: uploadCacheRef.current,
-          project: projectToUpload,
-          projectData,
-          sessionKey: getRemoteExecutorUploadSessionKey(executorSession.getRuntimeState()),
-          settings,
-          transport: {
-            sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
-            sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
-          },
-        });
+        uploadPreparedProject = () =>
+          uploadRemoteExecutorProjectIfNeeded({
+            cache: getRemoteExecutorUploadCacheForSocket(sessionState.socket),
+            project: projectToUpload,
+            projectData: projectWithCurrentGraph.data,
+            sessionKey: getRemoteExecutorUploadSessionKey(executorSession.getRuntimeState()),
+            settings,
+            transport: {
+              sendDynamicData: (payload) => remoteDebugger.send('set-dynamic-data', payload),
+              sendStaticData: (id, dataValue) => remoteDebugger.sendRaw(`set-static-data:${id}:${dataValue}`),
+            },
+          });
       }
 
       const remoteLocalRecordingProjectPath =
@@ -722,10 +737,7 @@ export function useRemoteExecutor() {
       const remoteLocalRecordingCorrelationId = remoteLocalRecordingProvider
         ? createLocalExecutionRecordingCorrelationId()
         : undefined;
-      const remoteLocalRecordingProject: Project =
-        projectData === undefined
-          ? projectWithCurrentGraph
-          : { ...projectWithCurrentGraph, data: structuredClone(projectData) };
+      const remoteLocalRecordingProject = projectWithCurrentGraph;
       let remoteLocalRecordingRequestId: RemoteRunRequestId | undefined;
       const startRemoteLocalExecutionRecording = (requestId: RemoteRunRequestId) => {
         if (!remoteLocalRecordingProvider || !remoteLocalRecordingCorrelationId || !remoteLocalRecordingProjectPath) {
@@ -765,7 +777,7 @@ export function useRemoteExecutor() {
 
         remoteLocalRecordingRequestId = requestId;
         localRecordingCapturesByRequestIdRef.current.set(requestId, capture);
-        void recorderPromise.then(
+        const finalizedRecording = recorderPromise.then(
           () => finalizeRemoteLocalExecutionRecording(requestId),
           async (error) => {
             localRecordingCapturesByRequestIdRef.current.delete(requestId);
@@ -783,38 +795,31 @@ export function useRemoteExecutor() {
             });
           },
         );
+        runSession.onDispose(() => finalizedRecording);
       };
 
-      const contextValues = getProjectContextValues(projectContext);
-      let runToNodeIds = options.to;
-      let preloadData: Record<NodeId, Outputs> | undefined;
+      const selection = prepareEditorRunSelection({
+        project: projectWithCurrentGraph,
+        graphId: graphToRun,
+        options,
+        registry: projectNodeRegistry,
+        previousRunData: lastRunData,
+        frozen: getFrozenNodeOptionsForExecutorTarget(frozenNodeOutputs, graphToRun, sessionState.target),
+      });
+      const { runToNodeIds, preloadData } = selection;
+      if (selection.preserveNodeIds) currentExecution.preserveNodeRunDataForNextStart(selection.preserveNodeIds);
+      if (selection.suppressPreloadedNodeIds)
+        currentExecution.suppressPreloadedNodeEventsForCurrentRun(selection.suppressPreloadedNodeIds);
 
-      if (options.from) {
-        const runFromPlan = getEditorRunFromPlan(
-          projectWithCurrentGraph,
-          graphToRun,
-          options.from,
-          projectNodeRegistry,
-        );
-        runToNodeIds = runFromPlan.runToNodeIds;
-        preloadData = getDependentDataForNodeForPreload(
-          runFromPlan.preloadNodeIds,
-          lastRunData,
-          getFrozenNodeOptionsForExecutorTarget(frozenNodeOutputs, graphToRun, sessionState.target),
-        );
-        currentExecution.preserveNodeRunDataForNextStart(runFromPlan.preserveNodeIds);
-        currentExecution.suppressPreloadedNodeEventsForCurrentRun(runFromPlan.preloadNodeIds);
-      } else if (options.to) {
-        const runToPlan = getEditorRunToPlan(
-          projectWithCurrentGraph,
-          graphToRun,
-          options.to,
-          projectNodeRegistry,
-          getFrozenNodeOptionsForExecutorTarget(frozenNodeOutputs, graphToRun, sessionState.target),
-        );
-        runToNodeIds = runToPlan.runToNodeIds;
-        currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
-      }
+      const ownRequest = (requestId: RemoteRunRequestId, awaitingResult = false) => {
+        requestOwnsSession = true;
+        editorRunSessions.current.set(requestId, runSession);
+        if (!awaitingResult)
+          runSession.bindCancellation(() => {
+            sendOwnedAbort(requestId);
+          });
+        startRemoteLocalExecutionRecording(requestId);
+      };
 
       const payload = {
         graphId: graphToRun,
@@ -835,6 +840,10 @@ export function useRemoteExecutor() {
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
       options.abortSignal?.throwIfAborted();
+      assertPreparationCurrent();
+      // Upload and dispatch are one synchronous sequence. Another preparation
+      // cannot replace dynamic/static data between this upload and its run.
+      uploadPreparedProject?.();
 
       if (options.waitForResults) {
         try {
@@ -845,7 +854,7 @@ export function useRemoteExecutor() {
             onRequestCreated: (requestId) => {
               activeGraphRequestIdRef.current = requestId;
               executorSession.setActiveGraphRunRequestId(requestId);
-              startRemoteLocalExecutionRecording(requestId);
+              ownRequest(requestId, true);
               if (options.onWebAppStoragePatch) {
                 webAppStoragePatchCallbacksByRequestIdRef.current.set(requestId, options.onWebAppStoragePatch);
               }
@@ -859,9 +868,17 @@ export function useRemoteExecutor() {
               }
             },
             onRequestSettled: (requestId) => {
-              if (earlyResultRequestIdsRef.current.has(requestId)) {
+              if (
+                earlyResultRequestIdsRef.current.has(requestId) &&
+                editorRunSessions.current.get(requestId) === runSession
+              ) {
+                runSession.bindCancellation(() => {
+                  sendOwnedAbort(requestId);
+                });
                 return;
               }
+              editorRunSessions.current.delete(requestId);
+              runSession.disposeInBackground();
               webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
               if (!earlyResultRequestIdsRef.current.has(requestId)) {
                 responseTraceByRequestIdRef.current.delete(requestId);
@@ -873,7 +890,7 @@ export function useRemoteExecutor() {
             },
             onProgress: options.onProgress,
             payload,
-            sendAbort: (requestId) => remoteDebugger.send('abort', { requestId }),
+            sendAbort: sendOwnedAbort,
             sendRun: (payload) => remoteDebugger.send('run', payload),
           });
         } catch (error) {
@@ -896,15 +913,18 @@ export function useRemoteExecutor() {
         activeRequestIdRef: activeGraphRequestIdRef,
         createRequestId: () => executorSession.createRemoteExecutionRequest(),
         payload,
-        onRequestCreated: startRemoteLocalExecutionRecording,
+        onRequestCreated: (requestId) => ownRequest(requestId),
+        onRequestFailed: (requestId) => {
+          if (editorRunSessions.current.get(requestId) === runSession) editorRunSessions.current.delete(requestId);
+          requestOwnsSession = false;
+          localRecordingCapturesByRequestIdRef.current.get(requestId)?.recorderAbortController.abort();
+        },
         sendRun: (payload) => remoteDebugger.send('run', payload),
       });
       if (runRequest.type === 'sent') {
         executorSession.setActiveGraphRunRequestId(runRequest.requestId);
       }
       if (runRequest.type === 'send-failed') {
-        const capture = localRecordingCapturesByRequestIdRef.current.get(runRequest.requestId);
-        if (capture) capture.recorderAbortController.abort();
         currentExecution.clearNodeRunDataPreservationForNextStart();
         logRuntimeDebug('Remote graph run skipped because executor session disconnected before send.', {
           target: executorSession.getRuntimeState().target?.type ?? 'none',
@@ -918,6 +938,8 @@ export function useRemoteExecutor() {
         throw e;
       }
       handleError(e, 'Failed to start remote graph run');
+    } finally {
+      if (!requestOwnsSession) await runSession.dispose();
     }
     return undefined;
   };
@@ -981,22 +1003,21 @@ export function useRemoteExecutor() {
       projectOverride?: Project;
       purpose: EvaluationRunPurpose;
     }) => {
-      const suite = evaluations.data.suites.find((candidate) => candidate.id === suiteId);
-      const dataset = evaluations.datasets.find((candidate) => candidate.id === suite?.datasetId);
-      if (!suite || !dataset) throw new Error('The selected evaluation suite or its dataset no longer exists.');
-      const evaluationBaseProject = projectOverride ?? project;
-      // The active canvas may be unrelated to the selected suite. Always use
-      // the suite target when deriving the remotely uploaded project.
-      const evaluationGraph = evaluationBaseProject.graphs[suite.targetGraphId];
-      if (!evaluationGraph) {
-        throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
-      }
-      const projectForEvaluation = withDerivedProjectPluginSpecs(evaluationBaseProject, {
-        appPluginStates: pluginStates,
-        currentGraph: evaluationGraph,
-        registry: projectNodeRegistry,
+      const {
+        suite,
+        dataset,
+        project: projectForEvaluation,
+      } = prepareEvaluationRun({
+        suiteId,
+        suites: evaluations.data.suites,
+        datasets: evaluations.datasets,
+        project: projectOverride ?? project,
+        plugins: { appPluginStates: pluginStates, registry: projectNodeRegistry },
       });
       const evaluationProjectId = projectForEvaluation.metadata.id;
+      // Capture before capability lookup or any other asynchronous preparation.
+      // Only the WebSocket fallback uses this; hosted runs own a durable job.
+      const evaluationConnection = bindExecutorSessionRun(executorSession);
       const bundleManifestPath = store.get(projectsState).openedProjects[evaluationProjectId]?.bundleManifestPath;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
@@ -1064,7 +1085,10 @@ export function useRemoteExecutor() {
       evaluationProjectIdRef.current = evaluationProjectId;
       const ensureActiveEvaluationProject = () => {
         if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
-        if (isActiveEvaluationProject()) return;
+        if (isActiveEvaluationProject()) {
+          evaluationConnection.assertCurrent();
+          return;
+        }
 
         const reason = new DOMException('Active project changed.', 'AbortError');
         evaluationAbortController.abort(reason);
@@ -1083,6 +1107,7 @@ export function useRemoteExecutor() {
         currentExecution.onEvaluationStart();
         updateActiveProjectEvaluationState((state) => ({ ...state, runningSuiteId: suiteId, currentRun: undefined }));
         let recordingPersistenceFailureCount = 0;
+        let uploadPreparedEvaluation: (() => void) | undefined;
         const finalizedRun = await executeEvaluationRunLifecycle({
           project: projectForEvaluation,
           projectId: evaluationProjectId,
@@ -1112,8 +1137,8 @@ export function useRemoteExecutor() {
               },
             );
             ensureActiveEvaluationProject();
-            uploadRemoteExecutorProjectIfNeeded({
-              cache: uploadCacheRef.current,
+            uploadPreparedEvaluation = prepareRemoteExecutorProjectUpload({
+              cache: getRemoteExecutorUploadCacheForSocket(sessionState.socket),
               project: projectForEvaluation,
               projectData,
               sessionKey: getRemoteExecutorUploadSessionKey(sessionState),
@@ -1192,6 +1217,7 @@ export function useRemoteExecutor() {
                 disconnectErrorMessage: 'Remote executor disconnected before the evaluation graph run could be sent.',
                 executorSession,
                 onRequestCreated: (createdRequestId) => {
+                  ensureActiveEvaluationProject();
                   requestId = createdRequestId;
                   evaluationEventCollectorsByRequestIdRef.current.set(createdRequestId, captured);
                   recorderPromise = executorSession.recordSocketEvents((socket) =>
@@ -1214,8 +1240,15 @@ export function useRemoteExecutor() {
                   captureNodeTimings: showNodeRunDurations,
                   evaluation: metadata,
                 },
-                sendAbort: (createdRequestId) => remoteDebugger.send('abort', { requestId: createdRequestId }),
-                sendRun: (payload) => remoteDebugger.send('run', payload),
+                sendAbort: (createdRequestId) =>
+                  evaluationConnection.isCurrent() && remoteDebugger.send('abort', { requestId: createdRequestId }),
+                sendRun: (payload) => {
+                  ensureActiveEvaluationProject();
+                  // No await between restoring this prepared definition and
+                  // dispatch. Other requests may have replaced the upload slot.
+                  uploadPreparedEvaluation?.();
+                  return remoteDebugger.send('run', payload);
+                },
               });
               captured.metrics.durationMs = Date.now() - startedAt;
               await recorderPromise;

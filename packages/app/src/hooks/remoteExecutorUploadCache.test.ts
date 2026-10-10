@@ -2,11 +2,82 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DataId, GraphId, Project, ProjectId, Settings } from '@valerypopoff/rivet2-core';
 import {
-  planRemoteExecutorProjectUpload,
+  prepareRemoteExecutorProjectUpload,
   resetRemoteExecutorUploadCache,
   type RemoteExecutorUploadCache,
   uploadRemoteExecutorProjectIfNeeded,
 } from './remoteExecutorUploadCache.js';
+
+test('prepared Evaluation uploads restore their slot after another request without reserializing each trial', () => {
+  const cache: RemoteExecutorUploadCache = {};
+  const harness = createUploadHarness();
+  const project = makeProject('evaluation');
+  let serializationReads = 0;
+  Object.defineProperty(project, 'plugins', {
+    enumerable: true,
+    get: () => {
+      serializationReads += 1;
+      return [];
+    },
+  });
+  const evaluationUpload = prepareRemoteExecutorProjectUpload({
+    cache,
+    project,
+    settings: makeSettings(),
+    sessionKey: 'internal:ws://executor',
+    projectData: { ['data-2' as DataId]: 'second', ['data-1' as DataId]: 'evaluation data' },
+    transport: harness.transport,
+  });
+  const preparedReads = serializationReads;
+  assert.ok(preparedReads > 0);
+  assert.equal(evaluationUpload(), 'uploaded');
+  assert.equal(evaluationUpload(), 'cached');
+  uploadRemoteExecutorProjectIfNeeded({
+    cache,
+    project: makeProject('editor'),
+    settings: makeSettings(),
+    sessionKey: 'internal:ws://executor',
+    transport: harness.transport,
+  });
+  assert.equal(evaluationUpload(), 'uploaded');
+  assert.equal(evaluationUpload(), 'cached');
+  assert.equal(serializationReads, preparedReads);
+  assert.equal(harness.dynamicPayloads.length, 3);
+  assert.deepEqual(harness.staticPayloads, [
+    ['data-1', 'evaluation data'],
+    ['data-2', 'second'],
+    ['data-1', 'evaluation data'],
+    ['data-2', 'second'],
+  ]);
+});
+
+test('partial replacement upload invalidates the previous key before any later trial reuses it', () => {
+  const cache: RemoteExecutorUploadCache = {};
+  const harness = createUploadHarness();
+  const evaluationUpload = prepareRemoteExecutorProjectUpload({
+    cache,
+    project: makeProject('evaluation'),
+    settings: makeSettings(),
+    sessionKey: 'internal:ws://executor',
+    transport: harness.transport,
+  });
+  assert.equal(evaluationUpload(), 'uploaded');
+  assert.throws(
+    () =>
+      uploadRemoteExecutorProjectIfNeeded({
+        cache,
+        project: makeProject('replacement'),
+        settings: makeSettings(),
+        projectData: { ['data-1' as DataId]: 'replacement data' },
+        sessionKey: 'internal:ws://executor',
+        transport: createUploadHarness({ staticSendResult: false }).transport,
+      }),
+    /static project data/,
+  );
+  assert.equal(cache.uploadKey, undefined);
+  assert.equal(evaluationUpload(), 'uploaded');
+  assert.equal(harness.dynamicPayloads.length, 2);
+});
 
 function makeProject(text = 'hello'): Project {
   return {
@@ -67,51 +138,6 @@ function createUploadHarness(options: { dynamicSendResult?: boolean; staticSendR
     },
   };
 }
-
-test('remote executor upload planner reports required and reusable uploads without sending', () => {
-  const cache: RemoteExecutorUploadCache = {};
-  const project = makeProject();
-  const settings = makeSettings();
-  const projectData = {
-    ['data-b' as DataId]: 'b',
-    ['data-a' as DataId]: 'a',
-  };
-
-  const required = planRemoteExecutorProjectUpload({
-    cache,
-    project,
-    projectData,
-    sessionKey: 'internal:ws://executor',
-    settings,
-  });
-
-  assert.equal(required.type, 'upload-required');
-  assert.equal(required.sessionKey, 'internal:ws://executor');
-  assert.deepEqual(required.staticDataEntries, [
-    ['data-a', 'a'],
-    ['data-b', 'b'],
-  ]);
-
-  uploadRemoteExecutorProjectIfNeeded({
-    cache,
-    project,
-    projectData,
-    sessionKey: 'internal:ws://executor',
-    settings,
-    transport: createUploadHarness().transport,
-  });
-
-  const reusable = planRemoteExecutorProjectUpload({
-    cache,
-    project,
-    projectData,
-    sessionKey: 'internal:ws://executor',
-    settings,
-  });
-
-  assert.equal(reusable.type, 'reuse-upload');
-  assert.equal(reusable.uploadKey, required.uploadKey);
-});
 
 test('remote executor upload cache skips identical consecutive project uploads', () => {
   const cache: RemoteExecutorUploadCache = {};

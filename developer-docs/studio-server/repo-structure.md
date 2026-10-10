@@ -43,6 +43,14 @@ on Rivet or another Studio Server package use `workspace:^`. Do not add nested
 lockfiles, nested package managers, generated package links, or a second copy
 of Rivet source.
 
+The hosted editor consumes the shared app's refactored execution preparation,
+run sessions, Evaluation commands and history hook. Those owners belong under
+`packages/app`, not duplicated under Studio Server Web. Server-side
+`ExecutionSession` remains a different processor-run owner; it is not the app's
+`EditorRunSession` and must not acquire the editor connection. See
+[Architecture](./architecture.md#hosted-editor-integration-boundaries) and the
+[cross-package ownership map](../EXECUTION-REFACTOR-ACCEPTANCE.md).
+
 ## Deployment Ownership
 
 `deploy/studio-server/images/` owns canonical production Dockerfiles and their

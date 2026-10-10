@@ -6,6 +6,13 @@ collecting evidence, not a claim that every listed scenario has passed on the
 current machine or deployment. The documentation audit began at `6dd9466af` on
 2026-09-07; record the actual baseline commit again when refactor work starts.
 
+The implemented editor/Evaluation/Core ownership split is documented in
+[Execution And Evaluation Ownership](./EXECUTION-REFACTOR-ACCEPTANCE.md).
+Use that guide for current capture, cancellation, history and inheritance owners;
+this document remains the general compatibility/evidence checklist. Introducing
+helper owners does not imply that full run completion, database transactions or
+transport ownership moved out of their established adapters.
+
 ## Establish the baseline
 
 Record the commit, dirty-tree diff, Node/Yarn versions, OS, runtime profile,

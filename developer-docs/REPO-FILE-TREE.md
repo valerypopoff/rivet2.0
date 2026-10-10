@@ -84,9 +84,24 @@ centralized through the existing core entrypoints.
 or have focused non-React tests. Do not create new app domain folders until
 multiple pure helpers naturally belong together.
 
+Editor execution preparation and run lifetime live in
+`packages/app/src/hooks/preparedEditorRun.ts` and `editorRunSession.ts`.
+Connection ownership remains in the executor-session modules; Browser/remote
+hooks are adapters, not new session managers. Evaluation presentation and commands
+stay together under `components/evaluations/`, with one scoped history hook.
+Core invocation/shared/boundary state owners stay under `core/src/model/`, while
+`GraphProcessor` retains scheduling and event emission. See the
+[ownership guide](./EXECUTION-REFACTOR-ACCEPTANCE.md) before adding a field or
+another execution path.
+
 `packages/node` keeps Node runtime APIs, debugger transport, Node-native
 providers, and runtime benchmarks. Benchmarks stay discoverable under
 `packages/node/bench`.
+
+The cross-package ownership comparison is intentionally under
+`scripts/bench/execution-ownership.mjs`: it compares committed and working Core
+implementations plus editor capture, rather than benchmarking only Node APIs.
+Its generated reports belong under ignored `artifacts/bench/`.
 
 `packages/app-executor/bin` currently contains executable entrypoints and
 sidecar implementation files because the packaging flow expects that shape. Do

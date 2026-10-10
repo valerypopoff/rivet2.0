@@ -778,9 +778,12 @@ the node class.
 The class maintains both:
 
 - per-instance state, such as project/graph/registry/node-instance maps
-- per-run state, such as results, visited nodes, abort controllers, globals, loaded references, and queue state
+- invocation state, such as results, visited nodes, abort controllers, loaded references, and queue state
+- root-shared state, such as globals, execution cache, stored-value/knowledge controllers and resolved cross-project targets
 
 This distinction is important because some state is reused across runs and some is rebuilt on each `processGraph(...)`.
+Globals and execution cache deliberately retain their existing reuse semantics;
+they must not be treated as ordinary invocation fields that reset with results.
 
 `GraphRunLifecycle` owns the small run-level state machine (`idle`, `running`,
 `aborting`, `finished`), pause persistence, one accepted abort decision, and the
@@ -796,6 +799,48 @@ Current behavioral detail:
 - dependency readiness tracks upstream nodes directly; titles are presentation metadata and must never decide whether a consumer is allowed to run
 - `Context` nodes resolve values in a strict order: runtime `contextValues[id]`, then a connected default input when the default-input toggle is enabled, then the editor default, then the data type's built-in default. Every resolved value is coerced to the node's configured data type before being emitted.
 - pause waits are abort-aware, so aborting a paused run unwinds instead of waiting forever for a later `resume`
+
+### Execution-state ownership
+
+`GraphExecutionState.ts` separates invocation bookkeeping from root-shared
+resources. `GraphInvocationState` contains results, input/output maps, queue,
+abort controllers, cost, and child tracking. `GraphSharedExecutionState` contains
+intentional shared globals/cache, stored-value/knowledge controllers and resolved
+cross-project targets. Every child kind inherits that same shared owner; a reused
+root replaces the shared scope while retaining only the existing globals/cache
+reuse contract. Old child scopes never acquire the next run's target cache.
+`nextRootRun` creates that fresh target cache; initialization must not reset it
+again or mutate the previous shared owner.
+
+`GraphSchedulerBoundaryState` owns streaming/Catch plans, streams, pending work,
+and failure collections. It drains Catch tasks until both the admitted tasks and
+queue follow-up work settle. Scheduling, topology decisions, event emission and
+the run lifecycle remain in their existing owners.
+
+Reset decisions live in `GraphInvocationState.initialize` and the separate
+boundary topology/input-stream initialization phases, called by
+`GraphProcessor.#initProcessState` and `processGraph`. Owners are mutated in place,
+not replaced wholesale. Seeded-plan preparation and child
+overrides can exist before initialization; clearing every field changes Watch
+events and async cost accounting. Ordinary children remain isolated; same-graph
+continuations retain only their explicit graph-output/attached-data/input-value
+overrides. This refactor does not introduce cross-run compiled-plan caching or
+change externally visible execution identities.
+
+These state classes are implementation owners, not new host-facing processor
+APIs. Add invocation fields to `GraphInvocationState` with an explicit reset and
+child-inheritance decision; add shared resources only when all child kinds need
+the same root lifetime. Add stream subscriptions/relays to the boundary owner
+with their release path. Keep node scheduling and observable event order in
+`GraphProcessor`, and keep root async-task admission/drain in `ManagedAsyncBranches`.
+The detailed inheritance matrix is the acceptance guide linked below.
+
+`GraphSchedulerBoundaryState.releaseInputStreams` attempts every disposer and
+relay finalizer before reporting cleanup failures and clears its subscription
+references. Processor terminal cleanup and finish emission run even if a stream
+disposer or boundary drain fails. This is independently covered by state-owner
+tests; scheduling order remains characterized through public processor tests.
+See [execution refactor acceptance](EXECUTION-REFACTOR-ACCEPTANCE.md).
 
 ### Preprocessing
 
