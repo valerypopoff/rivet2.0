@@ -25,6 +25,11 @@ type HistogramSample = Readonly<{
 }>;
 
 const DURATION_BUCKETS_SECONDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120];
+const STORAGE_DURATION_BUCKETS_SECONDS = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, ...DURATION_BUCKETS_SECONDS];
+const durationBuckets = (name: string) =>
+  name.startsWith('rivet_catalog_') || name.startsWith('rivet_parsed_execution_')
+    ? STORAGE_DURATION_BUCKETS_SECONDS
+    : DURATION_BUCKETS_SECONDS;
 
 export type MetricsHttpRoute =
   | 'api'
@@ -98,6 +103,52 @@ export class StudioMetrics {
 
   get enabled(): boolean {
     return this.#enabled;
+  }
+
+  recordCatalogEvent(
+    event:
+      | 'started'
+      | 'closed'
+      | 'failed'
+      | 'count_rejected'
+      | 'bytes_rejected'
+      | 'cancelled_before_dispatch'
+      | 'operation_failed',
+  ): void {
+    this.incrementCounter('rivet_catalog_worker_events_total', { event });
+  }
+
+  adjustCatalogState(delta: { pending: number; active: number; reservedBytes: number; workers: number }): void {
+    if (!this.#enabled) return;
+    for (const [name, value] of [
+      ['rivet_catalog_worker_pending_operations', delta.pending],
+      ['rivet_catalog_worker_active_operations', delta.active],
+      ['rivet_catalog_worker_reserved_bytes', delta.reservedBytes],
+      ['rivet_catalog_worker_instances', delta.workers],
+    ] as const) {
+      this.setMetricValue(this.#gauges, name, {}, (current) => Math.max(0, current + value));
+    }
+  }
+
+  observeCatalogOperation(stage: 'queue' | 'dispatched' | 'startup' | 'shutdown', durationMs: number): void {
+    this.observeHistogram('rivet_catalog_worker_duration_seconds', { stage }, Math.max(0, durationMs) / 1000);
+  }
+
+  recordParsedExecutionCache(
+    event: 'hit' | 'miss' | 'disabled' | 'entry_too_large' | 'total_budget' | 'evicted',
+  ): void {
+    this.incrementCounter('rivet_parsed_execution_cache_events_total', { event });
+  }
+
+  adjustParsedExecutionCache(deltaBytes: number): void {
+    if (this.#enabled)
+      this.setMetricValue(this.#gauges, 'rivet_parsed_execution_cache_retained_bytes', {}, (value) =>
+        Math.max(0, value + deltaBytes),
+      );
+  }
+
+  observeParsedExecution(stage: 'parse' | 'accounting' | 'clone', durationMs: number): void {
+    this.observeHistogram('rivet_parsed_execution_duration_seconds', { stage }, Math.max(0, durationMs) / 1000);
   }
 
   observeHttpRequest(input: { durationMs: number; method: string; route: MetricsHttpRoute; status: number }): void {
@@ -501,14 +552,12 @@ export class StudioMetrics {
       const key = labelKey(normalizedLabels);
       const family = this.#histograms.get(name) ?? new Map<string, HistogramSample>();
       const current = family.get(key) ?? {
-        buckets: DURATION_BUCKETS_SECONDS.map(() => 0),
+        buckets: durationBuckets(name).map(() => 0),
         count: 0,
         labels: normalizedLabels,
         sum: 0,
       };
-      const buckets = current.buckets.map(
-        (count, index) => count + (value <= DURATION_BUCKETS_SECONDS[index]! ? 1 : 0),
-      );
+      const buckets = current.buckets.map((count, index) => count + (value <= durationBuckets(name)[index]! ? 1 : 0));
       family.set(key, {
         buckets,
         count: current.count + 1,
@@ -634,9 +683,9 @@ function renderHistogramFamilies(families: Map<string, Map<string, HistogramSamp
   for (const [name, samples] of families) {
     lines.push(`# TYPE ${name} histogram`);
     for (const sample of samples.values()) {
-      for (let index = 0; index < DURATION_BUCKETS_SECONDS.length; index += 1) {
+      for (let index = 0; index < durationBuckets(name).length; index += 1) {
         lines.push(
-          `${name}_bucket${renderLabels({ ...sample.labels, le: DURATION_BUCKETS_SECONDS[index]! })} ${sample.buckets[index]!}`,
+          `${name}_bucket${renderLabels({ ...sample.labels, le: durationBuckets(name)[index]! })} ${sample.buckets[index]!}`,
         );
       }
       lines.push(`${name}_bucket${renderLabels({ ...sample.labels, le: '+Inf' })} ${sample.count}`);

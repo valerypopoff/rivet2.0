@@ -217,6 +217,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         ...snapshot,
         path: filePath,
         openedGraph,
+        graphToLoad: preferredGraphId ? snapshot.project.graphs[preferredGraphId] : undefined,
         evaluationData: evaluation.evaluationData,
         evaluationDatasets: evaluation.evaluationDatasets,
       };
@@ -287,6 +288,9 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       ...snapshot,
       path: filePath,
       openedGraph,
+      // Subgraph navigation is an explicit graph selection, not a restore
+      // fallback. Remembered navigation must not override the requested graph.
+      graphToLoad: preferredGraphId ? snapshot.project.graphs[preferredGraphId] : undefined,
       evaluationData: evaluation.evaluationData,
       evaluationDatasets: evaluation.evaluationDatasets,
     } satisfies RivetProjectSnapshotInput;

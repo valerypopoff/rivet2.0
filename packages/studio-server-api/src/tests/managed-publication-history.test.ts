@@ -108,6 +108,7 @@ function createWebAppPublicationRow(overrides: Partial<WebAppPublicationRow> = {
 
 function createManagedWebAppProjectContents(uiGraphs: Array<[string, string]>): string {
   const project = createWebAppProjectWithUiGraphs({ loadProjectFromString }, createBlankProjectFile('Main'), uiGraphs);
+  project.metadata.id = 'workflow-a' as typeof project.metadata.id;
   const serializedProject = serializeProject(project);
   if (typeof serializedProject !== 'string') {
     throw new TypeError('Expected serialized project to be a string');
@@ -129,6 +130,7 @@ function createPublicationHarness(
     webAppRows?: WebAppPublicationRow[];
     revisionContents?: Record<string, string>;
     forbidDatasetReads?: boolean;
+    beforeArtifactRead?: () => void;
   } = {},
 ) {
   const workflow = options.workflow ?? createWorkflow();
@@ -148,10 +150,13 @@ function createPublicationHarness(
   const workflowLookups: Array<{ relativePath: string; forUpdate: boolean }> = [];
   const commitTasks: Array<() => Promise<void>> = [];
   let latestInsertedPublishedVersionId: string | null = null;
+  let mutated = false;
+  let inTransaction = false;
 
   const client = {
     async query(sql: string, params: unknown[] = []) {
       clientQueries.push({ sql, params });
+      if (normalizeSql(sql).startsWith('UPDATE workflows')) mutated = true;
       if (normalizeSql(sql).startsWith('UPDATE workflows SET publication_version = publication_version + 1')) {
         workflow.publication_version = (BigInt(workflow.publication_version ?? '0') + 1n).toString();
         return { rows: [{ publication_version: workflow.publication_version }] };
@@ -218,7 +223,13 @@ function createPublicationHarness(
     withTransaction: async <T>(
       run: (transactionClient: PoolClient, transactionHooks: TransactionHooks) => Promise<T>,
     ) => {
-      const result = await run(client, hooks);
+      inTransaction = true;
+      let result: T;
+      try {
+        result = await run(client, hooks);
+      } finally {
+        inTransaction = false;
+      }
       for (const task of commitTasks) {
         await task();
       }
@@ -245,7 +256,7 @@ function createPublicationHarness(
           relativePath,
           forUpdate: lookupOptions.forUpdate === true,
         });
-        if (workflowLookups.length === 1) {
+        if (!mutated) {
           return workflow;
         }
 
@@ -262,6 +273,8 @@ function createPublicationHarness(
     },
     revisions: {
       readRevisionContents: async (revision: RevisionRow) => {
+        assert.equal(inTransaction, false, 'publication artifacts must be prepared before acquiring a transaction');
+        options.beforeArtifactRead?.();
         if (options.forbidDatasetReads) throw new Error('Settings must not read datasets');
         return {
           contents: revisionContents[revision.revision_id] ?? createManagedWebAppProjectContents([]),
@@ -432,10 +445,11 @@ test('managed web app publication list exposes revision-based statuses', async (
 });
 
 test('managed endpoint publish rejects a revision whose selected Main Graph no longer exists', async () => {
-  const contentsWithoutMainGraph = createBlankProjectFile('Main').replace(
-    /^[ \t]*mainGraphId:.*\r?\n/m,
-    '    mainGraphId: "missing-main-graph"\n',
-  );
+  const project = loadProjectFromString(createBlankProjectFile('Main'));
+  project.metadata.id = 'workflow-a' as typeof project.metadata.id;
+  project.metadata.mainGraphId = 'missing-main-graph' as typeof project.metadata.mainGraphId;
+  const contentsWithoutMainGraph = serializeProject(project);
+  assert.ok(typeof contentsWithoutMainGraph === 'string');
   const { service, clientQueries, endpointSyncCalls, invalidationRequests, reviewedPreconditions } =
     createPublicationHarness({
       revisionContents: {
@@ -529,7 +543,7 @@ test('managed publication backfills legacy current versions before new publishes
   assert.equal(project.settings.status, 'published');
 });
 
-test('managed publishing rejects a stale revision under the row lock without mutations', async () => {
+test('managed publishing rejects a stale revision before preparing artifacts without mutations', async () => {
   const { service, clientQueries, endpointSyncCalls, invalidationRequests, workflowLookups } =
     createPublicationHarness();
   await assert.rejects(
@@ -548,10 +562,107 @@ test('managed publishing rejects a stale revision under the row lock without mut
   assert.deepEqual(clientQueries, []);
   assert.deepEqual(endpointSyncCalls, []);
   assert.deepEqual(invalidationRequests, []);
-  assert.equal(workflowLookups[0]?.forUpdate, true);
+  assert.equal(workflowLookups[0]?.forUpdate, false);
 });
 
-test('managed web-app publishing rejects stale draft, publication, and project identity under the row lock', async () => {
+test('managed publication rejects mismatched revision and artifact identities before taking a writer lock', async () => {
+  for (const mismatch of ['revision', 'artifact'] as const) {
+    for (const webApp of [false, true]) {
+      const harness = createPublicationHarness({
+        revisions: [createRevision(mismatch === 'revision' ? { workflow_id: 'wrong-project' } : {})],
+        revisionContents: {
+          'draft-revision':
+            mismatch === 'artifact'
+              ? createBlankProjectFile('Wrong identity')
+              : createManagedWebAppProjectContents([['ui-current', 'Current']]),
+        },
+      });
+      const pending = webApp
+        ? harness.service.publishWorkflowProjectWebApps(
+            'Main.rivet-project',
+            [{ uiGraphId: 'ui-current', slug: 'current' }],
+            harness.reviewedPreconditions,
+          )
+        : harness.service.publishWorkflowProjectItem(
+            'Main.rivet-project',
+            { endpointName: 'current' },
+            harness.reviewedPreconditions,
+          );
+      await assert.rejects(pending, { status: 500 });
+      assert.deepEqual(
+        harness.workflowLookups.map((lookup) => lookup.forUpdate),
+        [false],
+      );
+      assert.deepEqual(harness.clientQueries, []);
+      assert.deepEqual(harness.invalidationRequests, []);
+    }
+  }
+});
+
+test('publication rechecks identity, draft and publication under lock after artifact preparation', async () => {
+  for (const change of [
+    { current_draft_revision_id: 'changed-draft' },
+    { publication_version: '1' },
+    { workflow_id: 'replacement-project' },
+  ]) {
+    for (const webApp of [false, true]) {
+      const workflow = createWorkflow();
+      const harness = createPublicationHarness({
+        workflow,
+        revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current']]) },
+        beforeArtifactRead: () => {
+          Object.assign(workflow, change);
+        },
+      });
+      const pending = webApp
+        ? harness.service.publishWorkflowProjectWebApps(
+            'Main.rivet-project',
+            [{ uiGraphId: 'ui-current', slug: 'current' }],
+            harness.reviewedPreconditions,
+          )
+        : harness.service.publishWorkflowProjectItem(
+            'Main.rivet-project',
+            { endpointName: 'current' },
+            harness.reviewedPreconditions,
+          );
+      await assert.rejects(pending, { status: 409 });
+      assert.deepEqual(
+        harness.workflowLookups.map((lookup) => lookup.forUpdate),
+        [false, true],
+      );
+      assert.deepEqual(harness.clientQueries, []);
+      assert.deepEqual(harness.invalidationRequests, []);
+    }
+  }
+});
+
+test('publication owns reviewed preconditions across asynchronous artifact preparation', async () => {
+  for (const webApp of [false, true]) {
+    const workflow = createWorkflow();
+    let expected!: ReturnType<typeof createPublicationHarness>['reviewedPreconditions'];
+    const harness = createPublicationHarness({
+      workflow,
+      revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current']]) },
+      beforeArtifactRead: () => {
+        workflow.current_draft_revision_id = 'new-draft';
+        expected.expectedDraftRevisionId = 'new-draft';
+      },
+    });
+    expected = harness.reviewedPreconditions;
+    const pending = webApp
+      ? harness.service.publishWorkflowProjectWebApps(
+          'Main.rivet-project',
+          [{ uiGraphId: 'ui-current', slug: 'current' }],
+          expected,
+        )
+      : harness.service.publishWorkflowProjectItem('Main.rivet-project', { endpointName: 'current' }, expected);
+    await assert.rejects(pending, { status: 409 });
+    assert.deepEqual(harness.clientQueries, []);
+    assert.deepEqual(harness.invalidationRequests, []);
+  }
+});
+
+test('managed web-app publishing rejects stale draft, publication, and project identity before preparation', async () => {
   const harness = createPublicationHarness({
     workflow: createWorkflow({ publication_version: '3' }),
     revisionContents: { 'draft-revision': createManagedWebAppProjectContents([['ui-current', 'Current Web App']]) },
@@ -586,7 +697,7 @@ test('managed web-app publishing rejects stale draft, publication, and project i
   });
   assert.deepEqual(harness.clientQueries, []);
   assert.deepEqual(harness.invalidationRequests, []);
-  assert.ok(harness.workflowLookups.every(({ forUpdate }) => forUpdate));
+  assert.ok(harness.workflowLookups.every(({ forUpdate }) => !forUpdate));
 
   const published = await publish(expected);
   assert.equal(published.settings.publicationVersion, '4');

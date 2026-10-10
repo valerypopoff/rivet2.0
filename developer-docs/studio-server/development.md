@@ -1,5 +1,144 @@
 # Development
 
+## Serving-path regression checks
+
+Catalog serving uses `worker: true`; direct adapters remain useful for stopped
+migrations and verification. Await initialization and disposal. Only serializable
+storage options enter the worker; host leases/callbacks stay in the parent.
+Publication preparation and commit are separate commands with a compare-and-swap
+guard, not an unlocked read followed by an unconditional update. Never retry an
+unknown worker commit automatically.
+Managed execution concurrency tests cover published/latest endpoint and web-app
+loads. Concurrent callers still share one route/object load but must not share
+mutable project, attached-data, dataset-provider, access-list or diagnostic state.
+All four paths reject artifacts whose project identity differs from the route's
+selected workflow, before returning executable state.
+Publication regressions mutate a caller-owned precondition object during artifact
+preparation and require a stale-draft conflict with no route/history writes.
+Worker-close and worker-loss regressions delay termination acknowledgement to
+verify that disposal and maintenance leases cannot finish early; queued writes
+are never replayed after worker loss.
+Termination-request failure tests cover both worker loss and normal close: a
+rejected request must not settle jobs, close or drain until a separate `exit`
+event confirms the owner is gone. Repeated shutdown errors remain contained, and
+canceling a drain wait must leave operation counts intact.
+Queue cancellation tests distinguish pre-dispatch cancellation from a dispatched
+write, verify pending-read drain and canceled readiness, and prove generation
+paths cannot be retargeted before lazy startup. A canceled idle wait leaves the
+actual operation running. Close remains usable on a canceled signal view.
+Normal and failed close replies retain drain accounting until worker termination;
+an unused close must not start a worker. Mode-change tests exercise both direct
+and worker adapters: failed initialization leaves the old write policy intact,
+startup does not enter write leases before initialization, and late initialization
+cannot revive a shutting-down owner. Recreate a serving worker backend after
+shutdown; offline direct adapters still support an explicit completed-close reopen.
+
+For a fixed, disposable component comparison, build the API and run
+`yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:benchmark 40`.
+It checks identical results before timing fresh parse versus detached cached
+materialization, and direct versus worker compact catalog reads. It reports
+p50/p95/max durations, CPU, sampled RSS, event-loop delay and separate worker
+startup. It accepts only a bounded iteration count, never a deployment URL,
+credentials or a storage path. See the
+[completion checklist](./serving-refactor-verification.md) for measurement limits.
+
+Focused API tests: `parsed-execution-cache.test.ts`, `catalog-worker.test.ts`,
+`managed-schema-cutover.test.ts`, `release-maintenance.test.ts`, `metrics.test.ts`,
+`sqlite-workflow-backend.test.ts`, `managed-execution-service.test.ts`,
+`managed-execution-cache.test.ts`, `managed-execution-invalidation.test.ts`,
+`managed-publication-history.test.ts`, `managed-workflow-schema-migrations.test.ts`,
+`hosted-evaluation-coordinator.test.ts` and `evaluation-runs.test.ts`. The real
+`test:async-managed` runner owns disposable PostgreSQL/S3 services and includes
+compact-progress detail reconstruction, rename, interruption/manual retry,
+cancellation and terminal retention/publication contracts.
+
+For the same fixed concurrent logical workload across adapters, build the API,
+then run these commands separately from builds and tests:
+
+```text
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:workload compare 100
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:managed-workload 100
+```
+
+The local comparison runs direct and worker owners in separate processes. The
+managed command owns fresh loopback PostgreSQL/MinIO containers; Docker is
+required. Neither accepts deployment paths, URLs or credentials. Both use 12
+projects, 300 nodes each, three initial publications, 96 recordings, and six
+concurrent operations (tree, recordings picker, open, execution definition,
+readiness, save/publication). Results must remain correct throughout. Report
+cold/warm distributions, p50/p95/p99 (p99 only with at least 100 samples), CPU,
+sampled Node-process RSS and event-loop delay. Container resources and real HTTP
+latency are not included; use the protected staging capacity gate for those.
+The component command also reports cold cache admission and oversized bypass,
+not only warm hits. Retain raw artifacts rather than treating synthetic latency
+as a production promise.
+
+`studio-server:verify:kubernetes` includes journal recovery behavior tests,
+maintenance-mode chart rendering, reserved reader identity rejection and
+namespace-scoped schema guard configuration. A real old-to-new maintenance
+cutover still requires disposable-cluster rehearsal before promotion; static
+rendering cannot prove scheduling, RBAC authorization or termination behavior.
+The cutover behavior suite also covers malformed completed journals, a completed
+runner's unreleased lease, expiration between controller mutations, failed
+renewal and renewal racing failure cleanup. Keep ordinary-rollout journal checks
+on the same validator as recovery; a `complete` string alone is not approval.
+The asynchronous endpoint fixture correlates each completed request with its new
+recording ID, rather than assuming it is first in timestamp order. It still
+requires exactly one new recording and the expected success/failure outcome.
+The integration fixture counts full scheduler-snapshot reads while the third trial
+is blocked: only the three execution claims may load snapshots, not their progress
+updates or the two preceding settlements. Progress reads must retain scheduler-row
+before projection-row locking; only terminal finalization loads the immutable
+snapshot. A two-expired-job fixture verifies lease recovery reuses per-run metadata
+within its transaction and preserves both interruptions without automatic retry.
+It also rejects generic checkpoint writes before the first worker claim and immediately after manual retry;
+the internal projection marker is established atomically and is never client-owned.
+Terminal cancellation is idempotent and uses the transaction's own connection,
+not a nested pool read that can deadlock under pool saturation.
+Generic managed deletion and coordinator deletion share one locked primitive.
+Unit and real PostgreSQL regressions reject queued/running parents and active
+children, preserving evidence even when no coordinator route is enabled. Real
+integration checks protection before dispatch and during a blocked trial, then
+checks that terminal/non-hosted deletion still works. Keep job -> scheduler ->
+projection locking; an unlocked status check before delete is not sufficient.
+It never targets a deployment URL. Browser regressions use headless `studio-server:ui:observe
+evaluation-history-paging.spec.ts run-recordings-modal.spec.ts` against a fresh
+local frontend build. These checks establish correctness, not a production VM
+latency claim; measure identical workloads before/after deployment separately.
+The linked-child deletion browser scenario focuses the action before clicking:
+auto-scrolling a partially visible row can invalidate a prior row hover. Keep
+this data-membership regression on the supported focus path, without forced
+clicks; separate row-action tests cover hover visibility.
+
+Migration 15 leaves released migration SQL/checksums untouched. Its running header
+representation is not backward-readable by schema-14 code. The release's minimum
+rollback-compatible schema is therefore 15, despite additive DDL; never widen
+the compatibility window to bypass that representation boundary. Stop older
+managed API readers as well as Evaluation workers before enabling new compact
+headers. The explicit `--maintenance-cutover` helper stops release-owned
+controllers and waits for their pods to disappear; accepted work must be drained
+and external controllers paused beforehand. Ordinary rolling deployment does not
+perform this cutover. See
+[serving-path ownership](./architecture.md#serving-path-refactors).
+
+### Desktop bundle browser harness
+
+Most hosted regressions should use a fixed production preview to avoid HMR
+changing ownership during a test. `desktop-project-bundle.spec.ts` is an exception:
+its test-owned desktop host imports `/@fs/` modules and Vite's source shims, so it
+requires the web package's `dev` server, not `preview`. Use a separate loopback
+port and set `PLAYWRIGHT_BASE_URL` to it. Let initial dependency optimization
+settle before the qualification run; an optimization reload can split React
+module identities in this custom host. Do not edit source while it runs.
+Run observe suites sequentially: their report and trace directories are shared.
+
+## Post-version review
+
+The [2026-10-10 inventory and reassessment](audits/2026-10-10-post-version-review.md)
+groups all changes since the desktop 2.24.0 / Server 1.23.0 / public package 2.17.0
+release preparation, including owner invariants, newly found fixes and verification
+limits.
+
 ## Browser fixture API isolation
 
 Mocked browser API catch-alls must use `url.pathname.startsWith('/api/')`, not
@@ -8,6 +147,10 @@ under `/@fs/`, and a broad glob intercepts those modules too. The cross-project
 Subgraph browser regression edits connected target inputs and outputs through the
 real editor, saves the target, then verifies renamed labels, preserved wires,
 clean caller state, tab switching and saved-file reopening.
+Self-contained editor fixtures must also mock configuration and Evaluation-library
+bootstrap using `mockHostedEditorBootstrap`; a mocked workflow tree alone can leave
+the project row disabled before the test reaches its owning behavior. The graph-port
+rename fixture uses that helper and does not depend on an ambient API session.
 
 ## Shared dropdown styling
 
@@ -1983,7 +2126,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - App Settings HTTP resources use `ETag` and `If-Match`; domain writers must merge scoped PATCH drafts into the repository's current value so independent tabs and concurrent browser sessions do not lose unrelated fields
   - missing files mean first-run defaults, schema upgrades require explicit migrations, writes remain atomic owner-only JSON files, and the repository poller is the compatibility path for external proxy/bootstrap writers
 - dashboard controllers belong in `packages/studio-server-web/dashboard/`
-  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows or in their filename tooltips. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
+  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows, in their filename tooltips, or on sidebar action labels/tooltips. Save keeps its stable name while disabled before readiness. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
   - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the active project card grey/green/yellow tinted from that same aggregate status where any `Unpublished changes` wins over `Published`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width

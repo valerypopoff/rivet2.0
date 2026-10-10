@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
-import { loadProjectAndAttachedDataFromString, serializeProject, type ProjectId } from '@valerypopoff/rivet2-node';
+import {
+  loadProjectAndAttachedDataFromString,
+  serializeProject,
+  type DatasetId,
+  type ProjectId,
+} from '@valerypopoff/rivet2-node';
 
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 import { collectProjectBundle, type BundleSnapshot } from '../routes/workflows/project-bundle.js';
@@ -38,6 +43,7 @@ function createControllerFixture() {
 }
 
 function createExecutionServiceFixture(options: {
+  webAppAllowedEmails?: string[];
   resolveExecutionPointerFromDatabase?: (
     runKind: ManagedWorkflowRunKind,
     lookupName: string,
@@ -75,11 +81,6 @@ function createExecutionServiceFixture(options: {
   let getWorkflowByIdCount = 0;
   const context: ManagedWorkflowExecutionContextFixture = {
     pool: {} as Pool,
-    blobStore: {
-      async getText() {
-        throw new Error('Unexpected blob-store read');
-      },
-    },
     executionCache: cache,
     executionInvalidationController: controller,
     queries: {
@@ -110,6 +111,7 @@ function createExecutionServiceFixture(options: {
                 workflowId: workflow.workflow_id,
                 relativePath: workflow.relative_path,
                 revisionId: revision.revision_id,
+                webAppAllowedEmails: options.webAppAllowedEmails,
               },
               revision,
             };
@@ -172,13 +174,10 @@ function createExecutionServiceFixture(options: {
 type ManagedWorkflowExecutionContextFixture = Pick<
   {
     pool: Pool;
-    blobStore: {
-      getText(key: string): Promise<string>;
-    };
     executionCache: ManagedWorkflowExecutionCache;
     executionInvalidationController: ManagedWorkflowExecutionInvalidationController;
   },
-  'pool' | 'blobStore' | 'executionCache' | 'executionInvalidationController'
+  'pool' | 'executionCache' | 'executionInvalidationController'
 > & {
   queries: {
     getWorkflowByRelativePath(client: Pool, relativePath: string): Promise<ManagedExecutionWorkflowRecord | null>;
@@ -210,6 +209,95 @@ test('warm pointer hit does not re-run joined DB resolution', async () => {
   assert.equal(fixture.resolveCount, 1);
   assert.equal(fixture.readRevisionContentsCount, 1);
 });
+
+test('different routes share a revision read failure without caching it or automatically replaying it', async () => {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  const unavailable = new Error('Object storage temporarily unavailable');
+  let failRead = true;
+  const fixture = createExecutionServiceFixture({
+    readRevisionContents: async () => {
+      entered.resolve();
+      await release.promise;
+      if (failRead) throw unavailable;
+      return { contents: fixture.projectContents, datasetsContents: null };
+    },
+  });
+  await fixture.controller.initialize();
+  const outcomes = Promise.allSettled([
+    fixture.service.loadPublishedExecutionProject('first-route'),
+    fixture.service.loadPublishedExecutionProject('second-route'),
+  ]);
+  await entered.promise;
+  release.resolve();
+  for (const outcome of await outcomes) {
+    assert.equal(outcome.status, 'rejected');
+    if (outcome.status === 'rejected') assert.strictEqual(outcome.reason, unavailable);
+  }
+  assert.equal(fixture.resolveCount, 2, 'independent routes are resolved independently');
+  assert.equal(fixture.readRevisionContentsCount, 1, 'only immutable revision IO is coalesced');
+  assert.equal(fixture.cache.getRevisionMaterialization('revision-a'), null);
+  failRead = false;
+  const recovered = await fixture.service.loadPublishedExecutionProject('first-route');
+  assert.equal(recovered?.project.metadata.title, 'Managed Cache');
+  assert.equal(fixture.readRevisionContentsCount, 2, 'a later request can retry the failed load');
+  const next = await fixture.service.loadPublishedExecutionProject('second-route');
+  assert.notStrictEqual(next?.project, recovered?.project);
+  assert.equal(fixture.readRevisionContentsCount, 2, 'successful immutable contents remain reusable');
+});
+
+for (const method of [
+  'loadPublishedExecutionProject',
+  'loadLatestExecutionProject',
+  'loadPublishedWebAppExecutionProject',
+  'loadLatestWebAppExecutionProject',
+] as const) {
+  test(`${method} coalesces immutable IO, not per-execution mutable state`, async () => {
+    const fixture = createExecutionServiceFixture({ webAppAllowedEmails: ['reader@example.test'] });
+    await fixture.controller.initialize();
+    const [first, second] = await Promise.all([
+      fixture.service[method]('same-route'),
+      fixture.service[method]('same-route'),
+    ]);
+    assert.ok(first);
+    assert.ok(second);
+    assert.notStrictEqual(first.project, second.project);
+    assert.notStrictEqual(first.attachedData, second.attachedData);
+    assert.notStrictEqual(first.datasetProvider, second.datasetProvider);
+    assert.notStrictEqual(first.debug, second.debug);
+    first.project.metadata.title = 'Mutated by the first execution';
+    first.attachedData.test = { changed: true };
+    first.debug.materializeMs = -1;
+    first.webAppAllowedEmails!.push('other@example.test');
+    const datasetId = 'run-local-dataset' as DatasetId;
+    await first.datasetProvider.putDatasetMetadata({
+      id: datasetId,
+      projectId: first.project.metadata.id,
+      name: 'Run-local dataset',
+      description: '',
+    });
+    assert.equal(second.project.metadata.title, 'Managed Cache');
+    assert.equal(second.attachedData.test, undefined);
+    assert.equal(await second.datasetProvider.getDatasetMetadata(datasetId), undefined);
+    assert.ok(second.debug.materializeMs >= 0);
+    assert.deepEqual(second.webAppAllowedEmails, ['reader@example.test']);
+    assert.equal(fixture.resolveCount, 1, 'concurrent route resolution remains coalesced');
+    assert.equal(fixture.readRevisionContentsCount, 1, 'concurrent object reads remain coalesced');
+    const third = await fixture.service[method]('same-route');
+    assert.equal(third?.project.metadata.title, 'Managed Cache');
+    assert.deepEqual(third?.webAppAllowedEmails, ['reader@example.test']);
+    assert.equal(await third?.datasetProvider.getDatasetMetadata(datasetId), undefined);
+  });
+
+  test(`${method} rejects a saved artifact belonging to another project`, async () => {
+    const [foreign] = loadProjectAndAttachedDataFromString(createBlankProjectFile('Foreign'));
+    const fixture = createExecutionServiceFixture({
+      readRevisionContents: async () => ({ contents: serializeProject(foreign) as string, datasetsContents: null }),
+    });
+    await fixture.controller.initialize();
+    await assert.rejects(fixture.service[method]('same-route'), { status: 500 });
+  });
+}
 
 test('public workflow lookup sees committed access changes before cache invalidation arrives', async () => {
   let access: 'public' | 'internal' = 'public';
@@ -546,10 +634,12 @@ test('reference loading skips a stale path hint for another workflow without rea
   });
   await fixture.controller.initialize();
   try {
-    const result = await fixture.service.createProjectReferenceLoader().loadProject(
-      getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
-      { id: fixture.workflow.workflow_id, hintPaths: ['./Old Location.rivet-project'] },
-    );
+    const result = await fixture.service
+      .createProjectReferenceLoader()
+      .loadProject(getManagedWorkflowProjectVirtualPath('Main.rivet-project'), {
+        id: fixture.workflow.workflow_id,
+        hintPaths: ['./Old Location.rivet-project'],
+      });
     assert.equal(result.metadata.id, fixture.workflow.workflow_id);
     assert.equal(fixture.getWorkflowByIdCount, 1);
     assert.equal(fixture.readRevisionContentsCount, 1);
@@ -568,10 +658,9 @@ test('reference loading rejects a materialized project with a foreign identity',
   await fixture.controller.initialize();
   try {
     await assert.rejects(
-      fixture.service.createProjectReferenceLoader().loadProject(
-        getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
-        { id: fixture.workflow.workflow_id },
-      ),
+      fixture.service
+        .createProjectReferenceLoader()
+        .loadProject(getManagedWorkflowProjectVirtualPath('Main.rivet-project'), { id: fixture.workflow.workflow_id }),
       /mismatched saved identity/,
     );
   } finally {
@@ -609,10 +698,12 @@ for (const stage of ['resolve', 'materialize'] as const) {
     });
     await fixture.controller.initialize();
     try {
-      const result = await fixture.service.createProjectReferenceLoader().loadProject(
-        getManagedWorkflowProjectVirtualPath('Main.rivet-project'),
-        { id: fixture.workflow.workflow_id, hintPaths: ['./Old Location.rivet-project'] },
-      );
+      const result = await fixture.service
+        .createProjectReferenceLoader()
+        .loadProject(getManagedWorkflowProjectVirtualPath('Main.rivet-project'), {
+          id: fixture.workflow.workflow_id,
+          hintPaths: ['./Old Location.rivet-project'],
+        });
       assert.equal(result.metadata.id, fixture.workflow.workflow_id);
       assert.equal(pathLookups, 2);
       assert.equal(fixture.getWorkflowByIdCount, 1);

@@ -123,11 +123,24 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownload}>
         <ArrowDownIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Download</span>
+        <span>Download project</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownloadBundle}>
-        <ArrowDownIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Download with dependencies</span>
+        <svg
+          className="workflow-project-context-menu-item-icon"
+          aria-hidden="true"
+          focusable="false"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M7 3v13m-4-4 4 4 4-4" />
+          <path d="M17 6v13m-4-4 4 4 4-4" />
+        </svg>
+        <span>Download bundle</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDuplicate}>
         <span className="workflow-project-context-menu-item-icon" aria-hidden="true">

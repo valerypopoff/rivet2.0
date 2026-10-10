@@ -51,8 +51,8 @@ In Studio Server, Save writes through the server rather than asking for a local 
 
 ## Downloading a Studio Server project for local execution
 
-Right-click a project in the server's project tree and choose **Download with
-dependencies**. Choose **Published** or **Saved latest** for every project in the
+Right-click a project in the server's project tree and choose **Download bundle**.
+Choose **Published** or **Saved latest** for every project in the
 bundle, then **Prepare bundle**. Published uses saved latest for projects that have
 no publication. Progress continues if you close the dialog;
 reopen the same action to download the ready ZIP. After fixing a reported issue,
@@ -74,7 +74,7 @@ provide the required version mapping.
 
 Configure API credentials, external plugins, services, Code-node npm dependencies
 and local file paths separately. Project/dataset content may contain sensitive
-values; inspect the bundle before sharing it. Ordinary **Download** still downloads
+values; inspect the bundle before sharing it. **Download project** still downloads
 only one `.rivet-project` file.
 
 ### Opening and running a bundle in desktop Rivet

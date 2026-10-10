@@ -134,8 +134,27 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await waitForDashboardReady(page);
     const row = page.locator('.project-row').filter({ hasText: 'Portable root' });
     await row.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Download with dependencies' })).toBeVisible();
+    const downloadProject = page.getByRole('menuitem', { name: 'Download project', exact: true });
+    const downloadBundle = page.getByRole('menuitem', { name: 'Download bundle', exact: true });
+    await expect(downloadProject).toBeVisible();
+    await expect(downloadBundle).toBeVisible();
+    const bundleIcon = downloadBundle.locator('svg');
+    await expect(bundleIcon).toHaveAttribute('aria-hidden', 'true');
+    const arrows = bundleIcon.locator('path');
+    await expect(arrows).toHaveCount(2);
+    const bounds = await arrows.evaluateAll((paths) =>
+      paths.map((path) => {
+        const { x, y, width, height } = (path as SVGGraphicsElement).getBBox();
+        return { x, y, width, height };
+      }),
+    );
+    expect(bounds[1]!.x).toBeGreaterThan(bounds[0]!.x);
+    expect(bounds[1]!.y).toBeGreaterThan(bounds[0]!.y);
+    expect(bounds[1]!.width).toBe(bounds[0]!.width);
+    expect(bounds[1]!.height).toBe(bounds[0]!.height);
+    await page.screenshot({ path: test.info().outputPath('project-download-menu.png') });
+    await downloadBundle.click();
+    await expect(page.getByRole('dialog', { name: 'Download bundle' })).toBeVisible();
     await expect(page.getByTestId('workflow-project-bundle-modal')).toHaveCSS('background-color', 'rgb(31, 31, 34)');
     await expect(page.getByTestId('workflow-project-bundle-modal--body')).toHaveCSS('padding', '0px');
     const dialog = page.getByTestId('workflow-project-bundle-modal');
@@ -179,7 +198,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.screenshot({ path: test.info().outputPath('bundle-modal-narrow.png') });
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Download with dependencies' }).getByRole('status')).toContainText(
+    await expect(page.getByRole('dialog', { name: 'Download bundle' }).getByRole('status')).toContainText(
       'Export: collecting.',
     );
     await expect(spinner).toBeVisible();
@@ -189,7 +208,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.getByRole('button', { name: 'Close bundle download' }).click();
     await row.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     await expect(spinner).toBeVisible();
     refuseCancellation = true;
     await dialog.getByRole('button', { name: 'Cancel export', exact: true }).click();
@@ -233,7 +252,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.screenshot({ path: test.info().outputPath('bundle-modal-ready-narrow.png') });
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.screenshot({ path: test.info().outputPath('bundle-modal-ready.png') });
-    await expect(page.getByRole('dialog', { name: 'Download with dependencies' }).getByRole('status')).toContainText(
+    await expect(page.getByRole('dialog', { name: 'Download bundle' }).getByRole('status')).toContainText(
       'Export: ready.',
     );
     expect(statusReads).toBeGreaterThan(0);
@@ -257,14 +276,14 @@ test('download dependencies survives closing the dialog and runs the real downlo
     loseAcknowledgement = true;
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
     await expect(link).toBeVisible();
-    await expect(page.getByRole('dialog', { name: 'Download with dependencies' }).getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Download bundle' }).getByRole('alert')).toHaveCount(0);
     // A real preparation failure must not strand the dialog or require reloading
     // the workspace. Disposal/reset followed by preparation uses a fresh job.
     loseAcknowledgement = false;
     await page.getByRole('button', { name: 'Prepare another bundle' }).click();
     failPreparation = true;
     await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
-    const modal = page.getByRole('dialog', { name: 'Download with dependencies' });
+    const modal = page.getByRole('dialog', { name: 'Download bundle' });
     await expect(modal.getByRole('status')).toContainText('Export: failed.');
     await expect(spinner).toHaveCount(0);
     await expect(modal.getByRole('alert')).toContainText('Could not prepare the bundle.');
@@ -335,7 +354,7 @@ test('reopened failed export retries the durable version choice rather than the 
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
   await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
-  await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
   const dialog = page.getByTestId('workflow-project-bundle-modal');
   await expect(dialog.getByRole('status')).toContainText('Export: failed.');
   await dialog.getByRole('button', { name: 'Retry export', exact: true }).click();
@@ -391,7 +410,7 @@ test('late bundle admission cannot regress packaging and duplicate clicks admit 
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
     await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Download with dependencies', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     const dialog = page.getByTestId('workflow-project-bundle-modal');
     await dialog.getByRole('button', { name: 'Prepare bundle', exact: true }).evaluate((element) => {
       // Dispatch both clicks in the same browser task, before awaiting HTTP.

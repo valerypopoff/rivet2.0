@@ -5,15 +5,18 @@ import {
   type ProjectReferenceLoader,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import { loadedProjectState, projectState, referencedProjectsState } from '../state/savedGraphs';
+import { loadedProjectState, projectState, projectsState, referencedProjectsState } from '../state/savedGraphs';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import { handleError } from '../utils/errorHandling.js';
 import { usePathPolicyProvider, useIOProvider } from '../providers/ProvidersContext.js';
+import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 
 export function useReloadProjectReferences() {
   const project = useAtomValue(projectState);
   const loadedProject = useAtomValue(loadedProjectState);
+  const openedProjects = useAtomValue(projectsState);
+  const bundleManifestPath = openedProjects.openedProjects[project.metadata.id]?.bundleManifestPath;
   const pathPolicy = usePathPolicyProvider();
   const ioProvider = useIOProvider();
 
@@ -36,7 +39,9 @@ export function useReloadProjectReferences() {
     // while the current reference closure is still loading.
     setReferencedProjects({});
     try {
-      const bundle = loadedProject.path ? await ioProvider.readProjectBundle?.(loadedProject.path) : undefined;
+      // The saved bundle binding also owns editor definitions. A nested member
+      // cannot rediscover the manifest from its immediate parent directory.
+      const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
       const loader: ProjectReferenceLoader = bundle
         ? {
             async loadProject(_path, reference) {
@@ -76,7 +81,7 @@ export function useReloadProjectReferences() {
         },
       });
     }
-  }, [loadedProject.path, pathPolicy, referenceRoot, setReferencedProjects, ioProvider]);
+  }, [loadedProject.path, bundleManifestPath, pathPolicy, referenceRoot, setReferencedProjects, ioProvider]);
 
   useEffect(() => {
     void reloadReferences();

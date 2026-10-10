@@ -8,6 +8,7 @@ import { loadProjectFromString, type ProjectId } from '@valerypopoff/rivet2-node
 import {
   createEmptyEvaluationProjectData,
   createEvaluationRunShell,
+  normalizeEvaluationRun,
   type EvaluationDataset,
   type EvaluationProjectData,
   type EvaluationRun,
@@ -275,7 +276,7 @@ class InterruptedRetrySuccessPool extends CapturePool {
       };
     }
     if (sql.includes('AS outstanding_count')) return { rows: [{ outstanding_count: 0 }] as T[], rowCount: 1 };
-    if (sql.includes('SELECT run_json FROM evaluation_runs')) {
+    if (sql.includes('FROM evaluation_runs WHERE') && sql.trimStart().startsWith('SELECT')) {
       return { rows: [{ run_json: this.run }] as T[], rowCount: 1 };
     }
     return super.query<T>(sql, values);
@@ -419,6 +420,10 @@ test('hosted Evaluation submission commits its run projection, snapshot, and job
   const begin = queryIndex(pool.queries, 'BEGIN');
   const datasetSnapshot = queryIndex(pool.queries, 'INSERT INTO evaluation_dataset_snapshots');
   const runProjection = queryIndex(pool.queries, 'INSERT INTO evaluation_runs');
+  const stored = JSON.parse(String(pool.queries[runProjection]!.values[4]));
+  assert.equal(stored._hostedTrialsFromJobs, true, 'queued runs are coordinator-owned before the first claim');
+  assert.deepEqual(stored.trials, []);
+  assert.ok(!('_hostedTrialsFromJobs' in run));
   const hostedRun = queryIndex(pool.queries, 'INSERT INTO evaluation_hosted_runs');
   const job = queryIndex(pool.queries, 'INSERT INTO evaluation_hosted_trial_jobs');
   const commit = queryIndex(pool.queries, 'COMMIT');
@@ -534,6 +539,17 @@ test('retrying interrupted hosted trials shares the global outstanding-capacity 
   );
 });
 
+test('canceling an already terminal hosted run reads through its leased connection', async () => {
+  const pool = new InterruptedRetrySuccessPool('completed');
+  const store = { getCalls: 0 };
+  const coordinator = createCoordinator(pool, store);
+  const run = await coordinator.requestCancel({ projectId, runId: 'interrupted-run' });
+  assert.deepEqual(run, normalizeEvaluationRun(pool.run));
+  assert.equal(store.getCalls, 0, 'a nested store read could deadlock a one-connection pool');
+  const read = queryIndex(pool.queries, 'AS run_json FROM evaluation_runs');
+  assert.ok(read < queryIndex(pool.queries, 'COMMIT'));
+});
+
 test('retrying interrupted hosted trials restores a running projection and durable audit event', async () => {
   const pool = new InterruptedRetrySuccessPool();
   const store = { getCalls: 0 };
@@ -562,6 +578,16 @@ test('retrying interrupted hosted trials restores a running projection and durab
   const audit = queryIndex(pool.queries, "'requeued', NOW()");
   const parent = queryIndex(pool.queries, "UPDATE evaluation_hosted_runs SET status = 'running'");
   const projection = queryIndex(pool.queries, 'UPDATE evaluation_runs SET suite_id');
+  const stored = JSON.parse(String(pool.queries[projection]!.values[4]));
+  assert.equal(stored._hostedTrialsFromJobs, true, 'retry must not reopen generic checkpoint ownership');
+  assert.deepEqual(stored.trials, []);
+  assert.ok(!('_hostedTrialsFromJobs' in run!));
+  assert.equal(pool.queries.filter((query) => query.sql.includes('FROM evaluation_runs WHERE')).length, 1);
+  assert.ok(
+    pool.queries.some(
+      (query) => query.sql.includes('AS run_json FROM evaluation_runs') && query.sql.endsWith('FOR UPDATE'),
+    ),
+  );
   const commit = queryIndex(pool.queries, 'COMMIT');
   assert.ok(
     begin < mutationLock &&

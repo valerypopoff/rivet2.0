@@ -1,5 +1,137 @@
 # Architecture
 
+## Serving-path refactors
+
+The serving SQLite workflow catalog has one worker-thread connection owner.
+Complete catalog operations cross the boundary, not SQL fragments. Transactions,
+schema/integrity checks and artifact preparation retain their owning invariants.
+The HTTP process retains maintenance/write leases and operational deletion hooks.
+Worker initialization is single-flight. The queue allows at most 64 outstanding
+operations and 128 MiB of serialized arguments; overload rejects before dispatch.
+Both queued and active catalog RPCs count toward maintenance drain, including
+reads. Parent write leases still cover full multi-operation mutations and host
+callbacks. A worker owner snapshots its selected database/artifact paths before
+lazy startup. `withSignal()` cancels only queued work and releases its admission
+bytes; dispatch removes the cancellation listener. Dispatched work must report
+its real outcome, and a canceled drain wait never cancels a running transaction.
+Readiness passes its abort signal to the queue so expired probes cannot accumulate
+behind slow storage. Shutdown always remains available even with an aborted signal.
+Shutdown drains accepted work and awaits worker termination before returning,
+including when the catalog's close operation fails. The close RPC remains counted
+by drain/status until that acknowledgement; receiving the SQL close reply alone
+does not release it. Closing an unused owner never starts a worker. Backend
+initialization publishes write policy only after success; rejected mode changes
+cannot disable a writer or enter writer leases on a verifier. A lifecycle revision
+prevents late initialization from reopening admission after shutdown starts.
+Serving worker owners are terminal after close; offline direct adapters retain
+explicit reopen support after shutdown completes. Worker loss holds pending write
+leases until termination completes, then fails requests without replaying writes:
+a dispatched operation may have committed, so reload
+durable state before retrying. Offline conversion/verification keeps its direct
+catalog adapter. Other operational stores are not silently moved to this worker.
+If the termination request itself throws or rejects, pending operations and drain
+remain held until an independent worker exit confirms SQL has stopped. Further
+shutdown errors are contained, not treated as exit. A canceled/timed-out drain
+wait cannot release those reservations; never force a generation switch around
+an unconfirmed old worker. Successful termination uses the normal acknowledgement
+path without an extra wait or retry.
+
+Execution materialization reuses immutable source bytes and a bounded parsed-data
+cache, across local and managed storage. Each load returns detached project,
+attached-data and dataset objects. Concurrent managed endpoint/web-app requests
+coalesce only source IO and route metadata, never the materialized project or
+dataset provider. Each caller receives
+detached project, attached data, datasets, access lists and diagnostic metadata.
+The endpoint/web-app materializer validates the artifact's project identity
+against the selected workflow, matching the Subgraph/reference boundaries.
+Source resolution retains its invalidation retries before the source becomes
+shareable. Per-caller cloning does not trigger extra route or object-storage IO.
+Reference loading checks invalidation after asynchronous artifact IO, without
+duplicating that check after the following synchronous parse/clone.
+Admission uses conservative byte accounting (32 MiB total, 8 MiB per entry by default);
+oversized definitions bypass caching.
+Disabled caches also bypass expanded-data serialization used for admission accounting.
+The source-text lower bound rejects clearly oversized entries before an extra
+serialized allocation. Fresh, unretained default-parser results need no second
+clone: they belong exclusively to the caller. Retained definitions and injected
+parsers still clone every consumer; no mutable definition is shared.
+Fresh SQL route/access checks for published HTTP execution and invalidation guards
+for cached internal loads remain authoritative. Source/revision guards still
+detect concurrent changes. Cross-project and legacy
+reference loads reuse the same narrow materialization path rather than loading
+publication history. Processor state and compiled plans remain run-scoped;
+external Subgraph plans are never made reusable across runs. Replay formats and
+artifact identity are unchanged.
+
+Managed endpoint/web-app publication reads and verifies both draft artifacts and
+validates the project before opening a writer transaction. The command owns a
+snapshot of the reviewed preconditions captured before preparation; a
+caller cannot mutate that object during the storage wait to retarget publication.
+The transaction rechecks project identity, draft revision and publication version
+under the row lock before claiming routes, appending history and updating pointers. A changed
+draft never silently substitutes another artifact. Invalidations remain
+commit-owned. No object-storage wait or project parse holds a workflow row lock.
+
+Hosted Evaluation job rows remain the authoritative fenced trial ledger. While
+work is outstanding, the run projection stores a compact header and an internal
+marker, not copies of every settled trial. Index-backed pending-work checks avoid
+rescanning prior result bodies on each claim/settlement.
+Progress locks only scheduler control metadata; it does not fetch or parse the
+immutable project/dataset snapshot on each settlement. Terminal finalization loads
+that snapshot once. Lease recovery shares run metadata across expired jobs in the
+same transaction, without a new cross-run cache or duplicated counters.
+Detail/list reads assemble the header and ordered trials in one PostgreSQL statement; the internal marker
+never enters public responses. Renaming, explicit cancellation and manual retry
+preserve existing evidence. Generic snapshot/checkpoint writes cannot overwrite a
+ledger-owned queued, running or manually retried run. Ownership is established
+in the submission/retry transaction, not deferred until the next worker claim.
+Generic snapshots cannot set the internal projection marker, and every public
+read/rename boundary removes it. Manual retry locks and assembles the run in one
+statement rather than fetching a full terminal snapshot twice. Repeated
+cancellation of a terminal run reads
+through the already leased connection; it must not wait for another pool slot
+before releasing that connection. Terminal finalization still assembles all trials and
+commits quality/accounting/recording retention atomically. Worker shutdown or lease
+loss is interruption, including when the evaluator returns a canceled result
+instead of throwing; only a durable user cancellation is cancellation.
+
+Managed run deletion shares one transaction-owned primitive between the generic
+store and hosted coordinator. It locks trial jobs before scheduler/projection
+rows, refuses queued/running parents or any queued/claimed/accepted child, and
+then deletes evidence and the run atomically. Disabling the coordinator does not
+make existing jobs safe to delete. Even an inconsistent terminal parent cannot
+override active child ownership. Terminal and non-hosted deletion remain supported.
+
+Managed migration 15 adds the partial pending-projection index. Running header
+storage requires a schema-15 reader, so release manifests no longer declare
+schema-14 or older images safe rollback targets. Quiesce older managed API readers
+and Evaluation workers before this format cutover; do not mix old and new readers
+or coordinators, or override the schema window to make an older reader start.
+The deployment helper requires an explicit maintenance cutover for incompatible
+or unidentified installed readers. A release-scoped, compare-and-swap journal
+records an expiring runner lease and exact candidate identity. It disables HPAs,
+stops ingress before readers, waits for pod termination without forced deletion,
+then installs and probes a paused validation release before resuming traffic.
+Direct migration also checks reader/controller inventory using namespace-scoped
+RBAC. Unknown/old pods or recreatable old controllers block migration. Operators
+must first drain accepted runs, pause external reconcilers and ensure all database
+consumers belong to the release; Kubernetes labels are not a global database lock.
+An unknown outcome never triggers automatic rollback/resume. Repair forward with a compatible
+image. Ordinary local/browser Evaluation persistence and historical run formats
+remain compatible and unchanged.
+
+Worker and parsed-cache metrics use finite, payload-free labels. Queue/active
+counts and reserved argument bytes include all owners; worker instances remain
+counted until termination acknowledgement. Histograms separate queue wait,
+dispatched RPC, startup/shutdown, parse, admission accounting and clone time.
+Cache retained bytes are conservative budgets, not exact heap usage. Prometheus
+scrapes read in-memory counters only and never issue catalog SQL.
+
+The [refactor completion checklist](./serving-refactor-verification.md) maps these
+boundaries to executable regressions and a disposable component benchmark. Replay
+artifact deduplication and cross-run compiled-plan caching remain deliberately
+deferred; neither is required by these narrower refactors.
+
 ## SQL and immutable-artifact boundaries
 
 Ordinary SQLite draft saves use a focused catalog update. They preserve active
@@ -80,13 +212,21 @@ legacy pages are normalized before stripping so quality semantics stay intact.
 Summary identity and timestamps are checked against their SQL ordering columns;
 an inconsistent stored JSON header fails closed instead of skipping or repeating
 history through a misleading cursor.
+Cursor timestamps come from the exact SQL ordering value, not the JSON header's
+spelling or PostgreSQL's millisecond-only JavaScript `Date`. Equivalent legacy
+timestamp formats and PostgreSQL microseconds must not omit or repeat runs.
+PostgreSQL projects the cursor timestamp explicitly as UTC ISO text with six
+fractional digits; header validation uses this same value, independent of session
+`DateStyle`, time zone and the driver's built-in date parser.
 The picker fetches full details only for the selected run, caches a bounded set,
 and exposes detail failures/retry without displaying another run's evidence.
 The first page becomes visible before selected details finish: a slow or failed
 body read must not hide successful compact history. Initial selection, later
 selections and retries share one hydration path. Missing persisted selections
 outside the first page fall back to its latest run; cross-project/run responses
-are rejected. Scope changes invalidate pending pagination independently.
+are rejected. Scope changes and overlay unmount invalidate pending pagination
+independently. A page may merge only into the project/suite and continuation
+cursor that requested it; a late response cannot overwrite a reopened panel.
 The client filters compact headers by both project and suite, matching the
 full-history boundary for third-party or stale provider responses.
 Live execution still takes precedence. The old full-list method remains for
@@ -108,7 +248,9 @@ barrier, streams projects individually, preserves catalog identities, history,
 compressed recording contents and operational domains, verifies the frozen
 logical source again, and opens the
 destination serving gate only after exact verification. This is an offline CLI
-adapter, not a hot selector or browser migration wizard. See
+adapter. The authenticated Migration tab can also run this adapter through a
+supervised maintenance/drain barrier without requiring a migration enable flag.
+Neither path switches traffic or hot-selects another backend. See
 [VM-to-managed migration](./vm-to-managed-migration.md).
 
 ## Scheduled runs
@@ -124,7 +266,7 @@ recording, backup and restored-installation guarantees and limits.
 
 ## Portable saved-project exports
 
-**Download with dependencies** connects API-owned snapshot collection and streaming
+**Download bundle** connects API-owned snapshot collection and streaming
 ZIP jobs to Core-owned manifest validation and the public Node `loadProjectBundle`
 loader. Explicit project/version bindings preserve matching datasets and Subgraph
 wire contracts; local execution never guesses server paths. Legacy aliases obtain
@@ -651,7 +793,7 @@ Interpretation rules:
 
 ### Storage and runtime libraries
 
-- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
+- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the authenticated Migration tab or the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
 - `Local Docker Postgres` is a local rehearsal option for managed metadata only. It uses the optional Compose Postgres default connection, but object storage remains controlled by the separate project artifact storage fields. Make sure the managed-services Compose profile is running before restarting into object-storage mode.
 - Storage mode, database mode, managed PostgreSQL credentials, and object-storage credentials are read from the active settings repository, not `.env`. If the file-backed domain is absent, Docker/API runtime defaults to `Local folders` and `Local Docker Postgres`. Kubernetes's migration Job seeds the PostgreSQL row from Helm/Vault bootstrap values only when the row is absent. Serving APIs load that row directly, and the co-located executor receives its startup configuration through the authenticated loopback API; Kubernetes does not project compatibility settings files into pod-local app data.
 - Managed workflow object location is stored as explicit bucket, endpoint, region, prefix, and path-style fields alongside the compatibility `storageUrl` in the version-1 deployment-storage payload. Legacy rows lacking those fields resolve with the original URL parser and `workflows/` prefix. Runtime libraries keep their independent `runtime-libraries/` prefix. Active managed storage cannot change object location or addressing through App Settings without an operator migration and restart; replicated Kubernetes topology rejects all Storage-tab writes because existing API/executor clients are startup-scoped and a mixed-pod configuration would split writes. Helm bootstrap values seed only an absent PostgreSQL row, never overwrite an existing location.

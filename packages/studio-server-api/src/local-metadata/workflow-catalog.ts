@@ -29,7 +29,7 @@ import { LocalWorkflowRouteClaims } from './workflow-route-claims.js';
 import {
   getWorkflowProjectIndexDataFromContents,
   type WorkflowProjectIndexData,
-} from '../routes/workflows/project-stats.js';
+} from '../routes/workflows/project-index.js';
 
 /** The complete project state preserved by conversion and normal local catalog writes. */
 export type LocalWorkflowCatalogSnapshot = {
@@ -194,6 +194,7 @@ export type LocalExecutionSelection =
   | { webAppSlug: string; version: 'latest' | 'published' };
 export type LocalExecutionSnapshot = {
   workflowId: string;
+  revisionId: string;
   relativePath: string;
   endpointAccess: 'public' | 'internal';
   contents: string;
@@ -823,6 +824,10 @@ export class LocalWorkflowCatalog {
       .sort((left, right) => left.localeCompare(right));
   }
 
+  readStructure() {
+    return this.#readMetadata(() => ({ expectedFolders: this.listFolders(), expectedProjectPaths: this.listProjectPaths() }));
+  }
+
   /** A consistent metadata-only view. No historical bodies or recording rows belong in tree reads. */
   #treeMetadata() {
     return this.#readMetadata((db) => {
@@ -1003,7 +1008,7 @@ export class LocalWorkflowCatalog {
   }
 
   /** Route/policy lookup never reads unrelated projects or old history blobs. */
-  readWebAppPolicy(slug: string): Omit<LocalExecutionSnapshot, 'contents' | 'datasetsContents'> | null {
+  readWebAppPolicy(slug: string): Omit<LocalExecutionSnapshot, 'contents' | 'datasetsContents' | 'revisionId'> | null {
     const match = this.#executionBundle({ webAppSlug: slug, version: 'published' });
     if (!match?.app) return null;
     const { contents: _contents, datasetsContents: _datasets, ...webApp } = match.app;
@@ -1049,6 +1054,7 @@ export class LocalWorkflowCatalog {
       workflowId: project.workflowId,
       relativePath: project.relativePath,
       endpointAccess: project.endpointAccess,
+      revisionId,
       contents,
       datasetsContents,
       cacheStatus: cached ? 'hit' : admitted ? 'miss' : 'bypass',
@@ -1815,6 +1821,13 @@ export class LocalWorkflowCatalog {
     update: (state: LocalPublicationState, revisionId: string) => void,
     requireDraft = false,
   ) {
+    const prepared = await this.preparePublication(relativePath, requireDraft);
+    if (!prepared) return null;
+    update(prepared.next, prepared.index.revisionId);
+    return this.commitPublication(relativePath, prepared);
+  }
+
+  async preparePublication(relativePath: string, requireDraft = false) {
     if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
     const before = this.#readStoredProjectBundle(relativePath, false);
     if (!before) return null;
@@ -1825,7 +1838,12 @@ export class LocalWorkflowCatalog {
       publishedVersions: [],
       publishedWebApps: structuredClone(before.apps),
     };
-    update(next, index.revisionId);
+    return { before, index, next };
+  }
+
+  async commitPublication(relativePath: string, prepared: NonNullable<Awaited<ReturnType<LocalWorkflowCatalog['preparePublication']>>>) {
+    if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
+    const { before, index, next } = prepared;
     const { draftText: _text, publishedVersions: added, publishedWebApps: apps, ...project } = next;
     if (
       project.workflowId !== before.project.workflowId ||

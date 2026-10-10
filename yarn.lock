@@ -9749,6 +9749,7 @@ __metadata:
     "@types/ws": "npm:^8.18.1"
     "@types/yazl": "npm:^3.3.0"
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
+    "@valerypopoff/rivet2-core": "workspace:^"
     "@valerypopoff/rivet2-evaluations": "workspace:^"
     "@valerypopoff/rivet2-node": "workspace:^"
     cors: "npm:^2.8.5"

@@ -16,6 +16,8 @@ import { listenTestServer } from './helpers/http-server-harness.js';
 import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
 import { verifyClassifierHealthContract } from './helpers/classifier-health-contract.js';
 import { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
+import { verifyManagedEvaluationHistoryCursorContract } from './helpers/evaluation-history-managed-contract.js';
+import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evaluation-projection-contract.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -74,6 +76,14 @@ try {
     }
   }
   await migrateManagedWorkflowSchema(pool);
+  await verifyManagedEvaluationHistoryCursorContract(pool);
+  await verifyHostedEvaluationProjectionContract(pool);
+  console.log(
+    'Hosted Evaluation compact progress: complete evidence, rename, interruption/retry, cancellation and finalization passed.',
+  );
+  console.log(
+    'Managed Evaluation history: microsecond pagination under non-ISO DateStyle and non-UTC time zone passed.',
+  );
   await verifyClassifierHealthContract([
     new PostgresRivetLLMProfileHealthStore(pool),
     new PostgresRivetLLMProfileHealthStore(pool),
@@ -283,6 +293,7 @@ try {
     [],
     'completed downloads were disposed',
   );
+  const recordedRunIds = new Set<string>();
   for (const [index, route] of ['/workflows', '/internal/workflows', '/workflows-latest'].entries()) {
     const value = `${tail.baseUrl}/${index}`;
     const response: Response = await fetch(`${api.baseUrl}${route}/async-acceptance`, {
@@ -308,7 +319,13 @@ try {
       if (Date.now() >= end) throw new Error('Managed recording did not persist');
       if (page.runs.length <= index) await delay(10);
     } while (page.runs.length <= index);
-    assert.equal(page.runs[0]!.status, index === 1 ? 'failed' : 'succeeded');
+    // Verify this request's recording, not whichever timestamp sorts first.
+    // A host clock adjustment must not make us inspect an earlier request.
+    const newRuns = page.runs.filter((run) => !recordedRunIds.has(run.id));
+    assert.equal(newRuns.length, 1, JSON.stringify(page.runs));
+    const recordedRun = newRuns[0]!;
+    assert.equal(recordedRun.status, index === 1 ? 'failed' : 'succeeded', JSON.stringify(page.runs));
+    recordedRunIds.add(recordedRun.id);
     assert.equal((await api.command<{ active: number }>('snapshot')).active, 0);
     const replays: Array<{ tails: unknown[] }> = await api.command('replay');
     assert.equal(replays.length, index + 1);

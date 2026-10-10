@@ -1680,8 +1680,12 @@ test.describe('Run recordings modal', () => {
     await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
     await expect(child).toBeVisible();
-    await child.hover();
-    await child.getByRole('button', { name: 'Delete', exact: true }).click();
+    // Scrolling this partially visible row can move it away from the mouse.
+    // Use its supported keyboard-focus path to keep actions active during the
+    // click; this scenario tests family membership/deletion, not hover styling.
+    const deleteChild = child.getByRole('button', { name: 'Delete', exact: true });
+    await deleteChild.focus();
+    await deleteChild.click();
     await expect(modal.locator('.run-recordings-runs-title')).toHaveText('2 Runs');
     await expect(modal.getByRole('button', { name: 'Bad only (1)', exact: true })).toBeVisible();
     await expect(child).toHaveCount(0);
@@ -1768,8 +1772,9 @@ test.describe('Run recordings modal', () => {
     await page.route('**/api/workflows/recordings/workflows', (route) =>
       route.fulfill({ status: 503, json: { error: 'Scope refresh unavailable' } }),
     );
-    await child.hover();
-    await child.getByRole('button', { name: 'Delete', exact: true }).click();
+    const deleteChild = child.getByRole('button', { name: 'Delete', exact: true });
+    await deleteChild.focus();
+    await deleteChild.click();
     await expect(child).toHaveCount(0);
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
     await expect(modal).toContainText('Recording deleted, but refreshing the list failed: Scope refresh unavailable');

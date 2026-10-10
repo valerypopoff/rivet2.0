@@ -1,6 +1,6 @@
 # loadProjectBundle
 
-Loads an extracted **Download with dependencies** bundle from Rivet Studio Server
+Loads an extracted **Download bundle** export from Rivet Studio Server
 and resolves its cross-project Subgraphs locally, without contacting that server.
 The loader was introduced in the `2.16.0` public npm release family. New bundles
 can require newer loader capabilities, including bundle-wide version selection.
@@ -10,7 +10,7 @@ an older loader reports that an upgrade is required.
 ## Example
 
 In Studio Server, save the project, right-click it in the project tree, choose
-**Download with dependencies**, prepare the bundle and download the ZIP. Extract
+**Download bundle**, prepare the bundle and download the ZIP. Extract
 the complete ZIP, keeping its directory structure. Create `run.mjs` alongside it:
 
 ```javascript

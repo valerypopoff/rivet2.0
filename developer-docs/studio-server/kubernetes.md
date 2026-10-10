@@ -52,6 +52,69 @@ deployment.
 
 ## Migration verification before release
 
+### Incompatible-reader maintenance cutover
+
+Schema-15 running Evaluation headers require new readers. The release helper
+refuses an ordinary rolling upgrade from older or unidentified readers. After
+draining accepted runs, pausing GitOps/operators that can recreate workloads, and
+confirming this release owns **all consumers of the destination database**, use
+the normal immutable-manifest release command with `--maintenance-cutover`.
+This is an explicit downtime operation, not a zero-downtime upgrade.
+
+The helper stores a release/namespace/candidate-bound ConfigMap journal with a
+compare-and-swap resource version and expiring runner lease. It disables release
+HPAs, stops proxy/web admission before other workloads, and waits for all old
+release pods to disappear. It never force-deletes a stalled pod.
+Already terminal migration-hook pods are ignored here so failed-hook recovery can
+reach Helm's next hook cleanup; active hooks and every old reader pod still block.
+Normal Kubernetes termination grace still applies, so drain accepted runs before starting. External
+gateways/controllers and consumers in other releases/namespaces are the operator's
+responsibility; the journal does not create a global PostgreSQL reader lease.
+
+The candidate starts with `workflowSchema.maintenanceValidation=true`, traffic
+and Evaluation replicas zero, and autoscaling off. Its APIs return
+`503 release_maintenance` for application requests and deny socket upgrades;
+health/metrics stay available. Scheduling, hosted Evaluation claims,
+runtime-library jobs and managed background maintenance remain disabled.
+Validation checks both readiness and closed application admission before the
+helper applies the normal release values to resume. Chart-owned admission and
+migration identity survive stale Vault dotenv values.
+Only the co-located executor's exact GET bootstrap-configuration route passes
+the application barrier; its existing loopback and dual-token checks still
+apply. Client authorization and graph execution stay denied. Blocking bootstrap
+would prevent the combined backend from becoming ready for validation.
+
+The migration Job has a namespace-scoped, list-only ServiceAccount/Role for Pods,
+Deployments, StatefulSets and HPAs. It refuses unknown/older reader pods, old
+controllers with desired replicas, or HPAs that can recreate old readers. Serving
+templates carry a reserved reader-version annotation. Direct Helm/CLI migrations
+cannot skip this check. Standalone PostgreSQL upgrades of older or unversioned
+existing catalogs require stopped readers/writers and the operator command's
+`RIVET_MANAGED_SCHEMA_OFFLINE=1`; fresh empty bootstrap needs no acknowledgement.
+
+Failure never automatically rolls back or resumes. Preserve diagnostics and the
+journal. Stop the previous runner, repair forward, and rerun the **same immutable
+manifest** with `--resume-cutover <token printed by the failed command>`. Recovery
+requires an expired ownership lease and the exact token; it re-quiesces and
+repeats validation even after a lost Helm acknowledgement. Do not delete the
+journal, widen schema compatibility, or use `helm rollback` to bypass recovery.
+If lease ownership or cleanup cannot be confirmed, the command reports admission
+as unconfirmed rather than claiming it is paused. Stop competing runners and
+inspect actual workloads/gateway state before recovery; a command already in
+flight may have committed despite a lost acknowledgement.
+All release paths validate journal format and release/namespace identity, even
+when it says `complete`. A completed journal permits another rollout only after
+its runner releases the lease (or the lease expires). Failure cleanup stops and
+settles outstanding renewal requests before reading ownership; an expired or
+unconfirmed lease fences subsequent controller mutations. It does not undo a
+Kubernetes/Helm request already in flight.
+Expiration also fences renewal and phase advancement after a long operation;
+the same runner cannot silently reacquire its expired lease. Only a new explicit
+exact-token recovery can claim that lease after the previous runner is stopped.
+A live disposable-cluster
+rehearsal is required before production promotion; render/unit checks alone do
+not prove API authorization, pod draining or external-controller ownership.
+
 The Studio Server deployment-contract job runs
 `yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs`
 against a disposable PostgreSQL 16.8 container before the Kubernetes checks.
@@ -620,7 +683,7 @@ Set `workflowSchema.migrationJob.enabled=false` only when an external delivery p
 
 ### Managed maintenance
 
-Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. Migration 12 adds the checked, public-by-default workflow endpoint access column. Migration 13 adds a nonnegative publication-version counter, defaulting existing projects to `0`; it does not republish existing artifacts. Endpoint and web-app publication commands compare the reviewed version under the workflow row lock and increment it in the same transaction as the change. Migration 14 adds the durable scheduled-run queue, installation binding and scheduled recording identity. The control API owns scheduling; execution replicas do not each start a scheduler. See [Scheduled runs](./scheduled-runs.md). A normal release verifies exactly the current schema version, presently `14`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
+Migration 3 adds the managed-maintenance lease and durable object-deletion outbox. Migration 4 adds durable reconciliation checkpoints and integrity findings. Migrations 5 through 7 add the hosted-Evaluation coordinator, outstanding-work index, and Evaluation-retention indexes. Migration 8 adds the nullable workflow-recordings correlation_id with a 16-to-96-character database check. Migration 9 adds non-negative per-domain active and last-completed object-inventory byte totals to reconciliation state. Migration 10 adds the partial terminal-row index that bounds web-app action transport retention. Migration 11 adds exact newest-first indexes for input-filtered workflow recording searches, including failed-only searches. Migration 12 adds the checked, public-by-default workflow endpoint access column. Migration 13 adds a nonnegative publication-version counter, defaulting existing projects to `0`; it does not republish existing artifacts. Endpoint and web-app publication commands compare the reviewed version under the workflow row lock and increment it in the same transaction as the change. Migration 14 adds the durable scheduled-run queue, installation binding and scheduled recording identity. Migration 15 adds the hosted-Evaluation pending-projection index. Running Evaluation headers assemble trial evidence from the fenced job ledger; this format requires schema-15 readers. Drain accepted work and stop older managed API readers and Evaluation coordinators before cutover. The explicit maintenance-cutover helper stops release-owned controllers and waits for their pods; the normal rolling-release path does not. This format transition requires an operator-controlled maintenance cutover, not an ordinary rolling upgrade. The release minimum rollback-compatible schema is 15: additive DDL does not make the new running data representation safe for an older image. The control API owns scheduling; execution replicas do not each start a scheduler. See [Scheduled runs](./scheduled-runs.md). A normal release verifies exactly the current schema version, presently `15`, and its migration Job applies that exact version before serving pods start. Every current migration is additive, but a guarded **forward rollback** must satisfy two independent checks: the target is the candidate manifest's canonical predecessor, and that predecessor API accepts the candidate's declared schema window. Never copy a historical `2..4` window, select an older ancestor merely because its schema is in range, or widen a normal serving release to bypass verification.
 
 Only the singleton `control` API pod receives `RIVET_MANAGED_MAINTENANCE_ENABLED=true`. The scalable `execution` Deployment receives `false`, so published endpoint traffic cannot create one global retention scan per replica or allocate the reconciliation-only runtime-library S3 client. Helm owns this boundary and the `managedMaintenance.intervalMs` (default `300000`), `leaseMs` (default `60000`), and `batchSize` (default `100`) values; `env` overrides for those variables are rejected. The worker uses a PostgreSQL fencing token, so a stale control pod cannot commit the recording-retention mutation after a successor owns the lease. Each pass selects candidates in PostgreSQL and removes at most `batchSize` recording rows while holding the fence, so a large backlog converges without loading its history into the API process or using one unbounded transaction. Recording/replay object keys are queued in the same transaction as removed metadata, then deleted only after a fresh database-reference recheck. Temporary blob-store failures retry with exponential backoff; still-referenced keys become `blocked` rather than being removed. A later deletion intent reopens a blocked key, because its final reference may have been removed after the earlier safety check.
 

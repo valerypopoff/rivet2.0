@@ -149,7 +149,12 @@ export async function handleOpenProjectCommand(
     }
     const message = getError(error).message;
     console.error('Failed to open workflow project:', error);
-    postMessageToDashboard({ type: 'project-open-failed', path: command.path, error: message });
+    postMessageToDashboard({
+      type: 'project-open-failed',
+      path: command.path,
+      error: message,
+      requestId: command.requestId,
+    });
   }
 }
 

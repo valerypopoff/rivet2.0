@@ -482,7 +482,7 @@ The Docker, development, and Kubernetes proxy templates define this stream as an
 
 Unpublishing does not delete published version history. It closes the public/latest route lineage, but previous published versions remain downloadable from Project Settings. If a pre-history legacy project still has only a current published pointer, unpublish first backfills that current snapshot/revision into history before clearing the pointer.
 
-In the current dashboard UI, the project-row context menu exposes `Rename project`, compare actions, `Download`, `Duplicate`, and `Delete project`.
+In the current dashboard UI, the project-row context menu exposes `Rename project`, compare actions, `Download project`, `Download bundle`, `Duplicate`, and `Delete project`.
 
 Single-clicking a project row opens that project in the editor as a preview tab, so browsing through projects does not clutter the editor tab row. Opening another not-yet-open project by single click replaces the previous clean preview tab; when the old preview is active, it is replaced in place so the project selection does not blink back to a persistent project first. Preview tabs are marked through Rivet's transient tab UI state and render italic in the editor tab row. Clicking an already-open persistent project just activates that tab and leaves the current preview tab open until another project needs the preview slot. Double-clicking the row, editing the opened project, running it, saving it, activating Remote Debugger on the active preview project, or hitting an unsafe replacement condition promotes that tab to a normal persistent editor tab. Remote Debugger promotion observes Rivet's `external-debugger` session target only, so hosted internal Node executor reconnects do not persist preview tabs. The project details card keeps the visibly button-like `Settings` action before `Save`; it does not provide a separate edit/open button and shows `Save` only when the selected workflow is the active editor project and has unsaved changes. Clicking folders or blank tree space (including either side of a project row) preserves the selected project and its details, even when its folder is collapsed. Clicking another project selects that project instead; ordinary folder navigation does not reload the editor.
 
@@ -605,7 +605,7 @@ What upload does **not** copy:
 
 ## Project downloading
 
-The separate **Download with dependencies** project-row action prepares a ZIP with
+The separate **Download bundle** project-row action prepares a ZIP with
 recursive saved project/version snapshots, matching datasets and a portable manifest.
 It does not alter the ordinary single-file behavior below. See
 [Portable project bundles](project-bundles.md) for the async API, resumable downloads,
@@ -635,7 +635,7 @@ Current download behavior by status:
   - downloads the saved live project file
   - filename tag: `[unpublished]`
 - **Published**
-  - one-click `Download` in the dashboard downloads the published version, even if the saved live file currently matches it
+  - one-click `Download project` in the dashboard downloads the published version, even if the saved live file currently matches it
   - filename tag: `[published]`
 - **Unpublished changes**
   - opens a chooser in the dashboard

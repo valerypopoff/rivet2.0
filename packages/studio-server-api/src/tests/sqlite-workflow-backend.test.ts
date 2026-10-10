@@ -24,7 +24,7 @@ async function fixture(
     options: { databasePath: string; artifactRoot: string; virtualRoot: string },
     setPaused: (value: boolean) => void,
   ) => Promise<void>,
-  hooks: { beforeDeleteProject?: (projectId: string) => Promise<void> } = {},
+  hooks: { beforeDeleteProject?: (projectId: string) => Promise<void>; worker?: boolean } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-sqlite-backend-'));
   const options = {
@@ -45,7 +45,7 @@ async function fixture(
   try {
     candidate.initialize();
     candidate.close();
-    backend.initialize();
+    await backend.initialize();
     await run(backend, options, (value) => {
       paused = value;
     });
@@ -53,7 +53,7 @@ async function fixture(
     await assert.rejects(fs.stat(options.virtualRoot), { code: 'ENOENT' });
   } finally {
     candidate.close();
-    backend.close();
+    await backend.dispose();
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -61,6 +61,57 @@ const conditions = (item: WorkflowProjectItem) => ({
   expectedProjectId: item.projectMetadataId!,
   expectedPublicationVersion: item.settings.publicationVersion!,
   expectedDraftRevisionId: item.revisionId!,
+});
+
+test('serving worker preserves save/publication CAS, detached execution and maintenance ownership', async () => {
+  await fixture(async (backend, _options, setPaused) => {
+    let item = await createExecutable(backend);
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'worker-contract' }, conditions(item));
+    const first = await backend.loadPublishedExecutionProject('worker-contract');
+    assert.ok(first);
+    first.project.metadata.title = 'mutated runtime';
+    const second = await backend.loadPublishedExecutionProject('worker-contract');
+    assert.ok(second);
+    assert.notEqual(second.project.metadata.title, 'mutated runtime');
+    const target = await backend.loadSubgraphTarget({ projectId: second.project.metadata.id, version: 'published' });
+    assert.equal(target.project.metadata.title, second.project.metadata.title);
+    const unpublished = await backend.unpublishWorkflowProjectItem(item.relativePath, conditions(item));
+    await assert.rejects(backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'worker-contract' }, conditions(item)), { status: 409 });
+    assert.equal(await backend.loadPublishedExecutionProject('worker-contract'), null);
+    assert.equal(unpublished.settings.publicationStatus, 'unpublished');
+    setPaused(true);
+    await assert.rejects(backend.createWorkflowFolderItem('blocked', ''), /maintenance/);
+    assert.equal(backend.getActiveWriteCount(), 0);
+    await backend.checkHealth();
+  }, { worker: true });
+});
+
+test('worker drain includes catalog reads and canceled readiness probes leave the queue', async () => {
+  await fixture(async (backend, options) => {
+    const blocker = new DatabaseSync(options.databasePath);
+    blocker.exec('BEGIN EXCLUSIVE');
+    const tree = backend.getTree();
+    const controller = new AbortController();
+    const health = backend.checkHealth({ signal: controller.signal });
+    const canceled = assert.rejects(health, /expired readiness probe/);
+    let idle = false;
+    const draining = backend.waitForIdle().then(() => { idle = true; });
+    try {
+      assert.equal(backend.getActiveWriteCount(), 0);
+      assert.ok(backend.getPendingCatalogOperationCount() >= 2);
+      controller.abort(new Error('expired readiness probe'));
+      await canceled;
+      assert.equal(backend.getPendingCatalogOperationCount(), 1);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(idle, false, 'an outstanding catalog read still prevents drain');
+    } finally {
+      blocker.exec('ROLLBACK');
+      blocker.close();
+      await Promise.all([tree, draining]);
+    }
+    assert.equal(idle, true);
+    assert.equal(backend.getPendingCatalogOperationCount(), 0);
+  }, { worker: true });
 });
 
 test('SQLite draft saves preserve publication artifacts without reading history', async (t) => {
@@ -903,13 +954,12 @@ test('SQLite project browsing reads only the selected pair, and metadata discove
         currentContents,
       ),
     );
-    await checkPair(async () =>
-      assert.equal(
-        (await backend.createProjectReferenceLoader().loadProject(undefined, { id: item.projectMetadataId! })).metadata
-          .description,
-        project.metadata.description,
-      ),
+    const beforeReference = reads;
+    assert.equal(
+      (await backend.createProjectReferenceLoader().loadProject(undefined, { id: item.projectMetadataId! })).metadata.description,
+      project.metadata.description,
     );
+    assert.equal(reads, beforeReference, 'The reference loader reuses the verified immutable source loaded by the Subgraph.');
     await checkPair(async () =>
       assert.deepEqual(await backend.readWorkflowPublishedVersionPreview(item.relativePath, firstVersion), {
         contents: firstContents,
@@ -1359,6 +1409,81 @@ test('SQLite serving does not create a missing or unidentified catalog', async (
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('SQLite late initialization cannot reopen admission after close begins', async () => {
+  await fixture(async (_backend, options) => {
+    let leases = 0;
+    const backend = new SqliteWorkflowBackend({
+      ...options,
+      worker: true,
+      withWrite: async (operation) => {
+        leases++;
+        return operation();
+      },
+    });
+    const blocker = new DatabaseSync(options.databasePath);
+    blocker.exec('BEGIN EXCLUSIVE');
+    let locked = true;
+    const opened = backend.initialize();
+    const rejected = assert.rejects(async () => opened, /shutting down/);
+    try {
+      await assert.rejects(backend.createWorkflowProjectItem('', 'Too early'), { status: 503 });
+      assert.equal(leases, 0, 'startup cannot enter a writer lease before initialization succeeds');
+      const closed = backend.close();
+      blocker.exec('ROLLBACK');
+      locked = false;
+      await rejected;
+      await closed;
+      await assert.rejects(backend.createWorkflowProjectItem('', 'Too late'), { status: 503 });
+      assert.throws(() => backend.initialize(), /shutdown has begun/);
+      assert.equal(leases, 0);
+    } finally {
+      if (locked) blocker.exec('ROLLBACK');
+      blocker.close();
+      await backend.dispose();
+    }
+  });
+});
+
+for (const worker of [false, true]) {
+  test(`SQLite ${worker ? 'worker' : 'direct'} failed mode changes preserve the initialized write policy`, async () => {
+    await fixture(async (_backend, options) => {
+      let leases = 0;
+      const backend = new SqliteWorkflowBackend({
+        ...options,
+        worker,
+        withWrite: async (operation) => {
+          leases++;
+          return operation();
+        },
+      });
+      try {
+        await backend.initialize();
+        await assert.rejects(async () => backend.initialize({ readOnly: true }), /another mode/);
+        await backend.createWorkflowProjectItem('', 'Still writable');
+        assert.equal(leases, 1, 'a rejected mode change must not disable the original writer');
+      } finally {
+        await backend.dispose();
+      }
+      const reader = new SqliteWorkflowBackend({
+        ...options,
+        worker,
+        withWrite: async (operation) => {
+          leases++;
+          return operation();
+        },
+      });
+      try {
+        await reader.initialize({ readOnly: true });
+        await assert.rejects(async () => reader.initialize(), /another mode/);
+        await assert.rejects(reader.createWorkflowProjectItem('', 'Rejected'), /verification only/);
+        assert.equal(leases, 1, 'a rejected mode change must not enter a writer lease on a verifier');
+      } finally {
+        await reader.dispose();
+      }
+    });
+  });
+}
 
 test('SQLite shutdown drains queued writes, rejects new work and supports cancelling only the idle wait', async () => {
   await fixture(async (backend, options) => {

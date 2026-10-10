@@ -277,10 +277,14 @@ export type WebAppAccessPolicy = {
 
 let managedBackendPromise: Promise<ManagedWorkflowBackend> | null = null;
 let sqliteBackend: SqliteWorkflowBackend | null = null;
+let sqliteBackendPromise: Promise<SqliteWorkflowBackend> | null = null;
 let sqliteRetentionTimer: ReturnType<typeof setInterval> | null = null;
 let sqliteRetentionRunning = false;
 export function getLocalWorkflowActiveWriteCount(): number {
   return sqliteBackend?.getActiveWriteCount() ?? 0;
+}
+export function getLocalWorkflowPendingCatalogOperationCount(): number {
+  return sqliteBackend?.getPendingCatalogOperationCount() ?? 0;
 }
 function startLocalRecordingRetention(): void {
   if (sqliteRetentionTimer) return;
@@ -308,10 +312,11 @@ function startLocalRecordingRetention(): void {
 async function getDataBackend(): Promise<WorkflowDataBackend> {
   const local = getLocalMetadataServingSelection();
   if (!local) return getManagedBackend();
-  if (!sqliteBackend) {
+  if (!sqliteBackendPromise) {
     const backend = new SqliteWorkflowBackend({
       ...local,
       databasePath: local.catalogDatabasePath,
+      worker: true,
       virtualRoot: local.source.workflows,
       withWrite: async (operation) => {
         assertLocalMetadataWritesAllowed();
@@ -322,10 +327,22 @@ async function getDataBackend(): Promise<WorkflowDataBackend> {
         await getFilesystemEvaluationStore().deleteProject(id as ProjectId);
       },
     });
-    backend.initialize();
     sqliteBackend = backend;
+    sqliteBackendPromise = Promise.resolve().then(async () => {
+      try {
+        await backend.initialize();
+        return backend;
+      } catch (error) {
+        await backend.dispose().catch(() => undefined);
+        if (sqliteBackend === backend) {
+          sqliteBackend = null;
+          sqliteBackendPromise = null;
+        }
+        throw error;
+      }
+    });
   }
-  return sqliteBackend;
+  return sqliteBackendPromise;
 }
 function usesDatabaseCatalog(): boolean {
   return getLocalMetadataServingSelection() !== null || isManagedWorkflowStorageEnabled();
@@ -909,8 +926,9 @@ export async function disposeWorkflowStorage(): Promise<void> {
   await flushLLMProfileHealthRecordingOutcomes();
 
   const backendPromise = managedBackendPromise;
-  const localBackend = sqliteBackend;
+  const localBackendPromise = sqliteBackendPromise;
   sqliteBackend = null;
+  sqliteBackendPromise = null;
   managedBackendPromise = null;
   const filesystemStore = filesystemLLMProfileHealthStore;
   const evaluationStore = filesystemEvaluationStore;
@@ -918,7 +936,7 @@ export async function disposeWorkflowStorage(): Promise<void> {
   filesystemEvaluationStore = null;
   await Promise.all([
     backendPromise?.then((backend) => backend.dispose()),
-    localBackend?.dispose(),
+    localBackendPromise?.then((backend) => backend.dispose(), () => undefined),
     filesystemStore?.dispose(),
     evaluationStore?.dispose(),
   ]);

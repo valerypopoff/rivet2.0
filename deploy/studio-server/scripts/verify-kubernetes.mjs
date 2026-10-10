@@ -137,6 +137,7 @@ async function main() {
   const { tempDir, envPath } = writeLocalVerificationEnv();
 
   try {
+    await spawnProgram(nodeBin, ['--test', 'deploy/studio-server/scripts/managed-release-cutover.test.mjs']);
     await verifyLocalRender(nodeBin, envPath);
     await verifyProdRender(helmBin, readManagedWorkflowSchemaReleaseContract(rootDir).version);
     console.log(`[${launcherName}] Kubernetes local/prod render verification passed.`);

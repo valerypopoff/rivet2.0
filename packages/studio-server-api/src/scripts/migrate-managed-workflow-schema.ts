@@ -12,6 +12,7 @@ import {
 } from '../routes/workflows/storage-config.js';
 import { readDeploymentStorageBootstrapSettings } from '../deployment-storage-settings.js';
 import { assertVmMigrationTargetMayServe } from '../vm-migration-target-gate.js';
+import { assertManagedSchemaMigrationSafe } from '../managed-schema-cutover.js';
 
 function readCommand(): ManagedWorkflowSchemaMode {
   const command = process.argv[2]?.trim().toLowerCase();
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   const pool = new Pool(getManagedDbPoolConfig(storageConfig));
   try {
     await assertVmMigrationTargetMayServe(pool);
+    if (command === 'migrate') await assertManagedSchemaMigrationSafe(pool);
     const result = await withManagedDbRetry(`managed schema ${command}`, () =>
       command === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
     );

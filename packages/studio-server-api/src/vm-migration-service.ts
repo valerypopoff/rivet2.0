@@ -7,7 +7,7 @@ import path from 'node:path';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { LocalMetadataTransitionJournal } from './local-metadata/transition-journal.js';
 import { SqliteMigrationSource } from './scripts/sqlite-migration-source.js';
-import { getLocalWorkflowActiveWriteCount } from './routes/workflows/storage-backend.js';
+import { getLocalWorkflowActiveWriteCount, getLocalWorkflowPendingCatalogOperationCount } from './routes/workflows/storage-backend.js';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
@@ -338,6 +338,7 @@ export async function localStorageDrainSnapshot(): Promise<{ ready: boolean; blo
   if ((await editorLeaseCount()) > 0) blockers.push('editor graph runs');
   if (runningPreflights > 0) blockers.push('destination connection test');
   if (getLocalWorkflowActiveWriteCount() > 0) blockers.push('SQLite catalog writes');
+  if (getLocalWorkflowPendingCatalogOperationCount() > 0) blockers.push('SQLite catalog operations');
   const recordings = getWorkflowExecutionRecordingPersistenceMetrics();
   if (recordings.activeWrites > 0 || recordings.pendingWrites > 0) blockers.push('recording writes');
   // Local artifacts use the same job runner in legacy and SQLite modes. Query it

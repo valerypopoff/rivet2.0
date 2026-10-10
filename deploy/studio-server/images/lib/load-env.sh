@@ -78,6 +78,9 @@ load_optional_dotenv_preserving_deployment_storage() {
   deployment_storage_force_path_style="${RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE:-}"
   deployment_app_settings_backend="${RIVET_APP_SETTINGS_BACKEND:-}"
   deployment_app_data_root="${RIVET_APP_DATA_ROOT:-}"
+  deployment_release_maintenance="${RIVET_RELEASE_MAINTENANCE:-}"
+  deployment_schema_migration_release="${RIVET_SCHEMA_MIGRATION_RELEASE:-}"
+  deployment_managed_maintenance_enabled="${RIVET_MANAGED_MAINTENANCE_ENABLED:-}"
 
   load_optional_dotenv "$@"
 
@@ -98,6 +101,16 @@ load_optional_dotenv_preserving_deployment_storage() {
   export RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE="$deployment_storage_force_path_style"
   export RIVET_APP_SETTINGS_BACKEND="$deployment_app_settings_backend"
   export RIVET_APP_DATA_ROOT="$deployment_app_data_root"
+  # Release admission and reader ownership cannot be changed by stale Vault env.
+  if [ -n "$deployment_release_maintenance" ]; then
+    export RIVET_RELEASE_MAINTENANCE="$deployment_release_maintenance"
+  fi
+  if [ -n "$deployment_schema_migration_release" ]; then
+    export RIVET_SCHEMA_MIGRATION_RELEASE="$deployment_schema_migration_release"
+  fi
+  if [ -n "$deployment_managed_maintenance_enabled" ]; then
+    export RIVET_MANAGED_MAINTENANCE_ENABLED="$deployment_managed_maintenance_enabled"
+  fi
   if [ -n "$deployment_bundle_scratch_root" ]; then
     export RIVET_PROJECT_BUNDLE_SCRATCH_ROOT="$deployment_bundle_scratch_root"
   fi

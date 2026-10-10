@@ -36,7 +36,7 @@ import {
 } from "../routes/workflows/evaluation-runs.js";
 import { createHttpEvaluationStore } from "../../../studio-server-shared/evaluationRunHttpStore.js";
 import { createApiApp } from "../app.js";
-import { evaluationHistoryPageQuery } from "../evaluation-runs/history-page.js";
+import { evaluationHistoryPageQuery, type EvaluationHistoryRow } from "../evaluation-runs/history-page.js";
 
 const projectA = "project-a" as ProjectId;
 const projectB = "project-b" as ProjectId;
@@ -64,6 +64,64 @@ test("history cursors use verified SQL identities and preserve legacy normalizat
     ]) {
       assert.throws(() => query.page([corrupted]), /Invalid evaluation history metadata/);
     }
+  }
+});
+
+test("history cursors preserve the exact database timestamp, not its JSON spelling or Date precision", () => {
+  for (const dialect of ["sqlite", "postgres"] as const) {
+    const value = run(projectA, "cursor-precision");
+    const storedTimestamp =
+      dialect === "postgres"
+        ? "2026-01-01T00:00:00.000123Z"
+        : "2026-01-01T00:00:00Z";
+    const row = {
+      run_id: value.id,
+      project_id: String(projectA),
+      suite_id: value.suiteId,
+      // A non-ISO PostgreSQL DateStyle can defeat pg's built-in Date parser.
+      // The explicitly formatted SQL value owns validation and pagination.
+      started_at: dialect === "postgres" ? new Date(Number.NaN) : storedTimestamp,
+      started_at_cursor: storedTimestamp,
+      summary_json: JSON.stringify({ ...value, startedAt: "2026-01-01T00:00:00.000Z" }),
+    };
+    const query = evaluationHistoryPageQuery(dialect, { projectId: projectA, limit: 1 });
+    const page = query.page([row, row]);
+    const cursor = JSON.parse(Buffer.from(page.nextCursor!, "base64url").toString("utf8"));
+    assert.equal(cursor[2], storedTimestamp);
+    const next = evaluationHistoryPageQuery(dialect, { projectId: projectA, after: page.nextCursor });
+    assert.equal(next.values[1], storedTimestamp);
+  }
+});
+
+test("SQLite history pagination does not omit equivalent differently formatted timestamps", () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(
+      "CREATE TABLE evaluation_runs (run_id TEXT, project_id TEXT, suite_id TEXT, started_at TEXT, run_json TEXT)",
+    );
+    for (const id of ["a", "b", "c"]) {
+      database.prepare("INSERT INTO evaluation_runs VALUES (?, ?, ?, ?, ?)").run(
+        id,
+        String(projectA),
+        "suite",
+        "2026-01-01T00:00:00Z",
+        JSON.stringify({ ...run(projectA, id), startedAt: "2026-01-01T00:00:00.000Z" }),
+      );
+    }
+    let after: string | undefined;
+    const ids: string[] = [];
+    do {
+      const query = evaluationHistoryPageQuery("sqlite", { projectId: projectA, limit: 1, after });
+      const rows = database
+        .prepare(query.sql)
+        .all(...(query.values as (string | number)[])) as unknown as EvaluationHistoryRow[];
+      const page = query.page(rows);
+      ids.push(...page.runs.map((value) => value.id));
+      after = page.nextCursor;
+    } while (after && ids.length < 5);
+    assert.deepEqual(ids, ["c", "b", "a"]);
+  } finally {
+    database.close();
   }
 });
 
@@ -2012,6 +2070,8 @@ type ManagedRecordingRow = {
 /** Small behavioral PostgreSQL double: it models only evaluation SQL used by this test. */
 class FakeManagedEvaluationPool {
   readonly queries: string[] = [];
+  readonly hostedStatuses = new Map<string, string>();
+  readonly jobStatuses = new Map<string, string[]>();
   readonly recordings = new Map<string, ManagedRecordingRow>();
   readonly activeRecordingIds = new Set<string>();
   readonly runs = new Map<string, EvaluationRun>();
@@ -2038,6 +2098,14 @@ class FakeManagedEvaluationPool {
     }
     if (normalized.startsWith("select pg_advisory_xact_lock")) {
       return { rows: [], rowCount: 1 };
+    }
+    if (normalized.startsWith('select status from evaluation_hosted_trial_jobs')) {
+      const rows = (this.jobStatuses.get(this.key(values[0], values[1])) ?? []).map((status) => ({ status }));
+      return { rows: rows as T[], rowCount: rows.length };
+    }
+    if (normalized.startsWith('select status from evaluation_hosted_runs')) {
+      const status = this.hostedStatuses.get(this.key(values[0], values[1]));
+      return { rows: (status === undefined ? [] : [{ status }]) as T[], rowCount: status === undefined ? 0 : 1 };
     }
     if (
       normalized ===
@@ -2127,7 +2195,7 @@ class FakeManagedEvaluationPool {
     if (
       normalized.startsWith(
         "select run_json from evaluation_runs where project_id = $1 and run_id = $2",
-      )
+      ) || (normalized.startsWith('select case when') && normalized.endsWith('from evaluation_runs where project_id = $1 and run_id = $2'))
     ) {
       const row = this.runs.get(this.key(values[0], values[1]));
       return {
@@ -2167,7 +2235,7 @@ class FakeManagedEvaluationPool {
     ) {
       const projectId = String(values[0]);
       for (const [key, row] of this.recordings)
-        if (row.projectId === projectId) this.recordings.delete(key);
+        if (row.projectId === projectId && (values[1] === undefined || row.runId === values[1])) this.recordings.delete(key);
       return { rows: [], rowCount: 1 };
     }
     if (
@@ -2186,7 +2254,7 @@ class FakeManagedEvaluationPool {
     ) {
       const projectId = String(values[0]);
       for (const [key, row] of this.runs)
-        if (String(row.projectId) === projectId) this.runs.delete(key);
+        if (String(row.projectId) === projectId && (values[1] === undefined || row.id === values[1])) this.runs.delete(key);
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`Unexpected managed evaluation SQL: ${normalized}`);
@@ -2202,6 +2270,53 @@ class FakeManagedEvaluationPool {
     };
   }
 }
+
+test('generic managed Evaluation deletion protects scheduler-owned jobs and preserves neighboring runs', async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
+  const initial = run(projectA, 'guarded-delete');
+  const neighbor = run(projectA, 'neighbor');
+  await store.put(initial);
+  await store.put(neighbor);
+  const input = { projectId: projectA, runId: initial.id };
+  const key = `${projectA}:${initial.id}`;
+  for (const status of ['queued', 'running']) {
+    pool.hostedStatuses.set(key, status);
+    await assert.rejects(store.delete(input), /queued or running/);
+  }
+  pool.hostedStatuses.set(key, 'completed');
+  for (const status of ['queued', 'claimed', 'accepted']) {
+    pool.jobStatuses.set(key, [status]);
+    await assert.rejects(store.delete(input), /queued or running/, 'active jobs protect even an inconsistent parent');
+  }
+  assert.equal(
+    pool.queries.some((sql) => sql.startsWith('delete from evaluation_runs')),
+    false,
+  );
+  pool.jobStatuses.set(key, ['completed', 'interrupted', 'canceled']);
+  const start = pool.queries.length;
+  await store.delete(input);
+  const commands = pool.queries.slice(start).map((sql) => sql.trim().replace(/\s+/g, ' ').toLowerCase());
+  assert.ok(commands[1]!.includes('evaluation_hosted_trial_jobs') && commands[1]!.endsWith('for update'));
+  assert.ok(commands[2]!.includes('evaluation_hosted_runs') && commands[2]!.endsWith('for update'));
+  assert.equal(await store.get(input), undefined);
+  assert.equal((await store.get({ projectId: projectA, runId: neighbor.id }))?.id, neighbor.id);
+});
+
+test('generic Evaluation snapshots cannot forge or expose the hosted projection marker', async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
+  const initial = run(projectA, 'untrusted-projection-marker');
+  await store.put({ ...initial, _hostedTrialsFromJobs: true } as EvaluationRun);
+  const stored = pool.runs.get(`${projectA}:${initial.id}`)!;
+  assert.ok(!('_hostedTrialsFromJobs' in stored));
+  assert.equal((await store.get({ projectId: projectA, runId: initial.id }))?.trials.length, initial.trials.length);
+  // Unknown/legacy marker values are never part of the public run contract.
+  pool.runs.set(`${projectA}:${initial.id}`, { ...stored, _hostedTrialsFromJobs: false } as EvaluationRun);
+  const renamed = await store.updateRunName({ projectId: projectA, runId: initial.id, name: 'Public run' });
+  assert.ok(!('_hostedTrialsFromJobs' in renamed!));
+  assert.ok(!('_hostedTrialsFromJobs' in pool.runs.get(`${projectA}:${initial.id}`)!));
+});
 
 test("managed evaluation store persists the complete upstream contract", async () => {
   const pool = new FakeManagedEvaluationPool();

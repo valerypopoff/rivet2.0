@@ -165,11 +165,11 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
   if (!isOpen) return null;
   return (
     <ModalTransition>
-      <ModalDialog testId="workflow-project-bundle-modal" label="Download with dependencies" onClose={onClose}>
+      <ModalDialog testId="workflow-project-bundle-modal" label="Download bundle" onClose={onClose}>
         <ModalBody>
           <div className="project-settings-modal-shell workflow-project-bundle-shell">
             <div className="project-settings-modal-header-row">
-              <div className="project-settings-modal-title">Download with dependencies</div>
+              <div className="project-settings-modal-title">Download bundle</div>
               <button
                 type="button"
                 className="project-settings-close-button"

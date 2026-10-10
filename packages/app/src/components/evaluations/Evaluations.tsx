@@ -1712,6 +1712,15 @@ const EvaluationsContainer: FC<{
   // and local selection immediately. A request generation prevents an older
   // read from putting the deleted record back into the Runs view afterward.
   const runHistoryReadGeneration = useRef(0);
+  useEffect(
+    () => () => {
+      // The workspace atom outlives this overlay. An abandoned page must not
+      // merge into a reopened panel, even when it has the same project/suite.
+      runHistoryReadGeneration.current += 1;
+      historyPageRequest.current = undefined;
+    },
+    [],
+  );
   const evaluationMainRef = useRef<HTMLElement>(null);
   const runScrollTopRef = useRef(0);
   const restoredRunScrollScopeRef = useRef<string>();
@@ -2488,13 +2497,21 @@ const EvaluationsContainer: FC<{
       const entries = page.runs.filter(
         (run) => run.projectId === project.metadata.id && run.suiteId === selectedSuiteId,
       );
-      setState((current) => ({
-        ...current,
-        runHistoryEntries: [
-          ...new Map([...(current.runHistoryEntries ?? []), ...entries].map((entry) => [entry.id, entry])).values(),
-        ],
-        runHistoryNextCursor: page.nextCursor,
-      }));
+      setState((current) =>
+        current.runHistoryScope?.projectId !== project.metadata.id ||
+        current.runHistoryScope.suiteId !== selectedSuiteId ||
+        current.runHistoryNextCursor !== state.runHistoryNextCursor
+          ? current
+          : {
+              ...current,
+              runHistoryEntries: [
+                ...new Map(
+                  [...(current.runHistoryEntries ?? []), ...entries].map((entry) => [entry.id, entry]),
+                ).values(),
+              ],
+              runHistoryNextCursor: page.nextCursor,
+            },
+      );
     } catch (error) {
       if (generation === runHistoryReadGeneration.current)
         setRunsError(error instanceof Error ? error.message : String(error));

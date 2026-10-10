@@ -192,6 +192,38 @@ async function renderLocalKubernetesChartWithOverrides(overrides: string[]): Pro
   );
 }
 
+test('maintenance chart keeps validation reachable without admitting work, and guards reader inventory', async () => {
+  const rendered = await renderLocalKubernetesChartWithOverrides([
+    'workflowSchema.maintenanceValidation=true',
+    'replicaCount.proxy=0',
+    'replicaCount.web=0',
+    'replicaCount.evaluation=0',
+    'autoscaling.proxy.enabled=false',
+    'autoscaling.execution.enabled=false',
+  ]);
+  const resources = deploymentYaml.parseAllDocuments(rendered).map((document) => document.toJS());
+  const workloads = resources.filter((resource) => ['Deployment', 'StatefulSet'].includes(resource.kind));
+  for (const workload of workloads) {
+    const env = workload.spec!.template!.spec.containers.find(
+      (container) => container.name === 'backend' || container.name === 'api',
+    )?.env;
+    if (!env) continue;
+    assert.equal(env.find((item) => item.name === 'RIVET_RELEASE_MAINTENANCE')?.value, 'true');
+    assert.equal(env.find((item) => item.name === 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED')?.value, 'false');
+    assert.equal(env.find((item) => item.name === 'RIVET_MANAGED_MAINTENANCE_ENABLED')?.value, 'false');
+  }
+  assert.ok(resources.some((resource) => resource.kind === 'Role'));
+  assert.ok(resources.some((resource) => resource.kind === 'RoleBinding'));
+  assert.match(rendered, /serviceAccountName: rivet-rivet-schema-guard/);
+  assert.match(rendered, /name: RIVET_SCHEMA_MIGRATION_RELEASE\s*\n\s*value: "rivet"/);
+  await assertHelmTemplateFails(['workflowSchema.maintenanceValidation=true'], /maintenance validation requires/);
+  await assertHelmTemplateFails(
+    ['podAnnotations.backend={"rivet.dev/managed-schema-reader-version":"999"}'],
+    /chart-owned/,
+    '--set-json',
+  );
+});
+
 async function assertHelmTemplateFails(
   overrides: string[],
   expectedMessage: RegExp,

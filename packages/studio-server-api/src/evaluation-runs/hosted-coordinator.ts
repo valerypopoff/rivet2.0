@@ -7,6 +7,7 @@ import {
   finalizeEvaluationRecordingRetention,
   finalizeEvaluationRun,
   fingerprintEvaluationDataset,
+  normalizeEvaluationRun,
   runEvaluationTrial,
   type EvaluationDataset,
   type EvaluationGraphRunner,
@@ -20,7 +21,13 @@ import { deserializeDatasets, loadProjectFromString, type ProjectId } from '@val
 
 import type { HostedEvaluationsCoordinatorConfig } from '../hosted-evaluations-config.js';
 import { getStudioMetrics } from '../metrics.js';
+import { deleteManagedEvaluationRun } from './managed-run-deletion.js';
 import type { PostgresRivetEvaluationStore } from './managed-store.js';
+import {
+  assembledEvaluationRunSql,
+  hostedEvaluationHeader,
+  withoutHostedProjectionMarker,
+} from './hosted-projection.js';
 
 export type HostedEvaluationSubmission = {
   projectContents: string;
@@ -449,7 +456,7 @@ export class HostedEvaluationCoordinator {
          VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
          ON CONFLICT (project_id, run_id) DO NOTHING
          RETURNING run_id`,
-        [String(run.projectId), run.id, run.suiteId, run.startedAt, JSON.stringify(run)],
+        [String(run.projectId), run.id, run.suiteId, run.startedAt, JSON.stringify(hostedEvaluationHeader(run))],
       );
       if (insertedRun.rowCount !== 1) throw new HostedEvaluationRunConflictError();
       await client.query(
@@ -506,8 +513,9 @@ export class HostedEvaluationCoordinator {
         return undefined;
       }
       if (hosted.status === 'completed' || hosted.status === 'canceled' || hosted.status === 'interrupted') {
+        const run = await this.#readProjectedRun(client, input.projectId, input.runId);
         await client.query('COMMIT');
-        return await this.#runStore.get(input);
+        return run;
       }
       await client.query(
         `UPDATE evaluation_hosted_runs SET cancel_requested_at = COALESCE(cancel_requested_at, NOW()), updated_at = NOW()
@@ -542,7 +550,8 @@ export class HostedEvaluationCoordinator {
           [String(input.projectId), input.runId, job.job_id, JSON.stringify(trial)],
         );
       }
-      const run = await this.#updateProjection(client, input.projectId, input.runId, snapshot);
+      await this.#updateProjection(client, input.projectId, input.runId);
+      const run = await this.#readProjectedRun(client, input.projectId, input.runId);
       await client.query('COMMIT');
       this.#abortRun(input.projectId, input.runId, 'Hosted evaluation cancellation requested.');
       this.#notify();
@@ -631,7 +640,7 @@ export class HostedEvaluationCoordinator {
         `UPDATE evaluation_hosted_runs SET status = 'running', updated_at = NOW() WHERE project_id = $1 AND run_id = $2`,
         [String(input.projectId), input.runId],
       );
-      const run = await this.#getRunForUpdate(client, input.projectId, input.runId);
+      const run = await this.#readProjectedRun(client, input.projectId, input.runId, true);
       const retryIds = new Set(jobIds);
       const retainedTrials = run.trials.filter((trial) => !retryIds.has(trial.id));
       const accountingComplete = !retainedTrials.some((trial) => trial.totalMetrics.hasUnknownCost);
@@ -664,7 +673,7 @@ export class HostedEvaluationCoordinator {
         ),
         trials: retainedTrials,
       };
-      await this.#writeRun(client, next);
+      await this.#writeRun(client, hostedEvaluationHeader(next));
       await client.query('COMMIT');
       this.#notify();
       return next;
@@ -685,29 +694,7 @@ export class HostedEvaluationCoordinator {
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
-      // Scheduler mutations consistently acquire job rows before the parent
-      // run. Lock all of them here so a concurrent claim/retry cannot change
-      // the run after we decide that deletion is safe.
-      await client.query(
-        `SELECT job_id FROM evaluation_hosted_trial_jobs
-          WHERE project_id = $1 AND run_id = $2
-          FOR UPDATE`,
-        [String(input.projectId), input.runId],
-      );
-      const hosted = await this.#findHostedRunForUpdate(client, String(input.projectId), input.runId);
-      if (hosted?.status === 'queued' || hosted?.status === 'running') {
-        throw new Error(
-          'A queued or running hosted Evaluation cannot be deleted. Cancel it first so completed evidence remains auditable.',
-        );
-      }
-      await client.query('DELETE FROM evaluation_recordings WHERE project_id = $1 AND run_id = $2', [
-        String(input.projectId),
-        input.runId,
-      ]);
-      await client.query('DELETE FROM evaluation_runs WHERE project_id = $1 AND run_id = $2', [
-        String(input.projectId),
-        input.runId,
-      ]);
+      await deleteManagedEvaluationRun(client, input);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -879,7 +866,7 @@ export class HostedEvaluationCoordinator {
           WHERE project_id = $1 AND run_id = $2 AND status = 'queued'`,
         [job.project_id, job.run_id],
       );
-      await this.#updateProjection(client, projectId(job.project_id), job.run_id, parseSnapshot(run.snapshot_json));
+      await this.#updateProjection(client, projectId(job.project_id), job.run_id);
       await client.query('COMMIT');
       return { run, job };
     } catch (error) {
@@ -1027,7 +1014,27 @@ export class HostedEvaluationCoordinator {
             contextValues: snapshot.contextValues,
           }),
       });
-      await this.#settle(claim.job, trial);
+      if (controller.signal.aborted && !(await this.#isCancellationRequested(claim.job))) {
+        // The evaluator may turn an AbortSignal into a returned canceled trial
+        // rather than throw. Worker shutdown/lease loss is still interruption,
+        // not user cancellation, and must remain explicitly retryable.
+        const interrupted = terminalTrial(
+          claim.job,
+          'interrupted',
+          snapshot.purpose,
+          plan.suite.evaluationMode ?? 'pass-fail',
+          'The hosted trial worker stopped after dispatch.',
+        );
+        await this.#interrupt(claim.job, {
+          ...trial,
+          executionStatus: interrupted.executionStatus,
+          qualityStatus: interrupted.qualityStatus,
+          qualityReason: interrupted.qualityReason,
+          error: interrupted.error,
+        });
+      } else {
+        await this.#settle(claim.job, trial);
+      }
     } catch (error) {
       const snapshot = parseSnapshot(claim.run.snapshot_json);
       const run = await this.#runStore.get({ projectId: projectId(claim.job.project_id), runId: claim.job.run_id });
@@ -1088,13 +1095,7 @@ export class HostedEvaluationCoordinator {
           this.#workerId,
         ],
       );
-      const hosted = await this.#getHostedRunForUpdate(client, interrupted.project_id, interrupted.run_id);
-      await this.#updateProjection(
-        client,
-        projectId(interrupted.project_id),
-        interrupted.run_id,
-        parseSnapshot(hosted.snapshot_json),
-      );
+      await this.#updateProjection(client, projectId(interrupted.project_id), interrupted.run_id);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -1134,13 +1135,7 @@ export class HostedEvaluationCoordinator {
           event,
         ],
       );
-      const hosted = await this.#getHostedRunForUpdate(client, settled.project_id, settled.run_id);
-      await this.#updateProjection(
-        client,
-        projectId(settled.project_id),
-        settled.run_id,
-        parseSnapshot(hosted.snapshot_json),
-      );
+      await this.#updateProjection(client, projectId(settled.project_id), settled.run_id);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -1183,7 +1178,15 @@ export class HostedEvaluationCoordinator {
           RETURNING job.project_id, job.run_id, job.job_id, job.case_id, job.case_name, job.case_index,
                     job.trial_index, job.status, job.attempt, job.fencing_token, job.worker_id, job.trial_json`,
       );
-      const dirty = new Map<string, { projectId: ProjectId; runId: string; snapshot: HostedEvaluationSnapshot }>();
+      const dirty = new Map<
+        string,
+        {
+          projectId: ProjectId;
+          runId: string;
+          purpose: HostedEvaluationSnapshot['purpose'];
+          evaluationMode: EvaluationRun['evaluationMode'];
+        }
+      >();
       for (const job of expired.rows) {
         const canceled = job.status === 'canceled';
         await client.query(
@@ -1198,14 +1201,24 @@ export class HostedEvaluationCoordinator {
             canceled ? 'canceled' : 'interrupted',
           ],
         );
-        const hosted = await this.#getHostedRunForUpdate(client, job.project_id, job.run_id);
-        const run = await this.#getRunForUpdate(client, projectId(job.project_id), job.run_id);
-        const snapshot = parseSnapshot(hosted.snapshot_json);
+        const identity = `${job.project_id}:${job.run_id}`;
+        let entry = dirty.get(identity);
+        if (!entry) {
+          const hosted = await this.#getHostedRunForUpdate(client, job.project_id, job.run_id);
+          const run = await this.#getRunForUpdate(client, projectId(job.project_id), job.run_id);
+          entry = {
+            projectId: projectId(job.project_id),
+            runId: job.run_id,
+            purpose: parseSnapshot(hosted.snapshot_json).purpose,
+            evaluationMode: run.evaluationMode,
+          };
+          dirty.set(identity, entry);
+        }
         const trial = terminalTrial(
           job,
           canceled ? 'canceled' : 'interrupted',
-          snapshot.purpose,
-          run.evaluationMode,
+          entry.purpose,
+          entry.evaluationMode,
           canceled
             ? 'The hosted evaluation was canceled while this trial was running.'
             : 'An execution worker stopped after accepting this trial. Rivet did not retry it automatically.',
@@ -1214,14 +1227,9 @@ export class HostedEvaluationCoordinator {
           `UPDATE evaluation_hosted_trial_jobs SET trial_json = $4::jsonb WHERE project_id = $1 AND run_id = $2 AND job_id = $3`,
           [job.project_id, job.run_id, job.job_id, JSON.stringify(trial)],
         );
-        dirty.set(`${job.project_id}:${job.run_id}`, {
-          projectId: projectId(job.project_id),
-          runId: job.run_id,
-          snapshot,
-        });
       }
       for (const entry of dirty.values()) {
-        await this.#updateProjection(client, entry.projectId, entry.runId, entry.snapshot);
+        await this.#updateProjection(client, entry.projectId, entry.runId);
       }
       await client.query('COMMIT');
     } catch (error) {
@@ -1265,13 +1273,54 @@ export class HostedEvaluationCoordinator {
     );
   }
 
-  async #updateProjection(
-    client: PoolClient,
-    project: ProjectId,
-    runId: string,
-    snapshot: HostedEvaluationSnapshot,
-  ): Promise<EvaluationRun> {
+  async #readProjectedRun(client: PoolClient, project: ProjectId, runId: string, lock = false): Promise<EvaluationRun> {
+    const result = await client.query<{ run_json: EvaluationRun | string }>(
+      `SELECT ${assembledEvaluationRunSql()} AS run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2${lock ? ' FOR UPDATE' : ''}`,
+      [String(project), runId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('Hosted Evaluation run projection is missing.');
+    return normalizeEvaluationRun(
+      withoutHostedProjectionMarker(typeof row.run_json === 'string' ? JSON.parse(row.run_json) : row.run_json),
+    );
+  }
+
+  async #updateProjection(client: PoolClient, project: ProjectId, runId: string): Promise<EvaluationRun> {
+    // Keep the scheduler-row -> projection-row lock order shared by cancel,
+    // retry and claim. Progress needs only control metadata, not the immutable
+    // project/dataset snapshot (which can be much larger than this header).
+    const control = await client.query<Pick<HostedRunRow, 'status' | 'cancel_requested_at'>>(
+      `SELECT status, cancel_requested_at FROM evaluation_hosted_runs
+         WHERE project_id = $1 AND run_id = $2 FOR UPDATE`,
+      [String(project), runId],
+    );
+    const hosted = control.rows[0];
+    if (!hosted) throw new Error('Hosted evaluation scheduler record was not found.');
     const run = await this.#getRunForUpdate(client, project, runId);
+    // Index-backed existence checks, not a scan/parse of every prior result on
+    // every claim/settlement. Job rows remain the authoritative fenced ledger;
+    // there are no redundant counters to drift during retries or worker loss.
+    const progress = await client.query<{ pending: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM evaluation_hosted_trial_jobs
+         WHERE project_id = $1 AND run_id = $2 AND status IN ('queued', 'claimed', 'accepted')) AS pending`,
+      [String(project), runId],
+    );
+    if (!progress.rows[0]) throw new Error('Hosted Evaluation progress could not be read.');
+    if (progress.rows[0].pending) {
+      const next = {
+        ...hostedEvaluationHeader(run),
+        revision: (run.revision ?? 0) + 1,
+        ...(hosted.status === 'running'
+          ? {
+              executionStatus: 'running' as const,
+              qualityStatus: 'not-evaluated' as const,
+              qualityReason: { code: 'in-progress' as const, message: 'The hosted evaluation is running.' },
+            }
+          : {}),
+      };
+      await this.#writeRun(client, next);
+      return next;
+    }
     const result = await client.query<HostedJobRow>(
       `SELECT project_id, run_id, job_id, case_id, case_name, case_index, trial_index, status, attempt, fencing_token, worker_id, trial_json
          FROM evaluation_hosted_trial_jobs WHERE project_id = $1 AND run_id = $2 ORDER BY case_index ASC, trial_index ASC`,
@@ -1283,10 +1332,17 @@ export class HostedEvaluationCoordinator {
       .filter((trial): trial is EvaluationTrial => trial !== undefined);
     const allTerminal = jobs.length > 0 && jobs.every((job) => TERMINAL_JOB_STATES.has(job.status));
     const interrupted = jobs.some((job) => job.status === 'interrupted');
-    const hosted = await this.#getHostedRunForUpdate(client, String(project), runId);
     const canceled = hosted.cancel_requested_at != null;
-    let next: EvaluationRun = { ...run, revision: (run.revision ?? 0) + 1, trials, requestedTrialCount: jobs.length };
+    const header = withoutHostedProjectionMarker(run);
+    let next: EvaluationRun = {
+      ...header,
+      revision: (run.revision ?? 0) + 1,
+      trials,
+      requestedTrialCount: jobs.length,
+    };
     if (allTerminal) {
+      const source = await this.#getHostedRunForUpdate(client, String(project), runId);
+      const snapshot = parseSnapshot(source.snapshot_json);
       const suite = snapshot.evaluationData.suites.find((candidate) => candidate.id === snapshot.suiteId);
       if (!suite) throw new Error('The hosted Evaluation snapshot no longer contains its suite.');
       next = finalizeEvaluationRun({ run: next, trials, suite, evaluationData: snapshot.evaluationData, canceled });

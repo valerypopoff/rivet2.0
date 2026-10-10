@@ -1,4 +1,5 @@
 import { LRUCache } from 'lru-cache';
+import { ParsedExecutionCache } from '../parsed-execution-cache.js';
 
 export type ManagedWorkflowRunKind = 'published' | 'latest' | 'web-app' | 'latest-web-app';
 
@@ -38,6 +39,7 @@ function measureRevisionMaterializationBytes(entry: ManagedRevisionMaterializati
 }
 
 export class ManagedWorkflowExecutionCache {
+  readonly parsedDefinitions: ParsedExecutionCache;
   readonly #endpointPointerLimit: number;
   readonly #revisionMaterializationBytesLimit: number;
   readonly #maxSingleRevisionBytes: number;
@@ -49,6 +51,13 @@ export class ManagedWorkflowExecutionCache {
     this.#endpointPointerLimit = options.endpointPointerLimit ?? DEFAULT_ENDPOINT_POINTER_LIMIT;
     this.#revisionMaterializationBytesLimit = options.revisionMaterializationBytesLimit ?? DEFAULT_REVISION_MATERIALIZATION_BYTES_LIMIT;
     this.#maxSingleRevisionBytes = options.maxSingleRevisionBytes ?? DEFAULT_MAX_SINGLE_REVISION_BYTES;
+    this.parsedDefinitions = new ParsedExecutionCache({
+      maxBytes:
+        this.#revisionMaterializationBytesLimit <= 0
+          ? 0
+          : Math.min(32 * 1024 * 1024, this.#revisionMaterializationBytesLimit),
+      maxEntryBytes: this.#maxSingleRevisionBytes,
+    });
     this.#endpointPointers = new LRUCache({
       max: Math.max(1, this.#endpointPointerLimit),
       dispose: (entry, key) => {
@@ -124,6 +133,7 @@ export class ManagedWorkflowExecutionCache {
 
   clearRevisionMaterializations(): void {
     this.#revisionMaterializations.clear();
+    this.parsedDefinitions.clear();
   }
 
   #linkEndpointPointerKey(workflowId: string, key: string): void {

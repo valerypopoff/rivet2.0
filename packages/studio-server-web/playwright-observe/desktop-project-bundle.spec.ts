@@ -107,6 +107,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
         finally { delete window.__TAURI__; }
       };
       io.readProjectBundle = async (path, manifestPath) => {
+        (window.bundleReadRequests ??= []).push({ path, manifestPath });
         // Match native discovery: a nested member cannot rediscover the
         // manifest. Runs must use the bundle membership recorded at Open.
         if (!manifestPath && path.endsWith('/nested/root.rivet-project')) return undefined;
@@ -153,6 +154,12 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   // Manifest opening creates every tab; called dataflow survives inactive/active switching.
   await expect(page.locator('.projects-container .project')).toHaveCount(2);
   await expect(page.locator(`.node[data-nodeid="${subgraph.id}"]`)).toBeVisible();
+  // Reference discovery must retain the same binding as execution. Verify it
+  // before Run so its reads cannot accidentally satisfy the regression.
+  await page.waitForFunction(() => (window as any).bundleReadRequests?.some(
+    (request: any) => request.path === '/bundle/projects/nested/root.rivet-project'
+      && request.manifestPath === '/bundle/rivet-bundle.json',
+  ));
   const run = page.locator('.run-button button').first();
   await run.click();
   await expect(page.locator(`.node[data-nodeid="${output.id}"]`)).toContainText('child-result');

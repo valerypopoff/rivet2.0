@@ -44,10 +44,14 @@ test('editor startup feedback stays in the editor area, not the project tree', a
     await expect(row).toHaveAttribute('title', 'loading-fixture.rivet-project');
     await expect(tree).not.toContainText('Loading editor');
     await expect(page.locator('.dashboard-main .dashboard-app-loading')).toBeVisible();
+    const sidebar = page.locator('.workflow-library-panel');
+    await expect(sidebar).not.toContainText('Loading editor');
+    await expect(sidebar.locator('[title*="Loading editor"], [aria-label*="Loading editor"]')).toHaveCount(0);
     releaseEditor();
     await waitForDashboardReady(page);
     await expect(row).toBeEnabled();
     await expect(tree).not.toContainText('Loading editor');
+    await expect(sidebar.locator('[title*="Loading editor"], [aria-label*="Loading editor"]')).toHaveCount(0);
     await expect(page.locator('.dashboard-main .dashboard-app-loading')).toBeHidden();
   } finally {
     releaseEditor();
@@ -256,6 +260,6 @@ test('hosted dialogs render the shared theme and project health uses the metadat
   await expect(settings.getByRole('tab', { name: 'Published version history' })).toBeVisible();
   await close(settings);
   await row.click({ button: 'right' });
-  await page.getByRole('menuitem', { name: 'Download', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Download project', exact: true }).click();
   await close(await checkTheme('workflow-project-version-modal'));
 });

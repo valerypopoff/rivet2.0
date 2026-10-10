@@ -1,9 +1,18 @@
 # Portable project bundles
 
-Studio Server's project-row **Download with dependencies** action exports a saved
-project and its recursive dependency closure as a ZIP. Ordinary **Download** and
+Studio Server's project-row **Download bundle** action exports a saved
+project and its recursive dependency closure as a ZIP. Ordinary **Download project** and
 published-history downloads retain their single-file contract. Closing the bundle
 dialog does not cancel export, activate a project, refresh the tree or discard edits.
+
+The project context menu distinguishes the single downward arrow for **Download project**
+from two downward arrows for **Download bundle**, with the right arrow
+slightly lower. Icons are decorative; menu labels provide accessible names. The
+bundle dialog also uses the **Download bundle** title.
+The single-project version chooser retains its **Download** title and version
+buttons; `workflow-project-version-modal.spec.ts` exercises that flow through
+the **Download project** menu item, separately from the bundle chooser.
+
 Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
 must succeed before creating a fresh job with the selected bundle-wide version. Ready
 jobs retain **Prepare another bundle** for choosing a different version. Job status
@@ -138,7 +147,7 @@ individual-member opening. Opening their manifest as a desktop workspace rejects
 duplicate project IDs, with guidance to re-export using the global version choice.
 Discovery does not walk arbitrary ancestors or guess dependencies from filenames.
 Once Open has established membership, tab activation/restoration, Browser/Node
-runs and Evaluation trials capture the tab's `bundleManifestPath` and pass it
+runs, Evaluation trials and editor reference reloads capture the tab's `bundleManifestPath` and pass it
 back to the native reader. The remembered manifest is authoritative: rediscovery
 from the file's parent would lose membership for valid nested paths and silently
 drop the Subgraph loader. Explicit reads validate both permitted paths, canonical
@@ -146,6 +155,12 @@ containment and declared membership, including on Windows.
 Missing, moved or invalid remembered manifests fail preparation with a visible
 error; they never downgrade to standalone execution. Individual-member opens
 retain the same membership metadata as manifest workspace opens.
+
+Reference reloads use the same explicit-binding reader as execution. In particular,
+an entry under `projects/nested/` cannot rediscover its manifest from its immediate
+parent: using that discovery path would leave external Subgraph previews missing
+even though the run loader still has the correct bundle. The desktop bundle
+Playwright regression verifies a bound reference read before execution starts.
 
 Reopening an already-open individual member still registers its manifest, without
 re-importing datasets or replacing live edits. If its saved baseline needs recovery,

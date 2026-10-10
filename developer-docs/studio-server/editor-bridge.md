@@ -345,6 +345,18 @@ dataset containers fail before commit.
 Already-open tabs use the shared App activation owner and their live snapshots,
 not a second hosted project cache. A server read is still required when restoring
 a missing snapshot, saved baseline or legacy Evaluation session after a reload.
+Cross-project **Go to subgraph** resolves the current path by stable project ID
+and sends `preferredGraphId` through the bridge. Fresh opens and explicit reloads
+must pass that graph as `graphToLoad`, not only as `openedGraph`: the latter is a
+restore fallback that yields to remembered project navigation. Warm activation
+uses the same explicit target, preserving unsaved content without another project
+read. Ordinary tree/tab opens omit this override and retain their last workspace.
+`cross-project-subgraph-loading.spec.ts` covers closing/reopening a target with a
+different remembered graph, explicit saved-file reloads and warm navigation while
+the target has unsaved edits. Missing target graphs fail before committing the
+loaded snapshot, preserving the active graph and dirty edits. Both successful
+and failed `open-project` replies must echo the supplied request ID so callers
+can correlate completion without confusing separate opens of the same path.
 Ordinary warm switches must not fetch project bytes or import saved datasets over
 local edits. Browser dataset catalog v4 uses `[projectId, datasetId]` storage keys
 and the `by-project` index. Upgrade migrates v2/v3 records atomically, one dataset

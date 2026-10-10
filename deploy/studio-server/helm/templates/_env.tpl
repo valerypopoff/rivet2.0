@@ -176,6 +176,8 @@
   value: "replicated"
 - name: RIVET_HOSTED_EVALUATIONS_ENABLED
   value: {{ $root.Values.hostedEvaluations.enabled | quote }}
+- name: RIVET_RELEASE_MAINTENANCE
+  value: {{ $root.Values.workflowSchema.maintenanceValidation | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY
   value: {{ $root.Values.hostedEvaluations.workerConcurrency | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_LEASE_MS
@@ -201,7 +203,7 @@
 - name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER
   value: {{ .replicaTier | quote }}
 - name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED
-  value: {{ .jobWorkerEnabled | quote }}
+  value: {{ if $root.Values.workflowSchema.maintenanceValidation }}"false"{{ else }}{{ .jobWorkerEnabled | quote }}{{ end }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
   value: verify
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION
@@ -209,7 +211,7 @@
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION
   value: {{ $root.Values.workflowSchema.compatibility.maximumVersion | quote }}
 - name: RIVET_MANAGED_MAINTENANCE_ENABLED
-  value: {{ if eq .profile "control" }}"true"{{ else }}"false"{{ end }}
+  value: {{ if and (eq .profile "control") (not $root.Values.workflowSchema.maintenanceValidation) }}"true"{{ else }}"false"{{ end }}
 - name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS
   value: {{ $root.Values.managedMaintenance.intervalMs | quote }}
 - name: RIVET_MANAGED_MAINTENANCE_LEASE_MS

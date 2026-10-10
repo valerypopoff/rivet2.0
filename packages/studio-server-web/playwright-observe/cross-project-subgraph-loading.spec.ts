@@ -58,6 +58,175 @@ function fixture(version: 'latest' | 'published') {
   return { project: persisted, target, connections: persisted.graphs.main!.connections };
 }
 
+test('Go to subgraph selects the external graph over remembered navigation on reopen and warm tabs', async ({
+  page,
+}) => {
+  const { project, target } = fixture('latest');
+  const mainNode = registry.createDynamic('text');
+  mainNode.id = 'target-main-node' as typeof mainNode.id;
+  mainNode.visualData = { x: 100, y: 200, width: 200 };
+  target.metadata.mainGraphId = 'target-main' as GraphId;
+  target.graphs['target-main'] = {
+    metadata: { id: 'target-main' as GraphId, name: 'Target main' },
+    nodes: [mainNode],
+    connections: [],
+  };
+  target.graphs.child!.nodes.forEach((node, index) => {
+    node.id = `target-child-${index}` as typeof node.id;
+    node.visualData = { x: 100 + index * 400, y: 200, width: 200 };
+  });
+  const paths = new Map([
+    ['/workflows/caller.rivet-project', project],
+    ['/workflows/target.rivet-project', target],
+  ]);
+  const loads = new Map<string, number>();
+  const workflows = [...paths].map(([absolutePath, saved]) => ({
+    id: saved.metadata.id,
+    projectMetadataId: saved.metadata.id,
+    name: saved.metadata.title,
+    fileName: absolutePath.split('/').pop(),
+    relativePath: absolutePath.slice('/workflows/'.length),
+    absolutePath,
+    updatedAt: '2026-10-10T00:00:00.000Z',
+    settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+  }));
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
+  );
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'Fixture route unavailable' } }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({ json: { root: '/workflows', folders: [], projects: workflows } }),
+  );
+  await page.route('**/api/projects/load', (route) => {
+    const path = route.request().postDataJSON().path as string;
+    loads.set(path, (loads.get(path) ?? 0) + 1);
+    return route.fulfill({
+      json: { contents: serializeProject(paths.get(path)!), datasetsContents: null, revisionId: null },
+    });
+  });
+  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest', (route) =>
+    route.fulfill({ json: { project: target } }),
+  );
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const frame = page.frameLocator('iframe.dashboard-editor-frame');
+  const targetRow = page.locator('.project-row', { hasText: target.metadata.title });
+  const callerRow = page.locator('.project-row', { hasText: project.metadata.title });
+  const targetTab = frame.locator('.projects-container .project:not(.opening)', { hasText: 'target' });
+  const callerTab = frame.locator('.projects-container .project:not(.opening)', { hasText: 'caller' });
+  const main = frame.locator('.node[data-nodeid="target-main-node"]');
+  const child = frame.locator('.node[data-nodeid="target-child-0"]');
+  const caller = frame.locator('.node[data-nodeid="external-call"]');
+
+  // Persist a different graph, then close the tab. Closing content does not
+  // erase the per-project navigation/viewport preferences.
+  await targetRow.dblclick();
+  await expect(main).toBeVisible();
+  await callerRow.dblclick();
+  await expect(caller).toBeVisible();
+  await targetTab.hover();
+  await targetTab.getByRole('button', { name: 'Close target', exact: true }).click();
+  await expect(targetTab).toHaveCount(0);
+  await caller.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+  await expect(targetTab).toHaveClass(/\bactive\b/);
+  await expect(child).toBeVisible();
+  await expect(main).toHaveCount(0);
+  expect(loads.get('/workflows/target.rivet-project')).toBe(2);
+
+  // Explicit saved-file reloads use the same target override, rather than
+  // restoring the graph active just before the reload.
+  await frame.locator('.graph-list').getByText('Target main', { exact: true }).click();
+  await expect(main).toBeVisible();
+  await page.evaluate(() => {
+    document.querySelector<HTMLIFrameElement>('iframe.dashboard-editor-frame')!.contentWindow!.postMessage(
+      {
+        type: 'open-project',
+        path: '/workflows/target.rivet-project',
+        preferredGraphId: 'child',
+        expectedProjectId: 'external-project',
+        reloadFromDisk: true,
+        replaceCurrent: false,
+      },
+      window.location.origin,
+    );
+  });
+  await expect(child).toBeVisible();
+  expect(loads.get('/workflows/target.rivet-project')).toBe(3);
+
+  // A warm target must also navigate, without reloading its saved bytes or
+  // replacing unsaved changes. Ordinary tab selection retains its graph.
+  await frame.locator('.graph-list').getByText('Target main', { exact: true }).click();
+  await expect(main).toBeVisible();
+  const initialPosition = await main.evaluate((node) => (node as HTMLElement).style.transform);
+  const title = (await main.locator('.node-title').boundingBox())!;
+  await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(title.x + title.width / 2 + 80, title.y + title.height / 2 + 40, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => main.evaluate((node) => (node as HTMLElement).style.transform)).not.toBe(initialPosition);
+  const editedPosition = await main.evaluate((node) => (node as HTMLElement).style.transform);
+  await expect(targetTab).toHaveClass(/has-unsaved-changes/);
+  await callerTab.click();
+  await expect(caller).toBeVisible();
+  await caller.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+  await expect(child).toBeVisible();
+  await expect(main).toHaveCount(0);
+  await expect(targetTab).toHaveClass(/has-unsaved-changes/);
+  expect(loads.get('/workflows/target.rivet-project')).toBe(3);
+  await frame.locator('.graph-list').getByText('Target main', { exact: true }).click();
+  await expect.poll(() => main.evaluate((node) => (node as HTMLElement).style.transform)).toBe(editedPosition);
+  await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
+
+  // A stale target must fail before committing the saved snapshot, and its
+  // failure must preserve request ownership for the dashboard.
+  const failure = await page.evaluate(async () => {
+    const editor = document.querySelector<HTMLIFrameElement>('iframe.dashboard-editor-frame')!.contentWindow!;
+    return await new Promise<{ error: string; requestId?: string }>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        window.removeEventListener('message', receive);
+        reject(new Error('Missing graph navigation did not report a failure.'));
+      }, 10000);
+      function receive(event: MessageEvent) {
+        if (
+          event.source !== editor ||
+          event.origin !== window.location.origin ||
+          event.data?.type !== 'project-open-failed' ||
+          event.data.path !== '/workflows/target.rivet-project'
+        )
+          return;
+        window.clearTimeout(timer);
+        window.removeEventListener('message', receive);
+        resolve({ error: event.data.error, requestId: event.data.requestId });
+      }
+      window.addEventListener('message', receive);
+      editor.postMessage(
+        {
+          type: 'open-project',
+          path: '/workflows/target.rivet-project',
+          preferredGraphId: 'removed-graph',
+          expectedProjectId: 'external-project',
+          requestId: 'missing-subgraph-regression',
+          reloadFromDisk: true,
+          replaceCurrent: false,
+        },
+        window.location.origin,
+      );
+    });
+  });
+  expect(failure.error).toContain('selected Subgraph graph is no longer');
+  expect(failure.requestId).toBe('missing-subgraph-regression');
+  await expect(page.locator('.Toastify__toast--error')).toContainText(failure.error);
+  await expect(targetTab).toHaveClass(/\bactive\b/);
+  await expect(targetTab).toHaveClass(/has-unsaved-changes/);
+  await expect.poll(() => main.evaluate((node) => (node as HTMLElement).style.transform)).toBe(editedPosition);
+  await expect(frame.locator('.projects-container .project.opening')).toHaveCount(0);
+});
+
 test('new external graph input survives connection, tab switches and saved-file reopen', async ({ page }) => {
   const { project, target } = fixture('latest');
   const call = project.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;

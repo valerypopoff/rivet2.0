@@ -38,6 +38,7 @@ import {
 } from './deployment-storage-settings.js';
 import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
 import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
+import { isReleaseMaintenanceActive } from './release-maintenance.js';
 import { initializeLocalMetadataServing, assertLocalMetadataWritesAllowed } from './local-metadata/runtime-control.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { initializeLocalRuntimeLibraryAuthority } from './local-metadata/runtime-library-authority.js';
@@ -101,9 +102,10 @@ const server = createServer(app);
 // an admitted parser reservation indefinitely.
 server.requestTimeout = 120_000;
 
-if (isControlPlaneApiProfile(apiRuntimeProfile)) {
+if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive()) {
   initializeLatestWorkflowRemoteDebugger(server);
 }
+if (isReleaseMaintenanceActive()) server.on('upgrade', (_request, socket) => socket.destroy());
 
 let shuttingDown = false;
 let startupPromise: Promise<void> | null = null;
@@ -370,7 +372,7 @@ async function startServer(): Promise<void> {
     assertStartupActive();
     // Existing schedules may be due immediately. Do not start their execution
     // until runtime-library reconciliation and the rest of startup have finished.
-    if (isControlPlaneApiProfile(apiRuntimeProfile)) await initializeScheduledRuns();
+    if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive()) await initializeScheduledRuns();
     assertStartupActive();
   } catch (error) {
     if (error instanceof StartupCancelledError) {

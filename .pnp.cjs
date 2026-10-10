@@ -16596,6 +16596,7 @@ const RAW_RUNTIME_STATE =
           ["@types/yazl", "npm:3.3.1"],\
           ["@valerypopoff/rivet-studio-server-api", "workspace:packages/studio-server-api"],\
           ["@valerypopoff/rivet-studio-server-shared", "workspace:packages/studio-server-shared"],\
+          ["@valerypopoff/rivet2-core", "workspace:packages/core"],\
           ["@valerypopoff/rivet2-evaluations", "workspace:packages/evaluations"],\
           ["@valerypopoff/rivet2-node", "workspace:packages/node"],\
           ["cors", "npm:2.8.5"],\
