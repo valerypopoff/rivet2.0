@@ -10,6 +10,7 @@ function nativeFixture(t: TestContext, asBundle = false) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const project = createBlankProjectWithDefaultGraph();
   const calls: string[] = [];
+  const bundleReads: { projectFilePath?: string; bundleManifestPath?: string }[] = [];
   const dialogs: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } }[] = [];
   let selectedPath: string | null = asBundle ? '/fixture/rivet-bundle.json' : '/fixture/project.rivet-project';
   let failWrite = false;
@@ -18,10 +19,13 @@ function nativeFixture(t: TestContext, asBundle = false) {
     callback: number;
     error: number;
     cmd?: string;
+    projectFilePath?: string;
+    bundleManifestPath?: string;
     message?: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } };
   }) => {
     const command = request.message?.cmd ?? request.cmd!;
     calls.push(command);
+    if (command === 'read_project_bundle') bundleReads.push(request);
     if (command === 'openDialog' || command === 'saveDialog') dialogs.push(request.message!);
     const error = command === 'writeFile' && failWrite;
     const callback = runtime[`_${error ? request.error : request.callback}`] as (value: unknown) => void;
@@ -33,7 +37,9 @@ function nativeFixture(t: TestContext, asBundle = false) {
           : command === 'read_project_bundle' && asBundle
             ? {
                 manifestPath: '/fixture/rivet-bundle.json',
-                selectedProjectPath: null,
+                selectedProjectPath: request.projectFilePath?.endsWith('rivet-bundle.json')
+                  ? null
+                  : '/fixture/projects/root.rivet-project',
                 manifestContents: JSON.stringify({
                   format: 'rivet-project-bundle',
                   schemaVersion: 1,
@@ -85,6 +91,7 @@ function nativeFixture(t: TestContext, asBundle = false) {
   return {
     provider,
     calls,
+    bundleReads,
     dialogs,
     cancelDialog: () => {
       selectedPath = null;
@@ -171,6 +178,33 @@ test('a pre-cancelled native load performs no filesystem IO', async (t) => {
     /abort/i,
   );
   assert.deepEqual(fixture.calls, []);
+});
+
+test('desktop run passes its remembered manifest to native IO and does not silently discard it', async (t) => {
+  const fixture = nativeFixture(t, true);
+  await fixture.provider.readProjectBundle('/fixture/projects/root.rivet-project', '/fixture/rivet-bundle.json');
+  assert.equal(fixture.bundleReads[0]?.projectFilePath, '/fixture/projects/root.rivet-project');
+  assert.equal(fixture.bundleReads[0]?.bundleManifestPath, '/fixture/rivet-bundle.json');
+});
+
+test('individual bundled member opens retain membership and tab reloads use the remembered manifest', async (t) => {
+  const fixture = nativeFixture(t, true);
+  const result = await fixture.provider.loadProjectDataNoPrompt('/fixture/projects/root.rivet-project', {
+    deferCommit: true,
+    bundleManifestPath: '/fixture/rivet-bundle.json',
+  });
+  assert.equal(result.bundleProjects, undefined);
+  assert.equal(result.bundleManifestPath, '/fixture/rivet-bundle.json');
+  assert.equal(result.path, '/fixture/projects/root.rivet-project');
+  assert.equal(fixture.bundleReads[0]?.bundleManifestPath, '/fixture/rivet-bundle.json');
+});
+
+test('a missing remembered bundle rejects before standalone execution', async (t) => {
+  const fixture = nativeFixture(t);
+  await assert.rejects(
+    fixture.provider.readProjectBundle('/fixture/project.rivet-project', '/fixture/rivet-bundle.json'),
+    /Reopen rivet-bundle.json/,
+  );
 });
 
 test('native save rejects a failed write instead of acknowledging persistence', async (t) => {

@@ -17,6 +17,8 @@ export type EvaluationProjectFileData = {
 export type ProjectLoadOptions = {
   signal?: AbortSignal;
   deferCommit?: boolean;
+  /** Preserve previously established desktop bundle membership on tab restore. */
+  bundleManifestPath?: string;
   /** Refresh an inactive snapshot without replacing the live dataset owner. */
   activateDatasets?: boolean;
 };

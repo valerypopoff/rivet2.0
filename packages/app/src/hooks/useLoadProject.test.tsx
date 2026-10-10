@@ -268,6 +268,112 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
 
 const evaluation = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
 
+test('reopening an existing bundle member retains membership without importing over live data', async () => {
+  for (const entry of ['active', 'inactive'] as const) {
+    const fixture = await mount(async (path, options) => {
+      assert.equal(path, 'b.rivet-project');
+      assert.equal(options?.bundleManifestPath, 'rivet-bundle.json');
+      return { project: fixture.b, evaluation };
+    });
+    const project = entry === 'active' ? fixture.a : fixture.b;
+    let imports = 0;
+    fixture.io.loadProjectData = async (callback) => {
+      await callback({
+        project,
+        path: entry === 'active' ? 'a.rivet-project' : 'b.rivet-project',
+        bundleManifestPath: 'rivet-bundle.json',
+        evaluation,
+        commit: async () => {
+          imports++;
+          return true;
+        },
+      });
+    };
+    try {
+      await act(async () => fixture.openFile());
+      assert.equal(fixture.store.get(projectState).metadata.id, project.metadata.id);
+      assert.equal(fixture.info(project.metadata.id).bundleManifestPath, 'rivet-bundle.json');
+      assert.equal(imports, 0, 'reopening a member must not re-import its datasets');
+      assert.equal(fixture.errors.length, 0);
+      if (entry === 'active') {
+        assert.equal(fixture.store.get(graphState).metadata?.description, 'Unsaved live edit');
+        assert.equal(fixture.store.get(projectUnsavedChangesState)[project.metadata.id], true);
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  }
+});
+
+test('bundle tab activation uses its remembered manifest when loading a missing saved baseline', async () => {
+  let reads = 0;
+  const fixture = await mount(async (path, options) => {
+    reads++;
+    assert.equal(path, 'b.rivet-project');
+    assert.equal(options?.bundleManifestPath, 'rivet-bundle.json');
+    return { project: fixture.b, evaluation };
+  });
+  try {
+    fixture.store.set(projectsState, (previous) => ({
+      ...previous,
+      openedProjects: {
+        ...previous.openedProjects,
+        [fixture.b.metadata.id]: {
+          ...previous.openedProjects[fixture.b.metadata.id]!,
+          bundleManifestPath: 'rivet-bundle.json',
+        },
+      },
+    }));
+    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+    assert.equal(reads, 1);
+    assert.equal(fixture.info(fixture.b.metadata.id).bundleManifestPath, 'rivet-bundle.json');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('rebinding a tab during baseline recovery discards the old bundle read', async () => {
+  const started = deferred();
+  const gate = deferred();
+  let imports = 0;
+  const fixture = await mount(async () => {
+    started.resolve();
+    await gate.promise;
+    return {
+      project: fixture.b,
+      evaluation,
+      commit: async () => {
+        imports++;
+        return true;
+      },
+    };
+  });
+  try {
+    await act(async () => {
+      const pending = fixture.activate(fixture.info(fixture.b.metadata.id));
+      await started.promise;
+      fixture.store.set(projectsState, (previous) => ({
+        ...previous,
+        openedProjects: {
+          ...previous.openedProjects,
+          [fixture.b.metadata.id]: {
+            ...previous.openedProjects[fixture.b.metadata.id]!,
+            bundleManifestPath: 'new/rivet-bundle.json',
+          },
+        },
+      }));
+      gate.resolve();
+      assert.equal(await pending, false);
+    });
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+    assert.equal(fixture.store.get(savedProjectContentDigestsState)[fixture.b.metadata.id], undefined);
+    assert.equal(imports, 0);
+  } finally {
+    gate.resolve();
+    await fixture.cleanup();
+  }
+});
+
 test('bundle execution targets inactive and active dependency tabs without taking run ownership', async () => {
   const fixture = await mount(async () => {
     throw new Error('Unexpected read');
@@ -490,8 +596,8 @@ test('superseding an inactive bundle root activation cannot add its dependency t
   }
 });
 
-test('closing or moving a bundle member during import prevents late workspace registration', async () => {
-  for (const change of ['close', 'move'] as const) {
+test('closing, moving or rebinding a bundle member during import prevents late workspace registration', async () => {
+  for (const change of ['close', 'move', 'rebind'] as const) {
     const fixture = await mount(async () => {
       throw new Error('Unexpected read');
     });
@@ -523,7 +629,9 @@ test('closing or moving a bundle member during import prevents late workspace re
           else
             openedProjects[fixture.b.metadata.id] = {
               ...openedProjects[fixture.b.metadata.id]!,
-              fsPath: 'moved.rivet-project',
+              ...(change === 'move'
+                ? { fsPath: 'moved.rivet-project' }
+                : { bundleManifestPath: 'other/rivet-bundle.json' }),
             };
           return {
             ...previous,

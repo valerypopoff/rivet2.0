@@ -24,8 +24,15 @@ import { recordExecutionsState, settingsState, showNodeRunDurationsState } from 
 import { useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
-import { loadedProjectState, projectContextState, projectDataState, projectState } from '../state/savedGraphs';
+import {
+  loadedProjectState,
+  projectContextState,
+  projectDataState,
+  projectState,
+  projectsState,
+} from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
+import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
 import {
@@ -249,8 +256,12 @@ export function useRemoteExecutor() {
   const pluginStates = useAtomValue(pluginsState);
   const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
 
-  const getDesktopBundleRunLocation = async (path: string, entryDatasets: Promise<CombinedDataset[]>) => {
-    const bundle = await ioProvider.readProjectBundle?.(path);
+  const getDesktopBundleRunLocation = async (
+    path: string | null | undefined,
+    entryDatasets: Promise<CombinedDataset[]>,
+    bundleManifestPath?: string,
+  ) => {
+    const bundle = await readProjectBundleForExecution(ioProvider, path, bundleManifestPath);
     if (!bundle) return undefined;
     if (executorSession.getRuntimeState().target?.type !== 'internal-desktop')
       throw new Error('Local bundles require Browser mode or the desktop Node executor, not an external debugger.');
@@ -647,6 +658,7 @@ export function useRemoteExecutor() {
     }
 
     const graphToRun = options.graphId ?? graph.metadata!.id!;
+    const bundleManifestPath = store.get(projectsState).openedProjects[project.metadata.id]?.bundleManifestPath;
 
     try {
       const entryDatasets =
@@ -812,10 +824,7 @@ export function useRemoteExecutor() {
         contextValues,
         inputs: options.inputs,
         projectPath: loadedProject.path,
-        projectBundle:
-          loadedProject.path && ioProvider.readProjectBundle
-            ? await getDesktopBundleRunLocation(loadedProject.path, entryDatasets)
-            : undefined,
+        projectBundle: await getDesktopBundleRunLocation(loadedProject.path, entryDatasets, bundleManifestPath),
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
         recordSubgraphProjectRuns: Boolean(remoteLocalRecordingProvider),
@@ -988,6 +997,7 @@ export function useRemoteExecutor() {
         registry: projectNodeRegistry,
       });
       const evaluationProjectId = projectForEvaluation.metadata.id;
+      const bundleManifestPath = store.get(projectsState).openedProjects[evaluationProjectId]?.bundleManifestPath;
       if (!evaluationProjectId)
         throw new Error('The loaded project is missing its project ID, so the evaluation cannot be stored.');
       const isActiveEvaluationProject = () => store.get(projectState).metadata.id === evaluationProjectId;
@@ -1196,10 +1206,11 @@ export function useRemoteExecutor() {
                   inputs: evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
                   contextValues: getProjectContextValues(projectContext),
                   projectPath: loadedProject.path,
-                  projectBundle:
-                    loadedProject.path && ioProvider.readProjectBundle
-                      ? await getDesktopBundleRunLocation(loadedProject.path, entryDatasets)
-                      : undefined,
+                  projectBundle: await getDesktopBundleRunLocation(
+                    loadedProject.path,
+                    entryDatasets,
+                    bundleManifestPath,
+                  ),
                   captureNodeTimings: showNodeRunDurations,
                   evaluation: metadata,
                 },

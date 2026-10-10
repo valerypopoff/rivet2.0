@@ -28,6 +28,7 @@ import { useEffect, useRef } from 'react';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
 import { useStableCallback } from './useStableCallback';
+import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph';
 import { useCurrentExecution } from './useCurrentExecution';
 import { userInputModalQuestionsState } from '../state/userInput';
@@ -453,6 +454,7 @@ export function useLocalExecutor() {
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     const recordingToReplay = loadedRecording;
     const runProjectId = project.metadata.id;
+    const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
 
     if (!runProjectId) {
       return;
@@ -673,7 +675,7 @@ export function useLocalExecutor() {
         preparation.signal.throwIfAborted();
         results = await processor.replayRecording(recordingToReplay.recorder);
       } else {
-        const bundle = loadedProject.path ? await ioProvider.readProjectBundle?.(loadedProject.path) : undefined;
+        const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
         options.abortSignal?.throwIfAborted();
         preparation.signal.throwIfAborted();
         const bundleRuntime = bundle?.createRuntime(
@@ -826,6 +828,7 @@ export function useLocalExecutor() {
         registry: projectNodeRegistry,
       });
       const runProjectId = projectForEvaluation.metadata.id;
+      const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
       if (!runProjectId) throw new Error('Cannot run an evaluation without a project id.');
 
       if (evaluationAbortControllersByProjectId.current.has(runProjectId)) {
@@ -938,7 +941,7 @@ export function useLocalExecutor() {
               }
             };
             try {
-              const bundle = loadedProject.path ? await ioProvider.readProjectBundle?.(loadedProject.path) : undefined;
+              const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
               signal?.throwIfAborted();
               const bundleRuntime = bundle?.createRuntime(
                 evaluationProject,

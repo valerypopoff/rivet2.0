@@ -94,7 +94,27 @@ export function prepareDesktopProjectBundle(input: NativeProjectBundle) {
   };
 }
 
-export async function readDesktopProjectBundle(projectPath: string) {
-  const input = await invokeNative<NativeProjectBundle | null>('read_project_bundle', { projectFilePath: projectPath });
+export async function readDesktopProjectBundle(projectPath: string, bundleManifestPath?: string) {
+  const input = await invokeNative<NativeProjectBundle | null>('read_project_bundle', {
+    projectFilePath: projectPath,
+    ...(bundleManifestPath ? { bundleManifestPath } : {}),
+  });
+  if (bundleManifestPath && !input)
+    throw new Error('The opened bundle could not be loaded. Reopen rivet-bundle.json before running it.');
   return input ? prepareDesktopProjectBundle(input) : undefined;
+}
+
+/** A known bundle must never fall through to execution without its loader. */
+export async function readProjectBundleForExecution(
+  io: { readProjectBundle?: typeof readDesktopProjectBundle },
+  projectPath: string | null | undefined,
+  bundleManifestPath?: string,
+) {
+  if (bundleManifestPath && (!io.readProjectBundle || !projectPath))
+    throw new Error('The opened bundle has no local project location. Reopen rivet-bundle.json before running it.');
+  const bundle =
+    io.readProjectBundle && projectPath ? await io.readProjectBundle(projectPath, bundleManifestPath) : undefined;
+  if (bundleManifestPath && !bundle)
+    throw new Error('The opened bundle could not be loaded. Reopen rivet-bundle.json before running it.');
+  return bundle;
 }

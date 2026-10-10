@@ -84,6 +84,9 @@ Rivet opens all bundled projects in separate tabs and selects the root project.
 Already-open projects at those same paths keep their unsaved edits and datasets.
 Opening a declared `.rivet-project` inside the bundle's `projects/` directory
 opens just that member, while retaining its bundle dependency mapping.
+Projects opened through the manifest retain that mapping when switching tabs
+and running, even when the manifest declares nested project folders. If the
+bundle is moved, reopen `rivet-bundle.json` at its new location before running.
 
 Run the entry project in **Browser** or desktop **Node** mode. Dependency dataflow
 appears in the matching project tabs, including tabs that are not selected.

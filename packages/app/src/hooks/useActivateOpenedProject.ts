@@ -37,7 +37,7 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
   return (
     projectInfo: OpenedProjectInfo,
     options?: { preferredGraphId?: GraphId },
-    intent?: { isCurrent(): boolean; signal: AbortSignal },
+    intent?: { isCurrent(): boolean; signal: AbortSignal; bundleManifestPath?: string },
   ): Promise<boolean> => {
     const activate = async (isCurrent: () => boolean, signal: AbortSignal) => {
       try {
@@ -48,9 +48,15 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         }
         projectInfo = currentInfo;
         const requestedPath = projectInfo.fsPath;
+        const requestedManifest = projectInfo.bundleManifestPath;
         const isTabCurrent = () => {
           const latest = store.get(projectsState).openedProjects[projectInfo.projectId];
-          return isCurrent() && latest !== undefined && latest.fsPath === requestedPath;
+          return (
+            isCurrent() &&
+            latest !== undefined &&
+            latest.fsPath === requestedPath &&
+            latest.bundleManifestPath === requestedManifest
+          );
         };
         const currentProject = store.get(projectState);
         const currentGraph = store.get(graphState);
@@ -93,6 +99,10 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
           const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath, {
             signal,
             deferCommit: true,
+            // A validated Open may establish membership for an existing tab.
+            // Use it for baseline recovery without rebinding the tab before
+            // its guarded activation succeeds.
+            bundleManifestPath: intent?.bundleManifestPath ?? requestedManifest,
           });
           const latestInfo = store.get(projectsState).openedProjects[projectInfo.projectId];
           if (!isTabCurrent() || !latestInfo) {

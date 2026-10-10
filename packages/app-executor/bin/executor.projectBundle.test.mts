@@ -142,12 +142,13 @@ void test(
         },
       },
     };
-    await mkdir(join(directory, 'projects'));
+    // Manifest membership, not a flat parent-folder convention, owns lookup.
+    // Exercise this through the packaged Node sidecar as well as Browser IO.
+    const projectFile = (project: Project) =>
+      `projects/${project.metadata.id === root.metadata.id ? 'nested/' : ''}${project.metadata.id}.rivet-project`;
+    await mkdir(join(directory, 'projects', 'nested'), { recursive: true });
     for (const project of [root, dependency])
-      await writeFile(
-        join(directory, `projects/${project.metadata.id}.rivet-project`),
-        serializeProject(project) as string,
-      );
+      await writeFile(join(directory, projectFile(project)), serializeProject(project) as string);
     const manifestPath = join(directory, 'rivet-bundle.json');
     await writeFile(
       manifestPath,
@@ -165,7 +166,7 @@ void test(
           title: project.metadata.title,
           version: 'latest',
           revision: 'original',
-          project: { path: `projects/${project.metadata.id}.rivet-project` },
+          project: { path: projectFile(project) },
         })),
         targets: [{ projectId: 'child', version: 'latest', artifact: 'child' }],
       }),

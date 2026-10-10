@@ -149,7 +149,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
 
   async loadProjectDataNoPrompt(path: string, options: ProjectLoadOptions = {}): Promise<LoadedProjectData> {
     options.signal?.throwIfAborted();
-    const bundle = await this.readProjectBundle(path);
+    const bundle = await this.readProjectBundle(path, options.bundleManifestPath);
     options.signal?.throwIfAborted();
     const [projectData, attachedData] = bundle
       ? [structuredClone(bundle.snapshot.project), bundle.attachments]
@@ -195,8 +195,8 @@ export class TauriIOProvider implements PathBasedIOProvider {
     const result = {
       project: projectData,
       evaluation: { evaluationData, evaluationDatasets },
-      ...(bundleProjects ? { bundleProjects, bundleManifestPath: bundle!.manifestPath } : {}),
-      ...(bundle ? { path: bundle.snapshot.sourceProjectPath } : {}),
+      ...(bundleProjects ? { bundleProjects } : {}),
+      ...(bundle ? { path: bundle.snapshot.sourceProjectPath, bundleManifestPath: bundle.manifestPath } : {}),
     };
     if (options.deferCommit) return { ...result, commit };
     if (!(await commit(() => !options.signal?.aborted))) throw new DOMException('Project load cancelled', 'AbortError');

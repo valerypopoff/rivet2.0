@@ -143,6 +143,7 @@ fn allow_data_file_scope(
 async fn read_project_bundle(
     app_handle: AppHandle,
     project_file_path: String,
+    bundle_manifest_path: Option<String>,
 ) -> Result<Option<project_bundle::NativeProjectBundle>, InvokeError> {
     let scope = app_handle.fs_scope();
     let selected = Path::new(&project_file_path);
@@ -151,8 +152,21 @@ async fn read_project_bundle(
             "Project path is outside the permitted filesystem scope.",
         ));
     }
+    if let Some(manifest) = &bundle_manifest_path {
+        if !scope.is_allowed(Path::new(manifest)) {
+            return Err(InvokeError::from(
+                "Bundle manifest is outside the permitted filesystem scope. Reopen the bundle.",
+            ));
+        }
+    }
     let bundle = tauri::async_runtime::spawn_blocking(move || {
-        project_bundle::read_bundle(Path::new(&project_file_path))
+        let selected = Path::new(&project_file_path);
+        match bundle_manifest_path.as_deref() {
+            Some(manifest) => {
+                project_bundle::read_bundle_with_manifest(selected, Some(Path::new(manifest)))
+            }
+            None => project_bundle::read_bundle(selected),
+        }
     })
     .await
     .map_err(|_| InvokeError::from("Bundle reader failed."))?

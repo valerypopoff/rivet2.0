@@ -128,8 +128,8 @@ fail before importing. New inactive members import datasets without activating
 their provider and merge their Evaluation library entries. Workspace opening uses
 the same guarded owner for file-picker and path-based opens, including when the
 root is already open. Reusing activation does not start a competing intent.
-Closing or moving a member during deferred dataset import invalidates the open
-before any new tabs are registered. Parsed member datasets are imported directly,
+Closing, moving or rebinding a member during deferred dataset import invalidates
+the open before any new tabs are registered. Parsed member datasets are imported directly,
 without rescanning the snapshot map for each member.
 Opening any declared project directly inside the bundle's `projects/` folder
 discovers the sibling manifest and opens only that member as the entry point.
@@ -137,9 +137,27 @@ Legacy mixed-version bundles still execute through the public Node loader or
 individual-member opening. Opening their manifest as a desktop workspace rejects
 duplicate project IDs, with guidance to re-export using the global version choice.
 Discovery does not walk arbitrary ancestors or guess dependencies from filenames.
+Once Open has established membership, tab activation/restoration, Browser/Node
+runs and Evaluation trials capture the tab's `bundleManifestPath` and pass it
+back to the native reader. The remembered manifest is authoritative: rediscovery
+from the file's parent would lose membership for valid nested paths and silently
+drop the Subgraph loader. Explicit reads validate both permitted paths, canonical
+containment and declared membership, including on Windows.
+Missing, moved or invalid remembered manifests fail preparation with a visible
+error; they never downgrade to standalone execution. Individual-member opens
+retain the same membership metadata as manifest workspace opens.
+
+Reopening an already-open individual member still registers its manifest, without
+re-importing datasets or replacing live edits. If its saved baseline needs recovery,
+the validated Open supplies that manifest to the guarded disk read before membership
+is committed. Tab restoration also fences on manifest identity, not only file path:
+a late read from an old binding cannot populate the new binding's baseline or cache.
+
 An existing malformed manifest or undeclared member is an error, not a silent
 fallback to standalone execution. Moving a project outside the bundle removes
-automatic discovery; move the complete extracted directory to retain bindings.
+automatic discovery for fresh opens; existing bound tabs fail rather than
+silently losing dependencies. Move the complete extracted directory and reopen
+its manifest to retain bindings.
 
 Both Browser mode and the standalone desktop Node executor support live runs and
 Evaluations. The current entry project/graph and its active editor datasets override
@@ -447,6 +465,10 @@ The desktop-editor Playwright fixture exercises the real editor and desktop IO
 adapter with owned native read replies: manifest/member save paths, unsaved entry
 execution, preflight error toasts, cancellation during bundle and environment
 preparation, recovery, and entry dataset capture while the selected provider changes.
+The editor regression and Node sidecar integration both use a nested entry path,
+so folder discovery cannot mask a lost manifest binding. Tab tests cover remembered
+membership during baseline recovery, reopening existing members without replacing
+live data, and stale reads/imports after a manifest rebind.
 The standalone executor WebSocket fixture checks cancellation, unsaved entry/member
 execution and the captured entry dataset protocol against a real Node process.
 It can also execute the built native sidecar rather than the development Node

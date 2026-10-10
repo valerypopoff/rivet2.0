@@ -19,7 +19,36 @@ import {
   type DatasetId,
   type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
-import { prepareDesktopProjectBundle, type NativeProjectBundle } from './DesktopProjectBundle.js';
+import {
+  prepareDesktopProjectBundle,
+  readProjectBundleForExecution,
+  type NativeProjectBundle,
+} from './DesktopProjectBundle.js';
+
+test('known bundle execution fails closed when its path, reader or manifest result is lost', async () => {
+  const emptyReader = { readProjectBundle: async () => undefined };
+  await assert.rejects(readProjectBundleForExecution({}, '/project', '/manifest'), /Reopen rivet-bundle.json/);
+  await assert.rejects(readProjectBundleForExecution(emptyReader, undefined, '/manifest'), /Reopen rivet-bundle.json/);
+  await assert.rejects(readProjectBundleForExecution(emptyReader, '/project', '/manifest'), /Reopen rivet-bundle.json/);
+  assert.equal(await readProjectBundleForExecution({}, '/standalone'), undefined);
+  assert.equal(await readProjectBundleForExecution(emptyReader, '/standalone'), undefined);
+});
+
+test('execution preserves reader ownership and passes the remembered manifest for the entry project', async () => {
+  const bundle = prepareDesktopProjectBundle(fixture().native);
+  const io = {
+    bundle,
+    async readProjectBundle(path: string, manifestPath?: string) {
+      assert.equal(path, '/fixture/projects/root.rivet-project');
+      assert.equal(manifestPath, '/fixture/rivet-bundle.json');
+      return this.bundle;
+    },
+  };
+  assert.equal(
+    await readProjectBundleForExecution(io, '/fixture/projects/root.rivet-project', '/fixture/rivet-bundle.json'),
+    bundle,
+  );
+});
 
 function fixture() {
   const graph = 'main' as GraphId;

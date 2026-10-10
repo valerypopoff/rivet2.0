@@ -40,13 +40,27 @@ fn read_bounded(path: &Path, limit: u64) -> Result<String, String> {
 
 /** Discovery is deliberately limited to the manifest itself or its standard projects folder. */
 pub fn read_bundle(selected: &Path) -> Result<Option<NativeProjectBundle>, String> {
+    read_bundle_with_manifest(selected, None)
+}
+
+/** A remembered manifest is authoritative; folder discovery is only for unbound opens. */
+pub fn read_bundle_with_manifest(
+    selected: &Path,
+    known_manifest: Option<&Path>,
+) -> Result<Option<NativeProjectBundle>, String> {
     let selected = selected
         .canonicalize()
         .map_err(|_| "Could not resolve selected project path.")?;
-    let direct = selected
+    let mut direct = selected
         .file_name()
         .map_or(false, |name| name == "rivet-bundle.json");
-    let manifest = if direct {
+    let manifest = if let Some(manifest) = known_manifest {
+        let manifest = manifest
+            .canonicalize()
+            .map_err(|_| "Could not resolve the opened bundle manifest. Reopen the bundle.")?;
+        direct = selected == manifest;
+        manifest
+    } else if direct {
         selected.clone()
     } else {
         let parent = match selected.parent() {
@@ -73,6 +87,9 @@ pub fn read_bundle(selected: &Path) -> Result<Option<NativeProjectBundle>, Strin
         .map_err(|_| "Could not resolve bundle manifest.")?;
     if !manifest.starts_with(&root) {
         return Err("Bundle manifest escapes its directory.".into());
+    }
+    if !selected.starts_with(&root) {
+        return Err("The selected project is outside the opened bundle directory.".into());
     }
     let contents = read_bounded(&manifest, 1024 * 1024)?;
     // Windows text editors may prefix UTF-8 with a BOM. Match Node's UTF-8
@@ -214,6 +231,39 @@ mod tests {
         assert!(read_bundle(&f.0.join("projects/root.rivet-project"))
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn remembered_manifest_runs_nested_members_without_folder_discovery() {
+        let f = Fixture::new();
+        fs::create_dir_all(f.0.join("projects/nested")).unwrap();
+        let member = f.0.join("projects/nested/root.rivet-project");
+        fs::write(&member, "nested member").unwrap();
+        f.manifest("projects/nested/root.rivet-project");
+        // This is the old run path: opening the manifest works, rediscovery
+        // from the loaded project silently loses the bundle.
+        assert!(read_bundle(&member).unwrap().is_none());
+        let manifest = f.0.join("rivet-bundle.json");
+        let bundle = read_bundle_with_manifest(&member, Some(&manifest))
+            .unwrap()
+            .unwrap();
+        assert_eq!(bundle.files[0].contents, "nested member");
+        assert_eq!(
+            bundle.selected_project_path.unwrap(),
+            bundle.files[0].source_project_path
+        );
+        fs::write(f.0.join("unlisted.rivet-project"), "unlisted").unwrap();
+        assert!(read_bundle_with_manifest(&f.0.join("unlisted.rivet-project"), Some(&manifest))
+            .err()
+            .unwrap()
+            .contains("not listed"));
+        let other = Fixture::new();
+        assert!(read_bundle_with_manifest(&member, Some(&other.0.join("rivet-bundle.json")))
+            .err()
+            .unwrap()
+            .contains("outside"));
+        fs::remove_file(&manifest).unwrap();
+        assert!(read_bundle_with_manifest(&member, Some(&manifest)).is_err());
     }
 
     #[test]

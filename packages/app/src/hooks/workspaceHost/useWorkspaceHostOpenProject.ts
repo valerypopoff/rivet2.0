@@ -224,16 +224,27 @@ export function useWorkspaceHostOpenProject() {
         const id = member.project.metadata.id;
         const current = store.get(projectsState).openedProjects[id];
         const previous = existingProjects[id];
-        return previous ? current?.fsPath === member.path : current === undefined;
+        return previous
+          ? current !== undefined &&
+              current.fsPath === member.path &&
+              current.bundleManifestPath === previous.bundleManifestPath
+          : current === undefined;
       });
     const activateExisting = () =>
       activateProject(loaded.project.metadata.id, undefined, {
         isCurrent: isWorkspaceCurrent,
         signal: getProjectActivationSignal(store),
+        bundleManifestPath: loaded.bundleManifestPath,
       });
-    if (!loaded.bundleProjects && existingProjects[loaded.project.metadata.id]) return activateExisting();
     const skip = new Set(Object.keys(existingProjects) as ProjectId[]);
-    if (loaded.commit && !(await loaded.commit(isWorkspaceCurrent, skip))) return false;
+    // Existing individual members retain their live datasets and edits, but
+    // still pass through membership registration after activation.
+    if (
+      loaded.commit &&
+      (loaded.bundleProjects || !existingProjects[loaded.project.metadata.id]) &&
+      !(await loaded.commit(isWorkspaceCurrent, skip))
+    )
+      return false;
     if (!isWorkspaceCurrent()) return false;
     const { data, ...project } = loaded.project;
     const opened = skip.has(loaded.project.metadata.id)

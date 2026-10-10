@@ -46,7 +46,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
         title: project.metadata.title,
         version: 'latest',
         revision: 'original',
-        project: { path: `projects/${index ? 'child' : 'root'}.rivet-project` },
+        project: { path: `projects/${index ? 'child' : 'nested/root'}.rivet-project` },
       })),
       targets: ['latest', 'published'].map((version) => ({
         projectId: fixture.child.project.metadata.id,
@@ -55,8 +55,8 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
       })),
     }),
     files: [fixture.root.project, fixture.child.project].map((project, index) => ({
-      path: `projects/${index ? 'child' : 'root'}.rivet-project`,
-      sourceProjectPath: `/bundle/projects/${index ? 'child' : 'root'}.rivet-project`,
+      path: `projects/${index ? 'child' : 'nested/root'}.rivet-project`,
+      sourceProjectPath: `/bundle/projects/${index ? 'child' : 'nested/root'}.rivet-project`,
       contents: serializeProject(project) as string,
     })),
   };
@@ -106,7 +106,10 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
         try { return await openWithDialog(...args); }
         finally { delete window.__TAURI__; }
       };
-      io.readProjectBundle = async (path) => {
+      io.readProjectBundle = async (path, manifestPath) => {
+        // Match native discovery: a nested member cannot rediscover the
+        // manifest. Runs must use the bundle membership recorded at Open.
+        if (!manifestPath && path.endsWith('/nested/root.rivet-project')) return undefined;
         if (window.blockNextBundleRead) {
           window.blockNextBundleRead = false;
           window.bundleReadBlocked = true;
@@ -165,7 +168,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     await page.evaluate(() =>
       (window as any).bundleHost.replaceProjectSnapshot((window as any).editedFixture.metadata.id, {
         project: (window as any).editedFixture,
-        path: '/bundle/projects/root.rivet-project',
+        path: '/bundle/projects/nested/root.rivet-project',
       }),
     ),
   ).toBe(true);
@@ -174,7 +177,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await expect(page.locator(`.node[data-nodeid="${output.id}"]`)).toContainText('child-result + unsaved');
   await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).bundleHost.saveCurrentProject())).toBe(true);
-  expect(await page.evaluate(() => (window as any).savedBundlePath)).toBe('/bundle/projects/root.rivet-project');
+  expect(await page.evaluate(() => (window as any).savedBundlePath)).toBe('/bundle/projects/nested/root.rivet-project');
   await page.evaluate(() => {
     (window as any).blockNextBundleRead = true;
   });
@@ -230,7 +233,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     await datasets.putDatasetRow('shared', { id: 'row', data: ['entry-at-run-start'] });
     (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
       project,
-      path: '/bundle/projects/root.rivet-project',
+      path: '/bundle/projects/nested/root.rivet-project',
     });
     (window as any).bundleReadBlocked = false;
     (window as any).blockNextBundleRead = true;
@@ -268,7 +271,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     await (window as any).bundleDatasets.loadDatasets(project.metadata.id);
     (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
       project,
-      path: '/bundle/projects/root.rivet-project',
+      path: '/bundle/projects/nested/root.rivet-project',
     });
     (window as any).environmentReadGate = new Promise<void>((resolve) => {
       (window as any).releaseEnvironmentRead = () => {
