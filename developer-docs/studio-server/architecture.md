@@ -54,6 +54,61 @@ without taking over the executor connection. See the
 
 ## Serving module boundaries
 
+The server composition in `server.ts` registers resources with
+`ServerResourceLifecycle` in caller-before-store disposal order. Startup is
+single-flight; synchronous admission fencing precedes drain. A failed fence is
+retried before disposal, and a failed close retains that resource and its
+downstream dependencies. Confirmed closes alone detach ownership. Existing
+workflow generation leases, worker unknown-outcome rules and recording drains
+remain in their owning services; the lifecycle does not replay transactions.
+`server-activity.ts` provides typed maintenance probes, including queued catalog
+reads and writes. Invalid/unavailable counts fail closed. Transport admission and
+foreground-versus-terminal execution tracking remain separate.
+
+`workflow-inputs.ts` normalizes public paths once, with physical containment still
+enforced by the filesystem adapter. Backend contracts accept typed operations,
+not arbitrary request values. Recording pagination uses one named
+`WorkflowRecordingPageQuery`, with mutable input filters captured before async
+delegation. `workflow-failure.ts` carries stable conflict/busy codes through
+worker error envelopes; adapters inspect native SQLite extended result codes,
+not error prose. Mutation message translation preserves the original structured
+conflict code; it must not turn a state-change or destination conflict into an
+unclassified HTTP error. Missing published Subgraph fallback requires the specific
+publication-missing code, not any 409 response.
+SQLite uniqueness translation is statement-scoped: project destinations and
+web-app slug writes identify their domain constraints at the catalog boundary.
+Publication-version, recording and composite web-app identity collisions remain
+internal failures. Never blanket-map `SQLITE_CONSTRAINT_*` to a route conflict.
+Worker loss retains its unavailable code and adds
+`operationOutcome: unknown | not-dispatched`, distinguishing dispatched work
+from queued work without automatically replaying either.
+
+Runtime-library owners fence job admission at drain, not just lazy construction.
+Local disposal cancels and awaits the accepted candidate operation, including
+its process pipes and staging cleanup; terminal UI status alone is not proof
+of cleanup. Managed disposal drains job/heartbeat work before releasing its pool
+and object client. Repeated pool lease releases share the original pending or
+failed close acknowledgement; calling `release()` again cannot invent success.
+Runtime SSE delivery pauses on backpressure and resumes from its cursor, with
+one latest observation and a bounded stall deadline; transport pressure never
+cancels the durable job. The dashboard's bridge checks monotonic deadlines even
+when browser timers are throttled. Undelivered committed notifications hand off
+to the existing authoritative tree reconciler rather than retaining an overflow
+queue or replaying uncertain mutations.
+
+`legacy-workflow-commands.ts` owns legacy project/publication locking and
+post-mutation invalidation. The compatibility facade selects an adapter; it no
+longer duplicates those command bodies. Hosted IO and legacy execution lookup
+retain their existing specialized paths. This is not a generic repository or
+SQL framework.
+
+Web-app preparation, request-context normalization, runtime options and recording
+identity live in `web-app-execution.ts`, shared by HTTP and WebSocket adapters.
+Authentication HTML belongs to `web-app-auth-presentation.ts`; HTTP routing,
+redirects, body admission and response delivery remain in `execution.ts`.
+WebSocket origin checks, session fencing and early-response behavior remain
+transport-specific. Neither adapter acquires a second run-session owner.
+
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and
 recording repositories are separate interfaces; `WorkflowDataBackend` composes

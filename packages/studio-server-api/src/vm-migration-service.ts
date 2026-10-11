@@ -1,3 +1,4 @@
+import { readServerActivity } from './server-activity.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -7,7 +8,10 @@ import path from 'node:path';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { LocalMetadataTransitionJournal } from './local-metadata/transition-journal.js';
 import { SqliteMigrationSource } from './scripts/sqlite-migration-source.js';
-import { getLocalWorkflowActiveWriteCount, getLocalWorkflowPendingCatalogOperationCount } from './routes/workflows/storage-backend.js';
+import {
+  getLocalWorkflowActiveWriteCount,
+  getLocalWorkflowPendingCatalogOperationCount,
+} from './routes/workflows/storage-backend.js';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
@@ -330,21 +334,25 @@ async function editorLeaseCount(): Promise<number> {
 }
 
 export async function localStorageDrainSnapshot(): Promise<{ ready: boolean; blockers: string[] }> {
-  const blockers: string[] = [];
-  if (getVmMigrationActiveRequestCount() > 0) blockers.push('HTTP requests');
-  if (getActiveScheduledRunCount() > 0) blockers.push('Scheduled runs');
-  if (getActiveHttpExecutionCount() > 0) blockers.push('HTTP graph runs');
-  if ((getWebAppActionWebSocketRuntime()?.getActiveRunCount() ?? 0) > 0) blockers.push('web-app actions');
-  if ((await editorLeaseCount()) > 0) blockers.push('editor graph runs');
-  if (runningPreflights > 0) blockers.push('destination connection test');
-  if (getLocalWorkflowActiveWriteCount() > 0) blockers.push('SQLite catalog writes');
-  if (getLocalWorkflowPendingCatalogOperationCount() > 0) blockers.push('SQLite catalog operations');
-  const recordings = getWorkflowExecutionRecordingPersistenceMetrics();
-  if (recordings.activeWrites > 0 || recordings.pendingWrites > 0) blockers.push('recording writes');
-  // Local artifacts use the same job runner in legacy and SQLite modes. Query it
-  // directly: getState() creates staging directories and would mutate a frozen source.
-  if (filesystemRuntimeLibraryJobRunner.isRunning()) blockers.push('runtime-library job');
-  return { ready: blockers.length === 0, blockers };
+  return readServerActivity([
+    { name: 'HTTP requests', count: getVmMigrationActiveRequestCount },
+    { name: 'Scheduled runs', count: getActiveScheduledRunCount },
+    { name: 'HTTP graph runs', count: getActiveHttpExecutionCount },
+    { name: 'web-app actions', count: () => getWebAppActionWebSocketRuntime()?.getActiveRunCount() ?? 0 },
+    { name: 'editor graph runs', count: editorLeaseCount },
+    { name: 'destination connection test', count: () => runningPreflights },
+    { name: 'SQLite catalog writes', count: getLocalWorkflowActiveWriteCount },
+    { name: 'SQLite catalog operations', count: getLocalWorkflowPendingCatalogOperationCount },
+    {
+      name: 'recording writes',
+      count: () => {
+        const writes = getWorkflowExecutionRecordingPersistenceMetrics();
+        return writes.activeWrites + writes.pendingWrites;
+      },
+    },
+    // getState() would create staging directories in a frozen source.
+    { name: 'runtime-library job', count: () => Number(filesystemRuntimeLibraryJobRunner.isRunning()) },
+  ]);
 }
 const drainSnapshot = localStorageDrainSnapshot;
 export async function freezeLocalStorageSource(migrationId?: string): Promise<void> {

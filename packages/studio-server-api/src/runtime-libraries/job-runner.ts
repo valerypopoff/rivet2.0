@@ -14,7 +14,7 @@ import {
   type RuntimeLibraryEntry,
   type RuntimeLibraryManifest,
 } from './manifest.js';
-import { buildChildProcessEnv, execStreaming } from '../utils/exec.js';
+import { buildChildProcessEnv, execStreaming, terminateChildProcess } from '../utils/exec.js';
 import type {
   JobStatus,
   RuntimeLibraryJobLogEntry,
@@ -43,6 +43,8 @@ class JobRunner extends EventEmitter {
   private activeJob: JobState | null = null;
   private jobCounter = 0;
   private activeProcess: ChildProcess | null = null;
+  private acceptedWork: Promise<void> = Promise.resolve();
+  private workActive = false;
 
   getActiveJob(): JobState | null {
     return this.activeJob;
@@ -57,7 +59,26 @@ class JobRunner extends EventEmitter {
   }
 
   isRunning(): boolean {
-    return this.activeJob != null && this.activeJob.status !== 'succeeded' && this.activeJob.status !== 'failed';
+    return (
+      this.workActive ||
+      (this.activeJob != null && this.activeJob.status !== 'succeeded' && this.activeJob.status !== 'failed')
+    );
+  }
+
+  private accept(operation: () => Promise<void>): void {
+    this.workActive = true;
+    this.acceptedWork = operation().finally(() => {
+      this.workActive = false;
+    });
+    // Preserve cleanup failure for drain, but never create an unhandled promise
+    // merely because the HTTP observer has disconnected.
+    void this.acceptedWork.catch(() => undefined);
+  }
+
+  async drain(interrupt = false): Promise<void> {
+    if (interrupt && this.activeJob) this.cancelJob(this.activeJob.id);
+    // Terminal UI status is not proof that candidate cleanup and pipes closed.
+    await this.acceptedWork;
   }
 
   startInstall(packages: Array<{ name: string; version: string }>): JobState {
@@ -77,7 +98,7 @@ class JobRunner extends EventEmitter {
     };
 
     this.activeJob = job;
-    void this.runInstall(job);
+    this.accept(() => this.runInstall(job));
     return job;
   }
 
@@ -98,7 +119,7 @@ class JobRunner extends EventEmitter {
     };
 
     this.activeJob = job;
-    void this.runRemove(job);
+    this.accept(() => this.runRemove(job));
     return job;
   }
 
@@ -380,13 +401,13 @@ class JobRunner extends EventEmitter {
 
   private terminateActiveProcess(job: JobState, reason: string): void {
     const child = this.activeProcess;
-    if (!child || child.killed) {
+    if (!child || child.exitCode != null || child.signalCode != null) {
       this.activeProcess = null;
       return;
     }
 
     try {
-      child.kill('SIGTERM');
+      terminateChildProcess(child, 'SIGTERM');
     } catch {
       this.activeProcess = null;
       return;
@@ -399,7 +420,7 @@ class JobRunner extends EventEmitter {
 
       this.appendLog(job, `Process did not exit after SIGTERM (${reason}); forcing shutdown.`);
       try {
-        child.kill('SIGKILL');
+        terminateChildProcess(child, 'SIGKILL');
       } catch {
         // ignore late kill failures
       }

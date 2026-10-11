@@ -1,3 +1,4 @@
+import { workflowFailure } from '../routes/workflows/workflow-failure.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -806,6 +807,20 @@ export class LocalWorkflowCatalog {
     }
   }
 
+  /** Only statements whose UNIQUE columns are public destinations belong here.
+   * Version/recording IDs and composite web-app identity failures remain internal
+   * errors, not instructions to refresh or retry a domain operation. */
+  #destinationWrite(write: () => unknown, projectIdentity = false): void {
+    try {
+      write();
+    } catch (error) {
+      const code = (error as { errcode?: number } | null)?.errcode;
+      if (code === 2067 || (projectIdentity && code === 1555))
+        throw workflowFailure('workflow_destination_conflict', 'Local catalog destination already exists.');
+      throw error;
+    }
+  }
+
   importFolder(folderPath: string): void {
     if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
     assertPath(folderPath, 'folder');
@@ -825,7 +840,10 @@ export class LocalWorkflowCatalog {
   }
 
   readStructure() {
-    return this.#readMetadata(() => ({ expectedFolders: this.listFolders(), expectedProjectPaths: this.listProjectPaths() }));
+    return this.#readMetadata(() => ({
+      expectedFolders: this.listFolders(),
+      expectedProjectPaths: this.listProjectPaths(),
+    }));
   }
 
   /** A consistent metadata-only view. No historical bodies or recording rows belong in tree reads. */
@@ -1043,7 +1061,10 @@ export class LocalWorkflowCatalog {
     const contents = cached?.contents ?? (await readText(this.#artifacts, source.contents))!,
       datasetsContents = cached ? cached.datasetsContents : await readText(this.#artifacts, source.datasetsContents);
     if (!sameJson(match, this.#executionBundle(selection)))
-      throw new Error('Local catalog execution target changed concurrently while loading.');
+      throw workflowFailure(
+        'workflow_state_changed',
+        'Local catalog execution target changed concurrently while loading.',
+      );
     const admitted = cached || cache?.setRevisionMaterialization({ revisionId, contents, datasetsContents });
     let webApp: LocalExecutionSnapshot['webApp'];
     if (match.app) {
@@ -1099,18 +1120,24 @@ export class LocalWorkflowCatalog {
         !sameJson(this.listFolders(), ordered(options.expectedFolders)) ||
         !sameJson(this.listProjectPaths(), ordered(options.expectedProjectPaths))
       ) {
-        throw new Error('Local catalog structure changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog structure changed concurrently; reload before saving.',
+        );
       }
       for (const change of encoded) {
         if (change.before) {
           if (!sameProjectBundle(this.#readStoredProjectBundle(change.before.project.relativePath), change.before))
-            throw new Error('Local catalog project changed concurrently; reload before saving.');
+            throw workflowFailure(
+              'workflow_state_changed',
+              'Local catalog project changed concurrently; reload before saving.',
+            );
         } else if (
           db
             .prepare('SELECT 1 FROM projects WHERE workflow_id = ? OR relative_path = ?')
             .get(change.after!.project.workflowId, change.after!.project.relativePath)
         ) {
-          throw new Error('Local catalog project already exists.');
+          throw workflowFailure('workflow_destination_conflict', 'Local catalog project already exists.');
         }
       }
       // Free old paths before publishing the new ones, without deleting project
@@ -1136,24 +1163,34 @@ export class LocalWorkflowCatalog {
         if (parent !== '.' && !options.folders.includes(parent))
           throw new Error('Local project parent folder is missing.');
         if (change.before) {
-          db.prepare(
-            'UPDATE projects SET relative_path = ?, endpoint_name = ?, published_endpoint_name = ?, metadata_json = ? WHERE workflow_id = ?',
-          ).run(
-            project.relativePath,
-            project.endpointName,
-            project.publishedEndpointName,
-            JSON.stringify(project),
-            project.workflowId,
+          this.#destinationWrite(() =>
+            db
+              .prepare(
+                'UPDATE projects SET relative_path = ?, endpoint_name = ?, published_endpoint_name = ?, metadata_json = ? WHERE workflow_id = ?',
+              )
+              .run(
+                project.relativePath,
+                project.endpointName,
+                project.publishedEndpointName,
+                JSON.stringify(project),
+                project.workflowId,
+              ),
           );
           db.prepare('DELETE FROM published_versions WHERE workflow_id = ?').run(project.workflowId);
           db.prepare('DELETE FROM web_apps WHERE workflow_id = ?').run(project.workflowId);
         } else
-          db.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)').run(
-            project.workflowId,
-            project.relativePath,
-            project.endpointName,
-            project.publishedEndpointName,
-            JSON.stringify(project),
+          this.#destinationWrite(
+            () =>
+              db
+                .prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)')
+                .run(
+                  project.workflowId,
+                  project.relativePath,
+                  project.endpointName,
+                  project.publishedEndpointName,
+                  JSON.stringify(project),
+                ),
+            true,
           );
         this.#insertProjectChildren(db, project.workflowId, versions, apps);
       }
@@ -1195,7 +1232,10 @@ export class LocalWorkflowCatalog {
         (await this.#treeIndex(current)).revisionId !== change.before.revisionId ||
         observed.has(current.workflowId)
       )
-        throw new Error('Local catalog project changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog project changed concurrently; reload before saving.',
+        );
       observed.set(current.workflowId, current);
     }
     const db = this.#database();
@@ -1206,14 +1246,20 @@ export class LocalWorkflowCatalog {
         !sameJson(this.listFolders(), ordered(options.expectedFolders)) ||
         !sameJson(this.listProjectPaths(), ordered(options.expectedProjectPaths))
       )
-        throw new Error('Local catalog structure changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog structure changed concurrently; reload before saving.',
+        );
       for (const folder of options.folders) assertPath(folder, 'folder');
       if (new Set(options.folders).size !== options.folders.length) throw new Error('Duplicate local catalog folder.');
       const ids = new Set<string>();
       const changes = options.projects.map((change) => {
         const current = this.#readStoredProjectBundle(change.before.relativePath, false)?.project;
         if (!current || !sameJson(current, observed.get(current.workflowId)) || ids.has(current.workflowId))
-          throw new Error('Local catalog project changed concurrently; reload before saving.');
+          throw workflowFailure(
+            'workflow_state_changed',
+            'Local catalog project changed concurrently; reload before saving.',
+          );
         ids.add(current.workflowId);
         if (change.relativePath !== null) assertPath(change.relativePath, 'project');
         return { current, relativePath: change.relativePath };
@@ -1235,10 +1281,10 @@ export class LocalWorkflowCatalog {
         if (relativePath === null) continue;
         const fileName = path.posix.basename(relativePath);
         const next = { ...current, relativePath, fileName, name: fileName.slice(0, -'.rivet-project'.length) };
-        db.prepare('UPDATE projects SET relative_path = ?, metadata_json = ? WHERE workflow_id = ?').run(
-          relativePath,
-          JSON.stringify(next),
-          current.workflowId,
+        this.#destinationWrite(() =>
+          db
+            .prepare('UPDATE projects SET relative_path = ?, metadata_json = ? WHERE workflow_id = ?')
+            .run(relativePath, JSON.stringify(next), current.workflowId),
         );
       }
       for (const value of [...options.folders, ...this.listProjectPaths()]) {
@@ -1486,12 +1532,18 @@ export class LocalWorkflowCatalog {
     try {
       this.#upgradeSchema(db);
       this.#assertStoredArtifacts(project);
-      db.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)').run(
-        snapshot.workflowId,
-        snapshot.relativePath,
-        snapshot.endpointName,
-        snapshot.publishedEndpointName,
-        JSON.stringify(project),
+      this.#destinationWrite(
+        () =>
+          db
+            .prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?)')
+            .run(
+              snapshot.workflowId,
+              snapshot.relativePath,
+              snapshot.endpointName,
+              snapshot.publishedEndpointName,
+              JSON.stringify(project),
+            ),
+        true,
       );
       this.#insertProjectChildren(db, snapshot.workflowId, versions, apps);
       this.#validateRoutes(db);
@@ -1566,7 +1618,11 @@ export class LocalWorkflowCatalog {
     }
     for (const app of apps) {
       this.#assertStoredArtifacts(app);
-      db.prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)').run(app.appId, workflowId, app.slug, JSON.stringify(app));
+      this.#destinationWrite(() =>
+        db
+          .prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)')
+          .run(app.appId, workflowId, app.slug, JSON.stringify(app)),
+      );
     }
   }
 
@@ -1621,18 +1677,25 @@ export class LocalWorkflowCatalog {
       this.#upgradeSchema(db);
       const current = this.#readStoredProjectBundle(expected.relativePath);
       if (!sameProjectBundle(current, expectedStored)) {
-        throw new Error('Local catalog project changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog project changed concurrently; reload before saving.',
+        );
       }
       this.#assertStoredArtifacts(nextStored.project);
-      db.prepare(
-        `UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ?
+      this.#destinationWrite(() =>
+        db
+          .prepare(
+            `UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ?
          WHERE workflow_id = ? AND relative_path = ?`,
-      ).run(
-        next.endpointName,
-        next.publishedEndpointName,
-        JSON.stringify(nextStored.project),
-        next.workflowId,
-        next.relativePath,
+          )
+          .run(
+            next.endpointName,
+            next.publishedEndpointName,
+            JSON.stringify(nextStored.project),
+            next.workflowId,
+            next.relativePath,
+          ),
       );
       db.prepare('DELETE FROM published_versions WHERE workflow_id = ?').run(next.workflowId);
       db.prepare('DELETE FROM web_apps WHERE workflow_id = ?').run(next.workflowId);
@@ -1690,7 +1753,7 @@ export class LocalWorkflowCatalog {
     if (!before) return null;
     const index = await this.#treeIndex(before.project);
     if (!sameJson(before, this.#readStoredProjectBundle(relativePath, false)))
-      throw new Error('Local catalog project changed concurrently while loading.');
+      throw workflowFailure('workflow_state_changed', 'Local catalog project changed concurrently while loading.');
     return { ...projectTreeMetadata(before.project, before.apps), ...index };
   }
 
@@ -1771,10 +1834,13 @@ export class LocalWorkflowCatalog {
     const before = this.#readStoredProjectBundle(options.relativePath, false);
     if (!before) return null;
     if (before.project.workflowId !== options.workflowId)
-      throw new Error('The save target belongs to a different project.');
+      throw workflowFailure('workflow_project_mismatch', 'The save target belongs to a different project.');
     const oldIndex = await this.#treeIndex(before.project);
     if (options.expectedRevisionId && options.expectedRevisionId !== oldIndex.revisionId)
-      throw new Error('Local catalog project changed concurrently; reload before saving.');
+      throw workflowFailure(
+        'workflow_state_changed',
+        'Local catalog project changed concurrently; reload before saving.',
+      );
     const index = projectTreeIndex(options.contents, options.datasetsContents);
     const draftReference = (contents: string | null, previous: ArtifactRef) =>
       sameArtifactReference(hashText(contents), previous)
@@ -1799,7 +1865,10 @@ export class LocalWorkflowCatalog {
     db.exec('BEGIN IMMEDIATE');
     try {
       if (!sameJson(before, this.#readStoredProjectBundle(options.relativePath, false)))
-        throw new Error('Local catalog project changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog project changed concurrently; reload before saving.',
+        );
       this.#upgradeSchema(db);
       this.#assertStoredArtifacts(next);
       db.prepare('UPDATE projects SET metadata_json = ? WHERE workflow_id = ?').run(
@@ -1841,7 +1910,10 @@ export class LocalWorkflowCatalog {
     return { before, index, next };
   }
 
-  async commitPublication(relativePath: string, prepared: NonNullable<Awaited<ReturnType<LocalWorkflowCatalog['preparePublication']>>>) {
+  async commitPublication(
+    relativePath: string,
+    prepared: NonNullable<Awaited<ReturnType<LocalWorkflowCatalog['preparePublication']>>>,
+  ) {
     if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
     const { before, index, next } = prepared;
     const { draftText: _text, publishedVersions: added, publishedWebApps: apps, ...project } = next;
@@ -1874,12 +1946,19 @@ export class LocalWorkflowCatalog {
     db.exec('BEGIN IMMEDIATE');
     try {
       if (!sameJson(before, this.#readStoredProjectBundle(relativePath, false)))
-        throw new Error('Local catalog project changed concurrently; reload before saving.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Local catalog project changed concurrently; reload before saving.',
+        );
       this.#upgradeSchema(db);
       this.#assertStoredArtifacts(project);
-      db.prepare(
-        'UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ? WHERE workflow_id = ?',
-      ).run(project.endpointName, project.publishedEndpointName, JSON.stringify(project), project.workflowId);
+      this.#destinationWrite(() =>
+        db
+          .prepare(
+            'UPDATE projects SET endpoint_name = ?, published_endpoint_name = ?, metadata_json = ? WHERE workflow_id = ?',
+          )
+          .run(project.endpointName, project.publishedEndpointName, JSON.stringify(project), project.workflowId),
+      );
       for (const version of added) {
         this.#assertStoredArtifacts(version);
         db.prepare(
@@ -1904,18 +1983,16 @@ export class LocalWorkflowCatalog {
         this.#assertStoredArtifacts(app);
         const old = before.apps.find((item) => item.appId === app.appId);
         if (old && !sameJson(old, app))
-          db.prepare('UPDATE web_apps SET slug = ?, metadata_json = ? WHERE workflow_id = ? AND app_id = ?').run(
-            app.slug,
-            JSON.stringify(app),
-            project.workflowId,
-            app.appId,
+          this.#destinationWrite(() =>
+            db
+              .prepare('UPDATE web_apps SET slug = ?, metadata_json = ? WHERE workflow_id = ? AND app_id = ?')
+              .run(app.slug, JSON.stringify(app), project.workflowId, app.appId),
           );
         else if (!old)
-          db.prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)').run(
-            app.appId,
-            project.workflowId,
-            app.slug,
-            JSON.stringify(app),
+          this.#destinationWrite(() =>
+            db
+              .prepare('INSERT INTO web_apps VALUES (?, ?, ?, ?)')
+              .run(app.appId, project.workflowId, app.slug, JSON.stringify(app)),
           );
       }
       this.#validateRoutes(db);
@@ -1964,7 +2041,7 @@ export class LocalWorkflowCatalog {
       readText(this.#artifacts, selected.source.datasetsContents),
     ]);
     if (!sameJson(selected, readSelection()))
-      throw new Error('Local catalog project changed concurrently while loading.');
+      throw workflowFailure('workflow_state_changed', 'Local catalog project changed concurrently while loading.');
     return {
       ...projectTreeMetadata(selected.bundle.project, selected.bundle.apps),
       contents,
@@ -1983,7 +2060,7 @@ export class LocalWorkflowCatalog {
     ]);
     if (contents === null) throw new Error('Project artifact is missing.');
     if (!sameJson(bundle, this.#readStoredProjectBundle(relativePath, false)))
-      throw new Error('Local catalog project changed concurrently while loading.');
+      throw workflowFailure('workflow_state_changed', 'Local catalog project changed concurrently while loading.');
     return { ...projectTreeMetadata(bundle.project, bundle.apps), ...index, stats: { ...index.stats }, contents };
   }
 
@@ -2022,7 +2099,7 @@ export class LocalWorkflowCatalog {
     };
     assertProjectSnapshot(snapshot);
     if (!sameJson(this.#readStoredProjectBundle(relativePath), bundle))
-      throw new Error('Local catalog project changed concurrently while loading.');
+      throw workflowFailure('workflow_state_changed', 'Local catalog project changed concurrently while loading.');
     return snapshot;
   }
 
@@ -2158,7 +2235,7 @@ export class LocalWorkflowCatalog {
       .prepare("SELECT metadata_json FROM runtime_library_state WHERE slot = 'default'")
       .get() as { metadata_json: string } | undefined;
     if (after?.metadata_json !== row.metadata_json)
-      throw new Error('Runtime-library state changed concurrently while loading.');
+      throw workflowFailure('workflow_state_changed', 'Runtime-library state changed concurrently while loading.');
     return state;
   }
 
@@ -2176,7 +2253,10 @@ export class LocalWorkflowCatalog {
     assertRuntimeLibraryState(next);
     const current = await this.readRuntimeLibraryState();
     if (!current || !sameJson(current.manifest, expected.manifest) || !sameArchive(current.archive, expected.archive))
-      throw new Error('Runtime-library state changed concurrently; reload before activating.');
+      throw workflowFailure(
+        'workflow_state_changed',
+        'Runtime-library state changed concurrently; reload before activating.',
+      );
     const encode = (state: LocalRuntimeLibraryState): StoredRuntimeLibraryState => ({
       manifest: state.manifest,
       archive:
@@ -2194,7 +2274,10 @@ export class LocalWorkflowCatalog {
         | { metadata_json: string }
         | undefined;
       if (!row || !sameJson(JSON.parse(row.metadata_json), before))
-        throw new Error('Runtime-library state changed concurrently; reload before activating.');
+        throw workflowFailure(
+          'workflow_state_changed',
+          'Runtime-library state changed concurrently; reload before activating.',
+        );
       this.#assertStoredArtifacts(after);
       db.prepare("UPDATE runtime_library_state SET metadata_json = ? WHERE slot = 'default'").run(
         JSON.stringify(after),

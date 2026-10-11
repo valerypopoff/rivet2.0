@@ -16,6 +16,7 @@ const startup = await import('../runtime-libraries/startup.js');
 const filesystemBackend = await import('../runtime-libraries/filesystem-backend.js');
 const runtimeLibrariesConfig = await import('../runtime-libraries/config.js');
 const { jobRunner } = await import('../runtime-libraries/job-runner.js');
+const { ManagedRuntimeLibrariesBackend } = await import('../runtime-libraries/managed/backend.js');
 
 async function resetRuntimeLibrariesRoot() {
   await fs.rm(runtimeLibrariesRoot, { recursive: true, force: true });
@@ -26,6 +27,107 @@ async function resetRuntimeLibrariesRoot() {
 
 test.beforeEach(async () => {
   await resetRuntimeLibrariesRoot();
+});
+
+test('a broken filesystem job observer cannot fail the job runner or leak listeners', (t) => {
+  const backend = filesystemBackend.createFilesystemRuntimeLibrariesBackend();
+  const beforeLog = jobRunner.listenerCount('log');
+  const beforeStatus = jobRunner.listenerCount('status');
+  t.mock.method(jobRunner, 'getJob', () => null);
+  let errors = 0;
+  const stop = backend.subscribeJob('observed-job', {
+    state() {
+      throw new Error('connection failed');
+    },
+    error() {
+      errors++;
+      throw new Error('observer failed too');
+    },
+  });
+  assert.doesNotThrow(() => jobRunner.emit('status', 'observed-job'));
+  assert.equal(errors, 1);
+  assert.equal(jobRunner.listenerCount('log'), beforeLog);
+  assert.equal(jobRunner.listenerCount('status'), beforeStatus);
+  stop();
+});
+
+test('filesystem shutdown fences new jobs and waits for owned cleanup', async (t) => {
+  const backend = filesystemBackend.createFilesystemRuntimeLibrariesBackend();
+  let finish!: () => void;
+  let interrupted = false;
+  t.mock.method(jobRunner, 'drain', (interrupt: boolean) => {
+    interrupted = interrupt;
+    return new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  });
+  let closed = false;
+  const close = backend.dispose!().then(() => {
+    closed = true;
+  });
+  await assert.rejects(backend.enqueueInstall([{ name: 'fixture', version: '1' }]), /draining/);
+  await assert.rejects(backend.enqueueRemove(['fixture']), /draining/);
+  await Promise.resolve();
+  assert.equal(interrupted, true);
+  assert.equal(closed, false);
+  finish();
+  await close;
+  assert.equal(closed, true);
+});
+
+test('terminal job notifications do not release admission before candidate cleanup', async () => {
+  let observedTerminal = false;
+  const observe = (_id: string, status: string) => {
+    if (status !== 'succeeded') return;
+    observedTerminal = true;
+    assert.equal(jobRunner.isRunning(), true);
+    assert.throws(() => jobRunner.startRemove([]), /already running/);
+  };
+  jobRunner.on('status', observe);
+  try {
+    jobRunner.startRemove([]);
+    await jobRunner.drain();
+    assert.equal(observedTerminal, true);
+    assert.equal(jobRunner.isRunning(), false);
+    assert.deepEqual(await fs.readdir(manifest.stagingDir()), []);
+  } finally {
+    jobRunner.off('status', observe);
+  }
+});
+
+test('managed shutdown keeps failed object-store cleanup retryable without reopening admission', async () => {
+  await seedDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://fixture@unused.example.test/rivet',
+    storageUrl: 'https://fixture.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'fixture',
+    storageAccessKey: 'fixture',
+  });
+  let closes = 0;
+  const backend = new ManagedRuntimeLibrariesBackend({
+    async getBuffer() {
+      assert.fail('must not read');
+    },
+    async putBuffer() {
+      assert.fail('must not write');
+    },
+    dispose() {
+      if (++closes === 1) throw new Error('object-store close incomplete');
+    },
+  });
+  try {
+    const first = backend.dispose();
+    assert.equal(backend.dispose(), first);
+    await assert.rejects(first, /close incomplete/);
+    await assert.rejects(backend.enqueueInstall([{ name: 'fixture', version: '1' }]), /shutting down/);
+    await backend.dispose();
+    await backend.dispose();
+    assert.equal(closes, 2);
+  } finally {
+    await backend.dispose();
+    await seedDeploymentStorageSettings({ storageMode: 'filesystem' });
+  }
 });
 
 test('readManifest normalizes invalid manifest content', async () => {
@@ -108,11 +210,7 @@ test('readManifest returns empty manifest when file does not exist', () => {
 });
 
 test('readManifest returns empty manifest when file contains invalid JSON', async () => {
-  await fs.writeFile(
-    path.join(runtimeLibrariesRoot, 'manifest.json'),
-    'not-json',
-    'utf8',
-  );
+  await fs.writeFile(path.join(runtimeLibrariesRoot, 'manifest.json'), 'not-json', 'utf8');
 
   const result = manifest.readManifest();
   assert.deepEqual(result.packages, {});
@@ -209,18 +307,15 @@ test('filesystem backend exposes a permission error when runtime-library storage
     return undefined;
   });
 
-  await assert.rejects(
-    backend.getState(),
-    (error: Error & { status?: number; expose?: boolean }) => {
-      assert.equal(error.status, 500);
-      assert.equal(error.expose, true);
-      assert.equal(
-        error.message,
-        `Runtime-library storage is not writable. Check server permissions for ${normalizedRoot}.`,
-      );
-      return true;
-    },
-  );
+  await assert.rejects(backend.getState(), (error: Error & { status?: number; expose?: boolean }) => {
+    assert.equal(error.status, 500);
+    assert.equal(error.expose, true);
+    assert.equal(
+      error.message,
+      `Runtime-library storage is not writable. Check server permissions for ${normalizedRoot}.`,
+    );
+    return true;
+  });
 });
 
 test('filesystem backend hides finished jobs from modal state but keeps them addressable by job id', async () => {
@@ -280,10 +375,7 @@ test('runtime-library config rejects retired runtime-library alias env names', (
 
   try {
     process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS = '1000';
-    assert.throws(
-      () => runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(),
-      /Retired environment variable/,
-    );
+    assert.throws(() => runtimeLibrariesConfig.getRuntimeLibrariesBackendMode(), /Retired environment variable/);
   } finally {
     if (originalSyncPollInterval === undefined) {
       delete process.env.RIVET_RUNTIME_LIBS_SYNC_POLL_INTERVAL_MS;

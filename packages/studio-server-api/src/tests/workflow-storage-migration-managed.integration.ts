@@ -635,10 +635,16 @@ try {
     migrationMode: 'verify',
   });
   try {
-    const filtered = await managed.listWorkflowRecordingRunsPage(projectId, 1, 10, 'all', {
-      path: '$.prompt.requestId',
-      operator: '==',
-      value: 'migration-input',
+    const filtered = await managed.listWorkflowRecordingRunsPage({
+      workflowId: projectId,
+      page: 1,
+      pageSize: 10,
+      statusFilter: 'all',
+      inputFilter: {
+        path: '$.prompt.requestId',
+        operator: '==',
+        value: 'migration-input',
+      },
     });
     assert.deepEqual(
       filtered.runs.map((run) => run.id),

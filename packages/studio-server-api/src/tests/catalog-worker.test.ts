@@ -362,11 +362,12 @@ test('worker loss fences pending leases until termination and never replays queu
     await assert.rejects(catalog.listFolders(), { code: 'local_storage_worker_unavailable', status: 503 });
     const closing = catalog.close();
     releaseTermination();
-    for (const outcome of await outcomes) {
+    for (const [index, outcome] of (await outcomes).entries()) {
       assert.equal(outcome.status, 'rejected');
       if (outcome.status === 'rejected') {
         assert.equal(outcome.reason.code, 'local_storage_worker_unavailable');
         assert.match(outcome.reason.message, /outcome may be unknown/);
+        assert.equal(outcome.reason.operationOutcome, index === 0 ? 'unknown' : 'not-dispatched');
       }
     }
     await closing;

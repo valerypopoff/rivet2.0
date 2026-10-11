@@ -38,7 +38,7 @@ import {
   type WebAppSocketAuthorizationStatus,
   type WebAppSocketExecutionResolution,
   type WebAppRouteKind,
-} from './routes/workflows/execution.js';
+} from './routes/workflows/web-app-execution.js';
 import { subscribeWebAppSocketPolicyInvalidation } from './routes/workflows/web-app-policy-invalidation.js';
 import {
   getWorkflowExecutionRecorderOptions,

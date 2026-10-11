@@ -8,7 +8,7 @@ import type {
   WorkflowProjectOpenOptions,
   WorkflowProjectPathMove,
 } from './types';
-import { useEditorCommandQueue } from './useEditorCommandQueue';
+import { useEditorBridgeSession } from './useEditorBridgeSession';
 import { focusIframeElement } from './editorBridgeFocus';
 import { useDashboardSidebar } from './useDashboardSidebar';
 import { useEditorBridgeEvents } from './useEditorBridgeEvents';
@@ -88,25 +88,11 @@ export const DashboardPage: FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const pendingWorkflowProjectOpenPathRef = useRef<string | null>(null);
   const pendingWorkflowProjectOpenRequestIdRef = useRef<string | null>(null);
-  const pendingWorkflowProjectOpenTimeoutRef = useRef<number | undefined>(undefined);
-  const workflowProjectOpenRequestSequenceRef = useRef(0);
-  const workflowPathMoveAckResolversRef = useRef(new Map<string, () => void>());
-  const workflowPathMoveRequestSequenceRef = useRef(0);
-  const workflowProjectBindingAckResolversRef = useRef(
-    new Map<string, (result: WorkflowProjectBindingReconciliationResult) => void>(),
-  );
-  const workflowProjectBindingRequestSequenceRef = useRef(0);
-  const captureResolversRef = useRef(new Map<string, (context: HostedProjectReconciliationContext | null) => void>());
+  const pendingWorkflowProjectOpenDeadlineRef = useRef(0);
   const editorInstanceRef = useRef<string | null>(null);
   const conflictSnapshotRef = useRef<HostedProjectConflictSnapshot | null>(null);
   const [conflictSnapshot, setConflictSnapshot] = useState<HostedProjectConflictSnapshot | null>(null);
   const [reconciliationSequence, setReconciliationSequence] = useState(0);
-  const workflowProjectContentResolutionAckResolversRef = useRef(new Map<string, (resolved: boolean) => void>());
-  const workflowProjectContentResolutionRequestSequenceRef = useRef(0);
-  const pendingRecordingOpenResolversRef = useRef(
-    new Map<string, { resolve: (result: RecordingOpenResult) => void; timeoutId: number }>(),
-  );
-  const recordingOpenRequestSequenceRef = useRef(0);
   const [openedProjectPath, setOpenedProjectPath] = useState('');
   const [activeWorkflowProjectPath, setActiveWorkflowProjectPath] = useState('');
   const [projectUnsavedChangesByPath, setProjectUnsavedChangesByPath] = useState<Record<string, boolean>>({});
@@ -115,7 +101,11 @@ export const DashboardPage: FC = () => {
   const [openProjectCount, setOpenProjectCount] = useState(0);
   const [projectSaveSequence, setProjectSaveSequence] = useState(0);
   const [routeConfig, setRouteConfig] = useState<HostedRouteConfig>(DEFAULT_HOSTED_ROUTE_CONFIG);
-  const postEditorCommand = useEditorCommandQueue(iframeRef, editorReady);
+  const {
+    session: editorSession,
+    postCommand: postEditorCommand,
+    ready: attachEditor,
+  } = useEditorBridgeSession(iframeRef, () => setReconciliationSequence((sequence) => sequence + 1));
   const {
     handleResizeMouseDown,
     handleResizePointerDown,
@@ -139,37 +129,31 @@ export const DashboardPage: FC = () => {
       return;
     }
 
-    if (
-      requestId &&
-      pendingWorkflowProjectOpenRequestIdRef.current &&
-      pendingWorkflowProjectOpenRequestIdRef.current !== requestId
-    ) {
+    if (requestId && pendingWorkflowProjectOpenRequestIdRef.current !== requestId) {
       return;
     }
 
     pendingWorkflowProjectOpenPathRef.current = null;
     pendingWorkflowProjectOpenRequestIdRef.current = null;
-    if (pendingWorkflowProjectOpenTimeoutRef.current !== undefined) {
-      window.clearTimeout(pendingWorkflowProjectOpenTimeoutRef.current);
-      pendingWorkflowProjectOpenTimeoutRef.current = undefined;
-    }
+    pendingWorkflowProjectOpenDeadlineRef.current = 0;
   }, []);
 
   const rememberPendingWorkflowProjectOpen = useCallback(
     (path: string, requestId?: string) => {
+      const previous = pendingWorkflowProjectOpenRequestIdRef.current;
+      if (previous) editorSession.cancelQueued(previous);
       clearPendingWorkflowProjectOpen();
       pendingWorkflowProjectOpenPathRef.current = path;
       pendingWorkflowProjectOpenRequestIdRef.current = requestId ?? null;
-      pendingWorkflowProjectOpenTimeoutRef.current = window.setTimeout(() => {
-        pendingWorkflowProjectOpenPathRef.current = null;
-        pendingWorkflowProjectOpenRequestIdRef.current = null;
-        pendingWorkflowProjectOpenTimeoutRef.current = undefined;
-      }, 120_000);
+      pendingWorkflowProjectOpenDeadlineRef.current = Date.now() + 120_000;
     },
-    [clearPendingWorkflowProjectOpen],
+    [clearPendingWorkflowProjectOpen, editorSession],
   );
 
   const shouldIgnoreTransientActiveProjectPath = useCallback((path: string, requestId?: string) => {
+    // Presentation intent can precede request admission. It must not suppress
+    // active-tab events forever if the upstream lookup never produces a command.
+    if (Date.now() >= pendingWorkflowProjectOpenDeadlineRef.current) return false;
     const pendingPath = pendingWorkflowProjectOpenPathRef.current;
     const pendingRequestId = pendingWorkflowProjectOpenRequestIdRef.current;
     return Boolean(
@@ -181,21 +165,41 @@ export const DashboardPage: FC = () => {
 
   const handleOpenProject = useCallback(
     (path: string, options?: WorkflowProjectOpenOptions) => {
-      const requestId = `open-project:${Date.now()}:${workflowProjectOpenRequestSequenceRef.current++}`;
+      const requestId = editorSession.nextId('open-project');
       rememberPendingWorkflowProjectOpen(path, requestId);
-      postEditorCommand({
-        type: 'open-project',
-        path,
-        replaceCurrent: Boolean(options?.replaceCurrent),
-        title: options?.title,
-        preview: options?.preview === true ? true : undefined,
-        reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
-        preferredGraphId: options?.preferredGraphId,
-        expectedProjectId: options?.expectedProjectId,
-        requestId,
-      });
+      void editorSession
+        .request(
+          {
+            type: 'open-project',
+            path,
+            replaceCurrent: Boolean(options?.replaceCurrent),
+            title: options?.title,
+            preview: options?.preview === true ? true : undefined,
+            reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
+            preferredGraphId: options?.preferredGraphId,
+            expectedProjectId: options?.expectedProjectId,
+            requestId,
+          },
+          'project-open-result',
+          120_000,
+        )
+        .then((result) => {
+          const stillCurrent = pendingWorkflowProjectOpenRequestIdRef.current === requestId;
+          clearPendingWorkflowProjectOpen(path, requestId);
+          if (
+            stillCurrent &&
+            result.status !== 'completed' &&
+            result.status !== 'replaced' &&
+            result.status !== 'closed'
+          )
+            toast.error(
+              result.status === 'unknown'
+                ? 'The editor has not confirmed opening the project. Check its tabs before trying again.'
+                : 'The project could not be opened in the editor. Please try again.',
+            );
+        });
     },
-    [postEditorCommand, rememberPendingWorkflowProjectOpen],
+    [editorSession, rememberPendingWorkflowProjectOpen, clearPendingWorkflowProjectOpen],
   );
 
   const handleWorkflowProjectOpenIntent = useCallback(
@@ -232,9 +236,11 @@ export const DashboardPage: FC = () => {
 
   const handleWorkflowProjectOpenIntentCanceled = useCallback(
     (path: string) => {
+      if (pendingWorkflowProjectOpenPathRef.current === path && pendingWorkflowProjectOpenRequestIdRef.current)
+        editorSession.cancelQueued(pendingWorkflowProjectOpenRequestIdRef.current);
       clearPendingWorkflowProjectOpen(path);
     },
-    [clearPendingWorkflowProjectOpen],
+    [clearPendingWorkflowProjectOpen, editorSession],
   );
 
   const handleRefreshOpenProjectFromDisk = useCallback(
@@ -246,45 +252,37 @@ export const DashboardPage: FC = () => {
 
   const settlePendingRecordingOpen = useCallback(
     (requestId: string | undefined, result: RecordingOpenResult): boolean => {
-      if (!requestId) {
-        return false;
-      }
-
-      const pending = pendingRecordingOpenResolversRef.current.get(requestId);
-      if (!pending) {
-        return false;
-      }
-
-      pendingRecordingOpenResolversRef.current.delete(requestId);
-      window.clearTimeout(pending.timeoutId);
-      pending.resolve(result);
-      return true;
+      return editorSession.acknowledge(requestId, 'project-open-result', result);
     },
-    [],
+    [editorSession],
   );
 
   const handleOpenRecording = useCallback(
     (recordingId: string, options?: { replaceCurrent?: boolean }): Promise<RecordingOpenResult> => {
-      const requestId = `open-recording:${Date.now()}:${recordingOpenRequestSequenceRef.current++}`;
-      return new Promise((resolve) => {
-        const timeoutId = window.setTimeout(() => {
-          pendingRecordingOpenResolversRef.current.delete(requestId);
-          resolve({
+      const requestId = editorSession.nextId('open-recording');
+      return editorSession
+        .request<RecordingOpenResult>(
+          {
+            type: 'open-recording',
+            recordingId,
+            replaceCurrent: Boolean(options?.replaceCurrent),
+            requestId,
+          },
+          'project-open-result',
+          RECORDING_OPEN_TIMEOUT_MS,
+        )
+        .then((result) => {
+          if (result.status === 'completed') return result.value;
+          return {
             opened: false,
-            error: 'Opening the recording timed out. Please try again.',
-          });
-        }, RECORDING_OPEN_TIMEOUT_MS);
-
-        pendingRecordingOpenResolversRef.current.set(requestId, { resolve, timeoutId });
-        postEditorCommand({
-          type: 'open-recording',
-          recordingId,
-          replaceCurrent: Boolean(options?.replaceCurrent),
-          requestId,
+            error:
+              result.status === 'unknown'
+                ? 'The editor has not confirmed opening the recording. Check its tabs before trying again.'
+                : 'The recording could not be opened in the editor. Please try again.',
+          };
         });
-      });
     },
-    [postEditorCommand],
+    [editorSession],
   );
 
   const handleOpenPublishedVersionPreview = useCallback(
@@ -340,35 +338,18 @@ export const DashboardPage: FC = () => {
     [postEditorCommand],
   );
 
-  const handleWorkflowPathsMovedApplied = useCallback((requestId?: string) => {
-    if (!requestId) {
-      return;
-    }
-
-    const resolve = workflowPathMoveAckResolversRef.current.get(requestId);
-    if (!resolve) {
-      return;
-    }
-
-    workflowPathMoveAckResolversRef.current.delete(requestId);
-    resolve();
-  }, []);
+  const handleWorkflowPathsMovedApplied = useCallback(
+    (requestId?: string) => {
+      editorSession.acknowledge(requestId, 'paths-moved', undefined);
+    },
+    [editorSession],
+  );
 
   const handleWorkflowProjectBindingsReconciled = useCallback(
     (result: WorkflowProjectBindingReconciliationResult, requestId?: string) => {
-      if (!requestId) {
-        return;
-      }
-
-      const resolve = workflowProjectBindingAckResolversRef.current.get(requestId);
-      if (!resolve) {
-        return;
-      }
-
-      workflowProjectBindingAckResolversRef.current.delete(requestId);
-      resolve(result);
+      editorSession.acknowledge(requestId, 'bindings-reconciled', result);
     },
-    [],
+    [editorSession],
   );
 
   const handleWorkflowPathsMoved = useCallback(
@@ -395,145 +376,84 @@ export const DashboardPage: FC = () => {
         return changed ? next : prev;
       });
 
-      const requestId = `workflow-paths-moved:${Date.now()}:${workflowPathMoveRequestSequenceRef.current++}`;
-      const applied = !editorReady
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            const timeoutId = window.setTimeout(() => {
-              workflowPathMoveAckResolversRef.current.delete(requestId);
-              resolve();
-            }, 5_000);
-
-            workflowPathMoveAckResolversRef.current.set(requestId, () => {
-              window.clearTimeout(timeoutId);
-              resolve();
-            });
-          });
-
-      postEditorCommand({ type: 'workflow-paths-moved', moves, requestId });
-      return applied;
+      const requestId = editorSession.nextId('workflow-paths-moved');
+      // The server move is already committed. The session signals the existing
+      // tree reconciler if delivery is rejected or its outcome is unknown.
+      return editorSession
+        .request<void>({ type: 'workflow-paths-moved', moves, requestId }, 'paths-moved', 5_000)
+        .then(() => undefined);
     },
-    [editorReady, postEditorCommand],
+    [editorSession],
   );
 
-  const captureProjectReconciliation = useCallback((): Promise<HostedProjectReconciliationContext | null> => {
-    if (!editorReady) return Promise.resolve(null);
-    const requestId = `workflow-project-capture:${workflowProjectBindingRequestSequenceRef.current++}`;
-    return new Promise((resolve) => {
-      const timeout = window.setTimeout(() => {
-        captureResolversRef.current.delete(requestId);
-        resolve(null);
-      }, 5_000);
-      captureResolversRef.current.set(requestId, (context) => {
-        window.clearTimeout(timeout);
-        resolve(context?.editorInstanceId === editorInstanceRef.current ? context : null);
-      });
-      postEditorCommand({ type: 'capture-workflow-project-reconciliation', requestId });
-    });
-  }, [editorReady, postEditorCommand]);
+  const captureProjectReconciliation = useCallback(async (): Promise<HostedProjectReconciliationContext | null> => {
+    if (!editorReady) return null;
+    const requestId = editorSession.nextId('workflow-project-capture');
+    const result = await editorSession.request<HostedProjectReconciliationContext>(
+      { type: 'capture-workflow-project-reconciliation', requestId },
+      'reconciliation-captured',
+      5_000,
+    );
+    return result.status === 'completed' && result.value.editorInstanceId === editorInstanceRef.current
+      ? result.value
+      : null;
+  }, [editorReady, editorSession]);
 
   const reconcileWorkflowProjectBindings = useCallback(
-    (
+    async (
       bindings: WorkflowProjectEditorBinding[],
       context: HostedProjectReconciliationContext,
     ): Promise<WorkflowProjectBindingReconciliationResult> => {
-      if (!editorReady || context.editorInstanceId !== editorInstanceRef.current) {
-        return Promise.resolve({ changes: [], status: 'retry' });
-      }
-
-      const requestId = `workflow-project-bindings:${Date.now()}:${workflowProjectBindingRequestSequenceRef.current++}`;
-      const applied = new Promise<WorkflowProjectBindingReconciliationResult>((resolve) => {
-        const timeoutId = window.setTimeout(() => {
-          workflowProjectBindingAckResolversRef.current.delete(requestId);
-          resolve({ changes: [], status: 'retry' });
-        }, 5_000);
-
-        workflowProjectBindingAckResolversRef.current.set(requestId, (changes) => {
-          window.clearTimeout(timeoutId);
-          resolve(changes);
-        });
-      });
-
-      postEditorCommand({ type: 'reconcile-workflow-project-bindings', bindings, context, requestId });
-      return applied;
+      if (!editorReady || context.editorInstanceId !== editorInstanceRef.current)
+        return { changes: [], status: 'retry' };
+      const requestId = editorSession.nextId('workflow-project-bindings');
+      const result = await editorSession.request<WorkflowProjectBindingReconciliationResult>(
+        { type: 'reconcile-workflow-project-bindings', bindings, context, requestId },
+        'bindings-reconciled',
+        5_000,
+      );
+      return result.status === 'completed' ? result.value : { changes: [], status: 'retry' };
     },
-    [editorReady, postEditorCommand],
+    [editorReady, editorSession],
   );
 
   const resolveWorkflowProjectContentChange = useCallback(
-    (change: WorkflowProjectContentChange, resolution: 'reload' | 'keep-local'): Promise<boolean> => {
-      if (!editorReady) {
-        return Promise.resolve(false);
-      }
-
-      const requestId = `workflow-project-content-change:${Date.now()}:${workflowProjectContentResolutionRequestSequenceRef.current++}`;
-      const applied = new Promise<boolean>((resolve) => {
-        const timeoutId = window.setTimeout(() => {
-          workflowProjectContentResolutionAckResolversRef.current.delete(requestId);
-          resolve(false);
-        }, 10_000);
-        workflowProjectContentResolutionAckResolversRef.current.set(requestId, (resolved) => {
-          window.clearTimeout(timeoutId);
-          resolve(resolved);
-        });
-      });
-
-      postEditorCommand({
-        type: 'resolve-workflow-project-content-change',
-        changeId: change.changeId,
-        projectId: change.projectId,
-        path: change.path,
-        revisionId: change.revisionId,
-        resolution,
-        requestId,
-      });
-      return applied;
+    async (change: WorkflowProjectContentChange, resolution: 'reload' | 'keep-local'): Promise<boolean> => {
+      if (!editorReady) return false;
+      const requestId = editorSession.nextId('workflow-project-content-change');
+      const result = await editorSession.request<boolean>(
+        {
+          type: 'resolve-workflow-project-content-change',
+          changeId: change.changeId,
+          projectId: change.projectId,
+          path: change.path,
+          revisionId: change.revisionId,
+          resolution,
+          requestId,
+        },
+        'content-change-resolved',
+        10_000,
+      );
+      return result.status === 'completed' && result.value;
     },
-    [editorReady, postEditorCommand],
+    [editorReady, editorSession],
   );
 
   useHostedProjectConflictNotices(conflictSnapshot, resolveWorkflowProjectContentChange);
 
   const resetEditorReconciliation = useCallback(() => {
     editorInstanceRef.current = null;
-    for (const resolve of captureResolversRef.current.values()) resolve(null);
-    captureResolversRef.current.clear();
-    for (const resolve of workflowProjectBindingAckResolversRef.current.values())
-      resolve({ changes: [], status: 'retry' });
-    workflowProjectBindingAckResolversRef.current.clear();
-    for (const resolve of workflowProjectContentResolutionAckResolversRef.current.values()) resolve(false);
-    workflowProjectContentResolutionAckResolversRef.current.clear();
+    editorSession.detach();
+    clearPendingWorkflowProjectOpen();
     conflictSnapshotRef.current = null;
     setConflictSnapshot(null);
     setEditorReady(false);
     setEditorInitializationFailed(false);
-  }, []);
+  }, [editorSession, clearPendingWorkflowProjectOpen]);
 
   useEffect(
     () => () => {
       clearPendingWorkflowProjectOpen();
-      for (const resolve of workflowPathMoveAckResolversRef.current.values()) {
-        resolve();
-      }
-      workflowPathMoveAckResolversRef.current.clear();
-      for (const resolve of workflowProjectBindingAckResolversRef.current.values()) {
-        resolve({ changes: [], status: 'retry' });
-      }
-      workflowProjectBindingAckResolversRef.current.clear();
-      for (const resolve of captureResolversRef.current.values()) resolve(null);
-      captureResolversRef.current.clear();
-      for (const resolve of workflowProjectContentResolutionAckResolversRef.current.values()) {
-        resolve(false);
-      }
-      workflowProjectContentResolutionAckResolversRef.current.clear();
-      for (const pending of pendingRecordingOpenResolversRef.current.values()) {
-        window.clearTimeout(pending.timeoutId);
-        pending.resolve({
-          opened: false,
-          error: 'The dashboard closed before the recording finished opening.',
-        });
-      }
-      pendingRecordingOpenResolversRef.current.clear();
     },
     [clearPendingWorkflowProjectOpen],
   );
@@ -593,12 +513,12 @@ export const DashboardPage: FC = () => {
         editorInstanceRef.current = editorInstanceId;
         setReconciliationSequence((sequence) => sequence + 1);
       }
+      attachEditor(editorInstanceId);
       setEditorReady(true);
     },
     onEditorInitializationFailed: () => setEditorInitializationFailed(true),
     onReconciliationCaptured: (context, requestId) => {
-      captureResolversRef.current.get(requestId)?.(context);
-      captureResolversRef.current.delete(requestId);
+      editorSession.acknowledge(requestId, 'reconciliation-captured', context);
     },
     onProjectConflicts: (snapshot) => {
       const previous = conflictSnapshotRef.current;
@@ -616,8 +536,8 @@ export const DashboardPage: FC = () => {
       settlePendingRecordingOpen(requestId, { opened: false, error });
     },
     onProjectOpened: (path, requestId) => {
-      const openedRecording = settlePendingRecordingOpen(requestId, { opened: true });
-      if (requestId && !pendingWorkflowProjectOpenPathRef.current && !openedRecording) {
+      const acknowledgedOpen = settlePendingRecordingOpen(requestId, { opened: true });
+      if (requestId && !pendingWorkflowProjectOpenPathRef.current && !acknowledgedOpen) {
         return;
       }
 
@@ -643,11 +563,7 @@ export const DashboardPage: FC = () => {
     onWorkflowPathsMovedApplied: handleWorkflowPathsMovedApplied,
     onWorkflowProjectBindingsReconciled: handleWorkflowProjectBindingsReconciled,
     onWorkflowProjectContentChangeResolved: (requestId, resolved) => {
-      if (!requestId) return;
-      const resolve = workflowProjectContentResolutionAckResolversRef.current.get(requestId);
-      if (!resolve) return;
-      workflowProjectContentResolutionAckResolversRef.current.delete(requestId);
-      resolve(resolved);
+      editorSession.acknowledge(requestId, 'content-change-resolved', resolved);
     },
   });
 

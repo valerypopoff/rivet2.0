@@ -9,6 +9,36 @@ They communicate through `window.postMessage`.
 
 ## Contract
 
+`EditorBridgeSession` is the dashboard's single delivery/acknowledgement owner;
+`useEditorBridgeSession` binds its lifetime to React and the current iframe.
+Admission clones validated commands and is bounded to 128 entries / 16 MiB.
+Interactive requests expire before dispatch and cannot run later at readiness.
+Deadlines use a monotonic clock and are checked at dispatch and acknowledgement,
+not just by timeout callbacks: background-tab timer throttling cannot deliver an
+expired interactive command or accept an expired reply.
+After dispatch a missing acknowledgement is an unknown outcome, never an
+automatic retry. Replies must match both request ID and reply kind; the bridge
+event listener still validates origin, source window and editor instance.
+
+Committed server notifications (move, delete, refresh) queued before readiness
+retain their delivery obligation when an acknowledgement wait expires. Editor
+replacement settles old dispatched requests without replaying them; undispatched
+durable notifications survive. Disposal clears timers and settles waiters.
+Rejected committed notifications (count/byte overload) and unconfirmed dispatched
+notifications request authoritative reconciliation through the existing tree-sync
+owner. Its single pending refresh and retry path recover bindings by project ID,
+including when same-client tree events are ignored. There is no overflow command
+queue, automatic mutation replay, or second reconciliation owner. Terminal
+dashboard disposal must not request another React update.
+Replacement project-open intents cancel an older undispatched interactive open.
+Active-path suppression is presentation-only and has a bounded deadline even
+before request admission. Immediate keyboard forwarding and development-refresh
+handshakes retain their separate, narrow protocols.
+
+Tests must wait for enabled project rows before native dragging, and verify the
+selected committed workspace-recovery envelope before reload. Legacy independent
+`graph`/`project` IndexedDB rows are no longer the recovery authority.
+
 Tunnel development has a separate, development-only refresh handshake:
 `prepare-development-refresh` / `cancel-development-refresh` carry a request ID;
 the iframe responds with `development-refresh-prepared` and `ready`. Both sides
@@ -45,41 +75,41 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ### Dashboard-to-editor commands
 
-| Type                                      | Payload                                                                                    | When sent                                                                                                            |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `open-project`                            | `path`, `replaceCurrent`, optional `title`, `preview`, `reloadFromDisk`, `preferredGraphId`, `expectedProjectId`, `requestId` | User opens/activates a workflow or navigates to an external Subgraph target |
-| `open-recording`                          | `recordingId`, `replaceCurrent`, optional `requestId`                                      | User opens a stored workflow run from the recordings browser                                                         |
-| `open-published-version-preview`          | `relativePath`, `versionId`, `replaceCurrent`                                              | User previews a stored published workflow version from Project Settings                                              |
-| `compare-open-project-with`               | `path`, optional `referencePath`, optional `labels.referenceLabel` / `labels.currentLabel` | User starts Rivet compare mode from another project row or from the open project's current published version         |
-| `refresh-open-project-from-disk`          | `path`                                                                                     | A server-side mutation changed a project that may already be open in the editor                                      |
-| `save-project`                            | optional `source: "shortcut"`                                                              | User saves from the dashboard surface or presses the save shortcut outside the iframe                                |
-| `trigger-editor-duplicate-shortcut`       | `modifier`                                                                                 | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
-| `trigger-editor-find-shortcut`            | `modifier`                                                                                 | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find                                |
-| `delete-workflow-project`                 | `path`, optional `projectId` | User deletes a workflow project from the dashboard |
-| `workflow-paths-moved`                    | `moves[]`, optional `requestId` | A project or folder rename/move changed workflow project references |
-| `capture-workflow-project-reconciliation` | `requestId`                                                                                | Capture editor revision ownership before fetching the remote workflow tree                                           |
-| `reconcile-workflow-project-bindings`     | authoritative `bindings[]`, captured `context`, optional `requestId`                     | Apply only bindings whose editor instance and project generation remain current                                     |
-| `resolve-workflow-project-content-change` | `changeId`, `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`), optional `requestId` | Resolve only the conflict identity the user actually chose |
+| Type                                      | Payload                                                                                                                       | When sent                                                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `open-project`                            | `path`, `replaceCurrent`, optional `title`, `preview`, `reloadFromDisk`, `preferredGraphId`, `expectedProjectId`, `requestId` | User opens/activates a workflow or navigates to an external Subgraph target                                          |
+| `open-recording`                          | `recordingId`, `replaceCurrent`, optional `requestId`                                                                         | User opens a stored workflow run from the recordings browser                                                         |
+| `open-published-version-preview`          | `relativePath`, `versionId`, `replaceCurrent`                                                                                 | User previews a stored published workflow version from Project Settings                                              |
+| `compare-open-project-with`               | `path`, optional `referencePath`, optional `labels.referenceLabel` / `labels.currentLabel`                                    | User starts Rivet compare mode from another project row or from the open project's current published version         |
+| `refresh-open-project-from-disk`          | `path`                                                                                                                        | A server-side mutation changed a project that may already be open in the editor                                      |
+| `save-project`                            | optional `source: "shortcut"`                                                                                                 | User saves from the dashboard surface or presses the save shortcut outside the iframe                                |
+| `trigger-editor-duplicate-shortcut`       | `modifier`                                                                                                                    | Dashboard-focused `Ctrl+D` / `Cmd+D` should duplicate the selected Rivet node instead of opening browser bookmark UI |
+| `trigger-editor-find-shortcut`            | `modifier`                                                                                                                    | Dashboard-focused `Ctrl+F` / `Cmd+F` should open Rivet search instead of browser find                                |
+| `delete-workflow-project`                 | `path`, optional `projectId`                                                                                                  | User deletes a workflow project from the dashboard                                                                   |
+| `workflow-paths-moved`                    | `moves[]`, optional `requestId`                                                                                               | A project or folder rename/move changed workflow project references                                                  |
+| `capture-workflow-project-reconciliation` | `requestId`                                                                                                                   | Capture editor revision ownership before fetching the remote workflow tree                                           |
+| `reconcile-workflow-project-bindings`     | authoritative `bindings[]`, captured `context`, optional `requestId`                                                          | Apply only bindings whose editor instance and project generation remain current                                      |
+| `resolve-workflow-project-content-change` | `changeId`, `projectId`, `path`, `revisionId`, `resolution` (`reload` or `keep-local`), optional `requestId`                  | Resolve only the conflict identity the user actually chose                                                           |
 
 ### Editor-to-dashboard events
 
-| Type                                       | Payload                                                                        | When sent                                                                          |
-| ------------------------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `editor-ready`                             | `editorInstanceId`                                                            | Editor iframe mounted; the dashboard fences previous iframe messages              |
-| `editor-initialization-failed`            | none | Bootstrap is blocked; dashboard reveals the iframe's retry/recovery controls instead of waiting forever for ready |
-| `open-subgraph-target`                    | `projectId`, `graphId` | Navigate through the dashboard's current workflow binding to a graph in another project |
-| `workflow-project-reconciliation-captured` | `context`, `requestId`                                                        | The editor supplied a pre-fetch observation context                                |
-| `workflow-project-conflicts`              | `snapshot`                                                                    | Authoritative pending-conflict state for this editor instance                      |
-| `project-opened`                           | `path`, optional `requestId`                                                   | A project or replay opened successfully                                            |
-| `project-open-failed`                      | `path`, `error`, optional `requestId`                                          | Open failed for a project path or recording ID                                     |
-| `active-project-path-changed`              | `path`                                                                         | User switched the active tab inside the editor                                     |
-| `active-project-unsaved-changes-changed`   | `path`, `hasUnsavedChanges`                                                    | Rivet dirty-state atoms changed for the active editor project                      |
-| `open-project-count-changed`               | `count`                                                                        | Number of open editor tabs changed                                                 |
-| `project-compare-failed`                   | `path`, `error`                                                                | A project-tree compare reference could not be loaded or deserialized               |
-| `project-saved`                            | `path`, optional `hasNewerUnsavedChanges` | Captured project write succeeded; newer edits may still require Save |
-| `workflow-paths-moved-applied`             | optional request id                                                            | The iframe finished applying a local move or rename                                |
-| `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                |
-| `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                  |
+| Type                                       | Payload                                                                        | When sent                                                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `editor-ready`                             | `editorInstanceId`                                                             | Editor iframe mounted; the dashboard fences previous iframe messages                                              |
+| `editor-initialization-failed`             | none                                                                           | Bootstrap is blocked; dashboard reveals the iframe's retry/recovery controls instead of waiting forever for ready |
+| `open-subgraph-target`                     | `projectId`, `graphId`                                                         | Navigate through the dashboard's current workflow binding to a graph in another project                           |
+| `workflow-project-reconciliation-captured` | `context`, `requestId`                                                         | The editor supplied a pre-fetch observation context                                                               |
+| `workflow-project-conflicts`               | `snapshot`                                                                     | Authoritative pending-conflict state for this editor instance                                                     |
+| `project-opened`                           | `path`, optional `requestId`                                                   | A project or replay opened successfully                                                                           |
+| `project-open-failed`                      | `path`, `error`, optional `requestId`                                          | Open failed for a project path or recording ID                                                                    |
+| `active-project-path-changed`              | `path`                                                                         | User switched the active tab inside the editor                                                                    |
+| `active-project-unsaved-changes-changed`   | `path`, `hasUnsavedChanges`                                                    | Rivet dirty-state atoms changed for the active editor project                                                     |
+| `open-project-count-changed`               | `count`                                                                        | Number of open editor tabs changed                                                                                |
+| `project-compare-failed`                   | `path`, `error`                                                                | A project-tree compare reference could not be loaded or deserialized                                              |
+| `project-saved`                            | `path`, optional `hasNewerUnsavedChanges`                                      | Captured project write succeeded; newer edits may still require Save                                              |
+| `workflow-paths-moved-applied`             | optional request id                                                            | The iframe finished applying a local move or rename                                                               |
+| `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                                               |
+| `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                                                 |
 
 ## Model-node error behavior
 

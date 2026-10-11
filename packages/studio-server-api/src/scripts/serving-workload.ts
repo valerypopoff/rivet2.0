@@ -17,6 +17,10 @@ export async function measureServingWorkload(
   backend: WorkflowDataBackend,
   checkHealth: () => Promise<void>,
   iterations = 100,
+  operational: {
+    operations: ReadonlyArray<{ name: string; run(round: number): Promise<unknown> }>;
+    sampleResources?(): Record<string, number>;
+  } = { operations: [] },
 ) {
   const projects: WorkflowProjectItem[] = [];
   for (let index = 0; index < 12; index++) {
@@ -85,8 +89,15 @@ export async function measureServingWorkload(
   delay.enable();
   await yieldTurn();
   let rssPeakBytes = process.memoryUsage().rss;
+  const resourceHighWater: Record<string, number> = {};
+  const sampleResources = () => {
+    for (const [name, value] of Object.entries(operational.sampleResources?.() ?? {}))
+      resourceHighWater[name] = Math.max(resourceHighWater[name] ?? 0, value);
+  };
+  sampleResources();
   const sampler = setInterval(() => {
     rssPeakBytes = Math.max(rssPeakBytes, process.memoryUsage().rss);
+    sampleResources();
   }, 10);
   const cpu = process.cpuUsage();
   const started = performance.now();
@@ -139,7 +150,9 @@ export async function measureServingWorkload(
             conditions(saved),
           );
         }),
+        ...operational.operations.map((operation) => timed(operation.name, () => operation.run(round))),
       ]);
+      sampleResources();
       await yieldTurn();
     }
     const final = await backend.loadPublishedExecutionProject('workload-1');
@@ -155,7 +168,7 @@ export async function measureServingWorkload(
   return {
     scope: 'concurrent adapter service operations, not production HTTP latency',
     iterations,
-    concurrency: 6,
+    concurrency: 6 + operational.operations.length,
     projectCount: 12,
     nodesPerProject: 300,
     initialPublishedVersions: 3,
@@ -163,6 +176,7 @@ export async function measureServingWorkload(
     elapsedMs: performance.now() - started,
     cpuMs: (used.user + used.system) / 1000,
     rssPeakBytes,
+    resourceHighWater,
     eventLoopDelayMaxMs: delay.max / 1e6,
     operations: Object.fromEntries(
       [...durations].map(([name, values]) => {

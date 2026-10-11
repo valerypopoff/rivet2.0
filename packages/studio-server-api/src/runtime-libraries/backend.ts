@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express';
+import type { RuntimeLibraryJobObserver } from './job-observation.js';
 
 import type { RuntimeHealthCheckContext } from '../runtime-health.js';
 
@@ -11,6 +11,7 @@ import type {
 import { createFilesystemRuntimeLibrariesBackend } from './filesystem-backend.js';
 import { getRuntimeLibrariesBackendMode } from './config.js';
 import { ManagedRuntimeLibrariesBackend } from './managed/backend.js';
+import { RuntimeLibraryServices } from './services.js';
 
 export interface RuntimeLibrariesBackend {
   initialize(): Promise<void>;
@@ -22,22 +23,28 @@ export interface RuntimeLibrariesBackend {
   getJob(jobId: string): Promise<RuntimeLibraryJobState | null>;
   cancelJob(jobId: string): Promise<RuntimeLibraryJobState | null>;
   clearStaleReplicaStatuses(): Promise<RuntimeLibraryReplicaCleanupResult>;
-  streamJob(req: Request, res: Response): Promise<void> | void;
+  subscribeJob(jobId: string, observer: RuntimeLibraryJobObserver): () => void;
+  beginDrain?(): void;
   dispose?(): Promise<void>;
 }
 
-let runtimeLibrariesBackend: RuntimeLibrariesBackend | null = null;
+let services: RuntimeLibraryServices | undefined;
+let draining = false;
 
 export function getRuntimeLibrariesBackend(): RuntimeLibrariesBackend {
-  if (runtimeLibrariesBackend) {
-    return runtimeLibrariesBackend;
+  if (!services) {
+    if (draining) throw new Error('Runtime-library services are draining.');
+    const mode = getRuntimeLibrariesBackendMode();
+    services = new RuntimeLibraryServices(() =>
+      mode === 'managed' ? new ManagedRuntimeLibrariesBackend() : createFilesystemRuntimeLibrariesBackend(),
+    );
   }
+  return services.get();
+}
 
-  runtimeLibrariesBackend = getRuntimeLibrariesBackendMode() === 'managed'
-    ? new ManagedRuntimeLibrariesBackend()
-    : createFilesystemRuntimeLibrariesBackend();
-
-  return runtimeLibrariesBackend;
+export function beginRuntimeLibrariesDrain(): void {
+  draining = true;
+  services?.beginDrain();
 }
 
 export async function initializeRuntimeLibrariesBackend(): Promise<void> {
@@ -55,10 +62,8 @@ export async function prepareRuntimeLibrariesForExecution(): Promise<void> {
 }
 
 export async function disposeRuntimeLibrariesBackend(): Promise<void> {
-  if (!runtimeLibrariesBackend) {
-    return;
-  }
-
-  await runtimeLibrariesBackend.dispose?.();
-  runtimeLibrariesBackend = null;
+  const owner = services;
+  if (!owner) return;
+  await owner.dispose();
+  if (services === owner) services = undefined;
 }

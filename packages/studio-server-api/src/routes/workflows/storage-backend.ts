@@ -1,8 +1,10 @@
+import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
+import { workflowFailure } from './workflow-failure.js';
 import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkflowDataBackend, WorkflowExecutionDefinition } from './data-backend.js';
+import type { WorkflowDataBackend, WorkflowExecutionDefinition, WorkflowRecordingPageQuery } from './data-backend.js';
 import {
   getWorkflowStorageServices,
   peekWorkflowStorageServices,
@@ -32,9 +34,7 @@ import type {
   WorkflowPublishedVersionsResponse,
 } from '../../../../studio-server-shared/workflow-types.js';
 import type {
-  WorkflowRecordingFilterStatus,
   WorkflowRecordingExecutionIdentity,
-  WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
@@ -56,46 +56,8 @@ import {
   pathExists,
   PROJECT_EXTENSION,
   requireProjectPath,
-  resolveWorkflowRelativePath,
 } from './fs-helpers.js';
-import {
-  listWorkflowFolders,
-  listWorkflowProjects,
-  moveWorkflowFolder,
-  moveWorkflowProject,
-} from './workflow-query.js';
-import {
-  createWorkflowFolderItem,
-  createWorkflowProjectItem,
-  deleteWorkflowFolderItem,
-  deleteWorkflowProjectItem,
-  duplicateWorkflowProjectItem,
-  publishWorkflowProjectItem,
-  updateWorkflowEndpointAccess,
-  renameWorkflowFolderItem,
-  renameWorkflowProjectItem,
-  uploadWorkflowProjectItem,
-  unpublishWorkflowProjectItem,
-} from './workflow-mutations.js';
-import {
-  listWorkflowProjectWebApps,
-  publishWorkflowProjectWebApps,
-  unpublishWorkflowProjectWebApp,
-  updateWorkflowProjectWebAppAccess,
-} from './web-app-publication.js';
-import { readWorkflowProjectDownload } from './workflow-download.js';
-import {
-  listFilesystemProjectReferenceCatalog,
-  readFilesystemProjectReferenceSnapshots,
-} from './project-reference-snapshots.js';
-import {
-  listWorkflowPublishedVersions,
-  readWorkflowPublishedVersionDownload,
-  readWorkflowPublishedVersionPreview,
-  restoreWorkflowPublishedVersion,
-  setWorkflowPublishedVersionComment,
-  setWorkflowPublishedVersionStar,
-} from './published-versions.js';
+import { listWorkflowFolders, listWorkflowProjects } from './workflow-query.js';
 import {
   deleteWorkflowRecording,
   listWorkflowRecordingRunsPage,
@@ -125,7 +87,6 @@ import {
   saveFilesystemProjectTransaction,
   withFilesystemWorkflowProjectRead,
   withFilesystemWorkflowStorageRead,
-  withFilesystemWorkflowStorageWrite,
 } from './filesystem-project-transactions.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
@@ -153,7 +114,10 @@ function assertMatchingHostedProjectIdentity(
   projectPath: string,
 ): void {
   if (!project.metadata.id || project.metadata.id !== expectedProjectId) {
-    throw createHttpError(409, `The save target ${projectPath} belongs to a different project.`, { expose: true });
+    throw workflowFailure(
+      'workflow_project_mismatch',
+      `The save target ${projectPath} belongs to a different project.`,
+    );
   }
 }
 type SaveHostedProjectResult = {
@@ -278,6 +242,13 @@ async function delegate<T>(
 
   return fsFn();
 }
+
+const legacyCommands = createLegacyWorkflowCommands({
+  markFilesystemExecutionStructureDirty,
+  invalidateFilesystemExecutionMove,
+  resetFilesystemLLMProfileHealthForProject,
+  getEvaluationStore,
+});
 
 async function delegateWithWorkflowsRoot<T>(
   managedFn: (backend: WorkflowDataBackend) => Promise<T>,
@@ -685,20 +656,23 @@ export async function listWorkflowRecordingWorkflowsWithBackend(): Promise<Workf
 }
 
 export async function listWorkflowRecordingRunsPageWithBackend(
-  workflowId: string,
-  page: number,
-  pageSize: number,
-  statusFilter: WorkflowRecordingFilterStatus,
-  inputFilter: WorkflowRecordingInputFilter | null = null,
-  inputCursor = 0,
-  signal?: AbortSignal,
-  inputAfter?: string,
-  includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
+  query: WorkflowRecordingPageQuery,
 ): Promise<WorkflowRecordingRunsPageResponse> {
+  const {
+    workflowId,
+    page,
+    pageSize,
+    statusFilter = 'all',
+    inputCursor = 0,
+    signal,
+    inputAfter,
+    includeSubgraphRuns = false,
+  } = query;
+  const inputFilter = query.inputFilter ? structuredClone(query.inputFilter) : null;
+  const runScope = query.runScope ?? (inputFilter ? 'roots' : 'all');
   return delegateWithWorkflowsRoot(
     async (backend) =>
-      backend.listWorkflowRecordingRunsPage(
+      backend.listWorkflowRecordingRunsPage({
         workflowId,
         page,
         pageSize,
@@ -709,7 +683,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
         inputAfter,
         includeSubgraphRuns,
         runScope,
-      ),
+      }),
     async (root) =>
       listWorkflowRecordingRunsPage(
         root,
@@ -791,308 +765,232 @@ export async function deleteWorkflowRecordingWithBackend(recordingId: string): P
 
 export async function moveWorkflowItemWithBackend(
   itemType: 'project' | 'folder',
-  sourceRelativePath: unknown,
-  destinationFolderRelativePath: unknown,
+  sourceRelativePath: string,
+  destinationFolderRelativePath: string,
 ): Promise<{
   folder?: WorkflowFolderItem;
   project?: WorkflowProjectItem;
   movedProjectPaths: WorkflowProjectPathMove[];
 }> {
-  return delegateWithWorkflowsRoot(
+  return delegate<Awaited<ReturnType<typeof moveWorkflowItemWithBackend>>>(
     async (backend) =>
       itemType === 'project'
         ? backend.moveWorkflowProject(sourceRelativePath, destinationFolderRelativePath)
         : backend.moveWorkflowFolder(sourceRelativePath, destinationFolderRelativePath),
-    async (root) =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const result =
-          itemType === 'project'
-            ? await moveWorkflowProject(root, sourceRelativePath, destinationFolderRelativePath)
-            : await moveWorkflowFolder(root, sourceRelativePath, destinationFolderRelativePath);
-
-        invalidateFilesystemExecutionMove(result.movedProjectPaths);
-
-        return result;
-      }),
+    () =>
+      itemType === 'project'
+        ? legacyCommands.moveWorkflowProject(sourceRelativePath, destinationFolderRelativePath)
+        : legacyCommands.moveWorkflowFolder(sourceRelativePath, destinationFolderRelativePath),
   );
 }
 
-export async function createWorkflowFolderItemWithBackend(name: unknown, parentRelativePath: unknown) {
+export async function createWorkflowFolderItemWithBackend(name: string, parentRelativePath: string) {
   return delegate(
     async (backend) => backend.createWorkflowFolderItem(name, parentRelativePath),
-    async () => withFilesystemWorkflowStorageWrite(() => createWorkflowFolderItem(name, parentRelativePath)),
+    () => legacyCommands.createWorkflowFolderItem(name, parentRelativePath),
   );
 }
 
-export async function renameWorkflowFolderItemWithBackend(relativePath: unknown, newName: unknown) {
+export async function renameWorkflowFolderItemWithBackend(relativePath: string, newName: string) {
   return delegate(
     async (backend) => backend.renameWorkflowFolderItem(relativePath, newName),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const result = await renameWorkflowFolderItem(relativePath, newName);
-        invalidateFilesystemExecutionMove(result.movedProjectPaths);
-
-        return result;
-      }),
+    () => legacyCommands.renameWorkflowFolderItem(relativePath, newName),
   );
 }
 
-export async function deleteWorkflowFolderItemWithBackend(relativePath: unknown) {
+export async function deleteWorkflowFolderItemWithBackend(relativePath: string) {
   return delegate(
     async (backend) => backend.deleteWorkflowFolderItem(relativePath),
-    async () => withFilesystemWorkflowStorageWrite(() => deleteWorkflowFolderItem(relativePath)),
+    () => legacyCommands.deleteWorkflowFolderItem(relativePath),
   );
 }
 
-export async function createWorkflowProjectItemWithBackend(folderRelativePath: unknown, name: unknown) {
+export async function createWorkflowProjectItemWithBackend(folderRelativePath: string, name: string) {
   return delegate(
     async (backend) => backend.createWorkflowProjectItem(folderRelativePath, name),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await createWorkflowProjectItem(folderRelativePath, name);
-        markFilesystemExecutionStructureDirty();
-        return project;
-      }),
+    () => legacyCommands.createWorkflowProjectItem(folderRelativePath, name),
   );
 }
 
-export async function renameWorkflowProjectItemWithBackend(relativePath: unknown, newName: unknown) {
+export async function renameWorkflowProjectItemWithBackend(relativePath: string, newName: string) {
   return delegate(
     async (backend) => backend.renameWorkflowProjectItem(relativePath, newName),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const result = await renameWorkflowProjectItem(relativePath, newName);
-        invalidateFilesystemExecutionMove(result.movedProjectPaths);
-        return result;
-      }),
+    () => legacyCommands.renameWorkflowProjectItem(relativePath, newName),
   );
 }
 
 export async function duplicateWorkflowProjectItemWithBackend(
-  relativePath: unknown,
+  relativePath: string,
   version: WorkflowProjectDownloadVersion,
 ) {
   return delegate(
     async (backend) => backend.duplicateWorkflowProjectItem(relativePath, version),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await duplicateWorkflowProjectItem(relativePath, version);
-        markFilesystemExecutionStructureDirty();
-        return project;
-      }),
+    () => legacyCommands.duplicateWorkflowProjectItem(relativePath, version),
   );
 }
 
 export async function uploadWorkflowProjectItemWithBackend(
-  folderRelativePath: unknown,
-  fileName: unknown,
-  contents: unknown,
+  folderRelativePath: string,
+  fileName: string,
+  contents: string,
 ) {
   return delegate(
     async (backend) => backend.uploadWorkflowProjectItem(folderRelativePath, fileName, contents),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await uploadWorkflowProjectItem(folderRelativePath, fileName, contents);
-        markFilesystemExecutionStructureDirty();
-        return project;
-      }),
+    () => legacyCommands.uploadWorkflowProjectItem(folderRelativePath, fileName, contents),
   );
 }
 
 export async function readWorkflowProjectDownloadWithBackend(
-  relativePath: unknown,
+  relativePath: string,
   version: WorkflowProjectDownloadVersion,
 ) {
   return delegate(
     async (backend) => backend.readWorkflowProjectDownload(relativePath, version),
-    async () => withFilesystemWorkflowStorageRead(() => readWorkflowProjectDownload(relativePath, version)),
+    () => legacyCommands.readWorkflowProjectDownload(relativePath, version),
   );
 }
 
-export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativePath: unknown) {
+export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativePath: string) {
   return delegate(
     async (backend) => backend.readWorkflowProjectReferenceSnapshots(relativePath),
-    async () => withFilesystemWorkflowStorageRead(() => readFilesystemProjectReferenceSnapshots(relativePath)),
+    () => legacyCommands.readWorkflowProjectReferenceSnapshots(relativePath),
   );
 }
 
 export async function listWorkflowProjectReferenceCatalogWithBackend() {
   return delegate(
     async (backend) => backend.listWorkflowProjectReferenceCatalog(),
-    async () => withFilesystemWorkflowStorageRead(listFilesystemProjectReferenceCatalog),
+    () => legacyCommands.listWorkflowProjectReferenceCatalog(),
   );
 }
 
 export async function listWorkflowPublishedVersionsWithBackend(
-  relativePath: unknown,
+  relativePath: string,
 ): Promise<WorkflowPublishedVersionsResponse> {
   return delegate(
     async (backend) => backend.listWorkflowPublishedVersions(relativePath),
-    async () => withFilesystemWorkflowStorageRead(() => listWorkflowPublishedVersions(relativePath)),
+    () => legacyCommands.listWorkflowPublishedVersions(relativePath),
   );
 }
 
-export async function readWorkflowPublishedVersionDownloadWithBackend(relativePath: unknown, versionId: unknown) {
+export async function readWorkflowPublishedVersionDownloadWithBackend(relativePath: string, versionId: string) {
   return delegate(
     async (backend) => backend.readWorkflowPublishedVersionDownload(relativePath, versionId),
-    async () => withFilesystemWorkflowStorageRead(() => readWorkflowPublishedVersionDownload(relativePath, versionId)),
+    () => legacyCommands.readWorkflowPublishedVersionDownload(relativePath, versionId),
   );
 }
 
-export async function readWorkflowPublishedVersionPreviewWithBackend(relativePath: unknown, versionId: unknown) {
+export async function readWorkflowPublishedVersionPreviewWithBackend(relativePath: string, versionId: string) {
   return delegate(
     async (backend) => backend.readWorkflowPublishedVersionPreview(relativePath, versionId),
-    async () => withFilesystemWorkflowStorageRead(() => readWorkflowPublishedVersionPreview(relativePath, versionId)),
+    () => legacyCommands.readWorkflowPublishedVersionPreview(relativePath, versionId),
   );
 }
 
 export async function setWorkflowPublishedVersionStarWithBackend(
-  relativePath: unknown,
-  versionId: unknown,
-  isStarred: unknown,
+  relativePath: string,
+  versionId: string,
+  isStarred: boolean,
 ): Promise<WorkflowPublishedVersionSummary> {
   return delegate(
     async (backend) => backend.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
-    async () =>
-      withFilesystemWorkflowStorageWrite(() => setWorkflowPublishedVersionStar(relativePath, versionId, isStarred)),
+    () => legacyCommands.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
   );
 }
 
 export async function setWorkflowPublishedVersionCommentWithBackend(
-  relativePath: unknown,
-  versionId: unknown,
-  comment: unknown,
+  relativePath: string,
+  versionId: string,
+  comment: string,
 ): Promise<WorkflowPublishedVersionSummary> {
   return delegate(
     async (backend) => backend.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
-    async () =>
-      withFilesystemWorkflowStorageWrite(() => setWorkflowPublishedVersionComment(relativePath, versionId, comment)),
+    () => legacyCommands.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
   );
 }
 
 async function restoreWorkflowPublishedVersionWithBackend(
-  relativePath: unknown,
-  versionId: unknown,
+  relativePath: string,
+  versionId: string,
   preconditions: WorkflowDraftPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   return delegate(
     async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const root = await ensureWorkflowsRoot();
-        const projectPath = requireProjectPath(
-          resolveWorkflowRelativePath(root, relativePath, {
-            allowProjectFile: true,
-          }),
-        );
-        return restoreWorkflowPublishedVersion(relativePath, versionId, preconditions, () => {
-          markFilesystemExecutionStructureDirty([projectPath]);
-        });
-      }),
+    () => legacyCommands.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
   );
 }
 
 async function publishWorkflowProjectItemWithBackend(
-  relativePath: unknown,
-  settings: WorkflowProjectSettingsDraft | unknown,
+  relativePath: string,
+  settings: WorkflowProjectSettingsDraft,
   preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.publishWorkflowProjectItem(relativePath, settings, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await publishWorkflowProjectItem(relativePath, settings, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.publishWorkflowProjectItem(relativePath, settings, preconditions),
   );
 }
 
 async function updateWorkflowEndpointAccessWithBackend(
-  relativePath: unknown,
+  relativePath: string,
   access: 'public' | 'internal',
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await updateWorkflowEndpointAccess(relativePath, access, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.updateWorkflowEndpointAccess(relativePath, access, preconditions),
   );
 }
 
 export async function listWorkflowProjectWebAppsWithBackend(
-  relativePath: unknown,
+  relativePath: string,
 ): Promise<WorkflowProjectWebAppsResponse> {
   return delegate(
     async (backend) => backend.listWorkflowProjectWebApps(relativePath),
-    async () => withFilesystemWorkflowStorageRead(() => listWorkflowProjectWebApps(relativePath)),
+    () => legacyCommands.listWorkflowProjectWebApps(relativePath),
   );
 }
 
 async function publishWorkflowProjectWebAppsWithBackend(
-  relativePath: unknown,
-  publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+  relativePath: string,
+  publications: WorkflowProjectWebAppPublicationDraft[],
   preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await publishWorkflowProjectWebApps(relativePath, publications, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
   );
 }
 
 async function updateWorkflowProjectWebAppAccessWithBackend(
-  relativePath: unknown,
-  accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+  relativePath: string,
+  accessUpdates: WorkflowProjectWebAppAccessDraft[],
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
   );
 }
 
 async function unpublishWorkflowProjectWebAppWithBackend(
-  relativePath: unknown,
-  uiGraphId: unknown,
+  relativePath: string,
+  uiGraphId: string,
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
   );
 }
 
 async function unpublishWorkflowProjectItemWithBackend(
-  relativePath: unknown,
+  relativePath: string,
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
     async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const project = await unpublishWorkflowProjectItem(relativePath, preconditions);
-        markFilesystemExecutionStructureDirty([project.absolutePath]);
-        return project;
-      }),
+    () => legacyCommands.unpublishWorkflowProjectItem(relativePath, preconditions),
   );
 }
 
@@ -1110,8 +1008,7 @@ export async function executeWorkflowPublicationCommandWithBackend(
 ): Promise<WorkflowProjectItem | WorkflowPublishedVersionRestoreResponse> {
   // Capture reviewed state before adapter acquisition or a filesystem writer
   // wait. A caller changing its object cannot authorize a different command.
-  command = { ...command };
-  command.preconditions = { ...command.preconditions };
+  command = structuredClone(command);
   switch (command.kind) {
     case 'publish-endpoint':
       return publishWorkflowProjectItemWithBackend(
@@ -1146,29 +1043,10 @@ export async function executeWorkflowPublicationCommandWithBackend(
   }
 }
 
-export async function deleteWorkflowProjectItemWithBackend(relativePath: unknown) {
+export async function deleteWorkflowProjectItemWithBackend(relativePath: string) {
   return delegate(
     async (backend) => backend.deleteWorkflowProjectItem(relativePath),
-    async () =>
-      withFilesystemWorkflowStorageWrite(async () => {
-        const root = await ensureWorkflowsRoot();
-        const resolvedPath = requireProjectPath(
-          resolveWorkflowRelativePath(root, relativePath, {
-            allowProjectFile: true,
-          }),
-        );
-
-        const projectId = await deleteWorkflowProjectItem(relativePath, {
-          beforeDelete: async (projectMetadataId) => {
-            if (projectMetadataId != null) {
-              await resetFilesystemLLMProfileHealthForProject(projectMetadataId as ProjectId);
-              await (await getEvaluationStore()).deleteProject(projectMetadataId as ProjectId);
-            }
-          },
-        });
-        markFilesystemExecutionStructureDirty([resolvedPath]);
-        return projectId;
-      }),
+    () => legacyCommands.deleteWorkflowProjectItem(relativePath),
   );
 }
 
@@ -1292,7 +1170,10 @@ export function createExecutionSubgraphProjectLoader() {
               );
               const publishedPath = await resolvePublishedWorkflowProjectPath(root, selectedPath, settings);
               if (!publishedPath)
-                throw createHttpError(409, `Subgraph project ${target.projectId} has no published version.`);
+                throw workflowFailure(
+                  'workflow_publication_missing',
+                  `Subgraph project ${target.projectId} has no published version.`,
+                );
               artifactPath = publishedPath;
             }
             const projectContents = await fs.readFile(artifactPath, 'utf8');

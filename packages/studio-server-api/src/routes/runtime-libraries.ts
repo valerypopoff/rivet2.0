@@ -1,3 +1,4 @@
+import { streamRuntimeLibraryJob } from './runtime-library-job-stream.js';
 import { Router } from 'express';
 import { z } from 'zod';
 
@@ -88,6 +89,6 @@ runtimeLibrariesRouter.get(
   '/jobs/:jobId/stream',
   asyncHandler(async (req, res) => {
     if (!watchOperatorStreamAuthorization(req, res)) return;
-    await getRuntimeLibrariesBackend().streamJob(req, res);
+    await streamRuntimeLibraryJob(req, res, getRuntimeLibrariesBackend());
   }),
 );

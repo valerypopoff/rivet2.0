@@ -53,6 +53,18 @@ export async function verifyWorkflowPublicationContract(
     conditions(item),
   );
   await assertNoEndpointAccess(); // Web-app publication is not endpoint publication.
+  await assert.rejects(
+    backend.publishWorkflowProjectWebApps(
+      other.relativePath,
+      [{ uiGraphId: 'ui', slug, allowedEmails: [] }],
+      conditions(other),
+    ),
+    { status: 409 },
+  );
+  assert.deepEqual(
+    (await backend.listWorkflowProjectWebApps(other.relativePath)).project.settings.publishedWebApps,
+    [],
+  );
   const publish = (expected: ReturnType<typeof conditions>) =>
     backend.publishWorkflowProjectItem(item.relativePath, { endpointName }, expected);
   await assert.rejects(publish({ ...conditions(item), expectedProjectId: other.projectMetadataId! }), {

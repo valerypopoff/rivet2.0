@@ -4,6 +4,198 @@ This is the implementation checklist for the refined SQLite isolation, immutable
 execution-definition reuse and short-transaction/Evaluation projection plan.
 Correctness tests are not evidence of a production VM speedup.
 
+## Maintainability follow-up (2026-10-11)
+
+The compatibility baseline is commit
+`5fdd02cef9dc021355d0a362de7beefd7693b622`. The measurements below use the
+maintainability implementation against that starting point; they
+compare execution models, not a measured pre-refactor production deployment.
+
+Completed the dashboard request owner, typed workflow inputs/failures, legacy
+command adapter, explicit server resource lifecycle, shared web-app preparation
+and backend-neutral runtime-library observation. Schemas, artifact formats,
+public revision IDs, scheduler semantics and transport authorization contracts
+are unchanged. Tests cover bridge expiry/replacement/overload, cleanup retries,
+SQLite error identity, legacy publication, HTTP/Socket authentication, early
+outputs, recording pagination and real PostgreSQL/S3 execution.
+
+Settings readiness now uses a cheap connectivity probe plus validation of the
+bounded settings rows. Full database integrity remains a startup/migration or
+explicit `verifyIntegrity()` operation, not a periodic readiness scan. Do not
+remove the settings-data validation: corrupt settings must still fail closed.
+
+The reproducible disposable operational workload is:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api build
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:operational-workload 100
+```
+
+It creates 24 settings rows, 100 health records, 100 Evaluation bodies of about
+100 KiB and 100 schedules outside serving storage. The local Windows/Node 22.22.3
+sample measured p95 readiness at 0.63 ms, health begin/finish at 12.08 ms,
+Evaluation summary pages at 12.51 ms, detail at 0.88 ms and schedule list/tick
+below 0.70 ms. These are development observations, not production capacity
+claims; Node 24 is the supported deployment runtime. Windows timer granularity
+also limits interpretation of the event-loop sample.
+
+Decision: retain the existing workflow-catalog worker, but do not mechanically
+move every operational store into another worker. This fixture does not prove
+that added IPC, startup and retained memory would improve them. PostgreSQL stays
+on its async driver. A contention/tail-latency measurement on the protected VM
+workload is still required before further isolation; Evaluation JSON projection
+and durable health writes are the measured candidates, not all settings reads.
+SQLite lock waits and large Evaluation histories remain limitations worth
+measuring. No worker pool, new trial ledger or compiled-plan cache was added.
+
+The follow-up qualification passed API and web compilation, web unit checks,
+the real disposable PostgreSQL/MinIO integration and 41 headless browser cases.
+After the last pending-open identity guard change, four affected browser cases
+were rerun against a fresh production build and passed. The final selected local
+API run passed 124 tests, with two existing POSIX permission checks skipped on
+Windows. It includes settings readiness/integrity separation, broken observer
+isolation, resource fencing/disposal retries, SQLite serving, trusted clients
+and legacy publication history. The focused recording/scheduling/contract run
+also passed 35 tests. These suites overlap; do not add them into a unique total.
+
+The protected 100-round local workload was run before and after this change.
+Both direct and worker modes preserved its correctness assertions. One noisy
+post-change sample had worker operation p95 values about 10-17% above the earlier
+sample and approximately 22 MiB more sampled process RSS, while direct-mode
+values were lower. Those single development samples do not establish a speedup
+or certify performance neutrality. Repeat isolated paired measurements on the
+supported Node 24 deployment runtime before claiming either. The new boundaries
+preserve the existing worker, cache and transaction designs; this follow-up is
+primarily an ownership/maintainability improvement.
+
+An isolated repeat after the final code review observed worker execution
+definition/readiness p95 of 24.31/24.36 ms, tree 51.97 ms and save/publication
+161.27 ms, with 840 MiB sampled RSS and 48.50 ms maximum event-loop delay.
+The earlier baseline was 22.06/22.12 ms, 49.51 ms, 149.98 ms, 834 MiB and
+50.66 ms respectively. Direct-mode save/publication p95 was 147.63 ms versus
+179.69 ms earlier. Results are mixed and remain synthetic development evidence,
+not a statistically established regression or improvement. All workload
+correctness assertions passed, and worker pending/active/reserved-byte metrics
+returned to zero after the operations.
+
+Final review additionally verified that native runtime-library log observations
+read only appended entries rather than rescanning the complete history, and that
+SQLite mutation message translation preserves structured conflict identity.
+The affected final suites passed 38 and 59 tests respectively, without skips.
+Two runtime-library modal browser cases also passed after the log-tail change.
+The separate live install/cancel browser scenario was subsequently qualified
+against the real API and built dashboard with disposable storage and a blocked
+loopback npm registry. It exposed a Windows cancellation defect: killing only
+the command shim left npm holding its output pipes. Owned process-tree termination
+fixes that path in both runtime-library backends. The browser check then passed
+with actual registry requests, no duplicate logs, no activated candidate and API
+exit code zero. Windows process-tree checks require normal process permissions;
+the restricted development sandbox blocks them. No normal deployment data or
+external package registry was used.
+
+Final lifecycle review additionally found that managed runtime-library disposal
+could release its database while an accepted worker job or heartbeat still ran.
+Disposal now awaits both, fences late process registration and prevents new
+claims after shutdown. Focused tests exercise the blocked heartbeat and late-child
+races, alongside the existing activation-outcome and observation checks. The
+final focused run passed 25 tests without skips; API compilation, full root
+`test:style`, repository structure/test-style guards and the disposable
+PostgreSQL/MinIO integration passed again after these corrections.
+
+### Final checklist audit
+
+The final audit repaired remaining correctness gaps: blanket SQLite uniqueness
+translation, repeated pool releases inventing a successful close, and no-op
+local runtime-library disposal. Constraint translation is statement-scoped;
+internal identity collisions remain failures. Both library backends fence new
+jobs and await owned cleanup. Managed object-client cleanup remains retryable
+without reopening admission. Worker loss distinguishes dispatched unknown
+outcomes from never-dispatched work without changing its unavailable code or
+automatically replaying either.
+
+The operational harness now supports the missing combined workload:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:operational-workload 100 direct
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:operational-workload 100 worker
+```
+
+Run separately after compilation, without competing builds/tests. Each owns
+disposable storage and rejects deployment paths. The same six serving operations
+run alongside settings refresh, profile-health begin/finish, Evaluation trial
+checkpoints and actual schedule queue/claim/finish operations. Every round checks
+returned identities and revisions. Reports include p50/p95/p99/max latency,
+event-loop delay, sampled Node RSS including workers, startup/shutdown, sampled
+queue/bytes high-water and queue-wait histograms. Native database lock wait is
+not isolated from complete operation duration; the existing contention test
+proves responsiveness, not production latency.
+
+The paired local Node 22.22.3, 100-round sample observed:
+
+| Metric                    |    Direct |     Worker |
+| ------------------------- | --------: | ---------: |
+| Event-loop maximum        | 149.95 ms |   58.52 ms |
+| Sampled Node RSS          | 581.0 MiB |  792.5 MiB |
+| Save/publication p95      | 186.78 ms |  171.86 ms |
+| Tree p95                  |  28.45 ms |   75.33 ms |
+| Profile-health p95        |  23.56 ms |   21.05 ms |
+| Evaluation checkpoint p95 |  23.50 ms |   21.03 ms |
+| Catalog startup           |   1.28 ms | 1072.71 ms |
+| All-store shutdown        |   5.83 ms |   20.52 ms |
+
+The worker sample reached six pending operations, one active operation and
+238,610 reserved message bytes; pending/active/byte counters returned to zero.
+Raw checkout-local reports are `artifacts/refactor-operational-serving-*.json`.
+This extends qualification coverage; it is not a before/after performance claim
+for this maintainability patch. Production Node 24 repeatability, contention and
+regression budgets remain an operator qualification gate. No additional
+operational worker is justified solely by this synthetic sample.
+
+Final qualification passed 121 selected API tests without skips, followed by a
+42-test overlapping worker/runtime-library/pool rerun after the last worker
+failure-outcome change. These are separate runs, not a unique-test total. API
+compilation, root `test:style`, repository structure and test-style guards passed.
+The real disposable PostgreSQL/MinIO integration passed publication conflicts,
+bundle execution, Evaluation ownership and asynchronous endpoint persistence.
+The required headless repository browser check passed cancellation of an actual
+npm job. A separate active-install shutdown check confirmed API exit and candidate
+cleanup before completion; it did not kill the API to manufacture success.
+These checks do not replace deployment-specific performance budgets or a live
+Kubernetes rehearsal when promoting the earlier managed representation cutover.
+
+### Plan acceptance map
+
+Post-audit regressions cover real HTTP delivery of 2,000 retained log lines and
+one terminal event across backpressure, blocked disconnect/stall cleanup, and
+cursor/status/terminal resumption without duplicates. Bridge tests use a
+controlled monotonic clock independent of timer callbacks, and cover durable
+count/byte overload and unknown/replaced delivery outcomes. The browser
+tree-sync regression rejects an oversized committed rename notification and
+checks that authoritative reconciliation preserves the open tab and retargets
+its next save without needing an event-stream notification.
+
+This follow-up passed 40 selected API tests, the full web unit suites, all 21
+headless tree-sync browser cases, API/web builds, root style and repository
+structure checks. Commit preparation also passed the normal migration-ledger
+check against the staged successor files, the full web unit suites, the real
+disposable PostgreSQL/MinIO integration and all 21 headless tree-sync browser
+cases. The selected API rerun passed 171 tests; two existing POSIX permission
+checks were skipped on Windows. The native Windows process-tree regression
+passed with normal process permissions. Do not overlap dependency-rebuilding
+checks with suites consuming those build outputs. Unused facade imports and an
+unused lifecycle property were removed without changing resource ownership.
+No production services or storage were changed.
+
+| Planned boundary                  | Completion                                                                                                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Baseline and compatibility        | Protected direct/worker workloads, ownership docs and behavioral suites; mixed local measurements are recorded above without production claims.                                                  |
+| Dashboard/editor bridge           | One bounded request owner; expiry, cancellation, instance replacement and durable queued-command behavior tested.                                                                                |
+| Workflow contracts                | Normalized typed inputs, named recording queries, structured failures and a focused legacy command adapter; SQL/native error identity preserved.                                                 |
+| Server lifecycle                  | Explicit startup/fence/disposal owner with retryable resource boundaries, typed maintenance probes and preserved storage generation/drain ownership.                                             |
+| Execution and runtime observation | Shared web-app preparation/persistence, transport-specific delivery/auth presentation and backend-neutral job observation; real cancellation qualified.                                          |
+| Operational SQLite                | Cheap settings readiness plus explicit integrity checks and a disposable measurement command. Additional workers remain measurement-gated, as planned—not an omitted mandatory rewrite.          |
+| Qualification and docs            | API/web compilation, focused and managed behavioral tests, browser checks, repository manifests/ledger and owning developer docs. Production capacity qualification remains deployment-specific. |
+
 ## Implemented boundaries
 
 | Area                                | Implementation and proof                                                                                                                                                                                                                                                                                                                                                                                  |

@@ -19,6 +19,9 @@ import type {
   WorkflowPublishedVersionRestoreResponse,
   WorkflowPublishedVersionSummary,
   WorkflowPublishedVersionsResponse,
+  WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppAccessDraft,
 } from '../../../../studio-server-shared/workflow-types.js';
 import type {
   WorkflowRecordingExecutionIdentity,
@@ -95,83 +98,83 @@ export interface WorkflowProjectRepository {
   readHostedText(filePath: string): Promise<string>;
   hostedPathExists(filePath: string): Promise<boolean>;
   resolveManagedRelativeProjectText(relativeFrom: string, projectFilePath: string): Promise<string>;
-  createWorkflowFolderItem(name: unknown, parentRelativePath: unknown): Promise<WorkflowFolderItem>;
-  renameWorkflowFolderItem(relativePath: unknown, newName: unknown): Promise<FolderMoveResult>;
-  moveWorkflowFolder(sourceRelativePath: unknown, destinationFolderRelativePath: unknown): Promise<FolderMoveResult>;
-  deleteWorkflowFolderItem(relativePath: unknown): Promise<void>;
-  createWorkflowProjectItem(folderRelativePath: unknown, name: unknown): Promise<WorkflowProjectItem>;
-  renameWorkflowProjectItem(relativePath: unknown, newName: unknown): Promise<ProjectMoveResult>;
-  moveWorkflowProject(sourceRelativePath: unknown, destinationFolderRelativePath: unknown): Promise<ProjectMoveResult>;
+  createWorkflowFolderItem(name: string, parentRelativePath: string): Promise<WorkflowFolderItem>;
+  renameWorkflowFolderItem(relativePath: string, newName: string): Promise<FolderMoveResult>;
+  moveWorkflowFolder(sourceRelativePath: string, destinationFolderRelativePath: string): Promise<FolderMoveResult>;
+  deleteWorkflowFolderItem(relativePath: string): Promise<void>;
+  createWorkflowProjectItem(folderRelativePath: string, name: string): Promise<WorkflowProjectItem>;
+  renameWorkflowProjectItem(relativePath: string, newName: string): Promise<ProjectMoveResult>;
+  moveWorkflowProject(sourceRelativePath: string, destinationFolderRelativePath: string): Promise<ProjectMoveResult>;
   duplicateWorkflowProjectItem(
-    relativePath: unknown,
+    relativePath: string,
     version?: WorkflowProjectDownloadVersion,
   ): Promise<WorkflowProjectItem>;
   uploadWorkflowProjectItem(
-    folderRelativePath: unknown,
-    fileName: unknown,
-    contents: unknown,
+    folderRelativePath: string,
+    fileName: string,
+    contents: string,
   ): Promise<WorkflowProjectItem>;
   readWorkflowProjectDownload(
-    relativePath: unknown,
+    relativePath: string,
     version: WorkflowProjectDownloadVersion,
   ): Promise<{ contents: string; fileName: string }>;
-  readWorkflowProjectReferenceSnapshots(relativePath: unknown): Promise<WorkflowProjectReferenceSnapshot[]>;
+  readWorkflowProjectReferenceSnapshots(relativePath: string): Promise<WorkflowProjectReferenceSnapshot[]>;
   listWorkflowProjectReferenceCatalog(): Promise<WorkflowProjectReferenceCatalogEntry[]>;
-  deleteWorkflowProjectItem(relativePath: unknown): Promise<string | null>;
+  deleteWorkflowProjectItem(relativePath: string): Promise<string | null>;
 }
 export interface WorkflowPublicationRepository {
-  listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse>;
+  listWorkflowPublishedVersions(relativePath: string): Promise<WorkflowPublishedVersionsResponse>;
   readWorkflowPublishedVersionDownload(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
   ): Promise<{ contents: string; fileName: string }>;
   readWorkflowPublishedVersionPreview(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
   ): Promise<{ contents: string; datasetsContents: string | null }>;
   setWorkflowPublishedVersionStar(
-    relativePath: unknown,
-    versionId: unknown,
-    isStarred: unknown,
+    relativePath: string,
+    versionId: string,
+    isStarred: boolean,
   ): Promise<WorkflowPublishedVersionSummary>;
   setWorkflowPublishedVersionComment(
-    relativePath: unknown,
-    versionId: unknown,
-    comment: unknown,
+    relativePath: string,
+    versionId: string,
+    comment: string,
   ): Promise<WorkflowPublishedVersionSummary>;
   restoreWorkflowPublishedVersion(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse>;
   publishWorkflowProjectItem(
-    relativePath: unknown,
-    settings: unknown,
+    relativePath: string,
+    settings: WorkflowProjectSettingsDraft,
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
   updateWorkflowEndpointAccess(
-    relativePath: unknown,
+    relativePath: string,
     access: WorkflowEndpointAccess,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
-  listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse>;
+  listWorkflowProjectWebApps(relativePath: string): Promise<WorkflowProjectWebAppsResponse>;
   publishWorkflowProjectWebApps(
-    relativePath: unknown,
-    publications: unknown,
+    relativePath: string,
+    publications: WorkflowProjectWebAppPublicationDraft[],
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
   updateWorkflowProjectWebAppAccess(
-    relativePath: unknown,
-    accessUpdates: unknown,
+    relativePath: string,
+    accessUpdates: WorkflowProjectWebAppAccessDraft[],
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
   unpublishWorkflowProjectWebApp(
-    relativePath: unknown,
-    uiGraphId: unknown,
+    relativePath: string,
+    uiGraphId: string,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
   unpublishWorkflowProjectItem(
-    relativePath: unknown,
+    relativePath: string,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem>;
 }
@@ -190,20 +193,22 @@ export interface WorkflowExecutionSources {
   createProjectReferenceLoader(): ProjectReferenceLoader;
   loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject>;
 }
+export type WorkflowRecordingPageQuery = {
+  workflowId: string;
+  page: number;
+  pageSize: number;
+  statusFilter?: WorkflowRecordingFilterStatus;
+  inputFilter?: WorkflowRecordingInputFilter | null;
+  inputCursor?: number;
+  signal?: AbortSignal;
+  inputAfter?: string;
+  includeSubgraphRuns?: boolean;
+  runScope?: 'all' | 'roots' | 'children';
+};
+
 export interface WorkflowRecordingRepository {
   listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse>;
-  listWorkflowRecordingRunsPage(
-    workflowId: string,
-    page: number,
-    pageSize: number,
-    statusFilter: WorkflowRecordingFilterStatus,
-    inputFilter?: WorkflowRecordingInputFilter | null,
-    inputCursor?: number,
-    signal?: AbortSignal,
-    inputAfter?: string,
-    includeSubgraphRuns?: boolean,
-    runScope?: 'all' | 'roots' | 'children',
-  ): Promise<WorkflowRecordingRunsPageResponse>;
+  listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse>;
   listWorkflowRunStatisticsCatalog(
     surface: WorkflowRunStatisticsSurface,
   ): Promise<WorkflowRunStatisticsCatalogResponse>;

@@ -6,7 +6,6 @@ import { config as loadDotEnv } from 'dotenv';
 import { Pool } from 'pg';
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 
-import type { WorkflowRecordingWorkflowSummary } from '../../../studio-server-shared/workflow-recording-types.js';
 import { listWorkflowFolders } from '../routes/workflows/workflow-query.js';
 import { getWorkflowRecordingMetadataPath } from '../routes/workflows/fs-helpers.js';
 import {
@@ -290,7 +289,12 @@ async function importSourceRecordings(
     const pageSize = 100;
     while (true) {
       const runsPage = native
-        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, pageSize, 'all')
+        ? await native.workflows.listWorkflowRecordingRunsPage({
+            workflowId: sourceWorkflow.workflowId,
+            page: page,
+            pageSize: pageSize,
+            statusFilter: 'all',
+          })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
       for (const run of runsPage.runs) {
         const readArtifact = (artifact: 'recording' | 'replay-project' | 'replay-dataset') =>
@@ -485,9 +489,19 @@ async function verifyMigration(
       throw new Error(`Managed recording workflow is missing: ${sourceWorkflow.project.relativePath}`);
     for (let page = 1; ; page += 1) {
       const sourceRuns = native
-        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, 100, 'all')
+        ? await native.workflows.listWorkflowRecordingRunsPage({
+            workflowId: sourceWorkflow.workflowId,
+            page: page,
+            pageSize: 100,
+            statusFilter: 'all',
+          })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, 100, 'all');
-      const targetRuns = await backend.listWorkflowRecordingRunsPage(targetWorkflow.workflowId, page, 100, 'all');
+      const targetRuns = await backend.listWorkflowRecordingRunsPage({
+        workflowId: targetWorkflow.workflowId,
+        page: page,
+        pageSize: 100,
+        statusFilter: 'all',
+      });
       if (sourceRuns.runs.length !== targetRuns.runs.length) {
         throw new Error(`Managed recording page differs for ${sourceWorkflow.project.relativePath}`);
       }

@@ -1,30 +1,20 @@
 import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import type { Request, Response } from 'express';
-
 import { checkPostgresPoolHealth } from '../../managed-health.js';
 import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 
-import type {
-  RuntimeLibraryPackageSpec,
-} from '../../../../studio-server-shared/runtime-library-types.js';
+import type { RuntimeLibraryPackageSpec } from '../../../../studio-server-shared/runtime-library-types.js';
 import type { RuntimeLibrariesBackend } from '../backend.js';
 import { createHttpError } from '../../utils/httpError.js';
 import { createManagedRuntimeLibrariesArtifactActivation } from './artifact-activation.js';
-import {
-  createManagedRuntimeLibrariesContext,
-  type ManagedRuntimeLibrariesContext,
-} from './context.js';
+import { createManagedRuntimeLibrariesContext, type ManagedRuntimeLibrariesContext } from './context.js';
 import { createManagedRuntimeLibrariesJobStore } from './job-store.js';
-import { streamManagedRuntimeLibraryJob } from './job-stream.js';
+import { pollRuntimeLibraryJob, type RuntimeLibraryJobObserver } from '../job-observation.js';
 import { createManagedRuntimeLibrariesJobWorker } from './job-worker.js';
 import { createManagedRuntimeLibrariesProcessRegistry } from './process-registry.js';
 import { clearManagedRuntimeLibraryStaleReplicaStatuses } from './replica-status.js';
-import {
-  ensureManagedRuntimeLibrariesSchema,
-  normalizeJobPackages,
-} from './schema.js';
+import { ensureManagedRuntimeLibrariesSchema, normalizeJobPackages } from './schema.js';
 import { getManagedJob, getManagedRuntimeLibrariesState } from './state.js';
 import { getRootPath } from '../manifest.js';
 import type { RuntimeLibrariesBlobStore } from './blob-store.js';
@@ -111,20 +101,26 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     if (this.#disposePromise) return this.#disposePromise;
 
     this.#stopped = true;
-    this.#jobWorker.reset();
     this.#processRegistry.terminateAll('Runtime-library backend is shutting down.');
     this.#disposePromise = (async () => {
       await this.#initializePromise?.catch(() => undefined);
       this.#initializePromise = null;
+      await this.#jobWorker.drain();
       this.#context.localCache.reset();
       this.#processRegistry.clear();
-      try {
-        await this.#context.poolLease.release();
-      } finally {
-        this.#context.blobStore.dispose?.();
-      }
-    })();
+      await this.#context.poolLease.release();
+      this.#context.blobStore.dispose?.();
+    })().catch((error) => {
+      // Retain the stopped owner so lifecycle cleanup can retry an unfinished
+      // resource. The pool lease preserves an uncertain/failed close outcome.
+      this.#disposePromise = null;
+      throw error;
+    });
     return this.#disposePromise;
+  }
+
+  beginDrain(): void {
+    this.#stopped = true;
   }
 
   async getState() {
@@ -167,10 +163,7 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     return clearManagedRuntimeLibraryStaleReplicaStatuses(this.#context);
   }
 
-  async streamJob(req: Request, res: Response): Promise<void> {
-    await this.initialize();
-    return streamManagedRuntimeLibraryJob(req, res, {
-      getJob: (jobId) => this.getJob(jobId),
-    });
+  subscribeJob(jobId: string, observer: RuntimeLibraryJobObserver): () => void {
+    return pollRuntimeLibraryJob(jobId, (id) => this.getJob(id), observer);
   }
 }

@@ -1,4 +1,5 @@
 // test-style: fixture-read: reads only generated catalog and artifact fixtures to verify read-only tree data and corruption checks.
+// test-style: fixture-read: reads only generated catalog and artifact fixtures to verify read-only tree data and corruption checks.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -68,6 +69,42 @@ test('SQLite direct and serving-worker adapters satisfy the shared SQL publicati
   for (const worker of [false, true]) {
     await fixture(verifyWorkflowPublicationContract, { worker });
   }
+});
+
+test('an internal publication identity collision is not disguised as a destination conflict', async (t) => {
+  await fixture(async (backend) => {
+    let item = await createExecutable(backend);
+    item = await backend.publishWorkflowProjectItem(
+      item.relativePath,
+      { endpointName: 'identity-fixture' },
+      conditions(item),
+    );
+    const before = await backend.listWorkflowPublishedVersions(item.relativePath);
+    const commit = LocalWorkflowCatalog.prototype.commitPublication;
+    t.mock.method(
+      LocalWorkflowCatalog.prototype,
+      'commitPublication',
+      function (this: LocalWorkflowCatalog, ...args: Parameters<typeof commit>) {
+        const prepared = args[1];
+        const duplicateId = prepared.before.versions[0]!.versionId;
+        prepared.next.publishedVersions[0]!.versionId = duplicateId;
+        prepared.next.publishedVersionId = duplicateId;
+        return commit.apply(this, args);
+      },
+    );
+    await assert.rejects(
+      backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'identity-fixture' }, conditions(item)),
+      (error: unknown) => {
+        const failure = error as { errcode?: number; status?: number; code?: string };
+        assert.equal(failure.errcode, 1555);
+        assert.equal(failure.status, undefined);
+        assert.notEqual(failure.code, 'workflow_destination_conflict');
+        return true;
+      },
+    );
+    assert.deepEqual(await backend.listWorkflowPublishedVersions(item.relativePath), before);
+    assert.equal((await backend.getTree()).projects[0]!.settings.publicationVersion, item.settings.publicationVersion);
+  });
 });
 
 test('serving worker preserves save/publication CAS, detached execution and maintenance ownership', async () => {
@@ -861,11 +898,7 @@ test('SQLite tree rejects malformed persisted summaries instead of returning inv
 test('SQLite endpoint lookup reads only its selected artifact, not unrelated projects or retained history', async () => {
   await fixture(async (backend, options) => {
     let item = await createExecutable(backend);
-    item = await backend.publishWorkflowProjectItem(
-      item.relativePath,
-      { endpointName: 'Story', endpointAccess: 'internal' },
-      conditions(item),
-    );
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'Story' }, conditions(item));
     item = await backend.updateWorkflowEndpointAccess(item.relativePath, 'internal', conditions(item));
     const oldContents = (await backend.loadHostedProject(item.absolutePath)).contents;
     const [project, attached] = loadProjectAndAttachedDataFromString(oldContents);
@@ -878,11 +911,7 @@ test('SQLite endpoint lookup reads only its selected artifact, not unrelated pro
         expectedRevisionId: item.revisionId,
       })
     ).project;
-    item = await backend.publishWorkflowProjectItem(
-      item.relativePath,
-      { endpointName: 'Story', endpointAccess: 'internal' },
-      conditions(item),
-    );
+    item = await backend.publishWorkflowProjectItem(item.relativePath, { endpointName: 'Story' }, conditions(item));
     const other = await createExecutable(backend, 'Other');
     const otherContents = (await backend.loadHostedProject(other.absolutePath)).contents;
     for (const contents of [oldContents, otherContents]) {
@@ -1032,7 +1061,11 @@ test('SQLite recording workflow summaries aggregate in SQL and never load projec
         durationMs: 1,
       });
     }
-    const page = await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 100);
+    const page = await backend.listWorkflowRecordingRunsPage({
+      workflowId: item.projectMetadataId!,
+      page: 1,
+      pageSize: 100,
+    });
     const newest = page.runs[0]!.createdAt;
     removeTreeIndexes(options.databasePath);
     t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', () => {
@@ -2436,116 +2469,141 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
     const nestedId = await persist(nested, 'subgraph_project', 'rvt-caller-scope-12345', 'suspicious');
     await persist(nested, 'subgraph_project', 'rvt-unrelated-scope-12345', 'failed');
     const workflowId = caller.projectMetadataId!;
-    const related = await backend.listWorkflowRecordingRunsPage(
-      workflowId,
-      1,
-      1,
-      'all',
-      null,
-      0,
-      undefined,
-      undefined,
-      true,
-    );
+    const related = await backend.listWorkflowRecordingRunsPage({
+      workflowId: workflowId,
+      page: 1,
+      pageSize: 1,
+      statusFilter: 'all',
+      inputFilter: null,
+      inputCursor: 0,
+      signal: undefined,
+      inputAfter: undefined,
+      includeSubgraphRuns: true,
+    });
     assert.equal(related.totalRuns, 3);
     assert.deepEqual({ ...related.scopeCounts }, { totalRuns: 3, failedRuns: 1, suspiciousRuns: 1 });
     const allIds = new Set(related.runs.map((run) => run.id));
     for (const page of [2, 3]) {
-      const response = await backend.listWorkflowRecordingRunsPage(
-        workflowId,
-        page,
-        1,
-        'all',
-        null,
-        0,
-        undefined,
-        undefined,
-        true,
-      );
+      const response = await backend.listWorkflowRecordingRunsPage({
+        workflowId: workflowId,
+        page: page,
+        pageSize: 1,
+        statusFilter: 'all',
+        inputFilter: null,
+        inputCursor: 0,
+        signal: undefined,
+        inputAfter: undefined,
+        includeSubgraphRuns: true,
+      });
       response.runs.forEach((run) => allIds.add(run.id));
     }
     assert.deepEqual(allIds, new Set([rootId, childId, nestedId]));
-    const bad = await backend.listWorkflowRecordingRunsPage(
-      workflowId,
-      1,
-      20,
-      'failed',
-      null,
-      0,
-      undefined,
-      undefined,
-      true,
-    );
+    const bad = await backend.listWorkflowRecordingRunsPage({
+      workflowId: workflowId,
+      page: 1,
+      pageSize: 20,
+      statusFilter: 'failed',
+      inputFilter: null,
+      inputCursor: 0,
+      signal: undefined,
+      inputAfter: undefined,
+      includeSubgraphRuns: true,
+    });
     assert.equal(bad.totalRuns, 2);
     assert.deepEqual(new Set(bad.runs.map((run) => run.id)), new Set([childId, nestedId]));
     assert.equal(bad.runs.find((run) => run.id === childId)?.sourceProjectRelativePath, child.relativePath);
-    assert.equal((await backend.listWorkflowRecordingRunsPage(workflowId, 1, 20)).totalRuns, 1);
-    const filter = { path: '$.matched', operator: '==' as const, value: 'true' };
-    let batch = await backend.listWorkflowRecordingRunsPage(
-      workflowId,
+    assert.equal(
+      (await backend.listWorkflowRecordingRunsPage({ workflowId: workflowId, page: 1, pageSize: 20 })).totalRuns,
       1,
-      1,
-      'all',
-      filter,
-      0,
-      undefined,
-      undefined,
-      true,
     );
+    const filter = { path: '$.matched', operator: '==' as const, value: 'true' };
+    let batch = await backend.listWorkflowRecordingRunsPage({
+      workflowId: workflowId,
+      page: 1,
+      pageSize: 1,
+      statusFilter: 'all',
+      inputFilter: filter,
+      inputCursor: 0,
+      signal: undefined,
+      inputAfter: undefined,
+      includeSubgraphRuns: true,
+    });
     const matches = new Set(batch.runs.map((run) => run.id));
     while (batch.hasMore) {
-      batch = await backend.listWorkflowRecordingRunsPage(
-        workflowId,
-        1,
-        1,
-        'all',
-        filter,
-        0,
-        undefined,
-        batch.nextInputAfter,
-        true,
-      );
+      batch = await backend.listWorkflowRecordingRunsPage({
+        workflowId: workflowId,
+        page: 1,
+        pageSize: 1,
+        statusFilter: 'all',
+        inputFilter: filter,
+        inputCursor: 0,
+        signal: undefined,
+        inputAfter: batch.nextInputAfter,
+        includeSubgraphRuns: true,
+      });
       batch.runs.forEach((run) => matches.add(run.id));
     }
     assert.deepEqual(matches, new Set([rootId]));
     assert.equal(batch.scopeCounts?.totalRuns, 1);
-    const children = await backend.listWorkflowRecordingRunsPage(
-      rootId,
-      1,
-      1,
-      'all',
-      null,
-      0,
-      undefined,
-      undefined,
-      false,
-      'children',
-    );
+    const children = await backend.listWorkflowRecordingRunsPage({
+      workflowId: rootId,
+      page: 1,
+      pageSize: 1,
+      statusFilter: 'all',
+      inputFilter: null,
+      inputCursor: 0,
+      signal: undefined,
+      inputAfter: undefined,
+      includeSubgraphRuns: false,
+      runScope: 'children',
+    });
     assert.equal(children.totalRuns, 2);
-    const nextChildren = await backend.listWorkflowRecordingRunsPage(
-      rootId,
-      2,
-      1,
-      'all',
-      null,
-      0,
-      undefined,
-      undefined,
-      false,
-      'children',
-    );
+    const nextChildren = await backend.listWorkflowRecordingRunsPage({
+      workflowId: rootId,
+      page: 2,
+      pageSize: 1,
+      statusFilter: 'all',
+      inputFilter: null,
+      inputCursor: 0,
+      signal: undefined,
+      inputAfter: undefined,
+      includeSubgraphRuns: false,
+      runScope: 'children',
+    });
     assert.deepEqual(
       new Set([...children.runs, ...nextChildren.runs].map((run) => run.id)),
       new Set([childId, nestedId]),
     );
-    assert.equal((await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all', filter)).scopeCounts?.totalRuns, 1);
+    assert.equal(
+      (
+        await backend.listWorkflowRecordingRunsPage({
+          workflowId: '',
+          page: 1,
+          pageSize: 20,
+          statusFilter: 'all',
+          inputFilter: filter,
+        })
+      ).scopeCounts?.totalRuns,
+      1,
+    );
     await backend.deleteWorkflowRecording(childId);
     assert.equal(
-      (await backend.listWorkflowRecordingRunsPage(workflowId, 1, 20, 'all', null, 0, undefined, undefined, true))
-        .totalRuns,
+      (
+        await backend.listWorkflowRecordingRunsPage({
+          workflowId: workflowId,
+          page: 1,
+          pageSize: 20,
+          statusFilter: 'all',
+          inputFilter: null,
+          inputCursor: 0,
+          signal: undefined,
+          inputAfter: undefined,
+          includeSubgraphRuns: true,
+        })
+      ).totalRuns,
       2,
     );
-    assert.equal((await backend.listWorkflowRecordingRunsPage('', 1, 20)).totalRuns, 3);
+    assert.equal((await backend.listWorkflowRecordingRunsPage({ workflowId: '', page: 1, pageSize: 20 })).totalRuns, 3);
   });
 });
 
@@ -2627,9 +2685,9 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
         executionIdentity: { surface: 'workflow_endpoint' },
         onPersisted: async (id) => {
           assert.equal(await backend.readWorkflowRecordingArtifact(id, 'recording'), recordingSerialized);
-          const summary = (await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 100)).runs.find(
-            (run) => run.id === id,
-          )!;
+          const summary = (
+            await backend.listWorkflowRecordingRunsPage({ workflowId: item.projectMetadataId!, page: 1, pageSize: 100 })
+          ).runs.find((run) => run.id === id)!;
           assert.equal(summary.recordingUncompressedBytes, Buffer.byteLength(recordingSerialized));
           assert.ok(summary.recordingCompressedBytes < summary.recordingUncompressedBytes / 2);
         },
@@ -2637,14 +2695,25 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
       assert.ok(id);
       ids.push(id);
     }
-    const page = await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 1, 'failed');
+    const page = await backend.listWorkflowRecordingRunsPage({
+      workflowId: item.projectMetadataId!,
+      page: 1,
+      pageSize: 1,
+      statusFilter: 'failed',
+    });
     assert.equal(page.totalRuns, 2);
     assert.equal(page.runs.length, 1);
     assert.equal(page.hasMore, true);
-    const filtered = await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 20, 'all', {
-      path: '$.value',
-      operator: '==',
-      value: '2',
+    const filtered = await backend.listWorkflowRecordingRunsPage({
+      workflowId: item.projectMetadataId!,
+      page: 1,
+      pageSize: 20,
+      statusFilter: 'all',
+      inputFilter: {
+        path: '$.value',
+        operator: '==',
+        value: '2',
+      },
     });
     assert.equal(filtered.runs.length, 1);
     assert.equal(filtered.runs[0]!.id, ids[2]);
@@ -2671,38 +2740,54 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
       }),
     });
     assert.ok(otherId);
-    const any = await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all');
+    const any = await backend.listWorkflowRecordingRunsPage({
+      workflowId: '',
+      page: 1,
+      pageSize: 20,
+      statusFilter: 'all',
+    });
     assert.equal(any.totalRuns, 4);
     assert.deepEqual(
       new Set(any.runs.map((run) => run.workflowId)),
       new Set([item.projectMetadataId, other.projectMetadataId]),
     );
-    const anyBad = await backend.listWorkflowRecordingRunsPage('', 1, 1, 'failed');
+    const anyBad = await backend.listWorkflowRecordingRunsPage({
+      workflowId: '',
+      page: 1,
+      pageSize: 1,
+      statusFilter: 'failed',
+    });
     assert.equal(anyBad.totalRuns, 3);
     assert.equal(anyBad.runs.length, 1);
     assert.equal(anyBad.hasMore, true);
-    const anyMatches = await backend.listWorkflowRecordingRunsPage('', 1, 20, 'all', {
-      path: '$.value',
-      operator: '==',
-      value: '2',
+    const anyMatches = await backend.listWorkflowRecordingRunsPage({
+      workflowId: '',
+      page: 1,
+      pageSize: 20,
+      statusFilter: 'all',
+      inputFilter: {
+        path: '$.value',
+        operator: '==',
+        value: '2',
+      },
     });
     const foundIds = new Set(anyMatches.runs.map((run) => run.id));
     let batch = anyMatches;
     while (batch.hasMore) {
-      batch = await backend.listWorkflowRecordingRunsPage(
-        '',
-        1,
-        20,
-        'all',
-        {
+      batch = await backend.listWorkflowRecordingRunsPage({
+        workflowId: '',
+        page: 1,
+        pageSize: 20,
+        statusFilter: 'all',
+        inputFilter: {
           path: '$.value',
           operator: '==',
           value: '2',
         },
-        batch.nextInputCursor,
-        undefined,
-        batch.nextInputAfter,
-      );
+        inputCursor: batch.nextInputCursor,
+        signal: undefined,
+        inputAfter: batch.nextInputAfter,
+      });
       batch.runs.forEach((run) => foundIds.add(run.id));
     }
     assert.deepEqual(foundIds, new Set([ids[2], otherId]));
@@ -2725,7 +2810,11 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
       3,
     );
     await backend.deleteWorkflowRecording(ids[0]!);
-    assert.equal((await backend.listWorkflowRecordingRunsPage(item.projectMetadataId!, 1, 20)).totalRuns, 2);
+    assert.equal(
+      (await backend.listWorkflowRecordingRunsPage({ workflowId: item.projectMetadataId!, page: 1, pageSize: 20 }))
+        .totalRuns,
+      2,
+    );
     await assert.rejects(backend.readWorkflowRecordingArtifact(ids[0]!, 'recording'), /not found/);
   });
 });

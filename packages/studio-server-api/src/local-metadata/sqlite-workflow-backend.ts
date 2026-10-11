@@ -1,3 +1,9 @@
+import type { WorkflowRecordingPageQuery } from '../routes/workflows/data-backend.js';
+import {
+  hasWorkflowFailure,
+  normalizeWorkflowStorageFailure,
+  workflowFailure,
+} from '../routes/workflows/workflow-failure.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -10,8 +16,6 @@ import {
 import type { Project, SubgraphProjectTarget, ResolvedSubgraphProject } from '@valerypopoff/rivet2-node';
 import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/data-backend.js';
 import type {
-  WorkflowRecordingInputFilter,
-  WorkflowRecordingFilterStatus,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsSurface,
   WorkflowRecordingRunSummary,
@@ -39,6 +43,9 @@ import type {
   WorkflowDraftPublicationPreconditions,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionSummary,
+  WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppAccessDraft,
 } from '../../../studio-server-shared/workflow-types.js';
 import {
   getAggregateWorkflowProjectStatus,
@@ -341,9 +348,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     try {
       await this.#catalog.applyStructureChanges({ ...structure, projects, folders });
     } catch (error) {
-      if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
-        throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-      throw error;
+      throw normalizeWorkflowStorageFailure(error);
     }
     for (const change of projects) {
       notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(change.before.relativePath)}`);
@@ -359,9 +364,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     try {
       await this.#catalog.applyChanges({ ...structure, folders, projects });
     } catch (error) {
-      if (/concurrently|already exists|UNIQUE constraint/.test(String(error)))
-        throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-      throw error;
+      throw normalizeWorkflowStorageFailure(error);
     }
     for (const change of projects) {
       for (const project of [change.before, change.after])
@@ -460,9 +463,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           updatedAt: next.updatedAt,
         });
       } catch (error) {
-        if (/different project/.test(String(error))) throw conflict('The save target belongs to a different project.');
-        if (/concurrently/.test(String(error)))
-          throw conflict('Project has changed since it was opened. Reload before saving.');
+        if (hasWorkflowFailure(error, 'workflow_project_mismatch'))
+          throw workflowFailure('workflow_project_mismatch', 'The save target belongs to a different project.');
+        if (hasWorkflowFailure(error, 'workflow_state_changed'))
+          throw workflowFailure(
+            'workflow_state_changed',
+            'Project has changed since it was opened. Reload before saving.',
+          );
         throw error;
       }
       if (saved) {
@@ -479,7 +486,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return { path: this.#absolute(value), revisionId: revision(next), project: this.#item(next), created: true };
     });
   }
-  async createWorkflowProjectItem(folderValue: unknown, nameValue: unknown): Promise<WorkflowProjectItem> {
+  async createWorkflowProjectItem(folderValue: string, nameValue: string): Promise<WorkflowProjectItem> {
     const folder = relative(folderValue, true, true),
       name = sanitizeWorkflowName(nameValue, 'name');
     return this.#withWrite(async () => {
@@ -495,9 +502,9 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     });
   }
   async uploadWorkflowProjectItem(
-    folderValue: unknown,
-    fileName: unknown,
-    contents: unknown,
+    folderValue: string,
+    fileName: string,
+    contents: string,
   ): Promise<WorkflowProjectItem> {
     if (typeof contents !== 'string') throw badRequest('Missing project contents');
     const folder = relative(folderValue, true, true),
@@ -511,7 +518,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     });
   }
   async duplicateWorkflowProjectItem(
-    value: unknown,
+    value: string,
     version: WorkflowProjectDownloadVersion = 'live',
   ): Promise<WorkflowProjectItem> {
     return this.#withWrite(async () => {
@@ -560,17 +567,17 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       };
     });
   }
-  renameWorkflowProjectItem(value: unknown, newName: unknown) {
+  renameWorkflowProjectItem(value: string, newName: string) {
     const name = sanitizeWorkflowName(newName, 'name');
     return this.#moveProject(value, (source) =>
       path.posix.join(parentOf(source.relativePath), `${name}.rivet-project`),
     );
   }
-  moveWorkflowProject(value: unknown, folder: unknown) {
+  moveWorkflowProject(value: string, folder: string) {
     const target = relative(folder, true, true);
     return this.#moveProject(value, (source) => path.posix.join(target, source.fileName));
   }
-  async deleteWorkflowProjectItem(value: unknown): Promise<string | null> {
+  async deleteWorkflowProjectItem(value: string): Promise<string | null> {
     return this.#withWrite(async () => {
       const structure = await this.#structure(),
         before = await this.#catalog.readTreeProject(this.#projectPath(value));
@@ -587,7 +594,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return before.workflowId;
     });
   }
-  async createWorkflowFolderItem(nameValue: unknown, parentValue: unknown): Promise<WorkflowFolderItem> {
+  async createWorkflowFolderItem(nameValue: string, parentValue: string): Promise<WorkflowFolderItem> {
     const name = sanitizeWorkflowName(nameValue, 'name'),
       parent = relative(parentValue, true, true),
       value = path.posix.join(parent, name);
@@ -632,15 +639,15 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       };
     });
   }
-  renameWorkflowFolderItem(value: unknown, newName: unknown) {
+  renameWorkflowFolderItem(value: string, newName: string) {
     const name = sanitizeWorkflowName(newName, 'name');
     return this.#moveFolder(value, (source) => path.posix.join(parentOf(source), name));
   }
-  moveWorkflowFolder(value: unknown, destination: unknown) {
+  moveWorkflowFolder(value: string, destination: string) {
     const folder = relative(destination, true, true);
     return this.#moveFolder(value, (source) => path.posix.join(folder, path.posix.basename(source)));
   }
-  async deleteWorkflowFolderItem(value: unknown): Promise<void> {
+  async deleteWorkflowFolderItem(value: string): Promise<void> {
     const source = relative(value, true);
     return this.#withWrite(async () => {
       const structure = await this.#structure();
@@ -656,7 +663,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       );
     });
   }
-  async readWorkflowProjectReferenceSnapshots(value: unknown) {
+  async readWorkflowProjectReferenceSnapshots(value: string) {
     const projectPath = relative(value);
     if (!projectPath.endsWith('.rivet-project')) throw badRequest('Expected project path');
     const snapshots = await this.#catalog.readProjectReferenceSnapshots(projectPath);
@@ -666,7 +673,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async listWorkflowProjectReferenceCatalog() {
     return this.#catalog.listProjectReferenceCatalog();
   }
-  async readWorkflowProjectDownload(value: unknown, version: WorkflowProjectDownloadVersion) {
+  async readWorkflowProjectDownload(value: string, version: WorkflowProjectDownloadVersion) {
     const project = await this.#payload(value, version === 'published' ? 'published' : 'latest'),
       contents = project.contents;
     if (contents === null) throw conflict('Published version is not available');
@@ -705,15 +712,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(projectPath)}`);
         return result;
       } catch (error) {
-        if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
-          throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-        throw error;
+        throw normalizeWorkflowStorageFailure(error);
       }
     });
   }
   async publishWorkflowProjectItem(
-    value: unknown,
-    settings: unknown,
+    value: string,
+    settings: WorkflowProjectSettingsDraft,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     const { endpointName, publishedAt, versionId } = createEndpointPublication(settings);
@@ -737,7 +742,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       }),
     );
   }
-  async unpublishWorkflowProjectItem(value: unknown, preconditions: WorkflowPublicationPreconditions) {
+  async unpublishWorkflowProjectItem(value: string, preconditions: WorkflowPublicationPreconditions) {
     return this.#treeItem(
       await this.#publication(value, preconditions, 'unpublish-endpoint', (next) => {
         next.publishedEndpointName = '';
@@ -749,7 +754,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async updateWorkflowEndpointAccess(
-    value: unknown,
+    value: string,
     access: 'public' | 'internal',
     preconditions: WorkflowPublicationPreconditions,
   ) {
@@ -766,7 +771,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       name: typeof graph.name === 'string' && graph.name.trim() ? graph.name.trim() : uiGraphId,
     }));
   }
-  async listWorkflowProjectWebApps(value: unknown): Promise<WorkflowProjectWebAppsResponse> {
+  async listWorkflowProjectWebApps(value: string): Promise<WorkflowProjectWebAppsResponse> {
     const snapshot = await this.#catalog.readDraftDefinition(this.#projectPath(value));
     if (!snapshot) throw createHttpError(404, 'Project not found');
     const contents = snapshot.contents,
@@ -807,8 +812,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     };
   }
   async publishWorkflowProjectWebApps(
-    value: unknown,
-    publications: unknown,
+    value: string,
+    publications: WorkflowProjectWebAppPublicationDraft[],
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppPublicationDrafts(publications);
@@ -838,8 +843,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async updateWorkflowProjectWebAppAccess(
-    value: unknown,
-    updates: unknown,
+    value: string,
+    updates: WorkflowProjectWebAppAccessDraft[],
     preconditions: WorkflowPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppAccessDrafts(updates);
@@ -854,8 +859,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async unpublishWorkflowProjectWebApp(
-    value: unknown,
-    uiGraphId: unknown,
+    value: string,
+    uiGraphId: string,
     preconditions: WorkflowPublicationPreconditions,
   ) {
     if (typeof uiGraphId !== 'string' || !uiGraphId) throw badRequest('Missing uiGraphId');
@@ -887,17 +892,17 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       comment: version.comment,
     };
   }
-  async listWorkflowPublishedVersions(value: unknown) {
+  async listWorkflowPublishedVersions(value: string) {
     const project = await this.#catalog.readProjectPublicationMetadata(this.#projectPath(value));
     if (!project) throw createHttpError(404, 'Project not found');
     return { versions: project.publishedVersions.map((version) => this.#versionSummary(project, version)) };
   }
-  async readWorkflowPublishedVersionPreview(value: unknown, id: unknown) {
+  async readWorkflowPublishedVersionPreview(value: string, id: string) {
     if (typeof id !== 'string') throw createHttpError(404, 'Published version not found');
     const version = await this.#payload(value, { versionId: id });
     return { contents: version.contents!, datasetsContents: version.datasetsContents };
   }
-  async readWorkflowPublishedVersionDownload(value: unknown, id: unknown) {
+  async readWorkflowPublishedVersionDownload(value: string, id: string) {
     if (typeof id !== 'string') throw createHttpError(404, 'Published version not found');
     const version = await this.#payload(value, { versionId: id });
     return {
@@ -917,18 +922,18 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return this.#versionSummary(result.project, result.version);
     });
   }
-  setWorkflowPublishedVersionStar(value: unknown, id: unknown, starred: unknown) {
+  setWorkflowPublishedVersionStar(value: string, id: string, starred: boolean) {
     if (typeof starred !== 'boolean') throw badRequest('Invalid isStarred');
     return this.#annotateVersion(value, id, { isStarred: starred });
   }
-  setWorkflowPublishedVersionComment(value: unknown, id: unknown, comment: unknown) {
+  setWorkflowPublishedVersionComment(value: string, id: string, comment: string) {
     if (typeof comment !== 'string' || comment.trim().length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH)
       throw badRequest('Invalid comment');
     return this.#annotateVersion(value, id, { comment: comment.trim() });
   }
   async restoreWorkflowPublishedVersion(
-    value: unknown,
-    id: unknown,
+    value: string,
+    id: string,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     preconditions = structuredClone(preconditions);
@@ -1087,7 +1092,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     if (!snapshot) {
       if (!(await this.#catalog.findProjectPathById(projectId)))
         throw createHttpError(404, 'Subgraph project not found');
-      throw conflict('Subgraph project has no published version');
+      throw workflowFailure('workflow_publication_missing', 'Subgraph project has no published version');
     }
     const { contents, datasetsContents } = snapshot;
     const execution = this.#execution(snapshot, contents, datasetsContents);
@@ -1210,18 +1215,19 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     };
   }
 
-  async listWorkflowRecordingRunsPage(
-    workflowId: string,
-    page: number,
-    pageSize: number,
-    statusFilter: WorkflowRecordingFilterStatus = 'all',
-    inputFilter: WorkflowRecordingInputFilter | null = null,
-    inputCursor = 0,
-    signal?: AbortSignal,
-    inputAfter?: string,
-    includeSubgraphRuns = false,
-    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
-  ): Promise<WorkflowRecordingRunsPageResponse> {
+  async listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse> {
+    const {
+      workflowId,
+      page,
+      pageSize,
+      statusFilter = 'all',
+      inputFilter = null,
+      inputCursor = 0,
+      signal,
+      inputAfter,
+      includeSubgraphRuns = false,
+      runScope = inputFilter ? 'roots' : 'all',
+    } = query;
     if (workflowId && runScope !== 'children' && !(await this.#catalog.findProjectPathById(workflowId)))
       throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),

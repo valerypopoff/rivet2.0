@@ -126,6 +126,58 @@ test('managed PostgreSQL pools stay isolated across database identities', async 
   );
 });
 
+test('repeated lease releases wait for the same confirmed pool close', async () => {
+  let finish!: () => void;
+  let closes = 0;
+  const registry = new ManagedPostgresPoolRegistry(
+    () =>
+      ({
+        end() {
+          closes++;
+          return new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      }) as unknown as Pool,
+    {},
+  );
+  const lease = registry.acquire({});
+  const first = lease.release();
+  const second = lease.release();
+  assert.equal(first, second);
+  let closed = false;
+  void second.then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  finish();
+  await second;
+  assert.equal(closed, true);
+  assert.equal(closes, 1);
+});
+
+test('a failed pool close cannot become successful through repeated release', async () => {
+  const failure = new Error('close acknowledgement unavailable');
+  let closes = 0;
+  const registry = new ManagedPostgresPoolRegistry(
+    () =>
+      ({
+        async end() {
+          closes++;
+          throw failure;
+        },
+      }) as unknown as Pool,
+    {},
+  );
+  const lease = registry.acquire({});
+  const first = lease.release();
+  await assert.rejects(first, (error) => error === failure);
+  assert.equal(lease.release(), first);
+  await assert.rejects(lease.release(), (error) => error === failure);
+  assert.equal(closes, 1, 'never retry an uncertain driver close');
+});
+
 test('managed PostgreSQL pool telemetry is an in-memory aggregate and tolerates an incomplete pool shim', async () => {
   const { pools, registry } = createPoolHarness();
   const first = registry.acquire({ connectionString: 'postgresql://rivet@one.test/rivet' });

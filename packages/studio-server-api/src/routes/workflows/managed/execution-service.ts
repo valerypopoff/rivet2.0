@@ -1,3 +1,4 @@
+import { workflowFailure } from '../workflow-failure.js';
 import { performance } from 'node:perf_hooks';
 import {
   NodeDatasetProvider,
@@ -181,7 +182,10 @@ export class ManagedWorkflowExecutionService {
     const revisionId =
       target.version === 'published' ? workflow.published_revision_id : workflow.current_draft_revision_id;
     if (!revisionId) {
-      throw createHttpError(409, `Subgraph project ${target.projectId} has no ${target.version} version.`);
+      throw workflowFailure(
+        target.version === 'published' ? 'workflow_publication_missing' : 'workflow_state_changed',
+        `Subgraph project ${target.projectId} has no ${target.version} version.`,
+      );
     }
     const workflowSnapshot = this.#invalidationController.captureWorkflowSnapshot(workflow.workflow_id);
     this.#invalidationController.beginWorkflowLoad(workflow.workflow_id);

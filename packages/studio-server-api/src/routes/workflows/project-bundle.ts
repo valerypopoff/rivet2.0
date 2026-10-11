@@ -1,3 +1,4 @@
+import { hasWorkflowFailure } from './workflow-failure.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -68,13 +69,7 @@ export function createSavedBundleSource(
     try {
       snapshot = await loader.loadTarget(selection);
     } catch (error) {
-      if (
-        versionPolicy !== 'published' ||
-        (error as { status?: number }).status !== 409 ||
-        !(error instanceof Error) ||
-        !error.message.includes('no published version')
-      )
-        throw error;
+      if (versionPolicy !== 'published' || !hasWorkflowFailure(error, 'workflow_publication_missing')) throw error;
       selection.version = 'latest';
       snapshot = await loader.loadTarget(selection);
     }
@@ -102,12 +97,7 @@ export function createSavedBundleSource(
       try {
         return await target({ projectId: projectId as ProjectId, version: 'published' });
       } catch (error) {
-        if (
-          (error as { status?: number }).status !== 409 ||
-          !(error instanceof Error) ||
-          !error.message.includes('no published version')
-        )
-          throw error;
+        if (!hasWorkflowFailure(error, 'workflow_publication_missing')) throw error;
         return target({ projectId: projectId as ProjectId, version: 'latest' });
       }
     },

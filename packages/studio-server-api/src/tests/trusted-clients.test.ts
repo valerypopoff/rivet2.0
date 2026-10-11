@@ -20,7 +20,7 @@ import { openWorkflowTreeEventStream } from '../routes/workflows/workflow-tree-e
 import { openEvaluationLibraryEventStream } from '../routes/workflows/evaluation-library-events.js';
 import { runtimeLibrariesRouter } from '../routes/runtime-libraries.js';
 import { getRuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
-import { streamManagedRuntimeLibraryJob } from '../runtime-libraries/managed/job-stream.js';
+import { pollRuntimeLibraryJob, type RuntimeLibraryJobObserver } from '../runtime-libraries/job-observation.js';
 import { jobRunner } from '../runtime-libraries/job-runner.js';
 import type { RuntimeLibraryJobState } from '../../../studio-server-shared/runtime-library-types.js';
 
@@ -125,8 +125,10 @@ for (const kind of ['tree', 'evaluation', 'filesystem-job', 'managed-job'] as co
       const statusListeners = jobRunner.listenerCount('status');
       if (kind === 'filesystem-job' || kind === 'managed-job') {
         if (kind === 'managed-job') {
-          t.mock.method(getRuntimeLibrariesBackend(), 'streamJob', (req: express.Request, res: express.Response) =>
-            streamManagedRuntimeLibraryJob(req, res, { getJob: async () => runningJob }));
+          const backend = getRuntimeLibrariesBackend();
+          t.mock.method(backend, 'getJob', async () => runningJob);
+          t.mock.method(backend, 'subscribeJob', (id: string, observer: RuntimeLibraryJobObserver) =>
+            pollRuntimeLibraryJob(id, async () => runningJob, observer));
         } else {
           t.mock.method(jobRunner, 'getJob', () => runningJob);
         }

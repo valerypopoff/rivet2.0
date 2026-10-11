@@ -16,6 +16,7 @@
     "workflow-execution:measure": "tsx src/scripts/measure-workflow-execution.ts",
     "serving-refactors:benchmark": "node dist/studio-server-api/src/scripts/benchmark-serving-refactors.js",
     "serving-refactors:workload": "node dist/studio-server-api/src/scripts/benchmark-serving-workload.js",
+    "serving-refactors:operational-workload": "node dist/studio-server-api/src/scripts/benchmark-operational-stores.js",
     "serving-refactors:managed-workload": "node dist/studio-server-api/src/scripts/benchmark-serving-managed.js",
     "workflow-schema:migrate": "tsx src/scripts/migrate-managed-workflow-schema.ts migrate",
     "workflow-schema:verify": "tsx src/scripts/migrate-managed-workflow-schema.ts verify",

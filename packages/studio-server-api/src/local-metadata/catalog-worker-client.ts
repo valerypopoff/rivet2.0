@@ -103,7 +103,7 @@ export function createCatalogWorker(
           cause: error,
         },
       ),
-      { code: 'local_storage_worker_unavailable', status: 503 },
+      { code: 'local_storage_worker_unavailable', status: 503, operationOutcome: 'not-dispatched' },
     );
     const pending = [...jobs.values()];
     for (const job of pending) job.cancel?.();
@@ -120,7 +120,15 @@ export function createCatalogWorker(
         for (const job of pending) {
           jobs.delete(job.id);
           bytes -= job.bytes;
-          job.reject(failed!);
+          job.reject(
+            job.dispatchedAt === undefined
+              ? failed!
+              : Object.assign(new Error(failed!.message, { cause: failed }), {
+                  code: 'local_storage_worker_unavailable',
+                  status: 503,
+                  operationOutcome: 'unknown',
+                }),
+          );
         }
         observeState();
         notifyIdle();

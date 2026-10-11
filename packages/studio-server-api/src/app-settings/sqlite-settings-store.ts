@@ -332,6 +332,11 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
     this.assertSynchronized();
   }
 
+  /** Explicit operator/startup integrity scrub, not the periodic readiness probe. */
+  verifyIntegrity(): void {
+    this.#verifyRows(this.#database(), true);
+  }
+
   #decodeRow(row: SqliteSettingsRow): ManagedSettingsRecord {
     if (!Number.isSafeInteger(row.revision) || row.revision < 1) {
       throw new Error(`SQLite App Settings revision is invalid for ${row.setting_key}.`);
@@ -372,9 +377,12 @@ export class SqliteAppSettingsBackend implements AppSettingsBackend {
   }
 
   #verifyRows(db: DatabaseSync, fullIntegrityCheck = false): void {
-    const pragma = fullIntegrityCheck ? 'integrity_check' : 'quick_check';
-    const result = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, string>;
-    if (result[pragma] !== 'ok') throw new Error('SQLite App Settings integrity check failed.');
+    if (fullIntegrityCheck) {
+      const result = db.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+      if (result.integrity_check !== 'ok') throw new Error('SQLite App Settings integrity check failed.');
+    } else {
+      db.prepare('SELECT 1').get();
+    }
     for (const row of db.prepare('SELECT * FROM app_settings').all() as SqliteSettingsRow[]) {
       this.#decodeRow(row);
     }

@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setImmediate } from 'node:timers/promises';
+import { createManagedRuntimeLibrariesJobWorker } from '../runtime-libraries/managed/job-worker.js';
+import type { ManagedRuntimeLibrariesContext } from '../runtime-libraries/managed/context.js';
+import { JOB_HEARTBEAT_INTERVAL_MS } from '../runtime-libraries/managed/schema.js';
+import { createManagedRuntimeLibrariesProcessRegistry } from '../runtime-libraries/managed/process-registry.js';
+import { EventEmitter } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 
-import {
-  createManagedRuntimeLibrariesArtifactActivation,
-} from '../runtime-libraries/managed/artifact-activation.js';
+import { createManagedRuntimeLibrariesArtifactActivation } from '../runtime-libraries/managed/artifact-activation.js';
 import { createManagedRuntimeLibrariesJobStore } from '../runtime-libraries/managed/job-store.js';
 import type { RuntimeLibraryJobRow } from '../runtime-libraries/managed/schema.js';
 
@@ -14,6 +19,105 @@ type Scenario =
   | 'outcome-unavailable';
 
 type Fixture = ReturnType<typeof createFixture>;
+
+test('shutdown also terminates a child registered after the initial process fence', async () => {
+  const registry = createManagedRuntimeLibrariesProcessRegistry({ appendJobLog: async () => {} });
+  registry.terminateAll('shutdown');
+  const signals: NodeJS.Signals[] = [];
+  const process = Object.assign(new EventEmitter(), {
+    pid: undefined,
+    exitCode: null as number | null,
+    signalCode: null,
+    kill(signal: NodeJS.Signals) {
+      signals.push(signal);
+      queueMicrotask(() => {
+        process.exitCode = 0;
+        process.emit('exit', 0);
+      });
+      return true;
+    },
+  });
+  const register = registry.registerRunningProcess;
+  register('late-job', process as unknown as ChildProcess);
+  await setImmediate();
+  assert.deepEqual(signals, ['SIGTERM']);
+  registry.clear();
+});
+
+test('managed worker drain settles an accepted job and in-flight heartbeat before storage closes', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let stopped = false;
+  let releaseJob!: () => void;
+  let releaseHeartbeat!: () => void;
+  let entered = false;
+  let touches = 0;
+  let claims = 0;
+  const jobGate = new Promise<void>((resolve) => {
+    releaseJob = resolve;
+  });
+  const heartbeatGate = new Promise<void>((resolve) => {
+    releaseHeartbeat = resolve;
+  });
+  const pool = {
+    async query() {
+      return { rows: [] };
+    },
+    async connect() {
+      return {
+        async query(sql: string) {
+          if (sql.includes('WITH next_job')) {
+            claims++;
+            return { rows: [createJob()] };
+          }
+          return { rows: [] };
+        },
+        release() {},
+      };
+    },
+  };
+  const worker = createManagedRuntimeLibrariesJobWorker({
+    context: { pool, instanceId: 'worker-1' } as unknown as ManagedRuntimeLibrariesContext,
+    isStopped: () => stopped,
+    syncForLocalUse: async () => {},
+    getProcessManagedSync: () => async () => {},
+    jobStore: {
+      appendJobLog: async () => {},
+      failJob: async () => false,
+      async touchJob() {
+        touches++;
+        await heartbeatGate;
+      },
+    },
+    artifactActivation: {
+      async processJob() {
+        entered = true;
+        await jobGate;
+        return 'succeeded';
+      },
+    },
+  });
+  worker.startWorkerLoop();
+  worker.startWorkerLoop();
+  await setImmediate();
+  assert.equal(entered, true);
+  t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 3);
+  await setImmediate();
+  assert.equal(touches, 1, 'heartbeat writes are single-flight');
+  stopped = true;
+  let drained = false;
+  const drain = worker.drain().then(() => {
+    drained = true;
+  });
+  releaseJob();
+  await setImmediate();
+  assert.equal(drained, false, 'the outcome still owns its outstanding heartbeat');
+  releaseHeartbeat();
+  await drain;
+  worker.startWorkerLoop();
+  t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 2);
+  assert.equal(claims, 1);
+  assert.equal(touches, 1);
+});
 
 function createJob(status: RuntimeLibraryJobRow['status'] = 'running'): RuntimeLibraryJobRow {
   return {
@@ -79,12 +183,14 @@ function createFixture(scenario: Scenario) {
         return queryResult();
       }
       if (sql.includes('FROM runtime_library_jobs AS job')) {
-        return queryResult([{
-          ...state.job,
-          committed_release_id: state.release?.releaseId ?? null,
-          committed_artifact_blob_key: state.release?.artifactBlobKey ?? null,
-          committed_artifact_sha256: state.release?.artifactSha256 ?? null,
-        }]);
+        return queryResult([
+          {
+            ...state.job,
+            committed_release_id: state.release?.releaseId ?? null,
+            committed_artifact_blob_key: state.release?.artifactBlobKey ?? null,
+            committed_artifact_sha256: state.release?.artifactSha256 ?? null,
+          },
+        ]);
       }
       if (sql.includes('FROM runtime_library_jobs') && sql.includes('FOR UPDATE')) {
         return queryResult([state.job]);
@@ -274,9 +380,10 @@ test('a cancellation request that loses the activation race returns the committe
           }
           if (sql.includes('FROM runtime_library_jobs')) {
             jobReads += 1;
-            return queryResult([jobReads === 1
-              ? createJob('activating')
-              : { ...createJob('succeeded'), claimed_by: null, release_id: 'release-committed' },
+            return queryResult([
+              jobReads === 1
+                ? createJob('activating')
+                : { ...createJob('succeeded'), claimed_by: null, release_id: 'release-committed' },
             ]);
           }
           if (sql.includes('SET cancel_requested_at = NOW()')) {
