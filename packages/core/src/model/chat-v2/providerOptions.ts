@@ -9,6 +9,7 @@ import type { InternalProcessContext } from '../ProcessContext.js';
 import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
 import type { ChatV2Model, ChatV2Provider } from './chatV2Types.js';
 import { getChatV2ModelRegistry } from './modelRegistry.js';
+import { chatV2ProviderDescriptors, chatV2ProviderOptions, isChatV2Provider } from './chatV2ProviderRegistry.js';
 
 export {
   customProviderApiOptions,
@@ -18,13 +19,7 @@ export {
   type CustomProviderApiContract,
 } from './customProviderApi.js';
 
-export const chatV2ProviderOptions = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'google', label: 'Google' },
-  { value: 'openrouter', label: 'OpenRouter' },
-  { value: 'custom', label: 'Custom provider' },
-] as const;
+export { chatV2ProviderOptions };
 
 export const openAIReasoningEffortOptions = [
   { value: '', label: 'Default' },
@@ -76,9 +71,8 @@ export function getChatV2ProviderLabel(provider: ChatV2Provider): string {
 }
 
 export function getChatV2ModelOptions(provider: ChatV2Provider): { value: string; label: string }[] {
-  if (provider === 'openrouter') {
-    return [{ value: 'openrouter/auto', label: 'OpenRouter Auto' }];
-  }
+  const catalog = chatV2ProviderDescriptors[provider].catalog;
+  if (catalog !== 'registry') return catalog.map((option) => ({ ...option }));
   const registry = getChatV2ModelRegistry()[provider];
 
   return Object.entries(registry)
@@ -90,31 +84,12 @@ export function getChatV2ModelOptions(provider: ChatV2Provider): { value: string
 }
 
 export function getDefaultChatV2Model(provider: ChatV2Provider): string {
-  switch (provider) {
-    case 'openai':
-      return 'gpt-5';
-    case 'anthropic':
-      return 'claude-sonnet-4-20250514';
-    case 'google':
-      return 'gemini-2.5-flash';
-    case 'openrouter':
-      return 'openrouter/auto';
-    case 'custom':
-      return 'model-id';
-  }
+  return chatV2ProviderDescriptors[provider].defaultModel;
 }
 
 export function parseChatV2Provider(value: string): ChatV2Provider {
-  switch (value) {
-    case 'openai':
-    case 'anthropic':
-    case 'google':
-    case 'openrouter':
-    case 'custom':
-      return value;
-    default:
-      throw new Error(`Unsupported LLM Chat provider: ${value}`);
-  }
+  if (isChatV2Provider(value)) return value;
+  throw new Error(`Unsupported LLM Chat provider: ${value}`);
 }
 
 export type CreateChatV2ModelOptions = {

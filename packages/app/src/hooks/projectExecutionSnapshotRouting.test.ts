@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  type DataValue,
-  type GraphId,
-  type NodeId,
-  type ProcessId,
-  type ProjectId,
-} from '@valerypopoff/rivet2-core';
+import { type DataValue, type GraphId, type NodeId, type ProcessId, type ProjectId } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { createEmptyProjectExecutionSnapshot } from '../state/dataFlow.js';
 import {
@@ -114,6 +108,55 @@ test('project execution snapshot map update can map reducer-ignored snapshots fo
 
   assert.notEqual(nextSnapshots, previousSnapshots);
   assert.deepEqual(nextSnapshots[projectId]?.frozenNodeOutputs, {});
+});
+
+test('project routing applies the captured payload retention limit and releases evicted evidence', () => {
+  const projectId = 'project-a' as ProjectId;
+  const nodeId = 'node-a' as NodeId;
+  const values = new Map<string, DataValue>();
+  const refStore: DataRefStore = {
+    get: (key) => values.get(key),
+    set: (key, value) => values.set(key, value),
+    delete: (key) => {
+      values.delete(key);
+    },
+  };
+  let snapshots: ProjectExecutionSnapshots = {};
+  for (const processId of ['first', 'second'] as ProcessId[]) {
+    snapshots = applyProcessEventToProjectExecutionSnapshots({
+      snapshots,
+      projectId,
+      refStore,
+      previousDataPerNodeToKeep: 0,
+      message: 'nodeStart',
+      data: {
+        execution: { graphId: 'graph-a' as GraphId },
+        node: { id: nodeId },
+        processId,
+        inputs: { input: { type: 'string', value: processId.repeat(20_000) } },
+      } as never,
+    });
+    if (processId === 'first') {
+      // Older persisted display snapshots predate round-page selection state.
+      Reflect.deleteProperty(snapshots[projectId]!, 'selectedLLMChatOutputPageByInvocation');
+    }
+  }
+  const runs = snapshots[projectId]!.lastRunDataByNode[nodeId]!;
+  assert.equal(runs.length, 2, 'retention preserves invocation metadata');
+  assert.deepEqual(runs[0]!.data.inputData, {});
+  assert.ok(runs[1]!.data.inputData);
+  assert.equal(values.size, 1, 'the older invocation no longer owns a stored payload');
+  assert.deepEqual(snapshots[projectId]!.selectedLLMChatOutputPageByInvocation, {});
+  Reflect.deleteProperty(snapshots[projectId]!, 'selectedLLMChatOutputPageByInvocation');
+  snapshots = applyProcessEventToProjectExecutionSnapshots({
+    snapshots,
+    projectId,
+    refStore,
+    message: 'nodeOutputsCleared',
+    data: { node: { id: nodeId } } as never,
+  });
+  assert.equal(values.size, 0, 'clearing an older snapshot also releases its remaining payload');
+  assert.deepEqual(snapshots[projectId]!.selectedLLMChatOutputPageByInvocation, {});
 });
 
 test('executor disconnect snapshot update interrupts only running hidden snapshots', () => {

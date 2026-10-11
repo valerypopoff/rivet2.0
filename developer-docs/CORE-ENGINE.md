@@ -802,6 +802,57 @@ Current behavioral detail:
 
 ### Execution-state ownership
 
+Child construction is centralized in `GraphProcessor.#constructChildInvocation`
+with four explicit invocation kinds: ordinary/cross-project Subgraph,
+continuation, Watch and async. Shared processor configuration, root resources,
+external functions, context, executor and frozen-output bindings are assigned
+once. Invocation paths still own their identities, recording scopes, state
+aliases, graph-output commits, costs and cancellation lifetime. Event/lifecycle
+wiring uses the existing `SubprocessorBridge` through two small processor
+adapters; the caller selects the parent/root and cleanup policy explicitly.
+Watch history interception and ordinary-child passive late-event forwarding
+remain distinct. Do not turn these choices into an unrestricted flags object.
+
+The bridge records each subscription immediately after acquisition. Failed
+setup rolls back earlier bindings; paired lifecycle setup also releases the
+event bridge and removes a registered child. Explicit cleanup drains all
+disposers exactly once, even if one throws, and branch tracking is released in
+`finally`. Ordinary graph-terminal auto-cleanup still removes control bindings
+only: passive forwarding must remain alive for late node terminals. Bridge
+regressions inject registration/disposal failures and distinguish nested from
+the child's own graph-terminal event. They also verify reentrant disposal and
+queued control/start delivery with the real Emittery implementation. Parent
+pause/resume bindings use the emitter's returned disposer directly; do not add
+another listener registry or reconstruct deregistration callbacks.
+
+Watch history allocation is followed by one setup/execution/finalization boundary:
+construction, preload, cancellation registration and partial wiring failures all
+complete that iteration's history and release acquired bindings. Explicit child
+cleanup attempts lifecycle and passive-event disposal even if either fails,
+then removes child tracking. A secondary cleanup failure cannot replace an
+already propagating setup/execution error; it reports only a safe warning/count.
+Automatic terminal cleanup for ordinary Subgraphs follows the same rule on
+`graphError` and unsuccessful `graphAbort`; passive late-terminal forwarding
+remains intact. Cleanup failure after successful execution or successful abort
+still throws its original aggregate, without adding another aggregate wrapper. Both
+schedulers have public regressions for Watch setup failure, simultaneous node
+and cleanup failure, ordinary Subgraph error identity, listener removal and
+successful processor reuse.
+
+`SchedulerBoundaryPlanner.ts` owns definition-only Watch and async topology
+validation and graph slicing. It consumes effective connections after existing
+port validation, plus explicit selection/preload/consumed-boundary information.
+Its lazy generators preserve authored traversal and validation/installation
+order, including dormant incomplete Watches. Both planners use one ordered
+connection index builder; their validation and traversal rules stay distinct.
+Plans retain node identities and do not allocate timers, subscriptions, history
+or runtime controllers.
+`GraphProcessor` installs plans and owns scheduling/resource effects. Existing
+Catch/input-stream setup remains with its boundary owner; continuation planning
+stays in `ToolCallContinuationBranchPlanner`. There is no new scheduler or
+cross-run topology cache. Test planners directly and preserve public processor
+characterization for both schedulers, child events, cancellation and costs.
+
 `GraphExecutionState.ts` separates invocation bookkeeping from root-shared
 resources. `GraphInvocationState` contains results, input/output maps, queue,
 abort controllers, cost, and child tracking. `GraphSharedExecutionState` contains

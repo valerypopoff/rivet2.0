@@ -237,6 +237,32 @@ injected provider interfaces remain supported.
 
 ## Tests
 
+Execution display state has one typed capture/restore declaration in
+`hooks/projectExecutionSnapshotBindings.ts`, consumed by
+`useProjectExecutionSnapshots`. Optional fields from older snapshots restore
+their existing empty defaults. Large stored data retains object identity across
+tab switches. This is an in-memory display projection, not workspace recovery
+authority. Node and graph event normalization/merging are shared with active
+execution hooks; selection and preloading remain adapter policy. The active and
+inactive adapters use the same configured per-node payload-retention limit,
+captured by the local, remote or bundle event owner. Eviction retains invocation
+metadata but releases payload/history refs and their round-page selections.
+The retention window also applies to late partial/terminal/round-history
+updates and history-first invocations. Late metadata remains observable, but
+already evicted payloads cannot be resurrected. Round-history invocation creation
+uses the shared node transition; it does not maintain a separate retention path.
+Model/profile/tool diagnostic-first invocations follow that same transition.
+Their trace-merging helper owns only trace identity and event merging, not a
+second invocation-creation path. Diagnostic arrival before `nodeStart` must
+release evicted payload refs and round selections in both storage adapters;
+late diagnostics remain observational metadata without restoring payloads.
+Clearing older snapshots without round-page selection state restores the empty
+selection default at that event boundary.
+Inactive snapshots can receive called-project terminal events before activation
+restores their defaults. Prompt cleanup must therefore treat a missing legacy
+`userInputQuestions` field as empty at that event boundary as well. Child
+activity stays observable without writing child node data over the caller.
+
 Prefer pure transition/presentation tests for target restoration, tab labels,
 capabilities, and leave policy. Source parsing is not an acceptable substitute for
 workspace behavior. Storage, activation, save and editor-session owners have

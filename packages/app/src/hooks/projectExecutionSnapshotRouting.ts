@@ -20,6 +20,7 @@ export function applyProcessEventToProjectExecutionSnapshots<K extends keyof Pro
   projectId: ProjectId;
   refStore: DataRefStore;
   snapshots: ProjectExecutionSnapshots;
+  previousDataPerNodeToKeep?: number;
 }): ProjectExecutionSnapshots {
   const result = applyProcessEventToProjectExecutionSnapshot({
     data: options.data,
@@ -27,6 +28,7 @@ export function applyProcessEventToProjectExecutionSnapshots<K extends keyof Pro
     projectId: options.projectId,
     refStore: options.refStore,
     snapshot: options.snapshots[options.projectId],
+    previousDataPerNodeToKeep: options.previousDataPerNodeToKeep,
   });
   const nextSnapshot = options.mapSnapshot?.(result.snapshot) ?? result.snapshot;
 

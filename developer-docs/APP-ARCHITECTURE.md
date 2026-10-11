@@ -2195,6 +2195,51 @@ If planning significant refactors, these are the highest-value seams already vis
 
 ### Execution seams
 
+Active-tab hooks and inactive-project snapshots share payload normalization in
+`nodeExecutionData.ts`, node-history merging/retention decisions in
+`executionDataTransitions.ts`, and graph-history transitions in
+`graphExecutionEventHelpers.ts`. These are small functions, not a second event
+dispatcher or store. Their results keep reference allocation/deletion and UI
+selection with the existing adapters. Compute replacement data before releasing
+old references; active atom updates commit first. Reject detached late partial
+outputs before allocating them.
+
+LLM round-history invocation creation/redelivery is also a shared transition:
+`updateLLMChatOutputHistory` consumes an already stored page, preserves terminal
+outputs/status and page selection, and returns only obsolete refs. Both adapters
+allocate once before this transition and release replaced refs afterwards.
+The paired-adapter test runs the same split streaming, terminal failure, late
+partial, history redelivery and clear sequence against separate ref stores.
+
+Keep policy differences explicit: active runs support preloaded-node suppression,
+partial-rerun preservation, Evaluation history accumulation, configured payload
+retention, authored debug-source capture and graph-view-aware selection. Inactive
+snapshots retain their existing reset/selection policy. Local, remote and bundle
+event owners supply the same live per-node payload-retention setting to snapshots;
+switching tabs must not bypass that setting. Eviction keeps invocation metadata,
+releases stored payload/history refs and removes obsolete round-page selections.
+Late events for evicted invocations retain metadata without restoring payloads.
+Round-history creation/upserts use the same invocation/retention transition, even
+if no node-start event arrived first; terminal data and page selection remain
+observationally preserved for retained invocations.
+Model-call, profile-attempt and tool-call diagnostics use
+`agentTraceEventStorage.ts` for trace identity/merging, then the same shared node
+transition for invocation creation and retention. A diagnostic-first invocation
+must evict old payloads and selections immediately, not wait for `nodeStart`.
+Tool diagnostics belong to their source node/process, not a result owner or
+incidental target ID. Identified redeliveries retain their position; anonymous
+tool calls stay distinct. Existing status, outputs and page selection remain
+observationally unchanged except required payload eviction.
+Called-project observations remain journal-only except live user-input prompts
+and their terminal cleanup. Replay prompts never become interactive.
+
+Tab capture/restoration uses the exhaustive typed field declaration in
+`projectExecutionSnapshotBindings.ts`. Adding a display field requires adding
+its binding and legacy default there; capture/restore do not clone payloads or
+persist execution state into authored project files. Regression coverage lives
+beside the hooks, including round-trip bindings, split evidence, stale events,
+bundle tab routing and partial-rerun behavior.
+
 - `useGraphExecutor`
 - `useExecutorSessionCoordinator`
 - `useExecutorSessionState`

@@ -841,8 +841,15 @@ test('renders suspension skips, reliability-service decisions, timeouts, and omi
 test('Run Activity retains timeout explanations for LLM and classifier attempts', () => {
   for (const timeoutKind of ['first-output', 'stream-inactivity', 'response'] as const) {
     const journal = createRunActivityJournal();
-    const selectedRoot = root(newerActiveRootId, 1, 'failed');
-    const capturedInvocation = invocation({ key: 'timeout', sequence: 1, nodeId: 'evaluate', processId: 'process' });
+    const selectedRoot = root(newerActiveRootId, 1, 'error');
+    const capturedInvocation = invocation({
+      key: 'timeout',
+      sequence: 1,
+      graphId: 'graph',
+      graphRunId: 'run',
+      nodeId: 'evaluate',
+      processId: 'process',
+    });
     capturedInvocation.profileAttempts = [
       {
         sequence: 2,

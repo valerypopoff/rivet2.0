@@ -1,75 +1,22 @@
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useCallback } from 'react';
 import { useSetAtom, useStore } from 'jotai';
-import {
-  createEmptyProjectExecutionSnapshot,
-  frozenNodeOutputsState,
-  graphPausedState,
-  graphRunHistoryByViewState,
-  graphRunningState,
-  graphStartTimeState,
-  lastRunDataByNodeState,
-  projectExecutionSnapshotsState,
-  rootGraphState,
-  runActivityJournalState,
-  runningGraphsState,
-  selectedGraphRunByViewState,
-  selectedLLMChatOutputPageByInvocationState,
-  selectedProcessPageNodesState,
-  type ProjectExecutionSnapshot,
-} from '../state/dataFlow.js';
-import { lastRecordingState } from '../state/execution.js';
-import { userInputModalQuestionsState } from '../state/userInput.js';
+import { projectExecutionSnapshotsState, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { useDataRefs } from '../providers/ProvidersContext.js';
 import { clearExecutionDataRefs } from '../utils/executionDataStorage.js';
-import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
+import {
+  captureProjectExecutionSnapshot,
+  restoreProjectExecutionSnapshot,
+} from './projectExecutionSnapshotBindings.js';
 
 export function useProjectExecutionSnapshots() {
   const store = useStore();
   const dataRefs = useDataRefs();
   const setProjectExecutionSnapshots = useSetAtom(projectExecutionSnapshotsState);
 
-  const captureCurrentProjectExecutionSnapshot = useCallback((): ProjectExecutionSnapshot => {
-    return {
-      graphPaused: store.get(graphPausedState),
-      graphRunHistoryByView: store.get(graphRunHistoryByViewState),
-      graphRunning: store.get(graphRunningState),
-      graphStartTime: store.get(graphStartTimeState),
-      frozenNodeOutputs: store.get(frozenNodeOutputsState),
-      lastRecording: store.get(lastRecordingState),
-      lastRunDataByNode: store.get(lastRunDataByNodeState),
-      rootGraph: store.get(rootGraphState),
-      runActivityJournal: store.get(runActivityJournalState),
-      runningGraphs: store.get(runningGraphsState),
-      selectedGraphRunByView: store.get(selectedGraphRunByViewState),
-      selectedLLMChatOutputPageByInvocation: store.get(selectedLLMChatOutputPageByInvocationState),
-      selectedProcessPageNodes: store.get(selectedProcessPageNodesState),
-      userInputQuestions: store.get(userInputModalQuestionsState),
-    };
-  }, [store]);
-
-  const restoreProjectExecutionSnapshot = useCallback(
-    (snapshot: ProjectExecutionSnapshot | undefined) => {
-      const nextSnapshot = snapshot ?? createEmptyProjectExecutionSnapshot();
-
-      store.set(graphPausedState, nextSnapshot.graphPaused);
-      store.set(graphRunHistoryByViewState, nextSnapshot.graphRunHistoryByView);
-      store.set(graphRunningState, nextSnapshot.graphRunning);
-      store.set(graphStartTimeState, nextSnapshot.graphStartTime);
-      store.set(frozenNodeOutputsState, nextSnapshot.frozenNodeOutputs ?? {});
-      store.set(lastRecordingState, nextSnapshot.lastRecording);
-      store.set(lastRunDataByNodeState, nextSnapshot.lastRunDataByNode);
-      store.set(rootGraphState, nextSnapshot.rootGraph);
-      store.set(runActivityJournalState, nextSnapshot.runActivityJournal ?? createRunActivityJournal());
-      store.set(runningGraphsState, nextSnapshot.runningGraphs);
-      store.set(selectedGraphRunByViewState, nextSnapshot.selectedGraphRunByView);
-      store.set(
-        selectedLLMChatOutputPageByInvocationState,
-        nextSnapshot.selectedLLMChatOutputPageByInvocation ?? {},
-      );
-      store.set(selectedProcessPageNodesState, nextSnapshot.selectedProcessPageNodes);
-      store.set(userInputModalQuestionsState, nextSnapshot.userInputQuestions ?? {});
-    },
+  const captureCurrentProjectExecutionSnapshot = useCallback(() => captureProjectExecutionSnapshot(store), [store]);
+  const restoreSnapshot = useCallback(
+    (snapshot: ProjectExecutionSnapshot | undefined) => restoreProjectExecutionSnapshot(store, snapshot),
     [store],
   );
 
@@ -113,6 +60,6 @@ export function useProjectExecutionSnapshots() {
     captureCurrentProjectExecutionSnapshot,
     persistCurrentProjectExecutionSnapshot,
     removeProjectExecutionSnapshot,
-    restoreProjectExecutionSnapshot,
+    restoreProjectExecutionSnapshot: restoreSnapshot,
   };
 }

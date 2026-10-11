@@ -8,6 +8,7 @@ import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
 import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
 import { handleError } from '../utils/errorHandling.js';
+import { previousDataPerNodeToKeepState } from '../state/settings.js';
 
 /** Display projection only. Run ownership, cancellation and recording stay with the entry tab. */
 export function useBundleExecutionRouting() {
@@ -63,6 +64,7 @@ export function useBundleExecutionRouting() {
           projectId: id,
           refStore,
           snapshot,
+          previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
         });
         if (!result.changed) return;
         store.set(projectExecutionSnapshotsState, (previous) => ({ ...previous, [id]: result.snapshot }));

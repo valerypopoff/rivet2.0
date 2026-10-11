@@ -264,6 +264,146 @@ beforeEach(() => {
 });
 
 void describe('GraphProcessor scheduler boundaries', () => {
+  for (const scheduler of ['compatible', 'fast-acyclic'] as const) {
+    void it(`settles Watch history after partial lifecycle setup fails (${scheduler})`, async (t) => {
+      const source = makeTestNode('setup-source');
+      const watch = makeWatchNode();
+      const stop = makeStopWatchNode();
+      const graph = makeGraph(
+        'setup-failure',
+        [source, watch, stop],
+        [connect(source.id, watch.id, 'stream'), connect(watch.id, stop.id, 'value', 'value')],
+      );
+      const processor = new GraphProcessor(
+        makeProject(graph),
+        graph.metadata!.id,
+        createBuiltInRegistry().register(asyncTestNode),
+        false,
+        { scheduler },
+      );
+      const summaries: ProcessEvents['streamingOutputWatchSummary'][] = [];
+      processor.on('streamingOutputWatchSummary', (event) => summaries.push(event));
+      const on = processor.on;
+      let bindings = 0;
+      const setupError = new Error('parent binding failed');
+      const faulty = t.mock.method(processor, 'on', ((event, listener) => {
+        if (event === 'resume') throw setupError;
+        const unsubscribe = on(event, listener);
+        if (event !== 'pause') return unsubscribe;
+        bindings++;
+        return () => {
+          bindings--;
+          unsubscribe();
+        };
+      }) as GraphProcessor['on']);
+      await assert.rejects(
+        withTimeout(processor.processGraph(testProcessContext()), 'failed Watch setup'),
+        (error) => error instanceof Error && error.cause === setupError,
+      );
+      assert.equal(bindings, 0);
+      assert.equal(summaries[0]?.summary.failedIterations, 1);
+      assert.equal(summaries[0]?.summary.completedIterations, 0);
+      assert.equal(summaries[0]?.summary.selectedIteration?.reason, 'failure');
+      faulty.mock.restore();
+      await withTimeout(processor.processGraph(testProcessContext()), 'reuse after failed setup');
+      assert.equal(summaries.at(-1)?.summary.failedIterations, 0);
+    });
+
+    void it(`preserves Watch execution failure when disposal also fails (${scheduler})`, async (t) => {
+      t.mock.method(console, 'warn', () => {});
+      const source = makeTestNode('cleanup-source');
+      const watch = makeWatchNode();
+      const branch = makeTestNode('failed-branch');
+      const stop = makeStopWatchNode();
+      const graph = makeGraph(
+        'cleanup-failure',
+        [source, watch, branch, stop],
+        [
+          connect(source.id, watch.id, 'stream'),
+          connect(watch.id, branch.id, 'input', 'value'),
+          connect(branch.id, stop.id, 'value'),
+        ],
+      );
+      const primary = new Error('original branch failure');
+      AsyncTestNodeImpl.handlers.set(branch.id, () => {
+        throw primary;
+      });
+      const processor = new GraphProcessor(
+        makeProject(graph),
+        graph.metadata!.id,
+        createBuiltInRegistry().register(asyncTestNode),
+        false,
+        { scheduler },
+      );
+      let graphError: Error | undefined;
+      processor.on('graphError', ({ error }) => {
+        graphError = error;
+      });
+      const on = processor.on;
+      let bindings = 0;
+      t.mock.method(processor, 'on', ((event, listener) => {
+        const unsubscribe = on(event, listener);
+        if (event !== 'pause' && event !== 'resume') return unsubscribe;
+        bindings++;
+        return () => {
+          bindings--;
+          unsubscribe();
+          if (event === 'pause') throw new Error('secondary cleanup failure');
+        };
+      }) as GraphProcessor['on']);
+      await assert.rejects(
+        withTimeout(processor.processGraph(testProcessContext()), 'combined Watch failure'),
+        /failed-branch/,
+      );
+      assert.equal(graphError?.cause, primary);
+      assert.equal(bindings, 0);
+    });
+
+    void it(`preserves an ordinary Subgraph failure through automatic cleanup (${scheduler})`, async (t) => {
+      t.mock.method(console, 'warn', () => {});
+      const failed = makeTestNode('ordinary-child-failure');
+      const child = makeGraph('ordinary-failing-child', [failed], []);
+      const caller = makeSubgraphNode('ordinary-caller', child.metadata!.id!);
+      const graph = makeGraph('ordinary-failing-parent', [caller], []);
+      const primary = new Error('original ordinary child failure');
+      AsyncTestNodeImpl.handlers.set(failed.id, () => {
+        throw primary;
+      });
+      const processor = new GraphProcessor(
+        makeProject(graph, [child]),
+        graph.metadata!.id,
+        createBuiltInRegistry().register(asyncTestNode),
+        false,
+        { scheduler },
+      );
+      let childFailure: Error | string | undefined;
+      let callerFailure: Error | string | undefined;
+      processor.on('graphError', ({ graph: eventGraph, error }) => {
+        if (eventGraph.metadata?.id === child.metadata!.id) childFailure = error;
+      });
+      processor.on('nodeError', ({ node, error }) => {
+        if (node.id === caller.id) callerFailure = error;
+      });
+      const on = processor.on;
+      let bindings = 0;
+      t.mock.method(processor, 'on', ((event, listener) => {
+        const unsubscribe = on(event, listener);
+        if (event !== 'pause' && event !== 'resume') return unsubscribe;
+        bindings++;
+        return () => {
+          unsubscribe();
+          bindings--;
+          throw new Error('secondary automatic cleanup failure');
+        };
+      }) as GraphProcessor['on']);
+      await assert.rejects(withTimeout(processor.processGraph(testProcessContext()), 'ordinary child cleanup'));
+      assert.ok(childFailure instanceof Error);
+      assert.equal(childFailure.cause, primary);
+      assert.equal(callerFailure, childFailure, 'the caller receives the child failure, not a cleanup aggregate');
+      assert.equal(bindings, 0);
+    });
+  }
+
   void it('turns one ordinary value into one early chunk and releases Catch exactly once', async () => {
     const source = makeTestNode('ordinary-source');
     const emit = makeStreamValueNode();

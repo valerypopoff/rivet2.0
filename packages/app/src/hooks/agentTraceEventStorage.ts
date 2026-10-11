@@ -1,36 +1,24 @@
 import { getAgentTraceEventIdentity, mergeAgentTraceEvent, type AgentTraceEvent } from '@valerypopoff/rivet2-core';
 import type { RunDataByNodeId } from '../state/dataFlow.js';
+import { updateNodeRunData } from './executionDataTransitions.js';
 
 /**
  * Stores an observational trace event on its owning node invocation.
  * Identified redeliveries replace their earlier row without changing order;
  * anonymous tool events remain distinct because they cannot be matched safely.
+ * Invocation creation and payload retention use the same transition as node
+ * events, even when a diagnostic arrives before nodeStart.
  */
-export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeId, event: AgentTraceEvent): void {
+export function updateAgentTraceEventForInvocation(
+  runDataByNode: RunDataByNodeId,
+  event: AgentTraceEvent,
+  previousDataPerNodeToKeep?: number,
+) {
   const execution = event.execution;
   const nodeId = event.type === 'tool-call-finished' ? event.sourceNodeId : event.nodeId;
   const processId = event.type === 'tool-call-finished' ? event.sourceProcessId : event.processId;
-  const processes = (runDataByNode[nodeId] ??= []);
-  let process = processes.find((candidate) => candidate.processId === processId);
-
-  if (process == null) {
-    process = {
-      processId,
-      graphId: execution.graphId,
-      graphRunId: execution.graphRunId,
-      parentGraphRunId: execution.parentGraphRunId,
-      rootRunId: execution.rootRunId,
-      data: {},
-    };
-    processes.push(process);
-  } else {
-    process.graphId = execution.graphId;
-    process.graphRunId = execution.graphRunId;
-    process.parentGraphRunId = execution.parentGraphRunId;
-    process.rootRunId = execution.rootRunId;
-  }
-
-  const events = (process.data.agentTraceEvents ??= []);
+  const process = runDataByNode[nodeId]?.find((candidate) => candidate.processId === processId);
+  const events = [...(process?.data.agentTraceEvents ?? [])];
   const identity = getAgentTraceEventIdentity(event);
   const existingIndex =
     identity == null ? -1 : events.findIndex((candidate) => getAgentTraceEventIdentity(candidate) === identity);
@@ -40,4 +28,14 @@ export function upsertAgentTraceEventForInvocation(runDataByNode: RunDataByNodeI
   } else {
     events[existingIndex] = mergeAgentTraceEvent(events[existingIndex]!, event);
   }
+  return {
+    nodeId,
+    ...updateNodeRunData(runDataByNode, {
+      nodeId,
+      processId,
+      execution,
+      data: { agentTraceEvents: events },
+      previousDataPerNodeToKeep,
+    }),
+  };
 }

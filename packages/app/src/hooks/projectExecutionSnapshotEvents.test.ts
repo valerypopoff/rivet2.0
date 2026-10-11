@@ -32,6 +32,64 @@ function createDataRefStore(): DataRefStore {
   };
 }
 
+test('called-project terminal events tolerate inactive snapshots created before prompt storage was added', () => {
+  const snapshot = createEmptyProjectExecutionSnapshot();
+  delete (snapshot as Partial<ProjectExecutionSnapshot>).userInputQuestions;
+  const execution = {
+    graphId: 'called-graph' as GraphId,
+    graphRunId: 'called-run' as GraphRunId,
+    rootRunId: 'caller-root' as RootRunId,
+    projectScope: '\u0000rivet-subgraph:latest:called',
+  };
+  for (const message of ['nodeFinish', 'nodeError', 'nodeExcluded'] as const) {
+    const result = applyProcessEventToProjectExecutionSnapshot({
+      message,
+      snapshot,
+      projectId: 'caller' as ProjectId,
+      refStore: createDataRefStore(),
+      data: {
+        execution,
+        node: { id: 'called-node' },
+        processId: 'called-process',
+        inputs: {},
+        outputs: {},
+        error: 'failed',
+        reason: 'excluded',
+      } as never,
+    });
+    assert.deepEqual(result.snapshot.lastRunDataByNode, {});
+    assert.deepEqual(result.snapshot.userInputQuestions, {});
+    assert.ok(result.snapshot.runActivityJournal.rootsById[execution.rootRunId]);
+  }
+  assert.equal(Object.hasOwn(snapshot, 'userInputQuestions'), false);
+});
+
+test('inactive non-split partials retain selected history while split partials continue following latest', () => {
+  const nodeId = 'selection-node' as NodeId;
+  const processId = 'selection-process' as ProcessId;
+  const execution = { graphId: 'graph' as GraphId, graphRunId: 'run' as GraphRunId, rootRunId: 'root' as RootRunId };
+  const snapshot = createEmptyProjectExecutionSnapshot();
+  snapshot.selectedProcessPageNodes[nodeId] = 2;
+  snapshot.lastRunDataByNode[nodeId] = [{ processId, data: { status: { type: 'running' } } }];
+  for (const isSplitRun of [false, true]) {
+    const next = applyProcessEventToProjectExecutionSnapshot({
+      message: 'partialOutput',
+      snapshot,
+      projectId: 'project' as ProjectId,
+      refStore: createDataRefStore(),
+      data: {
+        execution,
+        node: { id: nodeId, isSplitRun },
+        processId,
+        index: 0,
+        outputs: { output: { type: 'string', value: 'partial' } },
+      } as never,
+    }).snapshot;
+    assert.equal(next.selectedProcessPageNodes[nodeId], isSplitRun ? 'latest' : 2);
+  }
+  assert.equal(snapshot.selectedProcessPageNodes[nodeId], 2);
+});
+
 test('inactive callers retain child activity but not colliding called-project node or graph state', () => {
   const execution = {
     graphId: 'same-graph' as GraphId,

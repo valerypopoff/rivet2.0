@@ -38,7 +38,12 @@ import {
   projectsState,
   projectState,
 } from '../state/savedGraphs';
-import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
+import {
+  recordExecutionsState,
+  settingsState,
+  showNodeRunDurationsState,
+  previousDataPerNodeToKeepState,
+} from '../state/settings';
 import { graphState } from '../state/graph';
 import {
   currentProjectLoadedRecordingState,
@@ -259,6 +264,7 @@ export function useLocalExecutor() {
         projectId: runProjectId,
         refStore: dataRefs,
         snapshots: previousSnapshots,
+        previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
       }),
     );
   }

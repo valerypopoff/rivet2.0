@@ -1,32 +1,79 @@
 import type Emittery from 'emittery';
 import type { GraphProcessor, ProcessEvents } from './GraphProcessor.js';
 import { getGraphAbortReasonFromSignal } from './GraphAbortReasons.js';
+import { logRuntimeWarn } from '../utils/runtimeLogging.js';
 
 type GraphLifecycleEvent = ProcessEvents['graphFinish'] | ProcessEvents['graphAbort'] | ProcessEvents['graphError'];
+
+/** Drain before invoking disposers so cleanup is exhaustive and reentrant/idempotent. */
+function releaseSubscriptions(...groups: Array<Array<() => void>>): void {
+  const errors: unknown[] = [];
+  const subscriptions = groups.flatMap((group) => group.splice(0));
+  for (const unsubscribe of subscriptions) {
+    try {
+      unsubscribe();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, 'Failed to release child execution subscriptions');
+}
+
+function rollbackSubscriptions(error: unknown, ...groups: Array<Array<() => void>>): never {
+  try {
+    releaseSubscriptions(...groups);
+  } catch {
+    // Setup failure remains authoritative; every acquired disposer was attempted.
+  }
+  throw error;
+}
+
+/** Cleanup must not replace an execution/setup failure already being propagated. */
+export function cleanupSubprocessorBindings(
+  lifecycle: (() => void) | undefined,
+  events: (() => void) | undefined,
+  executionFailed: boolean,
+): void {
+  try {
+    releaseSubscriptions(lifecycle ? [lifecycle] : [], events ? [events] : []);
+  } catch (error) {
+    if (!executionFailed) throw error;
+    // Disposer errors may contain authored data. Keep secondary failure visible
+    // without logging messages or changing the primary Error identity.
+    try {
+      logRuntimeWarn('Child execution cleanup failed after an execution or setup failure.', {
+        failedBindings: error instanceof AggregateError ? error.errors.length : 1,
+      });
+    } catch {
+      // A host-provided logger must not replace the primary failure either.
+    }
+  }
+}
 
 function subscribeOwnGraphRunLifecycle(processor: GraphProcessor, onLifecycleEvent: () => void): () => void {
   let ownGraphRunId: ProcessEvents['graphStart']['execution']['graphRunId'] | undefined;
 
-  const unsubscribeGraphStart = processor.on('graphStart', (event) => {
-    ownGraphRunId ??= event.execution.graphRunId;
-  });
-
-  const onPossibleLifecycleEvent = (event: GraphLifecycleEvent) => {
+  const onPossibleLifecycleEvent = (event: GraphLifecycleEvent, executionFailed: boolean) => {
     if (ownGraphRunId != null && event.execution.graphRunId === ownGraphRunId) {
-      onLifecycleEvent();
+      if (executionFailed) cleanupSubprocessorBindings(onLifecycleEvent, undefined, true);
+      else onLifecycleEvent();
     }
   };
 
-  const unsubscribeGraphFinish = processor.on('graphFinish', onPossibleLifecycleEvent);
-  const unsubscribeGraphAbort = processor.on('graphAbort', onPossibleLifecycleEvent);
-  const unsubscribeGraphError = processor.on('graphError', onPossibleLifecycleEvent);
-
-  return () => {
-    unsubscribeGraphStart();
-    unsubscribeGraphFinish();
-    unsubscribeGraphAbort();
-    unsubscribeGraphError();
-  };
+  const subscriptions: Array<() => void> = [];
+  try {
+    subscriptions.push(
+      processor.on('graphStart', (event) => {
+        ownGraphRunId ??= event.execution.graphRunId;
+      }),
+    );
+    subscriptions.push(processor.on('graphFinish', (event) => onPossibleLifecycleEvent(event, false)));
+    subscriptions.push(processor.on('graphAbort', (event) => onPossibleLifecycleEvent(event, !event.successful)));
+    subscriptions.push(processor.on('graphError', (event) => onPossibleLifecycleEvent(event, true)));
+  } catch (error) {
+    rollbackSubscriptions(error, subscriptions);
+  }
+  return () => releaseSubscriptions(subscriptions);
 }
 
 export function wireSubprocessorEvents(
@@ -54,66 +101,56 @@ export function wireSubprocessorEvents(
   // graph-level terminal event. Keep passive forwarding alive for the
   // subprocessor object lifetime so remote-debugger/recorder consumers do not
   // miss those node terminals.
-  const passiveUnsubscribers = [
-    processor.on('nodeError', (event) => forward('nodeError', event)),
-    processor.on('nodeFinish', (event) => forward('nodeFinish', event)),
-    processor.on('partialOutput', (event) => forward('partialOutput', event)),
-    processor.on('progress', (event) => forward('progress', event)),
-    processor.on('llmCallFinished', (event) => forward('llmCallFinished', event)),
-    processor.on('llmChatOutputSnapshot', (event) => forward('llmChatOutputSnapshot', event)),
-    processor.on('llmProfileAttempt', (event) => forward('llmProfileAttempt', event)),
-    processor.on('toolCallFinished', (event) => forward('toolCallFinished', event)),
-    processor.on('nodeExcluded', (event) => forward('nodeExcluded', event)),
-    processor.on('nodeStart', (event) => forward('nodeStart', event)),
-    processor.on('graphAbort', (event) => forward('graphAbort', event)),
-    processor.on('graphError', (event) => forward('graphError', event)),
-    processor.on('userInput', (event) => forward('userInput', event)),
-    processor.on('graphStart', (event) => forward('graphStart', event)),
-    processor.on('graphFinish', (event) => forward('graphFinish', event)),
-    processor.on('nodeOutputsCleared', (event) => forward('nodeOutputsCleared', event)),
-    processor.on('streamingOutputWatchSummary', (event) => forward('streamingOutputWatchSummary', event)),
-    processor.on('globalSet', (event) => forward('globalSet', event)),
-    processor.on('newAbortController', (event) => forward('newAbortController', event)),
-  ];
-
-  const controlUnsubscribers: Array<() => void> = [
-    processor.on('pause', () => {
-      if (!parentState.isPaused()) {
-        parentState.pause();
-      }
-    }),
-    processor.on('resume', () => {
-      if (parentState.isPaused()) {
-        parentState.resume();
-      }
-    }),
-  ];
-
-  const unsubscribeAny = processor.onAny((event, data) => {
-    if (event.startsWith('globalSet:')) {
-      void forward(event, data);
+  const passiveUnsubscribers: Array<() => void> = [];
+  const controlUnsubscribers: Array<() => void> = [];
+  const cleanupControls = () => releaseSubscriptions(controlUnsubscribers);
+  try {
+    const passiveEvents = [
+      'nodeError',
+      'nodeFinish',
+      'partialOutput',
+      'progress',
+      'llmCallFinished',
+      'llmChatOutputSnapshot',
+      'llmProfileAttempt',
+      'toolCallFinished',
+      'nodeExcluded',
+      'nodeStart',
+      'graphAbort',
+      'graphError',
+      'userInput',
+      'graphStart',
+      'graphFinish',
+      'nodeOutputsCleared',
+      'streamingOutputWatchSummary',
+      'globalSet',
+      'newAbortController',
+    ] as const;
+    for (const event of passiveEvents) {
+      passiveUnsubscribers.push(processor.on(event, (data) => forward(event, data)));
     }
-  });
-
-  let controlsCleanedUp = false;
-  const cleanupControls = () => {
-    if (controlsCleanedUp) {
-      return;
+    controlUnsubscribers.push(
+      processor.on('pause', () => {
+        if (!parentState.isPaused()) parentState.pause();
+      }),
+    );
+    controlUnsubscribers.push(
+      processor.on('resume', () => {
+        if (parentState.isPaused()) parentState.resume();
+      }),
+    );
+    passiveUnsubscribers.push(
+      processor.onAny((event, data) => {
+        if (event.startsWith('globalSet:')) void forward(event, data);
+      }),
+    );
+    if (parentState.autoCleanup !== false) {
+      controlUnsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanupControls));
     }
-
-    controlsCleanedUp = true;
-    controlUnsubscribers.forEach((unsubscribe) => unsubscribe());
-  };
-
-  if (parentState.autoCleanup !== false) {
-    controlUnsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanupControls));
+  } catch (error) {
+    rollbackSubscriptions(error, controlUnsubscribers, passiveUnsubscribers);
   }
-
-  return () => {
-    cleanupControls();
-    passiveUnsubscribers.forEach((unsubscribe) => unsubscribe());
-    unsubscribeAny();
-  };
+  return () => releaseSubscriptions(controlUnsubscribers, passiveUnsubscribers);
 }
 
 export function wireSubprocessorLifecycle(
@@ -154,34 +191,23 @@ export function wireSubprocessorLifecycle(
     void processor.resume();
   };
 
-  options.signal?.addEventListener('abort', abortFromSignal, { once: true });
-  options.parentAbortSignal.addEventListener('abort', abortFromParent, { once: true });
-
-  const unsubscribers: Array<() => void> = [
-    () => options.signal?.removeEventListener('abort', abortFromSignal),
-    () => options.parentAbortSignal.removeEventListener('abort', abortFromParent),
-    () => unsubscribePendingAbort?.(),
-    options.onParentPause(pauseProcessor),
-    options.onParentResume(resumeProcessor),
-  ];
-
-  let cleanedUp = false;
-  const cleanup = () => {
-    if (cleanedUp) {
-      return;
+  const unsubscribers: Array<() => void> = [];
+  const cleanup = () => releaseSubscriptions(unsubscribers);
+  try {
+    options.signal?.addEventListener('abort', abortFromSignal, { once: true });
+    unsubscribers.push(() => options.signal?.removeEventListener('abort', abortFromSignal));
+    options.parentAbortSignal.addEventListener('abort', abortFromParent, { once: true });
+    unsubscribers.push(() => options.parentAbortSignal.removeEventListener('abort', abortFromParent));
+    unsubscribers.push(() => unsubscribePendingAbort?.());
+    unsubscribers.push(options.onParentPause(pauseProcessor));
+    unsubscribers.push(options.onParentResume(resumeProcessor));
+    if (options.autoCleanup !== false) {
+      unsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanup));
     }
-
-    cleanedUp = true;
-    unsubscribers.forEach((unsubscribe) => unsubscribe());
-  };
-
-  if (options.autoCleanup !== false) {
-    unsubscribers.push(subscribeOwnGraphRunLifecycle(processor, cleanup));
-  }
-  if (options.signal?.aborted) {
-    abortFromSignal();
-  } else if (options.parentAbortSignal.aborted) {
-    abortFromParent();
+    if (options.signal?.aborted) abortFromSignal();
+    else if (options.parentAbortSignal.aborted) abortFromParent();
+  } catch (error) {
+    rollbackSubscriptions(error, unsubscribers);
   }
   return cleanup;
 }

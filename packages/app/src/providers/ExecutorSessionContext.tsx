@@ -12,6 +12,7 @@ import { executorSessionRevisionState } from '../state/execution.js';
 import { projectsState, projectState } from '../state/savedGraphs.js';
 import { useDataRefs, useDatasetProvider, type AppDatasetProvider } from './ProvidersContext.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
+import { previousDataPerNodeToKeepState } from '../state/settings.js';
 import {
   createUnscopedRemoteExecutionRoutingState,
   getRemoteExecutionEventDispatchDecision,
@@ -243,6 +244,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
             projectId,
             refStore: dataRefs,
             snapshots: previousSnapshots,
+            previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
           }),
         );
       },

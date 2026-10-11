@@ -5,9 +5,65 @@ import {
   type NodeId,
   type PortId,
   type RootRunId,
+  type GraphExecutionMetadata,
 } from '@valerypopoff/rivet2-core';
+import { produce } from 'immer';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
-import type { GraphRunSelection, ProcessDataForNode, RunDataByNodeId } from '../state/dataFlow.js';
+import type {
+  GraphRunSelection,
+  GraphRunRecord,
+  ProjectExecutionSnapshot,
+  ProcessDataForNode,
+  RunDataByNodeId,
+} from '../state/dataFlow.js';
+
+export function startGraphRunHistory(
+  history: ProjectExecutionSnapshot['graphRunHistoryByView'],
+  graphViewKey: GraphViewKey,
+  execution: GraphExecutionMetadata | undefined,
+): ProjectExecutionSnapshot['graphRunHistoryByView'] {
+  if (!execution) return history;
+  return produce(history, (draft) => {
+    draft[graphViewKey] ??= [];
+    if (!draft[graphViewKey]!.some((run) => run.graphRunId === execution.graphRunId)) {
+      draft[graphViewKey]!.push({
+        executor: execution.executor,
+        graphId: execution.graphId,
+        graphRunId: execution.graphRunId,
+        parentGraphRunId: execution.parentGraphRunId,
+        rootRunId: execution.rootRunId,
+        startedAt: Date.now(),
+        status: 'running',
+      });
+    }
+  });
+}
+
+export function finishGraphRunHistory(
+  history: ProjectExecutionSnapshot['graphRunHistoryByView'],
+  graphViewKey: GraphViewKey,
+  graphRunId: GraphRunId | undefined,
+  status: GraphRunRecord['status'],
+): ProjectExecutionSnapshot['graphRunHistoryByView'] {
+  if (!graphRunId) return history;
+  return produce(history, (draft) => {
+    const run = draft[graphViewKey]?.find((candidate) => candidate.graphRunId === graphRunId);
+    if (run) {
+      run.finishedAt = Date.now();
+      run.status = status;
+    }
+  });
+}
+
+export function interruptRunningProcesses(lastRunData: RunDataByNodeId): RunDataByNodeId {
+  return produce(lastRunData, (draft) => {
+    for (const processes of Object.values(draft)) {
+      for (const process of processes) {
+        if (process.data.status?.type === 'running') process.data.status = { type: 'interrupted' };
+      }
+    }
+  });
+}
 
 export const MISSING_DEBUGGER_TERMINAL_EVENT_WARNING =
   'Remote Debugger did not receive the terminal event for this node. The graph run completed successfully, so Rivet cleared the stale running state.';
@@ -101,7 +157,9 @@ function markProcessFinishedAfterMissingTerminalEvent(
   const warningPort = WarningsPort as PortId;
   const existingWarnings = process.data.outputData?.[warningPort];
   const warningValues =
-    existingWarnings?.type === 'string[]' && existingWarnings.storage === 'inline' && Array.isArray(existingWarnings.value)
+    existingWarnings?.type === 'string[]' &&
+    existingWarnings.storage === 'inline' &&
+    Array.isArray(existingWarnings.value)
       ? existingWarnings.value
       : [];
   const nextWarnings = warningValues.includes(MISSING_DEBUGGER_TERMINAL_EVENT_WARNING)
