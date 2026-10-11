@@ -261,6 +261,43 @@ work completed at that boundary and does not mutate afterward. The processor's
 canonical output object remains unseeded until finalization, so `graphFinish`
 and `done` include cost from managed async branches that settle later.
 
+Runtime cost accounting stays in Core's invocation state. Numeric `cost` remains
+compatible; when known costs are accounted, `costBreakdown` is an object DataValue
+with USD subtotals `{ llm, classifier, other }`. Current/legacy LLM Chat and
+Classifier Evaluate identify their respective families; external/plugin costs
+without a family belong to `other`. No-charge non-AI graphs retain their existing
+shape. Unpriced calls do not fabricate charges; classifier estimates retain
+successful-response semantics. Explicit Graph Outputs named `cost` or
+`costBreakdown` still own those names and may override derived metrics.
+
+Normal/split/frozen processing uses one accumulator. Subgraph, optimized Subgraph,
+Call Graph, Referenced Graph Alias, and delegated graph tools carry their families
+without directly adding ordinary child costs twice. Alias metric visibility does
+not discard accounting. Carried breakdowns must match their numeric cost before
+attributing that value; otherwise the node's family is used. Temporary
+continuation/Watch/async processors transfer invocation totals at their existing
+completion boundaries. Early cost and breakdown are detached snapshots.
+Internal LLM auto-delegation carries tool costs outside cached delegation records;
+connected Delegate branches keep their existing accounting owner. Replaying an
+already-delegated record never charges again.
+
+Live editor cache hits preserve cached response/Usage evidence but return zero
+current-run cost and remove the historical breakdown, without mutating the
+cached output map. Frozen recording outputs remain intentional historical replay;
+they are not editor cache hits. Negative/non-finite node costs and overflowing
+additions are excluded before accumulator mutation. Breakdown fields must be own
+numeric data properties; inherited fields/accessors are rejected without invocation.
+`graphCostBreakdownMatchesCost` is the shared graph/tool attribution check.
+
+LLM Chat's result projector emits cost independently of Usage visibility from
+deduplicated physical-call receipts (last receipt per call ID wins), summing known
+prices, including priced retries/fallback calls. Usage's exact-total rule remains
+stricter: missing prices keep `Usage.totalCost` unavailable. Hosts forward Core
+metrics rather than summing bounded traces. CLI `--include-cost`/`--expose-cost`
+show or hide both fields together. Coverage lives in GraphBoundaryEffects,
+ClassifierResourceAndCost, LLM coordinator/projector, async/Watch, Delegate,
+OpenRouter, Node graphRunner, and CLI output-shaping tests.
+
 Root ownership keeps an async branch alive when its source processor finishes
 normally, but it does not detach the branch from source cancellation. Managed
 branches subscribe to both the source processor run's abort signal and the root

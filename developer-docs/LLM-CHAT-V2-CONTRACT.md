@@ -585,8 +585,16 @@ paths and should not be used as the primary target for new provider refactors.
   price; a failed transport call with no usage therefore never becomes `$0`,
   but makes the exact total unavailable. Response Inspector can still display a
   known subtotal as **partial** because it also retains the per-call rows.
-  Editor-cache hits make no physical calls and keep their existing cached output
-  contract.
+  Graph cost includes the known physical-call subtotal independently of Usage
+  visibility. `llmInvocationResultProjector.ts` owns that projection; missing
+  prices do not invent charges. Internal auto-delegated graph costs carry their
+  families separately; connected Delegate branches retain their accounting owner.
+  Core's `costBreakdown` distinguishes LLM, classifier, and other costs. Hosts
+  must not reconstruct it from UI traces.
+  Editor-cache hits make no physical calls. They preserve response and Usage
+  evidence, but return zero current-invocation cost and omit the old breakdown
+  so previous model/tool costs are never charged again. Cache-hit projection
+  does not mutate the cached output map.
 - Response-trace fallback totals count forward profile-index advances for each
   LLM node invocation. This includes profiles that failed during configuration
   and therefore produced no physical-call event when a later profile reaches a

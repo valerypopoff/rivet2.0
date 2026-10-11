@@ -86,6 +86,36 @@ function mockRequests(reply: (body: Record<string, any>, index: number) => Respo
   return requests;
 }
 
+void it('OpenRouter editor-cache hits preserve the response without re-adding runtime cost', async () => {
+  const { GraphProcessor, globalRivetNodeRegistry, TextNodeImpl } = await import('../../../src/index.js');
+  const requests = mockRequests();
+  const chat = node({ cache: true, outputUsage: true });
+  const prompt = TextNodeImpl.create();
+  prompt.data.text = 'Hello';
+  const project = {
+    metadata: { id: 'cache-project', title: 'Cache', description: '', mainGraphId: 'cache-graph' },
+    graphs: {
+      'cache-graph': {
+        metadata: { id: 'cache-graph', name: 'Cache', description: '' },
+        nodes: [prompt, chat],
+        connections: [{ outputNodeId: prompt.id, outputId: 'output', inputNodeId: chat.id, inputId: 'prompt' }],
+      },
+    },
+  } as unknown as Project;
+  const processor = new GraphProcessor(project, project.metadata.mainGraphId!, globalRivetNodeRegistry);
+  const host = {
+    ...testProcessContext(),
+    executor: 'browser' as const,
+    settings: { openRouterApiKey: 'fixture' },
+    editorExecutionCache: new Map(),
+  };
+  const first = await processor.processGraph(host);
+  assert.equal(first.cost?.value, 0.004);
+  assert.equal((await processor.processGraph(host)).cost?.value, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(first.cost?.value, 0.004);
+});
+
 void it('OpenRouter sends every shared generation setting, reasoning, headers and exact diagnostics', async () => {
   const requests = mockRequests();
   const calls: unknown[] = [];
@@ -705,7 +735,10 @@ for (const mode of ['generate', 'stream'] as const) {
       settings: { openRouterApiKey: 'router-secret' },
       llmProfileHealthStore: new InMemoryRivetLLMProfileHealthStore(),
     };
-    assert.equal((await processor.processGraph(host)).output?.value, 'Hello back');
+    const first = await processor.processGraph(host);
+    assert.equal(first.output?.value, 'Hello back');
+    assert.equal(first.cost?.value, 0.004);
+    assert.deepEqual(first.costBreakdown?.value, { llm: 0.004, classifier: 0, other: 0 });
     assert.deepEqual(
       requests.map((request) => request.body.model),
       ['test/unavailable', 'test/model'],

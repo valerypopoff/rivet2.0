@@ -435,7 +435,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
     }
 
     context.signal.throwIfAborted();
-    const { result, terminalSnapshot } = invocation;
+    const { result, terminalSnapshot, toolCost } = invocation;
     projectLLMInvocationResult({
       result,
       modelCalls: invocationJournal.modelCalls,
@@ -443,6 +443,7 @@ export class LLMChatV2NodeImpl extends NodeImpl<LLMChatV2Node> {
       outputLLMAttempts: this.data.outputLLMAttempts,
       llmAttempts: invocationJournal.llmAttempts,
       profileSummary: runtime.getProfileSummary?.(),
+      toolCost,
     });
     result.commonOutputs = withRunSuccessOutputs(this.data, result.commonOutputs);
 

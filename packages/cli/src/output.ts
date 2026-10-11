@@ -8,10 +8,7 @@ export type OutputShapeOptions = {
   unwrapOutput?: string;
 };
 
-export function shapeOutputs(
-  outputs: Outputs,
-  options: OutputShapeOptions,
-): unknown {
+export function shapeOutputs(outputs: Outputs, options: OutputShapeOptions): unknown {
   validateOutputShapeOptions(options);
 
   const { includeCost = false, outputKey, unwrapOutput } = options;
@@ -20,6 +17,7 @@ export function shapeOutputs(
 
   if (!includeCost) {
     delete visibleOutputs.cost;
+    delete visibleOutputs.costBreakdown;
   }
 
   const selectedOutputKey = unwrapOutput ?? outputKey;

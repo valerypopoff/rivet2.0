@@ -18,6 +18,15 @@ the request. Rejected structured replies retain reported physical-call cost.
 
 ## Hosted editor integration boundaries
 
+Runtime results forward Core's numeric `cost` and object DataValue
+`costBreakdown` with USD `{ llm, classifier, other }` subtotals. Core owns
+aggregation across nodes, nested graphs, delegated tools, and managed async work;
+transports must not re-sum bounded diagnostics. Early outputs are provisional
+snapshots; terminal outputs include late managed work. Unknown prices keep the
+known subtotal incomplete. Existing endpoint output unwrapping is unchanged:
+selecting a user value does not inject metrics into that value. See
+[execution data flow](../EXECUTION-DATA-FLOW.md).
+
 Editor Browser/Node transports share authored run capture and selection in
 `packages/app/src/hooks/preparedEditorRun.ts`; `EditorRunSession` owns per-run
 cancellation/cleanup without taking ownership from the project-scoped executor

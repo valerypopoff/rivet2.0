@@ -176,7 +176,7 @@ For LLM Chat, the node's API key source controls where the key comes from. If a 
 
 ### Monitoring
 
-- `--expose-cost`: Exposes the graph run cost as a property in the JSON response object. Disabled by default.
+- `--expose-cost`: Exposes numeric `cost` and, when known costs are accounted, `costBreakdown` with `llm`, `classifier`, and `other` USD subtotals. Unknown prices can make the total incomplete. Disabled by default.
 - `--unwrap-output <id>`: Responds with only `outputs[id].value` instead of the full output map.
 
 Every non-streaming response includes an `x-duration-ms` header. Errors use this shape:

@@ -266,6 +266,7 @@ export class ToolCallContinuationCoordinator {
             [toolResult.record],
             hasAssistantMessage ? assistantMessage : undefined,
             toolResult.cost,
+            toolResult.costBreakdown,
           );
           this.#adapter.accumulateCost(outputs);
           await this.#adapter.emitDelegateFinish(delegateNode, outputs, processId, timingStart);

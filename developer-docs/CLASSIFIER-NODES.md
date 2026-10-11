@@ -514,6 +514,12 @@ Keep validation responsibilities in their owning modules: `json.ts` provides pla
 
 ### Model-aware cost accounting
 
+Runtime results preserve numeric `cost` and add `costBreakdown` (object DataValue)
+for known costs: `{ llm, classifier, other }`, in USD. Evaluate contributes to
+`classifier` independently of Usage visibility, including nested graph/tool calls.
+See [execution data flow](./EXECUTION-DATA-FLOW.md) for ownership, early snapshots,
+authored metric-name overrides, and incomplete-pricing semantics.
+
 Rates were rechecked against the primary provider documentation on 2026-10-07. Charge the successful response's aggregate `usage.input_tokens` once: do not estimate tokens from text length/base64 bytes, multiply by question count, or add image tokens separately. [Liquid's usage contract](https://docs.liquid.ai/lfm/models/decision-models) already includes image tokens for every question (for example, two questions about a 1024×1024 image include 3,072 image tokens plus text). Jev reports request-level usage. OpenAI Decisions' cache-read, cache-write and output charges are zero; do not import Chat/Responses caching discounts or output rates even if those detail fields are present. Its long-context threshold uses `input_tokens`, not `total_tokens` or output tokens. `ClassifierCredentialsAndPricing.test.ts` exercises these rules through the calculator and real Evaluate nodes, with multi-question text/image evidence, diagnostics, Usage details on/off, tiny fractional USD costs, and both sides of the context threshold.
 
 Core's provider registry owns exact model-pricing groups. Both requested and returned model IDs must belong to the same verified group; do not infer rates from prefixes or treat aliases as proof about a future returned version. [TypeSafe's models](https://docs.typesafe.ai/models) currently document `jev-latest`, `jev-preview` and `jev-1.13.0` together at $0.042/MTok input. Liquid's documented paid `d1` rate is $0.04/MTok input; `d1:free` and unrecognized IDs have unknown pricing here, not assumed paid or zero. [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions) prices `gpt-6-luna` input at $0.10/MTok with no output/cache charges; its [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna) doubles the input rate for the entire request above 272,000 input tokens. Regional/account-specific premiums are not inferred from token usage.

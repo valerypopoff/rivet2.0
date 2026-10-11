@@ -67,6 +67,9 @@ import {
   applyFrozenGraphBoundaryEffects,
   commitGraphOutputValue,
   ensureGraphCostOutput,
+  addGraphCostBreakdown,
+  readGraphCostBreakdown,
+  graphCostBreakdownMatchesCost,
 } from './GraphBoundaryEffects.js';
 import { coerceGraphOutputValue, type GraphOutputNode } from './nodes/GraphOutputNode.js';
 import { replayExecutionRecording } from './RecordingPlayer.js';
@@ -1440,7 +1443,7 @@ export class GraphProcessor {
           // the provisional cost must not occupy the root cost port before managed
           // async branches contribute their cost during finalization.
           const outputsReady = { ...this.#run.graphOutputs };
-          ensureGraphCostOutput(outputsReady, this.#run.totalCost);
+          ensureGraphCostOutput(outputsReady, this.#run.totalCost, this.#run.costBreakdown);
           await this.#emitter.emit(
             'graphOutputsReady',
             this.#withExecution({ graph: this.#graph, outputs: outputsReady }),
@@ -2019,7 +2022,7 @@ export class GraphProcessor {
       return outputValues;
     }
 
-    ensureGraphCostOutput(this.#run.graphOutputs, this.#run.totalCost);
+    ensureGraphCostOutput(this.#run.graphOutputs, this.#run.totalCost, this.#run.costBreakdown);
 
     await this.#emitter.emit('graphFinish', this.#withExecution({ graph: this.#graph, outputs: outputValues }));
 
@@ -2159,9 +2162,45 @@ export class GraphProcessor {
   }
 
   /** Accumulates cost from a node's output. */
-  #accumulateCost(output: Outputs): void {
-    if (output['cost' as PortId]?.type === 'number') {
-      this.#run.totalCost += coerceTypeOptional(output['cost' as PortId], 'number') ?? 0;
+  #accumulateCost(output: Outputs, nodeType?: string): void {
+    const carried = readGraphCostBreakdown(output);
+    // Alias metric visibility must not discard the called graph's accounting.
+    const aliasCost =
+      nodeType === 'referencedGraphAlias' && carried ? carried.llm + carried.classifier + carried.other : undefined;
+    const costOutput = output['cost' as PortId];
+    if (costOutput?.type === 'number' || aliasCost != null) {
+      const cost = costOutput?.type === 'number' ? costOutput.value : aliasCost;
+      if (
+        typeof cost !== 'number' ||
+        !Number.isFinite(cost) ||
+        cost < 0 ||
+        !Number.isFinite(this.#run.totalCost + cost)
+      )
+        return;
+      this.#run.totalCost += cost;
+      const family =
+        nodeType === 'classifierEvaluate'
+          ? 'classifier'
+          : nodeType === 'llmChatV2' || nodeType === 'chat'
+            ? 'llm'
+            : 'other';
+      // Authored metric-named graph outputs retain ownership. Do not attribute
+      // an unrelated cost value using a child's runtime breakdown.
+      const breakdown =
+        carried && graphCostBreakdownMatchesCost(carried, cost)
+          ? carried
+          : { llm: 0, classifier: 0, other: 0, [family]: cost };
+      if (cost !== 0 || family !== 'other' || carried) {
+        this.#run.costBreakdown = addGraphCostBreakdown(this.#run.costBreakdown, breakdown);
+      }
+    }
+  }
+
+  #accumulateChildCost(processor: GraphProcessor): void {
+    if (!Number.isFinite(this.#run.totalCost + processor.#run.totalCost)) return;
+    this.#run.totalCost += processor.#run.totalCost;
+    if (processor.#run.costBreakdown) {
+      this.#run.costBreakdown = addGraphCostBreakdown(this.#run.costBreakdown, processor.#run.costBreakdown);
     }
   }
 
@@ -2751,7 +2790,7 @@ export class GraphProcessor {
       await processor.processGraph(this.#run.context, this.#run.graphInputs, this.#contextValues);
       executionFailed = false;
     } finally {
-      root.#run.totalCost += processor.#run.totalCost;
+      root.#accumulateChildCost(processor);
       this.#releaseChildInvocation(processor, root, unwireLifecycle, unwireEvents, executionFailed);
     }
   }
@@ -2855,7 +2894,7 @@ export class GraphProcessor {
       processNodeWithInputData: (n, inputs, idx, pid, partial, markResultAsEditorCacheHit) =>
         this.#processNodeWithInputData(n, inputs, idx, pid, partial, markResultAsEditorCacheHit),
       splitRunConcurrency: this.#concurrency.splitRunConcurrency,
-      accumulateCost: (output) => this.#accumulateCost(output),
+      accumulateCost: (output) => this.#accumulateCost(output, node.type),
       setNodeResults: (nodeId, outputs) => this.#run.nodeResults.set(nodeId, outputs),
       markNodeVisited: (nodeId) => this.#run.visitedNodes.add(nodeId),
       nodeErrored: (n, err, pid, durationMs, splitRunDurationMs, resultOrigin, splitOutputs) =>
@@ -2908,7 +2947,7 @@ export class GraphProcessor {
     const timingStart = this.#startNodeTiming();
     this.#run.nodeResults.set(node.id, outputValues);
     this.#run.visitedNodes.add(node.id);
-    this.#accumulateCost(outputValues);
+    this.#accumulateCost(outputValues, node.type);
     await this.#applyFrozenNodeDataflowEffects(node, outputValues, processId);
     this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
 
@@ -2979,7 +3018,7 @@ export class GraphProcessor {
 
       this.#run.nodeResults.set(node.id, outputValues);
       this.#run.visitedNodes.add(node.id);
-      this.#accumulateCost(outputValues);
+      this.#accumulateCost(outputValues, node.type);
       this.#assertStreamingOutputWatchFinalOutputs(node, outputValues);
       const stopClaim = this.#claimStreamingWatchStopFromInvocation(node, outputValues);
       await this.#emitter.emit(
@@ -3700,7 +3739,7 @@ export class GraphProcessor {
       executionFailed = false;
       return result;
     } finally {
-      this.#run.totalCost += processor.#run.totalCost;
+      this.#accumulateChildCost(processor);
       this.#releaseChildInvocation(processor, this, unwireLifecycle, unwireEvents, executionFailed);
     }
   }
@@ -4522,7 +4561,7 @@ export class GraphProcessor {
       }
       plan.history.complete(historyIteration);
       if (processor) {
-        this.#run.totalCost += processor.#run.totalCost;
+        this.#accumulateChildCost(processor);
         this.#releaseChildInvocation(processor, root, unwireLifecycle, unwireEvents, executionFailed);
       }
     }

@@ -2015,6 +2015,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const outputs = await processor.processGraph(testProcessContext());
     assert.equal(childCost, 3);
     assert.equal(outputs.cost?.value, 3);
+    assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 3 });
     assert.equal(summaries.length, 1);
     assert.equal(summaries[0]!.watchNode.id, watch.id);
   });
@@ -4523,6 +4524,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(outputs.result?.value, 'ready');
     assert.equal(outputs.cost?.value, 2);
     assert.equal(publishedOutputs, outputs);
+    assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 2 });
     assert.equal(processor.isRunning, true);
     assert.deepEqual(lifecycleEvents, ['outputs-ready']);
 
@@ -4532,6 +4534,8 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(processor.isRunning, false);
     assert.equal(outputs.cost?.value, 2);
     assert.equal(completedOutputs?.cost?.value, 5);
+    assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 2 });
+    assert.deepEqual(completedOutputs?.costBreakdown?.value, { llm: 0, classifier: 0, other: 5 });
     assert.notEqual(completedOutputs, outputs);
     assert.deepEqual(lifecycleEvents, ['outputs-ready', 'graph-finish', 'done']);
   });

@@ -94,6 +94,26 @@ Runs the selected graph and resolves with graph outputs.
 
 When the run succeeds, GraphProcessor adds a `cost` output if the graph did not already produce one.
 
+`cost` stays a numeric DataValue containing known USD costs from LLMs,
+classifiers, and other cost-producing nodes. When known costs are accounted,
+`costBreakdown` is also returned as an object DataValue:
+
+```json
+{
+  "cost": { "type": "number", "value": 0.23 },
+  "costBreakdown": { "type": "object", "value": { "llm": 0.2, "classifier": 0.03, "other": 0 } }
+}
+```
+
+Usage-output settings do not disable accounting. Nested graph/tool costs retain
+their categories. Missing prices mean these are incomplete known subtotals, not
+an invoice. Graph Outputs named `cost` or `costBreakdown` override the matching
+derived output. Early results are snapshots; terminal results include managed
+background work that finishes later.
+
+Live editor cache hits add no new cost; their cached Usage evidence may still
+describe the original request. Invalid negative/non-finite node costs are ignored.
+
 ## ProcessContext
 
 `ProcessContext` provides host/runtime services to nodes:

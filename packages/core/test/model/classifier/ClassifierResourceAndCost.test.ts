@@ -527,6 +527,7 @@ test('Real graphs account each provider cost with Usage details on or off, retry
         );
         const expected = (provider === 'jev' ? 0.042 : provider === 'liquid' ? 0.04 : 0.2) * (mode === 'split' ? 2 : 1);
         assert.equal(result.cost?.value, expected, `${provider}/${details}/${mode}`);
+        assert.deepEqual(result.costBreakdown, { type: 'object', value: { llm: 0, classifier: expected, other: 0 } });
         assert.equal(calls, mode === 'split' ? 3 : 2);
         if (mode !== 'split') assert.equal((result.usage?.value as any).totalCost, details ? expected : undefined);
       }
@@ -581,4 +582,5 @@ test('A mixed-provider graph sums both costs independently of diagnostic outputs
     { questions: { type: 'object', value: question } },
   );
   assert.equal(result.cost?.value, 0.042 + 0.2);
+  assert.deepEqual(result.costBreakdown, { type: 'object', value: { llm: 0, classifier: 0.042 + 0.2, other: 0 } });
 });
