@@ -12,7 +12,7 @@ Evaluates one shared state and optional images against a batch of independent ty
 
 **Configuration** selects **Inline** (the existing default) or **From profile**. Profile mode adds a required **Classifier Profiles** input accepting one [Classifier Profile](./classifier-profile.mdx) or an ordered Array of profiles. It hides inline model/credential inputs without deleting saved settings. **Export Classifier settings to profile node** creates and wires a Profile, moves active model/key connections, and preserves evidence connections; the command supports Undo/Redo.
 
-In profile mode, the overall timeout defaults to 180 seconds. With automatic suspension enabled and supported by the host, each profile has a response deadline (0.5 seconds by default). Otherwise only the overall timeout applies. Retry controls remain owned by Evaluate. Optional **Classifier Attempts** and **Classifier Profile Summary** outputs report candidate outcomes. On caught exhaustion these diagnostics remain available while answer/body/cost outputs are excluded. Native request and response bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
+In profile mode, the overall timeout defaults to 180 seconds. With automatic suspension enabled and supported by the host, each profile has a response deadline (0.5 seconds by default). Otherwise only the overall timeout applies. Retry controls remain owned by Evaluate. Optional **Classifier Attempts** and **Classifier Profile Summary** outputs report candidate outcomes and failure reasons. On failure, enabled request/response diagnostics remain inspectable alongside the error; on caught exhaustion, Answers/Usage/Cost are excluded. Successful native bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
@@ -24,6 +24,12 @@ In profile mode, the overall timeout defaults to 180 seconds. With automatic sus
 - **Error behavior**: controls HTTP-status failures, catching other node failures, and retries. See the behavior below. **Repeat times** and **Cooldown, ms** use the same defaults and layout as LLM Chat.
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
+
+When a profile chain fails, its error lists the reasons for each failed request,
+including retry numbers and HTTP statuses, even if **Classifier Attempts** is
+disabled. **Classifier Profile Summary** also shows suspension recovery times
+and reliability-service warnings. Enabled request/response bodies remain
+inspectable in the failed node and full output view; treat them as sensitive.
 
 ## Inputs
 
@@ -39,9 +45,11 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 - **Answers** (`object`): aggregate answer map keyed by Question ID.
 - **Usage** (`object`): provider input and output token counts. When **Output usage details** is enabled and pricing is known, includes `totalCost` in USD using the matched model's rate and context tier; output tokens contribute $0 for the currently priced models.
 - **Cost** (`number`): estimated USD cost, included in automatic graph-cost accounting regardless of the Usage-details setting. Excluded when the cost cannot be calculated.
-- **Request body** (`object`): available when **Output request body** is enabled. This is the exact JSON body sent to the provider after Rivet has resolved State, Model, and Questions. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
-- **Response body** (`object`): available when **Output response body** is enabled. This is the complete parsed JSON body returned by the successful provider call after response validation, including its resolved provider model. Rivet does not redact or truncate its content.
-- **Run failed** (`boolean`) and **Run error** (`string`): available only when **Catch all failures** is enabled, independently of **Fail on non-2XX status code**. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and normal answer, Usage and body outputs are excluded.
+- **Request body** (`object`): available when **Output request body** is enabled. This is the JSON body prepared for the provider after Rivet has resolved State, Model, and Questions; capture does not prove remote delivery. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
+- **Response body** (`object`): available when **Output response body** is enabled, including HTTP rejection and invalid answers. JSON objects keep their native shape; non-JSON text or non-object JSON appears as `{ raw: value }`. Captured content is not redacted. Missing, interrupted or over-limit bodies are unavailable.
+- **Run failed** (`boolean`) and **Run error** (`string`): available only when **Catch all failures** is enabled, independently of **Fail on non-2XX status code**. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and Answers/Usage/Cost are excluded; enabled diagnostics remain available.
+
+When a chain fails, bodies describe its last prepared request, not a mixture of different profiles. Failed-node diagnostics are also retained in recordings. Enable body outputs only when needed: State, questions, images and provider error content may be sensitive. A missing API key before preparation produces no request body. No response body exists when a request never received one, such as a connection failure.
 
 For Jev, Choice answers contain `choice`, `probabilities`, and `confidence`; Score answers contain a numeric `score` (which can be fractional), `legend`, `probabilities`, and `confidence`; Noul answers contain a numeric `noul` probability. These values come from the provider; Rivet does not enforce their numerical ranges.
 

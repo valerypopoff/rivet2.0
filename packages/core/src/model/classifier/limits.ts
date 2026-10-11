@@ -234,6 +234,7 @@ export async function readClassifierResponse(
   response: Response,
   signal: AbortSignal,
   check: ClassifierPreparationCheck = () => signal.throwIfAborted(),
+  onBody?: (body: unknown) => void,
 ): Promise<unknown> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > CLASSIFIER_LIMITS.responseBytes)
@@ -270,8 +271,29 @@ export async function readClassifierResponse(
     check();
     const json = text.join('');
     checkClassifierJsonWork(json, check);
-    const body: unknown = JSON.parse(json);
+    let body: unknown;
+    try {
+      body = JSON.parse(json);
+    } catch (error) {
+      check();
+      try {
+        onBody?.(json);
+      } catch {
+        /* Observation only. */
+      }
+      check();
+      throw error;
+    }
     assertClassifierResourceLimits(body, check, CLASSIFIER_LIMITS.responseBytes);
+    check();
+    try {
+      // Diagnostics must not modify the private response before validation or pricing.
+      // Only opt-in observers allocate a detached copy of this bounded, plain JSON.
+      if (onBody) onBody(structuredClone(body));
+    } catch {
+      /* Observation only. */
+    }
+    check();
     return body;
   } catch (error) {
     cancel();

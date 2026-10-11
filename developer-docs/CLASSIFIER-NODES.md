@@ -60,7 +60,7 @@ behavior.
 
 Evaluate keeps legacy Inline mode as the default. From profile hides inline configuration inputs and accepts one profile or a preserved ordered array (including Array's `any[]` output). Its total chain budget defaults to 180 seconds, independent of the retained inline 30-second setting. When hosted suspension is enabled, profile response budgets default to 0.5 seconds and include retries and their waits. These are repeated requests to the same provider (automatic transport/rate-limit retries and Evaluate's opt-in non-200 retries), not attempts of subsequent profiles. Each candidate gets one budget, not a fresh timeout per retry; a short budget may expire before a retry can occur. When suspension is inactive, only the remaining overall execution budget limits a candidate. Profiles use one cumulative deadline-aware validation/snapshot traversal, rather than a whole-chain scan plus fresh per-candidate scans. Shared State/questions are validated and detached before health or provider calls. A candidate's unsupported evidence fails that candidate without discarding content; malformed shared evidence fails the node before attempts. The first validated response wins. There is no cross-candidate answer merging, numerical reinterpretation or stream timing.
 
-`classifier/profileExecution.ts` runs classifier-specific fallback while reusing bounded health operations and atomic permits from the LLM reliability infrastructure. Transport/timeouts/408/429/5XX count once per failed candidate, not per physical retry. Interrupted response-body receipt is a transport failure; invalid UTF-8/JSON is response parsing, while an invalid answer shape is response validation. Authentication, input/capability failures, malformed responses and cancellation finish permits as ignored. Suspension is opt-in and requires an injected `llmProfileHealthStore`; its absence disables durable suspension, not fallback. Health-service errors fail open with bounded diagnostics, and stale completions cannot resurrect cleared entries. Classifier keys use a separate namespace and `family: classifier`; legacy entries without a family are LLM. Provider/model/credential and project/source-node identity determine health; display-name/policy edits do not reset it.
+`classifier/profileExecution.ts` runs classifier-specific fallback while reusing bounded health operations and atomic permits from the LLM reliability infrastructure. Transport/timeouts/408/429/5XX count once per failed candidate, not per physical retry. Non-cancellation response-body read failures are transport failures; invalid UTF-8/JSON is response parsing, while an invalid answer shape is response validation. Authentication, input/capability failures, malformed responses and cancellation finish permits as ignored. Suspension is opt-in and requires an injected `llmProfileHealthStore`; its absence disables durable suspension, not fallback. Health-service errors fail open with bounded diagnostics, and stale completions cannot resurrect cleared entries. Classifier keys use a separate namespace and `family: classifier`; legacy entries without a family are LLM. Provider/model/credential and project/source-node identity determine health; display-name/policy edits do not reset it.
 
 The non-2XX suppression switch applies only when all attempted candidates ended in HTTP rejection. Mixed configuration, transport, timeout or response-validation failures still throw unless Catch all failures is enabled. Classify terminal candidate errors rather than physical retries, and never infer the entire chain's failure category from its last diagnostic cause.
 
@@ -68,7 +68,67 @@ The overall deadline is checked after provider completion and after bounded heal
 
 Failed-request health cleanup observes the same deadline: expiration overrides HTTP-only suppression, even on the final candidate, and records a timeout decision. Cancellation during admission or completion must never become caught outputs or advance fallback; a late admitted permit is finished as ignored without calling the provider. Regression tests cover these races using controlled clocks and promise gates, rather than timing-dependent sleeps.
 
-The existing `llmProfileAttempt` event gains an optional family discriminator and non-streaming `response` timeout kind. Existing recording/debugger/activity paths carry it without a second event bus. Provider-internal failure classifications are mapped to these public fields, not spread into strict recording events. Optional `classifierAttempts` and `classifierProfileSummary` outputs contain sanitized decisions, not bodies or credentials; caught exhaustion retains them. Summaries use the terminal execution outcome, ignoring health-service observations: an earlier successful receipt cannot hide a later deadline failure, and a health-update failure cannot relabel a successful candidate. Native request/response bodies and Evaluate's Usage/Cost outputs remain from the winner only for compatibility.
+The existing `llmProfileAttempt` event gains an optional family discriminator and non-streaming `response` timeout kind. Existing recording/debugger/activity paths carry it without a second event bus. Provider-internal failure classifications are mapped to these public fields, not spread into strict recording events. Optional `classifierAttempts` and `classifierProfileSummary` outputs contain sanitized decisions, not bodies or credentials; caught exhaustion retains them. Summaries use the terminal execution outcome and its safe failure explanation, ignoring health-service observations: an earlier successful receipt cannot hide a later deadline failure, and a health-update failure cannot relabel a successful candidate. Successful native bodies and Evaluate's Usage/Cost outputs remain from the winner.
+
+Failed calls retain enabled request/response diagnostics through the existing
+`setFailureOutputs` terminal channel (including split invocations, debugger
+delivery and recordings), not graph-semantic partial results. Catch all failures
+and HTTP-only suppression also retain this evidence, while Answers/Usage/Cost
+remain excluded. Provider callbacks are opt-in and separate from attempt events;
+disabled body diagnostics do not parse a second request representation or read
+rejected response bodies. Bodies belong to the last prepared physical attempt;
+request capture proves construction, not remote delivery. Starting an attempt
+clears its predecessor's response. A later configuration-only candidate does not
+invent an HTTP exchange. Missing credentials before preparation produce no
+request body. Successful fallback still projects only the winner's bodies.
+
+Classifier chain errors include every failed physical attempt's category, attempt
+number, HTTP status and safe explanation even when the optional Attempts output
+is disabled. The compact profile summary reports retry counts, suspension recovery
+time and reliability-service warnings without changing the terminal provider
+outcome. Preparation and pre-dispatch deadline failures must also have a visible
+reason; explanations are bounded and redact the candidate's API key. Shared Run
+Activity and Response Inspector preserve classifier timeout reasons as they do
+LLM failures. None of these projections embeds captured response bodies or
+traverses arbitrary error causes; full error causes and opt-in bodies remain
+potentially sensitive diagnostic evidence.
+
+Rejected HTTP bodies are read only on the terminal physical attempt, using the
+existing 8 MiB/JSON work limits and at most one additional second (never beyond
+the current deadline). A stalled/missing/oversized body cannot replace the HTTP
+failure or delay fallback indefinitely. Parsed objects retain their native
+shape; non-JSON text and non-object JSON use an object envelope `{ raw: value }`.
+Interrupted/over-limit bodies are unavailable, not fabricated or truncated.
+Response-body observers receive a detached copy of bounded decoded JSON. They
+cannot repair an invalid response, alter successful answers/usage, or affect
+pricing. This extra copy exists only for opted-in body diagnostics; request and
+response work remains bounded by the existing limits. Check the operation again
+after diagnostic collection: caller cancellation and overall deadline expiry
+must not be converted into suppressible HTTP-only failures. The diagnostic-only
+one-second cap does not change the original HTTP failure while the overall
+operation remains active. Use the same retry decision for both diagnostic
+collection and dispatch so their policies cannot drift.
+Recheck admission after the request observer too: cancellation or deadline
+expiry there must prevent dispatch, not merely reject a response afterward.
+Retained attempt histories and observer payloads have separate ownership,
+including their small usage receipts. Pass detached attempt metadata to
+observers so they cannot rewrite a chain's failure explanation or accounting
+history. This does not copy projects, request bodies or runtime state.
+Caller cancellation during transport or successful-response body receipt emits
+one physical `outcome: aborted` event without a provider-failure category;
+preserve the original cancellation reason, do not retry/fall back, and finish
+health permits as ignored. Do not also manufacture a configuration failure for that same
+physical abort. Recording/activity consumers already support this common
+outcome; no new event bus or storage format is required.
+Preparation cancellation likewise has no configuration-failure category, and
+must release an acquired health permit without dispatching a request.
+Bodies may contain sensitive authored/provider content and are explicit opt-in
+outputs; authentication headers are never captured. Safe attempt explanations
+redact the current API key, are bounded, and never incorporate raw transport
+causes or rejected provider bodies. Failure-output observers cannot replace the
+original failure. Regression coverage includes inline/profile throw/catch/status
+suppression, invalid JSON/answers, candidate body pairing, opt-out, split terminal
+recordings and browser playback of classifier diagnostics.
 
 Physical request events retain an optional `classifierUsage` receipt containing only safe nonnegative integer input/output token counts and, when pricing recognizes the requested/returned model pair, `estimatedCostUsd`. A decoded response with invalid answers can still carry usable usage; malformed JSON, unsafe counts and unread receipts cannot. No raw model string, response body or credential is copied into receipts. Attempts, debugger/recording replay and Response Inspector expose those receipts; the inspector's aggregate token/cost summary includes known failed-attempt receipts and marks unpriced or unavailable request costs **partial**/**unknown**, never free. Health observations, configuration failures, suspension skips and unreached candidates are not additional physical requests. Estimates do not claim to represent the provider's invoice.
 

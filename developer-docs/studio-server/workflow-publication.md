@@ -850,6 +850,14 @@ A hosted editor run is different. When the user enables **Record local graph exe
 
 The API resolves the saved hosted project through the authoritative tree by stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, and never reads a raw requested filesystem path. It then requires both project IDs to match before writing the normal replay bundle with `runKind: editor`; these editor rows are excluded from endpoint and web-app Run statistics. The upload is capped at 24 MiB of UTF-8 snapshot data, uses normal recording retention, and respects server recording policy. It is browser-to-the-same-authenticated-Studio-Server storage, not a public workflow endpoint or a cloud sync feature. The API resolves matching health evidence to that recording ID only after durable persistence. Disabled recording policy, an oversized/invalid upload, a persistence failure, a queue rejection, an unrecordable socket, or explicit recording deletion is shown as an unavailable explanation rather than a broken replay link. A mixed-version dashboard checks the capability route before it gives either hosted editor mode a correlation id, so an older server cleanly falls back to `not recorded` instead of leaving evidence pending. Desktop and external-debugger Node executors never upload editor replays through this route.
 
+Classifier failure recordings retain enabled request/response bodies alongside
+the terminal node error through the existing failure-output contract. Attempt
+metadata stays separate, bounded and credential-redacted; it does not contain
+these bodies. Caller cancellation records an interrupted request, not an outage,
+and cannot increment suspension failures or start another fallback request.
+The recording replay browser tests cover both failure bodies and interrupted
+classifier attempts in Run Activity. See [classifier ownership and limits](../CLASSIFIER-NODES.md).
+
 The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
 are currently suspended, awaiting their recovery attempt, or running that attempt.
 For an active suspension it also shows all contributing failed runs, labels the run

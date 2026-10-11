@@ -372,9 +372,9 @@ function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): stri
   if (attempt.healthDisposition === 'fail-open') {
     return `reliability service unavailable; profile request continued${formatAttemptError(attempt)}`;
   }
-  if (attempt.timeoutKind === 'first-output') return 'first output timed out';
-  if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
-  if (attempt.timeoutKind === 'response') return 'response timed out';
+  if (attempt.timeoutKind === 'first-output') return `first output timed out${formatAttemptError(attempt)}`;
+  if (attempt.timeoutKind === 'stream-inactivity') return `stream became inactive${formatAttemptError(attempt)}`;
+  if (attempt.timeoutKind === 'response') return `response timed out${formatAttemptError(attempt)}`;
   if (attempt.stage === 'health-update' && attempt.healthOutcome) {
     return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
   }

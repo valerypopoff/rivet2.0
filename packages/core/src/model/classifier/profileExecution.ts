@@ -8,8 +8,10 @@ import {
 import {
   ClassifierProviderError,
   classifierFailureKind,
+  classifierErrorMessage,
   getClassifierProvider,
   type ClassifierProviderEvaluationResult,
+  type ClassifierProviderEvaluateArgs,
 } from './providers.js';
 import {
   classifierProfileHealthIdentity,
@@ -40,7 +42,29 @@ export function classifierProfileSummary(
               : events.length
                 ? 'failed'
                 : 'not reached';
-      return `${index + 1}. ${profile.profileName || 'Classifier Profile'} (${profile.configuration.provider}/${profile.configuration.model}): ${outcome}`;
+      const reason = outcome === 'failed' ? terminal?.error ?? terminal?.failureKind : undefined;
+      const requests = events.filter((event) => event.attemptIndex !== undefined);
+      const retryAt = events.findLast((event) => event.healthDisposition === 'deny')?.retryAt;
+      const recovery =
+        retryAt !== undefined && Number.isFinite(retryAt) && Math.abs(retryAt) <= 8.64e15
+          ? `; next recovery attempt after ${new Date(retryAt).toISOString()}`
+          : '';
+      const healthUnavailable = events.some(
+        (event) =>
+          event.healthDisposition === 'fail-open' || (event.stage === 'health-update' && event.outcome === 'failure'),
+      );
+      const healthState = events.findLast(
+        (event) => event.stage === 'health-update' && event.outcome === 'success',
+      )?.healthState;
+      const details = [
+        reason ? ` — ${reason}` : '',
+        requests.length > 1 ? `; ${requests.length} provider attempts` : '',
+        outcome === 'suspended' ? recovery : '',
+        healthUnavailable ? '; reliability service unavailable; profile was tried normally' : '',
+        outcome !== 'suspended' && healthState === 'open' ? '; profile is suspended' : '',
+        healthState === 'half-open' ? '; recovery attempt in progress' : '',
+      ].join('');
+      return `${index + 1}. ${profile.profileName || 'Classifier Profile'} (${profile.configuration.provider}/${profile.configuration.model}): ${outcome}${details}`;
     })
     .join('\n');
 }
@@ -52,7 +76,19 @@ export class ClassifierProfileExhaustedError extends Error {
     options?: ErrorOptions,
     readonly statusCode?: number,
   ) {
-    super(`Classifier profile chain exhausted.\n${summary}`, options);
+    const details = attempts
+      .filter((attempt) => attempt.outcome === 'failure' || attempt.outcome === 'aborted')
+      .map((attempt) => {
+        const request = attempt.attemptIndex === undefined ? '' : ` attempt ${attempt.attemptIndex + 1}`;
+        const status = attempt.status === undefined ? '' : ` (HTTP ${attempt.status})`;
+        const reason = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
+        return `Profile ${(attempt.profileIndex ?? 0) + 1}, ${attempt.failureKind ?? attempt.stage}${request} ${attempt.outcome}${status}${reason}`;
+      })
+      .join('\n');
+    super(
+      `Classifier profile chain exhausted.\n${summary}${details ? `\n\nAttempt details:\n${details}` : ''}`,
+      options,
+    );
     this.name = 'ClassifierProfileExhaustedError';
   }
 }
@@ -68,6 +104,8 @@ export async function runClassifierProfiles(input: {
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
   onAttempt: (attempt: LLMAttempt) => void;
+  onRequestBody?: ClassifierProviderEvaluateArgs['onRequestBody'];
+  onResponseBody?: ClassifierProviderEvaluateArgs['onResponseBody'];
 }): Promise<{
   result: ClassifierProviderEvaluationResult;
   provider: ReturnType<typeof getClassifierProvider>;
@@ -89,7 +127,7 @@ export async function runClassifierProfiles(input: {
     };
     attempts.push(event);
     try {
-      input.onAttempt(event);
+      input.onAttempt(structuredClone(event));
     } catch {
       /* Observation only. */
     }
@@ -98,6 +136,17 @@ export async function runClassifierProfiles(input: {
     context.signal.throwIfAborted();
     if (Date.now() >= input.deadline) {
       lastError = new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
+      const profile = input.profiles[profileIndex]!;
+      record({
+        roundIndex: 0,
+        profileIndex,
+        provider: profile.configuration.provider,
+        model: profile.configuration.model,
+        stage: 'request',
+        outcome: 'failure',
+        failureKind: 'timeout',
+        error: 'Classifier overall deadline expired.',
+      });
       httpFailuresOnly = false;
       break;
     }
@@ -112,6 +161,7 @@ export async function runClassifierProfiles(input: {
         : undefined;
     const base = { roundIndex: 0, profileIndex, provider: provider.id, model, profileHealthKey: health?.identity.key };
     let observedRequest = false;
+    let observedAbort = false;
     let lastPhysicalFailure: { kind?: ClassifierProviderError['kind']; status?: number } | undefined;
     let permit: ReturnType<typeof createProfileHealthPermit> | undefined;
     if (health && store) {
@@ -134,6 +184,7 @@ export async function runClassifierProfiles(input: {
             healthDisposition: 'deny',
             healthState: begin.state,
             retryAt: begin.retryAt,
+            error: 'Classifier profile is suspended.',
           });
           continue;
         }
@@ -191,8 +242,11 @@ export async function runClassifierProfiles(input: {
         retryOnNon200: input.retryOnNon200,
         retryOnNon200RepeatTimes: input.retryOnNon200RepeatTimes,
         retryOnNon200CooldownMs: input.retryOnNon200CooldownMs,
+        onRequestBody: input.onRequestBody,
+        onResponseBody: input.onResponseBody,
         onAttempt: ({ kind, ...attempt }) => {
           observedRequest = true;
+          observedAbort = attempt.outcome === 'aborted';
           lastPhysicalFailure = attempt.outcome === 'failure' ? { kind, status: attempt.status } : undefined;
           record({
             ...base,
@@ -233,9 +287,10 @@ export async function runClassifierProfiles(input: {
       httpFailuresOnly &&= httpFailure;
       if (httpFailure) lastHttpStatus = providerError.statusCode;
       const alreadyReported =
-        providerError &&
-        lastPhysicalFailure?.kind === providerError.kind &&
-        (providerError.kind !== 'http' || lastPhysicalFailure.status === providerError.statusCode);
+        (context.signal.aborted && observedAbort) ||
+        (providerError &&
+          lastPhysicalFailure?.kind === providerError.kind &&
+          (providerError.kind !== 'http' || lastPhysicalFailure.status === providerError.statusCode));
       if (!alreadyReported)
         record({
           ...base,
@@ -246,15 +301,15 @@ export async function runClassifierProfiles(input: {
                 ? 'response-validation'
                 : 'request'
             : 'configuration',
-          failureKind: providerError
-            ? classifierFailureKind(providerError.kind, providerError.statusCode)
-            : 'configuration',
+          failureKind: context.signal.aborted
+            ? undefined
+            : providerError
+              ? classifierFailureKind(providerError.kind, providerError.statusCode)
+              : 'configuration',
           outcome: context.signal.aborted ? 'aborted' : 'failure',
           status: providerError?.statusCode,
-          error: providerError
-            ? `Classifier ${providerError.kind} failure${providerError.statusCode ? ` (HTTP ${providerError.statusCode})` : ''}.`
-            : 'Classifier profile configuration or evidence capability failed.',
-          timeoutKind: providerError?.kind === 'timeout' && health ? 'response' : undefined,
+          error: classifierErrorMessage(error, profile.credential.value),
+          timeoutKind: !context.signal.aborted && providerError?.kind === 'timeout' && health ? 'response' : undefined,
         });
       const unhealthy =
         providerError?.kind === 'timeout' ||

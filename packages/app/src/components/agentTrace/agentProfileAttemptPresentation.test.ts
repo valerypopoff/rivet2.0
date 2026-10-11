@@ -29,10 +29,12 @@ test('presents classifier response timeouts without streaming terminology', () =
       stage: 'request',
       outcome: 'failure',
       timeoutKind: 'response',
+      error: 'Perplexity request timed out after 500 ms.',
     },
   ]);
   assert.equal(row?.providerAndModel, 'Profile: Primary route · liquid / d1');
   assert.equal(row?.context, 'request / response timed out / profile 1 / round 1');
+  assert.equal(row?.error, 'Perplexity request timed out after 500 ms.');
 });
 
 test('classifier failure categories are readable without interpreting provider error strings', () => {

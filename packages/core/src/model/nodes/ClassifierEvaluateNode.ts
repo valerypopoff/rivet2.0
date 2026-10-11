@@ -28,6 +28,7 @@ import { normalizeClassifierState } from '../classifier/state.js';
 import { CLASSIFIER_LIMITS, classifierPreparationCheck, ClassifierValueBudget } from '../classifier/limits.js';
 import {
   calculateClassifierUsageCost,
+  type ClassifierProviderEvaluateArgs,
   classifierFailureKind,
   classifierProviders,
   DEFAULT_CLASSIFIER_RETRY_ON_NON_200_COOLDOWN_MS,
@@ -196,7 +197,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             label: 'Output response body',
             dataKey: 'outputResponseBody',
             helperMessage:
-              'Adds the complete classifier JSON response returned by the provider after validation. Rivet does not redact or truncate captured content.',
+              'Shows the provider response, including rejected or invalid responses. Non-JSON responses appear as raw text. Captured content may contain sensitive input.',
           },
           { type: 'toggle', label: 'Output classifier attempts', dataKey: 'outputClassifierAttempts' },
           {
@@ -302,28 +303,71 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
     const attempts: LLMAttempt[] = [];
+    const bodies: Outputs = {};
+    let getRequestBody: (() => Record<string, unknown>) | undefined;
+    const diagnostics: Pick<ClassifierProviderEvaluateArgs, 'onRequestBody' | 'onResponseBody'> = {
+      ...(this.data.outputRequestBody || this.data.outputResponseBody
+        ? {
+            onRequestBody: (getBody: () => Record<string, unknown>) => {
+              // Pair the last prepared request with its response, never bodies from different candidates.
+              delete bodies['responseBody' as PortId];
+              if (this.data.outputRequestBody) getRequestBody = getBody;
+            },
+          }
+        : {}),
+      ...(this.data.outputResponseBody
+        ? {
+            onResponseBody: (body: unknown) => {
+              bodies['responseBody' as PortId] = {
+                type: 'object',
+                value:
+                  body !== null && typeof body === 'object' && !Array.isArray(body)
+                    ? (body as Record<string, unknown>)
+                    : { raw: body },
+              };
+            },
+          }
+        : {}),
+    };
     try {
       context.signal.throwIfAborted();
-      const outputs = await this.processRun(inputs, context, attempts);
+      const outputs = await this.processRun(inputs, context, attempts, diagnostics);
       context.signal.throwIfAborted();
       return withRunSuccessOutputs({ catchRequestFailed: this.data.catchRequestFailed }, outputs);
     } catch (error) {
+      try {
+        if (getRequestBody) bodies['requestBody' as PortId] = { type: 'object', value: getRequestBody() };
+      } catch {
+        /* Request diagnostics cannot replace the execution failure. */
+      }
+      const evidence = {
+        ...bodies,
+        ...this.profileEvidence(attempts, error instanceof ClassifierProfileExhaustedError ? error.summary : undefined),
+      };
       const failure = error instanceof ClassifierProfileExhaustedError ? { statusCode: error.statusCode } : error;
-      if (!shouldCatchRunFailure(this.data, failure, context.signal)) throw error;
+      if (!shouldCatchRunFailure(this.data, failure, context.signal)) {
+        try {
+          if (Object.keys(evidence).length) {
+            if (context.setFailureOutputs) context.setFailureOutputs(evidence);
+            else context.onPartialOutputs?.(evidence);
+          }
+        } catch {
+          /* Diagnostics must not replace the original failure. */
+        }
+        throw error;
+      }
       return this.data.catchRequestFailed === true
-        ? createCaughtRunFailureOutputs(
-            this.getOutputDefinitions(),
-            error,
-            this.profileEvidence(
-              attempts,
-              error instanceof ClassifierProfileExhaustedError ? error.summary : undefined,
-            ),
-          )
-        : createExcludedNodeOutputs(this.chartNode, this.getOutputDefinitions());
+        ? createCaughtRunFailureOutputs(this.getOutputDefinitions(), error, evidence)
+        : { ...createExcludedNodeOutputs(this.chartNode, this.getOutputDefinitions()), ...evidence };
     }
   }
 
-  private async processRun(inputs: Inputs, context: InternalProcessContext, attempts: LLMAttempt[]): Promise<Outputs> {
+  private async processRun(
+    inputs: Inputs,
+    context: InternalProcessContext,
+    attempts: LLMAttempt[],
+    diagnostics: Pick<ClassifierProviderEvaluateArgs, 'onRequestBody' | 'onResponseBody'>,
+  ): Promise<Outputs> {
     if (
       this.data.configurationMode !== undefined &&
       this.data.configurationMode !== 'inline' &&
@@ -338,7 +382,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     const checkPreparation = classifierPreparationCheck(context.signal, deadline, timeoutMs);
     checkPreparation();
     if (this.data.configurationMode === 'profile')
-      return this.processProfiles(inputs, context, deadline, checkPreparation, attempts);
+      return this.processProfiles(inputs, context, deadline, checkPreparation, attempts, diagnostics);
     const provider = getClassifierProvider(this.data.provider);
     if (!provider.browserExecutionSupported && context.executor === 'browser') {
       throw new Error(
@@ -405,6 +449,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       ...state,
       timeoutMs,
       deadline,
+      ...diagnostics,
       onAttempt: ({ kind, ...attempt }) => {
         const event: LLMAttempt = {
           ...attempt,
@@ -418,7 +463,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         };
         attempts.push(event);
         context.onLLMProfileAttempt?.({
-          ...event,
+          ...structuredClone(event),
           eventId: nanoid(),
           nodeId: this.chartNode.id,
           processId: context.processId,
@@ -484,6 +529,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     deadline: number,
     check: () => void,
     attempts: LLMAttempt[],
+    diagnostics: Pick<ClassifierProviderEvaluateArgs, 'onRequestBody' | 'onResponseBody'>,
   ): Promise<Outputs> {
     const profiles = normalizeClassifierProfiles(classifierInputDataValue(inputs, 'classifierProfile')?.value, check);
     const graph = context.project?.graphs[context.execution?.graphId];
@@ -524,10 +570,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       retryOnNon200: this.data.retryOnNon200,
       retryOnNon200RepeatTimes: this.data.retryOnNon200RepeatTimes,
       retryOnNon200CooldownMs: this.data.retryOnNon200CooldownMs,
+      ...diagnostics,
       onAttempt: (attempt) => {
         attempts.push(attempt);
         context.onLLMProfileAttempt?.({
-          ...attempt,
+          ...structuredClone(attempt),
           eventId: nanoid(),
           nodeId: this.chartNode.id,
           processId: context.processId,

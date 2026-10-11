@@ -19,6 +19,167 @@ const args = (model: string) => ({
   timeoutMs: 30_000,
 });
 
+test('Response diagnostics cannot repair invalid answers or mutate successful results', async () => {
+  const provider = getClassifierProvider('perplexity');
+  const body = {
+    model: provider.defaultModel,
+    answers: { q: { type: 'noul', noul: 0.8 } },
+    usage: { input_tokens: 1000, output_tokens: 0 },
+  };
+  const result = await provider.evaluate({
+    ...args(provider.defaultModel),
+    fetchImplementation: async () => Response.json(body),
+    onResponseBody: (diagnostic) => {
+      (diagnostic as any).answers.q.noul = 999;
+      (diagnostic as any).usage.input_tokens = 999;
+    },
+  });
+  assert.deepEqual(result.responseBody, body);
+  assert.equal((result.response.answers.q as any).noul, 0.8);
+  assert.equal(result.response.usage.input_tokens, 1000);
+  await assert.rejects(
+    provider.evaluate({
+      ...args(provider.defaultModel),
+      fetchImplementation: async () => Response.json({}),
+      onResponseBody: (diagnostic) => Object.assign(diagnostic as object, body),
+    }),
+    /invalid response shape/,
+  );
+});
+
+test('Cancellation during rejected body capture preserves the cancellation reason', async () => {
+  const provider = getClassifierProvider('perplexity');
+  const controller = new AbortController();
+  let started!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const reason = new Error('operator canceled');
+  const run = provider.evaluate({
+    ...args(provider.defaultModel),
+    signal: controller.signal,
+    onResponseBody: () => assert.fail('A canceled, incomplete body is not diagnostic evidence'),
+    fetchImplementation: async () =>
+      new Response(
+        new ReadableStream({
+          pull() {
+            started();
+          },
+        }),
+        { status: 400 },
+      ),
+  });
+  const rejected = assert.rejects(run, (error) => error === reason);
+  await reading;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort(reason);
+  await rejected;
+});
+
+for (const observer of ['request', 'success'] as const) {
+  test(`Cancellation from the ${observer} observer cannot dispatch or return a late success`, async () => {
+    const provider = getClassifierProvider('perplexity');
+    const controller = new AbortController();
+    const reason = new Error('operator canceled');
+    let calls = 0;
+    await assert.rejects(
+      provider.evaluate({
+        ...args(provider.defaultModel),
+        signal: controller.signal,
+        onRequestBody: observer === 'request' ? () => controller.abort(reason) : undefined,
+        onAttempt:
+          observer === 'success'
+            ? (event) => {
+                if (event.outcome === 'success') controller.abort(reason);
+              }
+            : undefined,
+        fetchImplementation: async () => {
+          calls++;
+          return Response.json({
+            model: provider.defaultModel,
+            answers: { q: { type: 'noul', noul: 0.8 } },
+            usage: { input_tokens: 1000, output_tokens: 0 },
+          });
+        },
+      }),
+      (error) => error === reason,
+    );
+    assert.equal(calls, observer === 'request' ? 0 : 1);
+  });
+}
+
+test('Inline status suppression cannot swallow an overall deadline during diagnostic capture', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  let started!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream({
+        pull() {
+          started();
+        },
+      }),
+      { status: 400 },
+    );
+  const node = ClassifierEvaluateNodeImpl.create();
+  Object.assign(node.data, { provider: 'perplexity', timeoutMs: 50, errorOnNon200: false, outputResponseBody: true });
+  const run = new ClassifierEvaluateNodeImpl(node).process(
+    {
+      state: { type: 'string', value: 'Evidence' },
+      question1: { type: 'object', value: question },
+    },
+    {
+      executor: 'nodejs',
+      signal: new AbortController().signal,
+      settings: { classifierProviders: { perplexity: { apiKey: 'private-key' } } },
+    } as InternalProcessContext,
+  );
+  const rejected = assert.rejects(run, /request timed out/);
+  await reading;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(50);
+  await rejected;
+});
+
+test('Opt-in rejected response diagnostics are bounded and preserve the original HTTP failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let readStarted!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    readStarted = resolve;
+  });
+  let cancellations = 0;
+  let captured = false;
+  const provider = getClassifierProvider('perplexity');
+  const run = provider.evaluate({
+    ...args(provider.defaultModel),
+    onResponseBody: () => {
+      captured = true;
+    },
+    fetchImplementation: async () =>
+      new Response(
+        new ReadableStream({
+          pull() {
+            readStarted();
+          },
+          cancel() {
+            cancellations++;
+          },
+        }),
+        { status: 400 },
+      ),
+  });
+  const rejected = assert.rejects(run, (error: any) => error.kind === 'http' && error.statusCode === 400);
+  await reading;
+  // Let the HTTP boundary receive the response and install its diagnostic timer.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(1000);
+  await rejected;
+  assert.equal(captured, false, 'Never fabricate a missing response');
+  assert.equal(cancellations, 1);
+});
+
 test('Every provider rejects invalid root State before HTTP or attempt observation', async () => {
   for (const provider of classifierProviders) {
     for (const state of [null, true, 42, undefined]) {

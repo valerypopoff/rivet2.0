@@ -2362,6 +2362,118 @@ test.describe('Run recordings modal', () => {
     await expect(fullscreenOutput).toContainText('preserved-failure-attempt');
   });
 
+  test('shows classifier failure reason and enabled request/response bodies in node and full output replay', async ({
+    page,
+  }) => {
+    await installRunRecordingRoutes(page);
+    const failure =
+      'ClassifierProfileExhaustedError: Classifier profile chain exhausted.\n1. Classifier Profile (perplexity/pplx-decider-v1.1-27b): failed — Perplexity rejected the request (HTTP 400); 2 provider attempts\n\nAttempt details:\nProfile 1, http attempt 1 failure (HTTP 503): Perplexity rejected the request (HTTP 503).\nProfile 1, http attempt 2 failure (HTTP 400): Perplexity rejected the request (HTTP 400).';
+    await page.route('**/api/workflows/recordings/recording-a-1/recording', async (route) => {
+      const recording = JSON.parse(createFailedLlmOutputRecording('recording-a-1'));
+      const event = recording.recording.events.find((item: any) => item.type === 'nodeError');
+      event.data.error = failure;
+      event.data.outputs = {
+        requestBody: {
+          type: 'object',
+          value: { model: 'pplx-decider-v1.1-27b', state: 'captured-classifier-evidence' },
+        },
+        responseBody: { type: 'object', value: { error: { message: 'classifier-model-unavailable' } } },
+      };
+      await route.fulfill({ contentType: 'text/plain', body: JSON.stringify(recording) });
+    });
+    await page.route('**/api/workflows/recordings/recording-a-1/replay-project', (route) =>
+      route.fulfill({
+        contentType: 'text/plain',
+        body: createReplayProject('recording-a-1')
+          .replace(':llmChatV2', ':classifierEvaluate')
+          .replace('provider: openai', 'provider: perplexity')
+          .replace('model: gpt-5', 'model: pplx-decider-v1.1-27b'),
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await modal.locator('.run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
+    const failedRun = modal
+      .locator('.run-recordings-run')
+      .filter({ has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }) });
+    await failedRun.locator('.run-recordings-run-open-button').click();
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    const output = editor.locator('.node[data-nodeid="replay-llm"] .node-output');
+    await expect(output).toContainText('HTTP 400');
+    await expect(output).toContainText('HTTP 503');
+    await expect(output).toContainText('captured-classifier-evidence');
+    await output.hover();
+    await output.locator('.expand-button').click();
+    const fullscreen = editor.getByTestId('fullscreen-output-modal');
+    await expect(fullscreen).toContainText('HTTP 400');
+    await expect(fullscreen).toContainText('Attempt details:');
+    await expect(fullscreen).toContainText('HTTP 503');
+    await expect(fullscreen).toContainText('captured-classifier-evidence');
+    await expect(fullscreen).toContainText('classifier-model-unavailable');
+  });
+
+  test('shows canceled classifier requests as interrupted without a provider failure category', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    await page.route('**/api/workflows/recordings/recording-a-1/recording', async (route) => {
+      const recording = JSON.parse(createFailedLlmOutputRecording('recording-a-1'));
+      const nodeStart = recording.recording.events.find((item: any) => item.type === 'nodeStart');
+      recording.recording.events.splice(3, 0, {
+        type: 'llmProfileAttempt',
+        ts: nodeStart.ts + 1,
+        data: {
+          ...nodeStart.data,
+          eventId: 'classifier-request-aborted',
+          family: 'classifier',
+          profileIndex: 0,
+          attemptIndex: 0,
+          roundIndex: 0,
+          stage: 'request',
+          outcome: 'aborted',
+          provider: 'perplexity',
+          model: 'pplx-decider-v1.1-27b',
+          error: 'Perplexity request was canceled.',
+        },
+      });
+      await route.fulfill({ contentType: 'text/plain', body: JSON.stringify(recording) });
+    });
+    await page.route('**/api/workflows/recordings/recording-a-1/replay-project', (route) =>
+      route.fulfill({
+        contentType: 'text/plain',
+        body: createReplayProject('recording-a-1')
+          .replace(':llmChatV2', ':classifierEvaluate')
+          .replace('provider: openai', 'provider: perplexity')
+          .replace('model: gpt-5', 'model: pplx-decider-v1.1-27b'),
+      }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Run recordings' }).click();
+    const modal = page.getByTestId('run-recordings-modal');
+    await modal.locator('.run-recordings-select__control').click();
+    await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
+    const failedRun = modal
+      .locator('.run-recordings-run')
+      .filter({ has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }) });
+    await failedRun.locator('.run-recordings-run-open-button').click();
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
+    await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+    const drawer = editor.locator('[aria-label="Run Activity"]');
+    const row = drawer.locator('.run-activity-row').filter({ hasText: 'Recorded response' });
+    await row.locator('.run-activity-row-toggle').click();
+    const attempt = row.locator('.run-activity-child').filter({ hasText: 'Perplexity request was canceled.' });
+    await expect(attempt).toBeVisible();
+    await expect(attempt.locator('.status-interrupted')).toBeVisible();
+    await expect(attempt).not.toContainText('transport');
+    await expect(attempt).not.toContainText('configuration');
+  });
+
   test('saves the loaded recording artifact after playback instead of a replay timeline', async ({ page }) => {
     await page.addInitScript(() => {
       const exportState = {

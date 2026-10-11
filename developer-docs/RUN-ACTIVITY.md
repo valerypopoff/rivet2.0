@@ -7,6 +7,11 @@ executor, durable run database, response-trace transport, or copy of node
 outputs. The same journal reducer must consume Browser, internal Node, Remote
 Debugger, inactive-project snapshot, and recording-replay events.
 
+Profile timeout rows retain the safe attempt explanation, not only a generic
+timeout label. This applies equally to LLM first-output/inactivity timeouts and
+classifier response deadlines, in live runs and recording replay. Keep bodies
+out of these rows; they remain owned by the opt-in node output diagnostics.
+
 The persistent bottom-right trigger is labelled **Run activity** before a
 run is available. During a run and after the latest run settles, it appends the
 same live or exact terminal duration used by the activity root, for example
@@ -572,3 +577,7 @@ Tests must cover:
 - Browser, Node, Remote Debugger, inactive-project, recording, and replay parity;
 - bounded retention and cleanup;
 - absence of forbidden sensitive payloads from journal state.
+
+Classifier caller cancellation is recorded as an interrupted request, not a
+transport or configuration failure. Recording playback coverage verifies the
+interrupted child status and its bounded cancellation reason in the drawer.

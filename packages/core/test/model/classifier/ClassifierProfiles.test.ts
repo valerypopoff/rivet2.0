@@ -11,8 +11,12 @@ import {
   resolveClassifierProfile,
   type ClassifierProfileValue,
 } from '../../../src/model/classifier/profile.js';
-import { getClassifierProvider, calculateClassifierUsageCost } from '../../../src/model/classifier/providers.js';
-import { classifierProfileSummary } from '../../../src/model/classifier/profileExecution.js';
+import {
+  getClassifierProvider,
+  calculateClassifierUsageCost,
+  classifierErrorMessage,
+} from '../../../src/model/classifier/providers.js';
+import { classifierProfileSummary, runClassifierProfiles } from '../../../src/model/classifier/profileExecution.js';
 import type { InternalProcessContext, LLMProfileAttemptTraceEvent } from '../../../src/model/ProcessContext.js';
 import type { Inputs } from '../../../src/model/GraphProcessor.js';
 import {
@@ -33,6 +37,7 @@ import {
   type Project,
 } from '../../../src/index.js';
 import { testProcessContext } from '../../testUtils.js';
+import { ExecutionRecorder } from '../../../src/recording/ExecutionRecorder.js';
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
@@ -67,6 +72,72 @@ const reply = (provider: string) =>
     }),
     { headers: { 'Content-Type': 'application/json' } },
   );
+
+test('Chain exhaustion retains every physical retry reason even without optional diagnostic ports', async () => {
+  const statuses = [429, 503, 400];
+  let calls = 0;
+  globalThis.fetch = async () => Response.json({ private: 'response-only-evidence' }, { status: statuses[calls++] });
+  await assert.rejects(
+    evaluate(
+      [profile('perplexity')],
+      context(),
+      {},
+      {
+        retryOnNon200: true,
+        outputRequestBody: false,
+        outputResponseBody: false,
+        outputClassifierAttempts: false,
+        outputClassifierProfileSummary: false,
+      },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /3 provider attempts/);
+      for (const [index, status] of statuses.entries())
+        assert.match(error.message, new RegExp(`attempt ${index + 1} failure \\(HTTP ${status}\\)`));
+      assert.doesNotMatch(error.message, /private-key|response-only-evidence/);
+      return true;
+    },
+  );
+  assert.equal(calls, 3);
+});
+
+test('Deadlines expiring before dispatch produce visible typed failure evidence, not only unreached profiles', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return reply('jev');
+  };
+  const attempts: any[] = [];
+  await assert.rejects(
+    runClassifierProfiles({
+      profiles: [profile()],
+      state: { state: 'evidence' },
+      questions: [question],
+      context: context(),
+      nodeId: 'evaluate' as never,
+      deadline: Date.now() - 1,
+      onAttempt: (event) => attempts.push(event),
+    }),
+    /Classifier overall deadline expired/,
+  );
+  assert.equal(calls, 0);
+  assert.equal(attempts[0]?.failureKind, 'timeout');
+});
+
+test('Preparation errors are visible, bounded, and credential-redacted even with unreadable metadata', () => {
+  assert.equal(
+    classifierErrorMessage(new Error('Invalid model private-key'), 'private-key'),
+    'Invalid model [redacted]',
+  );
+  assert.equal(classifierErrorMessage(new Error('x'.repeat(3000))).length, 2000);
+  const unreadable = new Error();
+  Object.defineProperty(unreadable, 'message', {
+    get() {
+      throw new Error('private-key');
+    },
+  });
+  assert.equal(classifierErrorMessage(unreadable), 'Classifier request failed with unreadable error metadata.');
+});
 function evaluate(profiles: ClassifierProfileValue[], ctx = context(), extra: Inputs = {}, data = {}) {
   const node = ClassifierEvaluateNodeImpl.create();
   Object.assign(node.data, {
@@ -86,6 +157,301 @@ function evaluate(profiles: ClassifierProfileValue[], ctx = context(), extra: In
     },
     ctx,
   );
+}
+
+test('Profile attempt observers cannot overwrite retained failure reasons or usage receipts', async () => {
+  globalThis.fetch = async () =>
+    Response.json({ model: 'jev-latest', answers: {}, usage: { input_tokens: 1000, output_tokens: 0 } });
+  await assert.rejects(
+    runClassifierProfiles({
+      profiles: [profile()],
+      state: { state: 'Evidence' },
+      questions: [question],
+      context: context(),
+      nodeId: 'evaluate' as never,
+      deadline: Date.now() + 5000,
+      onAttempt: (event) => {
+        event.profileIndex = 99;
+        event.error = 'tampered';
+        if (event.classifierUsage) event.classifierUsage.inputTokens = 999;
+      },
+    }),
+    (error: any) => {
+      assert.equal(error.attempts[0].profileIndex, 0);
+      assert.equal(error.attempts[0].classifierUsage.inputTokens, 1000);
+      assert.doesNotMatch(error.message, /tampered/);
+      assert.match(error.summary, /1\..*failed/);
+      return true;
+    },
+  );
+});
+
+for (const configurationMode of ['inline', 'profile'] as const) {
+  test(`Execution observers cannot mutate ${configurationMode} attempt receipts`, async () => {
+    globalThis.fetch = async () => reply('jev');
+    const node = ClassifierEvaluateNodeImpl.create();
+    Object.assign(node.data, { configurationMode, outputClassifierAttempts: true });
+    const result = await new ClassifierEvaluateNodeImpl(node).process(
+      {
+        classifierProfile: { type: 'classifier-config', value: profile() },
+        state: { type: 'string', value: 'Evidence' },
+        question1: { type: 'object', value: question },
+      },
+      context({
+        settings: { classifierProviders: { jev: { apiKey: 'private-key' } } },
+        onLLMProfileAttempt: (event) => {
+          if (event.classifierUsage) event.classifierUsage.inputTokens = 999;
+        },
+      }),
+    );
+    assert.equal((result.classifierAttempts!.value as any[])[0].classifierUsage.inputTokens, 1000);
+  });
+}
+
+for (const phase of ['fetch', 'body'] as const) {
+  test(`Cancellation during ${phase} emits one aborted request, not a transport outage`, async () => {
+    const controller = new AbortController();
+    const stop = new Error('operator canceled');
+    const store = new InMemoryRivetLLMProfileHealthStore();
+    const attempts: LLMProfileAttemptTraceEvent[] = [];
+    let started!: () => void;
+    const active = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      calls++;
+      if (phase === 'body')
+        return new Response(
+          new ReadableStream({
+            pull() {
+              started();
+            },
+          }),
+        );
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+        started();
+      });
+    };
+    const run = evaluate(
+      [profile('jev', { enableCircuitBreaker: true }), profile('liquid')],
+      context({
+        llmProfileHealthStore: store,
+        signal: controller.signal,
+        onLLMProfileAttempt: (event) => attempts.push(event),
+      }),
+      {},
+      { catchRequestFailed: true },
+    );
+    const rejected = assert.rejects(run, (error) => error === stop);
+    await active;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    controller.abort(stop);
+    await rejected;
+    const requestEvents = attempts.filter((event) => event.stage === 'request');
+    assert.equal(requestEvents.length, 1);
+    assert.equal(requestEvents[0]!.outcome, 'aborted');
+    assert.equal(requestEvents[0]!.failureKind, undefined);
+    assert.match(requestEvents[0]!.error!, /canceled/);
+    assert.equal(calls, 1);
+    assert.equal(store.list()[0]!.failureCount, 0);
+  });
+}
+
+for (const configurationMode of ['inline', 'profile'] as const) {
+  for (const behavior of ['throw', 'catch', 'suppress'] as const) {
+    test(`Classifier rejected bodies and failure reasons survive ${configurationMode}/${behavior}`, async () => {
+      const responseBody = { error: { message: 'Model is unavailable' } };
+      globalThis.fetch = async () => Response.json(responseBody, { status: 400 });
+      const node = ClassifierEvaluateNodeImpl.create();
+      Object.assign(node.data, {
+        configurationMode,
+        provider: 'perplexity',
+        outputRequestBody: true,
+        outputResponseBody: true,
+        outputClassifierAttempts: true,
+        outputClassifierProfileSummary: true,
+        catchRequestFailed: behavior === 'catch',
+        errorOnNon200: behavior !== 'suppress',
+      });
+      let evidence: Inputs | undefined;
+      const run = new ClassifierEvaluateNodeImpl(node).process(
+        {
+          classifierProfile: { type: 'classifier-config', value: profile('perplexity') },
+          state: { type: 'string', value: 'Shared evidence' },
+          question1: { type: 'object', value: question },
+        },
+        context({
+          settings: { classifierProviders: { perplexity: { apiKey: 'private-key' } } },
+          setFailureOutputs: (outputs) => {
+            evidence = outputs;
+          },
+        }),
+      );
+      if (behavior === 'throw') await assert.rejects(run, /Perplexity.*HTTP 400/);
+      else {
+        evidence = await run;
+        assert.equal(evidence.answers!.type, 'control-flow-excluded');
+        assert.equal(evidence.usage!.type, 'control-flow-excluded');
+        if (behavior === 'catch') assert.match(evidence.runError!.value as string, /Perplexity.*HTTP 400/);
+      }
+      assert.ok(evidence);
+      assert.equal((evidence.requestBody!.value as any).model, 'pplx-decider-v1.1-27b');
+      assert.deepEqual(evidence.responseBody!.value, responseBody);
+      assert.doesNotMatch(JSON.stringify(evidence), /private-key/);
+      assert.match((evidence.classifierAttempts!.value as any[]).at(-1).error, /HTTP 400/);
+    });
+  }
+}
+
+test('Invalid JSON and invalid answer responses remain inspectable without entering successful outputs', async () => {
+  for (const [body, reason, expected] of [
+    ['upstream service failed', /invalid JSON/, { raw: 'upstream service failed' }],
+    ['{}', /invalid response shape/, {}],
+  ] as const) {
+    globalThis.fetch = async () => new Response(body);
+    const result = await evaluate([profile('perplexity')], context(), {}, { catchRequestFailed: true });
+    assert.equal(result.answers!.type, 'control-flow-excluded');
+    assert.match(result.runError!.value as string, reason);
+    assert.deepEqual(result.responseBody!.value, expected);
+  }
+});
+
+test('Cancellation at the health gate is not mislabeled as configuration failure and releases the permit', async () => {
+  const controller = new AbortController();
+  const stop = new Error('operator canceled');
+  const store = new InMemoryRivetLLMProfileHealthStore();
+  const attempts: LLMProfileAttemptTraceEvent[] = [];
+  globalThis.fetch = async () => assert.fail('Canceled preparation must not dispatch');
+  await assert.rejects(
+    evaluate(
+      [profile('jev', { enableCircuitBreaker: true })],
+      context({
+        signal: controller.signal,
+        llmProfileHealthStore: store,
+        onLLMProfileAttempt: (event) => {
+          attempts.push(event);
+          if (event.stage === 'health-gate' && event.outcome === 'success') controller.abort(stop);
+        },
+      }),
+    ),
+    (error) => error === stop,
+  );
+  const canceled = attempts.find((event) => event.outcome === 'aborted');
+  assert.ok(canceled);
+  assert.equal(canceled.failureKind, undefined);
+  assert.ok(attempts.some((event) => event.healthOutcome === 'ignored'));
+  assert.equal(store.list()[0]!.failureCount, 0);
+});
+
+test('Fallback diagnostics pair the final physical request with its response, not an earlier candidate', async () => {
+  globalThis.fetch = async (url) =>
+    String(url).includes('perplexity')
+      ? Response.json({ error: 'first candidate failed' }, { status: 400 })
+      : new Response('last candidate failed', { status: 401 });
+  const result = await evaluate([profile('perplexity'), profile('jev')], context(), {}, { catchRequestFailed: true });
+  assert.equal((result.requestBody!.value as any).model, 'jev-latest');
+  assert.deepEqual(result.responseBody!.value, { raw: 'last candidate failed' });
+  assert.match(result.runError!.value as string, /1\..*HTTP 400/);
+  assert.match(result.runError!.value as string, /2\..*authentication failed.*HTTP 401/);
+});
+
+test('Failure outputs are opt-in and diagnostic observers cannot replace the classifier failure', async () => {
+  globalThis.fetch = async () => Response.json({ private: 'provider response' }, { status: 400 });
+  const checkpoints: Inputs[] = [];
+  await assert.rejects(
+    evaluate(
+      [profile()],
+      context({
+        setFailureOutputs: (outputs) => {
+          checkpoints.push(outputs);
+        },
+      }),
+      {},
+      {
+        outputRequestBody: false,
+        outputResponseBody: false,
+        outputClassifierAttempts: false,
+        outputClassifierProfileSummary: false,
+      },
+    ),
+    /HTTP 400/,
+  );
+  assert.deepEqual(checkpoints, []);
+  await assert.rejects(
+    evaluate(
+      [profile()],
+      context({
+        setFailureOutputs: () => {
+          throw new Error('observer failed');
+        },
+      }),
+    ),
+    /HTTP 400/,
+  );
+});
+
+for (const split of [false, true]) {
+  test(`Classifier failure bodies reach terminal events and recordings (split=${split})`, async () => {
+    const candidate = ClassifierProfileNodeImpl.create();
+    candidate.data.provider = 'perplexity';
+    const questions = GraphInputNodeImpl.create();
+    questions.data.id = 'questions';
+    questions.data.dataType = 'object';
+    const node = ClassifierEvaluateNodeImpl.create();
+    Object.assign(node.data, { configurationMode: 'profile', outputRequestBody: true, outputResponseBody: true });
+    node.isSplitRun = split;
+    const output = GraphOutputNodeImpl.create();
+    output.data.id = 'answer';
+    const wire = (from: string, outputId: string, to: string, inputId: string) =>
+      ({ outputNodeId: from, outputId, inputNodeId: to, inputId }) as NodeConnection;
+    const graph = {
+      metadata: { id: 'failure-graph', name: 'Failure', description: '' },
+      nodes: [candidate, questions, node, output],
+      connections: [
+        wire(candidate.id, 'profile', node.id, 'classifierProfile'),
+        wire(questions.id, 'data', node.id, 'question1'),
+        wire(node.id, 'answers', output.id, 'value'),
+      ],
+    };
+    const project = {
+      metadata: { id: 'failure-project', title: 'Failure', description: '' },
+      graphs: { 'failure-graph': graph },
+      plugins: [],
+    } as unknown as Project;
+    globalThis.fetch = async () => Response.json({ error: 'Bad request' }, { status: 400 });
+    const processor = new GraphProcessor(project, graph.metadata.id as never, createBuiltInRegistry(), {
+      executor: 'nodejs',
+    });
+    const recorder = new ExecutionRecorder();
+    recorder.record(processor);
+    const failures: any[] = [];
+    let answerFinished = false;
+    processor.on('nodeError', (event) => {
+      if (event.node.id === node.id) failures.push(event);
+    });
+    processor.on('nodeFinish', (event) => {
+      if (event.node.id === output.id) answerFinished = true;
+    });
+    await assert.rejects(
+      processor.processGraph(
+        { ...testProcessContext(), settings: { classifierProviders: { perplexity: { apiKey: 'private-key' } } } },
+        { questions: { type: 'object', value: question } },
+      ),
+      /failed to process due to errors in nodes/,
+    );
+    assert.equal(answerFinished, false);
+    assert.equal(failures.length, 1);
+    assert.match(String(failures[0].error), /Perplexity.*HTTP 400/);
+    const evidence = split ? failures[0].splitOutputs[0] : failures[0].outputs;
+    assert.deepEqual(evidence.responseBody.value, { error: 'Bad request' });
+    assert.equal(evidence.requestBody.value.model, 'pplx-decider-v1.1-27b');
+    const recording = recorder.getRecording();
+    const recorded = recording.events.find((event) => event.type === 'nodeError' && event.data.nodeId === node.id);
+    assert.ok(recorded?.type === 'nodeError');
+    assert.deepEqual(split ? recorded.data.splitOutputs?.[0] : recorded.data.outputs, evidence);
+  });
 }
 
 test('Classifier Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
@@ -404,6 +770,7 @@ test('Health-service failures are fail-open and never expose service diagnostics
     );
     assert.equal(result.answers!.type, 'object');
     assert.match(result.classifierProfileSummary!.value as string, /succeeded/);
+    assert.match(result.classifierProfileSummary!.value as string, /reliability service unavailable/);
     assert.ok(!JSON.stringify(result.classifierAttempts).includes('private-key'));
     assert.ok((result.classifierAttempts!.value as any[]).some((event) => event.healthDisposition === 'fail-open'));
   }
@@ -458,6 +825,8 @@ test('Fully suspended classifier chains do not call providers and concurrent rec
   assert.equal(calls, 0);
   assert.equal(skipped.runFailed!.value, true);
   assert.match(skipped.classifierProfileSummary!.value as string, /suspended/);
+  assert.match(skipped.runError!.value as string, /next recovery attempt after/);
+  assert.ok((skipped.classifierProfileSummary!.value as string).includes(new Date(now + 100).toISOString()));
 
   now += 101;
   let release!: () => void;

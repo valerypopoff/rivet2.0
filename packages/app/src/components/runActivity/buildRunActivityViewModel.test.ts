@@ -838,6 +838,38 @@ test('renders suspension skips, reliability-service decisions, timeouts, and omi
   assert.ok(item.searchTerms?.includes('fail-open'));
 });
 
+test('Run Activity retains timeout explanations for LLM and classifier attempts', () => {
+  for (const timeoutKind of ['first-output', 'stream-inactivity', 'response'] as const) {
+    const journal = createRunActivityJournal();
+    const selectedRoot = root(newerActiveRootId, 1, 'failed');
+    const capturedInvocation = invocation({ key: 'timeout', sequence: 1, nodeId: 'evaluate', processId: 'process' });
+    capturedInvocation.profileAttempts = [
+      {
+        sequence: 2,
+        eventId: 'timeout',
+        roundIndex: 0,
+        profileIndex: 0,
+        nodeId: capturedInvocation.nodeId,
+        processId: capturedInvocation.processId,
+        ...(timeoutKind === 'response' ? { family: 'classifier' as const } : {}),
+        provider: timeoutKind === 'response' ? 'perplexity' : 'openai',
+        model: 'model',
+        stage: 'request',
+        outcome: 'failure',
+        timeoutKind,
+        error: 'Provider request timed out after 500 ms.',
+      },
+    ];
+    selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
+    selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+    journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+    journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+    const item = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Evaluate' })).items[0]!;
+    assert.match(item.children?.[0]?.secondaryText ?? '', /Provider request timed out after 500 ms/);
+    assert.equal(item.children?.[0]?.status, 'error');
+  }
+});
+
 test('keeps older Run Activity journals without profile-attempt fields readable', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 1, 'completed');
