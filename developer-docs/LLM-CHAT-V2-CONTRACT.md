@@ -12,6 +12,9 @@ native-tool and reasoning fields never alter this provider. Credentials are
 `openRouterApiKey` / `OPENROUTER_API_KEY`, with the existing named-credential and
 API Key input mechanisms. No OpenAI/Custom key fallback is allowed. The public
 model catalog uses no credentials and retains `openrouter/auto` as its fallback.
+`test/api/processSettings.test.ts` checks the complete runtime defaults, host
+fallbacks, explicit-key precedence, and isolation from OpenAI credentials. Keep
+these expectations aligned whenever adding another provider setting.
 
 Shared generation fields, tools/choice/parallel calls, JSON/schema output,
 streaming, retries, captures and profile fallback retain their existing owners.
