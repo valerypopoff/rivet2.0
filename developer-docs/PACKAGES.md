@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update — classifier observability, port warnings and runtime costs
+
+This bump covers the nine commits after the previous coordinated bump,
+`aab636029f042f014bd9dfb1d15945a2631ddea8`, through
+`ad1c79eb4d1cd0accfbbc1e61b297642b0d1bffc`.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.18.0` → `2.19.0` | Adds combined runtime `cost` and `{ llm, classifier, other }` `costBreakdown`, including nested graphs, delegated tools and managed background work. Adds classifier trace/presentation support; preserves failure reasons, opt-in request/response evidence and cancellation. Consolidates provider metadata, child construction and boundary planning; hardens OpenRouter options, cached-call accounting and web-app rendering. Node forwards the runtime metrics; CLI cost flags cover both fields. Evaluations has no package-local changes and is a required public npm companion. |
+| App | `2.25.0` → `2.26.0` | Adds classifier response inspection and Run Activity discovery, persistent destination-port warnings and explanatory hover feedback. Refines connected ports, midpoints and graph-tree alignment. Consolidates execution display transitions while retaining active/inactive policies, retention and reference cleanup. |
+| App Executor | `2.10.0` → `2.11.0` | Bundled-runtime companion for Core/Node's cost reporting, classifier evidence and execution hardening. No package-local source changes; the sidecar bundles those workspace sources. |
+| All five Studio Server packages | `1.24.0` → `1.25.0` | Hosts the new editor inspection/port feedback. Consolidates editor bridge deadlines and settlement, typed workflow failures/commands, resource lifecycle and transport policy. Hardens filesystem root destinations, settings refresh, PostgreSQL cleanup, runtime-library observers and tunnel generation retention. API/Web changed locally; Shared/Executor/Bootstrap are lockstep release companions. |
+| Docs | `2.17.0` → `2.18.0` | Documents classifier inspection/activity, failure diagnostics and runtime cost breakdowns, including CLI visibility and incomplete-pricing semantics. |
+
+Compatible features justify minor increments; accompanying refactors and fixes
+do not require a major release. Public npm packages and Studio Server retain
+their separate lockstep families. Tauri/Cargo follows App and the CLI Docker
+fallback follows the public npm family. Internal `workspace:` dependencies need
+no lockfile resolution changes. Helm/schema/dependency versions are unchanged.
+This changes release metadata, not package publication or deployment.
+
 ## Version update: 2026-10-11 — profiles, bundles, storage and execution ownership
 
 The previous coordinated bump is `be437aad477b99b0d71f04d15687469146b1c904`
@@ -254,7 +275,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.18.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -294,7 +315,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.18.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -766,7 +787,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.25.0`
+- Version: `2.26.0`
 - Private: yes
 
 ### Runtime shape
@@ -831,7 +852,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.10.0`
+- Version: `2.11.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -936,7 +957,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.18.0`
+- Version: `2.19.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -1060,7 +1081,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.18.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1092,7 +1113,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.18.0`
 - Private: yes
 
 ### Script surface
