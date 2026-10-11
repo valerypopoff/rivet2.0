@@ -27,7 +27,8 @@ async function prepare(page: import('@playwright/test').Page) {
     }
     window.EventSource = new Proxy(Native, {
       construct(target, args) {
-        return args[0] === '/__rivet_dev/events' ? new BuildEvents() : Reflect.construct(target, args);
+        if (String(args[0]).startsWith('/__rivet_dev/events')) (window as any).__developmentEventsUrl = args[0];
+        return String(args[0]).startsWith('/__rivet_dev/events') ? new BuildEvents() : Reflect.construct(target, args);
       },
     });
   });
@@ -36,6 +37,18 @@ async function prepare(page: import('@playwright/test').Page) {
   await page.goto('/');
   await authenticateIfNeeded(page);
 }
+
+test('dashboard and directly opened editor retain their own immutable generation', async ({ page }) => {
+  await prepare(page);
+  for (const url of ['/', '/?editor']) {
+    await page.goto(url);
+    const generation = await page.locator('meta[name="rivet-dev-generation"]').getAttribute('content');
+    expect(generation).toBeTruthy();
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__developmentEventsUrl))
+      .toBe(`/__rivet_dev/events?generation=${encodeURIComponent(generation!)}`);
+  }
+});
 
 async function waitForCheckpointedEditor(page: import('@playwright/test').Page) {
   // editor-ready precedes some startup recovery effects. Wait through the real

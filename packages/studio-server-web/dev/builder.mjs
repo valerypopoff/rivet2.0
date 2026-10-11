@@ -61,7 +61,10 @@ const send = (message) => process.send?.(message);
 function schedule() {
   if (stopped) return;
   dirty = true;
-  if (child?.connected) child.send({ type: 'source-changed' });
+  if (child?.connected) {
+    child.send({ type: 'source-changed' });
+    send({ type: 'source-changed', pid: child.pid });
+  }
   clearTimeout(timer);
   if (!child) timer = setTimeout(compile, 350);
 }
@@ -76,10 +79,19 @@ function compile() {
   send({ type: 'compiler-started', pid: compilerPid });
   let published = false;
   let failed = false;
+  let retryAfterMs;
   child.on('message', (message) => {
+    if (message?.type === 'publish-build') {
+      if (dirty) child.send({ type: 'publication-result', error: 'Frontend publication was superseded.' });
+      else send({ type: 'publish-build', pid: compilerPid });
+      return;
+    }
     if (message.phase === 'ready') published = true;
     if (message.discarded) published = true; // completed, deliberately not selected
-    if (message.phase === 'failed') failed = true;
+    if (message.phase === 'failed') {
+      failed = true;
+      retryAfterMs = message.retryAfterMs;
+    }
     // A source edit observed during compilation/publication supersedes it.
     if (message.phase === 'ready' && dirty) return;
     send(message);
@@ -95,12 +107,14 @@ function compile() {
         error: 'Frontend build failed. Check the web container logs; the previous bundle remains available.',
       });
     if (dirty) timer = setTimeout(compile, 350);
+    else if (retryAfterMs === 5 * 60_000) timer = setTimeout(schedule, retryAfterMs);
   });
 }
 watcher.watcher.on('all', schedule);
 process.on('message', (message) => {
   if (message?.type === 'compiler-tracked' && message.pid === child?.pid && child.connected)
     child.send({ type: 'compile' });
+  if (message?.type === 'publication-result' && message.pid === child?.pid && child.connected) child.send(message);
 });
 schedule();
 const stop = async () => {

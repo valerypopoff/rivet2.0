@@ -24,6 +24,7 @@ export default defineConfig({
     'node-editor-lifecycle.spec.ts',
     'llm-temperature.spec.ts',
     'evaluation-history-paging.spec.ts',
+    'tunnel-cache-retention.spec.ts',
   ],
   timeout: 180_000,
   expect: {

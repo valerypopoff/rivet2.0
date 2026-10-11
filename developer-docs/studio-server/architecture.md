@@ -464,8 +464,14 @@ the same stack and data with a supervised Vite build watcher and independent
 HTTP/SSE server (`packages/studio-server-web/dev/`). Builds are published as
 immutable, content-deduplicated generations. An HTML base precedes all asset
 references, and the iframe carries the dashboard's generation ID. A failed build
-cannot replace current HTML or remove old lazy chunks. The bounded cache fails
-publication rather than deleting generations still usable by open tabs.
+cannot replace current HTML or remove old lazy chunks. The HTTP supervisor owns
+publication and bounded-cache collection. Generation-scoped SSE connections pin
+open tabs; asset/HTML responses and a five-minute disconnect grace protect reads
+and reconnects. Collection reclaims only unused history, never the current build.
+Legacy unscoped clients conservatively pin all history. If pinned builds still
+fill the cache, publication fails visibly and retries after five minutes rather
+than evicting a live editor. Compiler children await publication, and replacement
+compilation waits for retired publication cleanup before reusing build output.
 
 Refresh permission belongs to the editor's live Jotai store and committed browser
 recovery, not just the dashboard's active-project dirty dot. A development-only

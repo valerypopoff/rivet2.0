@@ -8,6 +8,8 @@ export function observeBuilder(
     compiler,
     onStatus,
     onFailure,
+    onPublish,
+    beforeCompile,
     timeoutMs = 15 * 60_000,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
@@ -15,6 +17,8 @@ export function observeBuilder(
 ) {
   let activePid;
   let deadline;
+  let publishing = false;
+  let sourceVersion = 0;
   const clearDeadline = () => {
     clearTimer(deadline);
     deadline = undefined;
@@ -43,7 +47,43 @@ export function observeBuilder(
         );
       }, timeoutMs);
       deadline?.unref?.();
-      builder.send({ type: 'compiler-tracked', pid: message.pid });
+      const acknowledge = () => {
+        if (isCurrent(builder) && builder.connected !== false && activePid === pid)
+          builder.send({ type: 'compiler-tracked', pid });
+      };
+      if (beforeCompile)
+        Promise.resolve()
+          .then(beforeCompile)
+          .then(acknowledge, (error) => {
+            if (isCurrent(builder) && activePid === pid) onFailure(error);
+          });
+      else acknowledge();
+      return;
+    }
+    if (message?.type === 'source-changed' && message.pid === activePid) {
+      sourceVersion++;
+      return;
+    }
+    if (message?.type === 'publish-build') {
+      if (!onPublish || publishing || message.pid !== activePid) return;
+      publishing = true;
+      const pid = activePid;
+      const version = sourceVersion;
+      const isOwner = () => isCurrent(builder) && builder.connected !== false && activePid === pid;
+      const isAccepted = () => isOwner() && sourceVersion === version;
+      Promise.resolve()
+        .then(() => onPublish(isAccepted))
+        .then(
+          (result) => {
+            if (isOwner()) builder.send({ type: 'publication-result', pid, ...result });
+          },
+          (error) => {
+            if (isOwner()) builder.send({ type: 'publication-result', pid, error: error.message, code: error.code });
+          },
+        )
+        .finally(() => {
+          publishing = false;
+        });
       return;
     }
     if (message?.type === 'compiler-stopped') {

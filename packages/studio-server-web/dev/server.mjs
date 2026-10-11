@@ -45,6 +45,9 @@ export function createTunnelServer(store, state) {
           res.writeHead(503).end();
           return;
         }
+        const generation = url.searchParams.get('generation');
+        const release = generation === null ? store.retainLegacy() : store.retain(generation);
+        res.once('close', release);
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-store',
@@ -75,6 +78,7 @@ export function createTunnelServer(store, state) {
           res.writeHead(503, { 'Content-Type': 'text/plain', 'Retry-After': '5' }).end('Frontend is building.');
           return;
         }
+        res.once('close', store.retain(id));
         const html = await readFile(path.join(store.directory(id), 'page.html'));
         res
           .writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' })
@@ -91,6 +95,7 @@ export function createTunnelServer(store, state) {
         return;
       }
       const directory = store.directory(id);
+      res.once('close', store.retain(id));
       const file = path.resolve(directory, ...parts);
       if (!file.startsWith(directory + path.sep)) {
         res.writeHead(404).end();

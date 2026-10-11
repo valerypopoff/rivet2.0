@@ -737,19 +737,42 @@ Changes to the launcher or `dev/*.mjs` server implementation require a web resta
 The watch-only Vite server has HMR disabled; it opens no unused HMR socket.
 
 The named `tunnel_cache` volume stores deduplicated hardlinked generations, capped
-at 2 GiB of unique objects and 128 generations. Old generations are deliberately
-not deleted while an old tab could still request a lazy chunk. At the limit,
-publication fails visibly while the existing bundle keeps serving.
-Failed-publication objects without any retained-generation hardlink are reclaimed
-when the next compiler initializes the cache; retained generations are never
-pruned. Objects from a partial publication must not permanently consume the
-available budget.
-To reset the retained-generation cache,
-close old browser tabs, stop the dev stack, and remove **only** that Compose
-project's `tunnel_cache` volume, then restart. Never use `docker compose down -v`
-for this: it would also remove local application/database volumes. A fresh web
-process waits for its first successful build rather than treating another
-checkout's cached HTML as current.
+at 2 GiB of unique objects and 128 generations. Publication now reclaims the
+oldest unused generations under pressure instead of permanently filling the
+volume. The HTTP supervisor is the sole publisher/collector; compiler children
+wait for its acknowledgement before exiting or reusing the working directory.
+This keeps live-tab retention and filesystem retirement in one process.
+
+The dashboard identifies its generation on `/__rivet_dev/events?generation=...`.
+An open SSE connection pins that generation, including its lazy chunks and
+workers. A directly opened `?editor` tab owns its own retention connection;
+the ordinary dashboard iframe inherits its parent's pin. HTML/asset reads also
+hold pins until their response closes. Released
+pins retain a five-minute reconnection grace; active and suspended background
+tabs retain their SSE pin without requiring browser timers. Legacy clients that
+omit the generation conservatively protect all history until they close/reload,
+plus the same grace. The current build is never evicted. On restart the newest
+cached generation is protected until replacement, but is not served as current:
+readiness still waits for the first successful build of the current checkout.
+
+Cache directories must be real directories, object entries must be regular
+content-addressed files, and generation HTML must identify its owning UUID.
+Unexpected entries fail closed rather than becoming deletion candidates.
+Candidate validation and exact deduplicated-space reservation happen before
+publication. An oversized build fails without evicting history. Failed/retired
+publications reclaim unreferenced objects immediately; startup cleans abandoned
+staging. Source edits and retired watcher identities fence publication before
+promotion, and replacement compilation waits for prior publication to settle.
+If pinned history still prevents publication, the last working build remains
+available, the notice asks to close unused tabs, and the watcher retries after
+five minutes (new source edits still trigger ordinary rebuilds).
+
+An upgrade from the old indefinitely-retained cache does not require volume
+deletion: close old tunnel tabs and restart the **development** frontend/stack so
+it loads the changed `dev/*.mjs` implementation. For example, save work, run
+`yarn studio-server:dev:down`, then `yarn studio-server:dev:tunnel`. These commands
+retain application and cache volumes. Never use `docker compose down -v` as
+cache recovery: it would also remove local application/database volumes.
 
 Verification:
 
@@ -773,7 +796,12 @@ failure/reconnect, build feedback, safe clean refresh,
 generation pinning, pending dashboard forms/rename rows, an active canvas drag,
 an inactive dirty tab and aborted recovery transactions. The native server tests cover cache limits, failed publication,
 old chunks, SSE, path validation, deduplication, retired watcher callbacks and
-compiler deadlines. Generated bundle reads in server tests inspect only test-owned
+compiler deadlines, full-cache restart recovery, live SSE retention, grace expiry,
+oversized candidates and superseded publication. `tunnel-cache-retention.spec.ts`
+uses the real HTTP/SSE server and a disposable tiny frontend to verify lazy imports
+and worker loading while newer builds exhaust the cache. It runs without Docker
+and is enrolled in the standard editor CI lane.
+Generated bundle reads in server tests inspect only test-owned
 artifacts, never production source. Bootstrap behavior is checked in the real browser,
 not by extracting and executing inline HTML source in a mock VM. Pure launcher
 tests exercise `developmentFrontendEnv`; the static repository gate
