@@ -1,11 +1,6 @@
-import {
-  type ChartNode,
-  type NodeConnection,
-  type PortId,
-  type NodeInputDefinition,
-} from '@valerypopoff/rivet2-core';
+import { type ChartNode, type NodeConnection, type PortId, type NodeInputDefinition } from '@valerypopoff/rivet2-core';
 import { type FC, type MouseEvent } from 'react';
-import { useCanvasNodeIO } from '../hooks/useGetNodeIO.js';
+import { useCanvasNodeIO, useInputConnectionWarnings } from '../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
 import { Port } from './Port.js';
 import { useDependsOnPlugins } from '../hooks/useDependsOnPlugins';
@@ -19,13 +14,11 @@ export type NodePortsProps = {
   zoomedOut?: boolean;
 };
 
-export const LoopControllerNodePorts: FC<NodePortsProps> = ({
-  node,
-  connections,
-}) => {
+export const LoopControllerNodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   const { draggingWire, closestPortToDraggingWire } = useCanvasViewContext();
   const { onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } = useCanvasHandlersContext();
   const { inputDefinitions, outputDefinitions } = useCanvasNodeIO(node.id)!;
+  const inputWarnings = useInputConnectionWarnings(node.id, connections);
 
   const preservePortTextCase = useAtomValue(preservePortTextCaseState);
 
@@ -85,6 +78,7 @@ export const LoopControllerNodePorts: FC<NodePortsProps> = ({
                   id={input.id}
                   input
                   connected={connected}
+                  connectionWarning={inputWarnings.has(input.id)}
                   key={`input-${input.id}`}
                   nodeId={node.id}
                   canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}
@@ -147,6 +141,7 @@ export const LoopControllerNodePorts: FC<NodePortsProps> = ({
                     id={input.id}
                     input
                     connected={connected}
+                    connectionWarning={inputWarnings.has(input.id)}
                     key={`input-${input.id}`}
                     nodeId={node.id}
                     canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}

@@ -6,6 +6,7 @@ import { useStableCallback } from '../../hooks/useStableCallback.js';
 import { preservePortTextCaseState } from '../../state/settings.js';
 import { useCanvasHandlersContext, useCanvasViewContext } from '../CanvasContext.js';
 import { Port } from '../Port.js';
+import { useInputConnectionWarnings } from '../../hooks/useGetNodeIO.js';
 
 export const ConditionalIfPort: FC<{
   node: ChartNode;
@@ -14,6 +15,7 @@ export const ConditionalIfPort: FC<{
   const { draggingWire, closestPortToDraggingWire } = useCanvasViewContext();
   const { onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } = useCanvasHandlersContext();
   const preservePortTextCase = useAtomValue(preservePortTextCaseState);
+  const inputWarnings = useInputConnectionWarnings(node.id, connections);
 
   const handleIfPortMouseDown = useStableCallback(
     (event: MouseEvent<HTMLDivElement>, port: PortId, isInput: boolean) => {
@@ -36,6 +38,8 @@ export const ConditionalIfPort: FC<{
       <span className={clsx('conditional-if-port-label', { connected: ifConnected })}>if</span>
       <Port
         connected={ifConnected}
+        connectionWarning={inputWarnings.has(IF_PORT.id)}
+        draggingDataType={draggingWire?.dataType}
         canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}
         closest={closestPortToDraggingWire?.nodeId === node.id && closestPortToDraggingWire.portId === IF_PORT.id}
         id={IF_PORT.id}

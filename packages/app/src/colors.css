@@ -95,6 +95,7 @@
   --node-overlay-shadow: 10px 10px 16px rgba(0, 0, 0, 0.4);
   --node-port-bg: var(--grey-dark);
   --node-port-border: var(--grey);
+  --node-port-connected-bg: color-mix(in srgb, var(--node-port-border) 30%, var(--node-port-bg) 70%);
   --node-port-label-color: var(--grey-lighter);
   --node-port-reorder-label-bg: color-mix(in srgb, var(--primary) 18%, var(--grey-darkest) 82%);
   --node-port-reorder-label-border: color-mix(in srgb, var(--primary) 42%, transparent);
@@ -106,7 +107,6 @@
   --node-color-picker-swatch-body-bg: var(--node-body-bg);
   --node-body-bg: var(--grey-darker-darker);
   --node-resting-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --port-connected-label-color: var(--primary-text);
   --port-connected-label-opacity: 0.5;
   --node-stack-front-opacity: 0.35;
   --node-stack-back-opacity: 0.15;
@@ -301,7 +301,6 @@
   --node-color-picker-swatch-body-bg: #ffffff;
   --node-body-bg: color-mix(in srgb, var(--secondary) 3%, #e7edf5 97%);
   --node-resting-shadow: 0 2px 4px rgba(30, 30, 30, 0.35);
-  --port-connected-label-color: #0d4ea8;
   --port-connected-label-opacity: 0.86;
   --node-stack-front-opacity: 0.72;
   --node-stack-back-opacity: 0.46;
