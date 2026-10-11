@@ -115,6 +115,9 @@ const workflowPathSchema = z
   .transform((value) => normalizeWorkflowRelativePath(value, { allowProjectFile: true }));
 const workflowFolderSchema = z
   .unknown()
+  // Omitted destinations mean the root. Zod object fields otherwise reject a
+  // missing transformed value before the normalizer can supply that root.
+  .prefault('')
   .transform((value) => normalizeWorkflowRelativePath(value, { allowProjectFile: false, allowEmpty: true }));
 const workflowNameSchema = z.unknown().transform((value) => sanitizeWorkflowName(value, 'name'));
 

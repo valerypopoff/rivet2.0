@@ -6,6 +6,25 @@ Correctness tests are not evidence of a production VM speedup.
 
 ## Maintainability follow-up (2026-10-11)
 
+CI follow-up caught two integration gaps missed by the selected local test run:
+the transformed HTTP folder schema rejected omitted root destinations, and two
+catalog rollback tests still asserted raw SQLite uniqueness messages. Folder
+destinations now explicitly default before normalization; omitted, null and empty
+values retain their existing root meaning. HTTP regressions cover create, move
+and upload, including rejection of malformed/traversing folder inputs. Catalog
+collision tests assert the stable `workflow_destination_conflict` code and 409
+status while retaining exact post-failure state/rollback checks. Run the full
+affected filesystem and catalog suites, not only the pure normalizer contract:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/workflow-filesystem-tree.test.ts src/tests/workflow-publication-filesystem.test.ts src/tests/workflow-execution-filesystem.test.ts src/tests/llm-profile-health.test.ts src/tests/local-workflow-catalog.test.ts
+```
+
+The repaired complete affected run passed all 163 tests on local Node 22.22.3,
+with no skips; API compilation and repository/style checks also passed. GitHub
+remains the supported Node 24/Linux qualification gate, not an inferred result
+from the local run.
+
 The compatibility baseline is commit
 `5fdd02cef9dc021355d0a362de7beefd7693b622`. The measurements below use the
 maintainability implementation against that starting point; they
