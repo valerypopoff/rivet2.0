@@ -410,6 +410,17 @@ must not discard it. A missing/deleted selection falls back to the active projec
 when it still exists in the tree, otherwise it clears. Selection restoration does
 not issue an open command, and blocked browser storage does not break selection.
 
+When the selected project is hidden by collapsed folders, `WorkflowFolderTree`
+highlights the outermost closed ancestor with `contains-selection`. Only visible
+folder rows participate; expanding that ancestor moves the highlight to the next
+closed ancestor, or removes it when the project is visible. The match uses
+normalized absolute paths with a slash boundary, so similarly named siblings do
+not match. Its white background alpha is 0.04 (half the 0.08 hover highlight);
+hover, rename and drag-over styling retain precedence. This is derived UI state:
+it does not expand folders, alter selection or read project content.
+`project-tree-activation.spec.ts` covers nested collapse/expansion, sibling paths,
+selection changes and the computed hover/highlight colors.
+
 `node-editor-lifecycle.spec.ts` covers a real page reload with multiple dirty tabs,
 tab order, active tab and selected row, delayed/failed tree requests, a deleted
 selection, and zero reload-triggered server saves. Missing runtime payloads may

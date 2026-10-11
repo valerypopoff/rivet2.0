@@ -49,6 +49,7 @@ export const llmProfileFieldSpecs = [
   { key: 'extraProviderOptions', inputId: 'extraProviderOptions', valueKind: 'string' },
   { key: 'useExtraProviderOptionsInput', valueKind: 'boolean', resolvedInputToggle: true },
   { key: 'openAIReasoningEffort', valueKind: 'string' },
+  { key: 'openRouterReasoningEffort', valueKind: 'string' },
   { key: 'openAIReasoningSummary', valueKind: 'string' },
   { key: 'openAIPreviousResponseId', inputId: 'previousResponseId', valueKind: 'string' },
   { key: 'useOpenAIPreviousResponseIdInput', valueKind: 'boolean', resolvedInputToggle: true },

@@ -77,6 +77,7 @@ test('fillMissingSettingsFromEnvironmentVariables resolves independent env looku
   assert.equal(settings.openAiKey, 'openai-key');
   assert.equal(settings.anthropicApiKey, 'anthropic-key');
   assert.equal(settings.googleApiKey, 'google-key');
+  assert.equal(settings.openRouterApiKey, classifierEnvironmentValues.OPENROUTER_API_KEY);
   assert.equal(settings.customAiApiKey, 'custom-provider-key');
   assert.equal(settings.openAiOrganization, '');
   assert.equal(settings.openAiEndpoint, '');

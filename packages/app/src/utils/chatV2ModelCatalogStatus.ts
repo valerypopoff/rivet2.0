@@ -1,9 +1,4 @@
-import {
-  getPluginConfig,
-  type ChatV2Provider,
-  type RivetPlugin,
-  type Settings,
-} from '@valerypopoff/rivet2-core';
+import { getPluginConfig, type ChatV2Provider, type RivetPlugin, type Settings } from '@valerypopoff/rivet2-core';
 
 export type ChatV2ModelRefreshStatus =
   | {
@@ -40,6 +35,7 @@ export function getChatV2MissingCredentialMessage(
         ? undefined
         : 'Google API key is not configured.';
     case 'custom':
+    case 'openrouter':
       return undefined;
   }
 }

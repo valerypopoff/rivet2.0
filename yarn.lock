@@ -7101,6 +7101,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@openrouter/ai-sdk-provider@npm:2.10.0":
+  version: 2.10.0
+  resolution: "@openrouter/ai-sdk-provider@npm:2.10.0"
+  peerDependencies:
+    ai: ^6.0.0
+    zod: ^3.25.0 || ^4.0.0
+  checksum: 10/b2d9d0197eabe58f98b5e176159df92a0f7bd7d9cf538cb919a2fc40a644598bd38d31e6a93757069013c376d68123ea335150d0c0d7f75f15f88cc59631f4af
+  languageName: node
+  linkType: hard
+
 "@opentelemetry/api@npm:1.9.0":
   version: 1.9.0
   resolution: "@opentelemetry/api@npm:1.9.0"
@@ -9844,6 +9854,7 @@ __metadata:
     "@google-cloud/vertexai": "npm:^0.1.3"
     "@google/genai": "npm:^0.12.0"
     "@huggingface/inference": "npm:^2.6.4"
+    "@openrouter/ai-sdk-provider": "npm:2.10.0"
     "@playwright/test": "npm:^1.53.0"
     "@recoiljs/refine": "npm:^0.1.1"
     "@tanstack/react-query": "npm:^5.4.3"
@@ -9974,6 +9985,7 @@ __metadata:
     "@google-cloud/vertexai": "npm:^1.12.0"
     "@google/genai": "npm:^1.52.0"
     "@huggingface/inference": "npm:^2.6.4"
+    "@openrouter/ai-sdk-provider": "npm:2.10.0"
     "@swc/core": "npm:^1.15.43"
     "@types/crypto-js": "npm:^4.1.3"
     "@types/eslint": "npm:^8.44.6"

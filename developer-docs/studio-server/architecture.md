@@ -1,5 +1,21 @@
 # Architecture
 
+## OpenRouter LLM execution
+
+LLM Chat and LLM Profile share Core's first-class OpenRouter adapter across hosted
+editor, Node executor, endpoints, web apps and Evaluations. Host runtime settings
+resolve `openRouterApiKey` or `OPENROUTER_API_KEY`, also used by the OpenRouter
+classifier provider. Do not special-case this provider in route
+handlers or bypass the shared profile-health/recording lifecycle. Model discovery
+uses the public catalog without sending execution credentials. See the
+[LLM contract](../LLM-CHAT-V2-CONTRACT.md#openrouter-provider) for request,
+reasoning-continuity, capability enforcement and pricing rules.
+OpenRouter embedded-error normalization and stream-completion validation belong
+to Core's model boundary, including errors received inside HTTP 200; hosts must
+not infer success from the transport status or a synthetic EOF finish event.
+Truncated streams fail before tool delegation; normal cancellation still aborts
+the request. Rejected structured replies retain reported physical-call cost.
+
 ## Hosted editor integration boundaries
 
 Editor Browser/Node transports share authored run capture and selection in

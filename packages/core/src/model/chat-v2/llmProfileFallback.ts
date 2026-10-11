@@ -372,6 +372,7 @@ const PROVIDER_NETWORK_ERROR_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_SOCKET',
+  'ERR_STREAM_PREMATURE_CLOSE',
 ]);
 
 function isKnownProviderNetworkError(error: unknown): boolean {

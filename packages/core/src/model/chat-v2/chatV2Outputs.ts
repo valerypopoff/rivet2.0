@@ -70,6 +70,7 @@ function createControlFlowExcludedOutput(): ControlFlowExcludedOutput {
 export function normalizeChatV2Usage(
   usage: LanguageModelUsage | undefined,
   options: Pick<RunChatV2PipelineOptions, 'provider' | 'modelId'>,
+  providerMetadata?: Record<string, Record<string, unknown>>,
 ): ChatV2NormalizedUsage | undefined {
   if (usage == null) {
     return undefined;
@@ -100,7 +101,7 @@ export function normalizeChatV2Usage(
     totalTokens,
     cachedTokens,
     reasoningTokens,
-    totalCost: calculateChatV2UsageCost(options.provider, options.modelId, usage),
+    totalCost: calculateChatV2UsageCost(options.provider, options.modelId, usage, providerMetadata),
   };
 }
 

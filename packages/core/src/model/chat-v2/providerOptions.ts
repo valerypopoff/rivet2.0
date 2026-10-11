@@ -2,6 +2,8 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { withOpenRouterResponseValidation } from './openRouterModel.js';
 import { cleanHeaders } from '../../utils/inputs.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { getCustomProviderApiContract, type CustomProviderApi } from './customProviderApi.js';
@@ -20,6 +22,7 @@ export const chatV2ProviderOptions = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'google', label: 'Google' },
+  { value: 'openrouter', label: 'OpenRouter' },
   { value: 'custom', label: 'Custom provider' },
 ] as const;
 
@@ -73,6 +76,9 @@ export function getChatV2ProviderLabel(provider: ChatV2Provider): string {
 }
 
 export function getChatV2ModelOptions(provider: ChatV2Provider): { value: string; label: string }[] {
+  if (provider === 'openrouter') {
+    return [{ value: 'openrouter/auto', label: 'OpenRouter Auto' }];
+  }
   const registry = getChatV2ModelRegistry()[provider];
 
   return Object.entries(registry)
@@ -91,6 +97,8 @@ export function getDefaultChatV2Model(provider: ChatV2Provider): string {
       return 'claude-sonnet-4-20250514';
     case 'google':
       return 'gemini-2.5-flash';
+    case 'openrouter':
+      return 'openrouter/auto';
     case 'custom':
       return 'model-id';
   }
@@ -101,6 +109,7 @@ export function parseChatV2Provider(value: string): ChatV2Provider {
     case 'openai':
     case 'anthropic':
     case 'google':
+    case 'openrouter':
     case 'custom':
       return value;
     default:
@@ -257,7 +266,9 @@ export function applyChatV2RequestBodyOverlay(
   }
 
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-    throw new Error('Extra provider options could not be applied because the provider request body is not a JSON object.');
+    throw new Error(
+      'Extra provider options could not be applied because the provider request body is not a JSON object.',
+    );
   }
 
   return { ...(body as Record<string, unknown>), ...overlay };
@@ -313,14 +324,13 @@ function createProviderProcessingFetch(
     }
 
     const nativeFetch = globalThis.fetch as unknown as (input: unknown, init?: unknown) => Promise<Response>;
-    let processedInit =
-      shouldSerializeProcessedBody
-        ? {
-            ...init,
-            body: serializeTransformedFetchBody(originalBody, processedBody),
-            headers: removeStaleContentLength(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
-          }
-        : init;
+    let processedInit = shouldSerializeProcessedBody
+      ? {
+          ...init,
+          body: serializeTransformedFetchBody(originalBody, processedBody),
+          headers: removeStaleContentLength(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
+        }
+      : init;
     const effectiveHeaders = processedInit?.headers ?? (input instanceof Request ? input.headers : undefined);
     if (processing.omitGeneratedEmptyBearer && effectiveHeaders != null) {
       const headers = new Headers(effectiveHeaders);
@@ -368,6 +378,11 @@ export async function resolveChatV2ProviderConfig(
   });
 
   switch (provider) {
+    case 'openrouter':
+      return {
+        baseURL: 'https://openrouter.ai/api/v1',
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+      };
     case 'openai':
       return {
         baseURL: undefined,
@@ -409,6 +424,22 @@ export function createChatV2Model(
   options: CreateChatV2ModelOptions = {},
 ): ChatV2Model {
   switch (provider) {
+    case 'openrouter': {
+      const providerInstance = createOpenRouter({
+        // Never fall back to the OpenAI/Custom key or an SDK ambient secret.
+        apiKey: options.apiKey ?? context.settings.openRouterApiKey ?? '',
+        baseURL: 'https://openrouter.ai/api/v1',
+        headers: options.headers,
+        fetch: maybeCreateProviderProcessingFetch(options),
+      });
+      return withOpenRouterResponseValidation(
+        providerInstance.chat(modelId, {
+          usage: { include: true },
+          // Unsupported configured parameters must fail, not be ignored upstream.
+          provider: { require_parameters: true },
+        }),
+      );
+    }
     case 'openai': {
       const providerInstance = createOpenAI({
         apiKey: options.apiKey || context.settings.openAiApiKey || context.settings.openAiKey || undefined,

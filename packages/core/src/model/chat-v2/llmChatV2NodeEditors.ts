@@ -83,7 +83,8 @@ function getApiKeySourceHelperMessage(data: LLMChatV2NodeData): string {
   switch (data.provider) {
     case 'openai':
     case 'anthropic':
-    case 'google': {
+    case 'google':
+    case 'openrouter': {
       const names = getChatV2CredentialNamesForDisplay(data.provider, data.providerApiKeyNames?.[data.provider]);
       const hasOverride = data.providerApiKeyNames?.[data.provider] != null;
       return hasOverride
@@ -392,6 +393,14 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
 
 function getReasoningEditors(): LLMChatV2EditorDefinition {
   return group('Reasoning', [
+    {
+      type: 'dropdown',
+      label: 'Reasoning effort',
+      dataKey: 'openRouterReasoningEffort',
+      options: openAIReasoningEffortOptions,
+      helperMessage: 'Reasoning depth for models that support it. Unsupported settings fail instead of being ignored.',
+      hideIf: hideUnlessProvider('openrouter'),
+    },
     {
       type: 'dropdown',
       label: 'Reasoning effort',

@@ -100,6 +100,13 @@ export function resolveLLMChatV2ExtraProviderOptions(
 function resolveProviderOptions(data: LLMChatV2NodeData, inputs: Inputs): ChatV2ProviderOptions | undefined {
   const providerOptions: ChatV2ProviderOptions = {};
 
+  if (data.provider === 'openrouter' && data.openRouterReasoningEffort) {
+    if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(data.openRouterReasoningEffort)) {
+      throw new Error('Unsupported OpenRouter reasoning effort.');
+    }
+    providerOptions.openrouter = { reasoning: { effort: data.openRouterReasoningEffort } };
+  }
+
   if (data.provider === 'openai') {
     const previousResponseId =
       data.useOpenAIPreviousResponseIdInput && inputs['previousResponseId' as PortId] != null
@@ -316,6 +323,7 @@ export function resolveLLMChatV2BuiltInTools(
     }
 
     case 'anthropic':
+    case 'openrouter':
       return undefined;
 
     case 'custom':

@@ -115,6 +115,10 @@ export function createRivetLLMProfileHealthIdentity(params: {
   // not to generation policy. A temperature/cooldown edit must not silently
   // create a fresh circuit, while changing the model, endpoint, auth, or
   // routing headers must never inherit another route's outage history.
+  const openRouterRouting =
+    params.configuration.provider === 'openrouter' && params.configuration.extraProviderOptions
+      ? pickOpenRouterRouting(JSON.parse(params.configuration.extraProviderOptions))
+      : {};
   const routingConfiguration = {
     provider: params.configuration.provider,
     model: params.configuration.model,
@@ -125,6 +129,7 @@ export function createRivetLLMProfileHealthIdentity(params: {
           customProviderBaseURL: params.configuration.customProviderBaseURL,
         }),
     headers: canonicalizeEffectiveRoutingHeaders(params.chatNodeHeaders, params.configuration.headers),
+    ...(Object.keys(openRouterRouting).length > 0 ? { openRouterRouting } : {}),
   };
   const serialized =
     stableStringify({
@@ -155,6 +160,14 @@ export function createRivetLLMProfileHealthIdentity(params: {
       : { customProviderApi: params.configuration.customProviderApi ?? 'completions' }),
     configurationFingerprint,
   };
+}
+
+function pickOpenRouterRouting(options: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    ['model', 'provider', 'models', 'route']
+      .filter((key) => options[key] !== undefined)
+      .map((key) => [key, options[key]]),
+  );
 }
 
 function canonicalizeEffectiveRoutingHeaders(

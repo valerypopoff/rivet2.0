@@ -22,7 +22,7 @@ export type SystemChatMessage = {
   type: 'system';
   message: ChatMessageMessagePart | ChatMessageMessagePart[];
 
-  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  /** Prompt-cache breakpoint for Anthropic or supported OpenRouter endpoints. */
   isCacheBreakpoint?: boolean;
 };
 
@@ -30,7 +30,7 @@ export type DeveloperChatMessage = {
   type: 'developer';
   message: ChatMessageMessagePart | ChatMessageMessagePart[];
 
-  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  /** Prompt-cache breakpoint for Anthropic or supported OpenRouter endpoints. */
   isCacheBreakpoint?: boolean;
 };
 
@@ -38,7 +38,7 @@ export type UserChatMessage = {
   type: 'user';
   message: ChatMessageMessagePart | ChatMessageMessagePart[];
 
-  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  /** Prompt-cache breakpoint for Anthropic or supported OpenRouter endpoints. */
   isCacheBreakpoint?: boolean;
 };
 
@@ -58,12 +58,15 @@ export type AssistantChatMessage = {
   type: 'assistant';
   message: ChatMessageMessagePart | ChatMessageMessagePart[];
 
+  /** Provider-returned reasoning continuity, including opaque encrypted blocks; not an API credential. */
+  openRouterReasoningDetails?: Record<string, unknown>[];
+
   /** @deprecated use function_calls instead */
   function_call: AssistantChatMessageFunctionCall | undefined;
 
   function_calls: AssistantChatMessageFunctionCall[] | undefined;
 
-  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  /** Prompt-cache breakpoint for Anthropic or supported OpenRouter endpoints. */
   isCacheBreakpoint?: boolean;
 };
 
@@ -73,7 +76,7 @@ export type FunctionResponseChatMessage = {
   name: string;
   toolName?: string;
 
-  /** If true, this message marks a breakpoint when used with prompt caching (as of right now, Anthropic-only). */
+  /** Prompt-cache breakpoint for Anthropic or supported OpenRouter endpoints. */
   isCacheBreakpoint?: boolean;
 };
 

@@ -360,7 +360,7 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
     };
   }
 
-  const usage = normalizeChatV2Usage(chatResponse.result.usage, options);
+  const usage = normalizeChatV2Usage(chatResponse.result.usage, options, chatResponse.result.providerMetadata);
   const requestStatus = chatResponse.result.requestStatus ?? 200;
   const commonOutputs = createChatV2CommonOutputs({
     requestMessages,
@@ -383,6 +383,19 @@ export async function runChatV2PipelineExecution(options: RunChatV2PipelineOptio
 
   if (allMessagesOutput?.type !== 'chat-message[]') {
     throw new Error('Chat v2 pipeline expected all-messages output to be chat-message[].');
+  }
+
+  // Tool continuation and All Messages re-entry rebuild SDK messages. Preserve
+  // only the provider's reasoning continuity, not arbitrary response metadata.
+  const reasoningDetails = chatResponse.result.providerMetadata?.openrouter?.reasoning_details;
+  const assistant = allMessagesOutput.value.at(-1);
+  if (
+    options.provider === 'openrouter' &&
+    assistant?.type === 'assistant' &&
+    Array.isArray(reasoningDetails) &&
+    reasoningDetails.length > 0
+  ) {
+    assistant.openRouterReasoningDetails = structuredClone(reasoningDetails);
   }
 
   const result: ChatV2PipelineResult = {

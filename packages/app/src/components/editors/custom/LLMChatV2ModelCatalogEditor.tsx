@@ -9,6 +9,7 @@ import {
   type CustomEditorDefinition,
   type NodeGraph,
   type PortId,
+  type ChatV2Provider,
 } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import { useAtomValue } from 'jotai';
@@ -138,7 +139,7 @@ type Props = SharedEditorProps & {
   editor: CustomEditorDefinition<ChartNode>;
 };
 
-type ProviderName = 'openai' | 'anthropic' | 'google' | 'custom';
+type ProviderName = ChatV2Provider;
 
 function getProvider(data: unknown): ProviderName {
   return ((data as { provider?: ProviderName }).provider ?? 'openai') as ProviderName;
@@ -222,7 +223,7 @@ export const LLMChatV2ModelCatalogEditor: FC<Props> = ({
           ? getLatestInputApiKey({ graph, nodeId: node.id, lastRun, graphSelectionOptions, dataRefs })
           : undefined;
 
-      if (apiKeySource === 'input' && !apiKey) {
+      if (provider !== 'openrouter' && apiKeySource === 'input' && !apiKey) {
         throw new Error(
           'API Key input is required when API key source is Input port. Connect API Key to a static Text node or another resolvable source before re-fetching the model list.',
         );

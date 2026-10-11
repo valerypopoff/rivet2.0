@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
+import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 
@@ -173,6 +173,91 @@ test('tree selection survives folder toggles and row padding until another proje
   await expect(aRow).not.toHaveClass(/\bactive\b/);
   await expect(card).toContainText(b.project.name);
   await expect(tabs.filter({ hasText: b.project.name })).toHaveClass(/\bactive\b/);
+});
+
+test('hidden selection highlights only the outermost closed ancestor at half hover strength', async ({ page }) => {
+  const a = fixture('nested-selection');
+  const b = fixture('root-selection');
+  a.project.relativePath = `owner/middle/inner/${a.project.fileName}`;
+  a.project.absolutePath = `/workflows/${a.project.relativePath}`;
+  const folder = (
+    path: string,
+    folders: WorkflowFolderItem[] = [],
+    projects: WorkflowProjectItem[] = [],
+  ): WorkflowFolderItem => ({
+    id: path,
+    name: path.split('/').at(-1)!,
+    relativePath: path,
+    absolutePath: `/workflows/${path}`,
+    updatedAt: a.project.updatedAt,
+    folders,
+    projects,
+  });
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) => route.fulfill({
+    json: {
+      root: '/workflows',
+      sync: { epoch: 'nested-selection-fixture', revision: 0 },
+      folders: [
+        folder('owner', [folder('owner/middle', [folder('owner/middle/inner', [], [a.project])])]),
+        // This sibling is a prefix of the selected path, but not an ancestor.
+        folder('own'),
+      ],
+      projects: [b.project],
+    } satisfies WorkflowTreeResponse,
+  }));
+  const loads: string[] = [];
+  await page.route('**/api/projects/load', (route) => {
+    const { path } = route.request().postDataJSON() as { path: string };
+    loads.push(path);
+    const entry = [a, b].find((item) => item.project.absolutePath === path);
+    expect(entry).toBeDefined();
+    return route.fulfill({ json: { contents: entry!.contents, datasetsContents: null, revisionId: null } });
+  });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const highlighted = page.locator('.folder-row.contains-selection');
+  const tabs = page.frameLocator('iframe.dashboard-editor-frame').locator('.projects-container .project:not(.opening)');
+  await expect(highlighted).toHaveCount(0);
+  for (const name of ['owner', 'middle', 'inner']) {
+    await page.getByRole('button', { name: `Expand ${name}`, exact: true }).click();
+  }
+  const aRow = page.locator('.project-row', { hasText: a.project.name });
+  await expect(aRow).toBeEnabled({ timeout: 120_000 });
+  await aRow.dblclick();
+  await expect(aRow).toHaveClass(/\bactive\b/);
+  await expect(tabs.filter({ hasText: a.project.name })).toHaveClass(/\bactive\b/);
+  await expect(highlighted).toHaveCount(0);
+
+  for (const name of ['inner', 'middle', 'owner']) {
+    await page.getByRole('button', { name: `Collapse ${name}`, exact: true }).click();
+    await page.mouse.move(0, 0);
+    await expect(highlighted).toHaveCount(1);
+    await expect(highlighted).toHaveAccessibleName(`Expand ${name}`);
+    await expect(highlighted).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.04)');
+  }
+  await highlighted.hover();
+  await expect(highlighted).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.08)');
+  await page.mouse.move(0, 0);
+  await expect(highlighted).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.04)');
+  await expect(page.getByRole('button', { name: 'Expand own', exact: true })).not.toHaveClass(/contains-selection/);
+
+  for (const [name, next] of [['owner', 'middle'], ['middle', 'inner'], ['inner', null]] as const) {
+    await page.getByRole('button', { name: `Expand ${name}`, exact: true }).click();
+    await expect(highlighted).toHaveCount(next ? 1 : 0);
+    if (next) await expect(highlighted).toHaveAccessibleName(`Expand ${next}`);
+  }
+  await expect(aRow).toHaveClass(/\bactive\b/);
+  await page.getByRole('button', { name: 'Collapse owner', exact: true }).click();
+  await expect(highlighted).toHaveCount(1);
+  const bRow = page.locator('.project-row', { hasText: b.project.name });
+  await bRow.click();
+  await expect(bRow).toHaveClass(/\bactive\b/);
+  await expect(highlighted).toHaveCount(0);
+  await expect(tabs.filter({ hasText: b.project.name })).toHaveClass(/\bactive\b/);
+  await expect(page.getByRole('button', { name: 'Expand owner', exact: true })).toBeVisible();
+  expect(loads).toEqual([a.project.absolutePath, b.project.absolutePath]);
 });
 
 test('tree activation preserves active and inactive edits, dirty dots, and the saved baseline', async ({ page }) => {

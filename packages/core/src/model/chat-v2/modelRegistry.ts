@@ -80,6 +80,9 @@ const chatV2ModelRegistry = {
   openai: normalizePerThousandTokenModelRegistry('OpenAI', openaiModels),
   anthropic: anthropicModels,
   google: normalizePerThousandTokenModelRegistry('Google', generativeAiGoogleModels),
+  // Routing prices vary by upstream endpoint. Use reported call cost, not
+  // another provider's static rate for a similarly named model.
+  openrouter: {},
   custom: {},
 } satisfies Record<ChatV2Provider, Record<string, ChatV2ModelInfo>>;
 
@@ -108,15 +111,24 @@ export function calculateChatV2Cost(
 }
 
 /**
- * Estimates a call only when the provider reported both billable text-token
- * counts. Cache discounts, long-context premiums, and provider tool fees stay
- * outside this baseline estimate until their billing inputs are modeled.
+ * Uses reported OpenRouter cost; estimates other providers only when both
+ * billable text-token counts are available. Cache discounts, long-context
+ * premiums, and provider tool fees are not modeled in those estimates.
  */
 export function calculateChatV2UsageCost(
   provider: ChatV2Provider,
   modelId: string,
   usage: TokenUsageForCost | undefined,
+  providerMetadata?: Record<string, Record<string, unknown>>,
 ): number | undefined {
+  if (provider === 'openrouter') {
+    const reportedUsage = providerMetadata?.openrouter?.usage;
+    const cost =
+      reportedUsage != null && typeof reportedUsage === 'object'
+        ? (reportedUsage as { cost?: unknown }).cost
+        : undefined;
+    return isFiniteNonNegative(cost) ? cost : undefined;
+  }
   if (!isFiniteNonNegative(usage?.inputTokens) || !isFiniteNonNegative(usage.outputTokens)) {
     return undefined;
   }

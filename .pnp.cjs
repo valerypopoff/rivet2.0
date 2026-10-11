@@ -13008,6 +13008,49 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@openrouter/ai-sdk-provider", [\
+      ["npm:2.10.0", {\
+        "packageLocation": "./.yarn/cache/@openrouter-ai-sdk-provider-npm-2.10.0-911211c481-b2d9d0197e.zip/node_modules/@openrouter/ai-sdk-provider/",\
+        "packageDependencies": [\
+          ["@openrouter/ai-sdk-provider", "npm:2.10.0"]\
+        ],\
+        "linkType": "SOFT"\
+      }],\
+      ["virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:2.10.0", {\
+        "packageLocation": "./.yarn/__virtual__/@openrouter-ai-sdk-provider-virtual-6ce9bddc43/0/cache/@openrouter-ai-sdk-provider-npm-2.10.0-911211c481-b2d9d0197e.zip/node_modules/@openrouter/ai-sdk-provider/",\
+        "packageDependencies": [\
+          ["@openrouter/ai-sdk-provider", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:2.10.0"],\
+          ["@types/ai", null],\
+          ["@types/zod", null],\
+          ["ai", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:6.0.271"],\
+          ["zod", "npm:4.3.6"]\
+        ],\
+        "packagePeers": [\
+          "@types/ai",\
+          "@types/zod",\
+          "ai",\
+          "zod"\
+        ],\
+        "linkType": "HARD"\
+      }],\
+      ["virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:2.10.0", {\
+        "packageLocation": "./.yarn/__virtual__/@openrouter-ai-sdk-provider-virtual-d9b5ef0cfb/0/cache/@openrouter-ai-sdk-provider-npm-2.10.0-911211c481-b2d9d0197e.zip/node_modules/@openrouter/ai-sdk-provider/",\
+        "packageDependencies": [\
+          ["@openrouter/ai-sdk-provider", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:2.10.0"],\
+          ["@types/ai", null],\
+          ["@types/zod", null],\
+          ["ai", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:6.0.116"],\
+          ["zod", "npm:4.3.6"]\
+        ],\
+        "packagePeers": [\
+          "@types/ai",\
+          "@types/zod",\
+          "ai",\
+          "zod"\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@opentelemetry/api", [\
       ["npm:1.9.0", {\
         "packageLocation": "./.yarn/cache/@opentelemetry-api-npm-1.9.0-7d0560d0dd-a607f0eef9.zip/node_modules/@opentelemetry/api/",\
@@ -16698,6 +16741,7 @@ const RAW_RUNTIME_STATE =
           ["@google-cloud/vertexai", "npm:0.1.3"],\
           ["@google/genai", "npm:0.12.0"],\
           ["@huggingface/inference", "npm:2.6.4"],\
+          ["@openrouter/ai-sdk-provider", "virtual:03eccba7aea56c5e81dc44bb3b7187b016606939b3f527c4056e17155e51ec06ce171ac2805ac4d2757699808fe739f2fcab49bece2a8a6443ae58e07d01d007#npm:2.10.0"],\
           ["@playwright/test", "npm:1.62.1"],\
           ["@recoiljs/refine", "npm:0.1.1"],\
           ["@tanstack/react-query", "virtual:c72650afd8d8ecff5306990489065a4e0c34d2b88c4acd8d3577f92d5cf46b6fcfd28624afe640ea0bc70671a30a586d15077b1a64459cd4c0f76ed3d182f496#npm:5.4.3"],\
@@ -16839,6 +16883,7 @@ const RAW_RUNTIME_STATE =
           ["@google-cloud/vertexai", "npm:1.12.0"],\
           ["@google/genai", "virtual:c30a1801ba199225a57d97f5d0ac6c1049421d7de2eca6c5bbafdaad6b82cdb32fb0a84a9b3f1a2e75f2a9ae7ff84eca87e43966e9a8f7d822e49754103b9bd0#npm:1.52.0"],\
           ["@huggingface/inference", "npm:2.6.4"],\
+          ["@openrouter/ai-sdk-provider", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:2.10.0"],\
           ["@swc/core", "virtual:cce41fb5932c708537e2c8102f67c1df8503bc7b0e98fe405b8d054c96ba0fd0ec3b4d44ffa2144f5379ff48b0cfcbb1215b2409bcf11998c11e7bcf45bd049f#npm:1.15.43"],\
           ["@types/crypto-js", "npm:4.1.3"],\
           ["@types/eslint", "npm:8.44.6"],\

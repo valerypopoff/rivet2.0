@@ -11,6 +11,7 @@ const providerCapabilities: Record<ChatV2Provider, ChatV2ProviderCapabilities> =
   openai: { builtInTools: true, parallelToolCalls: true, structuredOutput: true },
   anthropic: { builtInTools: false, parallelToolCalls: true, structuredOutput: true },
   google: { builtInTools: true, parallelToolCalls: false, structuredOutput: true },
+  openrouter: { builtInTools: false, parallelToolCalls: true, structuredOutput: true },
   custom: { builtInTools: false, parallelToolCalls: true, structuredOutput: true },
 };
 

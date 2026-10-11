@@ -117,6 +117,8 @@ In Studio Server's project tree, a single click opens a preview tab. Double-clic
 
 Folding or unfolding folders, including the selected project's parent, and clicking whitespace in the tree keep the selected project and its details. Clicking another project changes selection; activating an editor tab also updates the matching tree selection. Node settings follow the active project, even for duplicated projects with matching graph/node IDs.
 
+If the selected project is hidden inside collapsed folders, the outermost collapsed folder is highlighted at half the hover strength. Expand it to follow the highlight down to the project.
+
 ### Automatic browser recovery
 
 The editor checkpoints the workspace in the background and normally restores its latest committed checkpoint after reload. Healthy or pending recovery does not show a popup. Separate browser tabs have independent recovery writers; recovery is local to that browser and is not a server backup or cross-device sync.

@@ -1,5 +1,63 @@
 # LLM Chat V2 Contract
 
+## OpenRouter provider
+
+`openrouter` is a first-class Chat/Profile provider, implemented with the pinned
+AI SDK 6-compatible `@openrouter/ai-sdk-provider` 2.x adapter. Keep this dependency
+available to both Core packaging and the source-aliased hosted editor build.
+Do not upgrade to an adapter for a different AI SDK major independently.
+
+The fixed endpoint is `https://openrouter.ai/api/v1`; stale OpenAI/Custom URL,
+native-tool and reasoning fields never alter this provider. Credentials are
+`openRouterApiKey` / `OPENROUTER_API_KEY`, with the existing named-credential and
+API Key input mechanisms. No OpenAI/Custom key fallback is allowed. The public
+model catalog uses no credentials and retains `openrouter/auto` as its fallback.
+
+Shared generation fields, tools/choice/parallel calls, JSON/schema output,
+streaming, retries, captures and profile fallback retain their existing owners.
+`openRouterReasoningEffort` is profile-owned. Generated requests set
+`provider.require_parameters=true` and `usage.include=true`; model-dependent
+unsupported configurations must fail instead of silently degrading. Raw Extra
+Provider Options keep final precedence, including intentional routing overrides.
+Health identity hashes OpenRouter routing fields (`model`, `provider`, `models`, `route`)
+without exposing their contents; changing sampling alone does not reset health.
+
+OpenRouter-reported cost flows through usage and physical-call observers. Missing
+cost stays unknown; never infer routed-model pricing from another provider's
+static registry. Cache/read and reasoning token details retain normal accounting.
+Only `reasoning_details` is persisted as assistant `openRouterReasoningDetails`
+and reattached to OpenRouter messages, preserving opaque reasoning blocks across
+Rivet-owned tool rounds and All Messages re-entry. Never copy arbitrary provider
+metadata or forward this continuity to another provider. Message cache breakpoints
+map to OpenRouter ephemeral cache control, not Anthropic-only TTL settings.
+
+OpenRouter's model middleware normalizes embedded errors at the adapter
+boundary. An error can arrive inside HTTP 200 or after partial text; it must
+retain its message and valid 4xx/5xx provider code for retry, fallback and health
+classification. Authentication/configuration errors must not suspend profiles.
+Unknown symbolic codes remain diagnostic errors, not invented HTTP statuses.
+Non-streamed 200 error envelopes require the same code normalization; retain
+the original SDK error as the cause and never replace a real non-200 HTTP status.
+An adapter-generated finish event is not proof of completion: a stream must have
+a provider finish reason. Premature EOF is `ERR_STREAM_PREMATURE_CLOSE`, an
+availability failure without an invented HTTP status; the non-200 retry switch
+does not retry it, while a profile chain can fall back. Partial tool arguments
+must not reach tool delegation. An explicit `error` finish reason also fails,
+even without an error envelope, but does not invent an outage classification.
+Preserve explicit length/filter/other provider finish reasons. Cancellation wins
+over concurrent stream failures and aborts transport without retries or a
+successful call event. Validation uses SDK backpressure, not response buffering.
+
+The SDK bridge's per-attempt step collector preserves provider metadata when
+structured-output parsing rejects a completed response. Those calls still have
+real usage/cost; response rejection must not erase OpenRouter's reported cost.
+No metadata is synthesized when the provider did not supply it.
+
+Regression coverage: `test/model/chat-v2/openRouter.test.ts` uses the real adapter
+with intercepted HTTP, and hosted `llm-credential-names.spec.ts` checks both nodes'
+provider controls and credential-free discovery. Live paid-provider execution is
+a separate operational check, not implied by these deterministic tests.
+
 ## Response trace boundary
 
 Every physical provider attempt completed by LLM Chat emits the additive
@@ -144,12 +202,15 @@ own prompts and history, response format/schema, Rivet tools and continuation,
 outputs, retries and request diagnostics, and editor caching. Provider/model
 configuration, including OpenAI Previous Response ID, belongs to the profile.
 
-Built-in OpenAI, Anthropic, and Google providers can optionally store a
+Built-in OpenAI, Anthropic, Google, and OpenRouter providers can optionally store a
 provider-specific pair of credential _names_: a programmatic processor-setting
 name and an environment-variable name. The defaults remain
-`openAiApiKey`/`OPENAI_API_KEY`, `anthropicApiKey`/`ANTHROPIC_API_KEY`, and
-`googleApiKey`/`GOOGLE_GENERATIVE_AI_API_KEY`. An absent override follows the
-legacy shared-provider resolution path exactly. A stored override is a strict
+`openAiApiKey`/`OPENAI_API_KEY`, `anthropicApiKey`/`ANTHROPIC_API_KEY`,
+`googleApiKey`/`GOOGLE_GENERATIVE_AI_API_KEY`, and
+`openRouterApiKey`/`OPENROUTER_API_KEY`. For existing OpenAI, Anthropic and Google
+providers, an absent override preserves the legacy shared-provider resolution
+path. OpenRouter uses its named-credential path even with default names.
+A stored override is a strict
 account boundary: the runtime checks the named processor setting, then
 `pluginEnv`, then Node `process.env`, and never falls back to the shared key.
 The API-key input port remains higher priority than either configured-key path.
