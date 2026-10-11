@@ -19,6 +19,33 @@ Kubernetes rehearsal or a new browser run.
 
 ## Extending serving services
 
+Classifier providers are Core-owned and shared by desktop and hosted execution.
+Microsoft Decision-1 uses the `openrouter` provider and the native OpenRouter
+Decisions API, default model `microsoft/microsoft-decision-1`. Follow the
+[OpenRouter classifier contract](../CLASSIFIER-NODES.md#microsoft-decision-1-through-openrouter)
+for credential precedence, evidence preservation and conservative pricing.
+Configure `OPENROUTER_API_KEY` on the execution host (or its saved Classifier
+settings), not as a browser-exposed environment variable. No Azure resource URL
+or deployment is needed. Existing runtime settings injection applies to
+endpoints, web apps, Evaluations and editor Node runs without another adapter.
+
+Perplexity uses the same registry/runtime injection with provider `perplexity`,
+default model `pplx-decider-v1.1-27b` and host credential `PERPLEXITY_API_KEY`
+(or saved Classifier settings / programmatic `perplexityApiKey`). Its native
+Decisions endpoint is not Sonar or chat completions. Follow the
+[Perplexity classifier contract](../CLASSIFIER-NODES.md#perplexity-decisions)
+for inline image parts, smaller question limits and conservative cost accounting.
+Do not expose its environment key to the browser; Browser execution is rejected.
+
+Provider hardening belongs in Core's shared classifier preparation/HTTP runner,
+not duplicated host adapters. Graph and direct API State roots use the same
+text/object/array contract; malformed shared input cannot become a fallback
+candidate. HTTP 402/413 must not consume retry budgets or suspend profiles:
+an unchanged request cannot fix credit or payload-size rejection. Keep ordinary
+HTTP catch/fallback behavior, body disposal and cancellation intact. Run the
+classifier boundary, registry-driven input-snapshot and aggregate-pricing tests,
+then the hosted `jev-nodes.spec.ts` observer when changing these integrations.
+
 - Put workflow-facing contracts in `routes/workflows/data-backend.ts`; do not
   derive another adapter's contract with `Pick<ManagedWorkflowBackend, ...>`.
   Use its narrow project/publication/execution/recording interfaces for consumers.

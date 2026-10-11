@@ -302,16 +302,21 @@ Recovery checkpoint failure after a completed open is separate from open failure
 
 App's `ProjectSelector` owns adjacent project-tab shortcuts: Windows/Linux use
 Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+Page Down / Ctrl+Page Up; macOS uses
-Command+Option+Right / Left. Navigation follows the visible project-tab order,
+Command+Option+Right / Left. Alt+Page Down / Alt+Page Up is also available on all
+platforms as a browser-friendly alternative. Navigation follows the visible project-tab order,
 including opening placeholders, wraps at either end, and leaves workspace
 navigation buttons (Settings, Plugins, etc.) outside the cycle. Selecting a
 project closes the current workspace overlay through the normal tab-click path.
-Zero/one-tab workspaces do not consume these keys. Modal dialogs (including
+An enabled one-tab workspace consumes the shortcut without selecting anything;
+an empty workspace does not. Modal dialogs (including
 alert dialogs and native dialogs) and inert editor/host input locks block
 switching; ordinary text fields do not. In particular, window-level capture
 handling must not bypass the inert lock used by development-refresh preparation.
 
 `useProjectTabHotkeys` installs one capture listener with current callbacks.
+It prevents the default action and stops immediate propagation before requesting
+activation, including other listeners on the same window. This only controls
+events delivered to the document, not browser/OS-reserved shortcuts.
 `projectTabHotkeys.ts` matches exact modifiers and tracks the last keyboard
 selection only while its activation revision is pending. Mouse/host intents,
 closed tabs and failed activations cannot leave a stale keyboard cursor. An
@@ -324,10 +329,14 @@ Keyboard handling does not alter hosted Save shortcut ownership or native menus.
 These shortcuts work when key events reach Rivet (including desktop webviews).
 Browsers may reserve them for their own tabs before a page/iframe can intercept
 them; no JavaScript listener or iframe forwarding can override that reservation.
+Do not request fullscreen or keyboard-lock permissions automatically to work
+around it. Use Alt+Page Up / Down when the browser reserves Chrome-style keys.
 The headless `project-tab-shortcuts` observer exercises the real selector,
 wraparound, edited snapshots, opening tabs and modal blocking. Synthetic events
 cover OS/browser-reserved combinations without claiming to verify delivery by
 Chrome's browser chrome or native Windows/Linux/macOS webviews.
+The observer also sends real Alt+Page Up / Down key presses from a focused text
+input and verifies project selection and same-window listener suppression.
 
 ## Project loading performance
 

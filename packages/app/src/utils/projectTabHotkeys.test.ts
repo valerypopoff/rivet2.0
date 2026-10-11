@@ -67,6 +67,16 @@ test('adjacent navigation follows visible order, wraps, and includes opening pla
   assert.equal(getAdjacentProjectTab([a], a, 1), undefined);
 });
 
+test('browser-friendly Alt+Page shortcuts use exact modifiers on every platform', () => {
+  for (const platform of ['windows', 'linux', 'macos'] as const) {
+    assert.equal(getProjectTabHotkeyDirection(key('PageUp', { altKey: true }), platform), -1);
+    assert.equal(getProjectTabHotkeyDirection(key('PageDown', { altKey: true }), platform), 1);
+    for (const extra of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
+      assert.equal(getProjectTabHotkeyDirection(key('PageDown', { altKey: true, ...extra }), platform), undefined);
+    }
+  }
+});
+
 test('listener advances pending intent, yields to other selections/failures and cleans up', () => {
   const dom = new JSDOM('<input id="input">');
   let state: ProjectTabHotkeyState = {
@@ -112,12 +122,56 @@ test('listener advances pending intent, yields to other selections/failures and 
     state = { ...state, enabled: false };
     assert.equal(dispatch().defaultPrevented, false);
     state = { ...state, enabled: true, tabs: [a] };
+    assert.equal(dispatch().defaultPrevented, true);
+    state = { ...state, tabs: [] };
     assert.equal(dispatch().defaultPrevented, false);
     state = { ...state, tabs: [a, b, c] };
     assert.equal(dispatch({ isComposing: true }).defaultPrevented, false);
     cleanup();
     assert.equal(dispatch().defaultPrevented, false);
     assert.equal(selections.length, 4);
+  } finally {
+    cleanup();
+    dom.window.close();
+  }
+});
+
+test('owned shortcuts cannot reach same-window, target, or bubbling listeners', () => {
+  const dom = new JSDOM('<input id="input">');
+  let tabs: ProjectTabListItem[] = [a, b];
+  const selections: ProjectTabListItem[] = [];
+  const cleanup = installProjectTabHotkeyListener(
+    dom.window as unknown as Window,
+    () => ({ enabled: true, platform: 'windows', tabs, selected: a, activation: { revision: 0, pending: false } }),
+    (tab) => selections.push(tab),
+  );
+  let leaked = 0;
+  const input = dom.window.document.getElementById('input')!;
+  dom.window.addEventListener('keydown', () => leaked++, { capture: true });
+  dom.window.addEventListener('keydown', () => leaked++);
+  input.addEventListener('keydown', () => leaked++);
+  const dispatch = () => {
+    const event = new dom.window.KeyboardEvent('keydown', {
+      key: 'PageDown',
+      code: 'PageDown',
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    return event;
+  };
+  try {
+    assert.equal(dispatch().defaultPrevented, true);
+    assert.deepEqual(selections, [b]);
+    assert.equal(leaked, 0);
+    tabs = [a];
+    assert.equal(dispatch().defaultPrevented, true);
+    assert.deepEqual(selections, [b]);
+    assert.equal(leaked, 0);
+    cleanup();
+    assert.equal(dispatch().defaultPrevented, false);
+    assert.equal(leaked, 3);
   } finally {
     cleanup();
     dom.window.close();

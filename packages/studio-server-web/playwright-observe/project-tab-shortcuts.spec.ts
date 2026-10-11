@@ -155,6 +155,32 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     await expect(active).toContainText('Alpha edited');
     await page.locator('#shortcut-input').evaluate((input) => input.remove());
 
+    // Real key delivery for the browser-friendly shortcut; no synthetic event.
+    // It must stay in this page and consume the key before other app listeners.
+    const browserTabs = page.context().pages().length;
+    await page.evaluate(() => {
+      (window as any).shortcutLeaks = 0;
+      window.addEventListener(
+        'keydown',
+        (event) => {
+          if (event.altKey && event.code.startsWith('Page')) (window as any).shortcutLeaks++;
+        },
+        { capture: true },
+      );
+      const input = document.createElement('input');
+      input.id = 'browser-shortcut-input';
+      document.body.append(input);
+      input.focus();
+    });
+    await page.keyboard.press('Alt+PageDown');
+    await expect(active).toContainText('Beta');
+    await page.keyboard.press('Alt+PageUp');
+    await expect(active).toContainText('Alpha edited');
+    expect(await page.evaluate(() => (window as any).shortcutLeaks)).toBe(0);
+    expect(page.context().pages()).toHaveLength(browserTabs);
+    expect(page.url()).toContain('/project-shortcut-harness');
+    await page.locator('#browser-shortcut-input').evaluate((input) => input.remove());
+
     // Do not change the project owner while an unsaved-close dialog is open.
     await active.hover();
     await active.getByRole('button', { name: /Close Alpha edited/ }).click();
@@ -201,7 +227,7 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
       await (window as any).shortcutHost.closeProject('shortcut-project-2');
     });
     await expect(tabs).toHaveCount(1);
-    expect(await switchTab('right')).toBe(false);
+    expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Alpha edited');
     await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
   });

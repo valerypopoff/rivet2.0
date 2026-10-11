@@ -3,6 +3,8 @@ import {
   JEV_DEFAULT_CREDENTIAL_NAMES,
   LIQUID_DEFAULT_CREDENTIAL_NAMES,
   OPENAI_DEFAULT_CREDENTIAL_NAMES,
+  OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
+  PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
 } from './credentials.js';
 import type { DataValue } from '../DataValue.js';
 import { assertLiquidImageLimits } from './images.js';
@@ -14,6 +16,7 @@ import {
 } from './state.js';
 import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
+import { assertPerplexityDecisionLimits, perplexityDecisionState, PERPLEXITY_DECISION_MODELS } from './perplexity.js';
 import { prepareClassifierQuestion } from './questions.js';
 import { classifierArrayValues } from './json.js';
 import {
@@ -37,6 +40,8 @@ export { validateApiCompatibleClassifierResponse } from './response.js';
 export const JEV_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const LIQUID_SYSTEM_ONE_ENDPOINT = 'https://api.liquid.ai/decisions/v1/systemone';
 export const OPENAI_DECISIONS_ENDPOINT = 'https://api.openai.com/v1/decisions';
+export const OPENROUTER_DECISIONS_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
+export const PERPLEXITY_DECISIONS_ENDPOINT = 'https://api.perplexity.ai/v1/decisions';
 
 /** Jev's published USD rates. Keep this Core-owned rather than graph-authored. */
 export const JEV_TOKEN_PRICING = {
@@ -138,6 +143,7 @@ type ClassifierProviderSpec = Omit<ClassifierProvider, 'evaluate' | 'evaluateInp
   buildRequest(args: PreparedClassifierEvaluation): Record<string, unknown>;
   validateResponse: typeof validateClassifierEvaluationResponse;
   checkState?(state: PreparedClassifierState, check: () => void): void;
+  checkRequest?(request: PreparedClassifierEvaluation, check: () => void): void;
 };
 
 export type ApiCompatibleClassifierProviderConfig = {
@@ -200,6 +206,23 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   },
 });
 
+/** Native Decisions API, not chat completions. Microsoft Decision-1 is text-only.
+ * https://openrouter.ai/microsoft/microsoft-decision-1
+ */
+export const openrouterClassifierProvider = createApiCompatibleClassifierProvider({
+  id: 'openrouter',
+  label: 'OpenRouter',
+  defaultModel: 'microsoft/microsoft-decision-1',
+  credentialNames: OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
+  endpoint: OPENROUTER_DECISIONS_ENDPOINT,
+  modelPricing: [
+    {
+      models: ['microsoft/microsoft-decision-1'],
+      pricing: { inputPerMillionTokens: 0.042, outputPerMillionTokens: 0 },
+    },
+  ],
+});
+
 /** Decisions-specific rates, not GPT-6 Luna's Chat/Responses cache/output rates.
  * https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
  */
@@ -225,11 +248,37 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   validateResponse: validateOpenAIDecisionResponse,
 });
 
+/** https://docs.perplexity.ai/docs/decisions/quickstart */
+export const perplexityClassifierProvider: ClassifierProvider = createClassifierProvider({
+  id: 'perplexity',
+  label: 'Perplexity',
+  defaultModel: 'pplx-decider-v1.1-27b',
+  credentialNames: PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  endpoint: PERPLEXITY_DECISIONS_ENDPOINT,
+  supportsImages: (model) => PERPLEXITY_DECISION_MODELS.includes(model),
+  modelPricing: [
+    {
+      models: PERPLEXITY_DECISION_MODELS,
+      pricing: { inputPerMillionTokens: 0.02, outputPerMillionTokens: 0 },
+    },
+  ],
+  checkRequest: assertPerplexityDecisionLimits,
+  buildRequest: ({ model, state, questions }) => ({
+    model,
+    state: perplexityDecisionState(state),
+    questions: createQuestionMap(questions),
+  }),
+  validateResponse: validateClassifierEvaluationResponse,
+});
+
 /** Ordered so adding compatible providers does not alter authored IDs. */
 export const classifierProviders: readonly ClassifierProvider[] = [
   jevClassifierProvider,
   liquidClassifierProvider,
   openaiClassifierProvider,
+  openrouterClassifierProvider,
+  perplexityClassifierProvider,
 ];
 
 type ClassifierOperation = {
@@ -287,7 +336,7 @@ function createOperation(args: ClassifierProviderEvaluateArgs, label: string): C
 
 /** A plain specification and one runner for both graph and direct provider inputs. */
 function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvider {
-  const { endpoint, buildRequest, validateResponse, checkState, ...provider } = spec;
+  const { endpoint, buildRequest, validateResponse, checkState, checkRequest, ...provider } = spec;
   const evaluate = async (input: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult> => {
     // Reject removed evidence fields before object spread can read a getter or
     // discard non-enumerable/inherited content.
@@ -322,6 +371,7 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
       );
     try {
       checkState?.(state, operation.check);
+      checkRequest?.({ model: args.model, state, questions }, operation.check);
     } catch (error) {
       operation.check();
       throw new ClassifierProviderError(
@@ -539,7 +589,9 @@ async function callClassifierHttp(
           response.status,
         );
       }
-      if (response.status === 422 || response.status === 400) {
+      // Repeating an unchanged invalid/oversized request or an unfunded account
+      // cannot recover. These remain HTTP failures so profile fallback works.
+      if ([400, 402, 413, 422].includes(response.status)) {
         throw new ClassifierProviderError(
           `${providerLabel} rejected the request (HTTP ${response.status}).`,
           'http',

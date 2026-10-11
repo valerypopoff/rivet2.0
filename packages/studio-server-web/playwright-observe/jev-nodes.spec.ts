@@ -735,6 +735,62 @@ test('OpenAI Decisions selection exposes its model, credentials and single multi
   await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
 });
 
+for (const { label, defaultModel, keyName, environmentVariable } of [
+  {
+    label: 'OpenRouter',
+    defaultModel: 'microsoft/microsoft-decision-1',
+    keyName: 'openRouterApiKey',
+    environmentVariable: 'OPENROUTER_API_KEY',
+  },
+  {
+    label: 'Perplexity',
+    defaultModel: 'pplx-decider-v1.1-27b',
+    keyName: 'perplexityApiKey',
+    environmentVariable: 'PERPLEXITY_API_KEY',
+  },
+])
+  test(`${label} selection and extraction preserve model IDs and saved credentials`, async ({ page }) => {
+    const editor = await openFixture(page);
+    const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+    await evaluate.locator('button.edit-button').dispatchEvent('click');
+    const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+    await provider.fill(label);
+    await provider.press('Enter');
+    const model = editor.getByRole('textbox', { name: 'Model', exact: true });
+    await expect(model).toHaveValue('jev-latest');
+    await model.fill('');
+    await model.blur();
+    await expect(model).toHaveAttribute('placeholder', defaultModel);
+    await expect(editor.locator(`input[value="${keyName}"]`)).toBeVisible();
+    await expect(editor.locator(`input[value="${environmentVariable}"]`)).toBeVisible();
+    await model.fill(defaultModel);
+    await model.blur();
+    await expect(evaluate).toContainText(`Model: ${defaultModel}`);
+    await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+    const profile = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+    await expect(profile).toHaveCount(1);
+    await expect(profile).toContainText(`Provider: ${label}`);
+    await expect(profile).toContainText(`Model: ${defaultModel}`);
+    await profile.locator('button.edit-button').dispatchEvent('click');
+    await expect(editor.getByRole('textbox', { name: 'Model', exact: true })).toHaveValue(defaultModel);
+    await page.keyboard.press('Escape');
+    await editor.getByRole('button', { name: 'Menu', exact: true }).click();
+    await editor.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
+    const settings = editor.getByTestId('settings-modal');
+    await settings.getByRole('button', { name: 'Classifier', exact: true }).click();
+    const key = settings.getByLabel(`${label} API Key`, { exact: true });
+    await expect(key).toHaveAttribute('type', 'password');
+    await key.fill('fixture-key');
+    await expect(key).toHaveValue('fixture-key');
+    await expect(settings.getByLabel(/resource endpoint/)).toHaveCount(0);
+    await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
+    await editor.getByRole('button', { name: 'Menu', exact: true }).click();
+    await editor.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'Classifier', exact: true }).click();
+    await expect(settings.getByLabel(`${label} API Key`, { exact: true })).toHaveValue('fixture-key');
+    await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
+  });
+
 test('Classifier failure ports follow Catch all failures independently of the HTTP status toggle', async ({ page }) => {
   const editor = await openFixture(page);
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');

@@ -8,7 +8,7 @@ sidebar_label: Classifier Question
 
 Builds one serializable typed question for a classifier provider. It does not make a network request. **Question ID** is preserved exactly and becomes the key in Classifier Evaluate's aggregate **Answers** object.
 
-The same text questions work with **Jev**, **Liquid AI d1**, and **OpenAI Decisions**. Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type.
+The same question format works with **Jev**, **Liquid AI d1**, **OpenAI Decisions**, **Microsoft Decision-1 through OpenRouter**, and **Perplexity Decisions**. Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See [provider setup and limits](./classifier-evaluate.mdx).
 
 ## Settings
 

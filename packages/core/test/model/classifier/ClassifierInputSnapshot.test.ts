@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ClassifierEvaluateNodeImpl, type DataValue, type InternalProcessContext } from '../../../src/index.js';
-import { getClassifierProvider } from '../../../src/model/classifier/providers.js';
+import { classifierProviders, getClassifierProvider } from '../../../src/model/classifier/providers.js';
 import { normalizeClassifierState } from '../../../src/model/classifier/state.js';
 import { assertClassifierEntry } from '../../../src/model/classifier/json.js';
 
@@ -10,7 +10,7 @@ const context = {
   executor: 'nodejs',
   signal: new AbortController().signal,
   settings: {
-    classifierProviders: { jev: { apiKey: 'test' }, liquid: { apiKey: 'test' }, openai: { apiKey: 'test' } },
+    classifierProviders: Object.fromEntries(classifierProviders.map(({ id }) => [id, { apiKey: 'test' }])),
   },
 } as InternalProcessContext;
 
@@ -55,7 +55,7 @@ test('Multimodal State rejects message/image accessors without executing or losi
     throw new Error('Unexpected HTTP');
   };
   try {
-    for (const provider of ['jev', 'liquid', 'openai']) {
+    for (const { id: provider } of classifierProviders) {
       const node = ClassifierEvaluateNodeImpl.create();
       node.data.provider = provider;
       for (const state of fixtures) {
@@ -85,7 +85,7 @@ test('Evaluate reads only active input ports and rejects wrapper getters and inh
     throw new Error('Unexpected HTTP');
   };
   try {
-    for (const provider of ['jev', 'liquid', 'openai']) {
+    for (const { id: provider } of classifierProviders) {
       const node = ClassifierEvaluateNodeImpl.create();
       node.data = { ...node.data, provider, useModelInput: true, apiKeySource: 'input' };
       const inputs = () => ({
@@ -178,7 +178,7 @@ test('Questions reject serialization hooks, accessors, sparse arrays and disappe
     throw new Error('Unexpected HTTP');
   };
   try {
-    for (const id of ['jev', 'liquid', 'openai']) {
+    for (const { id } of classifierProviders) {
       const provider = getClassifierProvider(id);
       const node = ClassifierEvaluateNodeImpl.create();
       node.data.provider = id;
@@ -261,7 +261,7 @@ test('Structured State and entries reject getters without invoking them and vali
 });
 
 test('Optional undefined criteria and JSON data named toJSON remain valid and stable on every provider', async () => {
-  for (const id of ['jev', 'liquid', 'openai']) {
+  for (const { id } of classifierProviders) {
     const provider = getClassifierProvider(id);
     let calls = 0;
     const instructions = { toJSON: 'text', check: ['one', 'two'] };

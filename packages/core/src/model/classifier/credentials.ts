@@ -29,6 +29,16 @@ export const OPENAI_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
   environmentVariableName: 'OPENAI_API_KEY',
 };
 
+export const OPENROUTER_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'openRouterApiKey',
+  environmentVariableName: 'OPENROUTER_API_KEY',
+};
+
+export const PERPLEXITY_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'perplexityApiKey',
+  environmentVariableName: 'PERPLEXITY_API_KEY',
+};
+
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const environmentVariableNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

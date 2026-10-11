@@ -10,11 +10,13 @@ Use Chrome-style shortcuts to select the neighboring open project tab:
 
 - **Windows and Linux:** Ctrl+Tab (right), Ctrl+Shift+Tab (left). Ctrl+Page Down and Ctrl+Page Up also work.
 - **macOS:** Command+Option+Right Arrow (right), Command+Option+Left Arrow (left).
+- **In a web browser, all platforms:** Alt+Page Down (right), Alt+Page Up (left).
 
 The shortcuts wrap from the last tab to the first and back, following the tab
 order. Unsaved edits stay in their tabs. Switching is disabled while a modal
 dialog is open. In Rivet Studio Server, your browser may reserve these shortcuts
-for its own browser tabs instead of delivering them to the editor.
+for its own browser tabs instead of delivering them to the editor. Use the
+Alt+Page Up / Page Down shortcuts instead, with focus inside the Rivet editor.
 
 ### Project Settings
 

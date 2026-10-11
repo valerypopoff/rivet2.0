@@ -6,7 +6,7 @@ sidebar_label: Classifier Profile
 
 ## Overview
 
-Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI and OpenAI Decisions. Connect **Profile** directly to Evaluate's **Classifier Profiles** input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to **From profile**.
+Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI, OpenAI Decisions, Microsoft Decision-1 through OpenRouter, and Perplexity Decisions. Connect **Profile** directly to Evaluate's **Classifier Profiles** input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to **From profile**. For OpenRouter, clear Model to use `microsoft/microsoft-decision-1`; see [OpenRouter setup](./classifier-evaluate.mdx#using-microsoft-decision-1-on-openrouter). For Perplexity, clear Model to use `pplx-decider-v1.1-27b`; see [Perplexity setup](./classifier-evaluate.mdx#using-perplexity-decisions).
 
 ## Settings and ports
 

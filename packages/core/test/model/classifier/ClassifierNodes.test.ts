@@ -352,6 +352,8 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     { value: 'jev', label: 'Jev' },
     { value: 'liquid', label: 'Liquid AI' },
     { value: 'openai', label: 'OpenAI' },
+    { value: 'openrouter', label: 'OpenRouter' },
+    { value: 'perplexity', label: 'Perplexity' },
   ]);
   assert.deepEqual(
     instance.getOutputDefinitions().map((output) => output.id),
@@ -770,6 +772,8 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     'TYPESAFE_API_KEY',
     'LIQUID_API_KEY',
     'OPENAI_API_KEY',
+    'OPENROUTER_API_KEY',
+    'PERPLEXITY_API_KEY',
   ]);
 });
 

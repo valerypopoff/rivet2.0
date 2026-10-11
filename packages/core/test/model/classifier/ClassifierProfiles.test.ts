@@ -166,7 +166,7 @@ test('Classifier Evaluate overall timeout editor uses milliseconds for defaults 
 });
 
 test('Every classifier provider has inline/profile request, answer and cost parity', async () => {
-  for (const provider of ['jev', 'liquid', 'openai']) {
+  for (const provider of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity']) {
     globalThis.fetch = async () => reply(provider);
     const node = ClassifierEvaluateNodeImpl.create();
     Object.assign(node.data, { provider, outputRequestBody: true, outputResponseBody: true });

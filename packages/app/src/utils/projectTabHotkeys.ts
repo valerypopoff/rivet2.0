@@ -11,6 +11,23 @@ export function getProjectTabHotkeyDirection(
   event: KeyboardShortcutEvent,
   platform: KeyboardShortcutPlatform,
 ): ProjectTabDirection | undefined {
+  // Browser tab shortcuts may never reach the page. Offer an alternative that
+  // does not require fullscreen, keyboard-lock permission, or a browser extension.
+  for (const [key, direction] of [
+    ['PageUp', -1],
+    ['PageDown', 1],
+  ] as const) {
+    if (
+      matchesKeyboardShortcut(event, {
+        codes: [key],
+        keys: [key],
+        commandModifier: 'none',
+        shiftKey: false,
+        altKey: true,
+      })
+    )
+      return direction;
+  }
   const matches = (key: string, shiftKey: boolean, altKey: boolean) =>
     matchesKeyboardShortcut(
       event,
@@ -63,12 +80,16 @@ export function installProjectTabHotkeyListener(
 ): () => void {
   let requested: { tab: ProjectTabListItem; revision: number } | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!event.ctrlKey && !event.metaKey) return;
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) return;
     if (event.defaultPrevented || event.isComposing || event.getModifierState('AltGraph')) return;
     const state = getState();
     if (!state.enabled) return;
     const direction = getProjectTabHotkeyDirection(event, state.platform);
-    if (direction === undefined) return;
+    if (direction === undefined || state.tabs.length === 0) return;
+    // Consume before activation (even with one tab). stopPropagation alone
+    // does not stop other listeners on this same window from handling the key.
+    event.preventDefault();
+    event.stopImmediatePropagation();
     const selected =
       state.activation.pending &&
       requested?.revision === state.activation.revision &&
@@ -77,8 +98,6 @@ export function installProjectTabHotkeyListener(
         : state.selected;
     const next = getAdjacentProjectTab(state.tabs, selected, direction);
     if (!next) return;
-    event.preventDefault();
-    event.stopPropagation();
     selectTab(next);
     requested = { tab: next, revision: getState().activation.revision };
   };
