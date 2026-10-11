@@ -3,6 +3,8 @@ import {
   AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS,
   AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS,
   AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS,
+  mergeAgentProfileAttempt,
+  mergeAgentModelCall,
   type AgentModelCallTrace,
   type AgentToolCallTrace,
   type ChartNode,
@@ -699,8 +701,11 @@ function applyLlmCallFinished(
   );
   if (invocation == null) return;
 
-  invocation.modelCallCount += 1;
   const existingIndex = invocation.modelCalls.findIndex((call) => call.callId === data.callId);
+  if (existingIndex >= 0) {
+    const existing = invocation.modelCalls[existingIndex]!;
+    data = mergeAgentModelCall({ ...existing, normalizedUsage: existing.usage }, data);
+  }
   const call: RunActivityModelCall = {
     callId: data.callId,
     nodeId: data.nodeId,
@@ -710,23 +715,23 @@ function applyLlmCallFinished(
     ...(data.customProviderApi == null ? {} : { customProviderApi: data.customProviderApi }),
     outcome: data.outcome,
     attemptIndex: data.attemptIndex,
-    pricing: data.pricing,
+    pricing: { ...data.pricing },
     ...(data.profileIndex == null ? {} : { profileIndex: data.profileIndex }),
     ...(data.profileName == null ? {} : { profileName: data.profileName }),
     ...(data.roundIndex == null ? {} : { roundIndex: data.roundIndex }),
     ...(data.startedAt == null ? {} : { startedAt: data.startedAt }),
     ...(data.durationMs == null ? {} : { durationMs: data.durationMs }),
     ...(data.finishReason == null ? {} : { finishReason: data.finishReason }),
-    ...(data.normalizedUsage == null ? {} : { usage: data.normalizedUsage }),
+    ...(data.normalizedUsage == null ? {} : { usage: { ...data.normalizedUsage } }),
     sequence: existingIndex < 0 ? takeSequence(journal) : invocation.modelCalls[existingIndex]!.sequence,
   };
 
   if (existingIndex >= 0) {
-    invocation.modelCallCount -= 1;
     invocation.modelCalls[existingIndex] = call;
     return;
   }
 
+  invocation.modelCallCount += 1;
   if (invocation.modelCalls.length < journal.limits.modelCallsPerInvocation) {
     invocation.modelCalls.push(call);
   } else {
@@ -752,6 +757,7 @@ function applyLlmProfileAttempt(
   invocation.profileAttempts ??= [];
   invocation.omittedProfileAttemptCount ??= 0;
   const existingIndex = invocation.profileAttempts.findIndex((attempt) => attempt.eventId === data.eventId);
+  if (existingIndex >= 0) data = mergeAgentProfileAttempt(invocation.profileAttempts[existingIndex]!, data);
   const attempt: RunActivityProfileAttempt = {
     eventId: data.eventId,
     roundIndex: data.roundIndex,
@@ -777,6 +783,7 @@ function applyLlmProfileAttempt(
     ...(data.failureKind == null ? {} : { failureKind: data.failureKind }),
     ...(data.skipReason == null ? {} : { skipReason: data.skipReason }),
     ...(data.classifierUsage == null ? {} : { classifierUsage: { ...data.classifierUsage } }),
+    ...(data.durationMs == null ? {} : { durationMs: data.durationMs }),
     sequence: existingIndex < 0 ? takeSequence(journal) : invocation.profileAttempts[existingIndex]!.sequence,
   };
 

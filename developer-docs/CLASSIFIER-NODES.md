@@ -83,8 +83,10 @@ invent an HTTP exchange. Missing credentials before preparation produce no
 request body. Successful fallback still projects only the winner's bodies.
 
 Classifier chain errors include every failed physical attempt's category, attempt
-number, HTTP status and safe explanation even when the optional Attempts output
-is disabled. The compact profile summary reports retry counts, suspension recovery
+number, profile name (when present), HTTP status and safe explanation even when
+the optional Attempts output is disabled. Attempt details keep the one-based
+profile index to distinguish duplicate names; older/unnamed attempts keep the
+`Profile N` fallback. The compact profile summary reports retry counts, suspension recovery
 time and reliability-service warnings without changing the terminal provider
 outcome. Preparation and pre-dispatch deadline failures must also have a visible
 reason; explanations are bounded and redact the candidate's API key. Shared Run
@@ -137,6 +139,58 @@ The shared Configuration editor offers undoable extraction to a Profile. It move
 Regression coverage lives in `ClassifierProfiles.test.ts`, the extraction domain tests, durable-store family tests and `jev-nodes.spec.ts`. Mock HTTP checks assert inline/profile parity across all registered providers; they do not prove live credentials or provider availability. Run Activity and Response Inspector preserve classifier-family events and use non-streaming response-timeout labels. Regenerate the graph-builder catalog and the Node package's hosted web-app client after changing built-in node metadata or trace validation contracts.
 
 Response Inspector uses family-neutral **Profile fallbacks** and **Profile attempts** labels because a trace can include LLMs, classifiers, or both; the shared counters must not imply that classifier fallback was an LLM call. Classifier failures include optional typed `failureKind` diagnostics: configuration, capability, authentication, transport, HTTP, timeout, response parsing or response validation. The inspector renders this category; old recordings without it remain valid. HTTP 401/403 retain HTTP failure-control semantics but are classified as authentication in diagnostics. Categories and sanitized errors never depend on matching provider error text.
+
+### Editor response inspection and activity
+
+Classifier Evaluate uses the same eye action and `AgentResponseInspector` as LLM
+Chat, in both inline and fullscreen output, including failed executions. The
+shared `buildModelInvocationTrace` selects one exact root/graph/node/process;
+the additive `classifier-invocation` scope uses recorded whole-node duration
+on replay. Old/frozen executions without trace evidence show **Trace
+unavailable**, not fabricated requests. Inspection does not depend on enabling
+Classifier Attempts, Profile Summary, or body outputs.
+
+Classifier inspectors show status, duration, physical request count, retries,
+fallbacks, safe token receipts and estimated cost. **Classifier requests** lists
+each physical attempt with profile name, provider/model, HTTP status, failure
+category/reason, duration and reported usage. **Profile attempts** retains
+configuration, suspension, recovery, fail-open and unreached decisions. Chat
+rounds, tools, cache and reasoning-token metrics are not classifier concepts
+and are omitted from classifier-only views. Mixed response traces retain both
+families. Per-request duration covers transport, reading and validation, not
+retry waits; the whole-node duration includes preparation and waits.
+
+Core's renderer-independent `AgentResponseTracePresentation` owns profile-row
+labels and legacy classifier-request counting for the editor, Run Activity,
+React web-app preview and generated Node web-app client. A physical request
+without a receipt explicitly shows **usage not reported** and **cost unknown**;
+older requests without timing show **duration unavailable** rather than zero.
+Health/configuration rows do not imply a billable request. Hosted mixed traces
+also expose classifier requests and profile decisions, without duplicating the
+physical classifier rows in both sections. Keep the generated client checked
+after changing this presentation contract.
+
+Run Activity categorizes Evaluate as model activity even when it fails before
+HTTP, previews **Answers**, exposes **Inspect response**, and includes it in
+**Models and tools**. Profile names and classifier family are searchable;
+expanded rows preserve HTTP status, reasons, timing and usage, with the same
+presentation helper as the inspector. The root header accounts for classifier
+requests and failed-attempt receipts through Core's
+`summarizeAgentResponseCalls`, not another accounting implementation. Health and
+unreached decisions do not count as physical requests. Capped journal evidence
+is labelled **retained evidence only**, with unknown/partial cost rather than
+a complete total. Bodies remain in existing opt-in outputs, never copied into
+trace metadata or the journal. Recording/debugger paths preserve additive
+`durationMs` attempt metadata; no new event bus or recording version is needed.
+Legacy redelivery of an identified attempt retains its observed request
+identity, timing and safe usage receipt; it never increments the request count.
+An open Run Activity inspector follows that exact invocation's live evidence
+through completion. Whole-invocation journal caps also make root accounting
+incomplete, not just per-request caps.
+Profile-attempt row caps cover both requests and decisions. The inspector uses
+a combined notice rather than claiming all omissions were decisions. Legacy
+request counts inferred from capped rows are labelled **retained evidence only**;
+explicit summary counts continue to represent the pre-cap total.
 
 The end-to-end Core graph regression runs the real Profile → Array → Evaluate path in normal and split modes, and after serialization, prefab resolution, bundle validation and cross-project profile loading. Only node settings are serialized; resolved credentials are runtime-only. `helpers/classifier-health-contract.ts` exercises competing stores, single recovery ownership, renewal, stale-result/reset fencing and recording contributor links against two SQLite connections and real PostgreSQL pools in `test:async-managed`. `test:migration-managed` verifies exact classifier-family health JSON, suspension identity and recording evidence through both legacy and live SQLite operational transfer; these use the existing health table, not a second storage schema.
 

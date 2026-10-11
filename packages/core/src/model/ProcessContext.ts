@@ -167,11 +167,13 @@ export type LLMProfileAttemptTraceEvent = {
   failureKind?: ClassifierFailureKind;
   skipReason?: 'unreached';
   classifierUsage?: ClassifierAttemptUsage;
+  /** Physical classifier request duration, excluding retry waits. */
+  durationMs?: number;
   eventId: string;
   roundIndex: number;
   /** Present when this attempt belongs to a From profile fallback candidate. */
   profileIndex?: number;
-  /** User-facing title captured from the source LLM Profile node. */
+  /** User-facing title captured from the source profile node. */
   profileName?: string;
   nodeId: NodeId;
   processId: ProcessId;

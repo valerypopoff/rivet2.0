@@ -79,10 +79,11 @@ export class ClassifierProfileExhaustedError extends Error {
     const details = attempts
       .filter((attempt) => attempt.outcome === 'failure' || attempt.outcome === 'aborted')
       .map((attempt) => {
+        const profile = `Profile ${(attempt.profileIndex ?? 0) + 1}${attempt.profileName ? ` (${attempt.profileName})` : ''}`;
         const request = attempt.attemptIndex === undefined ? '' : ` attempt ${attempt.attemptIndex + 1}`;
         const status = attempt.status === undefined ? '' : ` (HTTP ${attempt.status})`;
         const reason = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
-        return `Profile ${(attempt.profileIndex ?? 0) + 1}, ${attempt.failureKind ?? attempt.stage}${request} ${attempt.outcome}${status}${reason}`;
+        return `${profile}, ${attempt.failureKind ?? attempt.stage}${request} ${attempt.outcome}${status}${reason}`;
       })
       .join('\n');
     super(

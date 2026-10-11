@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { expect, test } from '@playwright/test';
 import type { UiGraph } from '../../core/src/model/UiGraph';
-import { getUiGraphChatStorageKey } from '../../core/src/model/UiGraphBrowserRuntime';
+import { getUiGraphChatMessagesStateKey } from '../../core/src/model/UiGraph';
+import {
+  getUiGraphChatStorageKey,
+  getUiGraphResponseTraceStorageKey,
+} from '../../core/src/model/UiGraphBrowserRuntime';
 import { RIVET_MARKDOWN_SANITIZER_POLICY } from '../../core/src/model/MarkdownSanitizationPolicy';
 import { RIVET_WEB_APP_CLIENT_JS } from '../../node/src/generated/webAppClient.generated';
 
@@ -159,7 +163,119 @@ test('Rivet web app client turns revision mismatches into a reload modal', async
   await expect.poll(() => htmlRequestCount).toBe(2);
 });
 
-test('Rivet web app client does not reconnect or fall back after access is revoked over WebSocket', async ({ page }) => {
+test('Rivet web app classifier inspector mirrors request failures and suspension decisions', async ({ page }) => {
+  const uiGraph = {
+    id: 'classifier-inspection',
+    components: [{ id: 'chat', type: 'chat', action: { type: 'runGraph' }, allowResponseInspection: true }],
+  } as unknown as UiGraph;
+  const location = { origin: 'http://example.test', pathname: '/classifier-inspection' };
+  const base = {
+    family: 'classifier',
+    nodeId: 'evaluate',
+    processId: 'process',
+    roundIndex: 0,
+    provider: 'perplexity',
+    model: 'decider',
+  };
+  const trace = {
+    schemaVersion: 1,
+    traceId: 'classifier-trace',
+    scope: 'response',
+    rootRunId: 'classifier-trace',
+    graphRunId: 'run',
+    graphId: 'graph',
+    status: 'error',
+    summary: {
+      modelCallCount: 0,
+      toolCallCount: 0,
+      retryCount: 0,
+      fallbackCount: 1,
+      knownCostUsd: 0,
+      costStatus: 'unknown',
+    },
+    modelCalls: [],
+    toolCalls: [],
+    omittedModelCallCount: 0,
+    omittedToolCallCount: 0,
+    omittedProfileAttemptCount: 3,
+    profileAttempts: [
+      {
+        ...base,
+        eventId: 'gate',
+        profileIndex: 0,
+        profileName: 'Suspended classifier',
+        stage: 'health-gate',
+        outcome: 'skipped',
+        healthState: 'open',
+        healthDisposition: 'deny',
+      },
+      {
+        ...base,
+        eventId: 'failed',
+        profileIndex: 1,
+        profileName: 'Backup classifier',
+        stage: 'request',
+        outcome: 'failure',
+        failureKind: 'authentication',
+        attemptIndex: 0,
+        status: 401,
+        durationMs: 250,
+        error: 'Authentication failed.',
+      },
+    ],
+  };
+  await page.addInitScript(
+    ({ chatKey, messagesKey, traceKey, trace }) => {
+      localStorage.setItem(
+        chatKey,
+        JSON.stringify({
+          [messagesKey]: [{ role: 'assistant', content: 'Failed classifier response', responseTraceId: trace.traceId }],
+        }),
+      );
+      localStorage.setItem(traceKey, JSON.stringify([trace]));
+    },
+    {
+      chatKey: getUiGraphChatStorageKey(uiGraph, location)!,
+      messagesKey: getUiGraphChatMessagesStateKey('chat' as never),
+      traceKey: getUiGraphResponseTraceStorageKey(uiGraph, 'chat' as never, location)!,
+      trace,
+    },
+  );
+  await page.route('http://example.test/classifier-inspection', (route) =>
+    route.fulfill({
+      body: createWebAppHtml(RIVET_WEB_APP_CLIENT_JS, '', { uiGraph, initialState: {} }),
+      contentType: 'text/html',
+    }),
+  );
+  await page.goto('http://example.test/classifier-inspection');
+  await page.locator('.rivet-web-app-chat-message').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Inspect response', exact: true }).click();
+  const inspector = page.getByRole('dialog', { name: 'Response inspector' });
+  await expect(inspector).toContainText('Classifier requests1 (retained evidence only)');
+  await expect(inspector).toContainText('3 additional profile-attempt rows (requests or decisions) omitted');
+  await expect(inspector).toContainText('Profile fallbacks1');
+  const requests = inspector
+    .locator('details')
+    .filter({ has: page.locator('summary', { hasText: /^Classifier requests$/ }) });
+  const decisions = inspector
+    .locator('details')
+    .filter({ has: page.locator('summary', { hasText: /^Profile attempts$/ }) });
+  await expect(requests).toContainText('Profile: Backup classifier');
+  await expect(requests).toContainText('HTTP 401 / 0.25 sec / usage not reported / cost unknown');
+  await expect(requests).toContainText('Authentication failed.');
+  await expect(requests).not.toContainText('round');
+  await expect(decisions).toContainText('Profile: Suspended classifier');
+  await expect(decisions).toContainText('profile suspended; skipped');
+  await expect(decisions).not.toContainText('Backup classifier');
+  await expect(decisions).not.toContainText('omitted');
+  await expect(requests).not.toContainText('omitted');
+  await inspector.getByRole('button', { name: 'Close response inspector' }).click();
+  await expect(inspector).not.toBeVisible();
+});
+
+test('Rivet web app client does not reconnect or fall back after access is revoked over WebSocket', async ({
+  page,
+}) => {
   let actionStarts = 0;
   let httpActionRequests = 0;
   let webSocketConnections = 0;
@@ -254,7 +370,9 @@ test('Rivet web app migrates legacy Chat state to IndexedDB and synchronizes it 
   await expect(page.getByText('Migrated answer', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Show 1 pinned response' }).click();
   await expect(page.locator('.rivet-web-app-chat-pin')).toHaveCount(1);
-  expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey!)).toBe(JSON.stringify(getLegacyChatState()));
+  expect(await page.evaluate((key) => localStorage.getItem(key), legacyKey!)).toBe(
+    JSON.stringify(getLegacyChatState()),
+  );
 
   await page.evaluate((key) => localStorage.removeItem(key), legacyKey!);
   await page.reload();

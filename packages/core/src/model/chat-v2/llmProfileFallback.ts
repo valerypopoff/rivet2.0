@@ -114,10 +114,12 @@ export type LLMAttempt = {
   /** Unreached candidates are observability only, not a fallback attempt. */
   skipReason?: 'unreached';
   classifierUsage?: ClassifierAttemptUsage;
+  /** Physical classifier request duration, excluding retry waits. */
+  durationMs?: number;
   roundIndex: number;
   /** Present when a From profile candidate produced this attempt. */
   profileIndex?: number;
-  /** User-facing title captured from the source LLM Profile node. */
+  /** User-facing title captured from the source profile node. */
   profileName?: string;
   provider: string;
   model: string;

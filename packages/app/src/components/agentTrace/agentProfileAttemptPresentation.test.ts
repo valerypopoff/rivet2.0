@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AgentLLMProfileAttemptTrace, NodeId, ProcessId } from '@valerypopoff/rivet2-core';
-import { buildAgentProfileAttemptInspectorRows } from './agentProfileAttemptPresentation.js';
+import {
+  buildAgentProfileAttemptInspectorRows,
+  type AgentLLMProfileAttemptTrace,
+  type NodeId,
+  type ProcessId,
+} from '@valerypopoff/rivet2-core';
 
 const baseAttempt = {
   roundIndex: 0,
@@ -29,11 +33,12 @@ test('presents classifier response timeouts without streaming terminology', () =
       stage: 'request',
       outcome: 'failure',
       timeoutKind: 'response',
+      durationMs: 500,
       error: 'Perplexity request timed out after 500 ms.',
     },
   ]);
   assert.equal(row?.providerAndModel, 'Profile: Primary route · liquid / d1');
-  assert.equal(row?.context, 'request / response timed out / profile 1 / round 1');
+  assert.equal(row?.context, 'request / response timed out / profile 1 / 0.50 sec');
   assert.equal(row?.error, 'Perplexity request timed out after 500 ms.');
 });
 
@@ -48,7 +53,7 @@ test('classifier failure categories are readable without interpreting provider e
       failureKind: 'response-parsing',
     },
   ]);
-  assert.equal(row?.context, 'response parsing / failure / profile 1 / round 1');
+  assert.equal(row?.context, 'response parsing / failure / profile 1');
 });
 
 test('unreached candidates are not presented as suspended profiles', () => {
@@ -62,7 +67,7 @@ test('unreached candidates are not presented as suspended profiles', () => {
       skipReason: 'unreached',
     },
   ]);
-  assert.equal(row?.context, 'configuration / not reached / profile 1 / round 1');
+  assert.equal(row?.context, 'configuration / not reached / profile 1');
 });
 
 test('classifier receipts preserve failed usage and explicitly identify unpriced costs', () => {
@@ -83,6 +88,30 @@ test('classifier receipts preserve failed usage and explicitly identify unpriced
   const rows = buildAgentProfileAttemptInspectorRows(attempts);
   assert.match(rows[0]!.context, /1000 input \/ 0 output tokens \/ estimated \$0\.00004000$/);
   assert.match(rows[1]!.context, /1000 input \/ 0 output tokens \/ cost unknown$/);
+});
+
+test('physical classifier requests identify unavailable timing, usage and cost without inventing health receipts', () => {
+  const rows = buildAgentProfileAttemptInspectorRows([
+    {
+      ...baseAttempt,
+      family: 'classifier',
+      eventId: 'no-receipt',
+      stage: 'request',
+      outcome: 'failure',
+      attemptIndex: 0,
+    },
+    {
+      ...baseAttempt,
+      family: 'classifier',
+      eventId: 'gate',
+      stage: 'health-gate',
+      outcome: 'skipped',
+      healthDisposition: 'deny',
+    },
+  ]);
+  assert.match(rows[0]!.context, /usage not reported \/ cost unknown$/);
+  assert.match(rows[0]!.context, /duration unavailable/);
+  assert.doesNotMatch(rows[1]!.context, /usage|cost/);
 });
 
 test('presents suspension skips, reliability-service decisions, and timeout failures for Response Inspector', () => {

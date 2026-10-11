@@ -11,7 +11,7 @@ import type {
   PortId,
 } from '../NodeBase.js';
 import { nodeDefinition } from '../NodeDefinition.js';
-import { NodeImpl, type NodeUIData } from '../NodeImpl.js';
+import { NodeImpl, type NodeRunActivityDescriptor, type NodeUIData } from '../NodeImpl.js';
 import { createExcludedNodeOutputs } from '../NodeExclusionPolicy.js';
 import { formatNodeBodyMarkdownField, formatNodeBodyMarkdownSeparator } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
@@ -76,6 +76,10 @@ export type ClassifierEvaluateBodySection = Readonly<{
 const QUESTION_TYPES = ['object', 'object[]', 'any', 'any[]'] as const;
 
 export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode> {
+  getRunActivityDescriptor(): NodeRunActivityDescriptor {
+    return { category: 'model', primaryOutputPortId: 'answers' as PortId };
+  }
+
   static create(): ClassifierEvaluateNode {
     return {
       type: 'classifierEvaluate',

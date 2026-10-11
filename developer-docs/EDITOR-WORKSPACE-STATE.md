@@ -141,6 +141,11 @@ wrong graph after a deletion.
 `GraphListHeader`, `useGraphListPresentation`, `UiGraphResourceSection`,
 `GraphListContextMenus`, `GraphListDialogs`, and `useUiGraphOperations`.
 
+Folder icons and graph-count badges use first-line baseline alignment with
+small optical offsets in `GraphList.tsx`; wrapped folder names must not move
+these marks to the middle of the entire label. The folder badge adjustment is
+scoped to folder rows, not the shared Node library counter.
+
 Node library and web apps are project resources, not executable graphs. Main graph,
 graph history, and graph execution must not treat them as graphs. The graph-list
 reachability diagnostic treats valid Button and Chat action targets as additional

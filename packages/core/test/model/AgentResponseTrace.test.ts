@@ -4,6 +4,7 @@ import {
   AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS,
   AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS,
   buildAgentResponseTrace,
+  mergeAgentTraceEvent,
   isAgentResponseTrace,
   type AgentTraceEvent,
   type GraphExecutionMetadata,
@@ -68,6 +69,167 @@ const profileAttemptEvent = (overrides: Partial<Extract<AgentTraceEvent, { type:
   }) satisfies Extract<AgentTraceEvent, { type: 'llm-profile-attempt' }>;
 
 void describe('AgentResponseTrace', () => {
+  void it('preserves omitted LLM call timing and usage while accepting explicit receipt corrections', () => {
+    const original = modelEvent({
+      profileName: 'Primary route',
+      profileHealthKey: 'health-key',
+      profileHealthState: 'closed',
+      roundIndex: 1,
+      durationMs: 250,
+      startedAt: 100,
+      finishReason: 'stop',
+      normalizedUsage: { promptTokens: 20, completionTokens: 2 },
+    });
+    const legacy = modelEvent({ callId: original.callId, durationMs: undefined, normalizedUsage: undefined });
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      status: 'completed',
+      events: [original, legacy],
+    });
+    assert.equal(trace.summary.modelCallCount, 1);
+    assert.equal(trace.summary.promptTokens, 20);
+    assert.equal(trace.summary.completionTokens, 2);
+    assert.equal(trace.summary.knownCostUsd, 0.01);
+    assert.equal(trace.modelCalls[0]?.durationMs, 250);
+    assert.equal(trace.modelCalls[0]?.roundIndex, 1);
+    assert.equal(trace.modelCalls[0]?.profileName, 'Primary route');
+    assert.equal(trace.modelCalls[0]?.profileHealthKey, 'health-key');
+    const corrected = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      status: 'completed',
+      events: [
+        original,
+        {
+          ...legacy,
+          outcome: 'aborted',
+          durationMs: 300,
+          normalizedUsage: { promptTokens: 30, completionTokens: 0 },
+          pricing: { status: 'unknown' },
+        },
+      ],
+    });
+    assert.equal(corrected.summary.modelCallCount, 1);
+    assert.equal(corrected.summary.promptTokens, 30);
+    assert.equal(corrected.summary.costStatus, 'unknown');
+    assert.equal(corrected.summary.knownCostUsd, 0);
+    assert.equal(corrected.modelCalls[0]?.durationMs, 300);
+    assert.equal(corrected.modelCalls[0]?.finishReason, undefined);
+  });
+
+  void it('retains classifier receipts on legacy redelivery without double counting or stale failure details', () => {
+    const original = profileAttemptEvent({
+      family: 'classifier',
+      profileName: 'Fast classifier',
+      stage: 'request',
+      attemptIndex: 0,
+      durationMs: 250,
+      outcome: 'failure',
+      failureKind: 'timeout',
+      timeoutKind: 'response',
+      error: 'Timed out',
+      classifierUsage: { inputTokens: 20, outputTokens: 2, estimatedCostUsd: 0.001 },
+    });
+    const legacy = profileAttemptEvent({ eventId: original.eventId, stage: 'request', outcome: 'failure' });
+    const trace = buildAgentResponseTrace({
+      scope: 'classifier-invocation',
+      execution,
+      nodeId: original.nodeId,
+      processId: original.processId,
+      status: 'error',
+      events: [original, legacy],
+    });
+    assert.equal(trace.profileAttempts?.length, 1);
+    assert.equal(trace.profileAttempts?.[0]?.profileName, 'Fast classifier');
+    assert.equal(trace.profileAttempts?.[0]?.durationMs, 250);
+    assert.equal(trace.profileAttempts?.[0]?.timeoutKind, 'response');
+    assert.equal(trace.summary.classifierRequestCount, 1);
+    assert.equal(trace.summary.promptTokens, 20);
+    assert.equal(trace.summary.knownCostUsd, 0.001);
+    assert.equal(trace.summary.costStatus, 'known');
+    const corrected = mergeAgentTraceEvent(original, { ...legacy, outcome: 'success', durationMs: 300 });
+    assert.equal(corrected.type, 'llm-profile-attempt');
+    if (corrected.type !== 'llm-profile-attempt') throw new Error('Unexpected event type');
+    assert.equal(corrected.durationMs, 300);
+    assert.equal(corrected.error, undefined);
+    assert.equal(corrected.failureKind, undefined);
+    assert.equal(corrected.timeoutKind, undefined);
+    assert.equal(corrected.family, 'classifier');
+    assert.deepEqual(corrected.classifierUsage, original.classifierUsage);
+  });
+
+  void it('counts classifier requests, retries and fallback separately from health and unreached decisions', () => {
+    const physical = {
+      family: 'classifier' as const,
+      nodeId: 'classifier' as NodeId,
+      stage: 'request' as const,
+      attemptIndex: 0,
+    };
+    const first = profileAttemptEvent({ ...physical, outcome: 'failure', status: 503, durationMs: 250 });
+    const second = profileAttemptEvent({
+      ...physical,
+      attemptIndex: 1,
+      outcome: 'failure',
+      classifierUsage: { inputTokens: 1000, outputTokens: 0, estimatedCostUsd: 0.00004 },
+    });
+    const winner = profileAttemptEvent({
+      ...physical,
+      profileIndex: 1,
+      outcome: 'success',
+      classifierUsage: { inputTokens: 50, outputTokens: 5, estimatedCostUsd: 0.00002 },
+    });
+    const trace = buildAgentResponseTrace({
+      scope: 'classifier-invocation',
+      execution,
+      nodeId: physical.nodeId,
+      processId: 'process' as ProcessId,
+      status: 'completed',
+      startedAt: 100,
+      finishedAt: 600,
+      invocationDurationMs: 700,
+      events: [
+        first,
+        second,
+        winner,
+        winner,
+        profileAttemptEvent({ family: 'classifier', nodeId: physical.nodeId, profileIndex: 1, stage: 'health-update' }),
+        profileAttemptEvent({
+          family: 'classifier',
+          nodeId: physical.nodeId,
+          profileIndex: 2,
+          stage: 'configuration',
+          outcome: 'skipped',
+          skipReason: 'unreached',
+        }),
+        modelEvent(),
+      ],
+    });
+    assert.equal(trace.durationMs, 700);
+    assert.deepEqual(trace.summary, {
+      modelCallCount: 0,
+      classifierRequestCount: 3,
+      toolCallCount: 0,
+      retryCount: 1,
+      fallbackCount: 1,
+      promptTokens: 1050,
+      completionTokens: 5,
+      totalTokens: 1055,
+      knownCostUsd: 0.00004 + 0.00002,
+      costStatus: 'partial',
+    });
+    assert.equal(isAgentResponseTrace(JSON.parse(JSON.stringify(trace))), true);
+    assert.equal(trace.profileAttempts?.[0]?.durationMs, 250);
+    assert.equal(
+      isAgentResponseTrace({ ...trace, profileAttempts: [{ ...trace.profileAttempts![0], durationMs: -1 }] }),
+      false,
+    );
+    assert.equal(isAgentResponseTrace({ ...trace, summary: { ...trace.summary, classifierRequestCount: -1 } }), false);
+    assert.equal(isAgentResponseTrace({ ...trace, scope: 'unknown-invocation' }), false);
+    const { classifierRequestCount: _count, ...legacySummary } = trace.summary;
+    assert.equal(isAgentResponseTrace({ ...trace, scope: 'response', summary: legacySummary }), true);
+  });
+
   void it('retains and validates classifier family and response timeout attempts', () => {
     const trace = buildAgentResponseTrace({
       scope: 'response',

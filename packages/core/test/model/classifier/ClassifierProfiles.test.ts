@@ -73,13 +73,13 @@ const reply = (provider: string) =>
     { headers: { 'Content-Type': 'application/json' } },
   );
 
-test('Chain exhaustion retains every physical retry reason even without optional diagnostic ports', async () => {
+void test('Chain exhaustion retains every physical retry reason even without optional diagnostic ports', async () => {
   const statuses = [429, 503, 400];
   let calls = 0;
   globalThis.fetch = async () => Response.json({ private: 'response-only-evidence' }, { status: statuses[calls++] });
   await assert.rejects(
     evaluate(
-      [profile('perplexity')],
+      [{ ...profile('perplexity'), profileName: 'Retry classifier' }],
       context(),
       {},
       {
@@ -93,7 +93,9 @@ test('Chain exhaustion retains every physical retry reason even without optional
     (error: Error) => {
       assert.match(error.message, /3 provider attempts/);
       for (const [index, status] of statuses.entries())
-        assert.match(error.message, new RegExp(`attempt ${index + 1} failure \\(HTTP ${status}\\)`));
+        assert.ok(
+          error.message.includes(`Profile 1 (Retry classifier), http attempt ${index + 1} failure (HTTP ${status})`),
+        );
       assert.doesNotMatch(error.message, /private-key|response-only-evidence/);
       return true;
     },
@@ -101,7 +103,31 @@ test('Chain exhaustion retains every physical retry reason even without optional
   assert.equal(calls, 3);
 });
 
-test('Deadlines expiring before dispatch produce visible typed failure evidence, not only unreached profiles', async () => {
+void test('Chain exhaustion names each profile in attempt details and preserves unnamed-profile fallback', async () => {
+  globalThis.fetch = async () => Response.json({ error: 'unauthorized' }, { status: 401 });
+  await assert.rejects(
+    evaluate(
+      [
+        { ...profile('perplexity'), profileName: 'Some classifier profile' },
+        { ...profile('perplexity'), profileName: 'Another classifier profile' },
+        profile('perplexity'),
+      ],
+      context(),
+    ),
+    (error: Error) => {
+      const details = error.message.split('Attempt details:\n')[1]!;
+      assert.ok(details.includes('Profile 1 (Some classifier profile), authentication attempt 1 failure (HTTP 401)'));
+      assert.ok(
+        details.includes('Profile 2 (Another classifier profile), authentication attempt 1 failure (HTTP 401)'),
+      );
+      assert.ok(details.includes('Profile 3, authentication attempt 1 failure (HTTP 401)'));
+      assert.doesNotMatch(details, /private-key/);
+      return true;
+    },
+  );
+});
+
+void test('Deadlines expiring before dispatch produce visible typed failure evidence, not only unreached profiles', async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
@@ -124,7 +150,7 @@ test('Deadlines expiring before dispatch produce visible typed failure evidence,
   assert.equal(attempts[0]?.failureKind, 'timeout');
 });
 
-test('Preparation errors are visible, bounded, and credential-redacted even with unreadable metadata', () => {
+void test('Preparation errors are visible, bounded, and credential-redacted even with unreadable metadata', () => {
   assert.equal(
     classifierErrorMessage(new Error('Invalid model private-key'), 'private-key'),
     'Invalid model [redacted]',
@@ -159,7 +185,7 @@ function evaluate(profiles: ClassifierProfileValue[], ctx = context(), extra: In
   );
 }
 
-test('Profile attempt observers cannot overwrite retained failure reasons or usage receipts', async () => {
+void test('Profile attempt observers cannot overwrite retained failure reasons or usage receipts', async () => {
   globalThis.fetch = async () =>
     Response.json({ model: 'jev-latest', answers: {}, usage: { input_tokens: 1000, output_tokens: 0 } });
   await assert.rejects(
@@ -187,7 +213,7 @@ test('Profile attempt observers cannot overwrite retained failure reasons or usa
 });
 
 for (const configurationMode of ['inline', 'profile'] as const) {
-  test(`Execution observers cannot mutate ${configurationMode} attempt receipts`, async () => {
+  void test(`Execution observers cannot mutate ${configurationMode} attempt receipts`, async () => {
     globalThis.fetch = async () => reply('jev');
     const node = ClassifierEvaluateNodeImpl.create();
     Object.assign(node.data, { configurationMode, outputClassifierAttempts: true });
@@ -209,7 +235,7 @@ for (const configurationMode of ['inline', 'profile'] as const) {
 }
 
 for (const phase of ['fetch', 'body'] as const) {
-  test(`Cancellation during ${phase} emits one aborted request, not a transport outage`, async () => {
+  void test(`Cancellation during ${phase} emits one aborted request, not a transport outage`, async () => {
     const controller = new AbortController();
     const stop = new Error('operator canceled');
     const store = new InMemoryRivetLLMProfileHealthStore();
@@ -261,7 +287,7 @@ for (const phase of ['fetch', 'body'] as const) {
 
 for (const configurationMode of ['inline', 'profile'] as const) {
   for (const behavior of ['throw', 'catch', 'suppress'] as const) {
-    test(`Classifier rejected bodies and failure reasons survive ${configurationMode}/${behavior}`, async () => {
+    void test(`Classifier rejected bodies and failure reasons survive ${configurationMode}/${behavior}`, async () => {
       const responseBody = { error: { message: 'Model is unavailable' } };
       globalThis.fetch = async () => Response.json(responseBody, { status: 400 });
       const node = ClassifierEvaluateNodeImpl.create();
@@ -305,7 +331,7 @@ for (const configurationMode of ['inline', 'profile'] as const) {
   }
 }
 
-test('Invalid JSON and invalid answer responses remain inspectable without entering successful outputs', async () => {
+void test('Invalid JSON and invalid answer responses remain inspectable without entering successful outputs', async () => {
   for (const [body, reason, expected] of [
     ['upstream service failed', /invalid JSON/, { raw: 'upstream service failed' }],
     ['{}', /invalid response shape/, {}],
@@ -318,7 +344,7 @@ test('Invalid JSON and invalid answer responses remain inspectable without enter
   }
 });
 
-test('Cancellation at the health gate is not mislabeled as configuration failure and releases the permit', async () => {
+void test('Cancellation at the health gate is not mislabeled as configuration failure and releases the permit', async () => {
   const controller = new AbortController();
   const stop = new Error('operator canceled');
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -345,7 +371,7 @@ test('Cancellation at the health gate is not mislabeled as configuration failure
   assert.equal(store.list()[0]!.failureCount, 0);
 });
 
-test('Fallback diagnostics pair the final physical request with its response, not an earlier candidate', async () => {
+void test('Fallback diagnostics pair the final physical request with its response, not an earlier candidate', async () => {
   globalThis.fetch = async (url) =>
     String(url).includes('perplexity')
       ? Response.json({ error: 'first candidate failed' }, { status: 400 })
@@ -357,7 +383,7 @@ test('Fallback diagnostics pair the final physical request with its response, no
   assert.match(result.runError!.value as string, /2\..*authentication failed.*HTTP 401/);
 });
 
-test('Failure outputs are opt-in and diagnostic observers cannot replace the classifier failure', async () => {
+void test('Failure outputs are opt-in and diagnostic observers cannot replace the classifier failure', async () => {
   globalThis.fetch = async () => Response.json({ private: 'provider response' }, { status: 400 });
   const checkpoints: Inputs[] = [];
   await assert.rejects(
@@ -393,7 +419,7 @@ test('Failure outputs are opt-in and diagnostic observers cannot replace the cla
 });
 
 for (const split of [false, true]) {
-  test(`Classifier failure bodies reach terminal events and recordings (split=${split})`, async () => {
+  void test(`Classifier failure bodies reach terminal events and recordings (split=${split})`, async () => {
     const candidate = ClassifierProfileNodeImpl.create();
     candidate.data.provider = 'perplexity';
     const questions = GraphInputNodeImpl.create();
@@ -454,7 +480,7 @@ for (const split of [false, true]) {
   });
 }
 
-test('Classifier Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
+void test('Classifier Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
   const node = ClassifierProfileNodeImpl.create();
   const originalData = structuredClone(node.data);
   assert.equal(node.data.responseTimeoutMs, 500);
@@ -515,7 +541,7 @@ test('Classifier Profile suspension editors mirror the LLM structure with stored
   );
 });
 
-test('Classifier Evaluate overall timeout editor uses milliseconds for defaults and constraints', () => {
+void test('Classifier Evaluate overall timeout editor uses milliseconds for defaults and constraints', () => {
   for (const configurationMode of ['inline', 'profile'] as const) {
     const node = ClassifierEvaluateNodeImpl.create();
     node.data.configurationMode = configurationMode;
@@ -531,7 +557,7 @@ test('Classifier Evaluate overall timeout editor uses milliseconds for defaults 
   }
 });
 
-test('Every classifier provider has inline/profile request, answer and cost parity', async () => {
+void test('Every classifier provider has inline/profile request, answer and cost parity', async () => {
   for (const provider of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity']) {
     globalThis.fetch = async () => reply(provider);
     const node = ClassifierEvaluateNodeImpl.create();
@@ -555,7 +581,7 @@ test('Every classifier provider has inline/profile request, answer and cost pari
   }
 });
 
-test('Actual classifier retry and fallback events remain valid strict recording traces', async () => {
+void test('Actual classifier retry and fallback events remain valid strict recording traces', async () => {
   const execution = { graphId: 'graph', graphRunId: 'graph-run', rootRunId: 'root' } as GraphExecutionMetadata;
   for (const mode of ['inline', 'profile'] as const) {
     let calls = 0;
@@ -566,15 +592,24 @@ test('Actual classifier retry and fallback events remain valid strict recording 
       settings: { classifierProviders: { jev: { apiKey: 'private-key' } } },
       onLLMProfileAttempt: (event) => events.push(event),
     });
-    if (mode === 'profile') await evaluate([profile(), profile()], ctx);
-    else {
-      const node = ClassifierEvaluateNodeImpl.create();
-      node.data.retryOnNon200 = true;
-      await new ClassifierEvaluateNodeImpl(node).process({ question1: { type: 'object', value: question } }, ctx);
-    }
+    const node = ClassifierEvaluateNodeImpl.create();
+    node.data.configurationMode = mode;
+    node.data.retryOnNon200 = true;
+    // Attempt events must remain available without any optional diagnostic outputs.
+    await new ClassifierEvaluateNodeImpl(node).process(
+      {
+        question1: { type: 'object', value: question },
+        ...(mode === 'profile'
+          ? { classifierProfile: { type: 'classifier-config[]' as const, value: [profile(), profile()] } }
+          : {}),
+      },
+      ctx,
+    );
     assert.ok(events.some((event) => event.outcome === 'failure'));
     assert.ok(events.some((event) => event.outcome === 'success'));
     assert.ok(events.every((event) => !Object.hasOwn(event, 'kind')));
+    const physicalRequests = events.filter((event) => event.attemptIndex != null);
+    assert.ok(physicalRequests.every((event) => typeof event.durationMs === 'number' && event.durationMs >= 0));
     const trace = buildAgentResponseTrace({
       scope: 'response',
       execution,
@@ -582,10 +617,18 @@ test('Actual classifier retry and fallback events remain valid strict recording 
       events: events.map((event) => ({ ...event, type: 'llm-profile-attempt', execution })),
     });
     assert.equal(isAgentResponseTrace(trace), true, mode);
+    assert.equal(trace.summary.classifierRequestCount, physicalRequests.length);
+    assert.equal(trace.summary.modelCallCount, 0);
+    assert.ok(!JSON.stringify(trace).includes('private-key'));
   }
 });
 
-test('Unreached profiles are recorded without provider calls or inflating fallback counts', async () => {
+void test('Classifier Evaluate advertises model activity and Answers as its primary preview', () => {
+  const node = new ClassifierEvaluateNodeImpl(ClassifierEvaluateNodeImpl.create());
+  assert.deepEqual(node.getRunActivityDescriptor(), { category: 'model', primaryOutputPortId: 'answers' });
+});
+
+void test('Unreached profiles are recorded without provider calls or inflating fallback counts', async () => {
   const events: LLMProfileAttemptTraceEvent[] = [];
   let calls = 0;
   globalThis.fetch = async () => {
@@ -616,7 +659,7 @@ test('Unreached profiles are recorded without provider calls or inflating fallba
   assert.equal(trace.summary.fallbackCount, 0);
 });
 
-test('Failed answer batches retain safe usage, while unpriced or unavailable failed receipts remain unknown', async () => {
+void test('Failed answer batches retain safe usage, while unpriced or unavailable failed receipts remain unknown', async () => {
   for (const provider of ['jev', 'liquid', 'openai']) {
     for (const receipt of ['priced', 'unpriced', 'unsafe', 'unreadable']) {
       const events: LLMProfileAttemptTraceEvent[] = [];
@@ -678,7 +721,7 @@ test('Failed answer batches retain safe usage, while unpriced or unavailable fai
   }
 });
 
-test('Profile resolves dynamic model/key and allows a missing key to reach fallback', async () => {
+void test('Profile resolves dynamic model/key and allows a missing key to reach fallback', async () => {
   const node = ClassifierProfileNodeImpl.create();
   node.data = { provider: 'liquid', apiKeySource: 'input', useModelInput: true };
   const impl = new ClassifierProfileNodeImpl(node);
@@ -712,7 +755,7 @@ test('Profile resolves dynamic model/key and allows a missing key to reach fallb
   );
 });
 
-test('HTTP fallback is ordered, counts unhealthy candidates once, and skips suspended profiles', async () => {
+void test('HTTP fallback is ordered, counts unhealthy candidates once, and skips suspended profiles', async () => {
   const store = new InMemoryRivetLLMProfileHealthStore();
   const primary = profile('jev', { enableCircuitBreaker: true, circuitBreakerFailureThreshold: 1 });
   const calls: string[] = [];
@@ -732,7 +775,7 @@ test('HTTP fallback is ordered, counts unhealthy candidates once, and skips susp
   assert.match(second.classifierProfileSummary!.value as string, /suspended/);
 });
 
-test('Authentication, invalid response and unsupported image failures do not suspend a healthy route', async () => {
+void test('Authentication, invalid response and unsupported image failures do not suspend a healthy route', async () => {
   for (const mode of ['auth', 'validation', 'image']) {
     const store = new InMemoryRivetLLMProfileHealthStore();
     const primary = profile('jev', { enableCircuitBreaker: true, circuitBreakerFailureThreshold: 1 });
@@ -757,7 +800,7 @@ test('Authentication, invalid response and unsupported image failures do not sus
   }
 });
 
-test('Health-service failures are fail-open and never expose service diagnostics in classifier attempts', async () => {
+void test('Health-service failures are fail-open and never expose service diagnostics in classifier attempts', async () => {
   for (const operation of ['begin', 'finish'] as const) {
     const store = new InMemoryRivetLLMProfileHealthStore();
     store[operation] = () => {
@@ -776,7 +819,7 @@ test('Health-service failures are fail-open and never expose service diagnostics
   }
 });
 
-test('Health completion cannot turn an expired overall deadline into successful node evidence', async () => {
+void test('Health completion cannot turn an expired overall deadline into successful node evidence', async () => {
   let now = originalNow();
   Date.now = () => now;
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -804,7 +847,7 @@ test('Health completion cannot turn an expired overall deadline into successful 
   assert.match(result.classifierProfileSummary!.value as string, /2\..*not reached/);
 });
 
-test('Fully suspended classifier chains do not call providers and concurrent recovery admits one probe', async () => {
+void test('Fully suspended classifier chains do not call providers and concurrent recovery admits one probe', async () => {
   let now = originalNow();
   Date.now = () => now;
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -853,7 +896,7 @@ test('Fully suspended classifier chains do not call providers and concurrent rec
   assert.equal(store.list()[0]!.state, 'closed');
 });
 
-test('A deadline exhausted during rejected-request cleanup cannot be suppressed as an HTTP-only failure', async () => {
+void test('A deadline exhausted during rejected-request cleanup cannot be suppressed as an HTTP-only failure', async () => {
   let now = originalNow();
   Date.now = () => now;
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -888,7 +931,7 @@ test('A deadline exhausted during rejected-request cleanup cannot be suppressed 
   assert.equal(store.list()[0]!.failureCount, 0);
 });
 
-test('Cancellation during health completion never returns outputs or reaches another profile', async () => {
+void test('Cancellation during health completion never returns outputs or reaches another profile', async () => {
   for (const status of [200, 401]) {
     const controller = new AbortController();
     const stop = new Error('Cancelled during cleanup');
@@ -918,7 +961,7 @@ test('Cancellation during health completion never returns outputs or reaches ano
   }
 });
 
-test('A health permit arriving after cancellation is released without making a provider call', async () => {
+void test('A health permit arriving after cancellation is released without making a provider call', async () => {
   const controller = new AbortController();
   const store = new InMemoryRivetLLMProfileHealthStore();
   let release!: () => void;
@@ -972,7 +1015,7 @@ test('A health permit arriving after cancellation is released without making a p
   assert.equal(store.list()[0]!.failureCount, 0);
 });
 
-test('Shared malformed questions fail before health/HTTP, and evidence is snapshotted across fallback', async () => {
+void test('Shared malformed questions fail before health/HTTP, and evidence is snapshotted across fallback', async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
@@ -1006,7 +1049,7 @@ test('Shared malformed questions fail before health/HTTP, and evidence is snapsh
   });
 });
 
-test('Interrupted response receipt advances fallback and suspends the route, unlike malformed JSON', async () => {
+void test('Interrupted response receipt advances fallback and suspends the route, unlike malformed JSON', async () => {
   const store = new InMemoryRivetLLMProfileHealthStore();
   const primary = profile('jev', { enableCircuitBreaker: true, circuitBreakerFailureThreshold: 1 });
   globalThis.fetch = async (url) =>
@@ -1034,7 +1077,7 @@ test('Interrupted response receipt advances fallback and suspends the route, unl
   assert.match(result.classifierProfileSummary!.value as string, /2\..*succeeded/);
 });
 
-test('Classifier response deadlines are inert without enabled hosted suspension', async () => {
+void test('Classifier response deadlines are inert without enabled hosted suspension', async () => {
   let now = originalNow();
   Date.now = () => now;
   for (const enableCircuitBreaker of [false, true]) {
@@ -1056,7 +1099,7 @@ test('Classifier response deadlines are inert without enabled hosted suspension'
   }
 });
 
-test('Evaluate overall deadline still bounds runs with suspension disabled', async () => {
+void test('Evaluate overall deadline still bounds runs with suspension disabled', async () => {
   globalThis.fetch = async () => new Promise<Response>(() => {});
   const result = await evaluate(
     [profile('jev', { enableCircuitBreaker: false, responseTimeoutMs: 1 })],
@@ -1070,7 +1113,7 @@ test('Evaluate overall deadline still bounds runs with suspension disabled', asy
   );
 });
 
-test('Enabled hosted profile timeout advances fallback, but cancellation is never caught or retried', async () => {
+void test('Enabled hosted profile timeout advances fallback, but cancellation is never caught or retried', async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
@@ -1105,7 +1148,7 @@ test('Enabled hosted profile timeout advances fallback, but cancellation is neve
   assert.equal(calls, 1);
 });
 
-test('Exhausted chain keeps diagnostic evidence when caught without exposing credentials', async () => {
+void test('Exhausted chain keeps diagnostic evidence when caught without exposing credentials', async () => {
   globalThis.fetch = async () => new Response('', { status: 401 });
   const result = await evaluate([profile('jev'), profile('liquid')], context(), {}, { catchRequestFailed: true });
   assert.equal(result.runFailed!.value, true);
@@ -1115,7 +1158,7 @@ test('Exhausted chain keeps diagnostic evidence when caught without exposing cre
   assert.ok(!JSON.stringify(result).includes('private-key'));
 });
 
-test('Disabling HTTP failures never suppresses mixed profile-chain failures via the final cause', async () => {
+void test('Disabling HTTP failures never suppresses mixed profile-chain failures via the final cause', async () => {
   globalThis.fetch = async () => new Response('', { status: 401 });
   const unavailable = { ...profile('jev'), credential: {} };
   for (const profiles of [
@@ -1141,7 +1184,7 @@ test('Disabling HTTP failures never suppresses mixed profile-chain failures via 
   );
 });
 
-test('Profile snapshotting obeys preparation cancellation/deadlines without invoking authored hooks', () => {
+void test('Profile snapshotting obeys preparation cancellation/deadlines without invoking authored hooks', () => {
   const stop = new Error('Preparation cancelled');
   let checks = 0;
   assert.throws(
@@ -1170,7 +1213,7 @@ test('Profile snapshotting obeys preparation cancellation/deadlines without invo
   assert.equal(detached!.credential.value, 'private-key');
 });
 
-test('Profile normalization rejects malformed/cyclic/sparse chains and keeps family/identity stable', () => {
+void test('Profile normalization rejects malformed/cyclic/sparse chains and keeps family/identity stable', () => {
   for (const value of [
     [],
     Array(129).fill(profile()),
@@ -1205,7 +1248,7 @@ test('Profile normalization rejects malformed/cyclic/sparse chains and keeps fam
   assert.ok(!JSON.stringify(identity).includes('private-key'));
 });
 
-test('Profile summaries use terminal execution outcomes, not discarded retries or health updates', () => {
+void test('Profile summaries use terminal execution outcomes, not discarded retries or health updates', () => {
   const base = { provider: 'jev', model: 'jev-latest', roundIndex: 0, profileIndex: 0 };
   assert.match(
     classifierProfileSummary(
@@ -1233,7 +1276,7 @@ test('Profile summaries use terminal execution outcomes, not discarded retries o
 
 for (const variant of ['authored', 'saved', 'prefab', 'bundle', 'cross-project'])
   for (const split of [false, true])
-    test(`Real Profile → Array → Evaluate preserves the chain (${variant}, split=${split})`, async () => {
+    void test(`Real Profile → Array → Evaluate preserves the chain (${variant}, split=${split})`, async () => {
       const primary = ClassifierProfileNodeImpl.create();
       primary.data = { provider: 'jev', apiKeySource: 'input' }; // deliberately unavailable
       const secondary = ClassifierProfileNodeImpl.create();
@@ -1354,7 +1397,7 @@ for (const variant of ['authored', 'saved', 'prefab', 'bundle', 'cross-project']
       assert.equal(request.model, 'gpt-6-luna');
     });
 
-test('Attempt failure kinds distinguish credentials, capabilities, authentication, parsing and validation', async () => {
+void test('Attempt failure kinds distinguish credentials, capabilities, authentication, parsing and validation', async () => {
   const cases = [
     { kind: 'configuration', candidate: { ...profile(), credential: {} }, response: () => reply('jev') },
     { kind: 'capability', candidate: profile(), executor: 'browser', response: () => reply('jev') },

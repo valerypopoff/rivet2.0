@@ -33,6 +33,7 @@ export * from './native/NativeApi.js';
 export * from './native/BrowserNativeApi.js';
 export * from './model/ProcessContext.js';
 export * from './model/AgentResponseTrace.js';
+export * from './model/AgentResponseTracePresentation.js';
 export * from './model/DebuggerTransportSentinel.js';
 export * from './model/ProjectReferenceLoader.js';
 export * from './model/SubgraphProjectTarget.js';

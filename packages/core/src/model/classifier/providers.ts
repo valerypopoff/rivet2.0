@@ -114,6 +114,8 @@ export type ClassifierProviderEvaluateArgs = {
     kind?: ClassifierProviderError['kind'];
     error?: string;
     classifierUsage?: ClassifierAttemptUsage;
+    /** Physical request through response validation, excluding retry waits. */
+    durationMs?: number;
   }) => void;
   /** Opt-in node diagnostics, separate from privacy-bounded attempt events. */
   onRequestBody?: (getBody: () => Record<string, unknown>) => void;
@@ -516,6 +518,7 @@ async function callClassifierHttp(
   }
   let requestBody: Record<string, unknown> | undefined;
   let attemptIndex = -1;
+  let attemptStartedAt = 0;
   const report = (
     outcome: 'success' | 'failure' | 'aborted',
     status?: number,
@@ -526,6 +529,7 @@ async function callClassifierHttp(
     try {
       args.onAttempt?.({
         attemptIndex,
+        durationMs: Math.max(0, Date.now() - attemptStartedAt),
         outcome,
         status,
         kind,
@@ -541,6 +545,7 @@ async function callClassifierHttp(
   for (;;) {
     operation.check();
     attemptIndex++;
+    attemptStartedAt = Date.now();
     if (args.onRequestBody) {
       try {
         args.onRequestBody(() => (requestBody ??= JSON.parse(requestJson) as Record<string, unknown>));

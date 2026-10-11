@@ -603,7 +603,7 @@ void describe('createRivetWebAppHandler', () => {
     assert.match(inspectorText, /Execution/);
     assert.match(inspectorText, /Recovery behavior/);
     assert.match(inspectorText, /Provider request retries2/);
-    assert.match(inspectorText, /LLM profile fallbacks1/);
+    assert.match(inspectorText, /Profile fallbacks1/);
     assert.match(inspectorText, /Usage and cost/);
     assert.match(inspectorText, /Timing/);
     assert.match(inspectorText, /Profile: Primary DeepSeek · custom · deepseek-v4-flash/);
@@ -611,6 +611,159 @@ void describe('createRivetWebAppHandler', () => {
     assert.doesNotMatch(inspectorText, /Open graph at this run/);
     dom.window.document.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector-close')?.click();
     dom.window.close();
+  });
+
+  void it('renders classifier requests and health decisions in the hosted inspector, including legacy traces', async () => {
+    for (const scope of ['response', 'classifier-invocation']) {
+      const project = makeProject();
+      const uiGraph = project.uiGraphs?.['ui-graph' as UiGraphId]!;
+      const chatId = 'chat' as UiComponentId;
+      uiGraph.components = [{ action: { type: 'runGraph' }, allowResponseInspection: true, id: chatId, type: 'chat' }];
+      const base = {
+        family: 'classifier',
+        nodeId: 'evaluate',
+        processId: 'process',
+        roundIndex: 0,
+        provider: 'perplexity',
+        model: 'decider',
+      };
+      const trace = {
+        schemaVersion: 1,
+        traceId: 'classifier-trace',
+        scope,
+        rootRunId: 'classifier-trace',
+        graphRunId: 'graph-run',
+        graphId: 'main-graph',
+        status: 'completed',
+        durationMs: 500,
+        summary: {
+          modelCallCount: 0,
+          toolCallCount: 0,
+          retryCount: 1,
+          fallbackCount: 1,
+          promptTokens: 1000,
+          completionTokens: 8,
+          knownCostUsd: 0.00004,
+          costStatus: 'partial',
+          // Older v1 traces have no classifierRequestCount; infer it from physical attempts.
+        },
+        modelCalls: [],
+        toolCalls: [],
+        omittedModelCallCount: 0,
+        omittedToolCallCount: 0,
+        omittedProfileAttemptCount: 1,
+        profileAttempts: [
+          {
+            ...base,
+            eventId: 'gate',
+            profileIndex: 0,
+            profileName: 'Suspended classifier',
+            stage: 'health-gate',
+            outcome: 'skipped',
+            healthState: 'open',
+            healthDisposition: 'deny',
+          },
+          {
+            ...base,
+            eventId: 'failure',
+            profileIndex: 1,
+            profileName: 'Backup classifier',
+            stage: 'request',
+            outcome: 'failure',
+            attemptIndex: 0,
+            status: 401,
+            durationMs: 250,
+            failureKind: 'authentication',
+            error: 'Authentication failed.',
+          },
+          {
+            ...base,
+            eventId: 'success',
+            profileIndex: 1,
+            profileName: 'Backup classifier',
+            stage: 'request',
+            outcome: 'success',
+            attemptIndex: 1,
+            status: 200,
+            durationMs: 100,
+            classifierUsage: { inputTokens: 1000, outputTokens: 8, estimatedCostUsd: 0.00004 },
+          },
+          {
+            ...base,
+            eventId: 'unreached',
+            profileIndex: 2,
+            profileName: 'Unused classifier',
+            stage: 'configuration',
+            outcome: 'skipped',
+            skipReason: 'unreached',
+          },
+        ],
+      };
+      const dom = new JSDOM(renderRivetWebAppHtml(uiGraph, { actionPath: '/app/actions/run' }), {
+        beforeParse(window) {
+          window.localStorage.setItem(
+            'rivet-web-app-chat-state:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph',
+            JSON.stringify({
+              [getUiGraphChatMessagesStateKey(chatId)]: [
+                { role: 'assistant', content: 'Answer', responseTraceId: trace.traceId },
+              ],
+            }),
+          );
+          window.localStorage.setItem(
+            'rivet-web-app-response-traces:v1:https%3A%2F%2Fexample.test:%2Fapp:ui-graph:chat',
+            JSON.stringify([trace]),
+          );
+        },
+        runScripts: 'dangerously',
+        url: 'https://example.test/app',
+      });
+      try {
+        await waitForWebAppMount(dom);
+        dom.window.document
+          .querySelector<HTMLElement>('.rivet-web-app-chat-message')
+          ?.dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        const inspect = [
+          ...dom.window.document.querySelectorAll<HTMLButtonElement>('.rivet-web-app-chat-message-context-menu button'),
+        ].find((button) => button.textContent === 'Inspect response');
+        assert.ok(inspect);
+        inspect.click();
+        await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+        const inspector = dom.window.document.querySelector('.rivet-agent-response-inspector')!;
+        const text = inspector.textContent!;
+        assert.match(text, /Classifier requests2 \(retained evidence only\)/);
+        assert.match(text, /Profile fallbacks1/);
+        assert.match(text, /Provider request retries1/);
+        assert.match(text, /\$0\.000040 \(partial\)/);
+        const sections = [...inspector.querySelectorAll('details')];
+        const requests = sections.find(
+          (section) => section.querySelector('summary')?.textContent === 'Classifier requests',
+        )!;
+        const decisions = sections.find(
+          (section) => section.querySelector('summary')?.textContent === 'Profile attempts',
+        )!;
+        assert.equal(requests.querySelectorAll('article').length, 2);
+        assert.match(requests.textContent!, /Profile: Backup classifier/);
+        assert.match(requests.textContent!, /HTTP 401 \/ 0\.25 sec \/ usage not reported \/ cost unknown/);
+        assert.match(requests.textContent!, /Authentication failed/);
+        assert.match(requests.textContent!, /1000 input \/ 8 output tokens/);
+        assert.doesNotMatch(requests.textContent!, /round|suspended|not reached/);
+        assert.equal(decisions.querySelectorAll('article').length, 2);
+        assert.match(decisions.textContent!, /Profile: Suspended classifier/);
+        assert.match(decisions.textContent!, /profile suspended; skipped/);
+        assert.match(decisions.textContent!, /Profile: Unused classifier/);
+        assert.match(decisions.textContent!, /not reached/);
+        assert.match(text, /1 additional profile-attempt rows \(requests or decisions\) omitted/);
+        assert.doesNotMatch(decisions.textContent!, /omitted/);
+        assert.doesNotMatch(requests.textContent!, /omitted/);
+        assert.doesNotMatch(decisions.textContent!, /Backup classifier/);
+        if (scope === 'classifier-invocation')
+          assert.doesNotMatch(text, /Model calls|Tool calls|Cached input tokens|Reasoning tokens/);
+        dom.window.document.querySelector<HTMLButtonElement>('.rivet-agent-response-inspector-close')!.click();
+        assert.equal(dom.window.document.querySelector('.rivet-agent-response-inspector'), null);
+      } finally {
+        dom.window.close();
+      }
+    }
   });
 
   void it('keeps hosted Chat history in place for menu and pin presentation changes', async () => {

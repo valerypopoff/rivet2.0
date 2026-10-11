@@ -769,6 +769,7 @@ test('inactive project snapshot reducer upserts identified model, profile, and t
         attemptIndex: 0,
         callId: 'model-call',
         durationMs,
+        ...(durationMs === 10 ? { normalizedUsage: { promptTokens: 20, completionTokens: 2 } } : {}),
         execution,
         model: 'gpt-test',
         nodeId,
@@ -842,6 +843,10 @@ test('inactive project snapshot reducer upserts identified model, profile, and t
   assert.equal(events?.length, 3);
   assert.equal(events?.[0]?.type, 'llm-call-finished');
   assert.equal(events?.[0]?.durationMs, 12);
+  assert.deepEqual(
+    (events?.[0] as Extract<AgentTraceEvent, { type: 'llm-call-finished' }> | undefined)?.normalizedUsage,
+    { promptTokens: 20, completionTokens: 2 },
+  );
   assert.equal(
     (events?.[0] as Extract<AgentTraceEvent, { type: 'llm-call-finished' }> | undefined)?.customProviderApi,
     'responses',

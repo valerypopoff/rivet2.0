@@ -59,6 +59,29 @@ Calculated `totalCost` is added only when Usage contains safe, non-negative inte
 
 Pricing must also be known for both the requested and returned models. Recognized Jev IDs are `jev-latest`, `jev-preview` and `jev-1.13.0`; Liquid pricing is known for paid `d1`. Unknown models, including `d1:free`, do not inherit a paid default rate and are not assumed free. Their Answers and Usage remain available, but Cost is excluded and Usage.totalCost is omitted.
 
+## Inspecting a run
+
+Hover the node's output and click the **eye** (**Inspect response**) to open the
+same summary used by LLM Chat. It is also available in fullscreen output and
+from **Run activity**. No optional diagnostic outputs need to be enabled.
+
+The summary shows status, duration, classifier requests, retries, profile
+fallbacks, reported tokens and estimated cost. Each request identifies its
+profile, provider/model, HTTP status, timing and any failure reason. Separate
+profile decisions explain suspension, recovery and profiles not reached.
+Missing usage or pricing is unknown, not free. Older recordings without this
+metadata show **Trace unavailable**.
+
+Run Activity includes classifiers under **Models and tools**. Search by profile
+name, provider or model; expand the row to see attempts, or choose **Inspect
+response**. Its totals include available failed-request usage and identify
+incomplete retained evidence. Request/response bodies remain in the existing
+opt-in output diagnostics, not in these metadata summaries.
+
+The Run Activity inspector updates while that invocation runs. Limited attempt
+details are identified explicitly; inferred request counts from older recordings
+say **retained evidence only**, not a complete total.
+
 ## Resource limits and cost accounting
 
 Rivet limits each evaluation to 32 MiB of expanded request content, 8 MiB of response data, JSON nesting depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages and 4,096 content parts. Native images count at their base64-encoded size. Stricter provider limits still apply. Oversized input is rejected, not truncated or split; reduce the evidence upstream. Repeated references count each time they would appear in JSON.

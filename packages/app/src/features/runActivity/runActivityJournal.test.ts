@@ -333,6 +333,57 @@ test('retains circuit-breaker decisions on failed LLM invocations and deduplicat
   assert.equal(invocation.omittedProfileAttemptCount, 0);
 });
 
+test('LLM legacy redelivery preserves detached receipts and sequence without incrementing counts', () => {
+  let journal = createRunActivityJournal();
+  const call: ProcessEventMessageMap['llmCallFinished'] = {
+    execution,
+    nodeId,
+    processId,
+    callId: 'call' as never,
+    attemptIndex: 0,
+    provider: 'openai',
+    model: 'gpt-test',
+    profileName: 'Primary route',
+    durationMs: 250,
+    outcome: 'success',
+    normalizedUsage: { promptTokens: 20, completionTokens: 2 },
+    pricing: { status: 'known', costUsd: 0.01 },
+  };
+  journal = apply(journal, 'llmCallFinished', call, 1);
+  const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
+  const first = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.modelCalls[0]!;
+  assert.deepEqual(first.pricing, { status: 'known', costUsd: 0.01 });
+  // The metadata journal must not keep mutable provider receipt objects.
+  call.normalizedUsage!.promptTokens = 99;
+  call.pricing.costUsd = 0.9;
+  journal = apply(
+    journal,
+    'llmCallFinished',
+    {
+      execution,
+      nodeId,
+      processId,
+      callId: call.callId,
+      attemptIndex: 0,
+      provider: 'openai',
+      model: 'gpt-test',
+      outcome: 'success',
+      pricing: { status: 'known', costUsd: 0.01 },
+    },
+    2,
+  );
+  const invocation = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!;
+  assert.equal(invocation.modelCallCount, 1);
+  assert.equal(invocation.modelCalls.length, 1);
+  assert.equal(invocation.omittedModelCallCount, 0);
+  const retained = invocation.modelCalls[0]!;
+  assert.equal(retained.sequence, first.sequence);
+  assert.equal(retained.profileName, 'Primary route');
+  assert.equal(retained.durationMs, 250);
+  assert.deepEqual(retained.usage, { promptTokens: 20, completionTokens: 2 });
+  assert.deepEqual(retained.pricing, { status: 'known', costUsd: 0.01 });
+});
+
 test('preserves classifier family and response timeout through replay', () => {
   let journal = createRunActivityJournal();
   journal = apply(journal, 'graphStart', { graph, inputs: {}, execution }, 1);
@@ -342,9 +393,12 @@ test('preserves classifier family and response timeout through replay', () => {
     'llmProfileAttempt',
     {
       eventId: 'classifier-timeout',
+      durationMs: 500,
       family: 'classifier',
       roundIndex: 0,
       profileIndex: 0,
+      profileName: 'Fast classifier',
+      attemptIndex: 0,
       nodeId,
       processId,
       provider: 'liquid',
@@ -358,9 +412,31 @@ test('preserves classifier family and response timeout through replay', () => {
     },
     3,
   );
+  journal = apply(
+    journal,
+    'llmProfileAttempt',
+    {
+      eventId: 'classifier-timeout',
+      roundIndex: 0,
+      nodeId,
+      processId,
+      provider: 'liquid',
+      model: 'd1',
+      stage: 'request',
+      outcome: 'failure',
+      execution,
+    },
+    4,
+  );
   const key = createRunActivityNodeKey({ rootRunId, graphRunId, nodeId, processId });
-  const [attempt] = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.profileAttempts!;
+  const attempts = journal.rootsById[rootRunId]!.nodeInvocationsByKey[key]!.profileAttempts!;
+  assert.equal(attempts.length, 1);
+  const [attempt] = attempts;
+  assert.equal(attempt?.profileName, 'Fast classifier');
+  assert.equal(attempt?.attemptIndex, 0);
+  assert.equal(attempt?.sequence, 3);
   assert.equal(attempt?.family, 'classifier');
+  assert.equal(attempt?.durationMs, 500);
   assert.equal(attempt?.failureKind, 'timeout');
   assert.deepEqual(attempt?.classifierUsage, { inputTokens: 1000, outputTokens: 0, estimatedCostUsd: 0.00004 });
   assert.equal(attempt?.timeoutKind, 'response');

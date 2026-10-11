@@ -1,4 +1,5 @@
-import { getCustomProviderApiContract, type AgentLLMProfileAttemptTrace } from '@valerypopoff/rivet2-core';
+import { getCustomProviderApiContract } from './chat-v2/customProviderApi.js';
+import type { AgentLLMProfileAttemptTrace, AgentResponseTrace } from './AgentResponseTrace.js';
 
 export type AgentProfileAttemptInspectorRow = Readonly<{
   context: string;
@@ -22,13 +23,23 @@ export function buildAgentProfileAttemptInspectorRows(
       attempt.failureKind?.replaceAll('-', ' ') ?? describeStage(attempt.stage),
       describeOutcome(attempt),
       attempt.profileIndex == null ? undefined : `profile ${attempt.profileIndex + 1}`,
-      `round ${attempt.roundIndex + 1}`,
+      attempt.family === 'classifier' ? undefined : `round ${attempt.roundIndex + 1}`,
       attempt.attemptIndex == null ? undefined : `attempt ${attempt.attemptIndex + 1}`,
+      attempt.status == null ? undefined : `HTTP ${attempt.status}`,
+      attempt.durationMs == null
+        ? isClassifierRequest(attempt)
+          ? 'duration unavailable'
+          : undefined
+        : `${(attempt.durationMs / 1000).toFixed(2)} sec`,
       attempt.classifierUsage == null
-        ? undefined
+        ? isClassifierRequest(attempt)
+          ? 'usage not reported'
+          : undefined
         : `${attempt.classifierUsage.inputTokens} input / ${attempt.classifierUsage.outputTokens} output tokens`,
       attempt.classifierUsage == null
-        ? undefined
+        ? isClassifierRequest(attempt)
+          ? 'cost unknown'
+          : undefined
         : attempt.classifierUsage.estimatedCostUsd == null
           ? 'cost unknown'
           : `estimated $${attempt.classifierUsage.estimatedCostUsd.toPrecision(4)}`,
@@ -37,6 +48,36 @@ export function buildAgentProfileAttemptInspectorRows(
       .join(' / '),
     ...(attempt.error == null ? {} : { error: attempt.error }),
   }));
+}
+
+/** Physical classifier requests share profile evidence, not LLM chat-round semantics. */
+export function isClassifierRequest(attempt: AgentLLMProfileAttemptTrace): boolean {
+  return attempt.family === 'classifier' && attempt.attemptIndex != null;
+}
+
+export function getClassifierRequestCount(trace: AgentResponseTrace): number | undefined {
+  if (trace.summary.classifierRequestCount != null) return trace.summary.classifierRequestCount;
+  const attempts = trace.profileAttempts?.filter((attempt) => attempt.family === 'classifier');
+  if (trace.scope !== 'classifier-invocation' && !attempts?.length) return undefined;
+  // Older schema-v1 hosts recorded attempts before adding a dedicated counter.
+  return attempts?.filter(isClassifierRequest).length ?? 0;
+}
+
+/** Older trace counters inferred from capped rows are lower bounds, not exact totals. */
+export function formatClassifierRequestCount(trace: AgentResponseTrace): string | undefined {
+  const count = getClassifierRequestCount(trace);
+  if (count == null) return undefined;
+  return trace.summary.classifierRequestCount == null && (trace.omittedProfileAttemptCount ?? 0) > 0
+    ? `${count} (retained evidence only)`
+    : String(count);
+}
+
+/** One shared cap covers both physical classifier requests and profile decisions. */
+export function getProfileAttemptOmissionNotice(trace: AgentResponseTrace): string | undefined {
+  const omitted = trace.omittedProfileAttemptCount ?? 0;
+  return omitted > 0
+    ? `${omitted} additional profile-attempt rows (requests or decisions) omitted by the trace limit.`
+    : undefined;
 }
 
 function formatProvider(attempt: Pick<AgentLLMProfileAttemptTrace, 'provider' | 'customProviderApi'>): string {
