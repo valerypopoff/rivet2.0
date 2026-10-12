@@ -12,6 +12,6 @@
   },
   "version": "1.25.0",
   "scripts": {
-    "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check state.mjs && node --check sync.mjs"
+    "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check legacy-restore-participant.mjs && node --check state.mjs && node --check sync.mjs"
   }
 }

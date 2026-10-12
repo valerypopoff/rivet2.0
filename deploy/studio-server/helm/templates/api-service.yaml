@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/component: api
 spec:
   type: ClusterIP
+  {{- if eq .Values.deploymentProfile "single-machine" }}
+  publishNotReadyAddresses: true
+  {{- end }}
   selector:
     {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
   ports:

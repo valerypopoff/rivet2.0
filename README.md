@@ -50,8 +50,8 @@ Rivet 2 is organized as a Yarn workspace monorepo:
 | `packages/studio-server-bootstrap` | Studio Server API/executor process bootstrap.                                                                                                               |
 | `packages/docs`                    | Docusaurus documentation site.                                                                                                                              |
 
-The Studio Server packages are private Yarn workspaces. Docker images, Compose
-configuration, the Helm chart, and deployment scripts live in
+The Studio Server packages are private Yarn workspaces. Container images,
+the Helm chart, migration fixtures, and deployment scripts live in
 [`deploy/studio-server/`](deploy/studio-server/README.md).
 
 The repo also includes `developer-docs/`, which documents current architecture
@@ -88,24 +88,27 @@ The root `dev` script starts the Rivet app workspace and opens the Vite/Tauri de
 Studio Server is the self-hosted browser editor and workflow-serving platform.
 It includes project/folder management, endpoint and web-app publication, run
 recordings and replay, Evaluations, remote debugging, and runtime libraries.
-It supports local files with SQLite metadata or S3 with managed PostgreSQL.
+Its supported storage is PostgreSQL and S3-compatible storage. Docker Compose and
+Kubernetes deploy the same application. Local storage uses PostgreSQL/MinIO; external storage uses operator-provided
+services. Desktop and standalone Node graph execution are unchanged.
 
 Use the same repo-root Yarn installation as the desktop app. Server commands are
 namespaced separately from `yarn dev`, which starts the desktop app:
 
-| Command                          | Purpose                                                                                                      |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `yarn studio-server:dev`         | Start the Docker-backed development stack.                                                                   |
-| `yarn studio-server:dev:tunnel`  | Start development with watched frontend bundles for a VS Code tunnel; uses full-page refresh instead of HMR. |
-| `yarn studio-server:build`       | Build Studio Server and its shared runtime dependencies.                                                     |
-| `yarn studio-server:prod`        | Start using published production images.                                                                     |
-| `yarn studio-server:prod:custom` | Build and start production images from this checkout.                                                        |
-| `yarn studio-server:staging`     | Deploy verified staging images on an existing VM stack, preserving its data mounts.                          |
+| Command                                                          | Purpose                                                                                  |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `yarn studio-server:dev:local-storage`                           | Build and start Docker with private PostgreSQL/MinIO, without Kubernetes.                |
+| `yarn studio-server:dev:external-storage`                        | Build and start Docker using external PostgreSQL/S3 from `.env`.                         |
+| `yarn studio-server:staging:local-storage` / `:external-storage` | Stage immutable candidate images with installation confirmation.                         |
+| `yarn studio-server:prod:local-storage` / `:external-storage`    | Deploy promoted immutable images with installation confirmation.                         |
+| `yarn studio-server:build`                                       | Build Studio Server and its shared runtime dependencies.                                 |
+| `yarn studio-server:kubernetes:release`                          | Install/upgrade a single-machine or cluster deployment from a promoted release manifest. |
 
-Docker starts require Docker Compose and the appropriate local configuration;
-follow the [deployment and configuration guide](deploy/studio-server/README.md)
-before starting a stack. There is no bare `prod` command. Staging has additional
-checkout, image, and existing-stack checks described in that guide.
+Single-machine deployment needs Docker/Compose and private shared `.env` configuration;
+follow [Supported Server Stack](developer-docs/studio-server/server-stack.md).
+Production requires installation identity and a promoted
+manifest. Older Compose installations must export/transfer with their previous
+release first; changing launch commands does not migrate their data.
 
 For code ownership and local verification, start with
 [Repository Structure](developer-docs/studio-server/repo-structure.md) and

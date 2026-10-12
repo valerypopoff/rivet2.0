@@ -361,7 +361,7 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
     if (process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated') return undefined;
     if (process.env.RIVET_DEPLOYMENT_STORAGE_SEED_MISSING !== '1') {
       throw new Error(
-        'The authoritative deployment-storage settings row is missing. Run the Kubernetes migration Job before serving.',
+        'The authoritative deployment-storage settings row is missing. Run the deployment migration task before serving.',
       );
     }
     return readDeploymentStorageBootstrapSettings();

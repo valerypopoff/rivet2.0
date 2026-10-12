@@ -112,6 +112,9 @@ function sentinel(env, config, { create = false, bindingRoot = config.root } = {
   }
 }
 export function loadUiUpgradeEnvironment(env) {
+  // Managed deployments have no local-storage upgrade authority. Do not even
+  // synthesize its enable flag: it can be mistaken for a selected legacy mode.
+  if (env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') return env;
   const config = configuration(env);
   if (config && !config.value) {
     const binding = readManualBinding(config.volume);

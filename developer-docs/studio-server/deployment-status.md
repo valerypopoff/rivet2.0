@@ -9,6 +9,11 @@ Code-node packages.
 
 ### Single-host deployment
 
+This is historical compatibility behavior only. Supported installations now use
+managed roles under Docker Compose or Kubernetes. Their topology value
+is `replicated` because roles are separate; on one machine it does **not** imply
+redundant nodes, storage or automatic failover. See [Supported Server Stack](./server-stack.md).
+
 The default is `RIVET_DEPLOYMENT_TOPOLOGY=single-host`. It is the Docker and
 VM shape: one combined API process serves the editor, dashboard, and published
 workflow endpoints. The page states plainly that there is no second Rivet API
@@ -17,8 +22,8 @@ PostgreSQL or object storage for a managed-storage rehearsal.
 
 ### Replicated deployment
 
-The Helm chart injects `RIVET_DEPLOYMENT_TOPOLOGY=replicated` into every API
-workload. The page then shows:
+Both managed launchers inject `RIVET_DEPLOYMENT_TOPOLOGY=replicated` into every
+API workload. The page then shows:
 
 - the role of the API process serving the page (`control`, `execution`, or
   `evaluation`);
@@ -68,8 +73,8 @@ hidden until someone opens this page.
 Valid topology values are:
 
 ```text
-single-host  # default for Docker/VM operation
-replicated   # injected by the Helm API workloads
+single-host  # historical compatibility/fixture default, not supported serving
+replicated   # injected by managed Docker and Helm API workloads
 ```
 
 Changing the environment variable is a deployment operation, not a Settings

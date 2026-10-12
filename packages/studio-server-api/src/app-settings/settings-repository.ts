@@ -141,6 +141,19 @@ function getLegacySettingsPath(settingsPath: string): string | null {
 }
 
 export class VersionedSettingsRepository<T> {
+  /** Control-only restore bootstrap. No persistence, subscriptions or defaults are seeded. */
+  installRestoreSnapshot(stored: Record<string, unknown>, operationId: string): void {
+    const settingsPath = this.descriptor.getPath();
+    this.#cache.set(settingsPath, {
+      path: settingsPath,
+      revision: `restore:${operationId}`,
+      value: freezeValue(
+        this.descriptor.parseStored(
+          parseStoredObject(JSON.stringify(stored), this.descriptor as SettingsRepositoryDescriptor<unknown>),
+        ),
+      ),
+    });
+  }
   readonly #cache = new Map<string, SettingsSnapshot<T>>();
   readonly #errors = new Map<string, unknown>();
   readonly #fileSignatures = new Map<string, string>();
@@ -584,6 +597,34 @@ export async function initializeAppSettingsRepositories(): Promise<void> {
       }
     }, 5_000);
     settingsPollTimer.unref?.();
+  }
+}
+
+export function captureRestoreSettings(): Array<{
+  key: string;
+  schemaVersion: number;
+  value: Record<string, unknown>;
+  sourceHash: null;
+}> {
+  return [...repositories].map((repository) => ({
+    key: repository.descriptor.key,
+    schemaVersion: repository.descriptor.currentVersion,
+    value: {
+      version: repository.descriptor.currentVersion,
+      ...repository.descriptor.serialize(repository.readSync().value),
+    },
+    sourceHash: null,
+  }));
+}
+
+export function installRestoreSettings(
+  rows: readonly { key: string; value: Record<string, unknown> }[],
+  operationId: string,
+): void {
+  for (const repository of repositories) {
+    const row = rows.find((row) => row.key === repository.descriptor.key);
+    if (!row) throw new Error('Restore bootstrap settings are incomplete.');
+    repository.installRestoreSnapshot(row.value, operationId);
   }
 }
 

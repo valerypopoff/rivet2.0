@@ -94,6 +94,8 @@ export async function startBackendSupervisor({
     config.api.RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE = canPrepare ? '1' : '0';
     config.api.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = '1';
   }
+  if (!uiControl && env.RIVET_LEGACY_RESTORE_ENABLED === '1')
+    config.api.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN = controlToken;
   let localMetadataLease;
   if (env.RIVET_LOCAL_METADATA_CONTROL_ROOT) {
     if ((env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') !== 'single-host')
@@ -149,6 +151,8 @@ export async function startBackendSupervisor({
   let finishing = false;
   let exitCode = 0;
   let requestedAction = null;
+  let restoreMaintenance = false;
+  let restoreWarmup = false;
   let shutdownTimer;
   let finish;
   const completed = new Promise((resolve) => {
@@ -159,7 +163,9 @@ export async function startBackendSupervisor({
   async function apiReady() {
     try {
       const response = await fetch(apiReadyUrl, { signal: AbortSignal.timeout(1_500) });
-      await response.body?.cancel();
+      const body = await response.json().catch(() => null);
+      restoreMaintenance = body?.restoreMaintenance === true && env.RIVET_LEGACY_RESTORE_ENABLED === '1';
+      restoreWarmup = restoreMaintenance && body?.restoreWarmup === true;
       return response.status === 200;
     } catch {
       return false;
@@ -180,11 +186,16 @@ export async function startBackendSupervisor({
   }
 
   const health = createServer(async (request, response) => {
-    if (request.url === '/local-upgrade/prepare' || request.url === '/local-upgrade/restart') {
+    if (
+      request.url === '/local-upgrade/prepare' ||
+      request.url === '/local-upgrade/restart' ||
+      request.url === '/legacy-restore/restart'
+    ) {
+      const restoreRestart = request.url === '/legacy-restore/restart' && env.RIVET_LEGACY_RESTORE_ENABLED === '1';
       const supplied = Buffer.from(String(request.headers['x-rivet-supervisor-token'] || ''));
       const expected = Buffer.from(controlToken);
       if (
-        !uiControl ||
+        (!uiControl && !restoreRestart) ||
         request.method !== 'POST' ||
         request.headers.origin ||
         !['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(request.socket.remoteAddress) ||
@@ -208,11 +219,14 @@ export async function startBackendSupervisor({
       response.writeHead(404).end();
       return;
     }
-    const live = !stopping && api != null && !apiDone && (!executor || !executorDone);
+    await apiReady();
+    const live = !stopping && api != null && !apiDone && (restoreMaintenance || !executor || !executorDone);
     const healthy =
       request.url === '/livez'
         ? live && (!executorReady || (await executorListening()))
-        : live && executorReady && (await apiReady()) && (await executorListening());
+        : live &&
+          (await apiReady()) &&
+          ((restoreMaintenance && !restoreWarmup) || (executorReady && (await executorListening())));
     response.writeHead(healthy ? 200 : 503, { 'Cache-Control': 'no-store' }).end();
   });
   try {
@@ -297,6 +311,11 @@ export async function startBackendSupervisor({
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    if (stopping) return;
+    while (!stopping && restoreMaintenance && !restoreWarmup) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await apiReady();
     }
     if (stopping) return;
     executorDone = false;

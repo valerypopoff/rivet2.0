@@ -552,7 +552,8 @@ test('images and local launchers build directly from the monorepo workspace', ()
   assert.match(composeWebDockerfile, /npm install -g serve@14\.2\.6/);
   assert.match(executorDockerfile, /yarn build:runtime/);
   assert.doesNotMatch(executorDockerfile, /build:executor-runtime|rivet-app-executor run build/);
-  assert.match(apiEntrypoint, /exec node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/server\.js/);
+  assert.match(apiEntrypoint, /exec node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/serve\.js/);
+  assert.match(apiEntrypoint, /assertServerDeploymentContract\(\)/);
 
   for (const compose of [prodCompose, devCompose]) {
     assert.match(compose, /context: \.\.\/\.\.\/\.\./);
@@ -708,31 +709,28 @@ test('CI and production launchers publish and run the Studio Server image set fr
       assert.ok(prodCompose.includes(`ghcr.io/valerypopoff/rivet2.0-studio-server/${service}`));
   }
 
-  assert.equal(packageJson.scripts['studio-server:prod'], 'yarn studio-server:prod:prebuilt');
+  assert.equal(packageJson.scripts['studio-server:prod'], 'node deploy/studio-server/scripts/start-server.mjs prod');
+  for (const command of ['prebuilt', 'config', 'services', 'restart', 'custom']) {
+    assert.equal(
+      packageJson.scripts[`studio-server:prod:${command}`],
+      'node deploy/studio-server/scripts/retired-server-launcher.mjs',
+    );
+  }
+  for (const stage of ['dev', 'staging', 'prod']) {
+    for (const storage of ['local-storage', 'external-storage']) {
+      assert.equal(
+        packageJson.scripts[`studio-server:${stage}:${storage}`],
+        `node deploy/studio-server/scripts/container-server.mjs ${stage} ${storage}`,
+      );
+    }
+  }
+  assert.equal(packageJson.scripts['studio-server:dev'], packageJson.scripts['studio-server:dev:local-storage']);
   assert.equal(
-    packageJson.scripts['studio-server:prod:prebuilt'],
-    'node deploy/studio-server/scripts/prod-docker.mjs prebuilt',
+    packageJson.scripts['studio-server:dev:docker'],
+    'node deploy/studio-server/scripts/retired-server-launcher.mjs',
   );
-  assert.equal(
-    packageJson.scripts['studio-server:prod:config'],
-    'node deploy/studio-server/scripts/prod-docker.mjs config',
-  );
-  assert.equal(
-    packageJson.scripts['studio-server:prod:services'],
-    'node deploy/studio-server/scripts/prod-docker.mjs services',
-  );
-  assert.equal(
-    packageJson.scripts['studio-server:prod:restart'],
-    'node deploy/studio-server/scripts/prod-docker.mjs restart',
-  );
-  assert.equal(
-    packageJson.scripts['studio-server:prod:custom'],
-    'node deploy/studio-server/scripts/prod-docker.mjs custom',
-  );
-  assert.equal(packageJson.scripts['studio-server:dev'], 'yarn studio-server:dev:docker');
-  assert.equal(packageJson.scripts['studio-server:dev:docker'], 'node deploy/studio-server/scripts/dev-docker.mjs dev');
-  assert.equal(packageJson.scripts['studio-server:dev:down'], 'yarn studio-server:dev:docker:down');
-  assert.equal(packageJson.scripts['studio-server:dev:recreate'], 'yarn studio-server:dev:docker:recreate');
+  assert.equal(packageJson.scripts['studio-server:dev:down'], `${packageJson.scripts['studio-server:dev']} --stop`);
+  assert.equal(packageJson.scripts['studio-server:dev:recreate'], packageJson.scripts['studio-server:dev']);
   assert.match(prodDockerLauncher, /pull proxy web api/);
   assert.match(prodDockerLauncher, /--no-build --force-recreate --remove-orphans --wait/);
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);

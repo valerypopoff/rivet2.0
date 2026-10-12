@@ -14,6 +14,12 @@ import {
 } from './local-upgrade-ui.mjs';
 
 // test-style: fixture-read: reads only private configuration and bindings generated in owned temporary fixtures.
+test('replicated startup never enables legacy storage upgrade or inspects local control paths', () => {
+  const env = { RIVET_DEPLOYMENT_TOPOLOGY: 'replicated', RIVET_LOCAL_METADATA_UI_ROOT: '/must-not-be-inspected' };
+  assert.equal(loadUiUpgradeEnvironment(env), env);
+  assert.equal(loadUiUpgradeEnvironment(env).RIVET_LOCAL_METADATA_UPGRADE_ENABLED, undefined);
+});
+
 async function fixture(run) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ui-preparation-'));
   const env = {

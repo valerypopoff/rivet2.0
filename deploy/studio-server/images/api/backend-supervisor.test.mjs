@@ -721,3 +721,77 @@ test('combined backend terminates both children on a graceful stop', async () =>
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('managed restore keeps control ready without an executor, warms consumers and protects restart capability', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rivet-restore-supervisor-'));
+  const apiScript = join(dir, 'api.mjs');
+  const executorScript = join(dir, 'executor.mjs');
+  const tokenFile = join(dir, 'token');
+  const warmFile = join(dir, 'warm');
+  const executorMarker = join(dir, 'executor-started');
+  const allocated = await ports();
+  let supervisor;
+  await writeFile(
+    apiScript,
+    `
+    import {createServer} from 'node:http';import {writeFileSync,existsSync} from 'node:fs';
+    writeFileSync(${JSON.stringify(tokenFile)},process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN);
+    const server=createServer((_req,res)=>res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({restoreMaintenance:true,restoreWarmup:existsSync(${JSON.stringify(warmFile)})})));
+    server.listen(Number(process.env.PORT),'127.0.0.1');process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
+  `,
+  );
+  await writeFile(
+    executorScript,
+    `
+    import {createServer} from 'node:net';import {writeFileSync} from 'node:fs';
+    writeFileSync(${JSON.stringify(executorMarker)},'started');
+    const server=createServer(socket=>socket.end());server.listen(Number(process.env.PORT),'127.0.0.1',()=>process.send?.({type:'rivet-executor-ready'}));
+    process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
+  `,
+  );
+  try {
+    supervisor = await startBackendSupervisor({
+      env: { ...environment(allocated), RIVET_LEGACY_RESTORE_ENABLED: '1' },
+      apiCommand: [process.execPath, apiScript],
+      executorCommand: [process.execPath, executorScript],
+      executorCwd: dir,
+      apiStartupTimeoutMs: 5000,
+      shutdownTimeoutMs: 2000,
+    });
+    await waitForReady(allocated.healthPort);
+    await assert.rejects(access(executorMarker), { code: 'ENOENT' });
+    const restart = `http://127.0.0.1:${allocated.healthPort}/legacy-restore/restart`;
+    assert.equal((await fetch(restart, { method: 'POST' })).status, 403);
+    const token = await readFile(tokenFile, 'utf8');
+    assert.equal(
+      (
+        await fetch(restart, {
+          method: 'POST',
+          headers: { 'x-rivet-supervisor-token': token, origin: 'https://foreign.test' },
+        })
+      ).status,
+      403,
+    );
+    await writeFile(warmFile, 'warm');
+    const deadline = Date.now() + 5000;
+    while (true) {
+      try {
+        await access(executorMarker);
+        break;
+      } catch {
+        if (Date.now() > deadline) throw new Error('Executor did not warm');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    await waitForReady(allocated.healthPort);
+    assert.equal(
+      (await fetch(restart, { method: 'POST', headers: { 'x-rivet-supervisor-token': token } })).status,
+      202,
+    );
+    assert.equal(await supervisor.completed, 0);
+    assert.equal(supervisor.requestedAction, 'restart');
+  } finally {
+    if (supervisor) await supervisor.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -202,8 +202,11 @@ export async function migrateAppSettings(options: {
   encryptionKey: string;
   verifyOnly?: boolean;
   sourceCatalog?: SqliteAppSettingsBackend;
+  /** Restore supplies a prevalidated expectation with destination infrastructure preserved. */
+  preparedRows?: readonly SettingsRow[];
 }): Promise<number> {
-  const rows = await collectSourceAppSettings(options.sourceRoot, options.target, options.sourceCatalog);
+  const rows =
+    options.preparedRows ?? (await collectSourceAppSettings(options.sourceRoot, options.target, options.sourceCatalog));
   const pool = new Pool(getManagedDbPoolConfig(options.target));
   const backend = new PostgresAppSettingsBackend({
     poolConfig: getManagedDbPoolConfig(options.target),

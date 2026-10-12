@@ -1,5 +1,92 @@
 # VM local storage to managed PostgreSQL and S3 migration
 
+## Restore a downloaded legacy backup into initialized Kubernetes
+
+For a disposable destination, use **Settings → Storage → Restore legacy backup**.
+This uploads the original gzip tar archive, validates its version-1
+`rivet-browser-legacy-backup` manifest and source fingerprints, requires the exact
+`RESTORE LEGACY BACKUP` confirmation, then pauses, replaces and exactly verifies
+application state through the same importer described below. Do not extract or
+edit the archive on another OS before uploading it.
+The verified working copy normalizes an unambiguous older `active-release`
+runtime layout automatically; the downloaded archive itself remains unchanged.
+
+Projects, datasets, publication paths/history, recordings, supported operational
+state and runtime libraries are restored. UI-defined environment variable names,
+values and Browser permissions are included. Current database/S3 connections,
+deployment keys and administrator access remain destination-owned. Shared OAuth
+settings are preserved when the UI uses OAuth; otherwise source web-app OAuth
+settings are restored. Endpoint
+origins follow the new host; values containing old paths/URLs are not rewritten.
+Imported schedules stay disabled. Native modules and ELF/PE/Mach-O runtime binaries block validation
+before deletion because their ABI is not certified by this archive format.
+An ambiguous or incomplete runtime layout is rejected before replacement.
+Verification and warmup suppress retention. After normal restart the restored
+policies resume against original timestamps; already-expired history can be
+removed by those policies. Do not rewrite timestamps to make an exact import look
+new, or promise that restoration indefinitely pins all backed-up evidence.
+
+The server, not the browser, owns accepted work. Opening the normal UI during
+maintenance automatically displays recovery, including after a restart. The
+dedicated `/?restore-legacy-backup` URL is optional, not a manual step in the
+procedure. Cancellation is allowed during validation, while awaiting confirmation,
+or after a non-destructive failure; confirmed replacement cannot be cancelled.
+After deletion begins, failed operations remain in maintenance and expose
+**Retry restore**. There is no automatic backup or merge of the current
+destination. A failed/interrupted upload is cancelled and uploaded again.
+
+Only referenced installation-owned objects and registered application tables are
+cleared. Unknown objects, unrelated tables and unproven historical S3 versions
+remain untouched. Runtime-library archives are also retained because their fixed
+bucket-global namespace and deterministic migration IDs cannot prove exclusive
+ownership; the runtime catalog/active release still comes from the backup.
+Missing artifacts, unsafe references, external dependencies,
+insufficient permissions or an unconfirmed drain stop the operation. Existing
+offline migration commands still require an empty destination; their checks are
+not weakened to support restore.
+Restore verifies the already-installed workflow schema and bucket; it never runs
+the CLI's fresh-target schema migration from a serving pod. A schema mismatch
+remains an error, requiring the normal deployment migration, not additional
+restore permissions or a bypass of Kubernetes cutover checks.
+Restore is unavailable when Helm's bootstrap storage location differs from the
+authoritative settings; reconcile that configuration first rather than allowing
+restore to adopt a different namespace. The catalog is bound to one Helm
+namespace/release identity. Independent installations must not share its tables.
+
+The chart enables managed restore with `legacyRestore.enabled`, a dedicated
+single-backend scratch PVC (`64Gi` by default) and supervisor-owned restart
+capability. Archives are limited to 10 GiB compressed/30 GiB declared expanded
+content; extraction also checks actual fingerprints and capacity. The embedded
+proxy streams the upload; external gateways must permit that route's upload size
+and timeout. No broad Kubernetes RBAC or per-restore shell commands are needed.
+Runtime-library import and verification create their intermediate tar in that
+owned restore scratch, not the pod's separate 1 GiB `/tmp`. Capacity must cover
+the compressed upload, extracted roots and intermediate runtime tar together.
+Preflight checks a conservative tar/PAX size allowance against remaining scratch
+space before confirmation and again immediately before deletion; archive creation
+rechecks it before writing. An undersized claim is rejected without replacement.
+The existing importer still buffers runtime artifacts; archive limits are not a
+promise that every backup fits a particular pod's memory or runtime-cache budget.
+
+`test:migration-managed` builds the API and additionally starts its compiled
+server/worker, the actual bundled editor executor and the backend supervisor
+against the fixture's disposable PostgreSQL/MinIO. Execution and Evaluation API
+peers use independent restart loops to exercise standby, warmup and normal
+serving. Confirmation must reach completed and healthy normal generations without
+manual finalization or fake drain/restart hooks. This is process-level deployment
+evidence, not proof of Kubernetes scheduling, gateway policy or a user's archive.
+The executor bundle must be built before running the fixture.
+For faster restore-only feedback, use
+`yarn workspace @valerypopoff/rivet-studio-server-api test:legacy-restore-managed`.
+It uses the same disposable source/managed services and supervised restore test;
+the full migration command remains the CI compatibility gate. Failure diagnostics
+log the phase and fixed local failure categories, never arbitrary provider error
+details or archive paths.
+
+Use an isolated actual-data rehearsal before a production restore. Unit/HTTP
+fixtures and a successful synthetic import do not certify arbitrary Code nodes,
+provider durability, native packages or a real Kubernetes rollout.
+
 The operational importer includes legacy `scheduled-runs.sqlite` when present.
 It preserves definitions/history but disables every imported schedule and retires
 queued/claimed work as cancelled and accepted work as interrupted. Verification
@@ -457,9 +544,13 @@ local PostgreSQL+MinIO copy/retry/verify fixture is
 it is not a substitute for a rehearsal using the production VM snapshot and
 the actual managed provider credentials.
 
-The browser flow still depends on the operator to keep the destination pods
+The VM-to-managed source wizard (not **Restore legacy backup** into an initialized
+Kubernetes installation) still depends on the operator to keep destination pods
 offline, use matching deployment secrets, and conduct the Kubernetes release
 rehearsal. There is no one-click or atomic cross-cluster traffic cutover.
+The initialized-Kubernetes restore path owns its own fencing, import, verification
+and supervised restart and does not require manually scaling pods or running CLI
+migration commands after upload/confirmation.
 
 The disposable integration fixture also exercises the supervised SQLite UI
 service: source inspection, pause/drain, native copy, asynchronous final review,

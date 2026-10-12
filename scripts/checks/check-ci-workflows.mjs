@@ -474,8 +474,8 @@ assertIncludesAll(
 );
 assert.equal(
   imageJobs.changes.outputs.require_kind,
-  "${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}",
-  'Only automatic staging pushes may skip a required Kind gate.',
+  'true',
+  'Every image release must retain managed Kubernetes qualification alongside Docker support.',
 );
 assert.equal(
   imageJobs['managed-kubernetes-release-gate'].if,

@@ -1,6 +1,7 @@
 export const kubernetesApiTestFiles = [
   'src/tests/kubernetes-contract.test.ts',
   'src/tests/kubernetes-launcher-config.test.ts',
+  'src/tests/kubernetes-local-services.test.ts',
   'src/tests/kubernetes-managed-release-gate.test.ts',
   'src/tests/kubernetes-managed-restore-drill.test.ts',
   'src/tests/kubernetes-published-capacity-gate.test.ts',
@@ -42,6 +43,7 @@ export const defaultApiTestFiles = [
   'src/tests/hosted-runtime-policy.test.ts',
   'src/tests/immutable-local-artifact-store.test.ts',
   'src/tests/latest-workflow-remote-debugger.test.ts',
+  'src/tests/legacy-restore.test.ts',
   'src/tests/llm-profile-health.test.ts',
   'src/tests/local-bounded-copy.test.ts',
   'src/tests/local-browser-backup.test.ts',
@@ -114,6 +116,7 @@ export const defaultApiTestFiles = [
   'src/tests/runtime-library-stream.test.ts',
   'src/tests/scheduled-run-execution.test.ts',
   'src/tests/scheduled-runs.test.ts',
+  'src/tests/server-deployment-contract.test.ts',
   'src/tests/server-resource-lifecycle.test.ts',
   'src/tests/settings-repository.test.ts',
   'src/tests/shutdown-deadline.test.ts',

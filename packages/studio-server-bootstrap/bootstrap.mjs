@@ -17,6 +17,7 @@ const fileFree = replicated || localSqlite;
 const executor = process.env.RIVET_RUNTIME_PROCESS_ROLE === 'executor' && isExecutorRuntimeEntryProcess();
 let disposeNodeExecutorProxySettingsPolling = () => {};
 let disposeRemoteSettingsPolling = () => {};
+globalThis.__rivetDisposeManagedRuntimeLibraries = disposeManagedRuntimeLibrariesSync;
 
 if (!fileFree) {
   await loadAndApplyNodeExecutorProxySettings({
@@ -92,6 +93,10 @@ if (fileFree && executor) {
         throw new Error('Managed executor could not load its startup configuration.', { cause: error });
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
+  }
+  if (!localSqlite && process.env.RIVET_LEGACY_RESTORE_ENABLED === '1') {
+    const { startRestoreParticipant } = await import('./legacy-restore-participant.mjs');
+    await startRestoreParticipant(settings.storage, disposeManagedRuntimeLibrariesSync);
   }
   if (!localSqlite) await startManagedRuntimeLibrariesFromSettings(settings.storage);
   let refreshInFlight = false;

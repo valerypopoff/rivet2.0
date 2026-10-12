@@ -1,4 +1,5 @@
 import TextField from '@atlaskit/textfield';
+import { LegacyRestorePanel } from './LegacyRestorePanel';
 
 import { ModeButton, ModeGroup } from '../SettingsControls';
 import type { DeploymentStorageSettingsForm } from '../model';
@@ -257,6 +258,7 @@ export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof use
           </div>
         </section>
       ) : null}
+      {form.deploymentManaged && <LegacyRestorePanel />}
     </div>
   );
 }

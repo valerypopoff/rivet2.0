@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
+import { singleMachineConfig, singleMachineValues } from './lib/single-machine-kubernetes.mjs';
 
 const rootDir = process.cwd();
 const launcherName = 'verify-kubernetes';
@@ -72,7 +73,7 @@ async function verifyLocalRender(nodeBin, envPath) {
   });
 }
 
-async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
+async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMachineValuesPath) {
   console.log(`[${launcherName}] Linting and rendering the production overlay...`);
 
   const prodImageArgs = [
@@ -111,12 +112,16 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
     '--set',
     `release.production.database.managedWorkflowSchemaVersion=${managedWorkflowSchemaVersion}`,
   ];
+  const profileArgs = singleMachineValuesPath
+    ? ['-f', './deploy/studio-server/helm/overlays/single-machine.yaml', '-f', singleMachineValuesPath]
+    : [];
 
   await spawnProgram(helmBin, [
     'lint',
     './deploy/studio-server/helm',
     '-f',
     './deploy/studio-server/helm/overlays/prod.yaml',
+    ...profileArgs,
     ...prodImageArgs,
   ]);
   await spawnProgram(helmBin, [
@@ -127,6 +132,7 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion) {
     'rivet-prod',
     '-f',
     './deploy/studio-server/helm/overlays/prod.yaml',
+    ...profileArgs,
     ...prodImageArgs,
   ]);
 }
@@ -137,9 +143,35 @@ async function main() {
   const { tempDir, envPath } = writeLocalVerificationEnv();
 
   try {
-    await spawnProgram(nodeBin, ['--test', 'deploy/studio-server/scripts/managed-release-cutover.test.mjs']);
+    await spawnProgram(nodeBin, [
+      '--test',
+      'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
+      'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
+      'deploy/studio-server/scripts/server-launch-mode.test.mjs',
+      'deploy/studio-server/scripts/container-server.test.mjs',
+    ]);
     await verifyLocalRender(nodeBin, envPath);
+    await verifyLocalRender(nodeBin, path.join(rootDir, 'deploy', 'studio-server', '.env.kubernetes-local.example'));
     await verifyProdRender(helmBin, readManagedWorkflowSchemaReleaseContract(rootDir).version);
+    const config = singleMachineConfig(
+      {
+        RIVET_K8S_CONTEXT: 'default',
+        RIVET_K8S_CLUSTER_PROVIDER: 'k3s',
+        RIVET_K8S_RELEASE: 'rivet',
+        RIVET_K8S_NAMESPACE: 'rivet',
+        RIVET_K8S_LOCAL_MANAGED_SERVICES: 'true',
+        RIVET_K8S_LOCAL_POSTGRES_PASSWORD: 'verification-password',
+        RIVET_KEY: 'verification-key-with-at-least-32-characters',
+        RIVET_K8S_STORAGE_BUCKET: 'verification-bucket',
+        RIVET_K8S_STORAGE_REGION: 'us-east-1',
+        RIVET_K8S_STORAGE_ACCESS_KEY_ID: 'verification-access',
+        RIVET_K8S_STORAGE_ACCESS_KEY: 'verification-secret',
+      },
+      { context: 'default', release: 'rivet', namespace: 'rivet' },
+    );
+    const singleValuesPath = path.join(tempDir, 'single-machine.yaml');
+    fs.writeFileSync(singleValuesPath, singleMachineValues(config), { mode: 0o600 });
+    await verifyProdRender(helmBin, readManagedWorkflowSchemaReleaseContract(rootDir).version, singleValuesPath);
     console.log(`[${launcherName}] Kubernetes local/prod render verification passed.`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

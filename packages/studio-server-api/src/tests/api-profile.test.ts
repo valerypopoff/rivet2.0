@@ -23,6 +23,7 @@ import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-set
 import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-migration-maintenance.js';
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
 import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
+import { setLegacyRestorePaused, setLegacyRestoreWarmup } from '../legacy-restore/service.js';
 
 // test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
 
@@ -40,7 +41,68 @@ const relevantEnvKeys = [
   'RIVET_DEPLOYMENT_TOPOLOGY',
   'RIVET_LOCAL_METADATA_CONTROL_ROOT',
   'RIVET_LOCAL_METADATA_BOOT_REVISION',
+  'RIVET_LEGACY_RESTORE_ENABLED',
 ] as const;
+
+test('runtime config exposes uncached restore recovery state without exposing recovery secrets', async () => {
+  await withApiEnv({ RIVET_LEGACY_RESTORE_ENABLED: '1' }, async () => {
+    const server = await startServer('control');
+    try {
+      setLegacyRestorePaused(true);
+      const response = await fetch(`${server.baseUrl}/api/config`, { headers: trustedProxyHeaders() });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const config = await response.json();
+      assert.equal(config.legacyRestoreMaintenance, true);
+      assert.equal(typeof config.legacyRestoreEpoch, 'string');
+      assert.equal('ciphertext' in config, false);
+      setLegacyRestorePaused(false);
+      const normal = await fetch(`${server.baseUrl}/api/config`, { headers: trustedProxyHeaders() });
+      assert.equal((await normal.json()).legacyRestoreMaintenance, false);
+    } finally {
+      setLegacyRestorePaused(false);
+      await server.close();
+    }
+  });
+});
+
+test('restore standbys remain probe-responsive but warmup requires healthy consumers', async () => {
+  await withApiEnv({}, async () => {
+    const snapshot = {
+      ok: false,
+      profile: 'execution' as const,
+      state: 'starting' as const,
+      checkedAt: null,
+      checks: [],
+    };
+    const app = createApiApp('execution', {
+      health: { getLiveness: () => ({ ...snapshot, ok: true }), getReadiness: () => snapshot },
+    });
+    const server = http.createServer(app);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const url = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    try {
+      setLegacyRestorePaused(true);
+      setLegacyRestoreWarmup(false);
+      const standby = await fetch(url + '/readyz');
+      assert.equal(standby.status, 200);
+      assert.equal((await standby.json()).restoreWarmup, false);
+      assert.equal((await fetch(url + '/livez')).status, 200);
+      setLegacyRestoreWarmup(true);
+      const unhealthy = await fetch(url + '/readyz');
+      assert.equal(unhealthy.status, 503);
+      assert.equal((await unhealthy.json()).restoreWarmup, true);
+      snapshot.ok = true;
+      assert.equal((await fetch(url + '/readyz')).status, 200);
+    } finally {
+      setLegacyRestorePaused(false);
+      setLegacyRestoreWarmup(false);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
 
 async function withApiEnv(
   overrides: Partial<Record<(typeof relevantEnvKeys)[number], string | undefined>>,
@@ -139,6 +201,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/runtime-libraries/*',
     '/api/deployment-status/*',
     '/api/app-settings/*',
+    '/api/legacy-restore/*',
     '/api/config*',
     '/internal/app-settings/proxy-config',
   ]);
@@ -175,6 +238,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/api/runtime-libraries/*',
     '/api/deployment-status/*',
     '/api/app-settings/*',
+    '/api/legacy-restore/*',
     '/api/config*',
     '/internal/app-settings/proxy-config',
     '/workflows/:endpointName',

@@ -117,9 +117,24 @@ const executorReadyMessage = `Rivet app executor websocket listening on ${host}:
 let executorWebSocketReady = false;
 let exitingAfterStartupError = false;
 
+let restoreEditorActivity = 0;
+(
+  globalThis as typeof globalThis & { __rivetLegacyRestoreEditorActivity?: () => number }
+).__rivetLegacyRestoreEditorActivity = () => restoreEditorActivity;
 function acquireVmMigrationEditorLease(): (() => void) | null {
+  if ((globalThis as typeof globalThis & { __rivetLegacyRestorePaused?: boolean }).__rivetLegacyRestorePaused)
+    return null;
   const controlRoot = process.env.RIVET_VM_MIGRATION_CONTROL_ROOT?.trim();
-  if (process.env.RIVET_RUNTIME_PROCESS_ROLE !== 'executor' || !controlRoot) return () => undefined;
+  if (process.env.RIVET_RUNTIME_PROCESS_ROLE !== 'executor' || !controlRoot) {
+    restoreEditorActivity++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        restoreEditorActivity--;
+      }
+    };
+  }
   const activeRoot = join(controlRoot, 'vm-migration-active-editor-runs');
   mkdirSync(activeRoot, { recursive: true });
   const leasePath = join(activeRoot, `${process.pid}-${randomUUID()}`);

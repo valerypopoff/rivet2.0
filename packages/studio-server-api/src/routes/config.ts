@@ -1,6 +1,9 @@
 import { Router, type Request } from 'express';
 import path from 'node:path';
-import { LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH, isLatestWorkflowRemoteDebuggerEnabled } from '../latestWorkflowRemoteDebugger.js';
+import {
+  LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH,
+  isLatestWorkflowRemoteDebuggerEnabled,
+} from '../latestWorkflowRemoteDebugger.js';
 import { getAppDataRoot, isEnvAllowed, isProtectedBrowserEnvName } from '../security.js';
 import { resolveBrowserEnvironmentVariable } from '../environment-variable-settings.js';
 import {
@@ -13,6 +16,7 @@ import { getWebAppAuthMode } from '../web-app-oauth.js';
 import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-settings.js';
 import { readExecutorUrlOverrideSettingsSync } from '../executor-url-override-settings.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { getLegacyRestoreWorkspaceEpoch, isLegacyRestorePaused } from '../legacy-restore/service.js';
 
 export const configRouter = Router();
 
@@ -28,7 +32,9 @@ function getPublicOrigin(req: Request): string {
 }
 
 function toWebSocketOrigin(origin: string): string {
-  return origin.startsWith('https://') ? `wss://${origin.slice('https://'.length)}` : `ws://${origin.slice('http://'.length)}`;
+  return origin.startsWith('https://')
+    ? `wss://${origin.slice('https://'.length)}`
+    : `ws://${origin.slice('http://'.length)}`;
 }
 
 // GET /api/config — return runtime configuration
@@ -38,17 +44,22 @@ configRouter.get('/config', (req, res) => {
   const deploymentStorageSettings = readDeploymentStorageRuntimeSettingsSync();
   const executorUrlOverrides = readExecutorUrlOverrideSettingsSync();
 
-  res.json({
+  res.set('Cache-Control', 'no-store').json({
+    ...(process.env.RIVET_LEGACY_RESTORE_ENABLED === '1'
+      ? { legacyRestoreEpoch: getLegacyRestoreWorkspaceEpoch(), legacyRestoreMaintenance: isLegacyRestorePaused() }
+      : {}),
     hostedMode: true,
     executorWsUrl: executorUrlOverrides.executorWsUrl || `${publicWsOrigin}/ws/executor/internal`,
     remoteDebuggerDefaultWs: isLatestWorkflowRemoteDebuggerEnabled()
-      ? (executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`)
+      ? executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`
       : '',
     apiBaseUrl: '/api',
     publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),
     latestWorkflowsBasePath: getLatestWorkflowsBasePath(),
-    internalPublishedWorkflowsBaseUrl: process.env.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows',
-    internalLatestWorkflowsBaseUrl: process.env.RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows-latest',
+    internalPublishedWorkflowsBaseUrl:
+      process.env.RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows',
+    internalLatestWorkflowsBaseUrl:
+      process.env.RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL?.trim() || 'http://api/internal/workflows-latest',
     publishedAppsBasePath: getPublishedWebAppsBasePath(),
     latestAppsBasePath: getLatestWebAppsBasePath(),
     webAppsAuthMode: getWebAppAuthMode(),
@@ -68,24 +79,27 @@ configRouter.get('/path/app-log-dir', (_req, res) => {
 });
 
 // GET /api/config/env/:name
-configRouter.get('/config/env/:name', asyncHandler(async (req, res) => {
-  const name = String(req.params.name ?? '');
+configRouter.get(
+  '/config/env/:name',
+  asyncHandler(async (req, res) => {
+    const name = String(req.params.name ?? '');
 
-  if (!name) {
-    res.status(400).json({ error: 'Missing env var name' });
-    return;
-  }
+    if (!name) {
+      res.status(400).json({ error: 'Missing env var name' });
+      return;
+    }
 
-  if (isProtectedBrowserEnvName(name)) {
-    res.json({ value: '' });
-    return;
-  }
+    if (isProtectedBrowserEnvName(name)) {
+      res.json({ value: '' });
+      return;
+    }
 
-  const managed = await resolveBrowserEnvironmentVariable(name);
-  if (managed.configured) {
-    res.json({ value: managed.value ?? '' });
-    return;
-  }
+    const managed = await resolveBrowserEnvironmentVariable(name);
+    if (managed.configured) {
+      res.json({ value: managed.value ?? '' });
+      return;
+    }
 
-  res.json({ value: isEnvAllowed(name) ? process.env[name] ?? '' : '' });
-}));
+    res.json({ value: isEnvAllowed(name) ? process.env[name] ?? '' : '' });
+  }),
+);

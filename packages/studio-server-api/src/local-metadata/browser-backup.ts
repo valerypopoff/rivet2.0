@@ -132,6 +132,38 @@ async function scanRoots(roots: LocalMetadataSourceRoots) {
   return { hash: hash.digest('hex'), bytes };
 }
 
+/** Verify portable legacy archives before an importer may normalize its working copy. */
+export async function verifyLegacyBackupDirectory(directory: string): Promise<{ bytes: number; createdAt: string }> {
+  const file = path.join(directory, 'backup.json');
+  const stat = await fs.lstat(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Invalid backup manifest.');
+  const manifest = z
+    .object({
+      version: z.literal(1),
+      kind: z.literal('rivet-browser-legacy-backup'),
+      createdAt: z.string().datetime(),
+      sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+      roots: z.tuple([
+        z.literal('workflows'),
+        z.literal('recordings'),
+        z.literal('appData'),
+        z.literal('runtimeLibraries'),
+      ]),
+      encryptionKeyIncluded: z.literal(false),
+    })
+    .strict()
+    .parse(JSON.parse(await fs.readFile(file, 'utf8')));
+  const roots = rootsAt(directory);
+  const scanned = await scanRoots(roots);
+  if (
+    scanned.hash !== manifest.contentHash ||
+    (await fingerprintVmMigrationSource(roots)) !== manifest.sourceFingerprint
+  )
+    throw new Error('Backup contents do not match their manifest.');
+  return { bytes: scanned.bytes, createdAt: manifest.createdAt };
+}
+
 const rootsAt = (directory: string): LocalMetadataSourceRoots =>
   Object.fromEntries(domains.map((domain) => [domain, path.join(directory, domain)])) as LocalMetadataSourceRoots;
 

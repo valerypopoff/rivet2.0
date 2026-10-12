@@ -13,6 +13,7 @@ import {
 import { readDeploymentStorageBootstrapSettings } from '../deployment-storage-settings.js';
 import { assertVmMigrationTargetMayServe } from '../vm-migration-target-gate.js';
 import { assertManagedSchemaMigrationSafe } from '../managed-schema-cutover.js';
+import { LegacyRestoreControl } from '../legacy-restore/control.js';
 
 function readCommand(): ManagedWorkflowSchemaMode {
   const command = process.argv[2]?.trim().toLowerCase();
@@ -30,15 +31,34 @@ async function main(): Promise<void> {
       ? getManagedWorkflowStorageConfigFromSettings(readDeploymentStorageBootstrapSettings())
       : getManagedWorkflowStorageConfig();
   const pool = new Pool(getManagedDbPoolConfig(storageConfig));
+  let control: LegacyRestoreControl | undefined;
   try {
     await assertVmMigrationTargetMayServe(pool);
-    if (command === 'migrate') await assertManagedSchemaMigrationSafe(pool);
-    const result = await withManagedDbRetry(`managed schema ${command}`, () =>
-      command === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
-    );
+    if (
+      command === 'migrate' &&
+      process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated' &&
+      process.env.RIVET_LEGACY_RESTORE_ENABLED === '1'
+    ) {
+      const secret = process.env.RIVET_APP_SETTINGS_ENCRYPTION_KEY || process.env.RIVET_KEY;
+      if (!secret) throw new Error('Restore control requires the settings encryption key.');
+      control = new LegacyRestoreControl(getManagedDbPoolConfig(storageConfig), secret);
+    }
+    const prepare = async () => {
+      if (command === 'migrate') await assertManagedSchemaMigrationSafe(pool);
+      return withManagedDbRetry(`managed schema ${command}`, () =>
+        command === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
+      );
+    };
+    const result = control
+      ? await control.withDeploymentMigration(process.env.RIVET_LEGACY_RESTORE_INSTALLATION || '', prepare)
+      : await prepare();
     console.log(`[managed-workflow-schema] ${command} succeeded at version ${result.currentVersion}.`);
   } finally {
-    await pool.end();
+    try {
+      await control?.dispose();
+    } finally {
+      await pool.end();
+    }
   }
 }
 
