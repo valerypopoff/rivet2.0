@@ -37,19 +37,21 @@ function mergeProviderMetadata(
   };
 }
 
-function getAnthropicCacheMetadata(
+function getCacheMetadata(
   enabled: boolean,
-  ttl: ChatV2MessageConversionOptions['anthropicCacheControlTtl'],
+  options: ChatV2MessageConversionOptions,
 ): ChatV2ProviderOptions | undefined {
-  if (!enabled) {
+  if (!enabled || (options.provider !== 'anthropic' && options.provider !== 'openrouter')) {
     return undefined;
   }
 
   return {
-    anthropic: {
+    [options.provider]: {
       cacheControl: {
         type: 'ephemeral',
-        ...(ttl ? { ttl } : {}),
+        ...(options.provider === 'anthropic' && options.anthropicCacheControlTtl
+          ? { ttl: options.anthropicCacheControlTtl }
+          : {}),
       },
     },
   };
@@ -105,10 +107,10 @@ function stringifyParts(parts: ChatMessage['message']): string {
     .join('\n\n');
 }
 
-function applyAnthropicCacheBreakpoint<T extends { providerOptions?: ChatV2ProviderOptions | undefined }>(
+function applyCacheBreakpoint<T extends { providerOptions?: ChatV2ProviderOptions | undefined }>(
   parts: T[],
   enabled: boolean,
-  ttl: ChatV2MessageConversionOptions['anthropicCacheControlTtl'],
+  options: ChatV2MessageConversionOptions,
 ): T[] {
   if (!enabled || parts.length === 0) {
     return parts;
@@ -120,7 +122,7 @@ function applyAnthropicCacheBreakpoint<T extends { providerOptions?: ChatV2Provi
     return parts;
   }
 
-  lastPart.providerOptions = mergeProviderMetadata(lastPart.providerOptions, getAnthropicCacheMetadata(true, ttl));
+  lastPart.providerOptions = mergeProviderMetadata(lastPart.providerOptions, getCacheMetadata(true, options));
 
   return parts;
 }
@@ -137,10 +139,7 @@ export async function chatMessagesToModelMessages(
         result.push({
           role: 'system',
           content: stringifyParts(msg.message),
-          providerOptions:
-            options.provider === 'anthropic'
-              ? getAnthropicCacheMetadata(!!msg.isCacheBreakpoint, options.anthropicCacheControlTtl)
-              : undefined,
+          providerOptions: getCacheMetadata(!!msg.isCacheBreakpoint, options),
         });
         break;
       }
@@ -153,10 +152,7 @@ export async function chatMessagesToModelMessages(
         result.push({
           role: 'system',
           content: stringifyParts(msg.message),
-          providerOptions:
-            options.provider === 'anthropic'
-              ? getAnthropicCacheMetadata(!!msg.isCacheBreakpoint, options.anthropicCacheControlTtl)
-              : undefined,
+          providerOptions: getCacheMetadata(!!msg.isCacheBreakpoint, options),
         });
         break;
       }
@@ -170,11 +166,7 @@ export async function chatMessagesToModelMessages(
           const content = await Promise.all(parts.map((part) => partToUserContent(part, options)));
           result.push({
             role: 'user',
-            content: applyAnthropicCacheBreakpoint(
-              content,
-              options.provider === 'anthropic' && !!msg.isCacheBreakpoint,
-              options.anthropicCacheControlTtl,
-            ),
+            content: applyCacheBreakpoint(content, !!msg.isCacheBreakpoint, options),
           });
         }
         break;
@@ -183,9 +175,13 @@ export async function chatMessagesToModelMessages(
       case 'assistant': {
         const textContent = stringifyParts(msg.message);
         const toolCalls = msg.function_calls ?? (msg.function_call ? [msg.function_call] : []);
+        const providerOptions =
+          options.provider === 'openrouter' && msg.openRouterReasoningDetails?.length
+            ? ({ openrouter: { reasoning_details: msg.openRouterReasoningDetails } } as ChatV2ProviderOptions)
+            : undefined;
 
         if (toolCalls.length === 0 && !msg.isCacheBreakpoint) {
-          result.push({ role: 'assistant', content: textContent });
+          result.push({ role: 'assistant', content: textContent, ...(providerOptions ? { providerOptions } : {}) });
         } else {
           const content: Array<TextPart | ToolCallPart> = [];
 
@@ -211,11 +207,8 @@ export async function chatMessagesToModelMessages(
 
           result.push({
             role: 'assistant',
-            content: applyAnthropicCacheBreakpoint(
-              content,
-              options.provider === 'anthropic' && !!msg.isCacheBreakpoint,
-              options.anthropicCacheControlTtl,
-            ),
+            ...(providerOptions ? { providerOptions } : {}),
+            content: applyCacheBreakpoint(content, !!msg.isCacheBreakpoint, options),
           });
         }
         break;
@@ -234,11 +227,7 @@ export async function chatMessagesToModelMessages(
 
         result.push({
           role: 'tool',
-          content: applyAnthropicCacheBreakpoint(
-            content,
-            options.provider === 'anthropic' && !!msg.isCacheBreakpoint,
-            options.anthropicCacheControlTtl,
-          ),
+          content: applyCacheBreakpoint(content, !!msg.isCacheBreakpoint, options),
         });
         break;
       }

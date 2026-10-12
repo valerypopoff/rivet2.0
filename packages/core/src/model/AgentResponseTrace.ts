@@ -10,6 +10,7 @@ import type {
 import type { GraphId } from './NodeGraph.js';
 import type { NodeId } from './NodeBase.js';
 import type { GraphProcessor } from './GraphProcessor.js';
+import { classifierFailureKinds, type ClassifierFailureKind } from './classifier/types.js';
 
 export const AGENT_RESPONSE_TRACE_SCHEMA_VERSION = 1 as const;
 export const AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS = 250;
@@ -59,7 +60,7 @@ export type AgentLLMProfileAttemptTrace = Omit<LLMProfileAttemptTraceEvent, 'eve
 export type AgentResponseTrace = {
   schemaVersion: typeof AGENT_RESPONSE_TRACE_SCHEMA_VERSION;
   traceId: RootRunId;
-  scope: 'response' | 'llm-invocation';
+  scope: 'response' | 'llm-invocation' | 'classifier-invocation';
   rootRunId: RootRunId;
   graphRunId: GraphRunId;
   graphId: GraphId;
@@ -73,6 +74,8 @@ export type AgentResponseTrace = {
   backgroundWorkPending?: boolean;
   summary: {
     modelCallCount: number;
+    /** Physical classifier requests, including retries; absent in older traces. */
+    classifierRequestCount?: number;
     toolCallCount: number;
     retryCount: number;
     fallbackCount: number;
@@ -105,7 +108,7 @@ export type BuildAgentResponseTraceOptions = {
   events: readonly AgentTraceEvent[];
   nodeId?: NodeId;
   processId?: ProcessId;
-  /** Recorded whole-node duration for an LLM invocation; response traces retain their output-ready duration. */
+  /** Recorded whole-node duration for a model invocation; response traces retain their output-ready duration. */
   invocationDurationMs?: number;
   startedAt?: number;
   responseReadyAt?: number;
@@ -145,10 +148,10 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
       (event): event is Extract<AgentTraceEvent, { type: 'tool-call-finished' }> => event.type === 'tool-call-finished',
     )
     .map(toToolCallTrace);
-  const summary = summarizeAgentCalls(allModelCalls, allProfileAttempts, allToolCalls);
+  const summary = summarizeAgentResponseCalls(allModelCalls, allProfileAttempts, allToolCalls);
   const terminalAt = options.responseReadyAt ?? options.finishedAt;
   const durationMs =
-    options.scope === 'llm-invocation' && isNonNegativeFiniteNumber(options.invocationDurationMs)
+    options.scope !== 'response' && isNonNegativeFiniteNumber(options.invocationDurationMs)
       ? options.invocationDurationMs
       : isNonNegativeFiniteNumber(options.startedAt) &&
           isNonNegativeFiniteNumber(terminalAt) &&
@@ -176,10 +179,7 @@ export function buildAgentResponseTrace(options: BuildAgentResponseTraceOptions)
     profileAttempts: allProfileAttempts.slice(0, AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS),
     toolCalls: allToolCalls.slice(0, AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS),
     omittedModelCallCount: Math.max(0, allModelCalls.length - AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS),
-    omittedProfileAttemptCount: Math.max(
-      0,
-      allProfileAttempts.length - AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS,
-    ),
+    omittedProfileAttemptCount: Math.max(0, allProfileAttempts.length - AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS),
     omittedToolCallCount: Math.max(0, allToolCalls.length - AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS),
   };
 }
@@ -231,32 +231,16 @@ export function getAgentTraceEventIdentity(event: AgentTraceEvent): string | und
 
 /**
  * Redelivery is allowed to omit newly added optional observability fields. Keep
- * an exact Delegate result pointer once it was observed instead of making a
- * later legacy-shaped copy erase result navigation.
+ * observed profile metadata and exact Delegate result pointers instead of
+ * making a later legacy-shaped copy erase diagnostics or result navigation.
  */
 export function mergeAgentTraceEvent(existing: AgentTraceEvent, incoming: AgentTraceEvent): AgentTraceEvent {
   if (existing.type === 'llm-call-finished' && incoming.type === 'llm-call-finished') {
-    return {
-      ...incoming,
-      ...(incoming.profileName == null && existing.profileName != null
-        ? { profileName: existing.profileName }
-        : {}),
-      ...(incoming.profileHealthKey == null && existing.profileHealthKey != null
-        ? { profileHealthKey: existing.profileHealthKey }
-        : {}),
-      ...(incoming.profileHealthState == null && existing.profileHealthState != null
-        ? { profileHealthState: existing.profileHealthState }
-        : {}),
-    };
+    return mergeAgentModelCall(existing, incoming);
   }
 
   if (existing.type === 'llm-profile-attempt' && incoming.type === 'llm-profile-attempt') {
-    return {
-      ...incoming,
-      ...(incoming.profileName == null && existing.profileName != null
-        ? { profileName: existing.profileName }
-        : {}),
-    };
+    return mergeAgentProfileAttempt(existing, incoming);
   }
 
   if (
@@ -270,6 +254,50 @@ export function mergeAgentTraceEvent(existing: AgentTraceEvent, incoming: AgentT
   }
 
   return incoming;
+}
+
+/** Redelivery may omit optional receipts, but supplied pricing remains authoritative. */
+export function mergeAgentModelCall<T extends ChatV2CallTraceEvent>(
+  existing: Omit<ChatV2CallTraceEvent, 'callId' | 'provider'> & { callId: string; provider: string },
+  incoming: T,
+): T {
+  return {
+    ...existing,
+    ...incoming,
+    ...(existing.outcome !== incoming.outcome && incoming.finishReason == null ? { finishReason: undefined } : {}),
+    ...(incoming.profileName == null && existing.profileName != null ? { profileName: existing.profileName } : {}),
+    ...(incoming.profileHealthKey == null && existing.profileHealthKey != null
+      ? { profileHealthKey: existing.profileHealthKey }
+      : {}),
+    ...(incoming.profileHealthState == null && existing.profileHealthState != null
+      ? { profileHealthState: existing.profileHealthState }
+      : {}),
+    ...(incoming.durationMs == null && existing.durationMs != null ? { durationMs: existing.durationMs } : {}),
+    ...(incoming.normalizedUsage == null && existing.normalizedUsage != null
+      ? { normalizedUsage: existing.normalizedUsage }
+      : {}),
+  };
+}
+
+/** Merge one identified attempt, retaining additive metadata omitted by older transports. */
+export function mergeAgentProfileAttempt<T extends LLMProfileAttemptTraceEvent>(
+  existing: LLMProfileAttemptTraceEvent,
+  incoming: T,
+): T {
+  return {
+    // Failure/health details only belong to the same outcome. A corrected
+    // outcome must not inherit stale failure metadata.
+    ...(existing.outcome === incoming.outcome ? existing : {}),
+    ...incoming,
+    ...(incoming.family == null && existing.family != null ? { family: existing.family } : {}),
+    ...(incoming.profileName == null && existing.profileName != null ? { profileName: existing.profileName } : {}),
+    ...(incoming.profileIndex == null && existing.profileIndex != null ? { profileIndex: existing.profileIndex } : {}),
+    ...(incoming.attemptIndex == null && existing.attemptIndex != null ? { attemptIndex: existing.attemptIndex } : {}),
+    ...(incoming.durationMs == null && existing.durationMs != null ? { durationMs: existing.durationMs } : {}),
+    ...(incoming.classifierUsage == null && existing.classifierUsage != null
+      ? { classifierUsage: existing.classifierUsage }
+      : {}),
+  };
 }
 
 function toModelCallTrace(event: Extract<AgentTraceEvent, { type: 'llm-call-finished' }>): AgentModelCallTrace {
@@ -318,35 +346,57 @@ function toProfileAttemptTrace(
   return trace;
 }
 
-function summarizeAgentCalls(
-  modelCalls: AgentModelCallTrace[],
-  profileAttempts: AgentLLMProfileAttemptTrace[],
-  toolCalls: AgentToolCallTrace[],
-) {
+/** Shared metadata accounting for response inspectors and the bounded activity journal. */
+export function summarizeAgentResponseCalls(
+  modelCalls: readonly AgentModelCallTrace[],
+  profileAttempts: readonly AgentLLMProfileAttemptTrace[],
+  toolCalls: readonly AgentToolCallTrace[],
+): AgentResponseTrace['summary'] {
+  const classifierCalls = profileAttempts.filter(
+    (attempt) => attempt.family === 'classifier' && attempt.attemptIndex != null,
+  );
+  const accountedCallCount = modelCalls.length + classifierCalls.length;
   const usageKeys = ['promptTokens', 'completionTokens', 'totalTokens', 'cachedTokens', 'reasoningTokens'] as const;
   const usage = Object.fromEntries(
     usageKeys.flatMap((key) => {
       const values = modelCalls.map((call) => call.usage?.[key]).filter((value): value is number => value != null);
+      for (const attempt of classifierCalls) {
+        const receipt = attempt.classifierUsage;
+        if (!receipt) continue;
+        if (key === 'promptTokens') values.push(receipt.inputTokens);
+        if (key === 'completionTokens') values.push(receipt.outputTokens);
+        if (key === 'totalTokens') values.push(receipt.inputTokens + receipt.outputTokens);
+      }
       return values.length === 0 ? [] : [[key, values.reduce((sum, value) => sum + value, 0)]];
     }),
   );
-  const knownCosts = modelCalls
-    .map((call) => call.pricing.costUsd)
-    .filter((value): value is number => value != null && Number.isFinite(value));
-  const unknownCostCount = modelCalls.filter(
-    (call) => call.pricing.status === 'unknown' || !Number.isFinite(call.pricing.costUsd),
-  ).length;
+  const knownCosts = [
+    ...modelCalls
+      .map((call) => call.pricing.costUsd)
+      .filter((value): value is number => value != null && Number.isFinite(value)),
+    ...classifierCalls.flatMap((attempt) =>
+      attempt.classifierUsage?.estimatedCostUsd == null ? [] : [attempt.classifierUsage.estimatedCostUsd],
+    ),
+  ];
+  const unknownCostCount =
+    modelCalls.filter((call) => call.pricing.status === 'unknown' || !Number.isFinite(call.pricing.costUsd)).length +
+    classifierCalls.filter((attempt) => attempt.classifierUsage?.estimatedCostUsd == null).length;
   const profileTransitions = countProfileFallbacks(modelCalls, profileAttempts);
 
   return {
     modelCallCount: modelCalls.length,
+    ...(profileAttempts.some((attempt) => attempt.family === 'classifier')
+      ? { classifierRequestCount: classifierCalls.length }
+      : {}),
     toolCallCount: toolCalls.length,
-    retryCount: modelCalls.filter((call) => call.attemptIndex > 0).length,
+    retryCount:
+      modelCalls.filter((call) => call.attemptIndex > 0).length +
+      classifierCalls.filter((attempt) => attempt.attemptIndex! > 0).length,
     fallbackCount: profileTransitions,
     ...usage,
     knownCostUsd: knownCosts.reduce((sum, value) => sum + value, 0),
     costStatus:
-      modelCalls.length === 0 || unknownCostCount === modelCalls.length
+      accountedCallCount === 0 || unknownCostCount === accountedCallCount
         ? ('unknown' as const)
         : unknownCostCount > 0
           ? ('partial' as const)
@@ -374,7 +424,7 @@ function countProfileFallbacks(
         : [{ nodeId: call.nodeId, processId: call.processId, profileIndex: call.profileIndex }],
     ),
     ...profileAttempts.flatMap((attempt) =>
-      attempt.profileIndex == null
+      attempt.profileIndex == null || attempt.skipReason === 'unreached'
         ? []
         : [{ nodeId: attempt.nodeId, processId: attempt.processId, profileIndex: attempt.profileIndex }],
     ),
@@ -421,14 +471,12 @@ export function isAgentResponseTrace(value: unknown): value is AgentResponseTrac
     return false;
   if (typeof value.traceId !== 'string' || typeof value.rootRunId !== 'string') return false;
   if (typeof value.graphRunId !== 'string' || typeof value.graphId !== 'string') return false;
-  if (value.scope !== 'response' && value.scope !== 'llm-invocation') return false;
+  if (value.scope !== 'response' && value.scope !== 'llm-invocation' && value.scope !== 'classifier-invocation')
+    return false;
   if (!isRecord(value.summary) || !Array.isArray(value.modelCalls) || !Array.isArray(value.toolCalls)) return false;
   if (value.profileAttempts !== undefined && !Array.isArray(value.profileAttempts)) return false;
   if (value.modelCalls.length > AGENT_RESPONSE_TRACE_MAX_MODEL_CALLS) return false;
-  if (
-    Array.isArray(value.profileAttempts) &&
-    value.profileAttempts.length > AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS
-  )
+  if (Array.isArray(value.profileAttempts) && value.profileAttempts.length > AGENT_RESPONSE_TRACE_MAX_PROFILE_ATTEMPTS)
     return false;
   if (value.toolCalls.length > AGENT_RESPONSE_TRACE_MAX_TOOL_CALLS) return false;
   return (
@@ -606,11 +654,22 @@ function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
       'healthOutcome',
       'retryAt',
       'timeoutKind',
+      'family',
+      'failureKind',
+      'skipReason',
+      'classifierUsage',
+      'durationMs',
     ]) &&
     typeof value.eventId === 'string' &&
     isNonNegativeInteger(value.roundIndex) &&
     isOptionalNonNegativeInteger(value.profileIndex) &&
     isOptionalString(value.profileName) &&
+    isOptionalNonNegativeFiniteNumber(value.durationMs) &&
+    (value.family === undefined || value.family === 'llm' || value.family === 'classifier') &&
+    (value.skipReason === undefined || (value.skipReason === 'unreached' && value.outcome === 'skipped')) &&
+    (value.classifierUsage === undefined ||
+      (value.family === 'classifier' && isClassifierAttemptUsage(value.classifierUsage))) &&
+    (value.failureKind === undefined || classifierFailureKinds.includes(value.failureKind as ClassifierFailureKind)) &&
     typeof value.nodeId === 'string' &&
     typeof value.processId === 'string' &&
     typeof value.provider === 'string' &&
@@ -618,9 +677,7 @@ function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
     (value.customProviderApi === undefined ||
       value.customProviderApi === 'completions' ||
       value.customProviderApi === 'responses') &&
-    ['configuration', 'request', 'response-validation', 'health-gate', 'health-update'].includes(
-      String(value.stage),
-    ) &&
+    ['configuration', 'request', 'response-validation', 'health-gate', 'health-update'].includes(String(value.stage)) &&
     ['success', 'failure', 'aborted', 'skipped'].includes(String(value.outcome)) &&
     isOptionalNonNegativeInteger(value.attemptIndex) &&
     isOptionalNonNegativeFiniteNumber(value.status) &&
@@ -641,7 +698,20 @@ function isAgentLLMProfileAttemptTrace(value: unknown): boolean {
     isOptionalNonNegativeFiniteNumber(value.retryAt) &&
     (value.timeoutKind === undefined ||
       value.timeoutKind === 'first-output' ||
-      value.timeoutKind === 'stream-inactivity')
+      value.timeoutKind === 'stream-inactivity' ||
+      value.timeoutKind === 'response')
+  );
+}
+
+function isClassifierAttemptUsage(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['inputTokens', 'outputTokens', 'estimatedCostUsd']) &&
+    Number.isSafeInteger(value.inputTokens) &&
+    (value.inputTokens as number) >= 0 &&
+    Number.isSafeInteger(value.outputTokens) &&
+    (value.outputTokens as number) >= 0 &&
+    isOptionalNonNegativeFiniteNumber(value.estimatedCostUsd)
   );
 }
 
@@ -701,6 +771,7 @@ function isAgentTraceSummary(value: Record<string, unknown>): boolean {
   return (
     hasOnlyKeys(value, [
       'modelCallCount',
+      'classifierRequestCount',
       'toolCallCount',
       'retryCount',
       'fallbackCount',
@@ -713,6 +784,7 @@ function isAgentTraceSummary(value: Record<string, unknown>): boolean {
       'costStatus',
     ]) &&
     isNonNegativeInteger(value.modelCallCount) &&
+    isOptionalNonNegativeInteger(value.classifierRequestCount) &&
     isNonNegativeInteger(value.toolCallCount) &&
     isNonNegativeInteger(value.retryCount) &&
     isNonNegativeInteger(value.fallbackCount) &&

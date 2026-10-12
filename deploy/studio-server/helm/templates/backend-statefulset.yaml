@@ -22,6 +22,7 @@ spec:
       labels:
         {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 8 }}
       annotations:
+        rivet.dev/managed-schema-reader-version: {{ .Values.workflowSchema.compatibility.minimumVersion | quote }}
         {{- with .Values.podAnnotations.backend }}
 {{ toYaml . | nindent 8 }}
         {{- end }}

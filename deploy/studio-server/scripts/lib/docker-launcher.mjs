@@ -48,10 +48,12 @@ export function runCapture(command, env, options = {}) {
 
     child.stdout.on('data', (chunk) => {
       stdout += String(chunk);
+      if (options.streamOutput) process.stdout.write(chunk);
     });
 
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk);
+      if (options.streamOutput) process.stderr.write(chunk);
     });
 
     child.on('error', reject);
@@ -75,9 +77,11 @@ export function runArgsCapture(file, args, env, options = {}) {
     let stderr = '';
     child.stdout.on('data', (chunk) => {
       stdout += String(chunk);
+      if (options.streamOutput) process.stdout.write(chunk);
     });
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk);
+      if (options.streamOutput) process.stderr.write(chunk);
     });
     child.on('error', reject);
     child.on('close', (code) => {
@@ -171,15 +175,8 @@ export function composeConfigFilesMatch(configFilesLabel, expectedConfigFiles) {
     return false;
   }
 
-  const actual = configFilesLabel
-    .split(',')
-    .map(composeConfigFileName)
-    .filter(Boolean)
-    .sort();
-  const expected = expectedConfigFiles
-    .map(composeConfigFileName)
-    .filter(Boolean)
-    .sort();
+  const actual = configFilesLabel.split(',').map(composeConfigFileName).filter(Boolean).sort();
+  const expected = expectedConfigFiles.map(composeConfigFileName).filter(Boolean).sort();
 
   return actual.length === expected.length && actual.every((file, index) => file === expected[index]);
 }
@@ -199,10 +196,7 @@ export function hasBindMountInputOutputError(output) {
 }
 
 export async function composeProjectInputFingerprint(options) {
-  const {
-    composeConfigFiles,
-    cwd = process.cwd(),
-  } = options;
+  const { composeConfigFiles, cwd = process.cwd() } = options;
   const hash = createHash('sha256');
 
   for (const configFile of composeConfigFiles) {
@@ -246,7 +240,9 @@ export async function reconcileComposeProjectConfiguration(options) {
     { allowFailure: true, cwd },
   );
   if (labelsResult.exitCode !== 0) {
-    console.warn(`[${label}] Could not inspect the existing dev Compose containers; continuing with Docker Compose reconciliation.`);
+    console.warn(
+      `[${label}] Could not inspect the existing dev Compose containers; continuing with Docker Compose reconciliation.`,
+    );
     return false;
   }
 
@@ -270,11 +266,13 @@ export async function reconcileComposeProjectConfiguration(options) {
   );
   const hasStaleConfiguration = containerIds.some((containerId) => {
     const labels = labelsByContainerId.get(containerId);
-    return !composeConfigFilesMatch(labels?.['com.docker.compose.project.config_files'], expectedConfigFiles)
-      || !composeProjectFingerprintMatches(
+    return (
+      !composeConfigFilesMatch(labels?.['com.docker.compose.project.config_files'], expectedConfigFiles) ||
+      !composeProjectFingerprintMatches(
         labels?.['com.valerypopoff.rivet2.dev-stack-input-fingerprint'],
         expectedProjectFingerprint,
-      );
+      )
+    );
   });
   if (!hasStaleConfiguration) {
     return false;
@@ -325,9 +323,13 @@ export async function readDockerWaitTimeoutSeconds(options) {
         return timeout;
       }
 
-      console.warn(`[${label}] Ignoring invalid saved Docker startup wait timeout; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`);
+      console.warn(
+        `[${label}] Ignoring invalid saved Docker startup wait timeout; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`,
+      );
     } catch {
-      console.warn(`[${label}] Could not parse saved runtime limit settings; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`);
+      console.warn(
+        `[${label}] Could not parse saved runtime limit settings; using ${DEFAULT_DOCKER_WAIT_TIMEOUT_SECONDS}s.`,
+      );
     }
   }
 

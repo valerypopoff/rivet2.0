@@ -778,9 +778,12 @@ the node class.
 The class maintains both:
 
 - per-instance state, such as project/graph/registry/node-instance maps
-- per-run state, such as results, visited nodes, abort controllers, globals, loaded references, and queue state
+- invocation state, such as results, visited nodes, abort controllers, loaded references, and queue state
+- root-shared state, such as globals, execution cache, stored-value/knowledge controllers and resolved cross-project targets
 
 This distinction is important because some state is reused across runs and some is rebuilt on each `processGraph(...)`.
+Globals and execution cache deliberately retain their existing reuse semantics;
+they must not be treated as ordinary invocation fields that reset with results.
 
 `GraphRunLifecycle` owns the small run-level state machine (`idle`, `running`,
 `aborting`, `finished`), pause persistence, one accepted abort decision, and the
@@ -796,6 +799,99 @@ Current behavioral detail:
 - dependency readiness tracks upstream nodes directly; titles are presentation metadata and must never decide whether a consumer is allowed to run
 - `Context` nodes resolve values in a strict order: runtime `contextValues[id]`, then a connected default input when the default-input toggle is enabled, then the editor default, then the data type's built-in default. Every resolved value is coerced to the node's configured data type before being emitted.
 - pause waits are abort-aware, so aborting a paused run unwinds instead of waiting forever for a later `resume`
+
+### Execution-state ownership
+
+Child construction is centralized in `GraphProcessor.#constructChildInvocation`
+with four explicit invocation kinds: ordinary/cross-project Subgraph,
+continuation, Watch and async. Shared processor configuration, root resources,
+external functions, context, executor and frozen-output bindings are assigned
+once. Invocation paths still own their identities, recording scopes, state
+aliases, graph-output commits, costs and cancellation lifetime. Event/lifecycle
+wiring uses the existing `SubprocessorBridge` through two small processor
+adapters; the caller selects the parent/root and cleanup policy explicitly.
+Watch history interception and ordinary-child passive late-event forwarding
+remain distinct. Do not turn these choices into an unrestricted flags object.
+
+The bridge records each subscription immediately after acquisition. Failed
+setup rolls back earlier bindings; paired lifecycle setup also releases the
+event bridge and removes a registered child. Explicit cleanup drains all
+disposers exactly once, even if one throws, and branch tracking is released in
+`finally`. Ordinary graph-terminal auto-cleanup still removes control bindings
+only: passive forwarding must remain alive for late node terminals. Bridge
+regressions inject registration/disposal failures and distinguish nested from
+the child's own graph-terminal event. They also verify reentrant disposal and
+queued control/start delivery with the real Emittery implementation. Parent
+pause/resume bindings use the emitter's returned disposer directly; do not add
+another listener registry or reconstruct deregistration callbacks.
+
+Watch history allocation is followed by one setup/execution/finalization boundary:
+construction, preload, cancellation registration and partial wiring failures all
+complete that iteration's history and release acquired bindings. Explicit child
+cleanup attempts lifecycle and passive-event disposal even if either fails,
+then removes child tracking. A secondary cleanup failure cannot replace an
+already propagating setup/execution error; it reports only a safe warning/count.
+Automatic terminal cleanup for ordinary Subgraphs follows the same rule on
+`graphError` and unsuccessful `graphAbort`; passive late-terminal forwarding
+remains intact. Cleanup failure after successful execution or successful abort
+still throws its original aggregate, without adding another aggregate wrapper. Both
+schedulers have public regressions for Watch setup failure, simultaneous node
+and cleanup failure, ordinary Subgraph error identity, listener removal and
+successful processor reuse.
+
+`SchedulerBoundaryPlanner.ts` owns definition-only Watch and async topology
+validation and graph slicing. It consumes effective connections after existing
+port validation, plus explicit selection/preload/consumed-boundary information.
+Its lazy generators preserve authored traversal and validation/installation
+order, including dormant incomplete Watches. Both planners use one ordered
+connection index builder; their validation and traversal rules stay distinct.
+Plans retain node identities and do not allocate timers, subscriptions, history
+or runtime controllers.
+`GraphProcessor` installs plans and owns scheduling/resource effects. Existing
+Catch/input-stream setup remains with its boundary owner; continuation planning
+stays in `ToolCallContinuationBranchPlanner`. There is no new scheduler or
+cross-run topology cache. Test planners directly and preserve public processor
+characterization for both schedulers, child events, cancellation and costs.
+
+`GraphExecutionState.ts` separates invocation bookkeeping from root-shared
+resources. `GraphInvocationState` contains results, input/output maps, queue,
+abort controllers, cost, and child tracking. `GraphSharedExecutionState` contains
+intentional shared globals/cache, stored-value/knowledge controllers and resolved
+cross-project targets. Every child kind inherits that same shared owner; a reused
+root replaces the shared scope while retaining only the existing globals/cache
+reuse contract. Old child scopes never acquire the next run's target cache.
+`nextRootRun` creates that fresh target cache; initialization must not reset it
+again or mutate the previous shared owner.
+
+`GraphSchedulerBoundaryState` owns streaming/Catch plans, streams, pending work,
+and failure collections. It drains Catch tasks until both the admitted tasks and
+queue follow-up work settle. Scheduling, topology decisions, event emission and
+the run lifecycle remain in their existing owners.
+
+Reset decisions live in `GraphInvocationState.initialize` and the separate
+boundary topology/input-stream initialization phases, called by
+`GraphProcessor.#initProcessState` and `processGraph`. Owners are mutated in place,
+not replaced wholesale. Seeded-plan preparation and child
+overrides can exist before initialization; clearing every field changes Watch
+events and async cost accounting. Ordinary children remain isolated; same-graph
+continuations retain only their explicit graph-output/attached-data/input-value
+overrides. This refactor does not introduce cross-run compiled-plan caching or
+change externally visible execution identities.
+
+These state classes are implementation owners, not new host-facing processor
+APIs. Add invocation fields to `GraphInvocationState` with an explicit reset and
+child-inheritance decision; add shared resources only when all child kinds need
+the same root lifetime. Add stream subscriptions/relays to the boundary owner
+with their release path. Keep node scheduling and observable event order in
+`GraphProcessor`, and keep root async-task admission/drain in `ManagedAsyncBranches`.
+The detailed inheritance matrix is the acceptance guide linked below.
+
+`GraphSchedulerBoundaryState.releaseInputStreams` attempts every disposer and
+relay finalizer before reporting cleanup failures and clears its subscription
+references. Processor terminal cleanup and finish emission run even if a stream
+disposer or boundary drain fails. This is independently covered by state-owner
+tests; scheduling order remains characterized through public processor tests.
+See [execution refactor acceptance](EXECUTION-REFACTOR-ACCEPTANCE.md).
 
 ### Preprocessing
 
@@ -2019,7 +2115,7 @@ long-lived host signal cannot retain completed processors. Reusable processors
 reattach on their next run, while `coreCreateProcessor(...).dispose()` and the
 Node processor's existing `dispose()` release an unstarted binding explicitly.
 
-Runtime settings are normalized through [`processSettings.ts`](../packages/core/src/api/processSettings.ts). `resolveProcessSettings(...)` is the shared boundary used by core, `rivet-node`, and Evaluations so programmatic execution gets the same runtime defaults while still preserving explicit runtime options such as `recordingPlaybackLatency`, without depending on app-only editor preference fields that still exist on the legacy `Settings` object for compatibility. Shared LLM credentials (`openAiApiKey`, legacy `openAiKey`, `anthropicApiKey`, `googleApiKey`, and `customAiApiKey`) are first-class runtime settings so LLM Chat configured-key mode works the same in the app, Node package, CLI, and test runners; provider plugin config remains the compatibility fallback for older Anthropic/Google plugin settings. Custom provider configured-key mode checks the node's `customProviderApiKeyProgrammaticName` as a top-level runtime setting name, then checks the node-specific env var name through `settings.pluginEnv` / `process.env`, then falls back to the shared `customAiApiKey`. `resolveProcessSettings(...)` must normalize `openAiApiKey` and `openAiKey` to the same resolved runtime value so old OpenAI-backed nodes and new programmatic callers stay compatible, and it must preserve extra top-level settings so wrapper/backend code can pass separate custom-provider secrets using the exact names configured on each LLM Chat node without abusing plugin environment settings. [`getPluginConfig(...)`](../packages/core/src/utils/getPluginConfig.ts) deliberately bridges shared `anthropicApiKey` and `googleApiKey` settings into the legacy Anthropic/Google plugin config lookup after non-empty explicit plugin settings and before plugin env fallbacks, so old plugin nodes and app-side helper graphs such as `Generate using AI` can use the same Settings > LLM keys without duplicating credentials into Plugins settings. Missing or blank plugin values fall through instead of blocking shared keys or environment fallbacks, because plugin settings are often partial.
+Runtime settings are normalized through [`processSettings.ts`](../packages/core/src/api/processSettings.ts). `resolveProcessSettings(...)` is the shared boundary used by core, `rivet-node`, and Evaluations so programmatic execution gets the same runtime defaults while still preserving explicit runtime options such as `recordingPlaybackLatency`, without depending on app-only editor preference fields that still exist on the legacy `Settings` object for compatibility. Shared LLM credentials (`openAiApiKey`, legacy `openAiKey`, `anthropicApiKey`, `googleApiKey`, `openRouterApiKey`, and `customAiApiKey`) are first-class runtime settings so LLM Chat configured-key mode works the same in the app, Node package, CLI, and test runners; provider plugin config remains the compatibility fallback for older Anthropic/Google plugin settings. Custom provider configured-key mode checks the node's `customProviderApiKeyProgrammaticName` as a top-level runtime setting name, then checks the node-specific env var name through `settings.pluginEnv` / `process.env`, then falls back to the shared `customAiApiKey`. `resolveProcessSettings(...)` must normalize `openAiApiKey` and `openAiKey` to the same resolved runtime value so old OpenAI-backed nodes and new programmatic callers stay compatible, and it must preserve extra top-level settings so wrapper/backend code can pass separate custom-provider secrets using the exact names configured on each LLM Chat node without abusing plugin environment settings. [`getPluginConfig(...)`](../packages/core/src/utils/getPluginConfig.ts) deliberately bridges shared `anthropicApiKey` and `googleApiKey` settings into the legacy Anthropic/Google plugin config lookup after non-empty explicit plugin settings and before plugin env fallbacks, so old plugin nodes and app-side helper graphs such as `Generate using AI` can use the same Settings > LLM keys without duplicating credentials into Plugins settings. Missing or blank plugin values fall through instead of blocking shared keys or environment fallbacks, because plugin settings are often partial.
 
 ## Event Streaming API
 

@@ -27,12 +27,20 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
   };
 }) {
   let workerStarted = false;
+  let worker: Promise<void> | undefined;
 
   const withJobHeartbeat = async <T>(jobId: string, run: () => Promise<T>): Promise<T> => {
+    let pendingHeartbeat: Promise<void> | undefined;
     const heartbeat = setInterval(() => {
-      void options.jobStore.touchJob(jobId, options.isStopped()).catch((error) => {
-        console.error('[runtime-libraries] Managed job heartbeat failed:', error);
-      });
+      if (options.isStopped() || pendingHeartbeat) return;
+      pendingHeartbeat = Promise.resolve()
+        .then(() => options.jobStore.touchJob(jobId, options.isStopped()))
+        .catch((error) => {
+          console.error('[runtime-libraries] Managed job heartbeat failed:', error);
+        })
+        .finally(() => {
+          pendingHeartbeat = undefined;
+        });
     }, JOB_HEARTBEAT_INTERVAL_MS);
     heartbeat.unref?.();
 
@@ -40,6 +48,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
       return await run();
     } finally {
       clearInterval(heartbeat);
+      await pendingHeartbeat;
     }
   };
 
@@ -113,6 +122,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
         if (!options.getProcessManagedSync()) {
           await options.syncForLocalUse(false);
         }
+        if (options.isStopped()) break;
         const job = await claimNextJob();
         if (!job) {
           await wait(1_000);
@@ -129,14 +139,18 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
           } else if (outcome === 'failed') {
             recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
           } else {
-            console.warn(`[runtime-libraries] Job ${job.job_id} has an unresolved activation outcome; preserving durable state for recovery.`);
+            console.warn(
+              `[runtime-libraries] Job ${job.job_id} has an unresolved activation outcome; preserving durable state for recovery.`,
+            );
           }
         } catch (error) {
           const failed = await options.jobStore.failJob(job.job_id, error);
           if (failed) {
             recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
           } else {
-            console.warn(`[runtime-libraries] Job ${job.job_id} reached a terminal or unresolved state before worker failure handling completed.`);
+            console.warn(
+              `[runtime-libraries] Job ${job.job_id} reached a terminal or unresolved state before worker failure handling completed.`,
+            );
           }
         } finally {
           recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
@@ -154,17 +168,19 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
 
   return {
     startWorkerLoop(): void {
-      if (workerStarted) {
+      if (workerStarted || options.isStopped()) {
         return;
       }
 
       workerStarted = true;
       recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
-      void workerLoop();
+      worker = workerLoop();
     },
 
-    reset(): void {
-      workerStarted = false;
+    async drain(): Promise<void> {
+      // The backend fences new claims first. Finish any already-claimed job,
+      // its heartbeat and outcome persistence before releasing the DB lease.
+      await worker;
     },
   };
 }

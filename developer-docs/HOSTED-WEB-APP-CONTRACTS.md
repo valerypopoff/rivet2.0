@@ -135,6 +135,12 @@ changes without regeneration. Its build script fixes esbuild's working directory
 the Node package, so generating from the repository root or through a workspace
 command produces the same artifact.
 
+Response-inspector request counts and profile-attempt omission notices share
+Core's `AgentResponseTracePresentation` with the editor. A shared profile-row
+cap can omit requests or decisions; do not assign its omissions to only one
+section. Legacy classifier counts inferred from capped rows explicitly say
+**retained evidence only**. Explicit pre-cap counters are displayed unchanged.
+
 Core's `normalizeUiGraph(...)` / `normalizeProjectUiGraphs(...)` functions are the
 shared structural boundary for wrapper-provided snapshots. They validate every
 component and `runGraph` action discriminator and required field, and report
@@ -615,9 +621,19 @@ trace-save attempts are ignored while inspection remains disabled.
 The assistant-message menu order is **Open in reading view**, **Inspect
 response**, **Remove message**. The shared accessible inspector groups metadata
 into **Execution**, **Recovery behavior**, **Usage and cost**, and **Timing**,
-then lists physical model and tool calls. **Provider request retries** means a
-failed request was repeated; **LLM profile fallbacks** means execution moved to
-the next configured profile. Correlation identities remain in the portable
+then lists physical model, classifier and tool calls, plus profile decisions.
+**Provider request retries** means a failed request was repeated; **Profile
+fallbacks** means execution moved to the next configured LLM or classifier
+profile. Core's renderer-independent `AgentResponseTracePresentation` supplies
+the same named profile rows, safe failure categories/reasons, HTTP status,
+timing, suspension/recovery/unreached labels and classifier receipts to the
+React inspector, Run Activity and generated DOM inspector. Physical classifier
+requests without receipts show **usage not reported** and **cost unknown**.
+Health and configuration decisions stay separate from physical requests and do
+not invent usage. Legacy v1 traces without `classifierRequestCount` derive it
+from retained physical attempts; omitted-row counts remain visible. Classifier
+invocation views omit chat-only rounds, tools, cache and reasoning metrics;
+mixed response traces retain both families. Correlation identities remain in the portable
 trace for runtime isolation, recordings, and retention, but the normal inspector
 does not render opaque trace, graph, node, or process IDs. Both React and
 generated hosted renderers must validate the portable trace before rendering it.

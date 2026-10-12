@@ -1,5 +1,271 @@
 # Development
 
+## Extending the shared editor after the ownership refactor
+
+Hosted editor execution and Evaluation workspace behavior use the app-owned
+modules, not wrapper aliases or a second runner. Start with
+[App Architecture](../APP-ARCHITECTURE.md#execution-architecture),
+[Evaluation workspace owners](../EVALUATIONS.md#workspace-source-owners) and the
+[ownership/verification matrix](../EXECUTION-REFACTOR-ACCEPTANCE.md).
+Use the existing provider contracts to supply hosted storage/runtime capabilities;
+do not put database coordination into the extracted view components.
+
+For editor changes, run the official `yarn test:app` runner and relevant builds,
+then the required headless `studio-server:ui:observe` scenarios. Source-level
+Node sidecar integration and a packaged Windows executor smoke are separate
+checks; passing Browser tests alone does not verify desktop bundle execution.
+Documentation-only reconciliations need documentation link checks, not a
+Kubernetes rehearsal or a new browser run.
+
+## Extending serving services
+
+Classifier providers are Core-owned and shared by desktop and hosted execution.
+Microsoft Decision-1 uses the `openrouter` provider and the native OpenRouter
+Decisions API, default model `microsoft/microsoft-decision-1`. Follow the
+[OpenRouter classifier contract](../CLASSIFIER-NODES.md#microsoft-decision-1-through-openrouter)
+for credential precedence, evidence preservation and conservative pricing.
+Configure `OPENROUTER_API_KEY` on the execution host (or its saved Classifier
+settings), not as a browser-exposed environment variable. No Azure resource URL
+or deployment is needed. Existing runtime settings injection applies to
+endpoints, web apps, Evaluations and editor Node runs without another adapter.
+
+Perplexity uses the same registry/runtime injection with provider `perplexity`,
+default model `pplx-decider-v1.1-27b` and host credential `PERPLEXITY_API_KEY`
+(or saved Classifier settings / programmatic `perplexityApiKey`). Its native
+Decisions endpoint is not Sonar or chat completions. Follow the
+[Perplexity classifier contract](../CLASSIFIER-NODES.md#perplexity-decisions)
+for inline image parts, smaller question limits and conservative cost accounting.
+Do not expose its environment key to the browser; Browser execution is rejected.
+
+Provider hardening belongs in Core's shared classifier preparation/HTTP runner,
+not duplicated host adapters. Graph and direct API State roots use the same
+text/object/array contract; malformed shared input cannot become a fallback
+candidate. HTTP 402/413 must not consume retry budgets or suspend profiles:
+an unchanged request cannot fix credit or payload-size rejection. Keep ordinary
+HTTP catch/fallback behavior, body disposal and cancellation intact. Run the
+classifier boundary, registry-driven input-snapshot and aggregate-pricing tests,
+then the hosted `jev-nodes.spec.ts` observer when changing these integrations.
+
+- Put workflow-facing contracts in `routes/workflows/data-backend.ts`; do not
+  derive another adapter's contract with `Pick<ManagedWorkflowBackend, ...>`.
+  Use its narrow project/publication/execution/recording interfaces for consumers.
+  Untrusted mutation payloads remain `unknown` until adapter-owned normalization;
+  unioning a draft type with `unknown` does not strengthen that boundary.
+- Add common publication rules to `publication-policy.ts`. Supply each adapter's
+  actual project/draft/publication state and recheck inside its commit boundary.
+  Preserve adapter-specific route ownership, artifact validation and rollback.
+  Endpoint access changes must reject unpublished endpoints, including after
+  unpublish when historical versions still exist.
+  Capture publication preconditions before any asynchronous adapter acquisition,
+  filesystem writer wait or database lock. Do not retain caller-owned reviewed
+  state across an await, including access, unpublish and version-restore commands.
+- Construct serving resources in `storage-composition.ts` under one
+  `WorkflowStorageServices` owner. Never add independent module-global stores or
+  timers. Do not release an owner on an unknown cleanup outcome. Accepted recording
+  tasks may use existing stores during drain, but may not create new resources.
+  Obtain health/Evaluation stores from the owner rather than repeating mode
+  dispatch in consumers; managed owners must never create their local counterparts.
+- Extend `hosted-runtime-policy.ts` when adding execution dependencies. Supply
+  explicit loaders for hosted Evaluation execution as well as serving runs.
+  Keep transport credentials and request-context filtering in their owning
+  transport; keep durable scheduler/trial acceptance outside processor setup.
+- Use `ExecutionSession` for one processor run. Attach surface-specific listeners
+  before running it, await its full terminal, and leave recording persistence to
+  the caller. Prepared but unaccepted scheduled processors still need disposal.
+  A delivered HTTP response is not evidence that background execution finished.
+  Evaluation recording should use the session's recorder, not allocate a second
+  placeholder recorder during preparation; failed preparation has no run to record.
+
+Regression coverage for these seams: `workflow-storage-services.test.ts`,
+`workflow-publication-policy.test.ts`, `hosted-runtime-policy.test.ts`,
+`sqlite-workflow-backend.test.ts`, `managed-publication-history.test.ts`,
+`workflow-publication-filesystem.test.ts`, `workflow-web-apps-filesystem.test.ts`,
+`workflow-async-response.test.ts`, `hosted-evaluation-execution.test.ts`,
+`scheduled-run-execution.test.ts` and `scheduled-runs.test.ts`.
+The storage-owner tests cover single-flight construction, late initialization,
+independent owners, retention drain, evidence ordering and failed cleanup fencing.
+They distinguish deferred construction from an initializer already in progress,
+and require managed producer admission to close before waiting for that initializer.
+The runtime-policy/session tests cover cancellation at preparation boundaries,
+configuration isolation, disconnected foreground delivery and late graph failures.
+They also cover mode-correct operational stores, synchronous close failures,
+recorder-attachment cleanup and preservation of graph outcomes on disposal errors.
+Catalog shutdown must settle accepted operations before closing their health and
+Evaluation stores; unknown SQL termination must keep those dependent stores open.
+Use the owner's `drain()` to settle producer/persistence work without closing its
+stores; `dispose()` shares that same drain and then closes resources. Do not add
+another mode-dispatch or independent shutdown sequence in a feature.
+
+`helpers/workflow-publication-contract.ts` is one unchanged behavioral contract
+run by the direct and worker SQLite fixtures and by `test:async-managed` against
+real PostgreSQL/MinIO. It covers project/draft/publication preconditions, atomic
+route conflicts, access changes after draft edits, endpoint/web-app independence,
+unpublished access rejection, retained history and compact-tree status agreement.
+Extend that contract for shared policy changes rather than copying assertions
+into divergent adapter suites. Adapter-specific races/integrity remain separate.
+
+Run `test:async-managed` and `test:scheduled-managed` against their disposable
+PostgreSQL/MinIO fixtures when changing managed lifecycle or shared execution.
+For browser-visible execution/recording changes, use the required headless observe
+runner with `workflow-async-recording.spec.ts` (the disposable API serves real
+recordings; the hosted UI may be a local preview). Keep performance workloads
+separate from concurrent builds/tests; passing correctness checks does not measure
+production throughput or latency.
+Run `yarn test:style` separately from runtime/browser suites: its asset checks
+rebuild Core outputs, which runtime fixtures import from `dist`.
+
+## Serving-path regression checks
+
+Catalog serving uses `worker: true`; direct adapters remain useful for stopped
+migrations and verification. Await initialization and disposal. Only serializable
+storage options enter the worker; host leases/callbacks stay in the parent.
+Publication preparation and commit are separate commands with a compare-and-swap
+guard, not an unlocked read followed by an unconditional update. Never retry an
+unknown worker commit automatically.
+Managed execution concurrency tests cover published/latest endpoint and web-app
+loads. Concurrent callers still share one route/object load but must not share
+mutable project, attached-data, dataset-provider, access-list or diagnostic state.
+All four paths reject artifacts whose project identity differs from the route's
+selected workflow, before returning executable state.
+Publication regressions mutate a caller-owned precondition object during artifact
+preparation and require a stale-draft conflict with no route/history writes.
+Worker-close and worker-loss regressions delay termination acknowledgement to
+verify that disposal and maintenance leases cannot finish early; queued writes
+are never replayed after worker loss.
+Termination-request failure tests cover both worker loss and normal close: a
+rejected request must not settle jobs, close or drain until a separate `exit`
+event confirms the owner is gone. Repeated shutdown errors remain contained, and
+canceling a drain wait must leave operation counts intact.
+Queue cancellation tests distinguish pre-dispatch cancellation from a dispatched
+write, verify pending-read drain and canceled readiness, and prove generation
+paths cannot be retargeted before lazy startup. A canceled idle wait leaves the
+actual operation running. Close remains usable on a canceled signal view.
+Normal and failed close replies retain drain accounting until worker termination;
+an unused close must not start a worker. Mode-change tests exercise both direct
+and worker adapters: failed initialization leaves the old write policy intact,
+startup does not enter write leases before initialization, and late initialization
+cannot revive a shutting-down owner. Recreate a serving worker backend after
+shutdown; offline direct adapters still support an explicit completed-close reopen.
+
+For a fixed, disposable component comparison, build the API and run
+`yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:benchmark 40`.
+It checks identical results before timing fresh parse versus detached cached
+materialization, and direct versus worker compact catalog reads. It reports
+p50/p95/max durations, CPU, sampled RSS, event-loop delay and separate worker
+startup. It accepts only a bounded iteration count, never a deployment URL,
+credentials or a storage path. See the
+[completion checklist](./serving-refactor-verification.md) for measurement limits.
+
+Focused API tests: `parsed-execution-cache.test.ts`, `catalog-worker.test.ts`,
+`managed-schema-cutover.test.ts`, `release-maintenance.test.ts`, `metrics.test.ts`,
+`sqlite-workflow-backend.test.ts`, `managed-execution-service.test.ts`,
+`managed-execution-cache.test.ts`, `managed-execution-invalidation.test.ts`,
+`managed-publication-history.test.ts`, `managed-workflow-schema-migrations.test.ts`,
+`hosted-evaluation-coordinator.test.ts` and `evaluation-runs.test.ts`. The real
+`test:async-managed` runner owns disposable PostgreSQL/S3 services and includes
+compact-progress detail reconstruction, rename, interruption/manual retry,
+cancellation and terminal retention/publication contracts.
+
+For the same fixed concurrent logical workload across adapters, build the API,
+then run these commands separately from builds and tests:
+
+```text
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:workload compare 100
+yarn workspace @valerypopoff/rivet-studio-server-api serving-refactors:managed-workload 100
+```
+
+The local comparison runs direct and worker owners in separate processes. The
+managed command owns fresh loopback PostgreSQL/MinIO containers; Docker is
+required. Neither accepts deployment paths, URLs or credentials. Both use 12
+projects, 300 nodes each, three initial publications, 96 recordings, and six
+concurrent operations (tree, recordings picker, open, execution definition,
+readiness, save/publication). Results must remain correct throughout. Report
+cold/warm distributions, p50/p95/p99 (p99 only with at least 100 samples), CPU,
+sampled Node-process RSS and event-loop delay. Container resources and real HTTP
+latency are not included; use the protected staging capacity gate for those.
+The component command also reports cold cache admission and oversized bypass,
+not only warm hits. Retain raw artifacts rather than treating synthetic latency
+as a production promise.
+
+`studio-server:verify:kubernetes` includes journal recovery behavior tests,
+maintenance-mode chart rendering, reserved reader identity rejection and
+namespace-scoped schema guard configuration. A real old-to-new maintenance
+cutover still requires disposable-cluster rehearsal before promotion; static
+rendering cannot prove scheduling, RBAC authorization or termination behavior.
+The cutover behavior suite also covers malformed completed journals, a completed
+runner's unreleased lease, expiration between controller mutations, failed
+renewal and renewal racing failure cleanup. Keep ordinary-rollout journal checks
+on the same validator as recovery; a `complete` string alone is not approval.
+The asynchronous endpoint fixture correlates each completed request with its new
+recording ID, rather than assuming it is first in timestamp order. It still
+requires exactly one new recording and the expected success/failure outcome.
+The integration fixture counts full scheduler-snapshot reads while the third trial
+is blocked: only the three execution claims may load snapshots, not their progress
+updates or the two preceding settlements. Progress reads must retain scheduler-row
+before projection-row locking; only terminal finalization loads the immutable
+snapshot. A two-expired-job fixture verifies lease recovery reuses per-run metadata
+within its transaction and preserves both interruptions without automatic retry.
+It also rejects generic checkpoint writes before the first worker claim and immediately after manual retry;
+the internal projection marker is established atomically and is never client-owned.
+Terminal cancellation is idempotent and uses the transaction's own connection,
+not a nested pool read that can deadlock under pool saturation.
+Generic managed deletion and coordinator deletion share one locked primitive.
+Unit and real PostgreSQL regressions reject queued/running parents and active
+children, preserving evidence even when no coordinator route is enabled. Real
+integration checks protection before dispatch and during a blocked trial, then
+checks that terminal/non-hosted deletion still works. Keep job -> scheduler ->
+projection locking; an unlocked status check before delete is not sufficient.
+It never targets a deployment URL. Browser regressions use headless `studio-server:ui:observe
+evaluation-history-paging.spec.ts run-recordings-modal.spec.ts` against a fresh
+local frontend build. These checks establish correctness, not a production VM
+latency claim; measure identical workloads before/after deployment separately.
+The linked-child deletion browser scenario focuses the action before clicking:
+auto-scrolling a partially visible row can invalidate a prior row hover. Keep
+this data-membership regression on the supported focus path, without forced
+clicks; separate row-action tests cover hover visibility.
+
+Migration 15 leaves released migration SQL/checksums untouched. Its running header
+representation is not backward-readable by schema-14 code. The release's minimum
+rollback-compatible schema is therefore 15, despite additive DDL; never widen
+the compatibility window to bypass that representation boundary. Stop older
+managed API readers as well as Evaluation workers before enabling new compact
+headers. The explicit `--maintenance-cutover` helper stops release-owned
+controllers and waits for their pods to disappear; accepted work must be drained
+and external controllers paused beforehand. Ordinary rolling deployment does not
+perform this cutover. See
+[serving-path ownership](./architecture.md#serving-path-refactors).
+
+### Desktop bundle browser harness
+
+Most hosted regressions should use a fixed production preview to avoid HMR
+changing ownership during a test. `desktop-project-bundle.spec.ts` is an exception:
+its test-owned desktop host imports `/@fs/` modules and Vite's source shims, so it
+requires the web package's `dev` server, not `preview`. Use a separate loopback
+port and set `PLAYWRIGHT_BASE_URL` to it. Let initial dependency optimization
+settle before the qualification run; an optimization reload can split React
+module identities in this custom host. Do not edit source while it runs.
+Run observe suites sequentially: their report and trace directories are shared.
+
+## Post-version review
+
+The [2026-10-10 inventory and reassessment](audits/2026-10-10-post-version-review.md)
+groups all changes since the desktop 2.24.0 / Server 1.23.0 / public package 2.17.0
+release preparation, including owner invariants, newly found fixes and verification
+limits.
+
+## Browser fixture API isolation
+
+Mocked browser API catch-alls must use `url.pathname.startsWith('/api/')`, not
+`**/api/**`: ordinary Vite serves source modules such as `core/src/api/streaming.ts`
+under `/@fs/`, and a broad glob intercepts those modules too. The cross-project
+Subgraph browser regression edits connected target inputs and outputs through the
+real editor, saves the target, then verifies renamed labels, preserved wires,
+clean caller state, tab switching and saved-file reopening.
+Self-contained editor fixtures must also mock configuration and Evaluation-library
+bootstrap using `mockHostedEditorBootstrap`; a mocked workflow tree alone can leave
+the project row disabled before the test reaches its owning behavior. The graph-port
+rename fixture uses that helper and does not depend on an ambient API session.
+
 ## Shared dropdown styling
 
 `packages/studio-server-web/dropdown-styles.css` is loaded in both the dashboard
@@ -471,19 +737,42 @@ Changes to the launcher or `dev/*.mjs` server implementation require a web resta
 The watch-only Vite server has HMR disabled; it opens no unused HMR socket.
 
 The named `tunnel_cache` volume stores deduplicated hardlinked generations, capped
-at 2 GiB of unique objects and 128 generations. Old generations are deliberately
-not deleted while an old tab could still request a lazy chunk. At the limit,
-publication fails visibly while the existing bundle keeps serving.
-Failed-publication objects without any retained-generation hardlink are reclaimed
-when the next compiler initializes the cache; retained generations are never
-pruned. Objects from a partial publication must not permanently consume the
-available budget.
-To reset the retained-generation cache,
-close old browser tabs, stop the dev stack, and remove **only** that Compose
-project's `tunnel_cache` volume, then restart. Never use `docker compose down -v`
-for this: it would also remove local application/database volumes. A fresh web
-process waits for its first successful build rather than treating another
-checkout's cached HTML as current.
+at 2 GiB of unique objects and 128 generations. Publication now reclaims the
+oldest unused generations under pressure instead of permanently filling the
+volume. The HTTP supervisor is the sole publisher/collector; compiler children
+wait for its acknowledgement before exiting or reusing the working directory.
+This keeps live-tab retention and filesystem retirement in one process.
+
+The dashboard identifies its generation on `/__rivet_dev/events?generation=...`.
+An open SSE connection pins that generation, including its lazy chunks and
+workers. A directly opened `?editor` tab owns its own retention connection;
+the ordinary dashboard iframe inherits its parent's pin. HTML/asset reads also
+hold pins until their response closes. Released
+pins retain a five-minute reconnection grace; active and suspended background
+tabs retain their SSE pin without requiring browser timers. Legacy clients that
+omit the generation conservatively protect all history until they close/reload,
+plus the same grace. The current build is never evicted. On restart the newest
+cached generation is protected until replacement, but is not served as current:
+readiness still waits for the first successful build of the current checkout.
+
+Cache directories must be real directories, object entries must be regular
+content-addressed files, and generation HTML must identify its owning UUID.
+Unexpected entries fail closed rather than becoming deletion candidates.
+Candidate validation and exact deduplicated-space reservation happen before
+publication. An oversized build fails without evicting history. Failed/retired
+publications reclaim unreferenced objects immediately; startup cleans abandoned
+staging. Source edits and retired watcher identities fence publication before
+promotion, and replacement compilation waits for prior publication to settle.
+If pinned history still prevents publication, the last working build remains
+available, the notice asks to close unused tabs, and the watcher retries after
+five minutes (new source edits still trigger ordinary rebuilds).
+
+An upgrade from the old indefinitely-retained cache does not require volume
+deletion: close old tunnel tabs and restart the **development** frontend/stack so
+it loads the changed `dev/*.mjs` implementation. For example, save work, run
+`yarn studio-server:dev:down`, then `yarn studio-server:dev:tunnel`. These commands
+retain application and cache volumes. Never use `docker compose down -v` as
+cache recovery: it would also remove local application/database volumes.
 
 Verification:
 
@@ -507,7 +796,12 @@ failure/reconnect, build feedback, safe clean refresh,
 generation pinning, pending dashboard forms/rename rows, an active canvas drag,
 an inactive dirty tab and aborted recovery transactions. The native server tests cover cache limits, failed publication,
 old chunks, SSE, path validation, deduplication, retired watcher callbacks and
-compiler deadlines. Generated bundle reads in server tests inspect only test-owned
+compiler deadlines, full-cache restart recovery, live SSE retention, grace expiry,
+oversized candidates and superseded publication. `tunnel-cache-retention.spec.ts`
+uses the real HTTP/SSE server and a disposable tiny frontend to verify lazy imports
+and worker loading while newer builds exhaust the cache. It runs without Docker
+and is enrolled in the standard editor CI lane.
+Generated bundle reads in server tests inspect only test-owned
 artifacts, never production source. Bootstrap behavior is checked in the real browser,
 not by extracting and executing inline HTML source in a mock VM. Pure launcher
 tests exercise `developmentFrontendEnv`; the static repository gate
@@ -906,7 +1200,7 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.22.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.25.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
@@ -1026,7 +1320,52 @@ Push Studio Server changes to `develop` for the normal Build and Verify Studio S
 
 A relevant `staging` push runs Build Images, whose reusable verifier checks Studio Server once before the VM candidate is promoted. It builds four immutable candidate images and runs the candidate image and local-upgrade rehearsals, but skips the desktop/Rust Build matrix, duplicate standalone verification, and managed Kubernetes Kind gate. The separate protected Kubernetes provider/capacity/Evaluation gates remain explicit manual dispatches. `staging` never updates `latest` or the durable production release pointer; those remain `main`-only. Retagging the four images is not atomic, so a failed promotion can leave `staging` aliases at different versions. The alias alone is never proof that the latest push passed or that all four images match.
 
-For a VM rehearsal, wait for the **Build Images** run for the intended `staging` commit to succeed, switch the VM checkout to that commit on the `staging` branch, and run `yarn studio-server:staging`. It uses the same Compose project, dotenv, TLS overlay, durable volumes, and launcher-derived artifact paths as production. Before recreating containers it requires a clean tracked checkout and an existing API container in the selected Compose project; it checks the API/initializer artifact bind mounts and named app-data, workspace, and SQLite metadata volumes against that container. It then pulls all four `:staging` image aliases, verifies their source-revision labels against Git HEAD, and pins the three running services to the pulled immutable digests. It renders Compose again and requires every service, including the artifact initializer, to use the verified digest and unchanged mounts. It also checks that the API image contains the combined-backend supervisor. A failed check leaves the running containers alone. If the old API container was deleted, restore or inspect the intended Compose project and data volumes before using another deployment method; this command will not guess which state belongs to the VM. The command neither edits `.env` nor starts the local storage upgrade. Do not infer a green CI run merely from matching aliases: image promotion is not atomic, so confirm the intended Build Images run in GitHub first.
+For a VM rehearsal, wait for the **Build Images** run for the intended `staging` commit to succeed, switch the VM checkout to that commit on the `staging` branch, and run `yarn studio-server:staging`. It uses the same Compose project, dotenv, TLS overlay, durable volumes, and launcher-derived artifact paths as production. Before recreating containers it requires a clean tracked checkout and an existing API container in the selected Compose project; it checks the API/initializer artifact bind mounts and named app-data, workspace, and SQLite metadata volumes against that container. It then pulls all four `:staging` image aliases (at most two concurrently, with live Docker output), verifies their source-revision labels against Git HEAD, and pins the three running services to the pulled immutable digests. It renders Compose again and requires every service, including the artifact initializer, to use the verified digest and unchanged mounts. It also checks that the API image contains the combined-backend supervisor. A failed check leaves the running containers alone; in-flight pulls are drained and no queued image checks are started after failure. If the old API container was deleted, restore or inspect the intended Compose project and data volumes before using another deployment method; this command will not guess which state belongs to the VM. The command neither edits `.env` nor starts the local storage upgrade. Do not infer a green CI run merely from matching aliases: image promotion is not atomic, so confirm the intended Build Images run in GitHub first.
+
+### Startup progress across launchers
+
+Production (prebuilt, staging, restart, custom) and Docker development (including
+tunnel/recreate/build) print named preflight/build/start/readiness phases immediately,
+with elapsed-time heartbeats every 10 seconds and completion/failure duration.
+Docker pull/build/Compose output remains live; captured staging pulls are explicitly
+teed to the terminal while their original output is retained for digest verification.
+Config/inspection/secret commands remain captured and are never streamed implicitly.
+Phase labels do not include command arguments or dotenv values.
+Command plans carry their phase names explicitly: never infer the operation from
+the rendered shell command, since an env-file path can contain words such as
+`pull` or `down`. A failed pull/start stops subsequent recreation/proxy reload;
+diagnostics may still run, but cannot turn the failed phase into success.
+
+Production Compose defaults to two parallel operations unless the operator already
+set `COMPOSE_PARALLEL_LIMIT`; custom production and Docker development keep their
+one-operation build default. The staging image verifier independently caps pulls
+at two and completes all provenance checks before any service recreation. Concurrency
+does not relax mount continuity, digest pinning, revision, or supervisor checks.
+Elapsed messages describe work in progress, not readiness; existing `--wait` health
+checks and saved startup deadlines are still authoritative. Attached development
+`up` streams service logs without a perpetual startup timer.
+
+The local-process development launcher marks watcher launch separately from service
+readiness and adds elapsed time to its existing API/web/executor log prefixes.
+Single-watcher launch commands report process launch without claiming the service is
+ready. Kubernetes development wraps finite tool invocations with the same timed phases;
+its builds remain serialized and secret/config captures remain private. Captured
+tool invocations settle on child `close`, after their output streams drain, not
+on `exit`; progress completion must not race the final captured output.
+
+`launcher-progress.test.mjs` (included by the production-cutover test entry point)
+covers heartbeat cleanup, failures, streaming before child completion, private
+captures, complete Kubernetes tool output and nonzero-exit propagation with real disposable Node
+processes (no cluster access). `staging-docker.test.mjs` covers the two-pull bound, failure draining, and
+the unchanged provenance/mount safeguards. `launcher-startup.test.mjs` executes the
+production/development entry points with an isolated fake Docker CLI and dotenv,
+checking phase output (including env-file paths containing operation names),
+failure propagation/no subsequent startup, invocation order, tunnel mode, and concurrency overrides
+without relying on the launcher's command-plan source layout. It also verifies
+selected dotenv/Compose overrides, wait/build flags, stop-before-recreate ordering,
+and quiet `config`/`services` actions that never build, pull or start containers.
+These checks never pull real images or touch a running stack. No storage migration or VM restart is
+needed just to install this launcher change; it takes effect on the next invocation.
 
 The older manual route remains available: set exactly one `RIVET_IMAGE_TAG=candidate-<commit SHA>-<run ID>-<run attempt>` from a successful run in the VM `.env`, then run `yarn studio-server:prod`. Do not use the default `latest` tag to test staging; it is the main-branch production alias. If `.env` contains a staging tag or individual image overrides from a VM trial, remove or update them explicitly before a later main-line production deployment. Pulling a staging image does not select it for Compose by itself.
 
@@ -1929,7 +2268,7 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - App Settings HTTP resources use `ETag` and `If-Match`; domain writers must merge scoped PATCH drafts into the repository's current value so independent tabs and concurrent browser sessions do not lose unrelated fields
   - missing files mean first-run defaults, schema upgrades require explicit migrations, writes remain atomic owner-only JSON files, and the repository poller is the compatibility path for external proxy/bootstrap writers
 - dashboard controllers belong in `packages/studio-server-web/dashboard/`
-  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows or in their filename tooltips. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
+  - editor startup/loading feedback belongs in the editor area, not the project tree. Keep the tree's own folder-loading/error states and editor-readiness interaction guards, but do not duplicate "Loading editor" above the rows, in their filename tooltips, or on sidebar action labels/tooltips. Save keeps its stable name while disabled before readiness. `hosted-dashboard-contracts.spec.ts` holds editor startup to check this boundary before and after readiness.
   - `useWorkflowLibraryController.ts`, `useRunRecordingsController.ts`, `useProjectSettingsActions.ts`, `useDashboardSidebar.ts`, and `useEditorBridgeEvents.ts` are composition/orchestration seams; tree fetching, selection/preview debounce, drag/drop, project/folder mutations, version actions, and retained recording-modal state stay in their focused hooks instead of returning to the workflow controller
   - `AppSettingsModal.tsx` stays a tab-composition shell; each settings domain owns its form hook under `packages/studio-server-web/dashboard/app-settings/`, and all forms use `useSettingsFormResource.ts` for revision-aware load/save/conflict handling. A tab save must send only its scoped draft and must not reset unsaved fields in another tab
   - keep the workflow-library header block at `37px` high without a bottom divider; the whole open-state header row is the collapse control with square hover corners and the sidebar icon before the `Rivet Studio Server` title; collapsed mode should be a persistent full-height `30px` rail button with a centered `>` chevron rather than a small header button, show the opened project's larger status dot in the former header slot only when its aggregate endpoint/web-app publication status is `Published` or `Unpublished changes`, keep the active project card grey/green/yellow tinted from that same aggregate status where any `Unpublished changes` wins over `Published`, keep the workflow tree mounted while folded, reveal the contents only after the reopen width animation completes, and keep resize behavior pointer-captured with a forgiving splitter hit target, no width transition while dragging, and fold/unfold thresholding at half the minimum sidebar width

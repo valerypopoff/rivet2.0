@@ -3,9 +3,10 @@ import {
   getChatV2ModelOptions,
   getPluginConfig,
   type Settings,
+  type ChatV2Provider,
 } from '@valerypopoff/rivet2-core';
 
-export type ChatV2ModelCatalogProvider = 'openai' | 'anthropic' | 'google' | 'custom';
+export type ChatV2ModelCatalogProvider = ChatV2Provider;
 export type ChatModelOption = { value: string; label: string };
 
 export type ChatModelCatalogContext = {
@@ -62,7 +63,10 @@ function sortModelOptions(options: ChatModelOption[]): ChatModelOption[] {
   return [...options].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function mergeWithStaticFallback(provider: ChatV2ModelCatalogProvider, discovered: ChatModelOption[]): ChatModelOption[] {
+function mergeWithStaticFallback(
+  provider: ChatV2ModelCatalogProvider,
+  discovered: ChatModelOption[],
+): ChatModelOption[] {
   const merged = new Map<string, ChatModelOption>();
 
   for (const option of getChatV2ModelOptions(provider)) {
@@ -128,6 +132,25 @@ async function fetchOpenAIModels(context: ChatModelCatalogContext): Promise<Chat
   );
 
   return mergeWithStaticFallback('openai', discovered);
+}
+
+async function fetchOpenRouterModels(): Promise<ChatModelOption[]> {
+  // The catalog is public. Do not send execution credentials to discovery.
+  const response = await fetch('https://openrouter.ai/api/v1/models');
+  if (!response.ok) throw new Error(`OpenRouter models request failed with ${response.status}`);
+  const data = (await response.json()) as {
+    data?: Array<{ id?: string; name?: string; architecture?: { output_modalities?: string[] } }>;
+  };
+  const models = new Map<string, ChatModelOption>([
+    ['openrouter/auto', { value: 'openrouter/auto', label: 'OpenRouter Auto' }],
+  ]);
+  for (const model of data.data ?? []) {
+    const id = model.id?.trim();
+    if (!id || (model.architecture?.output_modalities && !model.architecture.output_modalities.includes('text')))
+      continue;
+    models.set(id, { value: id, label: model.name?.trim() || id });
+  }
+  return sortModelOptions([...models.values()]);
 }
 
 async function fetchAnthropicModels(context: ChatModelCatalogContext): Promise<ChatModelOption[]> {
@@ -263,6 +286,7 @@ export function getChatV2ModelCatalogCacheKey(
       ]);
     }
 
+    case 'openrouter':
     case 'custom':
       return JSON.stringify([provider]);
   }
@@ -305,6 +329,8 @@ export async function getChatV2DiscoveredModelOptionsWithStatus(
             options: await fetchGoogleModels(context),
             source: 'api' as const,
           };
+        case 'openrouter':
+          return { options: await fetchOpenRouterModels(), source: 'api' as const };
         case 'custom':
           return {
             options: [],
@@ -337,7 +363,7 @@ export function invalidateChatV2DiscoveredModelOptions(
 }
 
 export function prefetchChatV2DiscoveredModelOptions(context: ChatModelCatalogContext): void {
-  for (const provider of ['openai', 'anthropic', 'google'] as const) {
+  for (const provider of ['openai', 'anthropic', 'google', 'openrouter'] as const) {
     void getChatV2DiscoveredModelOptions(provider, context);
   }
 }

@@ -1,5 +1,325 @@
 # Architecture
 
+## OpenRouter LLM execution
+
+LLM Chat and LLM Profile share Core's first-class OpenRouter adapter across hosted
+editor, Node executor, endpoints, web apps and Evaluations. Host runtime settings
+resolve `openRouterApiKey` or `OPENROUTER_API_KEY`, also used by the OpenRouter
+classifier provider. Do not special-case this provider in route
+handlers or bypass the shared profile-health/recording lifecycle. Model discovery
+uses the public catalog without sending execution credentials. See the
+[LLM contract](../LLM-CHAT-V2-CONTRACT.md#openrouter-provider) for request,
+reasoning-continuity, capability enforcement and pricing rules.
+OpenRouter embedded-error normalization and stream-completion validation belong
+to Core's model boundary, including errors received inside HTTP 200; hosts must
+not infer success from the transport status or a synthetic EOF finish event.
+Truncated streams fail before tool delegation; normal cancellation still aborts
+the request. Rejected structured replies retain reported physical-call cost.
+
+## Hosted editor integration boundaries
+
+Runtime results forward Core's numeric `cost` and object DataValue
+`costBreakdown` with USD `{ llm, classifier, other }` subtotals. Core owns
+aggregation across nodes, nested graphs, delegated tools, and managed async work;
+transports must not re-sum bounded diagnostics. Early outputs are provisional
+snapshots; terminal outputs include late managed work. Unknown prices keep the
+known subtotal incomplete. Existing endpoint output unwrapping is unchanged:
+selecting a user value does not inject metrics into that value. See
+[execution data flow](../EXECUTION-DATA-FLOW.md).
+
+Editor Browser/Node transports share authored run capture and selection in
+`packages/app/src/hooks/preparedEditorRun.ts`; `EditorRunSession` owns per-run
+cancellation/cleanup without taking ownership from the project-scoped executor
+runtime registry. Remote preparation rechecks the original project and ready socket and
+uploads immediately before dispatch. Early HTTP/graph output remains distinct
+from terminal completion and must not dispose recording/event owners.
+Remote Evaluation preparation and trial dispatch use the same captured
+ready-connection fence. A reconnect, even to the same URL, cannot redirect a
+prepared trial, attach its recorder to a replacement socket, or receive its
+cancellation. Durable hosted Evaluations retain coordinator-owned cancellation.
+Evaluation upload keys are prepared once, but each trial checks the shared
+upload slot immediately before dispatch and restores its definition if needed.
+Upload caches are weakly keyed by socket identity, not active-tab lifetime or
+executor URL; separate project runtimes and reconnects cannot share a warm slot.
+Partial upload failures invalidate the previous slot key rather than silently
+reusing an executor that already accepted some replacement data.
+
+Evaluation UI uses separate definition/dataset/history/comparison views and a
+dedicated history hook. Durable run commands remain project-scoped; navigation
+does not cancel already accepted persistence. Suites/datasets/baselines remain
+instance-library resources, including when a baseline command finishes after
+switching projects. Server storage contracts and transactions are unchanged.
+An off-screen completed mutation invalidates only its originating history cache.
+Same-run renames are ordered at the stable store boundary, independently of panel
+lifetime; this is client coordination, not a replacement for adapter transactions.
+
+Library creation/reassignment/removal and file transfer have separate command
+owners. Commands recheck current dependencies and running-suite constraints;
+asynchronous dataset replacement rejects newer edits. Recording hydration cannot
+change a workspace after its originating scope has disappeared. Editor sessions
+also own recording finalization, so cleanup waits for the accepted recording tail
+without taking over the executor connection. See the
+[ownership and verification checklist](../EXECUTION-REFACTOR-ACCEPTANCE.md).
+
+## Serving module boundaries
+
+The server composition in `server.ts` registers resources with
+`ServerResourceLifecycle` in caller-before-store disposal order. Startup is
+single-flight; synchronous admission fencing precedes drain. A failed fence is
+retried before disposal, and a failed close retains that resource and its
+downstream dependencies. Confirmed closes alone detach ownership. Existing
+workflow generation leases, worker unknown-outcome rules and recording drains
+remain in their owning services; the lifecycle does not replay transactions.
+`server-activity.ts` provides typed maintenance probes, including queued catalog
+reads and writes. Invalid/unavailable counts fail closed. Transport admission and
+foreground-versus-terminal execution tracking remain separate.
+
+`workflow-inputs.ts` normalizes public paths once, with physical containment still
+enforced by the filesystem adapter. Backend contracts accept typed operations,
+not arbitrary request values. Recording pagination uses one named
+`WorkflowRecordingPageQuery`, with mutable input filters captured before async
+delegation. `workflow-failure.ts` carries stable conflict/busy codes through
+worker error envelopes; adapters inspect native SQLite extended result codes,
+not error prose. Mutation message translation preserves the original structured
+conflict code; it must not turn a state-change or destination conflict into an
+unclassified HTTP error. Missing published Subgraph fallback requires the specific
+publication-missing code, not any 409 response.
+SQLite uniqueness translation is statement-scoped: project destinations and
+web-app slug writes identify their domain constraints at the catalog boundary.
+Publication-version, recording and composite web-app identity collisions remain
+internal failures. Never blanket-map `SQLITE_CONSTRAINT_*` to a route conflict.
+Worker loss retains its unavailable code and adds
+`operationOutcome: unknown | not-dispatched`, distinguishing dispatched work
+from queued work without automatically replaying either.
+
+Runtime-library owners fence job admission at drain, not just lazy construction.
+Local disposal cancels and awaits the accepted candidate operation, including
+its process pipes and staging cleanup; terminal UI status alone is not proof
+of cleanup. Managed disposal drains job/heartbeat work before releasing its pool
+and object client. Repeated pool lease releases share the original pending or
+failed close acknowledgement; calling `release()` again cannot invent success.
+Runtime SSE delivery pauses on backpressure and resumes from its cursor, with
+one latest observation and a bounded stall deadline; transport pressure never
+cancels the durable job. The dashboard's bridge checks monotonic deadlines even
+when browser timers are throttled. Undelivered committed notifications hand off
+to the existing authoritative tree reconciler rather than retaining an overflow
+queue or replaying uncertain mutations.
+
+`legacy-workflow-commands.ts` owns legacy project/publication locking and
+post-mutation invalidation. The compatibility facade selects an adapter; it no
+longer duplicates those command bodies. Hosted IO and legacy execution lookup
+retain their existing specialized paths. This is not a generic repository or
+SQL framework.
+
+Web-app preparation, request-context normalization, runtime options and recording
+identity live in `web-app-execution.ts`, shared by HTTP and WebSocket adapters.
+Authentication HTML belongs to `web-app-auth-presentation.ts`; HTTP routing,
+redirects, body admission and response delivery remain in `execution.ts`.
+WebSocket origin checks, session fencing and early-response behavior remain
+transport-specific. Neither adapter acquires a second run-session owner.
+
+Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
+the PostgreSQL implementation. Project IO, publication, execution sources and
+recording repositories are separate interfaces; `WorkflowDataBackend` composes
+them for adapter registration. New consumers should depend on the smallest
+repository they need. Managed compatibility types re-export these contracts,
+rather than making SQLite derive its API from the managed backend class.
+
+`publication-policy.ts` owns reviewed-state validation, version increments,
+endpoint-name/access validation and endpoint publication identity. Adapters
+translate their pointer representation into that policy and recheck it inside
+their existing atomic mutation boundary. Draft-publishing commands check the
+reviewed draft; access/unpublish commands check project identity and publication
+version without requiring an unchanged draft. Endpoint access requires an active
+endpoint publication, not merely a saved endpoint preference or retained history.
+Route uniqueness, artifact integrity, locking, rollback and invalidation remain
+adapter-owned. No generic transaction abstraction replaces those guarantees.
+The command dispatcher snapshots reviewed preconditions before asynchronous
+delegation; SQL adapters also snapshot them at direct-call boundaries. A caller
+mutating its request object during a writer/row-lock wait cannot change the
+publication state that the command was authorized to act on.
+
+`WorkflowStorageServices` owns one serving installation's workflow adapter,
+operational stores and retention timer. `storage-composition.ts` is the serving
+construction site and captures the selected generation and managed connection
+configuration. The mode cannot change during that owner's lifetime. Existing
+route entry points forward to the owner; offline migration adapters remain
+separate and never join serving timers. On shutdown, reject new resource
+construction and fence managed producer startup immediately, then wait for
+initialization/retention and producer shutdown, flush recordings and their health
+evidence, and close resources. Existing
+resources remain available during persistence drain. Failed initialization is
+retryable only after confirmed resource cleanup; unknown cleanup outcomes retain
+the old owner. Failed disposal must never detach it or admit a replacement.
+Managed initialization is single-flight and cannot restart the coordinator after
+drain begins, including through health/Evaluation store getters.
+Shutdown fences an already-constructed managed adapter before awaiting its late
+initialization, so the initializer cannot start a coordinator during shutdown.
+Deferred adapter construction that has not begun is canceled without allocating
+resources; an initializer already running is still awaited and disposed.
+The owner's public operational-store getters route to the selected backend;
+managed owners never construct filesystem health/Evaluation stores. Resource
+shutdown confirms catalog termination before closing local operational stores,
+so accepted deletion hooks retain access to them. An unconfirmed catalog close
+keeps those stores open and the owner fenced. Operational-store closes are
+independently settled even if a disposer throws synchronously.
+The owner exposes a single-flight `drain()` independently of `dispose()`:
+drain fences new construction, stops producers and flushes persistence, while
+disposal reuses that drain and confirms catalog termination before closing stores.
+HTTP/WebSocket admission and active-run waits still belong to the server; do not
+close storage merely because a transport has delivered its foreground response.
+
+`hosted-runtime-policy.ts` supplies environment, code runner, native IO, reference
+and cross-project loaders, health store, debugger and child-recording options for
+endpoint, web-app, scheduled and hosted Evaluation execution. Preparation checks
+cancellation between asynchronous boundaries and returns run-local configuration.
+`hosted-processor.ts` binds that policy to serving dependencies.
+`ExecutionSession` owns a processor's recording attachment, foreground execution,
+full terminal completion, timing and disposal. A response delivery failure never
+releases a still-running background tail. HTTP authorization/admission, WebSocket
+session handling, scheduled acceptance and Evaluation persistence remain owned by
+their respective callers. WebSocket handlers already own their Node execution
+lifecycle and consume the same runtime policy without wrapping a second session.
+No cross-run processor, mutable dataset provider or compiled plan is shared.
+Failed recorder construction or attachment disposes a prepared processor before invocation.
+Post-terminal disposal failures are reported without exception contents and
+cannot replace the graph outcome or prevent recording persistence.
+
+These boundaries are maintainability refactors, not a measured production latency
+claim. They do not alter database schemas, artifact formats or API revision IDs.
+
+## Serving-path refactors
+
+The serving SQLite workflow catalog has one worker-thread connection owner.
+Complete catalog operations cross the boundary, not SQL fragments. Transactions,
+schema/integrity checks and artifact preparation retain their owning invariants.
+The HTTP process retains maintenance/write leases and operational deletion hooks.
+Worker initialization is single-flight. The queue allows at most 64 outstanding
+operations and 128 MiB of serialized arguments; overload rejects before dispatch.
+Both queued and active catalog RPCs count toward maintenance drain, including
+reads. Parent write leases still cover full multi-operation mutations and host
+callbacks. A worker owner snapshots its selected database/artifact paths before
+lazy startup. `withSignal()` cancels only queued work and releases its admission
+bytes; dispatch removes the cancellation listener. Dispatched work must report
+its real outcome, and a canceled drain wait never cancels a running transaction.
+Readiness passes its abort signal to the queue so expired probes cannot accumulate
+behind slow storage. Shutdown always remains available even with an aborted signal.
+Shutdown drains accepted work and awaits worker termination before returning,
+including when the catalog's close operation fails. The close RPC remains counted
+by drain/status until that acknowledgement; receiving the SQL close reply alone
+does not release it. Closing an unused owner never starts a worker. Backend
+initialization publishes write policy only after success; rejected mode changes
+cannot disable a writer or enter writer leases on a verifier. A lifecycle revision
+prevents late initialization from reopening admission after shutdown starts.
+Serving worker owners are terminal after close; offline direct adapters retain
+explicit reopen support after shutdown completes. Worker loss holds pending write
+leases until termination completes, then fails requests without replaying writes:
+a dispatched operation may have committed, so reload
+durable state before retrying. Offline conversion/verification keeps its direct
+catalog adapter. Other operational stores are not silently moved to this worker.
+If the termination request itself throws or rejects, pending operations and drain
+remain held until an independent worker exit confirms SQL has stopped. Further
+shutdown errors are contained, not treated as exit. A canceled/timed-out drain
+wait cannot release those reservations; never force a generation switch around
+an unconfirmed old worker. Successful termination uses the normal acknowledgement
+path without an extra wait or retry.
+
+Execution materialization reuses immutable source bytes and a bounded parsed-data
+cache, across local and managed storage. Each load returns detached project,
+attached-data and dataset objects. Concurrent managed endpoint/web-app requests
+coalesce only source IO and route metadata, never the materialized project or
+dataset provider. Each caller receives
+detached project, attached data, datasets, access lists and diagnostic metadata.
+The endpoint/web-app materializer validates the artifact's project identity
+against the selected workflow, matching the Subgraph/reference boundaries.
+Source resolution retains its invalidation retries before the source becomes
+shareable. Per-caller cloning does not trigger extra route or object-storage IO.
+Reference loading checks invalidation after asynchronous artifact IO, without
+duplicating that check after the following synchronous parse/clone.
+Admission uses conservative byte accounting (32 MiB total, 8 MiB per entry by default);
+oversized definitions bypass caching.
+Disabled caches also bypass expanded-data serialization used for admission accounting.
+The source-text lower bound rejects clearly oversized entries before an extra
+serialized allocation. Fresh, unretained default-parser results need no second
+clone: they belong exclusively to the caller. Retained definitions and injected
+parsers still clone every consumer; no mutable definition is shared.
+Fresh SQL route/access checks for published HTTP execution and invalidation guards
+for cached internal loads remain authoritative. Source/revision guards still
+detect concurrent changes. Cross-project and legacy
+reference loads reuse the same narrow materialization path rather than loading
+publication history. Processor state and compiled plans remain run-scoped;
+external Subgraph plans are never made reusable across runs. Replay formats and
+artifact identity are unchanged.
+
+Managed endpoint/web-app publication reads and verifies both draft artifacts and
+validates the project before opening a writer transaction. The command owns a
+snapshot of the reviewed preconditions captured before preparation; a
+caller cannot mutate that object during the storage wait to retarget publication.
+The transaction rechecks project identity, draft revision and publication version
+under the row lock before claiming routes, appending history and updating pointers. A changed
+draft never silently substitutes another artifact. Invalidations remain
+commit-owned. No object-storage wait or project parse holds a workflow row lock.
+
+Hosted Evaluation job rows remain the authoritative fenced trial ledger. While
+work is outstanding, the run projection stores a compact header and an internal
+marker, not copies of every settled trial. Index-backed pending-work checks avoid
+rescanning prior result bodies on each claim/settlement.
+Progress locks only scheduler control metadata; it does not fetch or parse the
+immutable project/dataset snapshot on each settlement. Terminal finalization loads
+that snapshot once. Lease recovery shares run metadata across expired jobs in the
+same transaction, without a new cross-run cache or duplicated counters.
+Detail/list reads assemble the header and ordered trials in one PostgreSQL statement; the internal marker
+never enters public responses. Renaming, explicit cancellation and manual retry
+preserve existing evidence. Generic snapshot/checkpoint writes cannot overwrite a
+ledger-owned queued, running or manually retried run. Ownership is established
+in the submission/retry transaction, not deferred until the next worker claim.
+Generic snapshots cannot set the internal projection marker, and every public
+read/rename boundary removes it. Manual retry locks and assembles the run in one
+statement rather than fetching a full terminal snapshot twice. Repeated
+cancellation of a terminal run reads
+through the already leased connection; it must not wait for another pool slot
+before releasing that connection. Terminal finalization still assembles all trials and
+commits quality/accounting/recording retention atomically. Worker shutdown or lease
+loss is interruption, including when the evaluator returns a canceled result
+instead of throwing; only a durable user cancellation is cancellation.
+
+Managed run deletion shares one transaction-owned primitive between the generic
+store and hosted coordinator. It locks trial jobs before scheduler/projection
+rows, refuses queued/running parents or any queued/claimed/accepted child, and
+then deletes evidence and the run atomically. Disabling the coordinator does not
+make existing jobs safe to delete. Even an inconsistent terminal parent cannot
+override active child ownership. Terminal and non-hosted deletion remain supported.
+
+Managed migration 15 adds the partial pending-projection index. Running header
+storage requires a schema-15 reader, so release manifests no longer declare
+schema-14 or older images safe rollback targets. Quiesce older managed API readers
+and Evaluation workers before this format cutover; do not mix old and new readers
+or coordinators, or override the schema window to make an older reader start.
+The deployment helper requires an explicit maintenance cutover for incompatible
+or unidentified installed readers. A release-scoped, compare-and-swap journal
+records an expiring runner lease and exact candidate identity. It disables HPAs,
+stops ingress before readers, waits for pod termination without forced deletion,
+then installs and probes a paused validation release before resuming traffic.
+Direct migration also checks reader/controller inventory using namespace-scoped
+RBAC. Unknown/old pods or recreatable old controllers block migration. Operators
+must first drain accepted runs, pause external reconcilers and ensure all database
+consumers belong to the release; Kubernetes labels are not a global database lock.
+An unknown outcome never triggers automatic rollback/resume. Repair forward with a compatible
+image. Ordinary local/browser Evaluation persistence and historical run formats
+remain compatible and unchanged.
+
+Worker and parsed-cache metrics use finite, payload-free labels. Queue/active
+counts and reserved argument bytes include all owners; worker instances remain
+counted until termination acknowledgement. Histograms separate queue wait,
+dispatched RPC, startup/shutdown, parse, admission accounting and clone time.
+Cache retained bytes are conservative budgets, not exact heap usage. Prometheus
+scrapes read in-memory counters only and never issue catalog SQL.
+
+The [refactor completion checklist](./serving-refactor-verification.md) maps these
+boundaries to executable regressions and a disposable component benchmark. Replay
+artifact deduplication and cross-run compiled-plan caching remain deliberately
+deferred; neither is required by these narrower refactors.
+
 ## SQL and immutable-artifact boundaries
 
 Ordinary SQLite draft saves use a focused catalog update. They preserve active
@@ -80,13 +400,21 @@ legacy pages are normalized before stripping so quality semantics stay intact.
 Summary identity and timestamps are checked against their SQL ordering columns;
 an inconsistent stored JSON header fails closed instead of skipping or repeating
 history through a misleading cursor.
+Cursor timestamps come from the exact SQL ordering value, not the JSON header's
+spelling or PostgreSQL's millisecond-only JavaScript `Date`. Equivalent legacy
+timestamp formats and PostgreSQL microseconds must not omit or repeat runs.
+PostgreSQL projects the cursor timestamp explicitly as UTC ISO text with six
+fractional digits; header validation uses this same value, independent of session
+`DateStyle`, time zone and the driver's built-in date parser.
 The picker fetches full details only for the selected run, caches a bounded set,
 and exposes detail failures/retry without displaying another run's evidence.
 The first page becomes visible before selected details finish: a slow or failed
 body read must not hide successful compact history. Initial selection, later
 selections and retries share one hydration path. Missing persisted selections
 outside the first page fall back to its latest run; cross-project/run responses
-are rejected. Scope changes invalidate pending pagination independently.
+are rejected. Scope changes and overlay unmount invalidate pending pagination
+independently. A page may merge only into the project/suite and continuation
+cursor that requested it; a late response cannot overwrite a reopened panel.
 The client filters compact headers by both project and suite, matching the
 full-history boundary for third-party or stale provider responses.
 Live execution still takes precedence. The old full-list method remains for
@@ -108,7 +436,9 @@ barrier, streams projects individually, preserves catalog identities, history,
 compressed recording contents and operational domains, verifies the frozen
 logical source again, and opens the
 destination serving gate only after exact verification. This is an offline CLI
-adapter, not a hot selector or browser migration wizard. See
+adapter. The authenticated Migration tab can also run this adapter through a
+supervised maintenance/drain barrier without requiring a migration enable flag.
+Neither path switches traffic or hot-selects another backend. See
 [VM-to-managed migration](./vm-to-managed-migration.md).
 
 ## Scheduled runs
@@ -124,7 +454,7 @@ recording, backup and restored-installation guarantees and limits.
 
 ## Portable saved-project exports
 
-**Download with dependencies** connects API-owned snapshot collection and streaming
+**Download bundle** connects API-owned snapshot collection and streaming
 ZIP jobs to Core-owned manifest validation and the public Node `loadProjectBundle`
 loader. Explicit project/version bindings preserve matching datasets and Subgraph
 wire contracts; local execution never guesses server paths. Legacy aliases obtain
@@ -143,8 +473,14 @@ the same stack and data with a supervised Vite build watcher and independent
 HTTP/SSE server (`packages/studio-server-web/dev/`). Builds are published as
 immutable, content-deduplicated generations. An HTML base precedes all asset
 references, and the iframe carries the dashboard's generation ID. A failed build
-cannot replace current HTML or remove old lazy chunks. The bounded cache fails
-publication rather than deleting generations still usable by open tabs.
+cannot replace current HTML or remove old lazy chunks. The HTTP supervisor owns
+publication and bounded-cache collection. Generation-scoped SSE connections pin
+open tabs; asset/HTML responses and a five-minute disconnect grace protect reads
+and reconnects. Collection reclaims only unused history, never the current build.
+Legacy unscoped clients conservatively pin all history. If pinned builds still
+fill the cache, publication fails visibly and retries after five minutes rather
+than evicting a live editor. Compiler children await publication, and replacement
+compilation waits for retired publication cleanup before reusing build output.
 
 Refresh permission belongs to the editor's live Jotai store and committed browser
 recovery, not just the dashboard's active-project dirty dot. A development-only
@@ -369,11 +705,15 @@ LLM Profile suspension state is wrapper-owned operational state, not project con
 - filesystem mode keeps `llm-profile-health.sqlite` under `RIVET_APP_DATA_ROOT`; this is appropriate for the supported single-host filesystem topology
 - managed mode keeps `llm_profile_health` rows in the shared Postgres database, so control-plane and execution replicas observe the same suspensions and recovery attempts
 - managed workflow schema ownership is explicit: Docker/simple-host API startup may migrate, while Kubernetes runs one versioned/checksummed Helm hook migration and starts every serving API replica in verify-only mode. The hook bootstraps candidate database settings under an isolated ephemeral app-data root, migrates the database schema before enabling the PostgreSQL settings backend, and then imports any legacy settings without mutating a volume observed by serving pods. Both paths share the same transactional advisory-lock library; process-local initialization promises are only an optimization, never the cross-replica lock.
-- each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same reliability history
+- each run receives the selected store through Rivet's `llmProfileHealthStore` processor option; published/latest workflow requests and HTTP/WebSocket web-app actions therefore share the same reliability history. Classifier Profiles reuse this atomic store and recording evidence with a separate `classifier-profile` key namespace and `identity.family = classifier`; legacy entries without a family remain LLM entries. The separate **Classifier profile suspension** Project Settings tab passes a family filter on list/reset, so clearing classifier history never clears LLM history. This is an additive JSON contract, not a new table or schema migration. Classifiers use response deadlines, not streaming first-output/inactivity timers; per-candidate availability failure counts, ignored configuration/auth/validation failures and fenced half-open permits follow the same durable lifecycle. See [Classifier nodes](../CLASSIFIER-NODES.md).
 - every API-owned endpoint or web-app execution receives a per-action opaque correlation id. When the existing Run recording queue finishes storing the replay bundle, it resolves a pending failure-evidence reference to that recording id. Hosted editor execution uses a separate capability-gated path: when **Record local graph executions** is enabled, Browser mode or Studio Server's internal Node executor receives one opaque correlation. Browser mode records directly; Node mode carries the correlation over the private remote-run frame while the browser records only that request's WebSocket events before it is sent. Every captured live editor run uploads its replay/project/dataset snapshot to the authenticated local-editor-recordings route, not only runs with unhealthy LLM-profile evidence. Parent and cross-project child recordings share that correlation, allowing the parent workflow's recordings view to discover both. A socket that cannot produce a terminal recording, or a local snapshot/upload that cannot be retained, resolves any health evidence as unavailable. The API resolves the current saved project by its stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, before verifying saved/executed project IDs; it never reads a raw requested filesystem path. It caps the combined UTF-8 payload at 24 MiB, stores it as an `editor` run, and links any pending health evidence to the resulting recording ID. Editor runs are excluded from the production run analytics catalog and statistics. Server recording configuration and retention still apply. This keeps health metadata separate from replay content and makes concurrent actions safe.
 - legacy health JSON is normalized on read. Invalid suspension-link metadata is discarded in memory rather than being allowed to break the Settings view or recording-retention pass; well-formed legacy history remains untouched until a later state transition writes it.
 - active suspension contributors are temporarily excluded from normal recording retention in both filesystem and managed storage. The hold is released on recovery/reset; an explicit recording delete best-effort marks the reference deleted rather than turning an already-successful recording delete into a false API failure.
 - the hosted Browser executor uses the authenticated `/api/workflows/llm-profile-health` bridge, while the hosted Node executor uses the wrapper-specific executor entrypoint and the same bridge
+
+Classifier chain deadlines cover provider execution and bounded health completion. Slow reliability storage cannot produce late successful node outputs, and service exception text is not copied into classifier attempt diagnostics. Classifier regression tests exercise fail-open services, no-request fully suspended chains, and single-probe concurrent recovery. The shared classifier health contract runs against independent SQLite connections and real PostgreSQL stores, including lease renewal, stale pre-recovery permits, family-scoped manual reset and recording contributor evidence. The managed migration rehearsal compares exact classifier health rows after both legacy and selected live-SQLite transfer. Operational snapshots retain these records in the existing `llm-profile-health.sqlite`/`llm_profile_health` container; no family-specific backup or database is necessary.
+
+Expiration during failed-candidate cleanup remains a timeout, not an HTTP rejection that the node's status-code switch can suppress. Cancellation during health admission/completion stops the chain; late admissions release their permits as ignored without executing a model.
 
 Reliability settings stored in an LLM Profile are authoring data. Upstream
 standalone Rivet deliberately leaves them inert; Rivet Studio Server activates
@@ -485,6 +825,13 @@ Hosted accepted/pending revisions persist as `hostedProjectRevisions` inside the
 - A later cleanup pass kept that behavior intact but extracted the managed execution subsystem into focused internal modules so the large managed backend remains orchestration-oriented instead of owning the whole execution state machine inline. The later hardening pass also made the writer replica ignore self-originated `NOTIFY` payloads and tightened listener startup/disposal behavior without changing route contracts or cache semantics.
 
 ## Core wrapper seams
+
+Same-project Graph Input/Output rename propagation is project-scoped: skip explicit
+cross-project Subgraphs and incomplete `other-projects` selections even if their
+graph IDs equal the edited graph's ID. Cross-project renames instead use the saved
+boundary's stable node identities, preserving caller wire keys while updating
+labels and runtime input/output names. Both preserve the visible connection;
+neither requires manual rewiring for an ordinary rename of the same node.
 
 Cross-project Subgraph replay persistence is part of the child node's completion boundary for hosted Browser and Node editor runs: the caller does not report a terminal result until the child upload completes. This prevents closing a tab immediately after completion from discarding its called-project replay. Those local uploads have a 60-second deadline so a stalled API cannot hold graph completion indefinitely. API-hosted runs only enqueue onto the existing drained persistence queue, without waiting for storage I/O. Persistence errors remain best-effort and do not change graph outputs. Re-selecting the same target in the canvas must still apply an updated authored boundary; compare the complete node data, not just project, graph, and version IDs.
 
@@ -640,7 +987,7 @@ Interpretation rules:
 
 ### Storage and runtime libraries
 
-- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
+- Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the authenticated Migration tab or the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
 - `Local Docker Postgres` is a local rehearsal option for managed metadata only. It uses the optional Compose Postgres default connection, but object storage remains controlled by the separate project artifact storage fields. Make sure the managed-services Compose profile is running before restarting into object-storage mode.
 - Storage mode, database mode, managed PostgreSQL credentials, and object-storage credentials are read from the active settings repository, not `.env`. If the file-backed domain is absent, Docker/API runtime defaults to `Local folders` and `Local Docker Postgres`. Kubernetes's migration Job seeds the PostgreSQL row from Helm/Vault bootstrap values only when the row is absent. Serving APIs load that row directly, and the co-located executor receives its startup configuration through the authenticated loopback API; Kubernetes does not project compatibility settings files into pod-local app data.
 - Managed workflow object location is stored as explicit bucket, endpoint, region, prefix, and path-style fields alongside the compatibility `storageUrl` in the version-1 deployment-storage payload. Legacy rows lacking those fields resolve with the original URL parser and `workflows/` prefix. Runtime libraries keep their independent `runtime-libraries/` prefix. Active managed storage cannot change object location or addressing through App Settings without an operator migration and restart; replicated Kubernetes topology rejects all Storage-tab writes because existing API/executor clients are startup-scoped and a mixed-pod configuration would split writes. Helm bootstrap values seed only an absent PostgreSQL row, never overwrite an existing location.

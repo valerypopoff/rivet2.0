@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/github/license/valerypopoff/rivet2.0)
 
-Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, graph runtime, Node runtime, CLI, app executor sidecar, Evaluations test tooling, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
+Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chains, and reusable automation flows. This repository is the Rivet 2 monorepo: it contains the desktop app, Rivet Studio Server, graph runtime, Node runtime, CLI, app executor sidecar, Evaluations tooling, deployment assets, documentation site, and maintainer developer docs. Rivet 2 continues the previous Rivet codebase as an independently maintained project.
 
 [Download Rivet 2 desktop app](https://valerypopoff.github.io/rivet2.0/download)
 
@@ -10,21 +10,25 @@ Rivet is a visual IDE and runtime for building AI workflows, agents, prompt chai
 
 [User documentation](https://valerypopoff.github.io/rivet2.0/user-guide)
 
-This checkout is also designed to be embedded by wrapper applications that vendor Rivet source code. Wrappers can import from local source paths and use the supported app-host seams without depending on public npm packages.
-
-For the self-hosted Rivet 2 service, see [Rivet Studio Server](deploy/studio-server/README.md).
+**Rivet Studio Server lives in this repository**, not in a separate server repo.
+Its browser editor uses the shared Rivet app source through supported app-host
+interfaces, and its API and executor use the runtime workspaces from the same
+checkout. No second clone or separate dependency installation is required.
+See [Rivet Studio Server](#rivet-studio-server) below or the
+[deployment guide](deploy/studio-server/README.md).
 
 ## Contents
 
 - [What This Repo Contains](#what-this-repo-contains)
-- [Getting Started](#getting-started)
+- [Getting Started](#getting-started-with-local-development)
+- [Rivet Studio Server](#rivet-studio-server)
 - [Common Commands](#common-commands)
 - [Execution Modes](#execution-modes)
 - [Plugins](#plugins)
-- [Embedding Rivet In A Wrapper](#embedding-rivet-in-a-wrapper)
-- [npm Packages](#npm-packages)
+- [Embedding Rivet In A Host](#embedding-rivet-in-a-host)
+- [npm Packages](#rivet-2-npm-packages)
 - [Stable and Developer Releases](#stable-and-developer-releases)
-- [Documentation](#documentation)
+- [Documentation](#developer-documentation)
 - [License](#license)
 
 ## What This Repo Contains
@@ -38,8 +42,17 @@ Rivet 2 is organized as a Yarn workspace monorepo:
 | `@valerypopoff/rivet-app-executor` | Node executor sidecar used by the app for Node-mode graph execution.                                                                                        |
 | `@valerypopoff/rivet2-node`        | Node runtime adapter for loading and running Rivet projects programmatically.                                                                               |
 | `@valerypopoff/rivet2-cli`         | CLI commands for running and serving Rivet graphs.                                                                                                          |
-| `@valerypopoff/rivet2-evaluations`             | Graph-oriented test utilities and test serialization.                                                                                                       |
+| `@valerypopoff/rivet2-evaluations` | Evaluation definitions, execution, scoring, persistence contracts, and serialization.                                                                       |
+| `packages/studio-server-api`       | Studio Server API, workflow storage, publication, recordings, and server-side execution services.                                                           |
+| `packages/studio-server-web`       | Studio Server browser UI and shared Rivet editor integration.                                                                                               |
+| `packages/studio-server-executor`  | Studio Server Node executor service.                                                                                                                        |
+| `packages/studio-server-shared`    | Shared Studio Server types and contracts.                                                                                                                   |
+| `packages/studio-server-bootstrap` | Studio Server API/executor process bootstrap.                                                                                                               |
 | `packages/docs`                    | Docusaurus documentation site.                                                                                                                              |
+
+The Studio Server packages are private Yarn workspaces. Docker images, Compose
+configuration, the Helm chart, and deployment scripts live in
+[`deploy/studio-server/`](deploy/studio-server/README.md).
 
 The repo also includes `developer-docs/`, which documents current architecture
 and integration contracts, and `refactor-history.md`, which consolidates
@@ -49,7 +62,7 @@ completed refactor notes and residual watchlist items.
 
 ### Prerequisites
 
-- Node.js 20.4.x or a compatible Node 20 runtime.
+- The root Volta configuration pins Node.js 22.21.1 for desktop/workspace development. Studio Server's deployment guide requires Node.js 24+ for its host tooling.
 - Yarn through the checked-in Yarn release (`packageManager` currently points at Yarn 4.17.1).
 - Rust stable and the Tauri platform prerequisites if you are building desktop bundles.
 - On Windows desktop builds, Visual Studio Build Tools with the Windows SDK must
@@ -70,13 +83,33 @@ yarn dev
 
 The root `dev` script starts the Rivet app workspace and opens the Vite/Tauri development flow used by the desktop IDE.
 
-Studio Server uses the same root Yarn installation but keeps its commands
-explicitly namespaced: use `yarn studio-server:dev` for server development,
-or `yarn studio-server:dev:tunnel` for watched frontend bundles through a VS Code
-tunnel (slower rebuilds, safe full-page refresh instead of HMR),
-`yarn studio-server:prod` for published production images, or
-`yarn studio-server:prod:custom` to build production images from this checkout.
-There is no bare `prod` command.
+## Rivet Studio Server
+
+Studio Server is the self-hosted browser editor and workflow-serving platform.
+It includes project/folder management, endpoint and web-app publication, run
+recordings and replay, Evaluations, remote debugging, and runtime libraries.
+It supports local files with SQLite metadata or S3 with managed PostgreSQL.
+
+Use the same repo-root Yarn installation as the desktop app. Server commands are
+namespaced separately from `yarn dev`, which starts the desktop app:
+
+| Command                          | Purpose                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `yarn studio-server:dev`         | Start the Docker-backed development stack.                                                                   |
+| `yarn studio-server:dev:tunnel`  | Start development with watched frontend bundles for a VS Code tunnel; uses full-page refresh instead of HMR. |
+| `yarn studio-server:build`       | Build Studio Server and its shared runtime dependencies.                                                     |
+| `yarn studio-server:prod`        | Start using published production images.                                                                     |
+| `yarn studio-server:prod:custom` | Build and start production images from this checkout.                                                        |
+| `yarn studio-server:staging`     | Deploy verified staging images on an existing VM stack, preserving its data mounts.                          |
+
+Docker starts require Docker Compose and the appropriate local configuration;
+follow the [deployment and configuration guide](deploy/studio-server/README.md)
+before starting a stack. There is no bare `prod` command. Staging has additional
+checkout, image, and existing-stack checks described in that guide.
+
+For code ownership and local verification, start with
+[Repository Structure](developer-docs/studio-server/repo-structure.md) and
+[Development And Verification](developer-docs/studio-server/development.md).
 
 ## Common Commands
 
@@ -114,7 +147,8 @@ Rivet supports several execution surfaces:
 - Browser execution runs graphs in-process inside the app for lightweight local execution.
 - Node execution uses `@valerypopoff/rivet-app-executor`, a websocket sidecar that runs graph work in Node.
 - Programmatic Node execution uses `@valerypopoff/rivet2-node` and the CLI without the desktop editor.
-- Hosted editor execution lets wrappers provide an internal executor websocket URL instead of asking browser-hosted Rivet to start a Tauri sidecar.
+- Studio Server execution uses this repo's API and executor services for the browser editor and published workflows/web apps.
+- Other hosted editor integrations can provide an internal executor websocket URL instead of asking browser-hosted Rivet to start a Tauri sidecar.
 
 The app executor defaults to a desktop-safe loopback websocket host, and hosted/containerized environments can override it with `RIVET_EXECUTOR_HOST`, `RIVET_EXECUTOR_PORT`, and `executor.internalExecutorUrl`. Code-node runtime-library resolution can be redirected with `RIVET_CODE_RUNNER_REQUIRE_ROOT`.
 
@@ -149,7 +183,9 @@ import '../app/src/host.css';
 
 Hosts should prefer these source-level seams over private editor internals. The
 workspace package names describe ownership boundaries, while the monorepo keeps
-the host and editor source on the same commit.
+the host and editor source on the same commit. Studio Server's web workspace is
+the in-repo implementation of this integration; it does not vendor a second
+Rivet checkout.
 
 ## Rivet 2 NPM Packages
 
@@ -211,6 +247,9 @@ Useful current developer docs:
 - [Package Boundaries](developer-docs/PACKAGES.md)
 - [Build And CI](developer-docs/BUILD-AND-CI.md)
 - [App Architecture](developer-docs/APP-ARCHITECTURE.md)
+- [Studio Server Deployment Guide](deploy/studio-server/README.md)
+- [Studio Server Architecture](developer-docs/studio-server/architecture.md)
+- [Studio Server Development And Verification](developer-docs/studio-server/development.md)
 - [Plugin System](developer-docs/PLUGIN-SYSTEM.md)
 - [Execution Data Flow](developer-docs/EXECUTION-DATA-FLOW.md)
 - [Refactor History](refactor-history.md)

@@ -8,6 +8,10 @@ contracts, or source layout. User-facing docs live under `packages/docs/docs`.
 For a behavior-preserving refactor, start with the
 [Refactor Baseline And Verification](./REFACTOR-BASELINE.md). It maps ownership,
 observable invariants, regression suites, manual scenarios, and evidence limits.
+For the current editor, Evaluation workspace and Core execution-state owners,
+use [Execution And Evaluation Ownership](./EXECUTION-REFACTOR-ACCEPTANCE.md).
+Its inheritance matrix describes implemented boundaries, not a proposal to move
+execution into another engine or transport manager.
 The [documentation audit](./DOCUMENTATION-AUDIT.md) records the dated review
 baseline, later source reconciliations and remaining verification obligations;
 it is not a certificate that all current runtime/deployment gates passed.
@@ -22,6 +26,7 @@ it is not a certificate that all current runtime/deployment gates passed.
 - [GitHub Pages Promo Demo Host](./PROMO-DEMO-HOST.md)
 - [Core Engine](./CORE-ENGINE.md)
 - [Execution Data Flow](./EXECUTION-DATA-FLOW.md)
+- [Execution And Evaluation Ownership](./EXECUTION-REFACTOR-ACCEPTANCE.md)
 - [Editor Workspace State](./EDITOR-WORKSPACE-STATE.md)
 - [Monaco And Editor Surfaces](./MONACO-EDITOR-SURFACES.md)
 - [Canvas Interactions](./CANVAS-INTERACTIONS.md)
@@ -39,6 +44,11 @@ it is not a certificate that all current runtime/deployment gates passed.
 - [Unreachable Graph Detection](./UNREACHABLE-GRAPH-DETECTION.md)
 
 ## Studio Server
+
+Studio Server is part of this monorepo: its private workspaces live under
+`packages/studio-server-*`, and deployment assets live under `deploy/studio-server/`.
+Use the [deployment guide](../deploy/studio-server/README.md) for setup and launch
+commands; the guides below describe implementation and verification.
 
 - [Architecture](./studio-server/architecture.md)
 - [Repository Structure](./studio-server/repo-structure.md)

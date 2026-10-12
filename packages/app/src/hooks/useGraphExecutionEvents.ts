@@ -1,4 +1,3 @@
-import { produce } from 'immer';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useRef } from 'react';
 import {
@@ -20,13 +19,10 @@ import {
   runningGraphsState,
   selectedGraphRunByViewState,
   selectedLLMChatOutputPageByInvocationState,
-  type GraphRunSelection,
   type GraphRunRecord,
 } from '../state/dataFlow';
 import { userInputModalQuestionsState } from '../state/userInput';
-import { keys } from '../utils/typeSafety';
 import { handleError } from '../utils/errorHandling.js';
-import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import type { ExecutionDataFlowApi } from './useExecutionDataFlow';
@@ -38,6 +34,9 @@ import {
 } from '../utils/executionDataStorage.js';
 import {
   appendRootRunIdOnce,
+  startGraphRunHistory,
+  finishGraphRunHistory,
+  interruptRunningProcesses,
   type MissingDebuggerTerminalEvent,
   reconcileRunningProcessesAfterSuccessfulDone,
   removeRunningGraphEntry,
@@ -70,7 +69,9 @@ export function useGraphExecutionEvents(
     evaluationRunningLatest,
   }: Pick<
     ExecutionDataFlowApi,
-    'clearNodeRunDataPreservationForNextStart' | 'consumeNodeRunDataPreservationForNextStart' | 'evaluationRunningLatest'
+    | 'clearNodeRunDataPreservationForNextStart'
+    | 'consumeNodeRunDataPreservationForNextStart'
+    | 'evaluationRunningLatest'
   >,
   options: GraphExecutionEventsOptions = {},
 ): GraphExecutionEventsApi {
@@ -97,19 +98,7 @@ export function useGraphExecutionEvents(
     setRunningGraphsState([]);
   };
 
-  const interruptAll = () => {
-    setLastRunData((lastRun) =>
-      produce(lastRun, (draft) => {
-        keys(draft).forEach((nodeId) => {
-          draft[nodeId]!.forEach((process) => {
-            if (process.data.status?.type === 'running') {
-              process.data.status = { type: 'interrupted' };
-            }
-          });
-        });
-      }),
-    );
-  };
+  const interruptAll = () => setLastRunData(interruptRunningProcesses);
 
   const onStart = ({ startGraph }: ProcessEvents['start']) => {
     const nodeIdsToPreserve = consumeNodeRunDataPreservationForNextStart();
@@ -177,12 +166,10 @@ export function useGraphExecutionEvents(
     rootRunIdsForDoneReconciliationRef.current = [];
     clearNodeRunDataPreservationForNextStart();
     stopAll();
-    handleError(data.error, 'Graph execution error', {
-      // Ordinary node failures already have node-local status. Async branch
-      // safety violations can reject a malformed persisted graph before a
-      // useful node error is visible, so surface those actionable messages.
-      toastError: shouldToastAsyncBranchSafetyError(data.error),
-    });
+    // A terminal failure may happen before any node has visible error output
+    // (for example, cross-project preflight). Do not gate this on error text.
+    // handleError deduplicates matching node/root notifications.
+    handleError(data.error, 'Graph execution error');
   };
 
   const onGraphStart = (data: ProcessEvents['graphStart']) => {
@@ -198,23 +185,7 @@ export function useGraphExecutionEvents(
       return;
     }
 
-    setGraphRunHistoryByView((prev) =>
-      produce(prev, (draft) => {
-        draft[graphViewKey] ??= [];
-        const existing = draft[graphViewKey]!.find((graphRun) => graphRun.graphRunId === data.execution.graphRunId);
-        if (!existing) {
-          draft[graphViewKey]!.push({
-            executor: data.execution.executor,
-            graphId: data.execution.graphId,
-            graphRunId: data.execution.graphRunId,
-            parentGraphRunId: data.execution.parentGraphRunId,
-            rootRunId: data.execution.rootRunId,
-            startedAt: Date.now(),
-            status: 'running',
-          });
-        }
-      }),
-    );
+    setGraphRunHistoryByView((previous) => startGraphRunHistory(previous, graphViewKey, data.execution));
     setSelectedGraphRunByView((prev) => updateSelectedGraphRunForGraphStart(prev, graphViewKey));
   };
 
@@ -249,19 +220,7 @@ export function useGraphExecutionEvents(
     graphRunId: GraphRunId | undefined,
     status: GraphRunRecord['status'],
   ) => {
-    if (!graphRunId) {
-      return;
-    }
-
-    setGraphRunHistoryByView((prev) =>
-      produce(prev, (draft) => {
-        const run = draft[graphViewKey]?.find((graphRun) => graphRun.graphRunId === graphRunId);
-        if (run) {
-          run.finishedAt = Date.now();
-          run.status = status;
-        }
-      }),
-    );
+    setGraphRunHistoryByView((previous) => finishGraphRunHistory(previous, graphViewKey, graphRunId, status));
   };
 
   const resetLastRunDataForRunStart = (nodeIdsToPreserve: NodeId[] | undefined) => {

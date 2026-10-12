@@ -2,13 +2,18 @@ import { type FC, type ReactNode, useEffect, useRef } from 'react';
 import CrossIcon from 'majesticons/line/multiply-line.svg?react';
 import {
   getCustomProviderApiContract,
+  buildAgentProfileAttemptInspectorRows,
+  getClassifierRequestCount,
+  formatClassifierRequestCount,
+  getProfileAttemptOmissionNotice,
+  isClassifierRequest,
+  type AgentLLMProfileAttemptTrace,
   type AgentModelCallTrace,
   type AgentResponseTrace,
 } from '@valerypopoff/rivet2-core';
 import { css } from '@emotion/react';
 import Modal, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import { AppModalHeader } from '../AppModalHeader.js';
-import { buildAgentProfileAttemptInspectorRows } from './agentProfileAttemptPresentation.js';
 
 const inlineResponseInspectorCss = css`
   position: fixed;
@@ -288,22 +293,36 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
         <MetricGroup title="Execution">
           <Metric label="Status" value={trace.status} />
           <Metric label="Total duration" value={formatDuration(trace.durationMs)} />
-          <Metric label="Model calls" value={String(trace.summary.modelCallCount)} />
-          <Metric label="Tool calls" value={String(trace.summary.toolCallCount)} />
+          {trace.scope !== 'classifier-invocation' && (
+            <Metric label="Model calls" value={String(trace.summary.modelCallCount)} />
+          )}
+          {getClassifierRequestCount(trace) != null && (
+            <Metric label="Classifier requests" value={formatClassifierRequestCount(trace)!} />
+          )}
+          {trace.scope !== 'classifier-invocation' && (
+            <Metric label="Tool calls" value={String(trace.summary.toolCallCount)} />
+          )}
         </MetricGroup>
         <MetricGroup
           title="Recovery behavior"
-          description="Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile."
+          description="Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or classifier profile."
         >
           <Metric label="Provider request retries" value={String(trace.summary.retryCount)} />
-          <Metric label="LLM profile fallbacks" value={String(trace.summary.fallbackCount)} />
+          <Metric label="Profile fallbacks" value={String(trace.summary.fallbackCount)} />
         </MetricGroup>
         <MetricGroup title="Usage and cost">
           <Metric label="Input tokens" value={formatTokens(trace.summary.promptTokens)} />
           <Metric label="Output tokens" value={formatTokens(trace.summary.completionTokens)} />
-          <Metric label="Cached input tokens" value={formatTokens(trace.summary.cachedTokens)} />
-          <Metric label="Reasoning tokens" value={formatTokens(trace.summary.reasoningTokens)} />
-          <Metric label="Model cost" value={formatCost(trace)} />
+          {trace.scope !== 'classifier-invocation' && (
+            <>
+              <Metric label="Cached input tokens" value={formatTokens(trace.summary.cachedTokens)} />
+              <Metric label="Reasoning tokens" value={formatTokens(trace.summary.reasoningTokens)} />
+            </>
+          )}
+          <Metric
+            label={trace.scope === 'classifier-invocation' ? 'Estimated cost' : 'Model cost'}
+            value={formatCost(trace)}
+          />
         </MetricGroup>
         {(trace.startedAt != null || trace.responseReadyAt != null || trace.backgroundWorkPending) && (
           <section className="rivet-agent-response-inspector-metric-group">
@@ -332,51 +351,69 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
             </dl>
           </section>
         )}
-        <TraceSection title="Model calls" omitted={trace.omittedModelCallCount} empty="No provider requests recorded.">
-          {trace.modelCalls.map((call) => (
-            <article key={call.callId}>
-              <strong>{formatModelCallLabel(call)}</strong>
-              <span>
-                {call.outcome}
-                {call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`}
-                {' · '}round {(call.roundIndex ?? 0) + 1} · attempt {call.attemptIndex + 1}
-              </span>
-              <span>
-                {formatDuration(call.durationMs)} · {formatCallUsage(call.usage)} · {formatCallCost(call.pricing)}
-              </span>
-              {call.finishReason && <span>Finish reason: {call.finishReason}</span>}
-            </article>
-          ))}
-        </TraceSection>
+        {trace.scope !== 'classifier-invocation' && (
+          <TraceSection
+            title="Model calls"
+            omitted={trace.omittedModelCallCount}
+            empty="No provider requests recorded."
+          >
+            {trace.modelCalls.map((call) => (
+              <article key={call.callId}>
+                <strong>{formatModelCallLabel(call)}</strong>
+                <span>
+                  {call.outcome}
+                  {call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`}
+                  {' · '}round {(call.roundIndex ?? 0) + 1} · attempt {call.attemptIndex + 1}
+                </span>
+                <span>
+                  {formatDuration(call.durationMs)} · {formatCallUsage(call.usage)} · {formatCallCost(call.pricing)}
+                </span>
+                {call.finishReason && <span>Finish reason: {call.finishReason}</span>}
+              </article>
+            ))}
+          </TraceSection>
+        )}
+        {getClassifierRequestCount(trace) != null && (
+          <TraceSection title="Classifier requests" omitted={0} empty="No classifier requests recorded.">
+            {renderProfileAttemptRows((trace.profileAttempts ?? []).filter(isClassifierRequest))}
+          </TraceSection>
+        )}
         <TraceSection
-          title="LLM profile attempts"
-          omitted={trace.omittedProfileAttemptCount ?? 0}
+          title="Profile attempts"
+          omitted={0}
           empty="No profile fallback or suspension decisions recorded."
         >
-          {buildAgentProfileAttemptInspectorRows(trace.profileAttempts ?? []).map((row) => (
-            <article key={row.eventId}>
-              <strong>{row.providerAndModel}</strong>
-              <span>{row.context}</span>
-              {row.error && <span>{row.error}</span>}
-            </article>
-          ))}
+          {renderProfileAttemptRows((trace.profileAttempts ?? []).filter((attempt) => !isClassifierRequest(attempt)))}
         </TraceSection>
-        <TraceSection title="Tool calls" omitted={trace.omittedToolCallCount} empty="No tool executions recorded.">
-          {trace.toolCalls.map((call, index) => (
-            <article key={`${call.toolCallId ?? call.toolName}-${index}`}>
-              <strong>{call.toolName}</strong>
-              <span>
-                {call.outcome} · {call.handlerKind}
-                {call.handlerName ? ` · ${call.handlerName}` : ''}
-              </span>
-              <span>{formatDuration(call.durationMs)}</span>
-            </article>
-          ))}
-        </TraceSection>
+        {getProfileAttemptOmissionNotice(trace) && <p>{getProfileAttemptOmissionNotice(trace)}</p>}
+        {trace.scope !== 'classifier-invocation' && (
+          <TraceSection title="Tool calls" omitted={trace.omittedToolCallCount} empty="No tool executions recorded.">
+            {trace.toolCalls.map((call, index) => (
+              <article key={`${call.toolCallId ?? call.toolName}-${index}`}>
+                <strong>{call.toolName}</strong>
+                <span>
+                  {call.outcome} · {call.handlerKind}
+                  {call.handlerName ? ` · ${call.handlerName}` : ''}
+                </span>
+                <span>{formatDuration(call.durationMs)}</span>
+              </article>
+            ))}
+          </TraceSection>
+        )}
       </>
     )}
   </div>
 );
+
+function renderProfileAttemptRows(attempts: readonly AgentLLMProfileAttemptTrace[]): ReactNode[] {
+  return buildAgentProfileAttemptInspectorRows(attempts).map((row) => (
+    <article key={row.eventId}>
+      <strong>{row.providerAndModel}</strong>
+      <span>{row.context}</span>
+      {row.error && <span>{row.error}</span>}
+    </article>
+  ));
+}
 
 function formatModelCallLabel(call: AgentModelCallTrace): string {
   return [

@@ -136,6 +136,11 @@ export class CallGraphNodeImpl extends NodeImpl<CallGraphNode> {
         type: 'object',
         value: graphOutputs,
       };
+      // Carry implicit graph metrics outside the wrapped user outputs so the
+      // containing processor accounts this invocation just like a Subgraph.
+      for (const metric of ['cost', 'costBreakdown']) {
+        if (graphOutputs[metric]) outputs[metric as PortId] = graphOutputs[metric]!;
+      }
 
       if (this.data.useErrorOutput) {
         outputs['error' as PortId] = {

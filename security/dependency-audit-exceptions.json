@@ -6,10 +6,10 @@
       "packages": ["http-cache-semantics"],
       "dependents": ["cacheable-request@npm:10.2.14"],
       "workspaceOwners": ["docs@workspace:packages/docs"],
-      "scope": "Docusaurus update-notifier's public npm version lookup only; this dependency path is not a Rivet runtime or shared authenticated-response cache.",
-      "reason": "GHSA-ch52-4w7c-c8xp has no confirmed fixed release. Published 4.3.0 was inspected and still reproduced shared Set-Cookie/proxy-revalidate reuse with max-stale, so it is not accepted as remediation. The current path is docs -> update-notifier -> latest-version -> package-json -> got -> cacheable-request. No cross-user response cache is configured there. Replace or upgrade the owning documentation tool when a verified fix is available; new runtime dependents remain blocked.",
+      "scope": "Patched Docusaurus update-notifier public npm version lookup only; not a Rivet runtime or shared authenticated-response cache.",
+      "reason": "No confirmed upstream fix for GHSA-ch52-4w7c-c8xp. The checked-in Yarn patch makes evaluateRequest synchronously revalidate every zero-lifetime entry, preventing max-stale and stale-while-revalidate from reviving security-zeroed responses. Regression tests through the actual cacheable-request consumer cover shared Set-Cookie, private, no-store, no-cache and proxy-revalidate entries, serialized policies, and ordinary public caching. Yarn still audits the underlying 4.2.0 version. This entry acknowledges the verified local mitigation, not the original vulnerable code; remove it and the patch when an upstream fix passes the same tests.",
       "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
+      "expires": "2026-11-01"
     },
     {
       "advisoryIds": [1240992],
@@ -20,64 +20,10 @@
         "@valerypopoff/rivet-studio-server-executor@workspace:packages/studio-server-executor",
         "docs@workspace:packages/docs"
       ],
-      "scope": "Repository-controlled documentation and executor build watchers only; no request-time or user-project pattern processing uses this dependency path.",
-      "reason": "braces 3.0.3 remains the latest release and GHSA-vfj7-8cjw-p6xm has no patched version. This Chokidar path comes from Docusaurus and esbuild-plugin-copy build tooling. Only reviewed repository watch patterns are accepted, not untrusted remote globs. Replace or upgrade the owning watcher when a compatible fix is available; this does not waive new runtime dependents.",
+      "scope": "Patched repository-controlled documentation and executor build watchers only; no request-time or user-project pattern processing.",
+      "reason": "braces 3.0.3 has no upstream fix for GHSA-vfj7-8cjw-p6xm. The checked-in Yarn patch bounds parser nesting and all recursive AST walkers to 256 levels, including caller-supplied ASTs. Regression tests resolve through the actual build watcher and test nested braces, parentheses, malformed patterns, direct AST inputs, and ordinary expansion. Yarn still audits the underlying 3.0.3 version. This entry acknowledges the verified local mitigation rather than waiving stack exhaustion; remove it and the patch when a compatible upstream fix passes the same tests.",
       "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1120258],
-      "packages": ["@babel/plugin-transform-modules-systemjs"],
-      "dependents": ["@babel/preset-env@npm:7.22.5"],
-      "scope": "Documentation build toolchain only; this package is not shipped in Rivet runtime bundles.",
-      "reason": "Docusaurus 3 still reaches this Babel transform through its webpack stack. Upgrade when the upstream toolchain moves to a fixed Babel release.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1101849],
-      "packages": ["path-to-regexp"],
-      "dependents": ["react-router@npm:5.3.4"],
-      "scope": "Documentation development server routing through Docusaurus React Router 5 only; it is not shipped in Rivet runtime bundles.",
-      "reason": "Docusaurus 3 still uses React Router 5. Upgrade when Docusaurus removes the affected path-to-regexp generation.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1115552],
-      "packages": ["picomatch"],
-      "dependents": ["micromatch@npm:4.0.8"],
-      "scope": "Documentation and build-time file matching only; it is not shipped in Rivet runtime bundles.",
-      "reason": "The remaining affected version is pinned through micromatch. Upgrade the owning toolchain when a compatible release is available.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1113686],
-      "packages": ["serialize-javascript"],
-      "dependents": ["copy-webpack-plugin@npm:11.0.0"],
-      "scope": "Documentation webpack asset generation only; it is not shipped in Rivet runtime bundles.",
-      "reason": "The advisory currently has no fixed serialize-javascript release in the accepted range. Remove the exception when upstream tooling adopts a fix.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1109532, 1109543, 1109552],
-      "packages": ["tar-fs"],
-      "dependents": ["pkg-fetch@npm:3.4.2"],
-      "scope": "Legacy app-executor packaging through pkg/pkg-fetch only; it does not extract user-controlled archives at runtime.",
-      "reason": "pkg is archived and pins pkg-fetch. Replace the executor binary packager before this exception expires.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
-    },
-    {
-      "advisoryIds": [1239765, 1239766],
-      "packages": ["image-size"],
-      "dependents": ["@docusaurus/mdx-loader@npm:3.10.1"],
-      "scope": "Documentation build toolchain parsing repository-controlled MDX image assets only; it is not shipped in Rivet runtime bundles.",
-      "reason": "image-size 2.0.2 is the current compatible release required by Docusaurus 3.10.1. Its ICNS, JXL, and HEIF parsers run only over reviewed documentation assets during the build. Remove this exception when Docusaurus or image-size publishes a compatible fixed release.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-10-10"
+      "expires": "2026-11-01"
     }
   ]
 }

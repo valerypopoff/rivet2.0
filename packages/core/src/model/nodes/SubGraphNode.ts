@@ -493,6 +493,9 @@ function buildOptimizedSubgraphOutputs(
   if (!boundary.outputs.some((output) => output.id === 'cost')) {
     outputs['cost' as PortId] = graphOutputs['cost' as PortId] ?? { type: 'number', value: 0 };
   }
+  if (!boundary.outputs.some((output) => output.id === 'costBreakdown') && graphOutputs['costBreakdown' as PortId]) {
+    outputs['costBreakdown' as PortId] = graphOutputs['costBreakdown' as PortId];
+  }
   if (!boundary.outputs.some((output) => output.id === 'duration')) {
     outputs['duration' as PortId] = { type: 'number', value: duration };
   }

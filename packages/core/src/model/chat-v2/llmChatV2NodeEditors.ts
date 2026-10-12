@@ -1,6 +1,7 @@
 import type { EditorDefinition } from '../EditorDefinition.js';
 import type { ChartNode } from '../NodeBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
+import { profileSuspensionHints } from '../profileSuspensionHints.js';
 import { STREAM_RESPONSE_HELPER_MESSAGE } from './chatV2Shared.js';
 import {
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
@@ -82,7 +83,8 @@ function getApiKeySourceHelperMessage(data: LLMChatV2NodeData): string {
   switch (data.provider) {
     case 'openai':
     case 'anthropic':
-    case 'google': {
+    case 'google':
+    case 'openrouter': {
       const names = getChatV2CredentialNamesForDisplay(data.provider, data.providerApiKeyNames?.[data.provider]);
       const hasOverride = data.providerApiKeyNames?.[data.provider] != null;
       return hasOverride
@@ -184,15 +186,13 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
     {
       type: 'info',
       label: "It's a hosted runtime capability",
-      helperMessage:
-        'This configuration is enforced by Rivet Studio Server or another host that explicitly provides shared LLM profile reliability. It has no effect in standalone Rivet.',
+      helperMessage: profileSuspensionHints.host,
     },
     {
       type: 'toggle',
       label: 'Enable automatic suspension',
       dataKey: 'enableCircuitBreaker',
-      helperMessage:
-        'After provider failures or timeouts, temporarily suspend this profile in the LLM profiles fallback chain. When the suspension ends, one recovery attempt checks whether the profile can resume.',
+      helperMessage: profileSuspensionHints.enable,
     },
     {
       type: 'number',
@@ -202,8 +202,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage:
-        'Maximum wait time for a non-stream response (or the first useful streamed output). A call that reaches this deadline falls back immediately, even before this profile is suspended.',
+      helperMessage: 'Time to receive a response or first useful streamed output; then try the next profile.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -214,7 +213,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'Maximum gap between streamed response events before falling back.',
+      helperMessage: 'Maximum gap between streamed events before trying the next profile.',
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -224,8 +223,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       defaultValue: DEFAULT_LLM_PROFILE_CIRCUIT_FAILURE_THRESHOLD,
       min: 1,
       step: 1,
-      helperMessage:
-        'Failed or timed-out profile attempts required within the failure window before suspending this profile.',
+      helperMessage: profileSuspensionHints.threshold,
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -236,7 +234,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'Failed or timed-out profile attempts inside this rolling window count toward suspension.',
+      helperMessage: profileSuspensionHints.window,
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
     {
@@ -247,7 +245,7 @@ function getCircuitBreakerEditors(): LLMChatV2EditorDefinition {
       storageMultiplier: 1_000,
       min: 1_000,
       step: 1_000,
-      helperMessage: 'How long the fallback chain skips this profile before allowing one recovery attempt.',
+      helperMessage: profileSuspensionHints.duration,
       hideIf: (data) => data.enableCircuitBreaker !== true,
     },
   ]);
@@ -395,6 +393,14 @@ function getParameterEditors(): LLMChatV2EditorDefinition {
 
 function getReasoningEditors(): LLMChatV2EditorDefinition {
   return group('Reasoning', [
+    {
+      type: 'dropdown',
+      label: 'Reasoning effort',
+      dataKey: 'openRouterReasoningEffort',
+      options: openAIReasoningEffortOptions,
+      helperMessage: 'Reasoning depth for models that support it. Unsupported settings fail instead of being ignored.',
+      hideIf: hideUnlessProvider('openrouter'),
+    },
     {
       type: 'dropdown',
       label: 'Reasoning effort',

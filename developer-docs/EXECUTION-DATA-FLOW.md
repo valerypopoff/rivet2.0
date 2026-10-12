@@ -23,6 +23,62 @@ When a graph executes, the app must:
 These four concerns are handled by separate but tightly coupled systems. The coupling
 is where bugs tend to hide.
 
+## Execution ownership versus display ownership
+
+[`preparedEditorRun`](../packages/app/src/hooks/preparedEditorRun.ts) captures
+the originating authored project before asynchronous preparation.
+[`EditorRunSession`](../packages/app/src/hooks/editorRunSession.ts) owns that
+invocation's cancellation and terminal cleanup. These are separate from the
+project's displayed execution snapshot: switching tabs can change what is drawn
+without changing which processor/request, recording or abort signal owns a run.
+
+The Browser processor registry and remote request/session registry release only
+their matching run. An outputs-ready result or abort notification must not
+discard the remaining event/recording tail. Remote connection ownership remains
+in `executorSession`; display routing and pending-request settlement continue
+using their existing helpers. Core invocation/shared/boundary state extraction
+does not change execution IDs or event ordering. See the
+[ownership and inheritance matrix](./EXECUTION-REFACTOR-ACCEPTANCE.md) for current
+reset rules and acceptance checks.
+
+## Terminal execution error notifications
+
+The shared `useGraphExecutionEvents.onError` handler stops active run controls
+and always calls `handleError` with its default visible error toast. This applies
+to Browser, desktop Node and remote execution errors, including failures before
+node output exists (such as a missing cross-project `subgraphProjectLoader`).
+Do not whitelist error text for root notifications: a console message alone is
+not sufficient feedback for an unsuccessful editor run.
+
+Child `graphError` and ordinary `nodeError` events remain node/run diagnostics;
+they can be caught by a parent and must not each generate a toast. The existing
+node-local async-branch safety notification remains, and `handleError` deduplicates
+identical node/root messages within its five-second window. Cancellation uses
+`abort`, not a fabricated execution-error toast. This changes presentation only;
+it does not add desktop cross-project loading or suppress the Core loader guard.
+
+## Desktop bundle dataflow across tabs
+
+Core `GraphExecutionMetadata.projectId` identifies the actual project owning a
+graph snapshot, including legacy referenced-graph aliases. Cross-project child
+processors carry an isolated `projectScope`; same-project children inherit it.
+`useBundleExecutionRouting` observes live Browser and internal desktop Node
+events and projects them only to open tabs sharing the entry's `bundleManifestPath`.
+It updates inactive project execution snapshots or restores the active target's
+snapshot. At a cross-project boundary it clears caller executor/parent identity
+for the target canvas; same-project nested graph identities are retained.
+
+This is display-only: entry run cancellation, prompts, recordings and terminal
+errors stay with the entry tab. Root lifecycle events are not copied as independent
+dependency runs. Replay is not live execution and is excluded. Observer failures
+are non-terminal diagnostics. Older event producers without `projectId` keep their
+existing routing. Root-run owner maps are bounded and released on completion/error.
+
+Both versioned cross-project Subgraphs and legacy referenced-graph aliases emit
+foreign-scoped live events. Root recorders exclude those child events because the
+root snapshot cannot replay foreign nodes; a child recorder owns that scope.
+Do not confuse this recording boundary with missing live dataflow across bundle tabs.
+
 ## Per-Node Run Duration Metadata
 
 Node run duration display is an app preference layered over execution events. The persisted setting lives in [`showNodeRunDurationsState`](../packages/app/src/state/settings.ts) with storage key `showNodeRunDurations` and default `false`. It is not part of core `Settings`, project YAML, node data, output definitions, or DataValue output maps.
@@ -204,6 +260,43 @@ The early `graphOutputsReady` payload is a snapshot. Its derived `cost` reflects
 work completed at that boundary and does not mutate afterward. The processor's
 canonical output object remains unseeded until finalization, so `graphFinish`
 and `done` include cost from managed async branches that settle later.
+
+Runtime cost accounting stays in Core's invocation state. Numeric `cost` remains
+compatible; when known costs are accounted, `costBreakdown` is an object DataValue
+with USD subtotals `{ llm, classifier, other }`. Current/legacy LLM Chat and
+Classifier Evaluate identify their respective families; external/plugin costs
+without a family belong to `other`. No-charge non-AI graphs retain their existing
+shape. Unpriced calls do not fabricate charges; classifier estimates retain
+successful-response semantics. Explicit Graph Outputs named `cost` or
+`costBreakdown` still own those names and may override derived metrics.
+
+Normal/split/frozen processing uses one accumulator. Subgraph, optimized Subgraph,
+Call Graph, Referenced Graph Alias, and delegated graph tools carry their families
+without directly adding ordinary child costs twice. Alias metric visibility does
+not discard accounting. Carried breakdowns must match their numeric cost before
+attributing that value; otherwise the node's family is used. Temporary
+continuation/Watch/async processors transfer invocation totals at their existing
+completion boundaries. Early cost and breakdown are detached snapshots.
+Internal LLM auto-delegation carries tool costs outside cached delegation records;
+connected Delegate branches keep their existing accounting owner. Replaying an
+already-delegated record never charges again.
+
+Live editor cache hits preserve cached response/Usage evidence but return zero
+current-run cost and remove the historical breakdown, without mutating the
+cached output map. Frozen recording outputs remain intentional historical replay;
+they are not editor cache hits. Negative/non-finite node costs and overflowing
+additions are excluded before accumulator mutation. Breakdown fields must be own
+numeric data properties; inherited fields/accessors are rejected without invocation.
+`graphCostBreakdownMatchesCost` is the shared graph/tool attribution check.
+
+LLM Chat's result projector emits cost independently of Usage visibility from
+deduplicated physical-call receipts (last receipt per call ID wins), summing known
+prices, including priced retries/fallback calls. Usage's exact-total rule remains
+stricter: missing prices keep `Usage.totalCost` unavailable. Hosts forward Core
+metrics rather than summing bounded traces. CLI `--include-cost`/`--expose-cost`
+show or hide both fields together. Coverage lives in GraphBoundaryEffects,
+ClassifierResourceAndCost, LLM coordinator/projector, async/Watch, Delegate,
+OpenRouter, Node graphRunner, and CLI output-shaping tests.
 
 Root ownership keeps an async branch alive when its source processor finishes
 normally, but it does not detach the branch from source cancellation. Managed
@@ -595,16 +688,26 @@ available to low-level runtime code and tests, but product UI should use the
 selector and capability layer.
 
 `useRemoteExecutor` caches the last successfully uploaded
-project/settings/static-data payload per executor session. Upload cache decisions
-are planned in `remoteExecutorUploadCache.ts`: `planRemoteExecutorProjectUpload`
-compares the session key, derived project graph/plugin state, resolved runtime
-settings, and sorted static project data before the hook sends anything.
+project/settings/static-data payload per actual WebSocket connection. A weak
+socket-keyed cache is shared by callers of that connection, not by project tabs
+or equal target URLs. Independent project runtimes and reconnects cannot reuse
+another socket's uploaded definition, and old sockets do not stay alive because
+of the cache. In
+`remoteExecutorUploadCache.ts`, `prepareRemoteExecutorProjectUpload` captures a
+key from the session, derived project graph/plugin state, resolved runtime
+settings and sorted static project data before the hook sends anything. Its
+returned uploader rechecks the shared slot at dispatch time, so an Evaluation
+can restore its prepared definition after another request without serializing
+the entire project again for each trial. `uploadRemoteExecutorProjectIfNeeded`
+is the one-shot adapter over this same implementation.
 Identical consecutive runs can therefore send only the lightweight `run`
 message, while graph edits, settings/env changes, static data changes, or a new
 session force a fresh upload. The imperative upload path sends dynamic project
 data first, then each static-data payload, and marks the cache fresh only after
-every send succeeds. The cache is cleared on executor connect/disconnect, and
-failed project or static-data sends do not update it.
+every send succeeds. A replacement socket naturally gets a cold cache without
+depending on a mounted hook's lifecycle listeners. The cache is invalidated
+before any replacement upload starts. Failed project or static-data sends leave
+it invalid, because the executor may already hold partial replacement data.
 
 Remote run request ids are managed by `remoteExecutorRunRequest.ts`.
 Editor graph runs register one active request id before sending the `run`
@@ -1938,7 +2041,7 @@ Lifecycle and observability events relevant to editor data flow are replayed:
 | `partialOutput`                             | Stores streaming/split-run output                                                                                                  |
 | `progress`                                  | Updates the exact invocation's latest progress                                                                                     |
 | `nodeOutputsCleared`                        | Removes node data entries                                                                                                          |
-| `streamingOutputWatchSummary`                | Adds one compact synthetic Watch row to Run Activity; never recreates omitted repeated branch history                             |
+| `streamingOutputWatchSummary`               | Adds one compact synthetic Watch row to Run Activity; never recreates omitted repeated branch history                              |
 | `done`                                      | Sets final outputs, marks not running                                                                                              |
 | `userInput`                                 | Replays the historical prompt into Run Activity with `isReplay: true`; the callback is a no-op and no User Input modal is reopened |
 | `globalSet`                                 | Replays global variable changes                                                                                                    |

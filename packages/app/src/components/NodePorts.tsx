@@ -7,7 +7,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { Fragment, type FC, type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useCanvasNodeIO } from '../hooks/useGetNodeIO.js';
+import { useCanvasNodeIO, useInputConnectionWarnings } from '../hooks/useGetNodeIO.js';
 import { useStableCallback } from '../hooks/useStableCallback.js';
 import { Port } from './Port.js';
 import { ErrorBoundary } from 'react-error-boundary';
@@ -104,6 +104,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   const { onDataBusChannelHoverChange, onPortMouseOut, onPortMouseOver, onWireEndDrag, onWireStartDrag } =
     useCanvasHandlersContext();
   const { inputDefinitions, outputDefinitions } = useCanvasNodeIO(node.id)!;
+  const inputWarnings = useInputConnectionWarnings(node.id, connections);
   const preservePortTextCase = useAtomValue(preservePortTextCaseState);
   const projectId = useAtomValue(projectMetadataState).id;
   const graphId = useAtomValue(graphMetadataState)?.id;
@@ -116,9 +117,9 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
   const previewPortOrderRef = useRef<string[] | undefined>();
   const [draggedPort, setDraggedPort] = useState<PortReorderDrag | undefined>();
   const [previewPortOrder, setPreviewPortOrder] = useState<string[] | undefined>();
-  const [matchCaseValueConnectionGuides, setMatchCaseValueConnectionGuides] = useState<
-    MatchCaseValueConnectionGuide[]
-  >([]);
+  const [matchCaseValueConnectionGuides, setMatchCaseValueConnectionGuides] = useState<MatchCaseValueConnectionGuide[]>(
+    [],
+  );
   const hoveredDataBusChannelKeySet = useMemo(() => new Set(hoveredDataBusChannelKeys), [hoveredDataBusChannelKeys]);
 
   const getDataBusAntenna = (input: boolean, portId: PortId) => {
@@ -642,6 +643,7 @@ export const NodePorts: FC<NodePortsProps> = ({ node, connections }) => {
                   preservePortCase={preservePortTextCase}
                   input
                   connected={connected}
+                  connectionWarning={inputWarnings.has(input.id)}
                   nodeId={node.id}
                   canDragTo={draggingWire ? !draggingWire.startPortIsInput : false}
                   closest={

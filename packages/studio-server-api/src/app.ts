@@ -54,6 +54,7 @@ import {
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
 import { vmMigrationRequestBarrier } from './vm-migration-maintenance.js';
+import { releaseMaintenanceBarrier } from './release-maintenance.js';
 import { closeResponseConnectionAfterFlush, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
@@ -403,6 +404,7 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(vmMigrationRequestBarrier);
+  app.use(releaseMaintenanceBarrier);
 
   app.use(captureAppSettingsSnapshot);
 

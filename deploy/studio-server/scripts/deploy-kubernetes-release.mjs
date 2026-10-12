@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 import {
   assertReleaseManifestMatchesCurrentChart,
@@ -10,8 +11,17 @@ import {
   assertStudioServerReleaseManifest,
   createForwardRollbackHelmValues,
   createProductionHelmValues,
+  getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
-import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { resolveHelmBinOrThrow, findExecutableOnPath } from './lib/k8s-tools.mjs';
+import {
+  maintenanceValidationValues,
+  assertCutoverJournal,
+  assertOrdinaryReleaseAllowed,
+  blocksCutoverStop,
+  requiresMaintenanceCutover,
+  runManagedReleaseCutover,
+} from './lib/managed-release-cutover.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const chartPath = path.join(rootDir, 'deploy', 'studio-server', 'helm');
@@ -27,6 +37,8 @@ const supportedOptions = new Set([
   '--dry-run',
   '--timeout',
   '--artifacts',
+  '--maintenance-cutover',
+  '--resume-cutover',
 ]);
 
 function parseArgs(argv) {
@@ -42,7 +54,7 @@ function parseArgs(argv) {
     if (options.has(key)) {
       throw new Error(`${key} may only be supplied once`);
     }
-    if (key === '--dry-run') {
+    if (key === '--dry-run' || key === '--maintenance-cutover') {
       options.set(key, true);
       continue;
     }
@@ -146,16 +158,23 @@ function commandLine(program, args) {
   return [program, ...args].map((value) => (/\s|"/u.test(value) ? JSON.stringify(value) : value)).join(' ');
 }
 
-async function run(program, args, { capture = false, allowFailure = false } = {}) {
+async function run(program, args, { capture = false, allowFailure = false, input } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       cwd: rootDir,
       shell: false,
       windowsHide: true,
-      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+      stdio: capture ? [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] : 'inherit',
     });
     let stdout = '';
     let stderr = '';
+    let inputError;
+    if (input != null) {
+      child.stdin.on('error', (error) => {
+        inputError = error;
+      });
+      child.stdin.end(input);
+    }
     if (capture) {
       child.stdout.on('data', (chunk) => {
         stdout += String(chunk);
@@ -165,7 +184,13 @@ async function run(program, args, { capture = false, allowFailure = false } = {}
       });
     }
     child.once('error', reject);
-    child.once('exit', (code) => {
+    // Wait for pipes as well as process exit: journal JSON is an acknowledgement,
+    // and truncated output or a broken stdin pipe must not count as success.
+    child.once('close', (code) => {
+      if (inputError) {
+        reject(new Error(`Command input acknowledgement failed: ${commandLine(program, args)}`, { cause: inputError }));
+        return;
+      }
       const exitCode = code ?? 1;
       const result = { exitCode, stdout, stderr };
       if (exitCode === 0 || allowFailure) {
@@ -283,8 +308,71 @@ async function main() {
     }
 
     await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
-    try {
-      await run(helmBin, [
+    const installedResult = await run(
+      helmBin,
+      ['list', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+      { capture: true },
+    );
+    const exists = JSON.parse(installedResult.stdout).length > 0;
+    const installed = exists
+      ? JSON.parse(
+          (
+            await run(helmBin, ['get', 'values', release, '--namespace', namespace, '--all', '--output', 'json'], {
+              capture: true,
+            })
+          ).stdout,
+        )
+      : null;
+    const kubectl = findExecutableOnPath(process.env.RIVET_K8S_KUBECTL_BIN ?? 'kubectl');
+    if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
+    const journalName = `${release.slice(0, 32)}-${createHash('sha256').update(release).digest('hex').slice(0, 8)}-cutover`;
+    const savedJournal = await run(
+      kubectl,
+      [
+        '--namespace',
+        namespace,
+        '--request-timeout=30s',
+        'get',
+        'configmap',
+        journalName,
+        '--ignore-not-found',
+        '-o',
+        'json',
+      ],
+      { capture: true },
+    );
+    const journalResource = savedJournal.stdout.trim() ? JSON.parse(savedJournal.stdout) : null;
+    const pendingJournal = journalResource
+      ? { ...JSON.parse(journalResource.data.record), resourceVersion: journalResource.metadata.resourceVersion }
+      : null;
+    assertCutoverJournal(pendingJournal, { release, namespace });
+    if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
+    const installedDigest = installed?.release?.production?.manifestDigest;
+    const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    if (
+      exists &&
+      installedDigest &&
+      installedDigest !== candidateDigest &&
+      installedDigest !== manifest.lineage?.predecessor?.manifestDigest
+    )
+      throw new Error(
+        'The installed release does not match the candidate or its certified predecessor. Refuse a stale or sibling rollout.',
+      );
+    const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
+    if (exists && !installedDigest && !cutover)
+      throw new Error(
+        'The installed release identity is unknown. Use an explicitly owned maintenance cutover, not an unverified rolling rollout.',
+      );
+    if (requiresMaintenanceCutover(manifest, installed) && !cutover)
+      throw new Error(
+        'This release is incompatible with older readers. Use --maintenance-cutover after draining accepted runs, pausing external controllers, and confirming this release owns every database consumer.',
+      );
+    if (cutover && rollbackManifestPath)
+      throw new Error('Maintenance cutover cannot be combined with forward rollback.');
+    if (cutover && !exists)
+      throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
+    const upgrade = (extra = []) =>
+      run(helmBin, [
         'upgrade',
         '--install',
         release,
@@ -292,17 +380,126 @@ async function main() {
         '--namespace',
         namespace,
         ...valueArgs,
-        // A candidate migration is not reversible. Do not let Helm silently
-        // restore the previous workloads after its migration Job has already
-        // advanced PostgreSQL; recovery must use the explicit forward
-        // rollback path below. A forward rollback itself does not mutate the
-        // schema, so Helm may safely make that one operation atomic.
+        ...extra,
         ...(rollbackManifestPath ? ['--atomic'] : []),
         '--wait',
         '--wait-for-jobs',
         '--timeout',
         timeout,
       ]);
+    try {
+      if (cutover) {
+        const kube = async (args, extra = {}) =>
+          run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+        const name = journalName;
+        const selector = `app.kubernetes.io/instance=${release}`;
+        const inventory = async () => {
+          const resources = JSON.parse(
+            (await kube(['get', 'deployment,statefulset,hpa', '-l', selector, '-o', 'json'])).stdout,
+          ).items;
+          return {
+            workloads: resources
+              .filter((item) => item.kind !== 'HorizontalPodAutoscaler')
+              .map((item) => ({
+                kind: item.kind.toLowerCase(),
+                name: item.metadata.name,
+                component: item.metadata.labels?.['app.kubernetes.io/component'],
+                replicas: item.spec.replicas ?? 1,
+              })),
+            autoscalers: resources
+              .filter((item) => item.kind === 'HorizontalPodAutoscaler')
+              .map((item) => item.metadata.name),
+          };
+        };
+        const readJournal = async () => {
+          const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
+          if (!result.stdout.trim()) return null;
+          const resource = JSON.parse(result.stdout);
+          return { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion };
+        };
+        const saveJournal = async (record, resourceVersion) => {
+          const { resourceVersion: _discard, ...data } = record;
+          const resource = {
+            apiVersion: 'v1',
+            kind: 'ConfigMap',
+            metadata: { name, namespace, ...(resourceVersion ? { resourceVersion } : {}) },
+            data: { record: JSON.stringify(data) },
+          };
+          const saved = JSON.parse(
+            (
+              await kube([resourceVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], {
+                input: JSON.stringify(resource),
+              })
+            ).stdout,
+          );
+          return { ...data, resourceVersion: saved.metadata.resourceVersion };
+        };
+        const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
+        await fs.writeFile(maintenancePath, JSON.stringify(maintenanceValidationValues), 'utf8');
+        await runManagedReleaseCutover({
+          release,
+          namespace,
+          manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
+          resumeToken: options.get('--resume-cutover'),
+          inventory,
+          readJournal,
+          createJournal: (record) => saveJournal(record),
+          replaceJournal: saveJournal,
+          scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
+          removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
+          waitForStopped: async () => {
+            const amount =
+              Number.parseInt(timeout, 10) *
+              (timeout.endsWith('h') ? 3_600_000 : timeout.endsWith('m') ? 60_000 : 1000);
+            const deadline = Date.now() + amount;
+            while (true) {
+              const pods = JSON.parse((await kube(['get', 'pods', '-l', selector, '-o', 'json'])).stdout).items;
+              if (!pods.some(blocksCutoverStop)) break;
+              if (Date.now() >= deadline)
+                throw new Error('Old pods have not stopped. No forced deletion was attempted.');
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+            }
+          },
+          installValidation: () => upgrade(['--values', maintenancePath]),
+          validate: async () => {
+            const pods = JSON.parse(
+              (await kube(['get', 'pods', '-l', `${selector},app.kubernetes.io/component=backend`, '-o', 'json']))
+                .stdout,
+            ).items;
+            if (pods.length !== 1) throw new Error('Expected one validation backend.');
+            await kube([
+              'exec',
+              pods[0].metadata.name,
+              '-c',
+              'backend',
+              '--',
+              'node',
+              '-e',
+              'const base=`http://127.0.0.1:${process.env.RIVET_BACKEND_API_PORT || 80}`; Promise.all([fetch(`${base}/readyz`,{signal:AbortSignal.timeout(10000)}),fetch(`${base}/api/workflows/tree`,{signal:AbortSignal.timeout(10000)})]).then(async([health,traffic])=>{if(!health.ok||traffic.status!==503||(await traffic.json()).code!=="release_maintenance")throw Error("Validation readiness or maintenance admission failed")}).catch(e=>{console.error(e.message);process.exitCode=1})',
+            ]);
+          },
+          resume: () => upgrade(),
+        });
+      } else
+        await run(helmBin, [
+          'upgrade',
+          '--install',
+          release,
+          chartPath,
+          '--namespace',
+          namespace,
+          ...valueArgs,
+          // A candidate migration is not reversible. Do not let Helm silently
+          // restore the previous workloads after its migration Job has already
+          // advanced PostgreSQL; recovery must use the explicit forward
+          // rollback path below. A forward rollback itself does not mutate the
+          // schema, so Helm may safely make that one operation atomic.
+          ...(rollbackManifestPath ? ['--atomic'] : []),
+          '--wait',
+          '--wait-for-jobs',
+          '--timeout',
+          timeout,
+        ]);
     } catch (error) {
       await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
       const recoveryGuidance = rollbackManifestPath

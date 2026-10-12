@@ -243,7 +243,11 @@ export async function verifySqliteWorkflowServing(options: {
       );
       const actualIds: string[] = [];
       for (let page = 1; page <= Math.max(1, Math.ceil(expectedRuns.length / 100)); page++) {
-        const result = await backend.listWorkflowRecordingRunsPage(source.workflowId, page, 100);
+        const result = await backend.listWorkflowRecordingRunsPage({
+          workflowId: source.workflowId,
+          page: page,
+          pageSize: 100,
+        });
         equal(result.totalRuns, expectedRuns.length, 'recording count');
         actualIds.push(...result.runs.map((run) => run.id));
         for (const run of result.runs) {

@@ -62,7 +62,7 @@ test.describe('Workflow project version chooser', () => {
     const chooserModal = page.getByTestId('workflow-project-version-modal');
 
     await projectRow.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: 'Download', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Download project', exact: true }).click();
     await expect(chooserModal).toHaveCount(1);
     await expect(chooserModal).toBeVisible();
     await expect(chooserModal.locator('.project-settings-modal-title')).toHaveText('Download');

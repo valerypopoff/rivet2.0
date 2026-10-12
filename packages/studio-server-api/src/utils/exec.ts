@@ -27,15 +27,7 @@ export interface SpawnInvocation {
   args: string[];
 }
 
-const WINDOWS_CMD_PROGRAMS = new Set([
-  'npm',
-  'npx',
-  'pnpm',
-  'pnpx',
-  'yarn',
-  'yarnpkg',
-  'corepack',
-]);
+const WINDOWS_CMD_PROGRAMS = new Set(['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'yarnpkg', 'corepack']);
 
 const PROXY_BOOTSTRAP_NODE_OPTION_PATTERNS = [
   /(?:^|\s)--import=\/opt\/proxy-bootstrap\/bootstrap\.mjs(?=\s|$)/g,
@@ -47,11 +39,14 @@ function logExecInvocation(invocation: SpawnInvocation, options: ExecOptions): v
     return;
   }
 
-  console.error('[exec]', JSON.stringify({
-    program: invocation.program,
-    args: invocation.args,
-    cwd: options.cwd ?? null,
-  }));
+  console.error(
+    '[exec]',
+    JSON.stringify({
+      program: invocation.program,
+      args: invocation.args,
+      cwd: options.cwd ?? null,
+    }),
+  );
 }
 
 export function resolveSpawnInvocation(
@@ -66,7 +61,8 @@ export function resolveSpawnInvocation(
 
   const extension = path.extname(program).toLowerCase();
   const basename = path.basename(program, extension).toLowerCase();
-  const isBatchShim = extension === '.cmd' || extension === '.bat' || (!extension && WINDOWS_CMD_PROGRAMS.has(basename));
+  const isBatchShim =
+    extension === '.cmd' || extension === '.bat' || (!extension && WINDOWS_CMD_PROGRAMS.has(basename));
 
   if (!isBatchShim) {
     return { program, args };
@@ -104,11 +100,30 @@ export function buildChildProcessEnv(baseEnv: NodeJS.ProcessEnv = process.env): 
   return env;
 }
 
-export function exec(
-  program: string,
-  args: string[],
-  options: ExecOptions = {},
-): Promise<ExecResult> {
+/** Terminate an owned child, including the npm descendants of a Windows CLI shim. */
+export function terminateChildProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.exitCode != null || child.signalCode != null) return;
+  if (process.platform !== 'win32' || !child.pid) {
+    child.kill(signal);
+    return;
+  }
+  // Killing cmd.exe first loses the descendant tree and leaves npm holding its
+  // output pipes open. Windows has no SIGTERM equivalent for that tree.
+  const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  killer.on('error', (error) => {
+    console.warn('[exec] Could not terminate the owned child process tree:', error.message);
+  });
+  killer.on('close', (code) => {
+    if (code !== 0 && child.exitCode == null && child.signalCode == null) {
+      console.warn(`[exec] Owned process-tree termination failed with exit code ${code}.`);
+    }
+  });
+}
+
+export function exec(program: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const invocation = resolveSpawnInvocation(program, args);
     logExecInvocation(invocation, options);
@@ -140,11 +155,7 @@ export function exec(
   });
 }
 
-export function execStreaming(
-  program: string,
-  args: string[],
-  options: ExecOptions = {},
-): StreamingExec {
+export function execStreaming(program: string, args: string[], options: ExecOptions = {}): StreamingExec {
   const emitter = new EventEmitter() as StreamingExec;
 
   const invocation = resolveSpawnInvocation(program, args);

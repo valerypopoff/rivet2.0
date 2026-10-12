@@ -105,20 +105,24 @@ export class ManagedPostgresPoolRegistry {
     }
     entry.referenceCount += 1;
 
-    let released = false;
+    let releasePromise: Promise<void> | undefined;
     return {
       pool: entry.pool,
-      release: async () => {
-        if (released) return;
-        released = true;
-        entry!.referenceCount -= 1;
-        if (entry!.referenceCount > 0) return;
+      release: () => {
+        // Idempotence includes acknowledgement: repeated callers must observe
+        // the same pending or failed close, never an invented successful close.
+        if (releasePromise) return releasePromise;
+        releasePromise = (async () => {
+          entry!.referenceCount -= 1;
+          if (entry!.referenceCount > 0) return;
 
-        if (this.#entries.get(key) === entry) {
-          this.#entries.delete(key);
-        }
-        entry!.endPromise ??= entry!.pool.end();
-        await entry!.endPromise;
+          if (this.#entries.get(key) === entry) {
+            this.#entries.delete(key);
+          }
+          entry!.endPromise ??= entry!.pool.end();
+          await entry!.endPromise;
+        })();
+        return releasePromise;
       },
     };
   }

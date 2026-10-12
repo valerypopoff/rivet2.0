@@ -34,18 +34,29 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
   const workspaceTransitions = useWorkspaceTransitions();
   const store = useStore();
 
-  return (projectInfo: OpenedProjectInfo, options?: { preferredGraphId?: GraphId }): Promise<boolean> =>
-    runLatestProjectActivation(store, async (isCurrent, signal) => {
+  return (
+    projectInfo: OpenedProjectInfo,
+    options?: { preferredGraphId?: GraphId },
+    intent?: { isCurrent(): boolean; signal: AbortSignal; bundleManifestPath?: string },
+  ): Promise<boolean> => {
+    const activate = async (isCurrent: () => boolean, signal: AbortSignal) => {
       try {
+        if (!isCurrent() || signal.aborted) return false;
         const currentInfo = store.get(projectsState).openedProjects[projectInfo.projectId];
         if (!currentInfo) {
           return false;
         }
         projectInfo = currentInfo;
         const requestedPath = projectInfo.fsPath;
+        const requestedManifest = projectInfo.bundleManifestPath;
         const isTabCurrent = () => {
           const latest = store.get(projectsState).openedProjects[projectInfo.projectId];
-          return isCurrent() && latest !== undefined && latest.fsPath === requestedPath;
+          return (
+            isCurrent() &&
+            latest !== undefined &&
+            latest.fsPath === requestedPath &&
+            latest.bundleManifestPath === requestedManifest
+          );
         };
         const currentProject = store.get(projectState);
         const currentGraph = store.get(graphState);
@@ -88,6 +99,10 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
           const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath, {
             signal,
             deferCommit: true,
+            // A validated Open may establish membership for an existing tab.
+            // Use it for baseline recovery without rebinding the tab before
+            // its guarded activation succeeds.
+            bundleManifestPath: intent?.bundleManifestPath ?? requestedManifest,
           });
           const latestInfo = store.get(projectsState).openedProjects[projectInfo.projectId];
           if (!isTabCurrent() || !latestInfo) {
@@ -184,5 +199,9 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         });
         return false;
       }
-    });
+    };
+    // A bundle open already owns a guarded intent. Starting another intent
+    // here would cancel the caller and allow late sibling-tab registration.
+    return intent ? activate(intent.isCurrent, intent.signal) : runLatestProjectActivation(store, activate);
+  };
 }

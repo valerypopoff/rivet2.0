@@ -1,5 +1,7 @@
 # LLM Profile Suspension
 
+Classifier Profiles reuse this store/permit infrastructure with separate family-scoped identities and administration; they do not reuse streaming Chat behavior. Legacy missing-family identities mean LLM. Runtime `llmProfileAttempt` events may carry `family: classifier` and `timeoutKind: response`. See [Classifier node contracts](./CLASSIFIER-NODES.md) for candidate-level response deadlines and failure classification.
+
 ## Purpose
 
 An `LLM Profile` can configure automatic suspension, which temporarily removes
@@ -40,6 +42,15 @@ inspectable.
 
 The `LLM profile suspension` section belongs to the `LLM Profile` node. It is
 not available on inline LLM Chat configuration.
+
+The inspector shares concise host, enable and failure-policy hints with
+Classifier Profiles through `model/profileSuspensionHints.ts`. Only deadline
+hints differ: LLM describes first useful output and streaming inactivity;
+Classifier describes a complete-batch deadline. Keep common wording in that
+shared module; presentation tests enforce parity across both families.
+Describe the policy as suspending a profile. Skipping a suspended candidate is
+the fallback chain's behavior, not the suspension setting's definition. Both
+families leave profile deadlines inert when hosted suspension is inactive.
 
 | Setting                    | Default | Meaning                                                                     |
 | -------------------------- | ------: | --------------------------------------------------------------------------- |
@@ -160,7 +171,8 @@ shows suspension skips, unavailable reliability-service errors, first-output/str
 inactivity timeouts, and reliability updates in chronological order beside physical
 model calls. When a source title is available, Run Activity and Response Inspector
 show `Profile: <node title>` beside provider/model identity. Response Inspector
-exposes the same records in its **LLM profile attempts** section. Older recordings
+exposes the same records in its shared **Profile attempts** section. **Profile fallbacks**
+counts advances for both LLM and classifier invocations. Older recordings
 remain loadable; their additive profile
 attempt collection is simply absent.
 

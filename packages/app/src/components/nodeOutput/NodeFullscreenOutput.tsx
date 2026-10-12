@@ -27,7 +27,7 @@ import { fullscreenOutputModalBoundsState, overlayOpenState } from '../../state/
 import { useDataRefs } from '../../providers/ProvidersContext.js';
 import { FullScreenModal } from '../FullScreenModal.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
-import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
+import { buildModelInvocationTrace, hasModelResponseInspector } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import { OUTPUT_NAVIGATION_ITEM_ATTRIBUTE } from '../renderDataValue/outputNavigationItems.js';
 import { MATCH_ACTIVE_CLASS, MATCH_CLASS } from './fullscreenOutputSearch.js';
@@ -401,7 +401,10 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
     [dataRefs, displayedOutput, node.type, presentationSelectedPage, showNodeRunDurations],
   );
   const { data, processId } = outputViewModel;
-  const responseTrace = useMemo(() => buildLlmInvocationTrace(node, selectedProcessData), [node, selectedProcessData]);
+  const responseTrace = useMemo(
+    () => buildModelInvocationTrace(node, selectedProcessData),
+    [node, selectedProcessData],
+  );
   const llmChatOutputHistory =
     node.type === 'llmChatV2' && !hasSelectedSplitOutputData
       ? selectedProcessData?.data.llmChatOutputHistory?.[0] ?? []
@@ -547,7 +550,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   if (content.kind === 'code-error') {
     outputBody = (
       <>
-        {showDurationSummary && presentationOutput && <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />}
+        {showDurationSummary && presentationOutput && (
+          <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />
+        )}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         <CodeNodeErrorOutput data={selectedData} />
       </>
@@ -555,7 +560,9 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
   } else if (content.kind === 'generic-error') {
     outputBody = (
       <div className="errored">
-        {showDurationSummary && presentationOutput && <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />}
+        {showDurationSummary && presentationOutput && (
+          <NodeRunDurationSummaryMeta processData={presentationOutput} hasBody />
+        )}
         {showDurationMeta && <NodeRunDurationMeta data={selectedData} hasBody />}
         <div className="node-output-error-message" {...{ [OUTPUT_NAVIGATION_ITEM_ATTRIBUTE]: '' }}>
           {content.error}
@@ -673,7 +680,7 @@ const NodeFullscreenOutput: FC<{ node: ChartNode }> = ({ node }) => {
               ? handleOpenPromptDesigner
               : undefined
           }
-          onInspectResponse={node.type === 'llmChatV2' ? () => setInspectorOpen(true) : undefined}
+          onInspectResponse={hasModelResponseInspector(node) ? () => setInspectorOpen(true) : undefined}
         />
       </header>
 

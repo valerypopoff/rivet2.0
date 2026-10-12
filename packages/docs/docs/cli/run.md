@@ -177,7 +177,7 @@ For LLM Chat, the node's API key source controls where the key comes from. If a 
 
 ### Output Configuration
 
-- `--include-cost` - Includes the cost of the graph execution in the output JSON object. The cost is included as a `cost` property on the output JSON.
+- `--include-cost` - Includes numeric `cost` and, when known costs are accounted, `costBreakdown` with `llm`, `classifier`, and `other` USD subtotals. Unknown prices can make the total incomplete.
 - `--output-key` - Prints only one named output as a Data Value object.
 - `--unwrap-output` - Prints only the `.value` field from one named output.
 - `--output-file` - Writes the final JSON payload to a file instead of standard output.

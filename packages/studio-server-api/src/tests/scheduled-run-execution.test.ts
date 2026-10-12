@@ -68,7 +68,7 @@ test('scheduled root uses real cross-project execution and root/child recording 
     assert.ok(result.recordingId);
     await store.finish(job.occurrence.id, 'worker', result);
     await recordings.flushWorkflowExecutionRecordingPersistence();
-    const page = await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all');
+    const page = await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 });
     assert.equal(page.runs.length, 2);
     const primary = page.runs.find((r) => r.executionIdentity?.surface === 'scheduled')!;
     assert.equal(primary.executionIdentity?.scheduleName, schedule.name);
@@ -88,7 +88,10 @@ test('scheduled root uses real cross-project execution and root/child recording 
     assert.equal(outcome.recordingStatus, 'off');
     await store.finish(second.occurrence.id, 'worker', outcome);
     await recordings.flushWorkflowExecutionRecordingPersistence();
-    assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+    assert.equal(
+      (await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 })).runs.length,
+      2,
+    );
     const recordingFailure = await store.save({ ...disabled, record: true }, disabled.id, disabled.revision);
     await store.runNow(recordingFailure.id, recordingFailure.revision);
     const failedSetup = (await store.tick('worker'))!;
@@ -105,7 +108,10 @@ test('scheduled root uses real cross-project execution and root/child recording 
       const failedRun = (await store.list()).history.find((run) => run.id === failedSetup.occurrence.id)!;
       assert.equal(failedRun.startedAt, undefined); // No processor invocation was accepted.
       assert.equal(failedRun.status, 'failed');
-      assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+      assert.equal(
+        (await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 })).runs.length,
+        2,
+      );
     } finally {
       recorderFailure.mock.restore();
     }
@@ -128,7 +134,11 @@ test('scheduled root uses real cross-project execution and root/child recording 
         const failedRun = (await store.list()).history.find((run) => run.id === failedAcceptance.occurrence.id)!;
         assert.equal(failedRun.startedAt !== undefined, committed);
         await recordings.flushWorkflowExecutionRecordingPersistence();
-        assert.equal((await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all')).runs.length, 2);
+        assert.equal(
+          (await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 })).runs
+            .length,
+          2,
+        );
       } finally {
         acceptanceFailure.mock.restore();
       }

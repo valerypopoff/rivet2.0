@@ -8,13 +8,43 @@ import type {
 
 /** Every active-publication mutation carries the state the caller reviewed. */
 export type WorkflowPublicationCommand =
-  | { kind: 'publish-endpoint'; relativePath: unknown; endpointName: string; preconditions: WorkflowDraftPublicationPreconditions }
-  | { kind: 'publish-web-apps'; relativePath: unknown; publications: WorkflowProjectWebAppPublicationDraft[]; preconditions: WorkflowDraftPublicationPreconditions }
-  | { kind: 'restore-version'; relativePath: unknown; versionId: unknown; preconditions: WorkflowDraftPublicationPreconditions }
-  | { kind: 'unpublish-endpoint'; relativePath: unknown; preconditions: WorkflowPublicationPreconditions }
-  | { kind: 'set-endpoint-access'; relativePath: unknown; access: WorkflowEndpointAccess; preconditions: WorkflowPublicationPreconditions }
-  | { kind: 'set-web-app-access'; relativePath: unknown; accessUpdates: WorkflowProjectWebAppAccessDraft[]; preconditions: WorkflowPublicationPreconditions }
-  | { kind: 'unpublish-web-app'; relativePath: unknown; uiGraphId: unknown; preconditions: WorkflowPublicationPreconditions };
+  | {
+      kind: 'publish-endpoint';
+      relativePath: string;
+      endpointName: string;
+      preconditions: WorkflowDraftPublicationPreconditions;
+    }
+  | {
+      kind: 'publish-web-apps';
+      relativePath: string;
+      publications: WorkflowProjectWebAppPublicationDraft[];
+      preconditions: WorkflowDraftPublicationPreconditions;
+    }
+  | {
+      kind: 'restore-version';
+      relativePath: string;
+      versionId: string;
+      preconditions: WorkflowDraftPublicationPreconditions;
+    }
+  | { kind: 'unpublish-endpoint'; relativePath: string; preconditions: WorkflowPublicationPreconditions }
+  | {
+      kind: 'set-endpoint-access';
+      relativePath: string;
+      access: WorkflowEndpointAccess;
+      preconditions: WorkflowPublicationPreconditions;
+    }
+  | {
+      kind: 'set-web-app-access';
+      relativePath: string;
+      accessUpdates: WorkflowProjectWebAppAccessDraft[];
+      preconditions: WorkflowPublicationPreconditions;
+    }
+  | {
+      kind: 'unpublish-web-app';
+      relativePath: string;
+      uiGraphId: string;
+      preconditions: WorkflowPublicationPreconditions;
+    };
 
 export type WorkflowPublicationCommandKind = WorkflowPublicationCommand['kind'];
 

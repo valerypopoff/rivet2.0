@@ -53,7 +53,8 @@ function legacyCanBeCoerced(from: DataType, to: DataType): boolean {
     to === 'knowledge-source' ||
     to === 'knowledge-document' ||
     to === 'knowledge-evidence' ||
-    to === 'llm-config'
+    to === 'llm-config' ||
+    to === 'classifier-config'
   ) {
     return from === to || from === 'object';
   }
@@ -62,7 +63,8 @@ function legacyCanBeCoerced(from: DataType, to: DataType): boolean {
     from === 'knowledge-source' ||
     from === 'knowledge-document' ||
     from === 'knowledge-evidence' ||
-    from === 'llm-config'
+    from === 'llm-config' ||
+    from === 'classifier-config'
   ) {
     return to === 'object' || to === 'string';
   }
@@ -85,17 +87,50 @@ describe('data coercion compatibility policy', () => {
       }
     }
 
-    assert.equal(dataTypes.length, 84);
-    assert.equal(incompatiblePairs, 2_655);
+    assert.equal(dataTypes.length, 88);
+    assert.equal(incompatiblePairs, 3_064);
     assert.equal(
       createHash('sha256').update(matrix).digest('hex'),
-      '17e085ba5f5300f0cb9d6fc1156aab63508d49b3dfe475931e3e85107f310b01',
+      '095cb654e46be53cf9e168304c3d5f4d33e387481dbf1b0a7671af04a7f2d601',
     );
   });
 
   it('checks alternatives without changing pair compatibility', () => {
     assert.equal(canBeCoercedAny(['knowledge-source', 'knowledge-document'], ['number', 'binary']), false);
     assert.equal(canBeCoercedAny(['knowledge-source', 'knowledge-document'], ['number', 'object']), true);
+  });
+
+  it('keeps Classifier and LLM profiles distinct across scalar and array ports', () => {
+    for (const classifier of ['classifier-config', 'classifier-config[]'] as const) {
+      for (const llm of ['llm-config', 'llm-config[]'] as const) {
+        assert.equal(canBeCoerced(classifier, llm), false, `${classifier} -> ${llm}`);
+        assert.equal(canBeCoerced(llm, classifier), false, `${llm} -> ${classifier}`);
+      }
+    }
+    assert.equal(canBeCoerced('classifier-config', 'classifier-config[]'), true);
+    assert.equal(canBeCoerced('object', 'classifier-config'), true);
+    assert.equal(canBeCoerced('string', 'classifier-config'), false);
+    assert.equal(
+      coerceTypeOptional({ type: 'llm-config', value: getDefaultValue('llm-config') }, 'classifier-config'),
+      undefined,
+    );
+    assert.equal(
+      coerceTypeOptional({ type: 'classifier-config', value: getDefaultValue('classifier-config') }, 'llm-config'),
+      undefined,
+    );
+    // Function ports keep the existing permissive wiring policy. Resolving a
+    // deferred value must still validate the returned profile family.
+    assert.equal(
+      coerceTypeOptional({ type: 'fn<llm-config>', value: () => getDefaultValue('llm-config') }, 'classifier-config'),
+      undefined,
+    );
+    assert.equal(
+      coerceTypeOptional(
+        { type: 'fn<classifier-config>', value: () => getDefaultValue('classifier-config') },
+        'llm-config',
+      ),
+      undefined,
+    );
   });
 });
 

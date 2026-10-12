@@ -176,6 +176,7 @@ describe('LLMChatV2NodeImpl', () => {
       openai: { programmaticName: 'openAiApiKey', environmentVariableName: 'OPENAI_API_KEY' },
       anthropic: { programmaticName: 'anthropicApiKey', environmentVariableName: 'ANTHROPIC_API_KEY' },
       google: { programmaticName: 'googleApiKey', environmentVariableName: 'GOOGLE_GENERATIVE_AI_API_KEY' },
+      openrouter: { programmaticName: 'openRouterApiKey', environmentVariableName: 'OPENROUTER_API_KEY' },
     });
   });
 
@@ -1089,6 +1090,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.deepEqual(
       reasoningGroup.editors.map((editor: any) => editor.dataKey),
       [
+        'openRouterReasoningEffort',
         'openAIReasoningEffort',
         'openAIReasoningSummary',
         'anthropicThinkingMode',

@@ -108,7 +108,7 @@ process.on('message', async (message: { id: number; command: string }) => {
       await flushWorkflowExecutionRecordingPersistence();
       process.send?.({
         id: message.id,
-        result: await storage.listWorkflowRecordingRunsPageWithBackend('', 1, 20, 'all'),
+        result: await storage.listWorkflowRecordingRunsPageWithBackend({ workflowId: '', page: 1, pageSize: 20 }),
       });
     } else if (message.command === 'snapshot') {
       const { getActiveHttpExecutionCount } = await import('../../active-http-executions.js');
@@ -120,10 +120,18 @@ process.on('message', async (message: { id: number; command: string }) => {
     } else if (message.command === 'recordings') {
       process.send?.({
         id: message.id,
-        result: await storage.listWorkflowRecordingRunsPageWithBackend(project.metadata.id, 1, 20, 'all'),
+        result: await storage.listWorkflowRecordingRunsPageWithBackend({
+          workflowId: project.metadata.id,
+          page: 1,
+          pageSize: 20,
+        }),
       });
     } else if (message.command === 'replay') {
-      const page = await storage.listWorkflowRecordingRunsPageWithBackend(project.metadata.id, 1, 20, 'all');
+      const page = await storage.listWorkflowRecordingRunsPageWithBackend({
+        workflowId: project.metadata.id,
+        page: 1,
+        pageSize: 20,
+      });
       const results = [];
       for (const run of page.runs) {
         const recording = rivet.ExecutionRecorder.deserializeFromString(

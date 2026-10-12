@@ -6,18 +6,23 @@ import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 14;
-// A serving release may verify an additive schema created by its immediate
-// successor only when the chart deliberately supplies that compatibility
-// window. Keep this constant explicit: raising it is the release-engineering
-// declaration that the current build can safely be used as a rollback target
-// for a newer schema.
-export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 2;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 15;
+// Minimum predecessor schema whose reader can safely serve data produced by
+// this release. Deployment consumes this explicit rollback floor; additive DDL
+// alone does not establish compatibility when stored representations change.
+// Schema 15's running Evaluation headers rely on the fenced job ledger. Older
+// readers do not assemble that representation, even though the DDL is additive.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 15;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
   objectId: 24_002,
 } as const;
+
+const MANAGED_EVALUATION_PROJECTION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS evaluation_hosted_trial_jobs_pending_projection_idx
+  ON evaluation_hosted_trial_jobs(project_id, run_id)
+  WHERE status IN ('queued', 'claimed', 'accepted');
+`;
 
 const MANAGED_APP_SETTINGS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -405,6 +410,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
       SCHEDULE_SCHEMA_SQL +
       'ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS scheduled_identity_json TEXT NULL;\n',
     checksum: 'ea14c8409bab5bb7226a4973651a8a93ab49d4497dab0f2a70a8ef556a4884b9',
+  },
+  {
+    version: 15,
+    name: 'hosted-evaluation-progress-projection',
+    sql: MANAGED_EVALUATION_PROJECTION_INDEX_SQL,
+    checksum: 'c3435ac7c225b41334a63806f74e3e95a41a5846f35668fffc1607a8143614d2',
   },
 ];
 
@@ -874,6 +885,13 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
     ['status'],
     "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))",
     [0],
+  ],
+  [
+    'evaluation_hosted_trial_jobs',
+    'evaluation_hosted_trial_jobs_pending_projection_idx',
+    ['project_id', 'run_id'],
+    "(status = ANY (ARRAY['queued'::text, 'claimed'::text, 'accepted'::text]))",
+    [0, 0],
   ],
   [
     'evaluation_hosted_trial_attempts',

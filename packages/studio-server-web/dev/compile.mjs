@@ -1,7 +1,6 @@
 import { build } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GenerationStore } from './generations.mjs';
 
 const webRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const root = process.env.RIVET_DEV_BUNDLE_ROOT;
@@ -26,8 +25,6 @@ try {
       resolve();
     });
   });
-  const store = new GenerationStore(root);
-  await store.initialize();
   // No other compiler can start until this child exits, after publication.
   await build({
     configFile: path.join(webRoot, 'vite.config.ts'),
@@ -45,15 +42,26 @@ try {
     console.log('[tunnel-build] Discarded superseded source build.');
     process.send?.({ phase: 'building', discarded: true });
   } else {
-    const generation = await store.publish(path.join(root, 'working'));
+    // The HTTP supervisor owns publication and live-tab pins. Keep this child
+    // alive (and its working directory stable) until publication settles.
+    const { generation, bytes } = await new Promise((resolve, reject) => {
+      process.on('message', function published(message) {
+        if (message?.type !== 'publication-result') return;
+        process.removeListener('message', published);
+        if (message.error) reject(Object.assign(new Error(message.error), { code: message.code }));
+        else resolve(message);
+      });
+      process.send({ type: 'publish-build' });
+    });
     const durationMs = Date.now() - started;
-    console.log(`[tunnel-build] Published ${generation} in ${durationMs} ms; cache ${store.bytes} bytes.`);
+    console.log(`[tunnel-build] Published ${generation} in ${durationMs} ms; cache ${bytes} bytes.`);
     process.send?.({ phase: 'ready', generation, durationMs });
   }
 } catch (error) {
   console.error('[tunnel-build]', error);
   process.send?.({
     phase: 'failed',
+    retryAfterMs: error.code === 'RIVET_DEV_CACHE_BUSY' ? 5 * 60_000 : undefined,
     error: error.message.startsWith('Tunnel bundle cache')
       ? error.message
       : 'Frontend build failed. Check the web container logs; the previous bundle remains available.',

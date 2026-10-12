@@ -38,8 +38,11 @@ export function prepareClassifierState(
       throw new Error('Rivet State input and provider State cannot be supplied together.');
     return prepareRivetState(input.stateInput, budget);
   }
-  if (input.stateMessages === undefined)
+  if (input.stateMessages === undefined) {
+    if (typeof input.state !== 'string' && !record(input.state) && !Array.isArray(input.state))
+      throw new Error('State must be text, a JSON object or an array.');
     return { kind: 'json', value: snapshotClassifierJson(input.state, 'State', budget) as ClassifierState['state'] };
+  }
   if (input.state !== '')
     throw new Error('Structured State and multimodal State messages cannot be supplied together.');
   const messages = snapshotClassifierJson(input.stateMessages, 'State', budget);

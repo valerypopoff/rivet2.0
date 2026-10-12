@@ -40,6 +40,7 @@ export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
   extraProviderOptions: string;
   useExtraProviderOptionsInput: boolean;
   openAIReasoningEffort: string;
+  openRouterReasoningEffort?: string;
   openAIReasoningSummary: string;
   openAIPreviousResponseId: string;
   useOpenAIPreviousResponseIdInput: boolean;
@@ -133,6 +134,7 @@ export function createLLMChatV2NodeData(): LLMChatV2NodeData {
     extraProviderOptions: '',
     useExtraProviderOptionsInput: false,
     openAIReasoningEffort: '',
+    openRouterReasoningEffort: '',
     openAIReasoningSummary: '',
     openAIPreviousResponseId: '',
     useOpenAIPreviousResponseIdInput: false,

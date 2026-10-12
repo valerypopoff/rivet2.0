@@ -7,11 +7,11 @@ import {
 import type { ProcessDataForNode } from '../../state/dataFlow.js';
 
 /** Builds the inspector model for one exact editor node invocation. */
-export function buildLlmInvocationTrace(
+export function buildModelInvocationTrace(
   node: ChartNode,
   processData: ProcessDataForNode | undefined,
 ): AgentResponseTrace | undefined {
-  if (node.type !== 'llmChatV2' || processData == null) return undefined;
+  if (!hasModelResponseInspector(node) || processData == null) return undefined;
 
   const { data, graphId, graphRunId, processId, rootRunId } = processData;
   if (graphId == null || graphRunId == null || rootRunId == null || data.agentTraceEvents == null) return undefined;
@@ -19,7 +19,7 @@ export function buildLlmInvocationTrace(
   const timing = data.recordedTiming;
   const execution: GraphExecutionMetadata = { graphId, graphRunId, rootRunId };
   return buildAgentResponseTrace({
-    scope: 'llm-invocation',
+    scope: node.type === 'classifierEvaluate' ? 'classifier-invocation' : 'llm-invocation',
     execution,
     events: data.agentTraceEvents,
     nodeId: node.id,
@@ -29,6 +29,10 @@ export function buildLlmInvocationTrace(
     finishedAt: timing == null ? data.finishedAt : timing.finishedAt,
     status: toTraceStatus(data.status?.type),
   });
+}
+
+export function hasModelResponseInspector(node: ChartNode): boolean {
+  return node.type === 'llmChatV2' || node.type === 'classifierEvaluate';
 }
 
 function toTraceStatus(status: string | undefined): AgentResponseTrace['status'] {

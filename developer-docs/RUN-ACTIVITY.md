@@ -7,6 +7,11 @@ executor, durable run database, response-trace transport, or copy of node
 outputs. The same journal reducer must consume Browser, internal Node, Remote
 Debugger, inactive-project snapshot, and recording-replay events.
 
+Profile timeout rows retain the safe attempt explanation, not only a generic
+timeout label. This applies equally to LLM first-output/inactivity timeouts and
+classifier response deadlines, in live runs and recording replay. Keep bodies
+out of these rows; they remain owned by the opt-in node output diagnostics.
+
 The persistent bottom-right trigger is labelled **Run activity** before a
 run is available. During a run and after the latest run settles, it appends the
 same live or exact terminal duration used by the activity root, for example
@@ -229,11 +234,44 @@ Run Activity reuses the response-inspector model for metadata when it is
 available. It must not introduce another trace format or another cost/usage
 aggregation path.
 
+LLM Chat and Classifier Evaluate share `buildModelInvocationTrace` and the eye
+action in inline/fullscreen output. Evaluate declares model activity with
+Answers as its preview port, including pre-request failures; **Models and
+tools** includes both node families. Its activity inspector uses the additive
+`classifier-invocation` trace scope, not chat rounds or tool metrics. Physical
+classifier requests remain `llmProfileAttempt` events with `family: classifier`
+and `attemptIndex`; no new event owner is introduced. HTTP status, safe failure
+reason, per-request duration and usage receipts appear in expanded children.
+Profile names are searchable, and the effective provider/model comes from the
+winning physical request (or last attempted candidate on failure), not an
+unreached tail candidate.
+
+Inspector, drawer and generated web-app profile rows share Core's
+`AgentResponseTracePresentation`; physical classifier requests explicitly show
+**usage not reported** / **cost unknown** when no receipt exists, while
+configuration and health decisions do not invent usage. The same owner infers
+classifier request counts for older schema-v1 traces without that counter.
+Core's `summarizeAgentResponseCalls` owns retained usage/cost accounting for
+both. Classifier request counts are separate from LLM model-call counts.
+Suspension checks, health updates, configuration failures and unreached
+candidates cannot inflate request counts or usage. The drawer labels capped
+metadata **retained evidence only** and downgrades known cost to partial,
+including when the journal omitted entire node invocations rather than just
+request rows; per-invocation inspector summaries are computed before their own
+row caps. Profile-attempt retention is shared by physical classifier requests
+and profile decisions. Inspectors show one combined omission notice outside
+both sections, without attributing unknown omitted rows to either category.
+Older traces missing `classifierRequestCount` label an inferred count
+**retained evidence only** when that shared cap omitted rows; an explicit
+pre-cap summary count remains authoritative.
+Bodies remain in node outputs, not in these summaries.
+
 The root header may aggregate retained runtime-executed model/tool counts, normalized
 usage, and known model cost. It must identify incomplete cost as partial when a
 retained call has unknown pricing or bounded trace retention omitted calls;
 never present that subtotal as a complete total. Roots with no model or tool
-activity do not render an empty accounting summary. Per-row response inspection
+activity do not render an empty accounting summary unless omitted invocations
+make the absence of retained calls inconclusive. Per-row response inspection
 remains the authoritative detailed accounting view.
 
 Copy diagnostics may include this bounded root accounting summary, but must not
@@ -246,7 +284,17 @@ tool identity includes the owning root/graph run, source node/process, and
 tool-call id. Anonymous tool events deliberately remain distinct. Run Activity
 replaces redelivered identified rows while they are retained and otherwise relies on the
 runtime's exactly-once lifecycle-event contract; nested processors must emit
-once and the editor must keep a single executor subscription.
+once and the editor must keep a single executor subscription. Core's
+`mergeAgentProfileAttempt` is shared by trace collection and journal projection:
+legacy-shaped redelivery preserves observed family, profile/request identity,
+timing and usage receipts without adding another request. Latest supplied
+metadata wins; a changed outcome does not inherit old failure/health details.
+The journal still copies only its metadata allowlist and detaches usage receipts.
+`mergeAgentModelCall` gives LLM physical calls the same redelivery protection:
+omitted timing and usage are retained, while supplied pricing and receipt
+corrections win. Changed outcomes clear an omitted old finish reason. The
+journal detaches normalized usage and pricing objects and increments the call
+counter only for newly observed identities, not replacements.
 
 ## Provider-neutral presentation descriptors
 
@@ -329,7 +377,7 @@ tokens so built-in and custom themes remain the single styling owner.
 
 ### Drawer controls and columns
 
-The drawer deliberately reuses the editor's `SegmentedEditor` for the **All / LLM
+The drawer deliberately reuses the editor's `SegmentedEditor` for the **All / Models
 and tools / Errors** filter and the ordinary Atlaskit `Select` surface for the
 graph filter. Do not add a Run Activity-specific segmented control, native
 select, or custom Select theme: the graph picker must inherit Rivet's standard
@@ -515,6 +563,12 @@ receipt clock.
 The response inspector is scoped to the currently selected root. Closing the
 drawer, clearing its root, or selecting another root closes any open inspector
 so replayed trace data never outlives its owning activity view.
+It stores the exact invocation identity, not a click-time process snapshot.
+`runActivityInspectorLifecycle` resolves current retained evidence on updates,
+so an open inspector follows request arrivals and terminal completion. If its
+node or exact invocation disappears, it shows unavailable evidence rather than
+selecting a different process with the same node ID. Unsaved current-graph
+definitions remain authoritative over saved definitions.
 
 Editor-owned response inspectors use Rivet's shared Atlaskit `Modal`,
 `ModalBody`, and `AppModalHeader` primitives. This keeps their backdrop,
@@ -572,3 +626,7 @@ Tests must cover:
 - Browser, Node, Remote Debugger, inactive-project, recording, and replay parity;
 - bounded retention and cleanup;
 - absence of forbidden sensitive payloads from journal state.
+
+Classifier caller cancellation is recorded as an interrupted request, not a
+transport or configuration failure. Recording playback coverage verifies the
+interrupted child status and its bounded cancellation reason in the drawer.

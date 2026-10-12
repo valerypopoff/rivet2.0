@@ -285,7 +285,7 @@ export const dataBusRailStyles = css`
     pointer-events: none;
   }
 
-  .data-bus-channel-port.connected .data-bus-channel-port-count {
+  .data-bus-channel-port .port.closest + .data-bus-channel-port-count {
     color: var(--foreground-on-primary);
   }
 

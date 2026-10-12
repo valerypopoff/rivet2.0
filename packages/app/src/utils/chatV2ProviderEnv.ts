@@ -20,7 +20,12 @@ export function getLLMChatV2ApiKeyEnvVarNames(project: Project): string[] {
 
     if (data.provider === 'custom') {
       addString(names, data.customProviderApiKeyEnvVarName);
-    } else if (data.provider === 'openai' || data.provider === 'anthropic' || data.provider === 'google') {
+    } else if (
+      data.provider === 'openai' ||
+      data.provider === 'anthropic' ||
+      data.provider === 'google' ||
+      data.provider === 'openrouter'
+    ) {
       const providerNames = asRecord(data.providerApiKeyNames)?.[data.provider];
       addString(names, asRecord(providerNames)?.environmentVariableName, isValidChatV2EnvironmentCredentialName);
     }

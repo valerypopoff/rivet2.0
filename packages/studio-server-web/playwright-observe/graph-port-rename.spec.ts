@@ -8,7 +8,7 @@ import {
   type NodeGraph,
   type Project,
 } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
 const projectName = 'Graph port rename';
@@ -412,12 +412,13 @@ function expectOutputRenameState(projectToInspect: Project, expectedOutputId: 'o
 }
 
 async function installFixture(page: Page, saves: ProjectSave[]): Promise<void> {
+  await mockHostedEditorBootstrap(page);
   let savedContents = serializedFixture;
   let saveSequence = 0;
   await page.addInitScript(() => {
     localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false }));
   });
-  await page.route('**/api/**', async (route) => {
+  await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
 

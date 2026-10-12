@@ -1,6 +1,10 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+
+test.beforeEach(async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
+});
 
 async function openEmptyProject(page: Page, suffix: string): Promise<FrameLocator> {
   await seedHostedEditorProject(page, {
@@ -49,6 +53,37 @@ async function selectProvider(editor: FrameLocator, provider: string): Promise<v
   await expect(providerInput).toHaveAttribute('aria-expanded', 'true');
   await providerInput.press('Enter');
   await expect(providerInput).toHaveAttribute('aria-expanded', 'false');
+}
+
+for (const nodeName of ['LLM Chat', 'LLM Profile']) {
+  test(`${nodeName} supports OpenRouter credentials, discovery and reasoning without foreign provider controls`, async ({
+    page,
+  }) => {
+    const editor = await openEmptyProject(page, `OpenRouter-${nodeName.replaceAll(' ', '-')}`);
+    await page.route('https://openrouter.ai/api/v1/models', (route) =>
+      route.fulfill({
+        json: {
+          data: [{ id: 'test/router-model', name: 'Router Test', architecture: { output_modalities: ['text'] } }],
+        },
+      }),
+    );
+    await addNode(editor, nodeName);
+    await expectOpenAiCredentialDefaults(editor);
+    await selectProvider(editor, 'OpenRouter');
+    await expect(editor.getByLabel('Programmatic API key name')).toHaveValue('openRouterApiKey');
+    await expect(editor.getByLabel('API key environment variable')).toHaveValue('OPENROUTER_API_KEY');
+    await expect(editor.getByRole('combobox', { name: 'Reasoning effort', exact: true })).toBeVisible();
+    await expect(editor.getByLabel('Previous Response ID', { exact: true })).toBeHidden();
+    await expect(editor.getByText('Enable Web Search', { exact: true })).toBeHidden();
+    await editor.getByRole('group', { name: 'API key source' }).getByRole('button', { name: 'Input port' }).click();
+    await editor.getByRole('button', { name: 'Re-fetch Model List' }).click();
+    await expect(editor.getByText('Loaded 2 models from openrouter.')).toBeVisible();
+    const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+    await model.click();
+    await model.fill('Router Test');
+    await model.press('Enter');
+    await expect(editor.getByText('Router Test', { exact: true })).toBeVisible();
+  });
 }
 
 test('LLM Chat exposes editable built-in-provider credential names', async ({ page }) => {

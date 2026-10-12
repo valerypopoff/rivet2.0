@@ -237,6 +237,48 @@ test('wraps long sidebar names but clips the active project title to one line', 
   await expectWrappedLabel(editor.locator('.ui-graph-entry-name', { hasText: uiGraphName }));
 });
 
+test('graph folder icons and counts align with the label in expanded and collapsed rows', async ({ page }) => {
+  const projectName = 'folder-alignment-project';
+  const graphFolderName = '1234567890';
+  const project: WorkflowProjectItem = {
+    id: projectName,
+    name: projectName,
+    fileName: `${projectName}.rivet-project`,
+    relativePath: `${projectName}.rivet-project`,
+    absolutePath: `/workflows/${projectName}.rivet-project`,
+    updatedAt: '2026-10-11T00:00:00.000Z',
+    settings: { status: 'unpublished', endpointName: '', publishedWebApps: [] },
+  };
+  await installWrappingFixture(
+    page,
+    { root: '/workflows', folders: [], projects: [project], sync: { epoch: projectName, revision: 0 } },
+    createProjectContents({ graphFolderName, graphName: 'Main Graph', projectName }),
+  );
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.workflow-library-panel .project-row', { hasText: projectName }).dblclick();
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const folder = editor.locator(`.folder-graph-item[data-folderpath="${graphFolderName}"]`);
+  await expect(folder).toBeVisible({ timeout: 90_000 });
+  await expect(folder.locator('.graph-folder-count')).toHaveText('1');
+  for (const collapsed of [false, true]) {
+    await expect(editor.locator('.graph-item[data-graphid="main"]')).toBeVisible({ visible: !collapsed });
+    const alignment = await folder.evaluate((row) => {
+      const label = row.querySelector('.graph-item-name-text')!;
+      const bounds = label.getBoundingClientRect();
+      const firstLineCenter = bounds.top + Number.parseFloat(getComputedStyle(label).lineHeight) / 2;
+      return ['.graph-folder-icon', '.graph-folder-count'].map((selector) => {
+        const mark = row.querySelector(selector)!.getBoundingClientRect();
+        return Math.abs(mark.top + mark.height / 2 - firstLineCenter);
+      });
+    });
+    for (const offset of alignment) expect(offset).toBeLessThanOrEqual(1);
+    if (!collapsed) await folder.locator('.graph-item-select').click();
+  }
+});
+
 test('F2 renames only the item in the sidebar that owns focus', async ({ page }) => {
   const projectName = 'focus-owned-project';
   const graphFolderName = 'Focus folder';

@@ -6,6 +6,7 @@ import {
   type NodeId,
   type PortId,
   type Project,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import { getSubGraphPortOrderKey, renameSubGraphPortOrder } from './subGraphPortOrder.js';
 
@@ -30,10 +31,7 @@ type GraphPortRename = {
   newPortId: string;
 };
 
-export function getGraphPortId(
-  node: Partial<ChartNode> | undefined,
-  kind: GraphPortRenameKind,
-): string | undefined {
+export function getGraphPortId(node: Partial<ChartNode> | undefined, kind: GraphPortRenameKind): string | undefined {
   if ((node as { type?: string } | undefined)?.type !== (kind === 'input' ? 'graphInput' : 'graphOutput')) {
     return undefined;
   }
@@ -53,8 +51,14 @@ function getGraphPortRename({
   previousCurrentNodes: readonly ChartNode[];
   nextCurrentNodes: readonly ChartNode[];
 }): GraphPortRename | undefined {
-  const oldPortId = getGraphPortId(previousCurrentNodes.find((node) => node.id === editedNodeId), kind);
-  const newPortId = getGraphPortId(nextCurrentNodes.find((node) => node.id === editedNodeId), kind);
+  const oldPortId = getGraphPortId(
+    previousCurrentNodes.find((node) => node.id === editedNodeId),
+    kind,
+  );
+  const newPortId = getGraphPortId(
+    nextCurrentNodes.find((node) => node.id === editedNodeId),
+    kind,
+  );
 
   if (oldPortId == null || newPortId == null || oldPortId === newPortId) {
     return undefined;
@@ -122,7 +126,8 @@ function rewriteConnectionsForSubGraphInputRename({
 
   for (const connection of connections) {
     const isTargetConnection =
-      connection.inputNodeId === subGraphNodeId && (connection.inputId === oldPortId || connection.inputId === newPortId);
+      connection.inputNodeId === subGraphNodeId &&
+      (connection.inputId === oldPortId || connection.inputId === newPortId);
 
     if (!isTargetConnection) {
       nextConnections.push(connection);
@@ -207,7 +212,11 @@ function reconcileGraph({
   let changed = false;
   let nextConnections = [...graph.connections];
   const nextNodes = graph.nodes.map((node) => {
-    if (node.type !== 'subGraph' || (node.data as { graphId?: GraphId }).graphId !== targetGraphId) {
+    if (node.type !== 'subGraph') return node;
+    const data = (node as SubGraphNode).data;
+    // Graph IDs are project-scoped. Local edits cannot rename a saved external
+    // contract, even when a copied graph happens to have the same graph ID.
+    if (data.targetProjectId || data.targetScope === 'other-projects' || data.graphId !== targetGraphId) {
       return node;
     }
 

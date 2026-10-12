@@ -209,7 +209,7 @@ export class DelegateFunctionCallNodeImpl extends NodeImpl<DelegateFunctionCallN
 
     const result = await delegateToolCall(functionCallInput, context, this.data);
 
-    return buildDelegatedToolCallOutputs([result.record], undefined, result.cost);
+    return buildDelegatedToolCallOutputs([result.record], undefined, result.cost, result.costBreakdown);
   }
 }
 

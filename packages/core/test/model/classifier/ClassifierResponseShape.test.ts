@@ -285,9 +285,15 @@ test('malformed successful HTTP responses still fail closed and are never retrie
           const outputs = await execution;
           assert.equal(outputs.runFailed!.value, true);
           assert.match(String(outputs.runError!.value), message);
-          for (const port of ['answers', 'usage', 'requestBody', 'responseBody']) {
+          for (const port of ['answers', 'usage', 'cost']) {
             assert.equal(outputs[port as PortId]!.type, 'control-flow-excluded');
           }
+          assert.equal(outputs.requestBody!.type, 'object');
+          assert.deepEqual(
+            Object.keys((outputs.requestBody!.value as any).questions),
+            questions.map((question) => question.questionId),
+          );
+          assert.deepEqual(outputs.responseBody!.value, json === '{broken' ? { raw: json } : JSON.parse(json));
         } else {
           await assert.rejects(execution, message);
         }

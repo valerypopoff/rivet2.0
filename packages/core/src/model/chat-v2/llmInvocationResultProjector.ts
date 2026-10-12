@@ -5,6 +5,9 @@ import type { LLMAttempt } from './llmProfileFallback.js';
 import { projectLLMInvocationUsage } from './llmInvocationProjections.js';
 import { createChatV2CapturedBodyOutputs } from './chatV2Outputs.js';
 import type { ChatV2PipelineResult, ChatV2PipelineRoundOptions } from './chatV2Types.js';
+import { sumChatV2PhysicalCallCost, isChatV2FiniteNonNegativeNumber } from './chatV2UsageAccounting.js';
+import { isChatV2PipelineProviderFailureResult } from './chatV2Pipeline.js';
+import type { GraphCostBreakdown } from '../GraphBoundaryEffects.js';
 
 type LLMInvocationDiagnosticProjectionOptions = {
   runOptions: Pick<
@@ -43,10 +46,7 @@ export function projectLLMInvocationDiagnostics({
 }
 
 /** Combines streamed response state with terminal diagnostics without hiding either. */
-export function mergeLLMInvocationFailureOutputs(
-  partialOutputs: Outputs | undefined,
-  diagnostics: Outputs,
-): Outputs {
+export function mergeLLMInvocationFailureOutputs(partialOutputs: Outputs | undefined, diagnostics: Outputs): Outputs {
   return { ...partialOutputs, ...diagnostics };
 }
 
@@ -83,8 +83,25 @@ export function projectLLMInvocationResult(params: {
   outputLLMAttempts: boolean | undefined;
   llmAttempts: readonly LLMAttempt[];
   profileSummary?: string | undefined;
+  toolCost?: GraphCostBreakdown;
 }): Outputs {
   const { result, modelCalls, outputUsage, outputLLMAttempts, llmAttempts, profileSummary } = params;
+
+  if (!isChatV2PipelineProviderFailureResult(result)) {
+    const knownCost = sumChatV2PhysicalCallCost(modelCalls);
+    const llmCost =
+      knownCost ?? (isChatV2FiniteNonNegativeNumber(result.usage?.totalCost) ? result.usage.totalCost : undefined);
+    if (params.toolCost) {
+      const breakdown = { ...params.toolCost, llm: params.toolCost.llm + (llmCost ?? 0) };
+      result.commonOutputs['cost' as PortId] = {
+        type: 'number',
+        value: breakdown.llm + breakdown.classifier + breakdown.other,
+      };
+      result.commonOutputs['costBreakdown' as PortId] = { type: 'object', value: breakdown };
+    } else if (llmCost != null) {
+      result.commonOutputs['cost' as PortId] = { type: 'number', value: llmCost };
+    }
+  }
 
   const usage = getLLMInvocationUsage({ modelCalls, outputUsage });
   if (usage != null) {

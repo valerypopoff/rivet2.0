@@ -1,6 +1,7 @@
 import { parsePositiveInt } from './utils/env-parsing.js';
 import { getApiRuntimeProfile, isHostedEvaluationWorkerApiProfile, type ApiRuntimeProfile } from './runtime-profile.js';
 import { isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
+import { isReleaseMaintenanceActive } from './release-maintenance.js';
 
 export const HOSTED_EVALUATIONS_ENABLED_ENV = 'RIVET_HOSTED_EVALUATIONS_ENABLED';
 export const HOSTED_EVALUATIONS_WORKER_CONCURRENCY_ENV = 'RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY';
@@ -36,7 +37,7 @@ export function getHostedEvaluationsCoordinatorConfig(
   profile: ApiRuntimeProfile = getApiRuntimeProfile(),
   managedStorageEnabled = isManagedWorkflowStorageEnabled(),
 ): HostedEvaluationsCoordinatorConfig {
-  const enabled = readBoolean(HOSTED_EVALUATIONS_ENABLED_ENV, env);
+  const enabled = readBoolean(HOSTED_EVALUATIONS_ENABLED_ENV, env) && !isReleaseMaintenanceActive(env);
   if (!enabled) {
     return {
       enabled: false,

@@ -30,37 +30,58 @@ export function pulledDigest(output) {
 }
 
 /** Resolve the mutable branch aliases once, then pass only digest references to Compose. */
-export async function pinStagingImages(runDocker, expectedRevision) {
+export async function pinStagingImages(runDocker, expectedRevision, options = {}) {
   assert.match(expectedRevision, /^[a-f0-9]{40}$/);
   const pinned = {};
-  for (const service of services) {
-    const repository = `${imageNamespace}/${service}`;
-    const pulled = await runDocker(['pull', `${repository}:staging`]);
-    const reference = `${repository}@${pulledDigest(pulled.stdout)}`;
-    const inspection = JSON.parse((await runDocker(['image', 'inspect', reference])).stdout);
-    assert.ok(Array.isArray(inspection) && inspection.length === 1, `Invalid ${service} image inspection.`);
-    assert.match(inspection[0].Id ?? '', /^sha256:[a-f0-9]{64}$/, `Invalid ${service} image ID.`);
-    assert.equal(
-      inspection[0].Config?.Labels?.['org.opencontainers.image.revision'],
-      expectedRevision,
-      `${service} staging image does not match the checked-out commit.`,
-    );
-    pinned[`RIVET_${service.toUpperCase()}_IMAGE`] = reference;
+  const progress = options.progress ?? ((_step, operation) => operation());
+  let next = 0;
+  let failure;
+  async function pullService(service) {
+    return progress(`Pulling and verifying ${service}:staging`, async () => {
+      const repository = `${imageNamespace}/${service}`;
+      const pulled = await runDocker(['pull', `${repository}:staging`], { streamOutput: true });
+      const reference = `${repository}@${pulledDigest(pulled.stdout)}`;
+      const inspection = JSON.parse((await runDocker(['image', 'inspect', reference])).stdout);
+      assert.ok(Array.isArray(inspection) && inspection.length === 1, `Invalid ${service} image inspection.`);
+      assert.match(inspection[0].Id ?? '', /^sha256:[a-f0-9]{64}$/, `Invalid ${service} image ID.`);
+      assert.equal(
+        inspection[0].Config?.Labels?.['org.opencontainers.image.revision'],
+        expectedRevision,
+        `${service} staging image does not match the checked-out commit.`,
+      );
+      pinned[`RIVET_${service.toUpperCase()}_IMAGE`] = reference;
+    });
   }
+  // Bound network/extraction pressure. On failure, drain in-flight pulls before
+  // returning; no new pulls or container recreation may follow a failed check.
+  async function worker() {
+    while (!failure && next < services.length) {
+      const service = services[next++];
+      try {
+        await pullService(service);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  }
+  await Promise.all([worker(), worker()]);
+  if (failure) throw failure;
   // The production API image runs both processes. Verify its required entrypoint
   // before any existing Compose container is recreated.
-  await runDocker([
-    'run',
-    '--rm',
-    '--network',
-    'none',
-    '--read-only',
-    '--entrypoint',
-    'sh',
-    pinned.RIVET_API_IMAGE,
-    '-c',
-    'test -f /opt/rivet/backend-supervisor.mjs',
-  ]);
+  await progress('Checking the combined backend image', () =>
+    runDocker([
+      'run',
+      '--rm',
+      '--network',
+      'none',
+      '--read-only',
+      '--entrypoint',
+      'sh',
+      pinned.RIVET_API_IMAGE,
+      '-c',
+      'test -f /opt/rivet/backend-supervisor.mjs',
+    ]),
+  );
   return pinned;
 }
 

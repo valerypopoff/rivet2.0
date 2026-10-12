@@ -5,6 +5,8 @@ import { classifierDataProperty, classifierInputDataValue } from './json.js';
 
 export type ClassifierApiKeySource = 'configured' | 'classifier-settings' | 'input';
 
+export class ClassifierCredentialMissingError extends Error {}
+
 export type ClassifierCredentialNames = {
   programmaticName: string;
   environmentVariableName: string;
@@ -25,6 +27,16 @@ export const LIQUID_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
 export const OPENAI_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
   programmaticName: 'openAiApiKey',
   environmentVariableName: 'OPENAI_API_KEY',
+};
+
+export const OPENROUTER_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'openRouterApiKey',
+  environmentVariableName: 'OPENROUTER_API_KEY',
+};
+
+export const PERPLEXITY_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'perplexityApiKey',
+  environmentVariableName: 'PERPLEXITY_API_KEY',
 };
 
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -112,12 +124,15 @@ export function resolveClassifierApiKey({
         : undefined;
     const saved = getNonEmptyString(read(read(read(context.settings, 'classifierProviders'), providerId), 'apiKey'));
     if (!saved)
-      throw new Error(`Classifier settings API key for ${providerId} is not set. No automatic fallback is used.`);
+      throw new ClassifierCredentialMissingError(
+        `Classifier settings API key for ${providerId} is not set. No automatic fallback is used.`,
+      );
     return saved;
   }
   if (apiKeySource === 'input') {
     const value = coerceTypeOptional(classifierInputDataValue(inputs, 'apiKey'), 'string')?.trim();
-    if (!value) throw new Error('API Key input is required when API key source is Input port.');
+    if (!value)
+      throw new ClassifierCredentialMissingError('API Key input is required when API key source is Input port.');
     return value;
   }
   if (apiKeySource !== undefined && apiKeySource !== 'configured')
@@ -142,7 +157,7 @@ export function resolveClassifierApiKey({
     }
   }
 
-  throw new Error(
+  throw new ClassifierCredentialMissingError(
     `${providerId === 'jev' ? 'Jev' : 'Classifier'} API key is not set. Pass ${names.programmaticName}, configure ${names.environmentVariableName}, or set the configured key in Settings > Classifier.`,
   );
 }

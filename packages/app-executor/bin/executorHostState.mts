@@ -13,6 +13,8 @@ export type AppExecutorProcessorOptionsContext = Readonly<{
 }>;
 
 export type AppExecutorHostOptions = Readonly<{
+  /** Standalone desktop defaults on; hosts injecting authentication or processor facilities default off. */
+  allowLocalProjectBundles?: boolean;
   /** Hosted transports can authenticate upgrades and periodically reauthorize sessions. */
   authorizeClient?: (request: IncomingMessage) => Promise<boolean>;
   /**

@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { terminateChildProcess } from '../../utils/exec.js';
 
 import { PROCESS_TERMINATE_GRACE_MS } from './schema.js';
 
@@ -6,11 +7,13 @@ export function createManagedRuntimeLibrariesProcessRegistry(options: {
   appendJobLog(jobId: string, message: string, source?: 'system' | 'stdout' | 'stderr'): Promise<void>;
 }) {
   const runningProcesses = new Map<string, ChildProcess>();
+  let shutdownReason: string | undefined;
 
-  return {
+  const registry = {
     registerRunningProcess(jobId: string, process: ChildProcess | null): void {
       if (process) {
         runningProcesses.set(jobId, process);
+        if (shutdownReason) registry.terminateRunningProcess(jobId, shutdownReason);
         return;
       }
 
@@ -19,13 +22,13 @@ export function createManagedRuntimeLibrariesProcessRegistry(options: {
 
     terminateRunningProcess(jobId: string, reason: string): void {
       const process = runningProcesses.get(jobId);
-      if (!process || process.killed) {
+      if (!process || process.exitCode != null || process.signalCode != null) {
         runningProcesses.delete(jobId);
         return;
       }
 
       try {
-        process.kill('SIGTERM');
+        terminateChildProcess(process, 'SIGTERM');
       } catch {
         runningProcesses.delete(jobId);
         return;
@@ -37,9 +40,11 @@ export function createManagedRuntimeLibrariesProcessRegistry(options: {
           return;
         }
 
-        void options.appendJobLog(jobId, `Process did not exit after SIGTERM (${reason}); forcing shutdown.`, 'system').catch(() => {});
+        void options
+          .appendJobLog(jobId, `Process did not exit after SIGTERM (${reason}); forcing shutdown.`, 'system')
+          .catch(() => {});
         try {
-          process.kill('SIGKILL');
+          terminateChildProcess(process, 'SIGKILL');
         } catch {
           // ignore late kill failures
         }
@@ -55,6 +60,7 @@ export function createManagedRuntimeLibrariesProcessRegistry(options: {
     },
 
     terminateAll(reason: string): void {
+      shutdownReason = reason;
       for (const [jobId] of runningProcesses) {
         this.terminateRunningProcess(jobId, reason);
       }
@@ -64,4 +70,5 @@ export function createManagedRuntimeLibrariesProcessRegistry(options: {
       runningProcesses.clear();
     },
   };
+  return registry;
 }

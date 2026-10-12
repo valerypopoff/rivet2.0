@@ -207,18 +207,28 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
   async reset(request: RivetLLMProfileHealthResetRequest): Promise<void> {
     await this.#transaction((database) => {
       if (request.key != null) {
-        database.prepare('DELETE FROM llm_profile_health WHERE key = ?').run(request.key);
+        database
+          .prepare(
+            "DELETE FROM llm_profile_health WHERE key = ? AND (? IS NULL OR COALESCE(json_extract(entry_json, '$.identity.family'), 'llm') = ?)",
+          )
+          .run(request.key, request.family ?? null, request.family ?? null);
       } else {
-        database.prepare('DELETE FROM llm_profile_health WHERE project_id = ?').run(String(request.projectId));
+        database
+          .prepare(
+            "DELETE FROM llm_profile_health WHERE project_id = ? AND (? IS NULL OR COALESCE(json_extract(entry_json, '$.identity.family'), 'llm') = ?)",
+          )
+          .run(String(request.projectId), request.family ?? null, request.family ?? null);
       }
     });
   }
 
-  async resetProjectKey(projectId: ProjectId, key: string): Promise<boolean> {
+  async resetProjectKey(projectId: ProjectId, key: string, family?: 'llm' | 'classifier'): Promise<boolean> {
     return this.#transaction((database) => {
       const result = database
-        .prepare('DELETE FROM llm_profile_health WHERE project_id = ? AND key = ?')
-        .run(String(projectId), key);
+        .prepare(
+          "DELETE FROM llm_profile_health WHERE project_id = ? AND key = ? AND (? IS NULL OR COALESCE(json_extract(entry_json, '$.identity.family'), 'llm') = ?)",
+        )
+        .run(String(projectId), key, family ?? null, family ?? null);
       return result.changes > 0;
     });
   }
@@ -241,10 +251,15 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
             )
             .all<StoredRow>(String(request.projectId));
     const now = Date.now();
-    return rows.map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now));
+    return rows
+      .map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now))
+      .filter((entry) => request.family == null || (entry.identity.family ?? 'llm') === request.family);
   }
 
-  async listAdmin(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]> {
+  async listAdmin(input: {
+    projectId: ProjectId;
+    family?: 'llm' | 'classifier';
+  }): Promise<readonly LLMProfileHealthAdminEntry[]> {
     const database = await this.#getDatabase();
     const rows = database
       .prepare(
@@ -257,13 +272,15 @@ export class FilesystemRivetLLMProfileHealthStore implements RivetStudioLLMProfi
       )
       .all<StoredRow>(String(input.projectId));
     const now = Date.now();
-    return rows.map((row) => {
-      const entry = parseEntry(row)!;
-      return {
-        ...createLLMProfileHealthSnapshot(entry, now),
-        contributingRuns: getLLMProfileHealthContributorRuns(entry),
-      };
-    });
+    return rows
+      .map((row) => {
+        const entry = parseEntry(row)!;
+        return {
+          ...createLLMProfileHealthSnapshot(entry, now),
+          contributingRuns: getLLMProfileHealthContributorRuns(entry),
+        };
+      })
+      .filter((entry) => input.family == null || (entry.identity.family ?? 'llm') === input.family);
   }
 
   async recordRecordingOutcome(input: LLMProfileHealthRecordingOutcome): Promise<void> {

@@ -1,33 +1,20 @@
-import { produce } from 'immer';
-import { useAtomValue, useSetAtom } from 'jotai';
-import {
-  type CodeNode,
-  type CodeNewNode,
-  type ExpressionNode,
-  type ExtractObjectPathNode,
-  type JSFilterNode,
-  type JSMapNode,
-  type ProcessEvents,
-  type AgentTraceEvent,
-} from '@valerypopoff/rivet2-core';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
+import { type ProcessEvents, type AgentTraceEvent } from '@valerypopoff/rivet2-core';
 import { type ExecutionDataFlowApi } from './useExecutionDataFlow';
 import { lastRunDataByNodeState, selectedLLMChatOutputPageByInvocationState } from '../state/dataFlow';
-import {
-  collectStoredRefIds,
-  deleteStoredRefIds,
-  storeInputsOrOutputsForHistory,
-} from '../utils/executionDataStorage';
-import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization';
-import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
+import { deleteStoredRefIds, storeInputsOrOutputsForHistory } from '../utils/executionDataStorage';
+import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization';
+import { nodeExecutionData } from './nodeExecutionData.js';
+import { clearNodeRunData, updateLLMChatOutputHistory } from './executionDataTransitions.js';
 import { handleError } from '../utils/errorHandling';
 import { shouldToastAsyncBranchSafetyError } from '../utils/graphExecutionErrorPresentation';
 import { useDataRefs } from '../providers/ProvidersContext';
 import { projectState } from '../state/savedGraphs';
-import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
+import { previousDataPerNodeToKeepState } from '../state/settings.js';
+import { updateAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 import {
   removeLLMChatOutputHistorySelectionsForProcess,
   toLLMChatOutputHistoryEntry,
-  upsertLLMChatOutputHistoryEntry,
 } from '../utils/llmChatOutputHistory.js';
 
 export type NodeExecutionEventsApi = {
@@ -52,69 +39,41 @@ export function useNodeExecutionEvents({
   'setDataForNode' | 'setSelectedNodePageLatest' | 'shouldSuppressPreloadedNodeEvent'
 >): NodeExecutionEventsApi {
   const dataRefs = useDataRefs();
+  const store = useStore();
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
   const project = useAtomValue(projectState);
+  const previousDataPerNodeToKeep = useAtomValue(previousDataPerNodeToKeepState);
 
   const onNodeStart = (event: ProcessEvents['nodeStart']) => {
-    const { node, inputs, processId, execution } = event;
+    const { node, processId, execution } = event;
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
 
-    setDataForNode(node.id, processId, execution, {
-      ...getNodeRunDebugData(node),
-      inputData: sanitizeInputsOrOutputs(inputs),
-      ...getRecordedNodeTimingPatch(event, 'start'),
-      status: { type: 'running' },
-      startedAt: Date.now(),
-    });
+    setDataForNode(node.id, processId, execution, nodeExecutionData.start(event));
     setSelectedNodePageLatest(node.id, execution);
   };
 
   const onNodeFinish = (event: ProcessEvents['nodeFinish']) => {
-    const { node, outputs, processId, durationMs, splitRunDurationMs, streamingWatchTerminal, execution } = event;
+    const { node, processId, execution } = event;
     if (shouldSuppressPreloadedNodeEvent(node.id, processId)) {
       return;
     }
 
-    setDataForNode(node.id, processId, execution, {
-      outputData: sanitizeInputsOrOutputs(outputs),
-      status: { type: 'ok' },
-      finishedAt: Date.now(),
-      durationMs,
-      ...getRecordedNodeTimingPatch(event, 'terminal'),
-      splitRunDurationMs,
-      ...(streamingWatchTerminal ? { streamingWatchTerminal: true } : {}),
-    });
+    setDataForNode(node.id, processId, execution, nodeExecutionData.finish(event));
     setSelectedNodePageLatest(node.id, execution);
   };
 
   const onNodeExcluded = (event: ProcessEvents['nodeExcluded']) => {
-    const { node, processId, inputs, outputs, reason, execution } = event;
-    setDataForNode(node.id, processId, execution, {
-      ...getNodeRunDebugData(node),
-      inputData: sanitizeInputsOrOutputs(inputs),
-      outputData: sanitizeInputsOrOutputs(outputs),
-      ...getRecordedNodeTimingPatch(event, 'excluded'),
-      status: { type: 'notRan', reason },
-      startedAt: Date.now(),
-      finishedAt: Date.now(),
-    });
+    const { node, processId, execution } = event;
+    setDataForNode(node.id, processId, execution, nodeExecutionData.excluded(event));
     setSelectedNodePageLatest(node.id, execution);
   };
 
   const onNodeError = (event: ProcessEvents['nodeError']) => {
-    const { node, error, processId, durationMs, splitRunDurationMs, outputs, splitOutputs, execution } = event;
-    setDataForNode(node.id, processId, execution, {
-      status: { type: 'error', error: typeof error === 'string' ? error : error.toString() },
-      finishedAt: Date.now(),
-      durationMs,
-      ...getRecordedNodeTimingPatch(event, 'terminal'),
-      splitRunDurationMs,
-      ...(outputs === undefined ? {} : { outputData: sanitizeInputsOrOutputs(outputs) }),
-      ...(splitOutputs === undefined ? {} : { splitOutputData: sanitizeSplitOutputs(splitOutputs) }),
-    });
+    const { node, error, processId, execution } = event;
+    setDataForNode(node.id, processId, execution, nodeExecutionData.error(event));
     setSelectedNodePageLatest(node.id, execution);
 
     if (shouldToastAsyncBranchSafetyError(error)) {
@@ -122,41 +81,24 @@ export function useNodeExecutionEvents({
     }
   };
 
-  const onPartialOutput = ({ node, outputs, index, processId, execution }: ProcessEvents['partialOutput']) => {
-    const sanitizedOutputs = sanitizeInputsOrOutputs(outputs);
-    const applied = setDataForNode(
-      node.id,
-      processId,
-      execution,
-      node.isSplitRun
-        ? { splitOutputData: { [index]: sanitizedOutputs } }
-        : { outputData: sanitizedOutputs },
-      { ignoreIfTerminal: true },
-    );
+  const onPartialOutput = (event: ProcessEvents['partialOutput']) => {
+    const { node, processId, execution } = event;
+    const applied = setDataForNode(node.id, processId, execution, nodeExecutionData.partial(event), {
+      ignoreIfTerminal: true,
+    });
     if (applied) {
       setSelectedNodePageLatest(node.id, execution);
     }
   };
 
   const onNodeOutputsCleared = ({ node, processId, execution }: ProcessEvents['nodeOutputsCleared']) => {
-    const refIdsToDelete: string[] = [];
-
-    setLastRunData((prev) =>
-      produce(prev, (draft) => {
-        if (processId) {
-          const index = draft[node.id]?.findIndex((process) => process.processId === processId);
-          if (index !== undefined && index !== -1) {
-            refIdsToDelete.push(...collectStoredRefIds(draft[node.id]![index]!.data));
-            draft[node.id]!.splice(index, 1);
-          }
-        } else {
-          refIdsToDelete.push(...(draft[node.id] ?? []).flatMap((process) => collectStoredRefIds(process.data)));
-          delete draft[node.id];
-        }
-      }),
-    );
-
-    deleteStoredRefIds(dataRefs, refIdsToDelete);
+    let obsoleteRefIds: string[] = [];
+    setLastRunData((previous) => {
+      const result = clearNodeRunData(previous, node.id, processId);
+      obsoleteRefIds = result.obsoleteRefIds;
+      return result.runData;
+    });
+    deleteStoredRefIds(dataRefs, obsoleteRefIds);
     setLLMChatOutputPageSelections((previous) =>
       removeLLMChatOutputHistorySelectionsForProcess({
         nodeId: node.id,
@@ -178,36 +120,47 @@ export function useNodeExecutionEvents({
     })!;
     const storedEntry = toLLMChatOutputHistoryEntry(data, outputData);
 
-    const refIdsToDelete: string[] = [];
-    setLastRunData((previous) =>
-      produce(previous, (draft) => {
-        draft[data.nodeId] ??= [];
-        let process = draft[data.nodeId]!.find((candidate) => candidate.processId === data.processId);
-        if (!process) {
-          process = {
-            data: {},
-            graphId: data.execution.graphId,
-            graphRunId: data.execution.graphRunId,
-            parentGraphRunId: data.execution.parentGraphRunId,
-            processId: data.processId,
-            rootRunId: data.execution.rootRunId,
-          };
-          draft[data.nodeId]!.push(process);
-        }
-        const updated = upsertLLMChatOutputHistoryEntry(process.data, storedEntry);
-        refIdsToDelete.push(...updated.replacedRefIds);
-        process.data = updated.data;
-      }),
-    );
-    deleteStoredRefIds(dataRefs, refIdsToDelete);
+    let obsoleteRefIds: string[] = [];
+    let evictedProcessIds: ProcessEvents['llmChatOutputSnapshot']['processId'][] = [];
+    setLastRunData((previous) => {
+      const result = updateLLMChatOutputHistory(previous, data, storedEntry, previousDataPerNodeToKeep);
+      obsoleteRefIds = result.obsoleteRefIds;
+      evictedProcessIds = result.evictedProcessIds;
+      return result.runData;
+    });
+    deleteStoredRefIds(dataRefs, obsoleteRefIds);
+    if (evictedProcessIds.length > 0) {
+      setLLMChatOutputPageSelections((previous) =>
+        evictedProcessIds.reduce(
+          (selections, processId) =>
+            removeLLMChatOutputHistorySelectionsForProcess({
+              nodeId: data.nodeId,
+              processId,
+              selections,
+            }),
+          previous,
+        ),
+      );
+    }
   };
 
   const appendAgentTraceEvent = (event: AgentTraceEvent) => {
-    setLastRunData((prev) =>
-      produce(prev, (draft) => {
-        upsertAgentTraceEventForInvocation(draft, event);
-      }),
+    const result = updateAgentTraceEventForInvocation(
+      store.get(lastRunDataByNodeState),
+      event,
+      previousDataPerNodeToKeep,
     );
+    store.set(lastRunDataByNodeState, result.runData);
+    const { nodeId, obsoleteRefIds, evictedProcessIds } = result;
+    deleteStoredRefIds(dataRefs, obsoleteRefIds);
+    if (evictedProcessIds.length > 0) {
+      setLLMChatOutputPageSelections((previous) =>
+        evictedProcessIds.reduce(
+          (selections, processId) => removeLLMChatOutputHistorySelectionsForProcess({ nodeId, processId, selections }),
+          previous,
+        ),
+      );
+    }
   };
 
   const onLlmCallFinished = (data: ProcessEvents['llmCallFinished']) => {
@@ -243,49 +196,4 @@ export function useNodeExecutionEvents({
     onLlmProfileAttempt,
     onToolCallFinished,
   };
-}
-
-function getNodeRunDebugData(node: ProcessEvents['nodeStart']['node']) {
-  if (node.type === 'code') {
-    return {
-      debugData: {
-        codeSource: (node as CodeNode).data.code,
-      },
-    };
-  }
-
-  if (node.type === 'codeNew') {
-    return {
-      debugData: {
-        codeSource: (node as CodeNewNode).data.code,
-      },
-    };
-  }
-
-  if (node.type === 'expression') {
-    return {
-      debugData: {
-        expressionSource: (node as ExpressionNode).data.expression,
-      },
-    };
-  }
-
-  if (node.type === 'extractObjectPath') {
-    return {
-      debugData: {
-        extractObjectPathSource: (node as ExtractObjectPathNode).data.path,
-        extractObjectPathUsePathInput: (node as ExtractObjectPathNode).data.usePathInput,
-      },
-    };
-  }
-
-  if (node.type === 'jsFilter' || node.type === 'jsMap') {
-    return {
-      debugData: {
-        jsListCallbackBodySource: (node as JSFilterNode | JSMapNode).data.callbackBody,
-      },
-    };
-  }
-
-  return {};
 }

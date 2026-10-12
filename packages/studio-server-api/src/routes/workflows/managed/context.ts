@@ -46,6 +46,7 @@ import {
 } from './schema-migrations.js';
 import { createManagedWorkflowTransactionRunner } from './transactions.js';
 import type { TransactionHooks } from './types.js';
+import { assertManagedSchemaMigrationSafe } from '../../../managed-schema-cutover.js';
 
 export type ManagedWorkflowContext = {
   pool: Pool;
@@ -181,6 +182,7 @@ export function createManagedWorkflowContext(
             : options?.migrationMode === 'copy'
               ? 'migrate'
               : getManagedWorkflowSchemaMode();
+        if (schemaMode === 'migrate') await assertManagedSchemaMigrationSafe(pool);
         await withManagedDbRetry(`managed schema ${schemaMode}`, () =>
           schemaMode === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
         );

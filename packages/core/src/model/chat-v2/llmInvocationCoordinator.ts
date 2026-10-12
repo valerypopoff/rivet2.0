@@ -3,12 +3,14 @@ import type { LLMChatV2RuntimeConfig } from './llmChatV2NodeRuntime.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import type { ToolCallContinuation } from '../ToolCallContinuation.js';
 import { delegateToolCall } from '../nodes/toolCallDelegation.js';
-import {
-  runChatV2PipelineWithToolContinuation,
-  type LLMChatOutputSnapshotDescriptor,
-} from './toolContinuation.js';
+import { runChatV2PipelineWithToolContinuation, type LLMChatOutputSnapshotDescriptor } from './toolContinuation.js';
 import type { LLMInvocationJournal } from './llmInvocationJournal.js';
 import { isChatV2PipelineProviderFailureResult } from './chatV2Pipeline.js';
+import {
+  addGraphCostBreakdown,
+  graphCostBreakdownMatchesCost,
+  type GraphCostBreakdown,
+} from '../GraphBoundaryEffects.js';
 
 /**
  * Owns the LLM-level recovery and continuation decision boundary. The node
@@ -20,8 +22,13 @@ export async function executeLLMInvocation(params: {
   journal: LLMInvocationJournal;
   runtime: LLMChatV2RuntimeConfig;
   toolCallContinuation: ToolCallContinuation | undefined;
-}): Promise<{ result: ChatV2PipelineResult; terminalSnapshot?: LLMChatOutputSnapshotDescriptor }> {
+}): Promise<{
+  result: ChatV2PipelineResult;
+  terminalSnapshot?: LLMChatOutputSnapshotDescriptor;
+  toolCost?: GraphCostBreakdown;
+}> {
   const { context, journal, runtime, toolCallContinuation } = params;
+  let toolCost: GraphCostBreakdown | undefined;
   try {
     let terminalSnapshot: LLMChatOutputSnapshotDescriptor | undefined;
     const result = runtime.shouldAutoContinueToolCalls
@@ -50,6 +57,15 @@ export async function executeLLMInvocation(params: {
               passthroughErrors: true,
             });
             journal.recordToolRound({ kind: 'internal', count: 1 });
+            if (delegated.cost != null && Number.isFinite(delegated.cost) && delegated.cost >= 0) {
+              const carried = delegated.costBreakdown;
+              toolCost = addGraphCostBreakdown(
+                toolCost,
+                carried && graphCostBreakdownMatchesCost(carried, delegated.cost)
+                  ? carried
+                  : { llm: 0, classifier: 0, other: delegated.cost },
+              );
+            }
             return {
               type: 'chat-message',
               value: delegated.message,
@@ -95,7 +111,7 @@ export async function executeLLMInvocation(params: {
           ? 'released-unresolved-calls'
           : 'final-model-answer',
     });
-    return { result, terminalSnapshot };
+    return { result, terminalSnapshot, toolCost };
   } catch (error) {
     journal.recordTerminal({ kind: context.signal.aborted ? 'cancelled' : 'failed' });
     throw error;

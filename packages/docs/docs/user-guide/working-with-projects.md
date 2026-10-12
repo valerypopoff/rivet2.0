@@ -51,27 +51,61 @@ In Studio Server, Save writes through the server rather than asking for a local 
 
 ## Downloading a Studio Server project for local execution
 
-Right-click a project in the server's project tree and choose **Download with
-dependencies**. If it has unpublished changes, choose **Published** or **Saved
-latest**, then **Prepare bundle**. Progress continues if you close the dialog;
+Right-click a project in the server's project tree and choose **Download bundle**.
+Choose **Published** or **Saved latest** for every project in the
+bundle, then **Prepare bundle**. Published uses saved latest for projects that have
+no publication. Progress continues if you close the dialog;
 reopen the same action to download the ready ZIP. After fixing a reported issue,
 use **Retry export** to replace a failed or interrupted export with a fresh attempt.
-Ready exports offer **Prepare another bundle** if you want a different root version.
+Reopening and retrying retain the export's version choice. Ready exports offer
+**Prepare another bundle** if you want a different bundle-wide version choice.
 Ready bundles are retained for 24 hours. If a browser download is interrupted,
 resume it using the browser's download controls while the export remains available;
 after it expires, prepare a new bundle.
 
-The ZIP includes recursively called projects and their datasets, including distinct
-Published and Saved latest versions of the same dependency. Unsaved editor edits
-are excluded. Extract the whole ZIP and use
+The ZIP includes recursively called projects and their matching datasets, with
+one selected version per project. This selection overrides individual Subgraph
+version choices only inside the bundle; it does not change the server project.
+An incompatible target graph interface fails export rather than removing wires.
+Unsaved editor edits are excluded. Extract the whole ZIP and use
 [`loadProjectBundle`](../api-reference/node/loadProjectBundle) to run it with the
 Node package. Simply placing individual project files next to each other does not
 provide the required version mapping.
 
 Configure API credentials, external plugins, services, Code-node npm dependencies
 and local file paths separately. Project/dataset content may contain sensitive
-values; inspect the bundle before sharing it. Ordinary **Download** still downloads
+values; inspect the bundle before sharing it. **Download project** still downloads
 only one `.rivet-project` file.
+
+### Opening and running a bundle in desktop Rivet
+
+Extract the complete ZIP, then use **Open Project** to open `rivet-bundle.json`.
+Rivet opens all bundled projects in separate tabs and selects the root project.
+Already-open projects at those same paths keep their unsaved edits and datasets.
+Opening a declared `.rivet-project` inside the bundle's `projects/` directory
+opens just that member, while retaining its bundle dependency mapping.
+Projects opened through the manifest retain that mapping when switching tabs
+and running, even when the manifest declares nested project folders. If the
+bundle is moved, reopen `rivet-bundle.json` at its new location before running.
+
+Run the entry project in **Browser** or desktop **Node** mode. Dependency dataflow
+appears in the matching project tabs, including tabs that are not selected.
+Run controls and errors remain owned by the entry project's run. External debugger
+mode does not resolve local bundles.
+
+The entry project uses its current editor content and datasets. Other projects
+are read from their saved bundle files for each run, so save edits in dependency
+tabs before running the caller. You can edit and save extracted files without
+recalculating checksums. Saves update the project and its data sidecar, not the
+manifest; adding another project or a new dataset sidecar requires updating the
+manifest or exporting a new bundle. Renaming an existing Graph Input or Graph
+Output preserves its connections and updates the caller's visible port label,
+including cross-project calls. Removing or replacing the node, changing its type,
+or creating a conflicting port ID requires reviewing the caller before running.
+
+Keep the directory structure when moving the bundle. Existing older bundles with
+multiple versions of one project cannot open all versions as desktop tabs;
+re-export with a bundle-wide version choice, or open an individual member.
 
 ## Opening a Project
 
@@ -82,6 +116,8 @@ To open a project, choose **Open Project** in the top-bar **Menu** dropdown or p
 In Studio Server's project tree, a single click opens a preview tab. Double-clicking, editing, saving or running the project makes that tab persistent. Opening a different clean preview can replace the previous preview; dirty work is not silently discarded. Clicking or double-clicking an already-open project activates its existing tab without reloading its content or clearing unsaved changes. Switching A → B → A preserves each project's edits and dirty indicator.
 
 Folding or unfolding folders, including the selected project's parent, and clicking whitespace in the tree keep the selected project and its details. Clicking another project changes selection; activating an editor tab also updates the matching tree selection. Node settings follow the active project, even for duplicated projects with matching graph/node IDs.
+
+If the selected project is hidden inside collapsed folders, the outermost collapsed folder is highlighted at half the hover strength. Expand it to follow the highlight down to the project.
 
 ### Automatic browser recovery
 

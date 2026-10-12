@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:3af82c89b65fcd16",
+  "catalogFingerprint": "fnv1a64:1cb5aa0f41c09dfa",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -242,10 +242,25 @@
       "settings": []
     },
     {
+      "authoringChoiceId": "registered:classifierProfile",
+      "nodeType": "classifierProfile",
+      "displayName": "Classifier Profile",
+      "description": "Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI, OpenAI Decisions, Microsoft Decision 1 through OpenRouter, and Perplexity Decisions. Connect Profile directly to Evaluate's Classifier Profiles input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to From profile . For OpenRouter, clear Model to use microsoft/microsoft decision 1 ; see OpenRouter setup. For Perplexity, clear Model to use pplx decider v1.1 27b ; see Perplexity setup.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
       "authoringChoiceId": "registered:classifierQuestion",
       "nodeType": "classifierQuestion",
       "displayName": "Classifier Question",
-      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object. The same text questions work with Jev , Liquid AI d1 , and OpenAI Decisions . Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type.",
+      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object. The same question format works with Jev , Liquid AI d1 , OpenAI Decisions , Microsoft Decision 1 through OpenRouter , and Perplexity Decisions . Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See provider setup and limits.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -1006,6 +1021,10 @@
             "llm-config[]",
             "fn<llm-config>",
             "fn<llm-config[]>",
+            "classifier-config",
+            "classifier-config[]",
+            "fn<classifier-config>",
+            "fn<classifier-config[]>",
             "document",
             "document[]",
             "fn<document>",
@@ -1134,6 +1153,10 @@
             "llm-config[]",
             "fn<llm-config>",
             "fn<llm-config[]>",
+            "classifier-config",
+            "classifier-config[]",
+            "fn<classifier-config>",
+            "fn<classifier-config[]>",
             "document",
             "document[]",
             "fn<document>",
@@ -1372,7 +1395,7 @@
       "authoringChoiceId": "registered:llmProfile",
       "nodeType": "llmProfile",
       "displayName": "LLM Profile",
-      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model the resolved API key and its source metadata Custom provider base URL and Completions/Responses API choice common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and Google Search Grounding custom headers and extra provider options It intentionally does not contain promp",
+      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model OpenRouter model IDs, reasoning effort, and independent openRouterApiKey / OPENROUTER API KEY credentials the resolved API key and its source metadata Custom provider base URL and Completions/Responses API choice common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

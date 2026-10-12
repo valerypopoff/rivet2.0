@@ -1,3 +1,9 @@
+import type { WorkflowRecordingPageQuery } from '../routes/workflows/data-backend.js';
+import {
+  hasWorkflowFailure,
+  normalizeWorkflowStorageFailure,
+  workflowFailure,
+} from '../routes/workflows/workflow-failure.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -8,16 +14,15 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-node';
 import type { Project, SubgraphProjectTarget, ResolvedSubgraphProject } from '@valerypopoff/rivet2-node';
-import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/managed/types.js';
+import type { PersistWorkflowExecutionRecordingOptions } from '../routes/workflows/data-backend.js';
 import type {
-  WorkflowRecordingInputFilter,
-  WorkflowRecordingFilterStatus,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsSurface,
   WorkflowRecordingRunSummary,
   WorkflowRecordingRunsPageResponse,
 } from '../../../studio-server-shared/workflow-recording-types.js';
 import type { LocalRecordingMetadata, LocalPublicationState } from './workflow-catalog.js';
+import { createCatalogWorker, type CatalogWorkerClient } from './catalog-worker-client.js';
 import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
 import {
   buildWorkflowRunStatistics,
@@ -38,6 +43,9 @@ import type {
   WorkflowDraftPublicationPreconditions,
   WorkflowProjectWebAppsResponse,
   WorkflowPublishedVersionSummary,
+  WorkflowProjectSettingsDraft,
+  WorkflowProjectWebAppPublicationDraft,
+  WorkflowProjectWebAppAccessDraft,
 } from '../../../studio-server-shared/workflow-types.js';
 import {
   getAggregateWorkflowProjectStatus,
@@ -51,6 +59,12 @@ import {
   type LocalWorkflowTreeProject,
 } from './workflow-catalog.js';
 import { badRequest, conflict, createHttpError } from '../utils/httpError.js';
+import {
+  createEndpointPublication,
+  assertEndpointAccess,
+  assertPublicationPreconditions,
+  nextPublicationVersion,
+} from '../routes/workflows/publication-policy.js';
 import { createBlankProjectFile, sanitizeWorkflowName } from '../routes/workflows/fs-helpers.js';
 import {
   normalizeHostedProjectTitle,
@@ -61,14 +75,7 @@ import {
   getWorkflowProjectStatsFromContents,
 } from '../routes/workflows/project-stats.js';
 import { normalizeManagedWorkflowRelativePath } from '../routes/workflows/virtual-paths.js';
-import {
-  normalizeStoredEndpointName,
-  normalizeWorkflowEndpointLookupName,
-} from '../routes/workflows/endpoint-names.js';
-import {
-  assertPublicationPreconditions,
-  nextPublicationVersion,
-} from '../routes/workflows/publication-preconditions.js';
+import { normalizeWorkflowEndpointLookupName } from '../routes/workflows/endpoint-names.js';
 import {
   normalizeWebAppPublicationDrafts,
   normalizeWebAppAccessDrafts,
@@ -101,7 +108,7 @@ type WriteLease = <T>(operation: () => Promise<T>) => Promise<T>;
  * selector. The owner must supply a shared
  * maintenance-aware write lease covering the whole asynchronous operation. */
 export class SqliteWorkflowBackend implements WorkflowDataBackend {
-  readonly #catalog: LocalWorkflowCatalog;
+  readonly #catalog: LocalWorkflowCatalog | CatalogWorkerClient;
   readonly #root: string;
   readonly #withWrite: WriteLease;
   readonly #cacheScope: string;
@@ -109,6 +116,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   readonly #getRecordingRetentionHolds: () => Promise<ReadonlySet<string>>;
   readonly #beforeDeleteProject: (projectId: string) => Promise<void>;
   #readOnly = false;
+  #initialized = false;
+  #lifecycleRevision = 0;
   #closing = false;
   #activeWrites = 0;
   #disposePromise: Promise<void> | null = null;
@@ -120,13 +129,16 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     withWrite: WriteLease;
     getRecordingRetentionHolds?: () => Promise<ReadonlySet<string>>;
     beforeDeleteProject?: (projectId: string) => Promise<void>;
+    worker?: boolean;
   }) {
-    this.#catalog = new LocalWorkflowCatalog(options);
+    const catalogOptions = { databasePath: options.databasePath, artifactRoot: options.artifactRoot };
+    this.#catalog = options.worker ? createCatalogWorker(catalogOptions) : new LocalWorkflowCatalog(catalogOptions);
     this.#root = path.resolve(options.virtualRoot);
     this.#beforeDeleteProject = options.beforeDeleteProject ?? (async () => {});
     const withWrite = options.withWrite;
     this.#withWrite = async (operation) => {
       if (this.#closing) throw createHttpError(503, 'Local workflow storage is shutting down.');
+      if (!this.#initialized) throw createHttpError(503, 'Local workflow storage is not initialized.');
       if (this.#readOnly) throw new Error('Local workflow catalog is open for verification only.');
       // Count before entering the owner's lease, so queued writes are drained
       // too. A rejected lease must release the count just like a failed write.
@@ -143,51 +155,70 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     this.#getRecordingRetentionHolds =
       options.getRecordingRetentionHolds ?? getFilesystemLLMProfileHealthHeldRecordingIds;
   }
-  initialize(options: { readOnly?: boolean } = {}): void {
+  initialize(options: { readOnly?: boolean } = {}): void | Promise<void> {
     if (this.#disposePromise) throw new Error('Cannot initialize local workflow storage while shutdown is pending.');
-    this.#catalog.initialize({ verifyOnly: options.readOnly, requireExisting: true });
-    this.#readOnly = options.readOnly ?? false;
-    this.#closing = false;
+    if (this.#closing && !(this.#catalog instanceof LocalWorkflowCatalog))
+      throw new Error('Cannot initialize local workflow storage after shutdown has begun.');
+    const lifecycleRevision = this.#lifecycleRevision;
+    const readOnly = options.readOnly ?? false;
+    const opened = this.#catalog.initialize({ verifyOnly: readOnly, requireExisting: true });
+    const acceptMode = () => {
+      if (lifecycleRevision !== this.#lifecycleRevision || this.#disposePromise)
+        throw createHttpError(503, 'Local workflow storage is shutting down.');
+      // A rejected reopen/mode change must not alter the current write policy.
+      this.#readOnly = readOnly;
+      this.#initialized = true;
+      this.#closing = false;
+    };
+    if (opened instanceof Promise) return opened.then(acceptMode);
+    acceptMode();
   }
   getActiveWriteCount(): number {
     return this.#activeWrites;
   }
-  close(): void {
+  getPendingCatalogOperationCount(): number {
+    return this.#catalog instanceof LocalWorkflowCatalog ? 0 : this.#catalog.getPendingOperationCount();
+  }
+  close(): void | Promise<void> {
     if (this.#activeWrites) throw new Error('Cannot close local workflow storage with pending writes; drain it first.');
     this.#closing = true;
-    this.#catalog.close();
+    this.#lifecycleRevision++;
+    this.#initialized = false;
     this.#executionCache.clearRevisionMaterializations();
+    return this.#catalog.close();
   }
 
   /** Caller must establish the durable maintenance fence before draining. */
   async waitForIdle(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
-    if (!this.#activeWrites) return;
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        this.#idleWaiters.delete(ready);
-        signal?.removeEventListener('abort', aborted);
-      };
-      const ready = () => {
-        cleanup();
-        resolve();
-      };
-      const aborted = () => {
-        cleanup();
-        reject(signal!.reason);
-      };
-      this.#idleWaiters.add(ready);
-      signal?.addEventListener('abort', aborted, { once: true });
-      if (signal?.aborted) aborted();
-    });
+    if (this.#activeWrites)
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          this.#idleWaiters.delete(ready);
+          signal?.removeEventListener('abort', aborted);
+        };
+        const ready = () => {
+          cleanup();
+          resolve();
+        };
+        const aborted = () => {
+          cleanup();
+          reject(signal!.reason);
+        };
+        this.#idleWaiters.add(ready);
+        signal?.addEventListener('abort', aborted, { once: true });
+        if (signal?.aborted) aborted();
+      });
+    if (!(this.#catalog instanceof LocalWorkflowCatalog)) await this.#catalog.waitForIdle(signal);
   }
 
   dispose(): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise;
     this.#closing = true;
+    this.#lifecycleRevision++;
     this.#disposePromise = (async () => {
       await this.waitForIdle();
-      this.close();
+      await this.close();
     })().finally(() => {
       this.#disposePromise = null;
     });
@@ -197,7 +228,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async checkHealth(context?: { signal: AbortSignal }): Promise<void> {
     context?.signal.throwIfAborted();
     if (this.#closing) throw new Error('Local workflow storage is shutting down.');
-    this.#catalog.checkHealth();
+    const catalog =
+      context && !(this.#catalog instanceof LocalWorkflowCatalog)
+        ? this.#catalog.withSignal(context.signal)
+        : this.#catalog;
+    await catalog.checkHealth();
     context?.signal.throwIfAborted();
   }
   #absolute(value: string): string {
@@ -211,8 +246,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     if (!normalized.endsWith('.rivet-project')) throw badRequest('Expected project path');
     return normalized;
   }
-  #structure(): Structure {
-    return { expectedFolders: this.#catalog.listFolders(), expectedProjectPaths: this.#catalog.listProjectPaths() };
+  async #structure(): Promise<Structure> {
+    return this.#catalog.readStructure();
   }
   #requireFolder(folders: string[], value: string): void {
     if (value && !folders.includes(value)) throw createHttpError(404, 'Folder not found');
@@ -313,9 +348,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     try {
       await this.#catalog.applyStructureChanges({ ...structure, projects, folders });
     } catch (error) {
-      if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
-        throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-      throw error;
+      throw normalizeWorkflowStorageFailure(error);
     }
     for (const change of projects) {
       notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(change.before.relativePath)}`);
@@ -331,9 +364,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     try {
       await this.#catalog.applyChanges({ ...structure, folders, projects });
     } catch (error) {
-      if (/concurrently|already exists|UNIQUE constraint/.test(String(error)))
-        throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-      throw error;
+      throw normalizeWorkflowStorageFailure(error);
     }
     for (const change of projects) {
       for (const project of [change.before, change.after])
@@ -383,11 +414,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       if (parent) folders.get(parent)!.projects.push(item);
       else projects.push(item);
     }
-    if (projection.stamp !== this.#catalog.changeStamp()) throw conflict('Workflow tree changed while loading. Retry.');
+    if (projection.stamp !== (await this.#catalog.changeStamp()))
+      throw conflict('Workflow tree changed while loading. Retry.');
     return { root: this.#root, folders: roots, projects };
   }
   async listProjectPathsForHostedIo(): Promise<string[]> {
-    return this.#catalog.listProjectPaths().map((value) => this.#absolute(value));
+    return (await this.#catalog.listProjectPaths()).map((value) => this.#absolute(value));
   }
   async loadHostedProject(projectPath: string) {
     const snapshot = await this.#payload(this.#parseAbsolute(projectPath));
@@ -408,13 +440,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   }) {
     options = structuredClone(options);
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       let value = this.#parseAbsolute(options.projectPath);
       const submitted = parseHostedProjectContents(options.contents, 'Could not save project').project;
       if (options.projectId && options.projectId !== submitted.metadata.id)
         throw badRequest('Project identity does not match submitted contents.');
       if (options.saveIntent === 'in-place') {
-        const currentPath = this.#catalog.findProjectPathById(submitted.metadata.id);
+        const currentPath = await this.#catalog.findProjectPathById(submitted.metadata.id);
         if (!currentPath) throw conflict('This project no longer exists. Reopen it or use Save As.');
         value = currentPath;
       }
@@ -431,9 +463,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           updatedAt: next.updatedAt,
         });
       } catch (error) {
-        if (/different project/.test(String(error))) throw conflict('The save target belongs to a different project.');
-        if (/concurrently/.test(String(error)))
-          throw conflict('Project has changed since it was opened. Reload before saving.');
+        if (hasWorkflowFailure(error, 'workflow_project_mismatch'))
+          throw workflowFailure('workflow_project_mismatch', 'The save target belongs to a different project.');
+        if (hasWorkflowFailure(error, 'workflow_state_changed'))
+          throw workflowFailure(
+            'workflow_state_changed',
+            'Project has changed since it was opened. Reload before saving.',
+          );
         throw error;
       }
       if (saved) {
@@ -450,11 +486,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return { path: this.#absolute(value), revisionId: revision(next), project: this.#item(next), created: true };
     });
   }
-  async createWorkflowProjectItem(folderValue: unknown, nameValue: unknown): Promise<WorkflowProjectItem> {
+  async createWorkflowProjectItem(folderValue: string, nameValue: string): Promise<WorkflowProjectItem> {
     const folder = relative(folderValue, true, true),
       name = sanitizeWorkflowName(nameValue, 'name');
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       this.#requireFolder(structure.expectedFolders, folder);
       const next = this.#newProject(
         path.posix.join(folder, `${name}.rivet-project`),
@@ -466,15 +502,15 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     });
   }
   async uploadWorkflowProjectItem(
-    folderValue: unknown,
-    fileName: unknown,
-    contents: unknown,
+    folderValue: string,
+    fileName: string,
+    contents: string,
   ): Promise<WorkflowProjectItem> {
     if (typeof contents !== 'string') throw badRequest('Missing project contents');
     const folder = relative(folderValue, true, true),
       name = sanitizeWorkflowName(fileName, 'fileName').replace(/\.rivet-project$/, '');
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       this.#requireFolder(structure.expectedFolders, folder);
       const next = this.#newProject(path.posix.join(folder, `${name}.rivet-project`), contents, null);
       await this.#commit(structure, [{ before: null, after: next }]);
@@ -482,11 +518,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     });
   }
   async duplicateWorkflowProjectItem(
-    value: unknown,
+    value: string,
     version: WorkflowProjectDownloadVersion = 'live',
   ): Promise<WorkflowProjectItem> {
     return this.#withWrite(async () => {
-      const structure = this.#structure(),
+      const structure = await this.#structure(),
         source = await this.#payload(value, version === 'published' ? 'published' : 'latest');
       const contents = source.contents;
       if (contents === null) throw conflict('Published version is not available');
@@ -509,7 +545,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   }
   async #moveProject(value: unknown, target: (source: LocalWorkflowTreeProject) => string) {
     return this.#withWrite(async () => {
-      const structure = this.#structure(),
+      const structure = await this.#structure(),
         before = await this.#catalog.readTreeProject(this.#projectPath(value));
       if (!before) throw createHttpError(404, 'Project not found');
       const newPath = target(before);
@@ -531,19 +567,19 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       };
     });
   }
-  renameWorkflowProjectItem(value: unknown, newName: unknown) {
+  renameWorkflowProjectItem(value: string, newName: string) {
     const name = sanitizeWorkflowName(newName, 'name');
     return this.#moveProject(value, (source) =>
       path.posix.join(parentOf(source.relativePath), `${name}.rivet-project`),
     );
   }
-  moveWorkflowProject(value: unknown, folder: unknown) {
+  moveWorkflowProject(value: string, folder: string) {
     const target = relative(folder, true, true);
     return this.#moveProject(value, (source) => path.posix.join(target, source.fileName));
   }
-  async deleteWorkflowProjectItem(value: unknown): Promise<string | null> {
+  async deleteWorkflowProjectItem(value: string): Promise<string | null> {
     return this.#withWrite(async () => {
-      const structure = this.#structure(),
+      const structure = await this.#structure(),
         before = await this.#catalog.readTreeProject(this.#projectPath(value));
       if (!before) throw createHttpError(404, 'Project not found');
       if (
@@ -558,12 +594,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       return before.workflowId;
     });
   }
-  async createWorkflowFolderItem(nameValue: unknown, parentValue: unknown): Promise<WorkflowFolderItem> {
+  async createWorkflowFolderItem(nameValue: string, parentValue: string): Promise<WorkflowFolderItem> {
     const name = sanitizeWorkflowName(nameValue, 'name'),
       parent = relative(parentValue, true, true),
       value = path.posix.join(parent, name);
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       this.#requireFolder(structure.expectedFolders, parent);
       if (structure.expectedFolders.includes(value)) throw conflict('Folder already exists');
       await this.#commitStructure(structure, [], [...structure.expectedFolders, value]);
@@ -573,7 +609,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async #moveFolder(value: unknown, target: (source: string) => string) {
     const source = relative(value, true);
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       this.#requireFolder(structure.expectedFolders, source);
       const destination = target(source);
       if (destination === source) return { folder: this.#folder(source), movedProjectPaths: [] };
@@ -603,20 +639,22 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       };
     });
   }
-  renameWorkflowFolderItem(value: unknown, newName: unknown) {
+  renameWorkflowFolderItem(value: string, newName: string) {
     const name = sanitizeWorkflowName(newName, 'name');
     return this.#moveFolder(value, (source) => path.posix.join(parentOf(source), name));
   }
-  moveWorkflowFolder(value: unknown, destination: unknown) {
+  moveWorkflowFolder(value: string, destination: string) {
     const folder = relative(destination, true, true);
     return this.#moveFolder(value, (source) => path.posix.join(folder, path.posix.basename(source)));
   }
-  async deleteWorkflowFolderItem(value: unknown): Promise<void> {
+  async deleteWorkflowFolderItem(value: string): Promise<void> {
     const source = relative(value, true);
     return this.#withWrite(async () => {
-      const structure = this.#structure();
+      const structure = await this.#structure();
       this.#requireFolder(structure.expectedFolders, source);
-      if ([...structure.expectedFolders, ...structure.expectedProjectPaths].some((item) => item.startsWith(`${source}/`)))
+      if (
+        [...structure.expectedFolders, ...structure.expectedProjectPaths].some((item) => item.startsWith(`${source}/`))
+      )
         throw conflict('Only empty folders can be deleted');
       await this.#commitStructure(
         structure,
@@ -625,7 +663,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       );
     });
   }
-  async readWorkflowProjectReferenceSnapshots(value: unknown) {
+  async readWorkflowProjectReferenceSnapshots(value: string) {
     const projectPath = relative(value);
     if (!projectPath.endsWith('.rivet-project')) throw badRequest('Expected project path');
     const snapshots = await this.#catalog.readProjectReferenceSnapshots(projectPath);
@@ -635,7 +673,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async listWorkflowProjectReferenceCatalog() {
     return this.#catalog.listProjectReferenceCatalog();
   }
-  async readWorkflowProjectDownload(value: unknown, version: WorkflowProjectDownloadVersion) {
+  async readWorkflowProjectDownload(value: string, version: WorkflowProjectDownloadVersion) {
     const project = await this.#payload(value, version === 'published' ? 'published' : 'latest'),
       contents = project.contents;
     if (contents === null) throw conflict('Published version is not available');
@@ -656,7 +694,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           (next, revisionId) => {
             assertPublicationPreconditions(
               preconditions,
-              { projectId: next.workflowId, publicationVersion: next.publicationVersion, draftRevisionId: revisionId },
+              {
+                projectId: next.workflowId,
+                publicationVersion: next.publicationVersion,
+                draftRevisionId: revisionId,
+                endpointPublished: next.publishedContents != null,
+              },
               kind,
             );
             const publicationVersion = nextPublicationVersion(next.publicationVersion);
@@ -669,24 +712,19 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         notifyWebAppSocketPolicyInvalidation(`filesystem:${this.#absolute(projectPath)}`);
         return result;
       } catch (error) {
-        if (/concurrently|UNIQUE constraint|route collision/.test(String(error)))
-          throw conflict('Workflow storage changed or the destination already exists. Refresh before trying again.');
-        throw error;
+        throw normalizeWorkflowStorageFailure(error);
       }
     });
   }
   async publishWorkflowProjectItem(
-    value: unknown,
-    settings: unknown,
+    value: string,
+    settings: WorkflowProjectSettingsDraft,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
-    const endpointName = normalizeStoredEndpointName((settings as { endpointName?: string })?.endpointName ?? '');
-    if (!endpointName) throw badRequest('Missing endpoint name');
+    const { endpointName, publishedAt, versionId } = createEndpointPublication(settings);
     return this.#treeItem(
       await this.#publication(value, preconditions, 'publish-endpoint', (next) => {
         requireProjectMainGraphForEndpoint(loadProjectAndAttachedDataFromString(next.draftText)[0]);
-        const publishedAt = new Date().toISOString(),
-          versionId = randomUUID();
         next.endpointName = next.publishedEndpointName = endpointName;
         next.publishedVersionId = versionId;
         next.lastPublishedAt = publishedAt;
@@ -704,7 +742,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       }),
     );
   }
-  async unpublishWorkflowProjectItem(value: unknown, preconditions: WorkflowPublicationPreconditions) {
+  async unpublishWorkflowProjectItem(value: string, preconditions: WorkflowPublicationPreconditions) {
     return this.#treeItem(
       await this.#publication(value, preconditions, 'unpublish-endpoint', (next) => {
         next.publishedEndpointName = '';
@@ -716,11 +754,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async updateWorkflowEndpointAccess(
-    value: unknown,
+    value: string,
     access: 'public' | 'internal',
     preconditions: WorkflowPublicationPreconditions,
   ) {
-    if (access !== 'public' && access !== 'internal') throw badRequest('Invalid endpoint access');
+    assertEndpointAccess(access);
     return this.#treeItem(
       await this.#publication(value, preconditions, 'set-endpoint-access', (next) => {
         next.endpointAccess = access;
@@ -733,7 +771,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       name: typeof graph.name === 'string' && graph.name.trim() ? graph.name.trim() : uiGraphId,
     }));
   }
-  async listWorkflowProjectWebApps(value: unknown): Promise<WorkflowProjectWebAppsResponse> {
+  async listWorkflowProjectWebApps(value: string): Promise<WorkflowProjectWebAppsResponse> {
     const snapshot = await this.#catalog.readDraftDefinition(this.#projectPath(value));
     if (!snapshot) throw createHttpError(404, 'Project not found');
     const contents = snapshot.contents,
@@ -774,8 +812,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     };
   }
   async publishWorkflowProjectWebApps(
-    value: unknown,
-    publications: unknown,
+    value: string,
+    publications: WorkflowProjectWebAppPublicationDraft[],
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppPublicationDrafts(publications);
@@ -805,8 +843,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async updateWorkflowProjectWebAppAccess(
-    value: unknown,
-    updates: unknown,
+    value: string,
+    updates: WorkflowProjectWebAppAccessDraft[],
     preconditions: WorkflowPublicationPreconditions,
   ) {
     const drafts = normalizeWebAppAccessDrafts(updates);
@@ -821,8 +859,8 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     );
   }
   async unpublishWorkflowProjectWebApp(
-    value: unknown,
-    uiGraphId: unknown,
+    value: string,
+    uiGraphId: string,
     preconditions: WorkflowPublicationPreconditions,
   ) {
     if (typeof uiGraphId !== 'string' || !uiGraphId) throw badRequest('Missing uiGraphId');
@@ -854,17 +892,17 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       comment: version.comment,
     };
   }
-  async listWorkflowPublishedVersions(value: unknown) {
-    const project = this.#catalog.readProjectPublicationMetadata(this.#projectPath(value));
+  async listWorkflowPublishedVersions(value: string) {
+    const project = await this.#catalog.readProjectPublicationMetadata(this.#projectPath(value));
     if (!project) throw createHttpError(404, 'Project not found');
     return { versions: project.publishedVersions.map((version) => this.#versionSummary(project, version)) };
   }
-  async readWorkflowPublishedVersionPreview(value: unknown, id: unknown) {
+  async readWorkflowPublishedVersionPreview(value: string, id: string) {
     if (typeof id !== 'string') throw createHttpError(404, 'Published version not found');
     const version = await this.#payload(value, { versionId: id });
     return { contents: version.contents!, datasetsContents: version.datasetsContents };
   }
-  async readWorkflowPublishedVersionDownload(value: unknown, id: unknown) {
+  async readWorkflowPublishedVersionDownload(value: string, id: string) {
     if (typeof id !== 'string') throw createHttpError(404, 'Published version not found');
     const version = await this.#payload(value, { versionId: id });
     return {
@@ -879,28 +917,28 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   ) {
     if (typeof id !== 'string' || !id) throw createHttpError(404, 'Published version not found');
     return this.#withWrite(async () => {
-      const result = this.#catalog.annotatePublishedVersion(this.#projectPath(value), id, update);
+      const result = await this.#catalog.annotatePublishedVersion(this.#projectPath(value), id, update);
       if (!result) throw createHttpError(404, 'Published version not found');
       return this.#versionSummary(result.project, result.version);
     });
   }
-  setWorkflowPublishedVersionStar(value: unknown, id: unknown, starred: unknown) {
+  setWorkflowPublishedVersionStar(value: string, id: string, starred: boolean) {
     if (typeof starred !== 'boolean') throw badRequest('Invalid isStarred');
     return this.#annotateVersion(value, id, { isStarred: starred });
   }
-  setWorkflowPublishedVersionComment(value: unknown, id: unknown, comment: unknown) {
+  setWorkflowPublishedVersionComment(value: string, id: string, comment: string) {
     if (typeof comment !== 'string' || comment.trim().length > WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH)
       throw badRequest('Invalid comment');
     return this.#annotateVersion(value, id, { comment: comment.trim() });
   }
   async restoreWorkflowPublishedVersion(
-    value: unknown,
-    id: unknown,
+    value: string,
+    id: string,
     preconditions: WorkflowDraftPublicationPreconditions,
   ) {
     preconditions = structuredClone(preconditions);
     const snapshot = await this.#withWrite(async () => {
-      const structure = this.#structure(),
+      const structure = await this.#structure(),
         before = await this.#project(value);
       assertPublicationPreconditions(
         preconditions,
@@ -933,19 +971,29 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     };
   }
   #execution(
-    snapshot: Pick<LocalExecutionSnapshot, 'workflowId' | 'relativePath' | 'endpointAccess' | 'cacheStatus'>,
+    snapshot: Pick<
+      LocalExecutionSnapshot,
+      'workflowId' | 'relativePath' | 'endpointAccess' | 'cacheStatus' | 'revisionId'
+    >,
     contents: string,
     datasetsContents: string | null,
   ) {
-    const [project, attachedData] = loadProjectAndAttachedDataFromString(contents);
+    const { project, attachedData, datasets, contentRevision } = this.#executionCache.parsedDefinitions.materialize(
+      {
+        revisionId: snapshot.revisionId,
+        contents,
+        datasetsContents,
+      },
+      true,
+    );
     if (project.metadata.id !== snapshot.workflowId)
       throw new Error('Execution project identity does not match catalog.');
     return {
       project,
       attachedData,
-      datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
+      datasetProvider: new NodeDatasetProvider(datasets),
       projectVirtualPath: this.#absolute(snapshot.relativePath),
-      revisionKey: `sqlite:${revision({ contents, datasetsContents })}`,
+      revisionKey: `sqlite:${contentRevision}`,
       endpointAccess: snapshot.endpointAccess,
       debug: { cacheStatus: snapshot.cacheStatus ?? ('bypass' as const), resolveMs: 0, materializeMs: 0 },
     };
@@ -985,7 +1033,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return this.#loadApp(slug, true);
   }
   async resolveWebAppAccessPolicy(slug: string) {
-    const match = this.#catalog.readWebAppPolicy(normalizeWorkflowEndpointLookupName(slug));
+    const match = await this.#catalog.readWebAppPolicy(normalizeWorkflowEndpointLookupName(slug));
     if (!match?.webApp) return null;
     return {
       projectVirtualPath: this.#absolute(match.relativePath),
@@ -1023,10 +1071,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       ) => {
         // Stable identity is authoritative, not stale or spoofed path hints.
         const { id } = reference;
-        const projectPath = this.#catalog.findProjectPathById(id);
-        if (!projectPath) throw createHttpError(404, 'Referenced project not found');
-        const snapshot = await this.#payload(projectPath, 'published-or-latest');
-        const [project] = loadProjectAndAttachedDataFromString(snapshot.contents!);
+        const cache = this.#readOnly ? undefined : this.#executionCache;
+        const snapshot =
+          (await this.#catalog.readExecutionSource({ workflowId: id, version: 'published' }, cache)) ??
+          (await this.#catalog.readExecutionSource({ workflowId: id, version: 'latest' }, cache));
+        if (!snapshot) throw createHttpError(404, 'Referenced project not found');
+        const { project } = this.#execution(snapshot, snapshot.contents, snapshot.datasetsContents);
         if (project.metadata.id !== id) throw new Error('Referenced project identity does not match catalog');
         return project;
       },
@@ -1035,11 +1085,16 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
 
   async loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
     const { projectId, version } = target;
-    const projectPath = this.#catalog.findProjectPathById(projectId);
-    if (!projectPath) throw createHttpError(404, 'Subgraph project not found');
-    const snapshot = await this.#payload(projectPath, version);
+    const snapshot = await this.#catalog.readExecutionSource(
+      { workflowId: projectId, version },
+      this.#readOnly ? undefined : this.#executionCache,
+    );
+    if (!snapshot) {
+      if (!(await this.#catalog.findProjectPathById(projectId)))
+        throw createHttpError(404, 'Subgraph project not found');
+      throw workflowFailure('workflow_publication_missing', 'Subgraph project has no published version');
+    }
     const { contents, datasetsContents } = snapshot;
-    if (contents === null) throw conflict('Subgraph project has no published version');
     const execution = this.#execution(snapshot, contents, datasetsContents);
     if (execution.project.metadata.id !== projectId)
       throw new Error('Subgraph project identity does not match catalog');
@@ -1062,7 +1117,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     const saved = structuredClone({ ...options, onPersisted: undefined });
     const id = `${Date.now()}-${randomUUID()}`;
     await this.#withWrite(async () => {
-      if (!this.#catalog.findProjectPathById(saved.sourceProject.metadata.id))
+      if (!(await this.#catalog.findProjectPathById(saved.sourceProject.metadata.id)))
         throw conflict('Recording source project no longer exists');
       const replay = {
         ...saved.executedProject,
@@ -1108,9 +1163,9 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
 
   async deleteWorkflowRecording(id: string): Promise<void> {
     await this.#withWrite(async () => {
-      const row = this.#catalog.listRecordingMetadata({ recordingId: id, limit: 1 })[0];
+      const row = (await this.#catalog.listRecordingMetadata({ recordingId: id, limit: 1 }))[0];
       if (!row) throw createHttpError(404, 'Recording not found');
-      this.#catalog.deleteRecording(id);
+      await this.#catalog.deleteRecording(id);
       workflowRecordingInputCache.invalidate(`${this.#cacheScope}${row.recordingHash}`);
     });
   }
@@ -1123,7 +1178,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       // An unreadable health authority must stop cleanup, never become an empty
       // hold set that discards the recording needed to diagnose a suspension.
       const heldRecordingIds = await this.#getRecordingRetentionHolds();
-      const deleted = this.#catalog.pruneRecordings({
+      const deleted = await this.#catalog.pruneRecordings({
         now,
         batchSize,
         retentionDays,
@@ -1160,19 +1215,20 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     };
   }
 
-  async listWorkflowRecordingRunsPage(
-    workflowId: string,
-    page: number,
-    pageSize: number,
-    statusFilter: WorkflowRecordingFilterStatus = 'all',
-    inputFilter: WorkflowRecordingInputFilter | null = null,
-    inputCursor = 0,
-    signal?: AbortSignal,
-    inputAfter?: string,
-    includeSubgraphRuns = false,
-    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
-  ): Promise<WorkflowRecordingRunsPageResponse> {
-    if (workflowId && runScope !== 'children' && !this.#catalog.findProjectPathById(workflowId))
+  async listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse> {
+    const {
+      workflowId,
+      page,
+      pageSize,
+      statusFilter = 'all',
+      inputFilter = null,
+      inputCursor = 0,
+      signal,
+      inputAfter,
+      includeSubgraphRuns = false,
+      runScope = inputFilter ? 'roots' : 'all',
+    } = query;
+    if (workflowId && runScope !== 'children' && !(await this.#catalog.findProjectPathById(workflowId)))
       throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),
       size = Math.min(100, Math.max(1, Math.floor(pageSize)));
@@ -1184,7 +1240,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       throw badRequest('Invalid recording page');
     const scopeCounts =
       (workflowId && includeSubgraphRuns) || runScope !== 'all'
-        ? this.#catalog.recordingScopeCounts(workflowId, runScope)
+        ? await this.#catalog.recordingScopeCounts(workflowId, runScope)
         : undefined;
     const scope = inputFilter ? { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns } : null;
     const load = async (after: string | undefined, offset: number, limit: number) =>
@@ -1228,7 +1284,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         ? statusFilter === 'failed'
           ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
           : scopeCounts.totalRuns
-        : this.#catalog.countRecordings(workflowId, statusFilter === 'failed'));
+        : await this.#catalog.countRecordings(workflowId, statusFilter === 'failed'));
     return {
       workflowId,
       scopeCounts,
@@ -1247,16 +1303,17 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   }
 
   async listWorkflowRecordingWorkflows() {
-    const result = this.#catalog
-      .readRecordingWorkflowProjection()
-      .map(({ project, ...summary }) => ({ ...summary, project: this.#treeItem(project) }));
+    const result = (await this.#catalog.readRecordingWorkflowProjection()).map(({ project, ...summary }) => ({
+      ...summary,
+      project: this.#treeItem(project),
+    }));
     result.sort((left, right) => left.project.relativePath.localeCompare(right.project.relativePath));
     return { workflows: result };
   }
   async listWorkflowRunStatisticsCatalog(surface: WorkflowRunStatisticsSurface) {
-    return buildWorkflowRunStatisticsCatalog(this.#catalog.readRecordingStatisticsCatalog(surface), surface);
+    return buildWorkflowRunStatisticsCatalog(await this.#catalog.readRecordingStatisticsCatalog(surface), surface);
   }
   async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery) {
-    return buildWorkflowRunStatistics(this.#catalog.readRecordingStatistics(query), query);
+    return buildWorkflowRunStatistics(await this.#catalog.readRecordingStatistics(query), query);
   }
 }

@@ -1041,7 +1041,8 @@ of the tracked cache, and the next `--immutable-cache` install will fail before
 tests start.
 
 The documentation stack uses `image-size` while reading checked-in image assets.
-Root `resolutions` applies the checked-in `image-size` patch because its Node 22
+Root `resolutions` pins `image-size` 2.0.4, fixing the ICNS/JXL/HEIF parser loops,
+and applies the checked-in PnP patch because its Node 22
 file-handle path reads incorrectly from a Yarn zip archive. Keep the patch and
 resolution together unless the package removes that PnP incompatibility; this no
 longer requires `dependenciesMeta` or an unplugged package copy.
@@ -1073,12 +1074,43 @@ validates policy rather than a frozen advisory count, so a newly published high
 finding or a new unreviewed dependent fails CI even when lower-severity counts
 change.
 
-The `image-size` documentation-only exception tracks the current advisory IDs
-for the unpatched ICNS and JXL/HEIF parser-loop findings. If the registry
-reissues these findings under new IDs, review the advisory contents and direct
-dependent before replacing the old IDs; unused exceptions are intentionally
-fatal so stale waivers cannot accumulate. This exception does not cover image
-parsing in a running Rivet service.
+The October 2026 CI repair replaces six obsolete exceptions with pinned upstream
+fixes: Babel SystemJS 7.29.8, React Router's path-to-regexp 1.9.0, Picomatch 2.3.2,
+serialize-javascript 7.1.2, pkg-fetch's tar-fs 2.1.5, and image-size 2.0.4. The
+overrides preserve the consumers' APIs; serialization's newer major remains
+CommonJS-compatible on the repository's supported Node 22+ runtime. Check the
+documentation production build when refreshing its webpack/Babel dependencies.
+
+Only two temporary JavaScript exceptions remain, both backed by local Yarn
+security patches because no verified upstream fix is available. They are not
+approvals to execute the original vulnerable code:
+
+- `braces` 3.0.3 limits nesting to 256 levels in its parser and compile, expand,
+  and stringify AST walkers. The limit cannot be overridden by caller options.
+  This deliberately rejects extreme nesting, while ordinary watcher patterns
+  and brace expansion retain their behavior.
+- `http-cache-semantics` 4.2.0 synchronously revalidates zero-lifetime responses
+  before honoring `max-stale` or stale-while-revalidate. This prevents security-
+  zeroed cookies/private/no-store/no-cache/proxy-revalidate responses from being
+  revived. Ordinary fresh and positive-lifetime stale public caching is retained;
+  zero-TTL public entries conservatively revalidate too.
+
+Yarn still reports the underlying versions for patched packages. The exceptions
+are restricted to their existing docs/build ancestry, record the actual
+mitigation, and expire on 2026-11-01 for upstream re-review. The unchanged audit
+gate still rejects new runtime consumers, expired or unused exceptions, and
+every critical finding. Remove a patch and its exception together only when a
+replacement passes the same consumer-level regression tests.
+Patch files retain LF endings. Their unified-diff format requires a single
+context-marker space on empty context lines; the path-scoped Git whitespace
+attribute recognizes that format without relaxing source-file whitespace checks.
+
+`dependency-security-regressions.test.mjs` exercises these patches through
+Docusaurus and both executor watcher paths, not a root library copy. Parser
+attacks run in disposable children with a 15-second timeout so an infinite-loop
+regression fails instead of hanging CI. It covers deeply nested patterns and
+caller-supplied ASTs, serialized HTTP cache policies, security-zeroed entries,
+normal expansion/caching, malformed image containers and ordinary PNG reads.
 
 An exception for a parser used only by a build tool must state that the input is
 repository-controlled and identify the owning toolchain. An exception for a

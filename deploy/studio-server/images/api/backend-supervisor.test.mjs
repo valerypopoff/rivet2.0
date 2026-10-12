@@ -216,6 +216,42 @@ async function unusedPort() {
   return port;
 }
 
+test(
+  'replicated dotenv cannot reopen release admission or retarget schema-reader inventory',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rivet-cutover-dotenv-'));
+    const dotenv = join(dir, 'fixture.env');
+    const selected = {
+      RIVET_RELEASE_MAINTENANCE: 'true',
+      RIVET_SCHEMA_MIGRATION_RELEASE: 'owned-release',
+      RIVET_MANAGED_MAINTENANCE_ENABLED: 'false',
+    };
+    try {
+      await writeFile(
+        dotenv,
+        'RIVET_RELEASE_MAINTENANCE=false\nRIVET_SCHEMA_MIGRATION_RELEASE=other\nRIVET_MANAGED_MAINTENANCE_ENABLED=true\n',
+      );
+      const output = execFileSync(
+        'sh',
+        [
+          '-c',
+          '. "$1"; load_optional_dotenv_preserving_deployment_storage "$2"; "$3" -e \'console.log(JSON.stringify(Object.fromEntries(JSON.parse(process.argv[1]).map(k=>[k,process.env[k]]))))\' "$4"',
+          'fixture',
+          fileURLToPath(new URL('../lib/load-env.sh', import.meta.url)),
+          dotenv,
+          process.execPath,
+          JSON.stringify(Object.keys(selected)),
+        ],
+        { env: { ...process.env, ...selected, RIVET_DEPLOYMENT_TOPOLOGY: 'replicated' }, encoding: 'utf8' },
+      );
+      assert.deepEqual(JSON.parse(output), selected);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 async function ports() {
   const apiPort = await unusedPort();
   let executorPort = await unusedPort();

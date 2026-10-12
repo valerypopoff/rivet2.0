@@ -102,7 +102,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
     let cancelled = false;
     const relativePath = activeProjectRelativePath;
 
-    setLoadedWebApps((current) => current?.relativePath === relativePath ? current : null);
+    setLoadedWebApps((current) => (current?.relativePath === relativePath ? current : null));
 
     fetchWorkflowProjectWebApps(relativePath)
       .then((response) => {
@@ -140,7 +140,8 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
   }
 
   const statusLabel = STATUS_LABELS[activeProject.settings.status];
-  const loadedCurrentWebApps = loadedWebApps?.relativePath === activeProject.relativePath ? loadedWebApps.webApps : null;
+  const loadedCurrentWebApps =
+    loadedWebApps?.relativePath === activeProject.relativePath ? loadedWebApps.webApps : null;
   const webAppStatusSummary = getWebAppStatusSummary(
     Math.max(webAppCount, publishedWebAppCount),
     loadedCurrentWebApps,
@@ -170,9 +171,7 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
           <div className="active-project-status-list">
             <div className="active-project-status-line">
               <span className="active-project-status-label">Endpoint:</span>
-              <span className={`project-status-badge ${activeProject.settings.status}`}>
-                {statusLabel}
-              </span>
+              <span className={`project-status-badge ${activeProject.settings.status}`}>{statusLabel}</span>
             </div>
             <div className="active-project-status-line">
               <span className="active-project-status-label">{webAppStatusSummary.label}:</span>
@@ -206,8 +205,8 @@ export const ActiveProjectSection: FC<ActiveProjectSectionProps> = ({
                 className="active-project-save-button button-size-m"
                 isDisabled={!editorReady}
                 onClick={() => onSave()}
-                title={editorReady ? 'Save current project' : 'Loading editor...'}
-                aria-label={editorReady ? 'Save current project' : 'Loading editor'}
+                title="Save current project"
+                aria-label="Save current project"
               >
                 Save
               </LoadingButton>

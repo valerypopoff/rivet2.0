@@ -1,5 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { JSDOM } from 'jsdom';
+import { buildAgentResponseTrace } from '@valerypopoff/rivet2-core';
 import type {
   AgentTraceEvent,
   ChartNode,
@@ -11,7 +15,8 @@ import type {
   RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { ProcessDataForNode } from '../../state/dataFlow.js';
-import { buildLlmInvocationTrace } from './agentTraceViewModel.js';
+import { buildModelInvocationTrace, hasModelResponseInspector } from './agentTraceViewModel.js';
+import { AgentResponseInspector } from './AgentResponseInspector.js';
 
 const node = { id: 'llm-node' as NodeId, type: 'llmChatV2' } as ChartNode;
 const execution: GraphExecutionMetadata = {
@@ -37,6 +42,87 @@ function modelEvent(processId: ProcessId): AgentTraceEvent {
 }
 
 void describe('agentTraceViewModel', () => {
+  void it('capped legacy classifier traces distinguish retained counts and combined request/decision omissions', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'classifier-invocation',
+      execution,
+      status: 'completed',
+      events: [],
+    });
+    trace.omittedProfileAttemptCount = 5;
+    const document = new JSDOM(
+      renderToStaticMarkup(React.createElement(AgentResponseInspector, { trace, onClose() {} })),
+    );
+    assert.match(document.window.document.body.textContent!, /0 \(retained evidence only\)/);
+    const sections = [...document.window.document.querySelectorAll('details')];
+    assert.equal(
+      sections.some((section) => section.textContent?.includes('omitted')),
+      false,
+    );
+    assert.match(
+      document.window.document.body.textContent!,
+      /5 additional profile-attempt rows \(requests or decisions\) omitted/,
+    );
+    document.window.close();
+    trace.summary.classifierRequestCount = 10;
+    const exact = new JSDOM(renderToStaticMarkup(React.createElement(AgentResponseInspector, { trace, onClose() {} })));
+    const count = [...exact.window.document.querySelectorAll('dt')].find(
+      (label) => label.textContent === 'Classifier requests',
+    )!;
+    assert.equal(count.nextElementSibling?.textContent, '10');
+    exact.window.close();
+  });
+
+  void it('renders legacy mixed classifier metadata and empty classifier decisions without chat-only metrics', () => {
+    const classifierAttempt: AgentTraceEvent = {
+      type: 'llm-profile-attempt',
+      execution,
+      eventId: 'legacy-request',
+      family: 'classifier',
+      nodeId: node.id,
+      processId: 'process' as ProcessId,
+      roundIndex: 0,
+      attemptIndex: 0,
+      provider: 'perplexity',
+      model: 'decider',
+      profileName: 'Legacy classifier',
+      stage: 'request',
+      outcome: 'failure',
+      failureKind: 'authentication',
+      status: 401,
+      error: 'Authentication failed.',
+      durationMs: 250,
+    };
+    const mixed = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      status: 'error',
+      events: [classifierAttempt],
+    });
+    delete mixed.summary.classifierRequestCount;
+    const legacyHtml = renderToStaticMarkup(
+      React.createElement(AgentResponseInspector, { trace: mixed, onClose() {} }),
+    );
+    const legacyDom = new JSDOM(legacyHtml);
+    const legacyText = legacyDom.window.document.body.textContent!;
+    assert.match(legacyText, /Classifier requests/);
+    assert.match(legacyText, /Profile: Legacy classifier/);
+    assert.match(legacyText, /HTTP 401/);
+    assert.match(legacyText, /0.25 sec/);
+    assert.match(legacyText, /Authentication failed/);
+    assert.doesNotMatch(legacyText, /\bround \d/);
+    legacyDom.window.close();
+    const empty = buildAgentResponseTrace({ scope: 'classifier-invocation', execution, status: 'error', events: [] });
+    const emptyDom = new JSDOM(
+      renderToStaticMarkup(React.createElement(AgentResponseInspector, { trace: empty, onClose() {} })),
+    );
+    const emptyText = emptyDom.window.document.body.textContent!;
+    assert.match(emptyText, /No classifier requests recorded/);
+    assert.match(emptyText, /No profile fallback or suspension decisions recorded/);
+    assert.doesNotMatch(emptyText, /Tool calls|Cached input tokens|Reasoning tokens|Model calls/);
+    emptyDom.window.close();
+  });
+
   void it('isolates the selected LLM process while retaining its delegated tools', () => {
     const selectedProcessId = 'selected' as ProcessId;
     const otherProcessId = 'other' as ProcessId;
@@ -90,7 +176,7 @@ void describe('agentTraceViewModel', () => {
       },
     } as unknown as ProcessDataForNode;
 
-    const trace = buildLlmInvocationTrace(node, processData);
+    const trace = buildModelInvocationTrace(node, processData);
 
     assert.equal(trace?.processId, selectedProcessId);
     assert.equal(trace?.modelCalls.length, 1);
@@ -127,12 +213,15 @@ void describe('agentTraceViewModel', () => {
       },
     } as unknown as ProcessDataForNode;
 
-    const trace = buildLlmInvocationTrace(node, processData);
+    const trace = buildModelInvocationTrace(node, processData);
 
     assert.equal(trace?.startedAt, 50_000);
     assert.equal(trace?.finishedAt, 146_000);
     assert.equal(trace?.durationMs, 96_000);
-    assert.deepEqual(trace?.modelCalls.map((call) => call.durationMs), [undefined, 40_000, 15_000]);
+    assert.deepEqual(
+      trace?.modelCalls.map((call) => call.durationMs),
+      [undefined, 40_000, 15_000],
+    );
   });
 
   void it('does not combine a partial recorded clock with the local replay receipt clock', () => {
@@ -150,7 +239,7 @@ void describe('agentTraceViewModel', () => {
       },
     } as unknown as ProcessDataForNode;
 
-    const trace = buildLlmInvocationTrace(node, processData);
+    const trace = buildModelInvocationTrace(node, processData);
 
     assert.equal(trace?.startedAt, 50_000);
     assert.equal(trace?.finishedAt, undefined);
@@ -166,6 +255,60 @@ void describe('agentTraceViewModel', () => {
       data: { status: { type: 'ok' } },
     } as unknown as ProcessDataForNode;
 
-    assert.equal(buildLlmInvocationTrace(node, processData), undefined);
+    assert.equal(buildModelInvocationTrace(node, processData), undefined);
+  });
+
+  void it('offers the same inspector for classifiers and isolates failed and split invocations', () => {
+    const classifier = { ...node, type: 'classifierEvaluate' } as ChartNode;
+    assert.equal(hasModelResponseInspector(classifier), true);
+    assert.equal(hasModelResponseInspector({ ...node, type: 'text' } as ChartNode), false);
+    const processId = 'classifier-selected' as ProcessId;
+    const attempt: AgentTraceEvent = {
+      type: 'llm-profile-attempt',
+      execution,
+      eventId: 'request',
+      nodeId: node.id,
+      processId,
+      family: 'classifier',
+      provider: 'perplexity',
+      model: 'decider',
+      profileName: 'Fast classifier',
+      profileIndex: 0,
+      roundIndex: 0,
+      attemptIndex: 0,
+      stage: 'request',
+      outcome: 'failure',
+      status: 401,
+      failureKind: 'authentication',
+      error: 'Authentication failed.',
+    };
+    const processData = {
+      ...execution,
+      processId,
+      data: {
+        status: { type: 'error' },
+        durationMs: 500,
+        recordedTiming: { startedAt: 100, finishedAt: 600 },
+        agentTraceEvents: [
+          attempt,
+          { ...attempt },
+          { ...attempt, processId: 'other' as ProcessId },
+          { ...attempt, execution: { ...execution, graphRunId: 'neighbor' as GraphRunId } },
+        ],
+      },
+    } as unknown as ProcessDataForNode;
+    const trace = buildModelInvocationTrace(classifier, processData)!;
+    assert.equal(trace.scope, 'classifier-invocation');
+    assert.equal(trace.status, 'error');
+    assert.equal(trace.durationMs, 500);
+    assert.equal(trace.summary.classifierRequestCount, 1);
+    assert.equal(trace.summary.modelCallCount, 0);
+    assert.equal(trace.summary.costStatus, 'unknown');
+    assert.equal(trace.profileAttempts?.length, 1);
+    assert.equal(trace.profileAttempts?.[0]?.profileName, 'Fast classifier');
+    assert.equal(
+      buildModelInvocationTrace(classifier, { ...processData, data: { status: { type: 'ok' } } }),
+      undefined,
+    );
   });
 });

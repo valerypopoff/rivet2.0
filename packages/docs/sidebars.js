@@ -220,7 +220,11 @@ const sidebars = {
       label: 'Classifier',
       collapsible: true,
       collapsed: false,
-      items: ['node-reference/classifier-question', 'node-reference/classifier-evaluate'],
+      items: [
+        'node-reference/classifier-question',
+        'node-reference/classifier-profile',
+        'node-reference/classifier-evaluate',
+      ],
     },
     {
       type: 'category',

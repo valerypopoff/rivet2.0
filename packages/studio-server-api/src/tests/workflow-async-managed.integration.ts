@@ -7,18 +7,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
-import {
-  S3Client,
-  CreateBucketCommand,
-  DeleteBucketCommand,
-  ListObjectsV2Command,
-} from '@aws-sdk/client-s3';
+import { S3Client, CreateBucketCommand, DeleteBucketCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import { parseManagedArtifactDescriptor } from '../routes/workflows/managed/artifact-descriptor.js';
 import { isManagedWorkflowArtifactObjectKey } from '../routes/workflows/managed/blob-store.js';
 import { startAsyncWorkflowProcess } from './helpers/workflow-async-process.js';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
+import { verifyClassifierHealthContract } from './helpers/classifier-health-contract.js';
+import { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
+import { verifyManagedEvaluationHistoryCursorContract } from './helpers/evaluation-history-managed-contract.js';
+import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evaluation-projection-contract.js';
+import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
+import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
+import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -77,6 +79,18 @@ try {
     }
   }
   await migrateManagedWorkflowSchema(pool);
+  await verifyManagedEvaluationHistoryCursorContract(pool);
+  await verifyHostedEvaluationProjectionContract(pool);
+  console.log(
+    'Hosted Evaluation compact progress: complete evidence, rename, interruption/retry, cancellation and finalization passed.',
+  );
+  console.log(
+    'Managed Evaluation history: microsecond pagination under non-ISO DateStyle and non-UTC time zone passed.',
+  );
+  await verifyClassifierHealthContract([
+    new PostgresRivetLLMProfileHealthStore(pool),
+    new PostgresRivetLLMProfileHealthStore(pool),
+  ]);
   s3 = new S3Client({
     endpoint: `http://127.0.0.1:${s3Port}`,
     region: 'eu-west-7',
@@ -126,14 +140,22 @@ try {
   const managedSettings = await import('../app-settings/managed-settings-store.js');
   const deploymentSettings = await import('../deployment-storage-settings.js');
   try {
-    await settingsRepository.configureAppSettingsBackendForTests(managedSettings.createPostgresAppSettingsBackendFromEnv());
+    await settingsRepository.configureAppSettingsBackendForTests(
+      managedSettings.createPostgresAppSettingsBackendFromEnv(),
+    );
     const seeded = await deploymentSettings.deploymentStorageSettingsRepository.initialize();
     assert.equal(seeded.value.objectStoragePrefix, 'tenant/async-workflows/');
     assert.equal(seeded.value.storageAccessKey, 'asyncfixturesecret');
-    assert.equal((await pool.query("SELECT count(*)::int AS count FROM app_settings WHERE setting_key = 'deployment storage'")).rows[0].count, 1);
+    assert.equal(
+      (await pool.query("SELECT count(*)::int AS count FROM app_settings WHERE setting_key = 'deployment storage'"))
+        .rows[0].count,
+      1,
+    );
     process.env.RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY = 'changed-helm-credential';
     delete process.env.RIVET_DEPLOYMENT_STORAGE_SEED_MISSING;
-    await settingsRepository.configureAppSettingsBackendForTests(managedSettings.createPostgresAppSettingsBackendFromEnv());
+    await settingsRepository.configureAppSettingsBackendForTests(
+      managedSettings.createPostgresAppSettingsBackendFromEnv(),
+    );
     const existing = await deploymentSettings.deploymentStorageSettingsRepository.initialize();
     assert.equal(existing.value.storageAccessKey, 'asyncfixturesecret');
     assert.equal(await fs.readdir(settingsRoot).then((files) => files.length), 0);
@@ -148,27 +170,32 @@ try {
   let runtimeConfigAvailable = false;
   let unavailableRuntimeConfigRequests = 0;
   let runtimeProxy = '';
-  const runtimeConfig = await listenTestServer(http.createServer((req, res) => {
-    const expected = (scope: string) =>
-      createHash('sha256').update(`async-fixture-key:${scope}`).digest('hex');
-    if (req.url !== '/internal/executor-runtime-config' ||
-      req.headers['x-rivet-proxy-auth'] !== expected('proxy-auth') ||
-      req.headers['x-rivet-executor-auth'] !== expected('executor-internal')) {
-      res.writeHead(403).end();
-      return;
-    }
-    if (!runtimeConfigAvailable) {
-      unavailableRuntimeConfigRequests += 1;
-      res.writeHead(503).end();
-      return;
-    }
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({
-      protocolVersion: 1,
-      storage: storageSettings,
-      proxy: { httpProxy: '', httpsProxy: runtimeProxy, noProxy: '127.0.0.1' },
-    }));
-  }));
+  const runtimeConfig = await listenTestServer(
+    http.createServer((req, res) => {
+      const expected = (scope: string) => createHash('sha256').update(`async-fixture-key:${scope}`).digest('hex');
+      if (
+        req.url !== '/internal/executor-runtime-config' ||
+        req.headers['x-rivet-proxy-auth'] !== expected('proxy-auth') ||
+        req.headers['x-rivet-executor-auth'] !== expected('executor-internal')
+      ) {
+        res.writeHead(403).end();
+        return;
+      }
+      if (!runtimeConfigAvailable) {
+        unavailableRuntimeConfigRequests += 1;
+        res.writeHead(503).end();
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          protocolVersion: 1,
+          storage: storageSettings,
+          proxy: { httpProxy: '', httpsProxy: runtimeProxy, noProxy: '127.0.0.1' },
+        }),
+      );
+    }),
+  );
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-settings-'));
   const executorAppDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-executor-settings-'));
   try {
@@ -190,12 +217,7 @@ try {
         }
       });
     `;
-    const child = spawn(process.execPath, [
-      '--import', bootstrapUrl,
-      '-e',
-      executorProbe,
-      'executor-bundle',
-    ], {
+    const child = spawn(process.execPath, ['--import', bootstrapUrl, '-e', executorProbe, 'executor-bundle'], {
       env: {
         ...process.env,
         RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
@@ -209,8 +231,12 @@ try {
       windowsHide: true,
     });
     let output = '';
-    child.stdout.on('data', (data) => { output += String(data); });
-    child.stderr.on('data', (data) => { output += String(data); });
+    child.stdout.on('data', (data) => {
+      output += String(data);
+    });
+    child.stderr.on('data', (data) => {
+      output += String(data);
+    });
     try {
       const unavailableDeadline = Date.now() + 15_000;
       while (unavailableRuntimeConfigRequests === 0 && Date.now() < unavailableDeadline) await delay(50);
@@ -222,19 +248,21 @@ try {
       assert.match(output, /EXECUTOR_READY none/);
       runtimeProxy = 'http://proxy-updated.invalid:3128';
       const refreshDeadline = Date.now() + 15_000;
-      while (!output.includes('EXECUTOR_REFRESHED http://proxy-updated.invalid:3128') && Date.now() < refreshDeadline) await delay(50);
+      while (!output.includes('EXECUTOR_REFRESHED http://proxy-updated.invalid:3128') && Date.now() < refreshDeadline)
+        await delay(50);
       assert.match(output, /EXECUTOR_REFRESHED http:\/\/proxy-updated\.invalid:3128/);
       const requestsBeforeInterruption = unavailableRuntimeConfigRequests;
       runtimeConfigAvailable = false;
       const interruptionDeadline = Date.now() + 15_000;
-      while (unavailableRuntimeConfigRequests === requestsBeforeInterruption && Date.now() < interruptionDeadline) await delay(50);
+      while (unavailableRuntimeConfigRequests === requestsBeforeInterruption && Date.now() < interruptionDeadline)
+        await delay(50);
       assert.ok(unavailableRuntimeConfigRequests > requestsBeforeInterruption, output);
       child.stdin.write('CHECK\n');
       const retainedDeadline = Date.now() + 5_000;
       while (!output.includes('EXECUTOR_RETAINED') && Date.now() < retainedDeadline) await delay(50);
       assert.match(output, /EXECUTOR_RETAINED http:\/\/proxy-updated\.invalid:3128/);
       child.stdin.write('EXIT\n');
-      const exitCode = child.exitCode ?? await new Promise<number | null>((resolve) => child.once('exit', resolve));
+      const exitCode = child.exitCode ?? (await new Promise<number | null>((resolve) => child.once('exit', resolve)));
       assert.equal(exitCode, 0, output);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
@@ -253,6 +281,30 @@ try {
   // the isolated executor bootstrap check has finished.
   await s3.send(new DeleteBucketCommand({ Bucket: 'async-recordings' }));
   api = await startAsyncWorkflowProcess({ storage: storageSettings });
+  // Run after the empty-bucket/first-install check. Publication writes immutable
+  // objects whose deletion is intentionally deferred, even after project deletion.
+  const publicationBackend = new ManagedWorkflowBackend(
+    getManagedWorkflowStorageConfigFromSettings({
+      ...storageSettings,
+      storageMode: 'managed',
+      databaseMode: 'managed',
+      databaseSslMode: 'disable',
+      source: 'default',
+      updatedAt: null,
+      artifactsHostPath: '',
+    }),
+    undefined,
+    { migrationMode: 'copy' },
+  );
+  try {
+    await publicationBackend.initialize();
+    await verifyWorkflowPublicationContract(publicationBackend);
+    console.log(
+      'Shared SQL publication contract: PostgreSQL route ownership, reviewed state and endpoint/web-app independence passed.',
+    );
+  } finally {
+    await publicationBackend.dispose();
+  }
   await verifyProjectBundleDownload({
     workflowsBaseUrl: `${api.baseUrl}/api/workflows`,
     projectsBaseUrl: `${api.baseUrl}/api/projects`,
@@ -264,9 +316,11 @@ try {
   const exportNamespaces = await fs.readdir(path.join(api.root, 'exports'));
   assert.equal(exportNamespaces.length, 1);
   assert.deepEqual(
-    await fs.readdir(path.join(api.root, 'exports', exportNamespaces[0]!)), [],
+    await fs.readdir(path.join(api.root, 'exports', exportNamespaces[0]!)),
+    [],
     'completed downloads were disposed',
   );
+  const recordedRunIds = new Set<string>();
   for (const [index, route] of ['/workflows', '/internal/workflows', '/workflows-latest'].entries()) {
     const value = `${tail.baseUrl}/${index}`;
     const response: Response = await fetch(`${api.baseUrl}${route}/async-acceptance`, {
@@ -292,7 +346,13 @@ try {
       if (Date.now() >= end) throw new Error('Managed recording did not persist');
       if (page.runs.length <= index) await delay(10);
     } while (page.runs.length <= index);
-    assert.equal(page.runs[0]!.status, index === 1 ? 'failed' : 'succeeded');
+    // Verify this request's recording, not whichever timestamp sorts first.
+    // A host clock adjustment must not make us inspect an earlier request.
+    const newRuns = page.runs.filter((run) => !recordedRunIds.has(run.id));
+    assert.equal(newRuns.length, 1, JSON.stringify(page.runs));
+    const recordedRun = newRuns[0]!;
+    assert.equal(recordedRun.status, index === 1 ? 'failed' : 'succeeded', JSON.stringify(page.runs));
+    recordedRunIds.add(recordedRun.id);
     assert.equal((await api.command<{ active: number }>('snapshot')).active, 0);
     const replays: Array<{ tails: unknown[] }> = await api.command('replay');
     assert.equal(replays.length, index + 1);
@@ -306,10 +366,7 @@ try {
   assert.ok(keys.every((key) => key.startsWith(prefix)));
   const artifactPaths = keys.map((key) => {
     const relativeKey = key.slice(prefix.length);
-    assert.ok(
-      isManagedWorkflowArtifactObjectKey(relativeKey),
-      'stored workflow objects use the recognized grammar',
-    );
+    assert.ok(isManagedWorkflowArtifactObjectKey(relativeKey), 'stored workflow objects use the recognized grammar');
     assert.ok(parseManagedArtifactDescriptor(relativeKey), 'new artifacts carry immutable integrity descriptors');
     return relativeKey.slice(0, relativeKey.lastIndexOf('.artifact-v1.'));
   });

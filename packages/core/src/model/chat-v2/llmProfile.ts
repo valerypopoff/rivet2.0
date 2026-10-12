@@ -33,7 +33,7 @@ const credentialSources = new Set<ChatV2CredentialReference['source']>([
   'environment',
   'none',
 ]);
-const profileProviders = new Set<ChatV2Provider>(['openai', 'anthropic', 'google', 'custom']);
+const profileProviders = new Set<ChatV2Provider>(['openai', 'anthropic', 'google', 'openrouter', 'custom']);
 
 export function normalizeLLMProfileValue(value: unknown): LLMProfileValue {
   if (!isRecord(value)) {
@@ -184,6 +184,11 @@ function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
     throw new Error(`Unsupported LLM Profile API key source: ${String(data.apiKeySource)}.`);
   }
   assertEnumValue(data.openAIWebSearchContextSize, ['low', 'medium', 'high'], 'OpenAI web search context');
+  assertEnumValue(
+    data.openRouterReasoningEffort ?? '',
+    ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    'OpenRouter reasoning effort',
+  );
   const customProviderApi = parseCustomProviderApi(data.customProviderApi);
   assertEnumValue(data.anthropicThinkingMode, ['', 'adaptive', 'enabled', 'disabled'], 'Anthropic thinking mode');
   assertEnumValue(data.anthropicEffort, ['', 'low', 'medium', 'high', 'max'], 'Anthropic effort');

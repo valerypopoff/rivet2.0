@@ -23,6 +23,7 @@ export interface Settings<PluginSettings = Record<string, Record<string, unknown
   openAiKey?: string;
   anthropicApiKey?: string;
   googleApiKey?: string;
+  openRouterApiKey?: string;
   customAiApiKey?: string;
   openAiOrganization?: string;
   openAiEndpoint?: string;

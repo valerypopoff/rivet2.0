@@ -90,7 +90,9 @@ function TunnelDevelopmentUpdates({
   useEffect(() => {
     if (import.meta.env.VITE_TUNNEL_DEV !== 'true' || !getDevelopmentGeneration()) return;
     // Reconnection reports status; only a successful new generation can refresh.
-    const events = new EventSource('/__rivet_dev/events');
+    // Keep this document's immutable chunks available while refresh is unsafe,
+    // even if many newer frontend builds have been published.
+    const events = new EventSource(`/__rivet_dev/events?generation=${encodeURIComponent(getDevelopmentGeneration()!)}`);
     events.onmessage = (event) => {
       let build: BuildStatus;
       try {

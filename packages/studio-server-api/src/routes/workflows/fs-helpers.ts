@@ -1,3 +1,4 @@
+import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -72,32 +73,9 @@ export function resolveWorkflowRelativePath(
     allowEmpty?: boolean;
   },
 ): string {
-  if (typeof relativePath !== 'string') {
-    if (options.allowEmpty && (relativePath == null || relativePath === '')) {
-      return root;
-    }
-
-    throw badRequest('Missing relativePath');
-  }
-
-  const normalized = relativePath.replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '');
-
-  if (!normalized) {
-    if (options.allowEmpty) {
-      return root;
-    }
-
-    throw badRequest('Missing relativePath');
-  }
-
+  const normalized = normalizeWorkflowRelativePath(relativePath, options);
+  if (!normalized) return root;
   const segments = normalized.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.startsWith('.'))) {
-    throw badRequest('Invalid relativePath');
-  }
-
-  if (!options.allowProjectFile && normalized.endsWith(PROJECT_EXTENSION)) {
-    throw badRequest('Expected folder path, received project path');
-  }
 
   return validatePath(path.join(root, ...segments));
 }
@@ -241,7 +219,10 @@ export async function deleteProjectWithSidecars(projectPath: string): Promise<vo
   }
 }
 
-export async function deleteWorkflowProjectRecordings(root: string, projectMetadataId: string | null | undefined): Promise<void> {
+export async function deleteWorkflowProjectRecordings(
+  root: string,
+  projectMetadataId: string | null | undefined,
+): Promise<void> {
   if (!projectMetadataId) {
     return;
   }

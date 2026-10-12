@@ -196,9 +196,9 @@ const wiresStyles = css`
   }
 
   .wire-bend-point {
-    fill: var(--grey-dark);
+    fill: var(--node-port-bg);
     pointer-events: none;
-    stroke: var(--primary);
+    stroke: var(--node-port-border);
     stroke-width: 2px;
     vector-effect: non-scaling-stroke;
   }
@@ -208,18 +208,15 @@ const wiresStyles = css`
     pointer-events: all;
   }
 
-  .wire-bend-point:hover,
-  .wire-bend-point.dragging,
   .wire-bend-point.selected {
     fill: var(--primary);
+    stroke: var(--primary-dark);
   }
 
   .wire-bend-point-ghost {
     cursor: inherit;
-    fill: var(--primary);
     opacity: 0.5;
     pointer-events: none;
-    stroke: var(--primary-dark);
   }
 `;
 

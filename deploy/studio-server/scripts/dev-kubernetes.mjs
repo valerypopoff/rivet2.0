@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { withLauncherProgress } from './lib/launcher-progress.mjs';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import { assertNoRetiredEnv } from './lib/docker-launcher-env.mjs';
 import { assertValidPort, ensurePortAvailable } from './lib/docker-launcher.mjs';
@@ -54,7 +56,7 @@ function resolveMinikubeBin(env) {
   return process.platform === 'win32' ? 'minikube.exe' : 'minikube';
 }
 
-function spawnProgram(program, args, options = {}) {
+export function spawnProgram(program, args, options = {}) {
   const {
     cwd = rootDir,
     env = process.env,
@@ -65,47 +67,51 @@ function spawnProgram(program, args, options = {}) {
     stdio = 'inherit',
   } = options;
 
-  return new Promise((resolve, reject) => {
-    const child = spawn(program, args, {
-      cwd,
-      env,
-      shell: false,
-      detached,
-      windowsHide: true,
-      stdio: capture ? ['pipe', 'pipe', 'pipe'] : input != null ? ['pipe', stdio, stdio] : stdio,
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    if (capture) {
-      child.stdout.on('data', (chunk) => {
-        stdout += String(chunk);
+  const operation = () =>
+    new Promise((resolve, reject) => {
+      const child = spawn(program, args, {
+        cwd,
+        env,
+        shell: false,
+        detached,
+        windowsHide: true,
+        stdio: capture ? ['pipe', 'pipe', 'pipe'] : input != null ? ['pipe', stdio, stdio] : stdio,
       });
 
-      child.stderr.on('data', (chunk) => {
-        stderr += String(chunk);
-      });
-    }
+      let stdout = '';
+      let stderr = '';
 
-    if (input != null && child.stdin) {
-      child.stdin.end(input);
-    }
+      if (capture) {
+        child.stdout.on('data', (chunk) => {
+          stdout += String(chunk);
+        });
 
-    child.on('error', reject);
-    child.on('exit', (code) => {
-      const exitCode = code == null ? 1 : code;
-      if (exitCode === 0 || allowFailure) {
-        resolve({ exitCode, stdout, stderr });
-        return;
+        child.stderr.on('data', (chunk) => {
+          stderr += String(chunk);
+        });
       }
 
-      const commandLine = [program, ...args].map(quoteArg).join(' ');
-      reject(
-        new Error(`Command failed with exit code ${exitCode}: ${commandLine}${stderr ? `\n${stderr}` : ''}`.trim()),
-      );
+      if (input != null && child.stdin) {
+        child.stdin.end(input);
+      }
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        const exitCode = code == null ? 1 : code;
+        if (exitCode === 0 || allowFailure) {
+          resolve({ exitCode, stdout, stderr });
+          return;
+        }
+
+        const commandLine = [program, ...args].map(quoteArg).join(' ');
+        reject(
+          new Error(`Command failed with exit code ${exitCode}: ${commandLine}${stderr ? `\n${stderr}` : ''}`.trim()),
+        );
+      });
     });
-  });
+  return ['build', 'up', 'dev', 'recreate'].includes(action)
+    ? withLauncherProgress(launcherName, `${path.basename(program)} ${args[0] ?? 'startup check'}`, operation)
+    : operation();
 }
 
 async function ensureCommandWorks(program, args, label, env) {
@@ -827,7 +833,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}

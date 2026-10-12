@@ -79,6 +79,22 @@ test('project global variable validation rejects unsupported runtime values and 
   assert.throws(() => decodeProjectGlobalVariable({ type: 'any[]', value: sparse }), /sparse array/);
 });
 
+test('project global variables preserve nonempty classifier profile arrays and reject malformed profile envelopes', () => {
+  const profile = { ...getDefaultValue('classifier-config'), profileName: 'Primary', sourceNodeId: 'profile-source' };
+  const definition = encodeProjectGlobalVariable({ type: 'classifier-config[]', value: [profile] } as never);
+  const decoded = decodeProjectGlobalVariable(JSON.parse(JSON.stringify(definition)));
+  assert.deepEqual(decoded, { type: 'classifier-config[]', value: [profile] });
+  for (const value of [
+    null,
+    { version: 2, configuration: {}, credential: {} },
+    { version: 1, configuration: [], credential: {} },
+    { version: 1, configuration: {}, credential: null },
+  ]) {
+    assert.throws(() => encodeProjectGlobalVariable({ type: 'classifier-config', value } as never));
+    assert.throws(() => decodeProjectGlobalVariable({ type: 'classifier-config', value }));
+  }
+});
+
 function project(
   id: string,
   globalVariables: Project['metadata']['globalVariables'],

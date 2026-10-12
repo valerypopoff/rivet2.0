@@ -144,6 +144,19 @@ void test(
       );
     }
 
+    const forbidden = collectRun(socket, 'forbidden-local-bundle', t.signal);
+    socket.send(
+      JSON.stringify({
+        type: 'run',
+        data: {
+          requestId: 'forbidden-local-bundle',
+          graphId: 'main',
+          projectBundle: { manifestPath: 'must-not-read.json', artifactId: 'root' },
+        },
+      }),
+    );
+    await assert.rejects(forbidden, /does not accept local desktop project bundles/);
+
     function makeUnusedOutputProject(skipUnusedOutputs: boolean) {
       const node = (type: string, id: string, data: Record<string, unknown>): ChartNode => ({
         type,

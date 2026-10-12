@@ -1,0 +1,26 @@
+diff --git a/dist/cjs/fromFile.js b/dist/cjs/fromFile.js
+index 19e6aa053f9b27f640e565aca32a847505f6e5f0..a2e2578b3b203a8c6527602e01ab4e7e0a9c0dd5 100644
+--- a/dist/cjs/fromFile.js
++++ b/dist/cjs/fromFile.js
+@@ -60,7 +60,7 @@ const processQueue = async () => {
+                 throw new Error('Empty file');
+             }
+             const inputSize = Math.min(size, MaxInputSize);
+-            const input = new Uint8Array(inputSize);
++            const input = Buffer.alloc(inputSize);
+             await handle.read(input, 0, inputSize, 0);
+             resolve((0, lookup_1.imageSize)(input));
+         }
+diff --git a/dist/esm/fromFile.js b/dist/esm/fromFile.js
+index fe50d017a8f6e01e36df1c28a351fcaa8a16fc8d..6578ea4ca1b8ac8875e2bcfa1d26d8b13c85a478 100644
+--- a/dist/esm/fromFile.js
++++ b/dist/esm/fromFile.js
+@@ -23,7 +23,7 @@ const processQueue = async () => {
+                 throw new Error('Empty file');
+             }
+             const inputSize = Math.min(size, MaxInputSize);
+-            const input = new Uint8Array(inputSize);
++            const input = Buffer.alloc(inputSize);
+             await handle.read(input, 0, inputSize, 0);
+             resolve(imageSize(input));
+         }

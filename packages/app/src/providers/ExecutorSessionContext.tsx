@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, type FC, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
+import { useBundleExecutionRouting } from '../hooks/useBundleExecutionRouting.js';
 import { type ProcessEventMessageMap, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 import {
   createExecutorSessionRuntime,
@@ -11,6 +12,7 @@ import { executorSessionRevisionState } from '../state/execution.js';
 import { projectsState, projectState } from '../state/savedGraphs.js';
 import { useDataRefs, useDatasetProvider, type AppDatasetProvider } from './ProvidersContext.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
+import { previousDataPerNodeToKeepState } from '../state/settings.js';
 import {
   createUnscopedRemoteExecutionRoutingState,
   getRemoteExecutionEventDispatchDecision,
@@ -152,6 +154,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
   const datasetProvider = useDatasetProvider();
   const dataRefs = useDataRefs();
   const store = useStore();
+  const routeBundleExecution = useBundleExecutionRouting();
   const bumpExecutorSessionRevision = useSetAtom(executorSessionRevisionState);
 
   const registry = useMemo(
@@ -183,10 +186,6 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
 
     const unsubscribeMessages = registry.subscribeMessagesForAllProjects(
       (projectId, runtime, message, data, requestId) => {
-        if (!shouldRouteInactiveProjectEvent(projectId)) {
-          return;
-        }
-
         const runtimeState = runtime.getRuntimeState();
 
         const routingState = routingStatesByProjectId.get(projectId) ?? createUnscopedRemoteExecutionRoutingState();
@@ -200,6 +199,9 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           requestId,
           unscopedRoutingState: routingState,
         });
+        if (dispatchDecision.shouldDispatch && runtimeState.target?.type === 'internal-desktop')
+          routeBundleExecution(projectId, message, data);
+        if (!shouldRouteInactiveProjectEvent(projectId)) return;
         const shouldFlushFrozenOutputs = shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
           alreadyFlushed: false,
           message,
@@ -242,6 +244,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
             projectId,
             refStore: dataRefs,
             snapshots: previousSnapshots,
+            previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
           }),
         );
       },
@@ -265,7 +268,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
       unsubscribeMessages();
       unsubscribeDisconnects();
     };
-  }, [dataRefs, registry, store]);
+  }, [dataRefs, registry, store, routeBundleExecution]);
 
   useEffect(() => {
     return () => {

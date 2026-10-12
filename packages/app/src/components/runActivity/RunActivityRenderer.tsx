@@ -5,7 +5,6 @@ import {
   type NodeGraph,
   type NodeRunActivityDescriptor,
   type PortId,
-  type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { type FC, useEffect, useMemo, useState } from 'react';
@@ -38,7 +37,7 @@ import {
 import { copyToClipboard } from '../../utils/copyToClipboard.js';
 import { hasStoredPortMapValues, hasStoredSplitOutputValues } from '../../utils/executionDataReaders.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
-import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
+import { buildModelInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import { RunActivityDrawer } from './RunActivityDrawer.js';
 import {
   areRunActivityColumnWidthsEqual,
@@ -51,7 +50,11 @@ import {
   type ResolveRunActivityInvocation,
 } from './buildRunActivityViewModel.js';
 import type { RunActivityInvocationIdentity, RunActivityItemViewModel, RunActivityToolResultTarget } from './types.js';
-import { shouldCloseRunActivityInspector } from './runActivityInspectorLifecycle.js';
+import {
+  findExactProcessData,
+  resolveRunActivityInspectorTrace,
+  shouldCloseRunActivityInspector,
+} from './runActivityInspectorLifecycle.js';
 
 const LIVE_DURATION_REFRESH_MS = 250;
 const NARROW_VIEWPORT_QUERY = '(max-width: 720px)';
@@ -67,11 +70,7 @@ export const RunActivityRenderer: FC = () => {
   const currentGraph = useAtomValue(graphState);
   const registry = useProjectNodeRegistry();
   const [now, setNow] = useState(() => Date.now());
-  const [inspectedProcess, setInspectedProcess] = useState<{
-    node: ChartNode;
-    processData: ProcessDataForNode;
-    rootRunId: RootRunId;
-  }>();
+  const [inspectedIdentity, setInspectedIdentity] = useState<RunActivityInvocationIdentity>();
   const goToNode = useGoToNode();
   const setOpenOverlay = useSetAtom(overlayOpenState);
   const setSelectedGraphRunByView = useSetAtom(selectedGraphRunByViewState);
@@ -80,7 +79,7 @@ export const RunActivityRenderer: FC = () => {
   const setEditingNode = useSetAtom(editingNodeState);
   const setFullscreenOutputNode = useSetAtom(fullscreenOutputNodeState);
   const selectedRoot = selectRunActivityRoot(journal);
-  const inspectedRootRunId = inspectedProcess?.rootRunId;
+  const inspectedRootRunId = inspectedIdentity?.rootRunId;
   const columnWidths = useMemo(() => normalizeRunActivityColumnWidths(storedColumnWidths), [storedColumnWidths]);
 
   useEffect(() => {
@@ -91,7 +90,7 @@ export const RunActivityRenderer: FC = () => {
         selectedRootRunId: selectedRoot?.rootRunId,
       })
     ) {
-      setInspectedProcess(undefined);
+      setInspectedIdentity(undefined);
     }
   }, [inspectedRootRunId, open, selectedRoot?.rootRunId]);
 
@@ -150,7 +149,7 @@ export const RunActivityRenderer: FC = () => {
         (executor?.parentGraphId === root.rootGraphId ? getNonEmptyLabel(root.rootGraphName) : undefined) ??
         'Unavailable caller graph';
       const hasStoredOutput = processData ? processHasStoredOutput(processData) : false;
-      const responseTrace = effectiveNode ? buildLlmInvocationTrace(effectiveNode, processData) : undefined;
+      const responseTrace = effectiveNode ? buildModelInvocationTrace(effectiveNode, processData) : undefined;
 
       return {
         graphName: graph?.metadata?.name,
@@ -247,13 +246,8 @@ export const RunActivityRenderer: FC = () => {
   });
 
   const handleInspectResponse = useStableCallback((item: RunActivityItemViewModel) => {
-    const graph = getCurrentGraphDefinition(project.graphs[item.graphId], currentGraph, item.graphId);
-    const sourceNode = graph?.nodes.find((node) => node.id === item.identity.nodeId);
-    const processData = findExactProcessData(runDataByNode, item.identity);
-    if (!sourceNode || !processData) return;
-    const effectiveNode = resolveNodePrefabInstance(project, sourceNode);
-    if (!buildLlmInvocationTrace(effectiveNode, processData)) return;
-    setInspectedProcess({ node: effectiveNode, processData, rootRunId: item.identity.rootRunId });
+    if (!resolveRunActivityInspectorTrace(project, currentGraph, runDataByNode, item.identity)) return;
+    setInspectedIdentity(item.identity);
   });
 
   const handleCopyDiagnostics = useStableCallback(() => {
@@ -278,6 +272,7 @@ export const RunActivityRenderer: FC = () => {
         startedAt: item.startedAt,
         durationMs: item.durationMs,
         modelCallCount: item.modelCallCount,
+        classifierRequestCount: item.classifierRequestCount,
         toolCallCount: item.toolCallCount,
       })),
     };
@@ -288,10 +283,10 @@ export const RunActivityRenderer: FC = () => {
 
   const inspectedTrace = useMemo(
     () =>
-      inspectedProcess == null
+      inspectedIdentity == null
         ? undefined
-        : buildLlmInvocationTrace(inspectedProcess.node, inspectedProcess.processData),
-    [inspectedProcess],
+        : resolveRunActivityInspectorTrace(project, currentGraph, runDataByNode, inspectedIdentity),
+    [currentGraph, inspectedIdentity, project, runDataByNode],
   );
 
   return (
@@ -310,8 +305,8 @@ export const RunActivityRenderer: FC = () => {
         onInspectResponse={handleInspectResponse}
         onCopyDiagnostics={handleCopyDiagnostics}
       />
-      {inspectedProcess && (
-        <AgentResponseInspector trace={inspectedTrace} onClose={() => setInspectedProcess(undefined)} renderInPortal />
+      {inspectedIdentity && (
+        <AgentResponseInspector trace={inspectedTrace} onClose={() => setInspectedIdentity(undefined)} renderInPortal />
       )}
     </>
   );
@@ -349,13 +344,6 @@ function getNonEmptyLabel(value: string | undefined): string | undefined {
   return normalized ? normalized : undefined;
 }
 
-function findExactProcessData(
-  runDataByNode: RunDataByNodeId,
-  identity: RunActivityInvocationIdentity,
-): ProcessDataForNode | undefined {
-  return runDataByNode[identity.nodeId]?.find((process) => matchesExactProcess(process, identity));
-}
-
 function findExactProcessPage(runDataByNode: RunDataByNodeId, identity: RunActivityInvocationIdentity) {
   const graphProcesses =
     runDataByNode[identity.nodeId]?.filter(
@@ -366,15 +354,6 @@ function findExactProcessPage(runDataByNode: RunDataByNodeId, identity: RunActiv
     ) ?? [];
   const page = graphProcesses.findIndex((process) => process.processId === identity.processId);
   return page < 0 ? undefined : page;
-}
-
-function matchesExactProcess(process: ProcessDataForNode, identity: RunActivityInvocationIdentity): boolean {
-  return (
-    process.rootRunId === identity.rootRunId &&
-    process.graphRunId === identity.graphRunId &&
-    process.processId === identity.processId &&
-    (process.graphId == null || process.graphId === identity.graphId)
-  );
 }
 
 function processHasStoredOutput(processData: ProcessDataForNode): boolean {

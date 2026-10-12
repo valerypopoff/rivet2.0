@@ -25,6 +25,7 @@ export const Port: FC<{
   nodeId: NodeId;
   id: PortId;
   connected?: boolean;
+  connectionWarning?: boolean;
   canDragTo: boolean;
   closest: boolean;
   preservePortCase?: boolean;
@@ -63,6 +64,7 @@ export const Port: FC<{
     nodeId,
     id,
     connected,
+    connectionWarning = false,
     canDragTo,
     closest,
     definition,
@@ -119,7 +121,7 @@ export const Port: FC<{
         draggingDataType,
         portDataType: definition.dataType,
         canCoerce: definitionAsNodeInputDefinition.coerced ?? true,
-        isInput: input,
+        isInput: input && (!connected || closest),
       });
 
       if (status === 'none') {
@@ -127,7 +129,7 @@ export const Port: FC<{
       }
 
       return status;
-    }, [draggingDataType, definition.dataType, definitionAsNodeInputDefinition.coerced, input]);
+    }, [draggingDataType, definition.dataType, definitionAsNodeInputDefinition.coerced, input, connected, closest]);
 
     return (
       <div
@@ -136,6 +138,8 @@ export const Port: FC<{
           'port',
           {
             connected,
+            'connection-warning':
+              input && connected && connectionWarning && !(closest && draggingDataType !== undefined),
             closest,
             reorderable,
             'reorder-dragging-source': reorderDragging,

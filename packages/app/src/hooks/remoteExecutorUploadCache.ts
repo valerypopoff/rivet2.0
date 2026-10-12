@@ -8,18 +8,18 @@ export type RemoteExecutorUploadCache = {
 
 export type RemoteExecutorUploadResult = 'cached' | 'uploaded';
 
-export type RemoteExecutorUploadDecision =
-  | {
-      type: 'reuse-upload';
-      sessionKey: string;
-      uploadKey: string;
-    }
-  | {
-      type: 'upload-required';
-      sessionKey: string;
-      staticDataEntries: Array<[DataId, string]>;
-      uploadKey: string;
-    };
+const uploadCachesBySocket = new WeakMap<WebSocket, RemoteExecutorUploadCache>();
+
+/** Upload state belongs to a connection, not the selected tab or its URL. */
+export function getRemoteExecutorUploadCacheForSocket(socket: WebSocket | null): RemoteExecutorUploadCache {
+  if (!socket) throw new Error('Cannot cache project uploads without an executor connection.');
+  let cache = uploadCachesBySocket.get(socket);
+  if (!cache) {
+    cache = {};
+    uploadCachesBySocket.set(socket, cache);
+  }
+  return cache;
+}
 
 export type RemoteExecutorUploadTransport = {
   sendDynamicData: (payload: { project: Project; settings: Settings }) => boolean;
@@ -31,69 +31,47 @@ export function resetRemoteExecutorUploadCache(cache: RemoteExecutorUploadCache)
   cache.uploadKey = undefined;
 }
 
-export function planRemoteExecutorProjectUpload(options: {
-  cache: RemoteExecutorUploadCache;
-  project: Project;
-  projectData?: Record<DataId, string>;
-  sessionKey: string;
-  settings: Settings;
-}): RemoteExecutorUploadDecision {
-  const { cache, project, projectData, sessionKey, settings } = options;
-  const staticDataEntries = getStaticProjectDataEntries(projectData);
-  const uploadKey = createRemoteExecutorUploadKey(project, settings, staticDataEntries);
-
-  if (cache.sessionKey === sessionKey && cache.uploadKey === uploadKey) {
-    return {
-      type: 'reuse-upload',
-      sessionKey,
-      uploadKey,
-    };
-  }
-
-  return {
-    type: 'upload-required',
-    sessionKey,
-    staticDataEntries,
-    uploadKey,
-  };
-}
-
-export function uploadRemoteExecutorProjectIfNeeded(options: {
+type RemoteExecutorProjectUploadOptions = {
   cache: RemoteExecutorUploadCache;
   project: Project;
   projectData?: Record<DataId, string>;
   sessionKey: string;
   settings: Settings;
   transport: RemoteExecutorUploadTransport;
-}): RemoteExecutorUploadResult {
+};
+
+/** Prepare once, then recheck the shared upload slot immediately before each run. */
+export function prepareRemoteExecutorProjectUpload(options: RemoteExecutorProjectUploadOptions) {
   const { cache, project, projectData, sessionKey, settings, transport } = options;
-  const decision = planRemoteExecutorProjectUpload({
-    cache,
-    project,
-    projectData,
-    sessionKey,
-    settings,
-  });
-
-  if (decision.type === 'reuse-upload') {
-    return 'cached';
-  }
-
-  const projectUploadSent = transport.sendDynamicData({ project, settings });
-  if (!projectUploadSent) {
-    throw new Error('Remote executor disconnected before the project upload could be sent.');
-  }
-
-  for (const [id, dataValue] of decision.staticDataEntries) {
-    const staticDataSent = transport.sendStaticData(id, dataValue);
-    if (!staticDataSent) {
-      throw new Error('Remote executor disconnected before static project data could be sent.');
+  const staticDataEntries = getStaticProjectDataEntries(projectData);
+  const uploadKey = createRemoteExecutorUploadKey(project, settings, staticDataEntries);
+  return (): RemoteExecutorUploadResult => {
+    if (cache.sessionKey === sessionKey && cache.uploadKey === uploadKey) return 'cached';
+    // A partial upload replaces the executor's dynamic data too. Never leave
+    // the previous key reusable when a later static-data send fails.
+    resetRemoteExecutorUploadCache(cache);
+    const projectUploadSent = transport.sendDynamicData({ project, settings });
+    if (!projectUploadSent) {
+      throw new Error('Remote executor disconnected before the project upload could be sent.');
     }
-  }
 
-  cache.sessionKey = decision.sessionKey;
-  cache.uploadKey = decision.uploadKey;
-  return 'uploaded';
+    for (const [id, dataValue] of staticDataEntries) {
+      const staticDataSent = transport.sendStaticData(id, dataValue);
+      if (!staticDataSent) {
+        throw new Error('Remote executor disconnected before static project data could be sent.');
+      }
+    }
+
+    cache.sessionKey = sessionKey;
+    cache.uploadKey = uploadKey;
+    return 'uploaded';
+  };
+}
+
+export function uploadRemoteExecutorProjectIfNeeded(
+  options: RemoteExecutorProjectUploadOptions,
+): RemoteExecutorUploadResult {
+  return prepareRemoteExecutorProjectUpload(options)();
 }
 
 function createRemoteExecutorUploadKey(

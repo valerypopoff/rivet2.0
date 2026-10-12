@@ -42,7 +42,7 @@ export function useGetRivetUIContext() {
       graph,
       node,
       getPluginConfig: getPluginConfigFn,
-      getChatModelOptions: (provider: 'openai' | 'anthropic' | 'google') =>
+      getChatModelOptions: (provider: 'openai' | 'anthropic' | 'google' | 'openrouter') =>
         getChatV2DiscoveredModelOptions(provider, {
           settings: resolvedSettings,
           plugins,

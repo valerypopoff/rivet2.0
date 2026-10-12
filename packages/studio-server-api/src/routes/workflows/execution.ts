@@ -1,29 +1,35 @@
+import {
+  WEB_APP_OAUTH_AUTH_ACTION_QUERY,
+  WEB_APP_OAUTH_LOGIN_ACTION,
+  WEB_APP_OAUTH_PROMPT_QUERY,
+  escapeHtml,
+  getWebAppAuthRetryPath,
+  getWebAppCleanReturnTo,
+  getWebAppCurrentLogoutPath,
+  renderWebAppAuthErrorHtml,
+  renderWebAppLoginRequiredHtml,
+  renderWebAppUiGatePromptHtml,
+  renderWebAppAccessDeniedHtml,
+  renderWebAppOriginDeniedHtml,
+} from './web-app-auth-presentation.js';
+import { resolveWebAppExecutionDefinition } from './web-app-execution.js';
 import { performance } from 'node:perf_hooks';
-import type { IncomingMessage } from 'node:http';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   createProcessor,
   createRivetStoredValueSnapshotStore,
-  ExecutionRecorder,
   getUiGraphActionComponent,
   jsonValueToDataValue,
   renderRivetWebAppHtml,
   resolveUiGraphActionInputs,
   resolveUiGraphActionOutputStatePatch,
   RivetWebAppActionHttpError,
-  type DataValue,
   type LooseDataValue,
   type RivetWebAppActionResult,
-  type RivetWebAppProcessorOptions,
   type UiComponentId,
-  type UiGraphActionComponent,
   type UiGraph,
 } from '@valerypopoff/rivet2-node';
 
-import {
-  isLatestWorkflowRemoteDebuggerEnabled,
-  maybeGetLatestWorkflowRemoteDebugger,
-} from '../../latestWorkflowRemoteDebugger.js';
 import { registerActiveHttpExecution } from '../../active-http-executions.js';
 import {
   getPublishedExecutionAdmission,
@@ -36,22 +42,18 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import { badRequest, createHttpError } from '../../utils/httpError.js';
 import { closeResponseConnectionAfterFlush } from '../../middleware/body-admission.js';
 import { createJsonBodyParser } from '../../middleware/body-parsers.js';
-import { getLatestWebAppsBasePath, getPublishedWebAppsBasePath } from '../../workflowEndpointPaths.js';
 import { normalizeStoredEndpointName } from './endpoint-names.js';
 import {
   createManagedCodeRunnerTelemetry,
   getManagedCodeRunnerTelemetrySnapshot,
   isManagedCodeRunnerTelemetryEnabled,
-  ManagedCodeRunner,
   type ManagedCodeRunnerTelemetry,
 } from '../../runtime-libraries/managed-code-runner.js';
-import { getRootPath } from '../../runtime-libraries/manifest.js';
 import { isTrustedProxyRequest, isTrustedClientRequest } from '../../auth.js';
-import { getRequestCorrelationId, RIVET_CORRELATION_HEADER } from '../../request-correlation.js';
+import { getRequestCorrelationId } from '../../request-correlation.js';
 import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
-  getWebAppOAuthSessionOwnerKey,
   getWebAppAuthMode,
   isWebAppOAuthSessionAllowed,
   readWebAppOAuthSession,
@@ -60,30 +62,45 @@ import {
 import { readWorkflowEndpointAuthSettingsSync } from '../../workflow-endpoint-auth-settings.js';
 import { readRuntimeLimitSettingsSync } from '../../runtime-limit-settings.js';
 import { isWorkflowCapacityCapabilityValid } from '../../workflow-capacity-capability.js';
-import { readExecutionEnvironmentVariables } from '../../environment-variable-settings.js';
-import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
-import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
-import {
-  createExecutionProjectReferenceLoader,
-  createExecutionSubgraphProjectLoader,
-  getLLMProfileHealthStore,
-  persistWorkflowExecutionRecordingWithBackend,
-  resolveLatestExecutionProject,
-  resolveLatestWebAppExecutionProject as resolveLatestWebAppExecutionProjectWithBackend,
-  resolvePublishedExecutionProject,
-  resolvePublishedWebAppExecutionProject as resolvePublishedWebAppExecutionProjectWithBackend,
-  resolveWebAppAccessPolicy,
-  type WebAppAccessPolicy,
-} from './storage-backend.js';
-import {
-  getWorkflowExecutionRecorderOptions,
-  isWorkflowRecordingEnabled,
-  shouldSnapshotWorkflowRecordingDatasets,
-} from './recordings-config.js';
-import { sanitizeUiAuthReturnTo } from '../../ui-auth-utils.js';
+import { resolveLatestExecutionProject, resolvePublishedExecutionProject } from './storage-backend.js';
+import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from './recordings-config.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
-import { enqueueSubgraphProjectRecording } from './subgraph-recordings.js';
 import { createHostedProcessor } from './hosted-processor.js';
+import { ExecutionSession } from './execution-session.js';
+import {
+  WorkflowExecutionContext,
+  WorkflowExecutionProject,
+  isJsonObjectRecord,
+  getWorkflowRequestHeaders,
+  getWorkflowErrorMessage,
+  WebAppRouteKind,
+  getWebAppBasePath,
+  getLatestRemoteDebuggerForExecution,
+  resolveWebAppUiGraph,
+  WorkflowExecutionRecordingSnapshot,
+  awaitWebAppActionPreflight,
+  createWebAppProcessorOptions,
+  enqueueExecutionRecording,
+  getGraphNameAtExecution,
+  createWebAppActionRecordingIdentity,
+} from './web-app-execution.js';
+export {
+  type WorkflowExecutionProject,
+  normalizeWorkflowRequestHeadersForContext,
+  getWorkflowRecordingStatusFromOutputs,
+  getWorkflowErrorMessage,
+  type WebAppRouteKind,
+  getWebAppBasePath,
+  resolveWebAppUiGraph,
+  awaitWebAppActionPreflight,
+  type WebAppSocketExecutionResolution,
+  type WebAppSocketAuthorizationStatus,
+  resolveWebAppSocketExecution,
+  createWebAppSocketFetchRequest,
+  createWebAppProcessorOptions,
+  enqueueWebAppActionRecording,
+  createWebAppActionRecordingIdentity,
+} from './web-app-execution.js';
 
 export const publishedWorkflowsRouter = Router();
 export const internalPublishedWorkflowsRouter = Router();
@@ -94,35 +111,7 @@ export const latestWebAppsRouter = Router();
 
 const WORKFLOW_JSON_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
 const MAX_CONCURRENT_WEB_APP_ACTION_PREFLIGHTS = 16;
-const WEB_APP_ACTION_PREFLIGHT_TIMEOUT_MS = 15_000;
 let activeWebAppActionPreflights = 0;
-
-type WorkflowRequestHeadersContext = Record<string, string>;
-type WorkflowExecutionContext = {
-  headers: {
-    type: 'any';
-    value: WorkflowRequestHeadersContext;
-  };
-};
-
-export type WorkflowExecutionProject =
-  Awaited<ReturnType<typeof resolvePublishedExecutionProject>> extends infer T ? Exclude<T, null> : never;
-
-const WORKFLOW_CONTEXT_HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-const UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
-const SENSITIVE_WORKFLOW_CONTEXT_HEADER_NAMES = new Set([
-  'authorization',
-  'cookie',
-  'proxy-authorization',
-  'x-forwarded-authorization',
-  'x-rivet-proxy-auth',
-  'x-rivet-token-free-host',
-  'x-rivet-client-ip',
-]);
-
-function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function hasWorkflowRequestBody(req: Request): boolean {
   const transferEncoding = req.get('transfer-encoding');
@@ -152,66 +141,6 @@ function getWorkflowRequestInputs(req: Request): Record<string, { type: 'any'; v
   };
 }
 
-function normalizeWorkflowContextHeaderName(name: string): string | null {
-  const normalizedName = name.trim().toLowerCase();
-  if (!normalizedName || UNSAFE_WORKFLOW_CONTEXT_HEADER_NAMES.has(normalizedName)) {
-    return null;
-  }
-
-  return WORKFLOW_CONTEXT_HEADER_NAME_PATTERN.test(normalizedName) ? normalizedName : null;
-}
-
-function normalizeWorkflowContextHeaderValue(value: unknown): string | null {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.length > 0 && value.every((item) => typeof item === 'string') ? value.join(', ') : null;
-  }
-
-  return null;
-}
-
-export function normalizeWorkflowRequestHeadersForContext(
-  rawHeaders: Record<string, unknown> | null | undefined,
-  options?: { excludeHeaderNames?: ReadonlySet<string> },
-): WorkflowRequestHeadersContext {
-  const headers: WorkflowRequestHeadersContext = {};
-  if (!isJsonObjectRecord(rawHeaders)) {
-    return headers;
-  }
-
-  for (const [rawName, rawValue] of Object.entries(rawHeaders)) {
-    const name = normalizeWorkflowContextHeaderName(rawName);
-    if (!name) {
-      continue;
-    }
-
-    if (options?.excludeHeaderNames?.has(name)) {
-      continue;
-    }
-
-    const value = normalizeWorkflowContextHeaderValue(rawValue);
-    if (value == null) {
-      continue;
-    }
-
-    headers[name] = value;
-  }
-
-  return headers;
-}
-
-function getWorkflowRequestHeaders(req: Request | IncomingMessage): WorkflowRequestHeadersContext {
-  const headers = normalizeWorkflowRequestHeadersForContext(req.headers, {
-    excludeHeaderNames: SENSITIVE_WORKFLOW_CONTEXT_HEADER_NAMES,
-  });
-  // This ID is generated by Rivet or forwarded only by its authenticated proxy.
-  headers[RIVET_CORRELATION_HEADER] = getRequestCorrelationId(req);
-  return headers;
-}
-
 function getWorkflowResponsePayload(outputs: Record<string, { type?: string; value?: unknown }>): unknown {
   const outputValue = outputs.output;
   if (outputValue?.type !== 'any') {
@@ -219,12 +148,6 @@ function getWorkflowResponsePayload(outputs: Record<string, { type?: string; val
   }
 
   return outputValue.value ?? null;
-}
-
-export function getWorkflowRecordingStatusFromOutputs(
-  outputs: Record<string, { type?: string; value?: unknown }>,
-): 'succeeded' | 'suspicious' {
-  return outputs.output?.type === 'control-flow-excluded' ? 'suspicious' : 'succeeded';
 }
 
 function sendJsonWithDuration(res: Response, statusCode: number, payload: unknown, requestStartedAt: number): void {
@@ -307,14 +230,6 @@ function isEnvFlagEnabled(value: string | undefined, defaultValue = false): bool
   return defaultValue;
 }
 
-export function getWorkflowErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
-}
-
 function shouldEmitWorkflowExecutionDebugHeaders(): boolean {
   return isEnvFlagEnabled(process.env.RIVET_WORKFLOW_EXECUTION_DEBUG_HEADERS, false);
 }
@@ -324,15 +239,6 @@ function shouldCollectCodeRunnerTelemetry(): boolean {
 }
 
 function getWorkflowExecutionContext(req: Request): WorkflowExecutionContext {
-  return {
-    headers: {
-      type: 'any',
-      value: getWorkflowRequestHeaders(req),
-    },
-  };
-}
-
-function getWebAppWorkflowExecutionContext(req: Request | IncomingMessage): WorkflowExecutionContext {
   return {
     headers: {
       type: 'any',
@@ -443,213 +349,8 @@ function requirePublishedWebAppUiGate(req: Request): void {
 
 type WebAppRequestKind = 'html' | 'json' | 'action';
 
-const WEB_APP_OAUTH_AUTH_ACTION_QUERY = 'auth_action';
-const WEB_APP_OAUTH_LOGIN_ACTION = 'login';
-const WEB_APP_OAUTH_PROMPT_QUERY = 'auth_prompt';
-
-function getWebAppRequestReturnTo(req: Request): string {
-  return req.originalUrl || req.url || '/';
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
 function getWebAppAuthError(req: Request): string {
   return typeof req.query.auth_error === 'string' ? req.query.auth_error : '';
-}
-
-function getWebAppAuthRetryPath(req: Request): string {
-  const parsed = new URL(getWebAppRequestReturnTo(req), 'http://rivet.local');
-  parsed.searchParams.delete('auth_error');
-  parsed.searchParams.delete(WEB_APP_OAUTH_AUTH_ACTION_QUERY);
-  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
-}
-
-function getWebAppCleanReturnTo(req: Request): string {
-  const parsed = new URL(getWebAppAuthRetryPath(req), 'http://rivet.local');
-  parsed.searchParams.delete(WEB_APP_OAUTH_PROMPT_QUERY);
-  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
-}
-
-function getWebAppOAuthLoginPath(req: Request): string {
-  const parsed = new URL(getWebAppAuthRetryPath(req), 'http://rivet.local');
-  parsed.searchParams.set(WEB_APP_OAUTH_AUTH_ACTION_QUERY, WEB_APP_OAUTH_LOGIN_ACTION);
-  return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/';
-}
-
-function getWebAppOAuthLogoutPath(
-  returnTo: string,
-  options: {
-    selectAccount?: boolean;
-  } = {},
-): string {
-  const params = new URLSearchParams({ return_to: returnTo });
-  if (options.selectAccount) {
-    params.set('select_account', '1');
-  }
-  return `${getPublishedWebAppsBasePath()}/auth/logout?${params.toString()}`;
-}
-
-function getWebAppCurrentLogoutPath(req: Request): string {
-  return getWebAppOAuthLogoutPath(getWebAppCleanReturnTo(req), { selectAccount: true });
-}
-
-function getWebAppAuthErrorMessage(errorCode: string): string {
-  if (errorCode === 'oauth_profile') {
-    return 'OAuth sign-in succeeded, but the profile response did not include the configured email claim.';
-  }
-
-  if (errorCode === 'oauth_token') {
-    return 'OAuth sign-in could not exchange the authorization code for an access token.';
-  }
-
-  if (errorCode === 'oauth_state') {
-    return 'The OAuth sign-in session expired. Try signing in again.';
-  }
-
-  if (errorCode === 'oauth_denied') {
-    return 'The OAuth provider rejected the sign-in request.';
-  }
-
-  return 'OAuth sign-in failed. Try signing in again.';
-}
-
-function renderWebAppAuthStatusHtml(options: {
-  title: string;
-  message: string;
-  code?: string;
-  primaryHref: string;
-  primaryLabel: string;
-  secondaryHref?: string;
-  secondaryLabel?: string;
-}): string {
-  const secondaryLink =
-    options.secondaryHref && options.secondaryLabel
-      ? `<a class="secondary" href="${escapeHtml(options.secondaryHref)}">${escapeHtml(options.secondaryLabel)}</a>`
-      : '';
-  return `<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(options.title)}</title>
-<style>
-  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101114; color: #f4f4f5; }
-  main { width: min(440px, calc(100vw - 32px)); border: 1px solid #333741; border-radius: 8px; background: #1d1f24; padding: 24px; box-shadow: 0 24px 80px rgb(0 0 0 / 0.38); }
-  h1 { margin: 0 0 10px; font-size: 20px; line-height: 1.2; }
-  p { margin: 0 0 18px; color: #c8c8cf; line-height: 1.5; }
-  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-  a { display: inline-flex; align-items: center; min-height: 34px; padding: 0 13px; border-radius: 6px; background: #2f6fed; color: white; font-weight: 650; text-decoration: none; }
-  a.secondary { background: transparent; color: #d6d8df; border: 1px solid #3d414b; }
-  code { color: #d6d8df; }
-</style>
-<main>
-  <h1>${escapeHtml(options.title)}</h1>
-  <p>${escapeHtml(options.message)}</p>
-  ${options.code ? `<p>Error code: <code>${escapeHtml(options.code)}</code></p>` : ''}
-  <div class="actions">
-    <a href="${escapeHtml(options.primaryHref)}">${escapeHtml(options.primaryLabel)}</a>
-    ${secondaryLink}
-  </div>
-</main>`;
-}
-
-function renderWebAppAuthErrorHtml(errorCode: string, retryPath: string, logoutPath: string): string {
-  return renderWebAppAuthStatusHtml({
-    title: 'Web app sign-in failed',
-    message: getWebAppAuthErrorMessage(errorCode),
-    code: errorCode || 'oauth_failed',
-    primaryHref: retryPath,
-    primaryLabel: 'Try again',
-    secondaryHref: logoutPath,
-    secondaryLabel: 'Sign out',
-  });
-}
-
-function renderWebAppLoginRequiredHtml(req: Request): string {
-  return renderWebAppAuthStatusHtml({
-    title: 'Sign in required',
-    message: 'Sign in to open this Rivet web app.',
-    primaryHref: getWebAppOAuthLoginPath(req),
-    primaryLabel: 'Sign in',
-  });
-}
-
-function renderWebAppUiGatePromptHtml(req: Request): string {
-  const returnTo = escapeHtml(sanitizeUiAuthReturnTo(getWebAppRequestReturnTo(req)));
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Rivet Access</title>
-    <style>
-      :root { color-scheme: dark; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at top, rgba(96, 165, 250, 0.18), transparent 34%), linear-gradient(180deg, #121419 0%, #0b0d11 100%); font-family: Georgia, "Times New Roman", serif; color: #f3f4f6; }
-      .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(10px); }
-      .modal { position: relative; width: min(440px, calc(100vw - 32px)); padding: 28px; border-radius: 18px; background: rgba(18, 20, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42); }
-      h1 { margin: 0 0 10px; font-size: 31px; line-height: 1.05; }
-      p { margin: 0 0 18px; font-size: 16px; line-height: 1.55; color: rgba(243, 244, 246, 0.78); }
-      form { display: grid; gap: 12px; }
-      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-      label { font-size: 14px; color: rgba(243, 244, 246, 0.84); }
-      input { width: 100%; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; background: rgba(255, 255, 255, 0.04); color: inherit; padding: 12px 14px; font: inherit; }
-      input:focus { outline: 2px solid rgba(96, 165, 250, 0.75); outline-offset: 2px; }
-      button { border: none; border-radius: 12px; background: #f3f4f6; color: #111827; padding: 12px 16px; font: inherit; font-weight: 700; cursor: pointer; }
-      .hint { margin-top: 12px; font-size: 13px; color: rgba(243, 244, 246, 0.52); }
-    </style>
-  </head>
-  <body>
-    <div class="overlay" aria-hidden="true"></div>
-    <main class="modal" role="dialog" aria-modal="true" aria-labelledby="gate-title">
-      <h1 id="gate-title">Enter Access Key</h1>
-      <p>Provide the Rivet key to open this web app.</p>
-      <form method="post" action="/__rivet_auth">
-        <label for="gate-username" class="sr-only">Username</label>
-        <input id="gate-username" class="sr-only" name="username" type="text" value="Rivet" autocomplete="username" required>
-        <label for="gate-key">Access key</label>
-        <input id="gate-key" name="key" type="password" autocomplete="current-password" autofocus required>
-        <input name="return_to" type="hidden" value="${returnTo}">
-        <button type="submit">Continue</button>
-      </form>
-      <div class="hint">Token-free hosts still bypass this prompt automatically.</div>
-    </main>
-  </body>
-</html>`;
-}
-
-function renderWebAppAccessDeniedHtml(email: string, logoutPath: string): string {
-  return renderWebAppAuthStatusHtml({
-    title: 'Web app access denied',
-    message: `You are signed in as ${email}, but this web app does not allow that email.`,
-    code: 'oauth_forbidden',
-    primaryHref: logoutPath,
-    primaryLabel: 'Sign out and choose another account',
-  });
-}
-
-function renderWebAppOriginDeniedHtml(req: Request): string {
-  const options = {
-    title: 'Web app request blocked',
-    message: 'The request did not come from the expected Rivet server origin.',
-    code: 'origin_forbidden',
-    primaryHref: getWebAppAuthRetryPath(req),
-    primaryLabel: 'Try again',
-  };
-
-  return getWebAppAuthMode() === 'oauth'
-    ? renderWebAppAuthStatusHtml({
-        ...options,
-        secondaryHref: getWebAppCurrentLogoutPath(req),
-        secondaryLabel: 'Sign out',
-      })
-    : renderWebAppAuthStatusHtml(options);
 }
 
 function addWebAppOAuthLogoutLink(html: string, logoutPath: string): string {
@@ -728,40 +429,6 @@ function isWebAppBrowserRequestOriginAllowed(req: Request, requestKind: WebAppRe
 
   const fetchSite = req.get('sec-fetch-site')?.trim().toLowerCase();
   return requestKind === 'html' || fetchSite !== 'cross-site';
-}
-
-function getIncomingHeader(req: IncomingMessage, name: string): string {
-  const value = req.headers[name.toLowerCase()];
-  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
-}
-
-function getWebAppSocketRequestOrigin(req: IncomingMessage): string | null {
-  const trustedProxy = isTrustedProxyRequest(req);
-  const protocol = trustedProxy
-    ? getIncomingHeader(req, 'x-forwarded-proto').split(',')[0]?.trim().toLowerCase()
-    : (req.socket as { encrypted?: boolean }).encrypted
-      ? 'https'
-      : 'http';
-  const host = trustedProxy
-    ? getIncomingHeader(req, 'x-forwarded-host').split(',')[0]?.trim() || getIncomingHeader(req, 'host')
-    : getIncomingHeader(req, 'host');
-  if (!protocol || !host) return null;
-  try {
-    return new URL(`${protocol}://${host}`).origin;
-  } catch {
-    return null;
-  }
-}
-
-function isWebAppSocketOriginAllowed(req: IncomingMessage): boolean {
-  const requestOrigin = getWebAppSocketRequestOrigin(req);
-  const origin = getIncomingHeader(req, 'origin').trim();
-  if (!requestOrigin || !origin) return false;
-  try {
-    return new URL(origin).origin === requestOrigin;
-  } catch {
-    return false;
-  }
 }
 
 function prepareWebAppRejection(req: Request, res: Response, requestKind: WebAppRequestKind): void {
@@ -882,32 +549,6 @@ function authorizeResolvedWebAppRequest(
   return false;
 }
 
-function encodeUrlPathSegment(value: string): string {
-  return encodeURIComponent(value).replace(/%2F/gi, '%252F');
-}
-
-export type WebAppRouteKind = 'published' | 'latest';
-
-export function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): string {
-  const basePath = routeKind === 'published' ? getPublishedWebAppsBasePath() : getLatestWebAppsBasePath();
-
-  return `${basePath}/${encodeUrlPathSegment(slug)}`;
-}
-
-function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
-  return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? maybeGetLatestWorkflowRemoteDebugger()
-    : undefined;
-}
-
-export function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject): UiGraph | null {
-  const uiGraphId = executionProject.webAppUiGraphId;
-
-  return uiGraphId
-    ? executionProject.project.uiGraphs?.[uiGraphId as keyof typeof executionProject.project.uiGraphs] ?? null
-    : null;
-}
-
 function sendHtmlWithDuration(res: Response, statusCode: number, html: string, requestStartedAt: number): void {
   const durationMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -974,35 +615,11 @@ function getOptionalWebAppActionRevisionKey(body: Record<string, unknown>): stri
   return revisionKey;
 }
 
-type WorkflowExecutionRecordingSnapshot = {
-  recorder: ExecutionRecorder | null;
-  status: 'succeeded' | 'failed' | 'suspicious';
-  durationMs: number;
-  errorMessage?: string;
-};
-
 type WebAppActionExecutionSnapshot = WorkflowExecutionRecordingSnapshot & {
   result?: RivetWebAppActionResult;
   executionError?: unknown;
   executionIdentity: WorkflowRecordingExecutionIdentity;
 };
-type RecordingEvidenceAvailability = 'available' | 'disabled' | 'queue-dropped' | 'persistence-failed';
-
-function reportLLMProfileHealthRecordingOutcome(
-  executionIdentity: WorkflowRecordingExecutionIdentity | undefined,
-  availability: RecordingEvidenceAvailability,
-  recordingId?: string,
-): Promise<void> {
-  const correlationId = executionIdentity?.correlationId;
-  if (!correlationId) return Promise.resolve();
-  return trackLLMProfileHealthRecordingOutcome(
-    getLLMProfileHealthStore()
-      .then((store) => store.recordRecordingOutcome({ correlationId, availability, recordingId }))
-      .catch((error) => {
-        console.error('[llm-profile-health] Failed to resolve recording evidence:', error);
-      }),
-  );
-}
 
 function getWebAppActionState(body: Record<string, unknown>): Record<string, unknown> {
   const state = body.state;
@@ -1079,6 +696,7 @@ async function runRecordedWebAppAction(
 
   const rawInputs = resolveUiGraphActionInputs(component.action, actionState);
   const processorOptions = await createWebAppProcessorOptions(executionProject, req, codeRunnerTelemetry, {
+    abortSignal: options.abortSignal,
     enableRemoteDebugger: options.enableRemoteDebugger,
     llmProfileHealthExecutionCorrelationId: executionIdentity.correlationId,
   });
@@ -1097,39 +715,25 @@ async function runRecordedWebAppAction(
     inputs,
     storedValueStore: processorOptions.storedValueStore ?? browserStoredValues!.store,
   });
-  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
-  recorder?.record(processor.processor);
-
+  const session = new ExecutionSession(processor, {
+    recording: isWorkflowRecordingEnabled(),
+    recorderOptions: getWorkflowExecutionRecorderOptions(),
+  });
   let result: RivetWebAppActionResult | undefined;
-  let executionError: unknown;
-  let status: WebAppActionExecutionSnapshot['status'] = 'succeeded';
-  let errorMessage: string | undefined;
-  let durationMs = 0;
-  const executionStartedAt = performance.now();
-
-  try {
-    const outputs = (await processor.run()) as Record<string, DataValue>;
-    status = getWorkflowRecordingStatusFromOutputs(outputs);
+  const snapshot = await session.run((outputs) => {
     result = {
       outputs,
       statePatch: resolveUiGraphActionOutputStatePatch(component.action, outputs),
       storagePatch: browserStoredValues?.getPatch() ?? {},
     };
-  } catch (error) {
-    status = 'failed';
-    errorMessage = getWorkflowErrorMessage(error);
-    executionError = error;
-  } finally {
-    durationMs = performance.now() - executionStartedAt;
-  }
-
+  });
   return {
-    recorder,
-    status,
-    durationMs,
-    errorMessage,
+    ...snapshot,
+    ...(snapshot.failure
+      ? { status: 'failed' as const, errorMessage: getWorkflowErrorMessage(snapshot.failure.error) }
+      : {}),
     result,
-    executionError,
+    executionError: snapshot.failure?.error,
     executionIdentity,
   };
 }
@@ -1158,10 +762,7 @@ async function resolveWebAppExecutionProject(
     throw badRequest('Web app slug is required');
   }
 
-  const executionProject =
-    routeKind === 'published'
-      ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
-      : await resolveLatestWebAppExecutionProjectWithBackend(slug);
+  const executionProject = await resolveWebAppExecutionDefinition(routeKind, slug);
   if (options?.abortSignal?.aborted) {
     return null;
   }
@@ -1217,45 +818,6 @@ function acquireWebAppActionPreflight(): (() => void) | null {
     released = true;
     activeWebAppActionPreflights = Math.max(0, activeWebAppActionPreflights - 1);
   };
-}
-
-export function awaitWebAppActionPreflight<T>(
-  operation: Promise<T>,
-  abortController: AbortController,
-  timeoutMs = WEB_APP_ACTION_PREFLIGHT_TIMEOUT_MS,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      abortController.abort();
-      reject(
-        createHttpError(503, 'Web app action preparation timed out.', {
-          expose: true,
-          code: 'web_app_action_preflight_timeout',
-          retryAfterSeconds: 1,
-          closeConnection: true,
-        }),
-      );
-    }, timeoutMs);
-    timeout.unref();
-
-    void operation.then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(value);
-      },
-      (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        reject(error);
-      },
-    );
-  });
 }
 
 function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
@@ -1339,259 +901,6 @@ function prepareWebAppActionBeforeBody(routeKind: WebAppRouteKind) {
   });
 }
 
-export type WebAppSocketExecutionResolution =
-  | {
-      executionProject: WorkflowExecutionProject;
-      ownerScope: string;
-      /** Fast request/session check used before every incoming socket frame. */
-      isAuthorized(): boolean;
-      /** Shared lookup key; unlike credentials, the app policy is user-independent. */
-      accessPolicyLookupKey: string;
-      /** Targeted local mutation/managed LISTEN invalidation key. */
-      accessPolicyInvalidationKey: string;
-      /** Reads only the current app binding and access list, never project contents. */
-      readCurrentAccessPolicy(): Promise<WebAppAccessPolicy | null>;
-      /** Combines the opening identity with a freshly read app policy. */
-      evaluateCurrentAccessPolicy(policy: WebAppAccessPolicy | null): WebAppSocketAuthorizationStatus;
-      uiGraph: UiGraph;
-    }
-  | {
-      code: string;
-      message: string;
-      statusCode: number;
-    };
-
-/**
- * `revoked` means the credentials that opened the socket are no longer valid.
- * `policy-revoked` means those credentials remain valid, but the current web
- * app binding or its allowlist no longer permits this app. The distinction lets
- * an already accepted action finish using its existing browser-storage RPC
- * channel while preventing every new operation immediately.
- */
-export type WebAppSocketAuthorizationStatus = 'authorized' | 'revoked' | 'policy-revoked' | 'unavailable';
-
-/**
- * WebSocket upgrades cannot use the HTML redirect/prompt flow. They share the
- * normal web-app policy, but require a strict Origin header before accepting a
- * browser socket.
- */
-export async function resolveWebAppSocketExecution(
-  req: IncomingMessage,
-  routeKind: WebAppRouteKind,
-  rawSlug: string,
-): Promise<WebAppSocketExecutionResolution> {
-  if (!isWebAppSocketOriginAllowed(req)) {
-    return { statusCode: 403, code: 'origin_forbidden', message: 'Cross-origin web app request denied' };
-  }
-
-  const mode = getWebAppAuthMode();
-  const trustedClient = isTrustedClientRequest(req);
-  if (!trustedClient && mode === 'ui-gate' && !isServerUiAuthRequestAllowed(req)) {
-    return { statusCode: 401, code: 'ui_gate_required', message: 'Rivet access key required' };
-  }
-
-  const oauthSession = !trustedClient && mode === 'oauth' ? readWebAppOAuthSession(req) : null;
-  if (!trustedClient && mode === 'oauth' && !oauthSession) {
-    return { statusCode: 401, code: 'oauth_required', message: 'OAuth login required' };
-  }
-
-  const slug = normalizeStoredEndpointName(rawSlug);
-  if (!slug) {
-    return { statusCode: 400, code: 'invalid_slug', message: 'Web app slug is required' };
-  }
-
-  const executionProject =
-    routeKind === 'published'
-      ? await resolvePublishedWebAppExecutionProjectWithBackend(slug)
-      : await resolveLatestWebAppExecutionProjectWithBackend(slug);
-  if (!executionProject) {
-    return {
-      statusCode: 404,
-      code: 'not_found',
-      message: routeKind === 'published' ? 'Published Rivet web app not found' : 'Latest Rivet web app not found',
-    };
-  }
-
-  const uiGraph = resolveWebAppUiGraph(executionProject);
-  if (!uiGraph) {
-    return { statusCode: 404, code: 'not_found', message: 'Rivet web app not found' };
-  }
-
-  let principal = trustedClient ? 'trusted-client' : mode;
-  if (oauthSession) {
-    try {
-      principal = `oauth:${getWebAppOAuthSessionOwnerKey(oauthSession)}`;
-    } catch {
-      return { statusCode: 401, code: 'oauth_required', message: 'OAuth login required' };
-    }
-  }
-
-  const isBaseAuthorized = () => {
-    // Keep the identity scope fixed for the life of this socket. A client that
-    // later appears trusted must reconnect rather than acquiring a new scope.
-    if (isTrustedClientRequest(req) !== trustedClient) return false;
-    if (trustedClient) return true;
-    const currentMode = getWebAppAuthMode();
-    if (currentMode !== mode) return false;
-    if (mode === 'ui-gate') return isServerUiAuthRequestAllowed(req);
-    if (mode === 'oauth') return readWebAppOAuthSession(req) != null;
-    return true;
-  };
-
-  const readCurrentAccessPolicy = () => resolveWebAppAccessPolicy(slug, executionProject.projectVirtualPath);
-  const evaluateCurrentAccessPolicy = (policy: WebAppAccessPolicy | null): WebAppSocketAuthorizationStatus => {
-    if (!isBaseAuthorized()) return 'revoked';
-    if (
-      policy == null ||
-      policy.projectVirtualPath !== executionProject.projectVirtualPath ||
-      policy.uiGraphId !== executionProject.webAppUiGraphId ||
-      policy.bindingId !== executionProject.webAppBindingId
-    ) {
-      return 'policy-revoked';
-    }
-    if (trustedClient || mode !== 'oauth') return 'authorized';
-    return isWebAppOAuthSessionAllowed(readWebAppOAuthSession(req), policy.allowedEmails)
-      ? 'authorized'
-      : 'policy-revoked';
-  };
-  const accessPolicyInvalidationKey =
-    executionProject.webAppPolicyInvalidationKey ?? `web-app:${routeKind}:${executionProject.projectVirtualPath}`;
-
-  return {
-    executionProject,
-    uiGraph,
-    isAuthorized: isBaseAuthorized,
-    accessPolicyLookupKey: `${accessPolicyInvalidationKey}\0${slug}`,
-    accessPolicyInvalidationKey,
-    readCurrentAccessPolicy,
-    evaluateCurrentAccessPolicy,
-    ownerScope: [principal, routeKind, slug, executionProject.revisionKey].join(':'),
-  };
-}
-
-export function createWebAppSocketFetchRequest(req: IncomingMessage): globalThis.Request {
-  const origin = getWebAppSocketRequestOrigin(req) ?? 'http://rivet.local';
-  const headers = getWorkflowRequestHeaders(req);
-  return new globalThis.Request(new URL(req.url || '/', origin), { headers });
-}
-
-export async function createWebAppProcessorOptions(
-  executionProject: WorkflowExecutionProject,
-  req: Request | IncomingMessage,
-  codeRunnerTelemetry: ManagedCodeRunnerTelemetry | null,
-  options?: {
-    enableRemoteDebugger?: boolean;
-    llmProfileHealthExecutionCorrelationId?: string;
-  },
-): Promise<RivetWebAppProcessorOptions> {
-  const remoteDebugger = getLatestRemoteDebuggerForExecution(options);
-  const executionEnvironment = await readExecutionEnvironmentVariables();
-
-  return {
-    codeRunner: new ManagedCodeRunner(getRootPath(), {
-      ...(codeRunnerTelemetry ? { telemetry: codeRunnerTelemetry } : {}),
-      executionEnvironment,
-    }) as any,
-    context: getWebAppWorkflowExecutionContext(req),
-    datasetProvider: executionProject.datasetProvider,
-    projectPath: executionProject.projectVirtualPath,
-    nativeApi: createLocalCatalogNativeApi(),
-    projectReferenceLoader: await createExecutionProjectReferenceLoader(executionProject.projectVirtualPath),
-    subgraphProjectLoader: createExecutionSubgraphProjectLoader(),
-    ...(isWorkflowRecordingEnabled()
-      ? {
-          onSubgraphProjectRun: enqueueSubgraphProjectRecording,
-          subgraphRecordingOptions: getWorkflowExecutionRecorderOptions(),
-        }
-      : {}),
-    llmProfileHealthStore: await getLLMProfileHealthStore(),
-    ...(options?.llmProfileHealthExecutionCorrelationId == null
-      ? {}
-      : { llmProfileHealthExecutionCorrelationId: options.llmProfileHealthExecutionCorrelationId }),
-    executionEnvironment,
-    remoteDebugger,
-  };
-}
-
-function enqueueExecutionRecording(
-  executionProject: WorkflowExecutionProject,
-  recording: WorkflowExecutionRecordingSnapshot,
-  options: {
-    endpointName: string;
-    runKind: 'published' | 'latest';
-    executionIdentity?: WorkflowRecordingExecutionIdentity;
-  },
-): void {
-  const { project, attachedData, datasetProvider, projectVirtualPath } = executionProject;
-  const recorder = recording.recorder;
-
-  if (!recorder) {
-    void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
-    return;
-  }
-
-  const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
-    try {
-      const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
-        ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-            console.error('Failed to export workflow datasets for recording:', error);
-            return [];
-          })
-        : [];
-      const recordingId = await persistWorkflowExecutionRecordingWithBackend({
-        sourceProject: project,
-        sourceProjectPath: projectVirtualPath,
-        executedProject: project,
-        executedAttachedData: attachedData,
-        executedDatasets,
-        endpointName: options.endpointName,
-        recordingSerialized: recorder.serialize(),
-        runKind: options.runKind,
-        status: recording.status,
-        durationMs: recording.durationMs,
-        errorMessage: recording.errorMessage,
-        executionIdentity: options.executionIdentity,
-        onPersisted: async (recordingId) => {
-          await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'available', recordingId);
-        },
-      });
-      if (recordingId == null) {
-        await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'disabled');
-      }
-    } catch (error) {
-      await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
-      throw error;
-    }
-  });
-  if (!accepted) {
-    void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'queue-dropped');
-  }
-}
-
-export function enqueueWebAppActionRecording(
-  executionProject: WorkflowExecutionProject,
-  recorder: ExecutionRecorder | null,
-  durationMs: number,
-  status: 'succeeded' | 'failed' | 'suspicious',
-  errorMessage: string | undefined,
-  options: {
-    endpointName: string;
-    runKind: 'published' | 'latest';
-    executionIdentity?: WorkflowRecordingExecutionIdentity;
-  },
-): void {
-  enqueueExecutionRecording(executionProject, { recorder, durationMs, status, errorMessage }, options);
-}
-
-function getGraphNameAtExecution(
-  executionProject: WorkflowExecutionProject,
-  graphId: string | undefined,
-): string | undefined {
-  return graphId
-    ? executionProject.project.graphs[graphId as keyof typeof executionProject.project.graphs]?.metadata?.name
-    : undefined;
-}
-
 function createWorkflowEndpointRecordingIdentity(
   executionProject: WorkflowExecutionProject,
   correlationId: string,
@@ -1602,29 +911,6 @@ function createWorkflowEndpointRecordingIdentity(
     graphId,
     graphName: getGraphNameAtExecution(executionProject, graphId),
     revisionKey: executionProject.revisionKey,
-    correlationId,
-  };
-}
-
-export function createWebAppActionRecordingIdentity(
-  executionProject: WorkflowExecutionProject,
-  uiGraph: UiGraph,
-  component: UiGraphActionComponent,
-  webAppSlug: string,
-  correlationId: string,
-): WorkflowRecordingExecutionIdentity {
-  const graphId = component.action.graphId;
-  return {
-    surface: 'web_app_action',
-    graphId,
-    graphName: getGraphNameAtExecution(executionProject, graphId),
-    revisionKey: executionProject.revisionKey,
-    uiGraphId: uiGraph.id,
-    uiGraphName: uiGraph.name,
-    webAppSlug,
-    componentId: component.id,
-    componentType: component.type,
-    componentLabel: component.type === 'button' ? component.label : 'Chat',
     correlationId,
   };
 }
@@ -1658,59 +944,24 @@ async function executeWorkflowEndpoint(
     context: getWorkflowExecutionContext(req),
     inputs: getWorkflowRequestInputs(req),
   });
-  const recorder = isWorkflowRecordingEnabled() ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions()) : null;
-  recorder?.record(processor.processor);
-
-  let recordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
-  let recordingErrorMessage: string | undefined;
-  let failure: { error: unknown } | undefined;
-  let executionDurationMs = 0;
+  const session = new ExecutionSession(processor, {
+    recording: isWorkflowRecordingEnabled(),
+    recorderOptions: getWorkflowExecutionRecorderOptions(),
+  });
   const executionStartedAt = performance.now();
-
-  try {
-    const outputs = await processor.run();
-    recordingStatus = getWorkflowRecordingStatusFromOutputs(
-      outputs as Record<string, { type?: string; value?: unknown }>,
-    );
-
-    try {
-      const responsePayload = getWorkflowResponsePayload(outputs as Record<string, { type?: string; value?: unknown }>);
-      setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
-      setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
-      if (!res.destroyed && !res.writableEnded) {
-        sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
-      }
-    } catch (error) {
-      // A response conversion/transport failure must not release a running tail.
-      failure = { error };
-    }
-
-    // Keep this handler pending after sending the response: its callers own
-    // execution capacity, shutdown registration, and parsed-body reservations.
-    const finalOutputs = await processor.processor.waitForRunCompletion();
-    recordingStatus = getWorkflowRecordingStatusFromOutputs(finalOutputs);
-  } catch (error) {
-    recordingStatus = 'failed';
-    recordingErrorMessage = getWorkflowErrorMessage(error);
-    failure = { error };
-  } finally {
-    executionDurationMs = performance.now() - executionStartedAt;
-  }
-
-  enqueueExecutionRecording(
-    executionProject,
-    {
-      recorder,
-      status: recordingStatus,
-      durationMs: executionDurationMs,
-      errorMessage: recordingErrorMessage,
-    },
-    {
-      endpointName: options.endpointName,
-      runKind: options.runKind,
-      executionIdentity,
-    },
-  );
+  const snapshot = await session.run((outputs) => {
+    const responsePayload = getWorkflowResponsePayload(outputs);
+    setWorkflowExecutionDebugHeaders(res, executionProject, performance.now() - executionStartedAt);
+    setCodeRunnerTelemetryHeaders(res, codeRunnerTelemetry);
+    if (!res.destroyed && !res.writableEnded) sendJsonWithDuration(res, 200, responsePayload, requestStartedAt);
+  });
+  const failure = snapshot.failure;
+  const executionDurationMs = snapshot.durationMs;
+  enqueueExecutionRecording(executionProject, snapshot, {
+    endpointName: options.endpointName,
+    runKind: options.runKind,
+    executionIdentity,
+  });
 
   if (failure) {
     if (res.headersSent || res.writableEnded || res.destroyed) {
@@ -1985,4 +1236,3 @@ latestWebAppsRouter.get(
     await handleWebAppHtmlRequest(req, res, 'latest');
   }),
 );
-import { createLocalCatalogNativeApi } from '../../local-metadata/execution-io.js';

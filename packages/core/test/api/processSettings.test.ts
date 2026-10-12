@@ -11,6 +11,7 @@ describe('resolveProcessSettings', () => {
       openAiKey: '',
       anthropicApiKey: '',
       googleApiKey: '',
+      openRouterApiKey: '',
       customAiApiKey: '',
       openAiOrganization: '',
       openAiEndpoint: '',
@@ -67,6 +68,7 @@ describe('resolveProcessSettings', () => {
         openAiApiKey: 'env-key',
         anthropicApiKey: 'anthropic-env-key',
         googleApiKey: 'google-env-key',
+        openRouterApiKey: 'openrouter-env-key',
         customAiApiKey: 'custom-env-key',
         customOne: 'custom-one-env-key',
         openAiOrganization: 'env-org',
@@ -79,6 +81,7 @@ describe('resolveProcessSettings', () => {
         openAiKey: 'env-key',
         anthropicApiKey: 'anthropic-env-key',
         googleApiKey: 'google-env-key',
+        openRouterApiKey: 'openrouter-env-key',
         customAiApiKey: 'custom-env-key',
         customOne: 'custom-one-env-key',
         openAiOrganization: 'env-org',
@@ -94,5 +97,19 @@ describe('resolveProcessSettings', () => {
         throttleChatNode: 100,
       },
     );
+  });
+
+  it('resolves OpenRouter credentials independently of OpenAI credentials', () => {
+    const fallbacks = { openRouterApiKey: 'router-fallback', openAiApiKey: 'openai-fallback' };
+    assert.equal(
+      resolveProcessSettings({ openRouterApiKey: 'router-explicit' }, fallbacks).openRouterApiKey,
+      'router-explicit',
+    );
+    for (const openRouterApiKey of ['', undefined]) {
+      assert.equal(resolveProcessSettings({ openRouterApiKey }, fallbacks).openRouterApiKey, 'router-fallback');
+    }
+    assert.equal(resolveProcessSettings({ openAiApiKey: 'openai-only' }).openRouterApiKey, '');
+    assert.equal(resolveProcessSettings(undefined, { openAiApiKey: 'openai-only' }).openRouterApiKey, '');
+    assert.equal(resolveProcessSettings({ openRouterApiKey: 'router-only' }).openAiApiKey, '');
   });
 });

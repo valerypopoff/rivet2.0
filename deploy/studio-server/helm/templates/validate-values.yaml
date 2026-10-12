@@ -1,4 +1,18 @@
 {{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- if not (kindIs "bool" .Values.workflowSchema.maintenanceValidation) -}}
+{{- fail "workflowSchema.maintenanceValidation must be a boolean" -}}
+{{- end -}}
+{{- if hasKey .Values.env "RIVET_RELEASE_MAINTENANCE" -}}
+{{- fail "env.RIVET_RELEASE_MAINTENANCE is chart-owned; use workflowSchema.maintenanceValidation" -}}
+{{- end -}}
+{{- range $component := list "backend" "execution" "evaluation" -}}
+{{- if hasKey (index $.Values.podAnnotations $component) "rivet.dev/managed-schema-reader-version" -}}
+{{- fail "managed-schema-reader-version is chart-owned; podAnnotations cannot override it" -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.workflowSchema.maintenanceValidation (or .Values.autoscaling.execution.enabled .Values.autoscaling.proxy.enabled (ne (int .Values.replicaCount.proxy) 0) (ne (int .Values.replicaCount.web) 0) (ne (int .Values.replicaCount.evaluation) 0)) -}}
+{{- fail "maintenance validation requires traffic and Evaluation replicas zero and autoscaling disabled" -}}
+{{- end -}}
 {{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
 
 {{- if not (has .Values.gateway.mode (list "external" "embedded")) -}}
@@ -153,7 +167,7 @@
 {{- if not (kindIs "string" .Values.hostedEvaluations.scheduling.priorityClassName) -}}
 {{- fail "hostedEvaluations.scheduling.priorityClassName must be a string" -}}
 {{- end -}}
-{{- if and .Values.hostedEvaluations.enabled (lt (int .Values.replicaCount.evaluation) 1) -}}
+{{- if and .Values.hostedEvaluations.enabled (not .Values.workflowSchema.maintenanceValidation) (lt (int .Values.replicaCount.evaluation) 1) -}}
 {{- fail "hostedEvaluations.enabled requires replicaCount.evaluation >= 1" -}}
 {{- end -}}
 {{- if and .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}

@@ -1,4 +1,9 @@
-import { getCustomProviderApiContract, type PortId } from '@valerypopoff/rivet2-core';
+import {
+  getCustomProviderApiContract,
+  summarizeAgentResponseCalls,
+  buildAgentProfileAttemptInspectorRows,
+  type PortId,
+} from '@valerypopoff/rivet2-core';
 import type {
   RunActivityGraphRun,
   RunActivityJournal,
@@ -119,38 +124,31 @@ function buildAccountingSummary(root: RunActivityRoot): RunActivityAccountingSum
     .filter((invocation): invocation is RunActivityNodeInvocation => invocation != null);
   const modelCallCount = invocations.reduce((total, invocation) => total + invocation.modelCallCount, 0);
   const toolCallCount = invocations.reduce((total, invocation) => total + invocation.toolCallCount, 0);
-  if (modelCallCount === 0 && toolCallCount === 0) return undefined;
   const calls = invocations.flatMap((invocation) => invocation.modelCalls);
-  const omittedCount = invocations.reduce((total, invocation) => total + invocation.omittedModelCallCount, 0);
-  const totalUsage = (key: 'promptTokens' | 'completionTokens' | 'cachedTokens' | 'reasoningTokens') => {
-    const total = calls.reduce((sum, call) => sum + (call.usage?.[key] ?? 0), 0);
-    return total > 0 ? total : undefined;
-  };
-  const knownCosts = calls
-    .filter((call) => call.pricing.status === 'known' && call.pricing.costUsd != null)
-    .reduce((total, call) => total + call.pricing.costUsd!, 0);
-  const hasUnknownCost = calls.some((call) => call.pricing.status !== 'known' || call.pricing.costUsd == null);
-  const costStatus =
-    modelCallCount === 0 || (knownCosts === 0 && (hasUnknownCost || omittedCount > 0))
-      ? 'unknown'
-      : hasUnknownCost || omittedCount > 0
-        ? 'partial'
-        : 'known';
-
-  const promptTokens = totalUsage('promptTokens');
-  const completionTokens = totalUsage('completionTokens');
-  const cachedTokens = totalUsage('cachedTokens');
-  const reasoningTokens = totalUsage('reasoningTokens');
+  const summary = summarizeAgentResponseCalls(
+    calls,
+    invocations.flatMap((invocation) => invocation.profileAttempts ?? []),
+    invocations.flatMap((invocation) => invocation.toolCalls),
+  );
+  const incomplete =
+    root.omittedNodeInvocationCount > 0 ||
+    invocations.some(
+      (invocation) => invocation.omittedModelCallCount > 0 || (invocation.omittedProfileAttemptCount ?? 0) > 0,
+    );
+  if (modelCallCount === 0 && toolCallCount === 0 && summary.classifierRequestCount == null && !incomplete)
+    return undefined;
 
   return {
     modelCallCount,
     toolCallCount,
-    ...(promptTokens == null ? {} : { promptTokens }),
-    ...(completionTokens == null ? {} : { completionTokens }),
-    ...(cachedTokens == null ? {} : { cachedTokens }),
-    ...(reasoningTokens == null ? {} : { reasoningTokens }),
-    knownCostUsd: knownCosts,
-    costStatus,
+    ...(summary.classifierRequestCount == null ? {} : { classifierRequestCount: summary.classifierRequestCount }),
+    ...(summary.promptTokens == null ? {} : { promptTokens: summary.promptTokens }),
+    ...(summary.completionTokens == null ? {} : { completionTokens: summary.completionTokens }),
+    ...(summary.cachedTokens == null ? {} : { cachedTokens: summary.cachedTokens }),
+    ...(summary.reasoningTokens == null ? {} : { reasoningTokens: summary.reasoningTokens }),
+    knownCostUsd: summary.knownCostUsd,
+    costStatus: incomplete && summary.costStatus === 'known' ? 'partial' : summary.costStatus,
+    ...(incomplete ? { incomplete: true } : {}),
   };
 }
 
@@ -180,7 +178,16 @@ function buildInvocationViewModel(
     status === 'interrupted' ||
     children.some((child) => child.status === 'error' || child.status === 'interrupted');
   const detailRows = buildDetailRows(root, graphRun, invocation, resolved, category);
-  const primaryModelCall = getEffectiveModelCall(invocation.modelCalls);
+  const classifierRequests = (invocation.profileAttempts ?? []).filter(
+    (attempt) => attempt.family === 'classifier' && attempt.attemptIndex != null,
+  );
+  const primaryModelCall =
+    getEffectiveModelCall(invocation.modelCalls) ??
+    classifierRequests.findLast((attempt) => attempt.outcome === 'success') ??
+    classifierRequests.at(-1) ??
+    invocation.profileAttempts?.findLast(
+      (attempt) => attempt.family === 'classifier' && attempt.skipReason !== 'unreached',
+    );
   const searchTerms = buildInvocationSearchTerms(invocation, resolved.searchTerms);
   // Replays and delayed Watch branches retain an authoritative event clock
   // alongside local delivery times. Once an invocation has that provenance,
@@ -214,6 +221,7 @@ function buildInvocationViewModel(
     ...(primaryModelCall?.model == null ? {} : { model: primaryModelCall.model }),
     ...(invocation.toolCalls[0]?.toolName == null ? {} : { toolName: invocation.toolCalls[0].toolName }),
     ...(invocation.modelCallCount > 0 ? { modelCallCount: invocation.modelCallCount } : {}),
+    ...(classifierRequests.length > 0 ? { classifierRequestCount: classifierRequests.length } : {}),
     ...(invocation.toolCallCount > 0 ? { toolCallCount: invocation.toolCallCount } : {}),
     ...(detailRows.length === 0 ? {} : { detailRows }),
     ...(children.length === 0 ? {} : { children }),
@@ -236,7 +244,11 @@ function buildInvocationSearchTerms(
     ...(invocation.profileAttempts ?? []).flatMap((attempt) => [
       formatModelCallProvider(attempt),
       attempt.model,
+      attempt.family,
+      attempt.profileName,
       attempt.stage,
+      attempt.failureKind,
+      attempt.skipReason,
       attempt.healthState,
       attempt.healthDisposition,
       attempt.healthOutcome,
@@ -332,18 +344,14 @@ function buildChildRows(invocation: RunActivityNodeInvocation): RunActivityChild
 }
 
 function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityChildViewModel {
-  const context = [
-    describeProfileAttemptOutcome(attempt),
-    attempt.profileIndex == null ? undefined : `profile ${attempt.profileIndex + 1}`,
-    `round ${attempt.roundIndex + 1}`,
-    attempt.attemptIndex == null ? undefined : `attempt ${attempt.attemptIndex + 1}`,
-  ].filter((value): value is string => value != null);
+  const row = buildAgentProfileAttemptInspectorRows([attempt])[0]!;
 
   return {
     id: `profile-attempt:${attempt.eventId}`,
-    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${describeProfileAttemptStage(attempt.stage)}`,
-    secondaryText: context.join(' / '),
+    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
+    secondaryText: `${row.context}${attempt.error ? `: ${attempt.error}` : ''}`,
     status: getProfileAttemptStatus(attempt),
+    ...(attempt.durationMs == null ? {} : { durationMs: attempt.durationMs }),
   };
 }
 
@@ -358,51 +366,6 @@ function describeProfileAttemptStage(stage: RunActivityProfileAttempt['stage']):
     default:
       return stage;
   }
-}
-
-function describeProfileAttemptOutcome(attempt: RunActivityProfileAttempt): string {
-  if (attempt.healthDisposition === 'deny') {
-    return attempt.retryAt == null
-      ? 'profile suspended; skipped'
-      : `profile suspended until ${new Date(attempt.retryAt).toLocaleString()}`;
-  }
-  if (attempt.healthDisposition === 'fail-open') {
-    return `reliability service unavailable; profile request continued${formatAttemptError(attempt)}`;
-  }
-  if (attempt.timeoutKind === 'first-output') return 'first output timed out';
-  if (attempt.timeoutKind === 'stream-inactivity') return 'stream became inactive';
-  if (attempt.stage === 'health-update' && attempt.healthOutcome) {
-    return `recorded ${describeReliabilityOutcome(attempt.healthOutcome)}${describeReliabilityState(attempt.healthState)}`;
-  }
-  return `${attempt.outcome}${describeReliabilityState(attempt.healthState)}${formatAttemptError(attempt)}`;
-}
-
-function describeReliabilityOutcome(outcome: NonNullable<RunActivityProfileAttempt['healthOutcome']>): string {
-  switch (outcome) {
-    case 'healthy':
-      return 'success';
-    case 'unhealthy':
-      return 'failure';
-    default:
-      return 'ignored result';
-  }
-}
-
-function describeReliabilityState(state: RunActivityProfileAttempt['healthState']): string {
-  switch (state) {
-    case 'open':
-      return '; profile suspended';
-    case 'half-open':
-      return '; recovery attempt in progress';
-    case 'closed':
-      return '; profile available';
-    default:
-      return '';
-  }
-}
-
-function formatAttemptError(attempt: RunActivityProfileAttempt): string {
-  return attempt.error ? `: ${attempt.error}` : '';
 }
 
 function getProfileAttemptStatus(attempt: RunActivityProfileAttempt): RunActivityItemStatus {
@@ -556,14 +519,21 @@ function buildDetailRows(
     rows.push({ label: 'Model call rows omitted', value: String(invocation.omittedModelCallCount) });
   }
   if ((invocation.omittedProfileAttemptCount ?? 0) > 0) {
-    rows.push({ label: 'LLM profile attempt rows omitted', value: String(invocation.omittedProfileAttemptCount) });
+    rows.push({ label: 'Profile attempt rows omitted', value: String(invocation.omittedProfileAttemptCount) });
   }
   if (invocation.omittedToolCallCount > 0) {
     rows.push({ label: 'Tool call rows omitted', value: String(invocation.omittedToolCallCount) });
   }
   if (invocation.terminalEventMissing) rows.push({ label: 'Execution record', value: 'Terminal event unavailable' });
   if (invocation.exclusionReason) rows.push({ label: 'Not run because', value: invocation.exclusionReason });
-  if (invocation.status !== 'running' && category === 'model' && invocation.modelCallCount === 0) {
+  if (
+    invocation.status !== 'running' &&
+    category === 'model' &&
+    invocation.modelCallCount === 0 &&
+    !(invocation.profileAttempts ?? []).some(
+      (attempt) => attempt.family === 'classifier' && attempt.attemptIndex != null,
+    )
+  ) {
     rows.push({
       label: 'Model call details',
       value:
@@ -592,6 +562,7 @@ function resolveCategory(
   resolvedCategory: RunActivityInvocationResolution['category'],
 ): RunActivityCategory {
   if (resolvedCategory) return resolvedCategory;
+  if (invocation.nodeType === 'classifierEvaluate') return 'model';
   if (invocation.modelCallCount > 0 || (invocation.profileAttempts?.length ?? 0) > 0) return 'model';
   if (invocation.toolCallCount > 0) return 'tool';
   return 'generic';

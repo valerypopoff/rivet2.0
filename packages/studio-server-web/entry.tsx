@@ -7,6 +7,22 @@ declare global {
   }
 }
 window.__rivetEditorBootstrapState = 'starting';
+// Dashboard embeds inherit its retention connection. A directly opened editor
+// has no dashboard, so it must retain its own lazy chunks across rebuilds.
+const generation = document.querySelector<HTMLMetaElement>('meta[name="rivet-dev-generation"]')?.content;
+if (
+  import.meta.env.VITE_TUNNEL_DEV === 'true' &&
+  generation &&
+  window.parent === window &&
+  new URLSearchParams(window.location.search).has('editor')
+) {
+  const url = `/__rivet_dev/events?generation=${encodeURIComponent(generation)}`;
+  let retention = new EventSource(url);
+  window.addEventListener('pagehide', () => retention.close());
+  window.addEventListener('pageshow', () => {
+    if (retention.readyState === EventSource.CLOSED) retention = new EventSource(url);
+  });
+}
 try {
   const { bootstrapApp } = await import('./bootstrapApp');
   await bootstrapApp();

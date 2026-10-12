@@ -961,6 +961,64 @@ test('workflow project download returns not found for missing projects', async (
   );
 });
 
+test('workflow HTTP folder destinations accept omitted, null and empty roots without accepting invalid paths', async () => {
+  const source = await workflowMutations.createWorkflowProjectItem('', 'RootUploadSource');
+  const contents = await fs.readFile(source.absolutePath, 'utf8');
+  await withWorkflowApiServer(async (baseUrl) => {
+    const post = (route: string, body: Record<string, unknown>) =>
+      fetch(`${baseUrl}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    for (const [index, destination] of [undefined, null, ''].entries()) {
+      const folderName = `RootFolder${index}`;
+      const folder = await readJson<{ folder: { relativePath: string } }>(
+        await post('/folders', { name: folderName, parentRelativePath: destination }),
+      );
+      assert.equal(folder.folder.relativePath, folderName);
+      const root = await readJson<{ project: { relativePath: string } }>(
+        await post('/projects', { name: `RootProject${index}`, folderRelativePath: destination }),
+      );
+      assert.equal(root.project.relativePath, `RootProject${index}.rivet-project`);
+      const nested = await workflowMutations.createWorkflowProjectItem(folderName, `Moved${index}`);
+      const moved = await readJson<{ project: { relativePath: string } }>(
+        await post('/move', {
+          itemType: 'project',
+          sourceRelativePath: nested.relativePath,
+          destinationFolderRelativePath: destination,
+        }),
+      );
+      assert.equal(moved.project.relativePath, `Moved${index}.rivet-project`);
+      const uploaded = await readJson<{ project: { relativePath: string } }>(
+        await post('/projects/upload', {
+          folderRelativePath: destination,
+          fileName: `Uploaded${index}.rivet-project`,
+          contents,
+        }),
+      );
+      assert.equal(uploaded.project.relativePath, `Uploaded${index}.rivet-project`);
+    }
+    for (const destination of [42, {}, [], 'a/../b', '.hidden', 'project.rivet-project']) {
+      for (const [route, body] of [
+        ['/folders', { name: 'Rejected', parentRelativePath: destination }],
+        ['/projects', { name: 'Rejected', folderRelativePath: destination }],
+        [
+          '/move',
+          { itemType: 'project', sourceRelativePath: source.relativePath, destinationFolderRelativePath: destination },
+        ],
+        ['/projects/upload', { folderRelativePath: destination, fileName: 'Rejected.rivet-project', contents }],
+      ] as const) {
+        const response = await post(route, body);
+        assert.equal(response.status, 400, `${route} must reject ${JSON.stringify(destination)}`);
+        await response.body?.cancel();
+      }
+    }
+    assert.equal(await fs.readFile(source.absolutePath, 'utf8'), contents);
+    await assert.rejects(fs.access(path.join(workflowsRoot, 'Rejected.rivet-project')), { code: 'ENOENT' });
+  });
+});
+
 test('workflow routes support folder/project create, move, rename, and delete flows over HTTP', async () => {
   await withWorkflowApiServer(async (baseUrl) => {
     const createdFolder = await readJson<{ folder: { relativePath: string } }>(

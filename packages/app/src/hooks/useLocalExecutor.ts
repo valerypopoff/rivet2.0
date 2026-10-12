@@ -1,5 +1,6 @@
 import {
   GraphProcessor,
+  InMemoryDatasetProvider,
   type NodeId,
   type StringArrayDataValue,
   type DataValue,
@@ -9,7 +10,6 @@ import {
   type GraphOutputs,
   type Project,
   type GraphId,
-  type GraphInputNode,
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
@@ -22,10 +22,12 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
+import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { useEffect, useRef } from 'react';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
 import { useStableCallback } from './useStableCallback';
+import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph';
 import { useCurrentExecution } from './useCurrentExecution';
 import { userInputModalQuestionsState } from '../state/userInput';
@@ -36,7 +38,12 @@ import {
   projectsState,
   projectState,
 } from '../state/savedGraphs';
-import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
+import {
+  recordExecutionsState,
+  settingsState,
+  showNodeRunDurationsState,
+  previousDataPerNodeToKeepState,
+} from '../state/settings';
 import { graphState } from '../state/graph';
 import {
   currentProjectLoadedRecordingState,
@@ -58,6 +65,7 @@ import {
 import {
   createEmptyProjectExecutionSnapshot,
   frozenNodeOutputsState,
+  graphRunningState,
   lastRunDataByNodeState,
   projectExecutionSnapshotsState,
 } from '../state/dataFlow';
@@ -65,6 +73,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import {
   useAudioProvider,
+  useIOProvider,
   useDataRefs,
   useDatasetProvider,
   useEnvironmentProvider,
@@ -77,14 +86,8 @@ import {
 } from '../providers/ProvidersContext';
 import { useProjectNodeRegistry } from './useProjectNodeRegistry';
 import { handleError } from '../utils/errorHandling.js';
-import {
-  createProcessEventDispatcher,
-  getDependentDataForNodeForPreload,
-  getEditorRunFromPlan,
-  getEditorRunToPlan,
-} from './remoteExecutorHelpers.js';
+import { createProcessEventDispatcher } from './remoteExecutorHelpers.js';
 import { pluginsState } from '../state/plugins.js';
-import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
 import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js';
 import { recordingStatusAfterAbort, shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
@@ -96,31 +99,13 @@ import {
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
 import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
-
-function evaluationInputsToGraphOutputs(
-  project: Project,
-  graphId: GraphId,
-  inputs: Record<string, PortableJson>,
-): GraphOutputs {
-  const graph = project.graphs[graphId];
-  if (!graph) {
-    throw new Error(`Evaluation target graph "${graphId}" does not exist.`);
-  }
-  const inputsById = new Map(
-    graph.nodes
-      .filter((node): node is GraphInputNode => node.type === 'graphInput')
-      .map((node) => [node.data.id, node]),
-  );
-  return Object.fromEntries(
-    Object.entries(inputs).map(([inputId, value]) => {
-      const graphInput = inputsById.get(inputId);
-      if (!graphInput) {
-        throw new Error(`Evaluation provided unknown graph input "${inputId}".`);
-      }
-      return [inputId, { type: graphInput.data.dataType, value }];
-    }),
-  ) as GraphOutputs;
-}
+import {
+  captureEditorRun,
+  evaluationInputsToGraphOutputs,
+  prepareEditorRunSelection,
+  prepareEvaluationRun,
+} from './preparedEditorRun.js';
+import { EditorRunSession } from './editorRunSession.js';
 
 function createEvaluationRecordingReference(): EvaluationRecordingReference {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -152,12 +137,17 @@ function createEvaluationRecordingReference(): EvaluationRecordingReference {
 function yieldToMacrotask(): Promise<void> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    channel.port1.onmessage = () => resolve();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      resolve();
+    };
     channel.port2.postMessage(undefined);
   });
 }
 
 export function useLocalExecutor() {
+  const ioProvider = useIOProvider();
   const audioProvider = useAudioProvider();
   const dataRefs = useDataRefs();
   const datasetProvider = useDatasetProvider();
@@ -172,7 +162,9 @@ export function useLocalExecutor() {
   const project = useAtomValue(projectState);
   const graph = useAtomValue(graphState);
   const store = useStore();
+  const routeBundleExecution = useBundleExecutionRouting();
   const currentProcessorsByProjectId = useRef(new Map<ProjectId, GraphProcessor>());
+  const activeRunControllersByProjectId = useRef(new Map<ProjectId, EditorRunSession>());
   const evaluationAbortControllersByProjectId = useRef(new Map<ProjectId, AbortController>());
   const saveGraph = useSaveCurrentGraph();
   const currentExecution = useCurrentExecution();
@@ -199,6 +191,9 @@ export function useLocalExecutor() {
 
   useEffect(() => {
     const openProjectIds = new Set(Object.keys(openedProjects));
+    for (const [projectId, controller] of activeRunControllersByProjectId.current) {
+      if (!openProjectIds.has(projectId)) controller.abort(new DOMException('Project closed.', 'AbortError'));
+    }
 
     for (const [projectId, processor] of currentProcessorsByProjectId.current) {
       if (openProjectIds.has(projectId)) {
@@ -243,6 +238,7 @@ export function useLocalExecutor() {
     data: ProcessEventMessageMap[K],
     dispatchActive: () => void,
   ) {
+    routeBundleExecution(runProjectId, message, data);
     const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
     const openedProjectsState = store.get(projectsState).openedProjects;
 
@@ -268,6 +264,7 @@ export function useLocalExecutor() {
         projectId: runProjectId,
         refStore: dataRefs,
         snapshots: previousSnapshots,
+        previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
       }),
     );
   }
@@ -442,6 +439,7 @@ export function useLocalExecutor() {
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     const recordingToReplay = loadedRecording;
     const runProjectId = project.metadata.id;
+    const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
 
     if (!runProjectId) {
       return;
@@ -450,6 +448,7 @@ export function useLocalExecutor() {
     options.abortSignal?.throwIfAborted();
 
     if (
+      activeRunControllersByProjectId.current.has(runProjectId) ||
       currentProcessorsByProjectId.current.get(runProjectId)?.isRunning ||
       (recordingToReplay && recordingPlaybackStartingRef.current)
     ) {
@@ -476,14 +475,39 @@ export function useLocalExecutor() {
     let finalizeCapturedRecording: (() => Promise<void>) | undefined;
     let localRecordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'succeeded';
     let localRecordingErrorMessage: string | undefined;
-    const handleAbort = () => {
-      void processor?.abort();
-    };
-
+    let processorEmittedError = false;
+    const runSession = new EditorRunSession(options.abortSignal);
+    const preparation = runSession.controller;
+    activeRunControllersByProjectId.current.set(runProjectId, runSession);
+    // Discovery is async and precedes GraphProcessor's start event. Reserve the
+    // run and allow Abort while reading, rather than starting a second run.
+    store.set(graphRunningState, true);
     try {
+      const savedGraph = saveGraph() ?? graph;
+      const captured = captureEditorRun({
+        project,
+        currentGraph: savedGraph,
+        projectData,
+        plugins: { appPluginStates: pluginStates, currentGraph: savedGraph, registry: projectNodeRegistry },
+        options,
+      });
+      options = captured.options;
+      const tempProject = captured.project;
+      const graphToRun = captured.graphId;
+      const contextValues = getProjectContextValues(projectContext);
+      const runSettings = structuredClone(savedSettings);
+      // Capture before any awaited preparation can select another tab's data.
+      const entryDatasets =
+        ioProvider.readProjectBundle && loadedProject.path
+          ? datasetProvider.exportDatasetsForProject(runProjectId)
+          : Promise.resolve([]);
+      // Observe a rejection even if preparation fails before consumption;
+      // awaiting the original promise below still reports that failure.
+      void entryDatasets.catch(() => {});
       if (recordingToReplay) {
         await yieldToMacrotask();
         options.abortSignal?.throwIfAborted();
+        preparation.signal.throwIfAborted();
 
         // The user can close this tab during the repaint yield. Its recording
         // is released synchronously on close, so do not construct a hidden
@@ -492,27 +516,6 @@ export function useLocalExecutor() {
           return undefined;
         }
       }
-
-      const savedGraph = saveGraph() ?? graph;
-
-      const graphToRun = options.graphId ?? graph.metadata!.id!;
-
-      const tempProject = withDerivedProjectPluginSpecs(
-        {
-          ...project,
-          // Include the just-saved version of the currently selected graph, because saveGraph won't update the `project` until next render
-          graphs: {
-            ...project.graphs,
-            [savedGraph.metadata!.id!]: savedGraph,
-          },
-          data: projectData,
-        },
-        {
-          appPluginStates: pluginStates,
-          currentGraph: savedGraph,
-          registry: projectNodeRegistry,
-        },
-      );
 
       // Playback only re-emits evidence from a previous execution. Recording
       // those delivery events would replace the live recording with a fast,
@@ -541,6 +544,7 @@ export function useLocalExecutor() {
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
         captureNodeTimings: showNodeRunDurations,
       });
+      runSession.bindCancellation(() => processor!.abort());
       responseTraceCollector = options.onResponseTrace ? new AgentResponseTraceCollector(processor) : undefined;
       for (const [name, externalFunction] of Object.entries(options.externalFunctions ?? {})) {
         processor.setExternalFunction(name, externalFunction);
@@ -550,41 +554,34 @@ export function useLocalExecutor() {
       if (options.onProgress) {
         processor.on('progress', ({ progress }) => options.onProgress?.(progress));
       }
-      options.abortSignal?.addEventListener('abort', handleAbort, { once: true });
       options.abortSignal?.throwIfAborted();
       processor.executor = 'browser';
       processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
 
-      if (options.from) {
-        const runFromPlan = getEditorRunFromPlan(tempProject, graphToRun, options.from, projectNodeRegistry);
-        processor.runToNodeIds = runFromPlan.runToNodeIds;
-        const preloadData = getDependentDataForNodeForPreload(
-          runFromPlan.preloadNodeIds,
-          lastRunData,
-          loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
-        );
-        for (const [nodeId, outputs] of Object.entries(preloadData)) {
+      const selection = prepareEditorRunSelection({
+        project: tempProject,
+        graphId: graphToRun,
+        options,
+        registry: projectNodeRegistry,
+        previousRunData: lastRunData,
+        frozen: loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
+      });
+      processor.runToNodeIds = selection.runToNodeIds;
+      if (selection.preloadData) {
+        for (const [nodeId, outputs] of Object.entries(selection.preloadData)) {
           processor.preloadNodeData(nodeId as NodeId, outputs);
         }
-        currentExecution.preserveNodeRunDataForNextStart(runFromPlan.preserveNodeIds);
-        currentExecution.suppressPreloadedNodeEventsForCurrentRun(runFromPlan.preloadNodeIds);
-      } else if (options.to) {
-        const runToPlan = getEditorRunToPlan(
-          tempProject,
-          graphToRun,
-          options.to,
-          projectNodeRegistry,
-          loadedRecording ? undefined : { frozenNodeOutputs },
-        );
-        processor.runToNodeIds = runToPlan.runToNodeIds;
-        currentExecution.preserveNodeRunDataForNextStart(runToPlan.preserveNodeIds);
       }
+      if (selection.preserveNodeIds) currentExecution.preserveNodeRunDataForNextStart(selection.preserveNodeIds);
+      if (selection.suppressPreloadedNodeIds)
+        currentExecution.suppressPreloadedNodeEventsForCurrentRun(selection.suppressPreloadedNodeIds);
 
       if (recorder) {
         recorder.record(processor);
       }
 
       processor.on('error', (event) => {
+        processorEmittedError = true;
         localRecordingStatus = 'failed';
         localRecordingErrorMessage = event.error instanceof Error ? event.error.message : event.error;
       });
@@ -641,30 +638,40 @@ export function useLocalExecutor() {
       let results: GraphOutputs;
 
       if (recordingToReplay) {
+        preparation.signal.throwIfAborted();
         results = await processor.replayRecording(recordingToReplay.recorder);
       } else {
+        const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
+        options.abortSignal?.throwIfAborted();
+        preparation.signal.throwIfAborted();
+        const bundleRuntime = bundle?.createRuntime(
+          tempProject,
+          new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
+        );
+        preparation.signal.throwIfAborted();
         processor.setFrozenNodeOutputResolver(
           createFrozenNodeOutputResolver(cloneFrozenNodeOutputsForExecutor(frozenNodeOutputs)),
         );
-        const contextValues = getProjectContextValues(projectContext);
-
+        const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
+          runSettings,
+          projectNodeRegistry.getPlugins(),
+          {
+            environmentProvider,
+            extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(tempProject),
+          },
+        );
+        preparation.signal.throwIfAborted();
         results = await processor.processGraph(
           {
-            settings: await fillMissingSettingsFromEnvironmentVariables(
-              savedSettings,
-              projectNodeRegistry.getPlugins(),
-              {
-                environmentProvider,
-                extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(tempProject),
-              },
-            ),
+            settings: runtimeSettings,
             nativeApi: new TauriNativeApi(),
-            datasetProvider,
+            datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
             audioProvider,
             tokenizer: new GptTokenizerTokenizer(),
             projectPath: loadedProject.path ?? undefined,
-            projectReferenceLoader: new TauriProjectReferenceLoader(pathPolicy),
-            subgraphProjectLoader,
+            projectReferenceLoader:
+              bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
+            subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
             onSubgraphProjectRun:
               shouldRecordExecution && localRecordingProvider ? persistSubgraphProjectRun : undefined,
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
@@ -683,6 +690,14 @@ export function useLocalExecutor() {
       if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
+      if (preparation.signal.aborted) {
+        localRecordingStatus = 'failed';
+        localRecordingErrorMessage = 'Run cancelled.';
+        if (store.get(projectState).metadata.id === runProjectId)
+          currentExecution.clearNodeRunDataPreservationForNextStart();
+        if (options.throwOnError) throw preparation.signal.reason;
+        return undefined;
+      }
       localRecordingStatus = 'failed';
       localRecordingErrorMessage = e instanceof Error ? e.message : String(e);
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
@@ -707,13 +722,16 @@ export function useLocalExecutor() {
       if (options.throwOnError) {
         throw e;
       }
+      // Processor errors are presented by its root error event. Preparation
+      // failures never emit that event, so present them at this owning boundary.
+      if (!processorEmittedError && runProjectIsActive) handleError(e, 'Failed to start local graph run');
       return undefined;
     } finally {
       const cleanupProcessorRun = () => {
         responseTraceCollector?.dispose();
-        options.abortSignal?.removeEventListener('abort', handleAbort);
-
-        if (processor && runProjectId && store.get(projectState).metadata.id === runProjectId) {
+        const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === runSession;
+        if (ownsRun) activeRunControllersByProjectId.current.delete(runProjectId);
+        if (ownsRun && store.get(projectState).metadata.id === runProjectId) {
           dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
         }
 
@@ -725,10 +743,11 @@ export function useLocalExecutor() {
       const completion = processor?.isRunning
         ? processor.waitForRunCompletion().catch(() => undefined)
         : Promise.resolve();
-      void completion.finally(cleanupProcessorRun);
-      if (finalizeCapturedRecording) {
-        void completion.then(() => finalizeCapturedRecording!()).catch(() => undefined);
-      }
+      runSession.onDispose(cleanupProcessorRun);
+      if (finalizeCapturedRecording) runSession.onDispose(finalizeCapturedRecording);
+      void completion
+        .then(() => runSession.dispose())
+        .catch((error) => logRuntimeDebug('Editor run cleanup failed.', { error, projectId: runProjectId }));
 
       if (recordingToReplay) {
         // A closed owner can be replaced by another tab's recording while this
@@ -752,26 +771,19 @@ export function useLocalExecutor() {
       projectOverride?: Project;
       purpose: EvaluationRunPurpose;
     }) => {
-      const suite = evaluations.data.suites.find((candidate) => candidate.id === suiteId);
-      const dataset = evaluations.datasets.find((candidate) => candidate.id === suite?.datasetId);
-      if (!suite || !dataset) {
-        throw new Error('The selected evaluation suite or its dataset no longer exists.');
-      }
-
-      const evaluationBaseProject = projectOverride ?? project;
-      // A suite can target any graph, not just the canvas graph that happened
-      // to be open when the user pressed Run. Derive plugin requirements from
-      // the suite target so the execution project and the runner agree.
-      const evaluationGraph = evaluationBaseProject.graphs[suite.targetGraphId];
-      if (!evaluationGraph) {
-        throw new Error(`Evaluation target graph "${suite.targetGraphId}" no longer exists.`);
-      }
-      const projectForEvaluation = withDerivedProjectPluginSpecs(evaluationBaseProject, {
-        appPluginStates: pluginStates,
-        currentGraph: evaluationGraph,
-        registry: projectNodeRegistry,
+      const {
+        suite,
+        dataset,
+        project: projectForEvaluation,
+      } = prepareEvaluationRun({
+        suiteId,
+        suites: evaluations.data.suites,
+        datasets: evaluations.datasets,
+        project: projectOverride ?? project,
+        plugins: { appPluginStates: pluginStates, registry: projectNodeRegistry },
       });
       const runProjectId = projectForEvaluation.metadata.id;
+      const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
       if (!runProjectId) throw new Error('Cannot run an evaluation without a project id.');
 
       if (evaluationAbortControllersByProjectId.current.has(runProjectId)) {
@@ -799,6 +811,11 @@ export function useLocalExecutor() {
 
       try {
         ensureActiveEvaluationProject();
+        const entryDatasets =
+          ioProvider.readProjectBundle && loadedProject.path
+            ? datasetProvider.exportDatasetsForProject(runProjectId)
+            : Promise.resolve([]);
+        void entryDatasets.catch(() => {});
         const runKind = purpose === 'evaluation' ? 'evaluation' : 'execution benchmark';
         runningToastId = toast.info(`Running ${runKind}: ${suite.name}`);
         logRuntimeInfo(`Running local ${runKind}`, { suiteId, suiteName: suite.name });
@@ -879,22 +896,35 @@ export function useLocalExecutor() {
               }
             };
             try {
+              const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
+              signal?.throwIfAborted();
+              const bundleRuntime = bundle?.createRuntime(
+                evaluationProject,
+                new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
+              );
+              signal?.throwIfAborted();
+              const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
+                savedSettings,
+                projectNodeRegistry.getPlugins(),
+                {
+                  environmentProvider,
+                  extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
+                },
+              );
+              signal?.throwIfAborted();
               const outputs = await processor.processGraph(
                 {
-                  settings: await fillMissingSettingsFromEnvironmentVariables(
-                    savedSettings,
-                    projectNodeRegistry.getPlugins(),
-                    {
-                      environmentProvider,
-                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
-                    },
-                  ),
+                  settings: runtimeSettings,
                   nativeApi: new TauriNativeApi(),
-                  datasetProvider,
+                  datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
                   audioProvider,
                   tokenizer: new GptTokenizerTokenizer(),
                   llmProfileHealthStore,
                   evaluation: metadata,
+                  projectPath: loadedProject.path ?? undefined,
+                  projectReferenceLoader:
+                    bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
+                  subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
                 },
                 evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
                 getProjectContextValues(projectContext),
@@ -955,6 +985,7 @@ export function useLocalExecutor() {
       evaluationAbortController.abort(new DOMException('Evaluation canceled.', 'AbortError'));
       return;
     }
+    activeRunControllersByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
     currentProcessorsByProjectId.current.get(project.metadata.id as ProjectId)?.abort();
   }
 

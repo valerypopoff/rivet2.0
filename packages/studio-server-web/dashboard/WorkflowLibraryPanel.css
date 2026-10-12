@@ -818,6 +818,10 @@
   cursor: pointer;
 }
 
+.workflow-library-panel .folder-row.contains-selection {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .workflow-library-panel .folder-row.editing {
   cursor: default;
   background: rgba(255, 255, 255, 0.08);

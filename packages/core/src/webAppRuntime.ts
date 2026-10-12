@@ -15,6 +15,13 @@ export type {
 export type { GraphProgress } from './model/GraphProgress.js';
 export type { AgentResponseTrace } from './model/AgentResponseTrace.js';
 export { isAgentResponseTrace } from './model/AgentResponseTrace.js';
+export {
+  buildAgentProfileAttemptInspectorRows,
+  getClassifierRequestCount,
+  formatClassifierRequestCount,
+  getProfileAttemptOmissionNotice,
+  isClassifierRequest,
+} from './model/AgentResponseTracePresentation.js';
 export type {
   WebAppBrowserStorage,
   WebAppBrowserStorageBatchChange,

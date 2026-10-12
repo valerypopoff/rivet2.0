@@ -37,6 +37,8 @@ export function applyLLMChatV2ParallelToolCallProviderOptions(params: {
   }
 
   switch (provider) {
+    case 'openrouter':
+      return mergeProviderOptions(providerOptions, provider, { parallel_tool_calls: !!parallelToolCalls });
     case 'openai':
       return mergeProviderOptions(providerOptions, provider, {
         parallelToolCalls: !!parallelToolCalls,

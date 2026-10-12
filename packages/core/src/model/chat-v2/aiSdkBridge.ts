@@ -15,6 +15,10 @@ import { normalizeTemperature } from './temperature.js';
 
 type GenerateTextArgs = Parameters<typeof generateText>[0];
 type GenerateStepToolCall = NonNullable<ChatV2GenerateHandle['toolCalls']>[number];
+type GenerateStepEvidence = {
+  toolCalls: GenerateStepToolCall[];
+  providerMetadata?: StreamChatV2Result['providerMetadata'];
+};
 
 function keepPromiseHandled<T>(value: PromiseLike<T>): Promise<T> {
   const promise = Promise.resolve(value);
@@ -104,7 +108,7 @@ async function resolveGenerateStructuredOutput(
 function recoverGenerateStructuredOutputError(
   error: unknown,
   options: StreamChatV2Options,
-  toolCalls: ChatV2GenerateHandle['toolCalls'],
+  evidence: GenerateStepEvidence,
 ): StreamChatV2Result | undefined {
   if (options.responseOutput == null || !isChatV2StructuredResponseFormat(options.responseFormat)) {
     return undefined;
@@ -124,29 +128,35 @@ function recoverGenerateStructuredOutputError(
   return {
     responseText,
     structuredOutput: undefined,
-    functionCalls: toStreamedFunctionCalls(toolCalls),
+    functionCalls: toStreamedFunctionCalls(evidence.toolCalls),
     usage: error.usage,
     reasoning: '',
     finishReason: error.finishReason == null ? undefined : String(error.finishReason),
-    providerMetadata: undefined,
+    // Output parsing runs after onStepFinish. Keep the actual provider billing
+    // metadata even when the SDK rejects the generated structured value.
+    providerMetadata: evidence.providerMetadata,
     requestStatus: undefined,
   };
 }
 
-function attachGenerateStepToolCallCollector(args: GenerateTextArgs): ChatV2GenerateHandle['toolCalls'] {
-  const toolCalls: GenerateStepToolCall[] = [];
+function attachGenerateStepCollector(args: GenerateTextArgs): GenerateStepEvidence {
+  const evidence: GenerateStepEvidence = { toolCalls: [] };
   const previousOnStepFinish = args.onStepFinish;
 
   args.onStepFinish = async (event) => {
-    const stepToolCalls = (event as { toolCalls?: readonly GenerateStepToolCall[] }).toolCalls;
-    if (stepToolCalls != null) {
-      toolCalls.push(...stepToolCalls);
+    const step = event as {
+      toolCalls?: readonly GenerateStepToolCall[];
+      providerMetadata?: StreamChatV2Result['providerMetadata'];
+    };
+    if (step.toolCalls != null) {
+      evidence.toolCalls.push(...step.toolCalls);
     }
+    evidence.providerMetadata = step.providerMetadata;
 
     await previousOnStepFinish?.(event);
   };
 
-  return toolCalls;
+  return evidence;
 }
 
 function collapseRepeatedStructuredJsonText(responseText: string): string {
@@ -444,7 +454,7 @@ export async function streamChatV2(options: StreamChatV2Options): Promise<Stream
 
 export async function generateChatV2(options: StreamChatV2Options): Promise<StreamChatV2Result> {
   const args = buildTextArgs(options) as Parameters<typeof generateText>[0];
-  const stepToolCalls = attachGenerateStepToolCallCollector(args);
+  const stepEvidence = attachGenerateStepCollector(args);
   try {
     options.onRequestStarted?.();
   } catch {
@@ -457,7 +467,7 @@ export async function generateChatV2(options: StreamChatV2Options): Promise<Stre
       options,
     );
   } catch (error) {
-    const recovered = recoverGenerateStructuredOutputError(error, options, stepToolCalls);
+    const recovered = recoverGenerateStructuredOutputError(error, options, stepEvidence);
     if (recovered != null) {
       return recovered;
     }
@@ -468,7 +478,7 @@ export async function generateChatV2(options: StreamChatV2Options): Promise<Stre
   const isStructuredOutput = isChatV2StructuredResponseFormat(options.responseFormat);
   const responseText = isStructuredOutput ? collapseRepeatedStructuredJsonText(result.text) : result.text;
   const functionCalls = toStreamedFunctionCalls(
-    result.toolCalls != null && result.toolCalls.length > 0 ? result.toolCalls : stepToolCalls,
+    result.toolCalls != null && result.toolCalls.length > 0 ? result.toolCalls : stepEvidence.toolCalls,
   );
   const reasoningPromise = resolveGenerateReasoning(result);
   const usagePromise = resolveGenerateUsage(result);

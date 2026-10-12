@@ -81,6 +81,15 @@ function getModelBodyLabel(data: LLMChatV2ProfileData): string {
 
 function getProviderBodyFields(data: LLMChatV2ProfileData): LLMProfileBodyField[] {
   switch (data.provider) {
+    case 'openrouter':
+      return data.openRouterReasoningEffort
+        ? [
+            {
+              label: 'Reasoning effort',
+              value: getOptionLabel(openAIReasoningEffortOptions, data.openRouterReasoningEffort),
+            },
+          ]
+        : [];
     case 'openai':
       return [
         getOptionalStringBodyField(

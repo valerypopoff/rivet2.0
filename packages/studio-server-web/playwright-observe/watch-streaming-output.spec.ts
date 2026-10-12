@@ -1,4 +1,4 @@
-import { expect, type FrameLocator, type Page, test } from '@playwright/test';
+import { expect, type FrameLocator, type Locator, type Page, test } from '@playwright/test';
 import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject, type SeedHostedEditorProjectOptions } from './helpers/hostedEditorStorage';
 import { createServer, type ServerResponse } from 'node:http';
@@ -32,7 +32,7 @@ for (const scenario of [
   'deep-input',
   'nested-stop',
 ] as const) {
-  test(`live preview and Watch share a stream: ${scenario}`, async ({ page }) => {
+  test(`live preview and Watch share a stream: ${scenario}`, async ({ page }, testInfo) => {
     const pageErrors: string[] = [];
     const hasStop = scenario === 'parallel-stop' || scenario === 'unmatched-stop' || scenario === 'nested-stop';
     const nestedInput = scenario === 'nested-input' || scenario === 'deep-input' || scenario === 'nested-stop';
@@ -327,7 +327,17 @@ for (const scenario of [
           await editor.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
         await expect(consumer).toBeVisible();
       }
-      chunk(firstChunk);
+      const repaintSamples: number[] = [];
+      let visibleStream = '';
+      const sendChunk = async (text: string) => {
+        if (scenario !== 'text') {
+          chunk(text);
+          return;
+        }
+        visibleStream += text;
+        repaintSamples.push(await measureStreamRepaint(consumer, () => chunk(text), visibleStream));
+      };
+      await sendChunk(firstChunk);
       if (nestedInput) await expect(consumer.locator('.node-output')).toHaveCount(0);
       else await expect(consumer.locator('.live-streaming-input-preview')).toContainText('hello');
       await expect(consumer).not.toHaveClass(/success/);
@@ -345,7 +355,18 @@ for (const scenario of [
         expect(pageErrors).toEqual([]);
         return;
       }
-      chunk(lastChunk);
+      await sendChunk(lastChunk);
+      if (scenario === 'text') {
+        await testInfo.attach('stream-repaint-samples.json', {
+          body: JSON.stringify({
+            // Local transport + SDK + React update + two animation frames.
+            // A paint opportunity, not a compositor/pixel or baseline comparison.
+            samplesMs: repaintSamples,
+            browser: testInfo.project.name,
+          }),
+          contentType: 'application/json',
+        });
+      }
       if (nestedInput && !hasStop) {
         const output = editor.locator('.node[data-nodeid="branch"] .node-output');
         await expect(output).toHaveClass(/multi/);
@@ -414,6 +435,34 @@ for (const scenario of [
       response?.end();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+}
+
+async function measureStreamRepaint(consumer: Locator, emit: () => void, expected: string): Promise<number> {
+  await consumer.evaluate((element, text) => {
+    const started = performance.now();
+    const sample = new Promise<number>((resolve, reject) => {
+      const observer = new MutationObserver(() => {
+        if (!element.querySelector('.live-streaming-input-preview')?.textContent?.includes(text)) return;
+        observer.disconnect();
+        clearTimeout(timeout);
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - started)));
+      });
+      const timeout = setTimeout(() => {
+        observer.disconnect();
+        reject(new Error('Streaming preview did not render the measured chunk'));
+      }, 10_000);
+      observer.observe(element, { subtree: true, childList: true, characterData: true });
+    });
+    Reflect.set(element, '__rivetStreamRepaintSample', sample);
+  }, expected);
+  emit();
+  return consumer.evaluate(async (element) => {
+    try {
+      return await (Reflect.get(element, '__rivetStreamRepaintSample') as Promise<number>);
+    } finally {
+      Reflect.deleteProperty(element, '__rivetStreamRepaintSample');
     }
   });
 }
@@ -632,7 +681,7 @@ test('Watch Streaming Output accepts a named Subgraph streaming output', async (
         name: 'Streaming child',
         nodes: [
           {
-            data: {},
+            data: { useAsGraphPartialOutput: true },
             id: 'child-llm',
             title: 'LLM Chat',
             type: 'llmChatV2',

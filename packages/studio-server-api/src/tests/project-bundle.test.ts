@@ -72,6 +72,19 @@ test('export closure packages actual bytes and produces a relocatable locally ru
     const extracted = path.join(temporary, 'elsewhere');
     await extractProjectBundleFixture(bytes, extracted);
     const bundle = await loadProjectBundle(path.join(extracted, 'rivet-bundle.json'));
+    assert.equal(bundle.manifest.requiredLoaderVersion, 2);
+    for (const artifact of bundle.manifest.artifacts) {
+      assert.deepEqual(Object.keys(artifact.project), ['path']);
+      if (artifact.datasets) assert.deepEqual(Object.keys(artifact.datasets), ['path']);
+    }
+    const exportedManifest = JSON.parse(await fs.readFile(path.join(extracted, 'rivet-bundle.json'), 'utf8'));
+    assert.ok(
+      exportedManifest.artifacts.every(
+        (artifact: { project: object; datasets?: object }) =>
+          Object.keys(artifact.project).join() === 'path' &&
+          (!artifact.datasets || Object.keys(artifact.datasets).join() === 'path'),
+      ),
+    );
     const processor = bundle.createProcessor();
     try {
       assert.equal((await processor.run()).result?.value, 'child-result');
@@ -189,6 +202,111 @@ test('collection is coherent, bounded, deduplicated and checks source changes be
     }),
     /size limit/,
   );
+});
+
+test('export verification rejects changed version selections and revisions even with identical payloads', async () => {
+  for (const member of ['root', 'child'] as const) {
+    for (const field of ['selectedVersion', 'revisionKey'] as const) {
+      const f = projectBundleFixture();
+      f.source.versionPolicy = 'published';
+      const capture = await collectProjectBundle({
+        source: f.source,
+        rootVersion: 'published',
+        signal: new AbortController().signal,
+        writeFile: async () => {},
+        progress() {},
+      });
+      await capture.verify();
+      if (field === 'selectedVersion') f[member].selectedVersion = 'published';
+      else f[member].revisionKey = 'new-revision';
+      await assert.rejects(capture.verify(), /changed while exporting/, `${member} ${field}`);
+    }
+  }
+});
+
+test('bundle-wide exports support the full 256-project limit with both version bindings', async () => {
+  const f = projectBundleFixture();
+  const children = new Map([[f.child.project.metadata.id, f.child]]);
+  for (let index = 1; index < 255; index++) {
+    const child = structuredClone(f.child);
+    child.project.metadata.id = `child-${index}` as ProjectId;
+    child.projectContents = serializeProject(child.project) as string;
+    children.set(child.project.metadata.id, child);
+  }
+  f.root.project.references = [...children.keys()].map((id) => ({ id }));
+  f.root.projectContents = serializeProject(f.root.project) as string;
+  f.source.versionPolicy = 'latest';
+  f.source.reference = async (id) => children.get(id as ProjectId)!;
+  const options = {
+    source: f.source,
+    rootVersion: 'latest' as const,
+    signal: new AbortController().signal,
+    writeFile: async () => {},
+    progress() {},
+  };
+  const capture = await collectProjectBundle(options);
+  assert.equal(capture.manifest.artifacts.length, 256);
+  assert.equal(capture.manifest.targets.length, 512);
+  await capture.verify();
+  // Titles within the per-string limit can still overflow the serialized
+  // manifest, especially in UTF-8. Never export a ZIP that the loaders reject.
+  for (const child of children.values()) {
+    child.project.metadata.title = '界'.repeat(4096);
+    child.projectContents = serializeProject(child.project) as string;
+  }
+  let wroteManifest = false;
+  await assert.rejects(
+    collectProjectBundle({
+      ...options,
+      writeFile: async (file) => {
+        if (file === 'rivet-bundle.json') wroteManifest = true;
+      },
+    }),
+    /manifest exceeds the 1 MiB loader limit/,
+  );
+  assert.equal(wroteManifest, false);
+  const extra = structuredClone(f.child);
+  extra.project.metadata.id = 'one-too-many' as ProjectId;
+  extra.projectContents = serializeProject(extra.project) as string;
+  children.set(extra.project.metadata.id, extra);
+  f.root.project.references.push({ id: extra.project.metadata.id });
+  f.root.projectContents = serializeProject(f.root.project) as string;
+  await assert.rejects(collectProjectBundle(options), /exceeds 256 project snapshots/);
+});
+
+test('export-wide selection survives job restart and is described accurately in the archive', async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-policy-'));
+  const jobs = new ProjectBundleJobs(temporary);
+  let restarted: ProjectBundleJobs | undefined;
+  try {
+    const f = projectBundleFixture();
+    f.source.versionPolicy = 'latest';
+    const admitted = await jobs.start(f.source, 'latest');
+    assert.equal(admitted.versionPolicy, 'latest');
+    let status = await jobs.status(admitted.id);
+    for (let attempt = 0; attempt < 200 && ['collecting', 'packaging'].includes(status.phase); attempt++) {
+      await delay(10);
+      status = await jobs.status(admitted.id);
+    }
+    assert.equal(status.phase, 'ready', JSON.stringify(status));
+    await jobs.dispose();
+    restarted = new ProjectBundleJobs(temporary);
+    assert.equal((await restarted.status(admitted.id)).versionPolicy, 'latest');
+    const download = await restarted.download(admitted.id);
+    try {
+      const extracted = path.join(temporary, 'extracted');
+      await extractProjectBundleFixture(await fs.readFile(download.archive), extracted);
+      const readme = await fs.readFile(path.join(extracted, 'README.txt'), 'utf8');
+      assert.match(readme, /Version selection for all projects: latest/);
+      assert.doesNotMatch(readme, /published root may include latest targets/);
+    } finally {
+      download.release();
+    }
+  } finally {
+    await restarted?.dispose();
+    await jobs.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test('closure includes prefab and non-main dependencies, legacy back-edges, attachments and another root version', async () => {
@@ -1018,6 +1136,17 @@ test('filesystem saved export HTTP requires auth and supports exact Range/If-Ran
     await fs.writeFile(path.join(suite.workflowsRoot, 'child.rivet-project'), f.child.projectContents);
     const captured = await createSavedBundleSource('root.rivet-project', 'live').root();
     assert.equal(captured.project.metadata.id, f.root.project.metadata.id);
+    const fallback = await collectProjectBundle({
+      source: createSavedBundleSource('root.rivet-project', 'published', 'published'),
+      rootVersion: 'published',
+      signal: new AbortController().signal,
+      writeFile: async () => {},
+      progress() {},
+    });
+    assert.equal(fallback.manifest.versionPolicy, 'published');
+    assert.equal(fallback.manifest.artifacts.length, 2);
+    assert.ok(fallback.manifest.artifacts.every((artifact) => artifact.version === 'latest'));
+    await fallback.verify();
     await withEnvOverride('RIVET_KEY', 'bundle-fixture-key-not-a-real-secret', async () => {
       await suite.withWorkflowApiServer(async (base) => {
         const url = `${base}/project-bundles`;

@@ -1,15 +1,24 @@
 import { useAtomValue, useSetAtom } from 'jotai';
-import { loadProjectReferenceTree } from '@valerypopoff/rivet2-core';
-import { loadedProjectState, projectState, referencedProjectsState } from '../state/savedGraphs';
+import {
+  loadProjectReferenceTree,
+  getSubgraphProjectKey,
+  type ProjectReferenceLoader,
+  type ProjectId,
+} from '@valerypopoff/rivet2-core';
+import { loadedProjectState, projectState, projectsState, referencedProjectsState } from '../state/savedGraphs';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { TauriProjectReferenceLoader } from '../model/TauriProjectReferenceLoader';
 import { handleError } from '../utils/errorHandling.js';
-import { usePathPolicyProvider } from '../providers/ProvidersContext.js';
+import { usePathPolicyProvider, useIOProvider } from '../providers/ProvidersContext.js';
+import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
 
 export function useReloadProjectReferences() {
   const project = useAtomValue(projectState);
   const loadedProject = useAtomValue(loadedProjectState);
+  const openedProjects = useAtomValue(projectsState);
+  const bundleManifestPath = openedProjects.openedProjects[project.metadata.id]?.bundleManifestPath;
   const pathPolicy = usePathPolicyProvider();
+  const ioProvider = useIOProvider();
 
   const setReferencedProjects = useSetAtom(referencedProjectsState);
   const reloadGeneration = useRef(0);
@@ -30,8 +39,27 @@ export function useReloadProjectReferences() {
     // while the current reference closure is still loading.
     setReferencedProjects({});
     try {
-      const loader = new TauriProjectReferenceLoader(pathPolicy);
+      // The saved bundle binding also owns editor definitions. A nested member
+      // cannot rediscover the manifest from its immediate parent directory.
+      const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
+      const loader: ProjectReferenceLoader = bundle
+        ? {
+            async loadProject(_path, reference) {
+              const artifactId = bundle.manifest.references.find(
+                (binding) => binding.projectId === reference.id,
+              )?.artifact;
+              const snapshot = artifactId && bundle.snapshots.get(artifactId);
+              if (!snapshot) throw new Error(`Bundle has no reference binding for ${reference.id}.`);
+              return snapshot.project;
+            },
+          }
+        : new TauriProjectReferenceLoader(pathPolicy);
       const references = await loadProjectReferenceTree(referenceRoot, loadedProject.path ?? undefined, loader);
+      if (bundle)
+        for (const target of bundle.manifest.targets) {
+          references[getSubgraphProjectKey({ projectId: target.projectId as ProjectId, version: target.version })] =
+            bundle.snapshots.get(target.artifact)!.project;
+        }
       if (generation === reloadGeneration.current) {
         // External Subgraph previews can finish while legacy references load.
         // They have separate, versioned keys and must not be overwritten.
@@ -53,7 +81,7 @@ export function useReloadProjectReferences() {
         },
       });
     }
-  }, [loadedProject.path, pathPolicy, referenceRoot, setReferencedProjects]);
+  }, [loadedProject.path, bundleManifestPath, pathPolicy, referenceRoot, setReferencedProjects, ioProvider]);
 
   useEffect(() => {
     void reloadReferences();

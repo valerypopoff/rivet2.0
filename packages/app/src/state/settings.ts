@@ -26,6 +26,7 @@ export const settingsState = atomWithStorage<Settings>(
     openAiKey: '',
     anthropicApiKey: '',
     googleApiKey: '',
+    openRouterApiKey: '',
     customAiApiKey: '',
     openAiOrganization: '',
     openAiEndpoint: '',
