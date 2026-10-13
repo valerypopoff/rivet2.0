@@ -63,6 +63,10 @@ The local App Settings candidate-import regression asserts the structured
 `source-invalid-utf8` reason and its safe `settings`/`invalid-data` projection,
 not incidental error-wrapper wording. Malformed source bytes must remain unchanged
 and rejection must occur before even the candidate directory is created.
+Its readback is limited to test-generated malformed settings bytes and carries
+the repository's required `test-style: fixture-read` annotation. Run the full
+root `yarn test:style` gate; the narrower Studio Server style gate does not check
+this filesystem-read policy.
 
 Operational exact verification compares PostgreSQL timestamp objects directly
 as ISO values, preserving milliseconds. Converting them through `String(Date)`

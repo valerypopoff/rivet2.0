@@ -9,6 +9,8 @@ import { LocalUpgradeDiagnosticError, localUpgradeFailure } from '../local-metad
 import { runtimeLimitSettingsRepository } from '../runtime-limit-settings.js';
 import { migrateLocalAppSettings } from '../scripts/migrate-local-app-settings.js';
 
+// test-style: fixture-read: Read only test-generated malformed settings bytes to verify source preservation.
+
 test('local App Settings candidate import is idempotent and verifies every domain', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-local-settings-import-'));
   const sourceRoot = path.join(root, 'source');
