@@ -9,8 +9,6 @@ import {
   ProjectBundleError,
   type Project,
   type ProjectId,
-  type SubGraphNode,
-  type ReferencedGraphAliasNode,
 } from '@valerypopoff/rivet2-node';
 import {
   PROJECT_BUNDLE_UPLOAD_MAX_BYTES,
@@ -147,22 +145,19 @@ export function prepareProjectBundleImport(files: ProjectBundleUploadFile[]): Pr
         ...Object.values(project.nodePrefabs ?? {}).map((p) => p.sourceNode),
       ];
       for (const node of nodes) {
-        if (node.type === 'subGraph') {
-          const call = node as SubGraphNode;
-          for (const data of [call.data, ...(call.variants ?? []).map((variant) => variant.data)]) {
-            const mapped = data?.targetProjectId && ids.get(data.targetProjectId);
-            if (mapped) {
-              data.targetProjectId = mapped;
-              // Imported snapshots are drafts, including saved alternative configurations.
-              data.targetVersion = 'latest';
-            }
-          }
-        } else if (node.type === 'referencedGraphAlias') {
-          const alias = node as ReferencedGraphAliasNode;
-          for (const data of [alias.data, ...(alias.variants ?? []).map((variant) => variant.data)]) {
-            const mapped = data?.projectId && ids.get(data.projectId);
-            if (mapped) data.projectId = mapped;
-          }
+        if (node.type !== 'subGraph' && node.type !== 'referencedGraphAlias') continue;
+        const targetField = node.type === 'subGraph' ? 'targetProjectId' : 'projectId';
+        for (const configuration of [node.data, ...(node.variants ?? []).map((variant) => variant.data)]) {
+          // Saved variants deliberately have unknown data in Core's public contract.
+          // Narrow each object before remapping; preserve unfinished inactive values.
+          if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) continue;
+          const data = configuration as Record<string, unknown>;
+          const target = data[targetField];
+          const mapped = typeof target === 'string' ? ids.get(target) : undefined;
+          if (!mapped) continue;
+          data[targetField] = mapped;
+          // Imported snapshots are drafts, including saved alternative configurations.
+          if (node.type === 'subGraph') data.targetVersion = 'latest';
         }
       }
       for (const dataset of datasets ?? []) dataset.meta.projectId = project.metadata.id;

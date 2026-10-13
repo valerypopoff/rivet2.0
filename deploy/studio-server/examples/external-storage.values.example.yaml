@@ -1,0 +1,109 @@
+# Environment overlay for studio-server:kubernetes:release --values.
+# Merge order: chart defaults -> overlays/prod.yaml -> this file -> promoted
+# manifest image/source/schema values. Do not put image tags or release metadata here.
+# Copy to artifacts/deployment/environment-values.yaml and edit before deployment.
+# No credentials belong in this file. See the external-storage-deployment guide.
+
+deploymentProfile: cluster
+clusterDomain: cluster.local # Change only if your cluster uses another DNS domain.
+
+# DevOps supplies TLS, routing, UI session gate, trusted headers and NetworkPolicies.
+# Generic Ingress alone is NOT sufficient; see kubernetes.md's gateway contract.
+gateway:
+  mode: external
+ingress:
+  enabled: false
+
+# Override production's Vault default. All Secrets below must already exist in
+# the release namespace and are operator-owned, not created by this chart.
+vault:
+  enabled: false
+auth:
+  keySecretName: rivet-auth
+  keySecretKey: RIVET_KEY # Random 32+ character secret, shared by all Rivet pods.
+
+workflowStorage:
+  backend: managed
+runtimeLibraries:
+  backend: managed
+  objectStoragePrefix: runtime-libraries/ # Fixed by the current storage contract.
+  cache:
+    enabled: false
+
+postgres:
+  mode: managed
+  connectionStringSecretName: rivet-postgres-connection
+  connectionStringSecretKey: connectionString
+  # Secret: postgresql://USER:URL_ENCODED_PASSWORD@HOST:5432/DATABASE.
+  # Use an existing installation-owned database and an account with migration
+  # and runtime privileges. This supersedes production host/user defaults.
+  sslMode: require # TLS; use verify-full when provider CA/hostname trust is configured.
+  maxConnections: 200 # REPLACE with actual provider max_connections capacity.
+  reservedConnections: 30 # Migrations, administration and other clients.
+  poolMaxPerApiPod: 10 # Plus 3 dedicated LISTEN connections per API process.
+
+objectStorage:
+  bucket: your-rivet-bucket # REPLACE: existing private bucket.
+  region: us-east-1 # REPLACE with the bucket's actual region.
+  # Empty selects AWS regional S3. Other providers: HTTPS origin only, e.g.
+  # https://s3.example.com (no bucket path, credentials, query or fragment).
+  endpoint: ""
+  # Scope read/write/list/delete permissions to Rivet artifacts. Prefer a dedicated
+  # bucket: fixed runtime-libraries/ is separate from this workflow prefix.
+  # Never share these roots between Rivet installations.
+  prefix: workflows/
+  accessKeySecretName: rivet-object-storage
+  accessKeySecretKey: accessKeyId
+  secretKeySecretName: rivet-object-storage
+  secretKeySecretKey: secretAccessKey
+  forcePathStyle: false # True only if required by your S3-compatible provider.
+
+appSettings:
+  backend: postgres
+  # Dedicated 32+ character key recommended. Back it up with RIVET_KEY.
+  # Never generate replacement keys during an ordinary upgrade or restore.
+  encryptionKeySecretName: rivet-settings-encryption
+  encryptionKeySecretKey: encryptionKey
+
+# Settings -> Storage -> Restore legacy backup needs a dynamically provisioned PVC.
+# Size for compressed upload + extracted backup + import scratch, not upload alone.
+legacyRestore:
+  enabled: true
+  size: 64Gi
+  storageClassName: "" # REPLACE if the cluster has no default StorageClass.
+
+replicaCount:
+  web: 1
+  backend: 1 # Singleton control API + editor executor; do not increase.
+  execution: 2
+autoscaling:
+  web:
+    enabled: false
+  backend:
+    enabled: false
+  execution:
+    enabled: true # Requires metrics-server; false uses fixed execution replicas.
+    minReplicas: 2
+    maxReplicas: 10 # Tune with PostgreSQL capacity and representative workloads.
+    targetCPUUtilizationPercentage: 75
+
+# Optional batch workers require explicit scheduling/capacity configuration.
+hostedEvaluations:
+  enabled: false
+
+env:
+  RIVET_SERVER_UI_AUTH_MODE: key
+  RIVET_REQUIRE_UI_GATE_KEY: "true"
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
+  RIVET_RECORDINGS_ENABLED: "true"
+  # Keep default workflow/app route bases aligned with the external gateway.
+
+# Private registries: create an image-pull Secret, then reference its name here.
+imagePullSecrets: []
+# imagePullSecrets:
+#   - name: rivet-registry
+
+# Resource requests, bounded scratch volumes, lifecycle/drain settings and
+# production resource-limit acknowledgements are inherited from chart/prod.
+# Starting defaults are NOT measured sizing. Review resource-sizing.md before
+# exposing production. No external PostgreSQL/S3 services are provisioned here.

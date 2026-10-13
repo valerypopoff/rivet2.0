@@ -90,6 +90,13 @@ without treating them as active dependencies or silently retargeting them.
 Enabling such a configuration may require selecting its target or supplying that
 project. Bindings to projects that are captured are remapped even in inactive
 configurations. Active dependency validation still occurs before any mutation.
+Core's `ChartNode.variants` data is `unknown`, even for typed Subgraph/alias nodes.
+Import narrows each current/variant configuration to a non-array object and checks
+the target ID is a string before remapping. Unfinished inactive payloads are kept,
+not cast to provider/node-specific data or used to invent dependencies. Qualification
+must rebuild Core/Node declarations before compiling the API and its tests; stale
+local declarations are not evidence of clean-container compilation. The API Docker
+builder performs this dependency-first build with the supported Node 24 toolchain.
 Project names are sanitized and made unique within the group. A fresh
 `<root title> bundle <suffix>` folder is created under the captured destination,
 expanded after success, and announced through the existing tree-change mechanism.

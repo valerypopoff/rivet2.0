@@ -6,6 +6,9 @@ is optional; single-machine commands use Docker Compose without starting a clust
 the shared release contract. Release commands require explicit `--context` and
 never change the current kubeconfig context.
 
+For a complete external PostgreSQL/S3 values example and first-install Secret
+commands, see [External storage deployment handoff](./external-storage-deployment.md).
+
 Open managed-mode risks and recommended remediation work are tracked in
 [`kubernetes-managed-mode.md`](./audits/kubernetes-managed-mode.md).
 

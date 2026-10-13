@@ -10,10 +10,17 @@ import {
   type DatasetId,
   type SubGraphNode,
   type NodePrefabId,
+  type ChartNode,
 } from '@valerypopoff/rivet2-node';
 import { prepareProjectBundleImport } from '../routes/workflows/project-bundle-import.js';
 import { collectProjectBundle } from '../routes/workflows/project-bundle.js';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
+
+function variantData(node: ChartNode, index: number): Record<string, unknown> {
+  const data = node.variants![index]!.data;
+  assert.ok(data && typeof data === 'object' && !Array.isArray(data));
+  return data as Record<string, unknown>;
+}
 
 async function filesFixture() {
   const fixture = projectBundleFixture();
@@ -141,18 +148,18 @@ test('inactive dependencies are preserved, and saved variants remap only importe
   );
   const nodes = root.graphs[root.metadata.mainGraphId!]!.nodes;
   const call = nodes.find((n) => n.type === 'subGraph' && !n.disabled)! as SubGraphNode;
-  assert.equal(call.variants![0]!.data.targetProjectId, childId);
-  assert.equal(call.variants![0]!.data.targetVersion, 'latest');
-  assert.equal(call.variants![1]!.data.targetProjectId, 'outside');
-  assert.equal(call.variants![1]!.data.targetVersion, 'published');
+  assert.equal(variantData(call, 0).targetProjectId, childId);
+  assert.equal(variantData(call, 0).targetVersion, 'latest');
+  assert.equal(variantData(call, 1).targetProjectId, 'outside');
+  assert.equal(variantData(call, 1).targetVersion, 'published');
   const alias = nodes.find((n) => n.type === 'referencedGraphAlias')! as ReturnType<
     typeof ReferencedGraphAliasNodeImpl.create
   >;
-  assert.equal(alias.variants![0]!.data.projectId, childId);
+  assert.equal(variantData(alias, 0).projectId, childId);
   assert.equal((nodes.find((n) => n.disabled)! as SubGraphNode).data.targetProjectId, 'outside');
   const prefab = Object.values(root.nodePrefabs!)[0]!.sourceNode as SubGraphNode;
   assert.equal(prefab.data.targetProjectId, 'outside');
-  assert.equal(prefab.variants![0]!.data.targetProjectId, childId);
+  assert.equal(variantData(prefab, 0).targetProjectId, childId);
   // The same absent target is still rejected if it becomes executable.
   const enabled = changed.map((file) => {
     if (file.path !== rootFile) return file;
@@ -189,6 +196,30 @@ test('ambiguous dataset identities and malformed embeddings are rejected without
       .rows[0]!.embedding,
     [0.5, -0.25],
   );
+});
+
+test('unknown inactive variant payloads are preserved without inventing or remapping target IDs', async () => {
+  const { files, manifest, fixture } = await filesFixture();
+  const rootFile = manifest.artifacts.find((a) => a.projectId === fixture.root.project.metadata.id)!.project.path;
+  const values = [null, 'unfinished', [], { targetProjectId: 42, targetVersion: 'published' }, { projectId: 42 }];
+  const updated = files.map((file) => {
+    if (file.path !== rootFile) return file;
+    const [project, attached] = loadProjectAndAttachedDataFromString(file.contents);
+    for (const node of project.graphs[project.metadata.mainGraphId!]!.nodes) {
+      if (node.type === 'subGraph' || node.type === 'referencedGraphAlias')
+        node.variants = values.map((data, index) => ({ id: `unfinished-${index}`, data: structuredClone(data) }));
+    }
+    return { ...file, contents: serializeProject(project, attached) as string };
+  });
+  const imported = prepareProjectBundleImport(updated);
+  const rootFileContents = imported.projects.find((p) => p.id === imported.rootProjectId)!.contents;
+  const [root] = loadProjectAndAttachedDataFromString(rootFileContents);
+  for (const node of root.graphs[root.metadata.mainGraphId!]!.nodes)
+    if (node.type === 'subGraph' || node.type === 'referencedGraphAlias')
+      assert.deepEqual(
+        node.variants!.map((variant) => variant.data),
+        values,
+      );
 });
 
 test('import rejects identity mismatches and does not silently pick a version from old mixed bundles', async () => {

@@ -1455,6 +1455,18 @@ The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounde
 retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
 They run on every host; actual `hdiutil`/`plutil` execution and finished-package
 verification require the native macOS release jobs.
+Developer release run 38370519350 exposed a separate earlier boundary: Tauri's
+own app stapling lost its Apple CloudKit connection (-1005) after notarization
+was accepted. Tauri wraps native stapler exit 68 as build exit 1. The build
+helper now also recognizes that exact combination: confirmed
+`Finished with status Accepted`, `failed to staple app`,
+`The staple and validate action failed! Error 68.`, and one of the existing
+explicit transient Apple network codes. It reuses the stapler classifier and
+the same bounded full-build retry/cleanup path; it does not treat arbitrary
+exit 1/68, certificate errors or uncertain notarization submission as retryable.
+Unlike the final-DMG retry below, this can repeat app signing/notarization through
+Tauri. All signing, stapling, packaged-executor and release validation still run.
+Regression tests cover the wrapped failure, permanent lookalikes and exhaustion.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
