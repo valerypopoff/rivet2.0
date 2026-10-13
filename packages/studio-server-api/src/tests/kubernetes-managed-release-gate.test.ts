@@ -17,10 +17,14 @@ import {
 import { assertCandidateManifestImages } from '../../../../deploy/studio-server/scripts/lib/kubernetes-candidate-manifest-images.mjs';
 import { buildManagedProviderGateConfig } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-provider-gate-config.mjs';
 import { summarizePodStartupState } from '../../../../deploy/studio-server/scripts/lib/kubernetes-workload-diagnostics.mjs';
+import { assertRuntimeReadiness } from '../../../../deploy/studio-server/scripts/lib/kubernetes-runtime-readiness.mjs';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const { ManagedReleaseGate } = await import(
   pathToFileURL(path.join(rootDir, 'deploy/studio-server/scripts/kubernetes-managed-release-gate.mjs')).href
+);
+const { ManagedProviderGate } = await import(
+  pathToFileURL(path.join(rootDir, 'deploy/studio-server/scripts/kubernetes-managed-provider-gate.mjs')).href
 );
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
 
@@ -123,6 +127,193 @@ const storageUnavailableHealth = {
   code: 'dependency_unavailable',
   checks: [{ ok: false, code: 'workflow_storage_unavailable' }],
 };
+
+for (const [label, body] of [
+  ['frontend HTML containing ready', '<!doctype html><title>Ready to sign in</title>'],
+  ['unready JSON containing ready', JSON.stringify({ ok: false, state: 'not-ready' })],
+  ['restore warmup', JSON.stringify({ ...readyHealth, restoreMaintenance: true, restoreWarmup: true })],
+  ['null JSON', 'null'],
+] as const) {
+  test(`all qualification gates reject ${label} without echoing the body`, () => {
+    assert.throws(
+      () => assertRuntimeReadiness({ status: 200, body }),
+      (error: Error) => {
+        assert.match(error.message, /\/readyz (returned non-JSON|did not report a ready runtime)/);
+        assert.equal(error.message.includes(body), false);
+        return true;
+      },
+    );
+  });
+  for (const gatewayMode of ['embedded', 'external']) {
+    test(`${gatewayMode} provider gate stops surface probes after ${label}`, async (t) => {
+      const gate = new ManagedProviderGate(
+        { gatewayMode, baseUrl: 'https://fixture.test', requestHeaders: {} },
+        'unused',
+        'unused',
+      );
+      const requests: string[] = [];
+      t.mock.method(globalThis, 'fetch', async (url: URL) => {
+        requests.push(url.pathname);
+        return new Response(body);
+      });
+      await assert.rejects(gate.assertPublicSurface(), /\/readyz/);
+      assert.deepEqual(requests, ['/readyz']);
+    });
+  }
+}
+
+test('shared readiness rejects redirects and non-200 success without accepting a healthy body', () => {
+  for (const status of [201, 204, 302, 401, 403, 503]) {
+    assert.throws(
+      () => assertRuntimeReadiness({ status, body: JSON.stringify(readyHealth) }),
+      new RegExp(`HTTP ${status}`),
+    );
+  }
+  assert.doesNotThrow(() => assertRuntimeReadiness({ status: 200, body: JSON.stringify(readyHealth) }));
+});
+
+test('provider gate still runs directly and rejects missing protected confirmation before cluster work', () => {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(rootDir, 'deploy/studio-server/scripts/kubernetes-managed-provider-gate.mjs')],
+    {
+      env: { ...process.env, RIVET_K8S_PROVIDER_GATE_CONFIRM: '' },
+      encoding: 'utf8',
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /RIVET_K8S_PROVIDER_GATE_CONFIRM/);
+});
+
+for (const gatewayMode of ['embedded', 'external']) {
+  test(`${gatewayMode} provider gate preserves published probes and external private-route fencing after healthy readiness`, async (t) => {
+    const gate = new ManagedProviderGate(
+      {
+        gatewayMode,
+        baseUrl: 'https://fixture.test',
+        requestHeaders: { authorization: 'Bearer fixture-token' },
+        workflowProbe: {
+          path: '/workflows/fixture',
+          method: 'POST',
+          body: { input: 'fixture' },
+          contains: 'published-workflow',
+        },
+        webAppProbe: { path: '/apps/fixture', contains: 'published-app' },
+      },
+      'unused',
+      'unused',
+    );
+    const paths: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (url: URL, init: RequestInit) => {
+      paths.push(url.pathname);
+      assert.equal((init.headers as Record<string, string>).authorization, 'Bearer fixture-token');
+      assert.equal(init.redirect, 'manual');
+      if (url.pathname === '/readyz') return Response.json(readyHealth);
+      if (url.pathname === '/apps/fixture') return new Response('<main>published-app</main>');
+      assert.equal(init.method, 'POST');
+      assert.equal(init.body, JSON.stringify({ input: 'fixture' }));
+      return url.pathname === '/workflows/fixture'
+        ? new Response('published-workflow')
+        : new Response('not found', { status: 404 });
+    });
+    await gate.assertPublicSurface();
+    assert.deepEqual(paths, [
+      '/readyz',
+      '/workflows/fixture',
+      '/apps/fixture',
+      ...(gatewayMode === 'external' ? ['/internal/workflows/fixture'] : []),
+    ]);
+  });
+}
+
+for (const status of [302, 401, 403, 404, 500, 501]) {
+  test(`provider interruption cannot be certified by HTTP ${status}, and restores its network policy`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const gate = new ManagedProviderGate(
+      {
+        namespace: 'fixture-owned',
+        baseUrl: 'https://fixture.test',
+        requestHeaders: {},
+        interruptionManifests: [
+          { name: 'fixture outage', applyFile: 'block.yaml', restoreFile: 'restore.yaml', restoreAction: 'apply' },
+        ],
+      },
+      'unused',
+      'unused',
+    );
+    const commands: string[][] = [];
+    gate.validateInterruptionManifest = async () => {};
+    gate.kubectl = async (args: string[]) => {
+      commands.push(args);
+    };
+    const response = new Response('not an outage', { status });
+    t.mock.method(globalThis, 'fetch', async () => response);
+    const outcome = assert.rejects(
+      gate.verifyDependencyInterruptions(),
+      /timed out waiting for fixture outage readiness failure/,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(response.bodyUsed, true);
+    t.mock.timers.tick(90_000);
+    await outcome;
+    assert.deepEqual(commands, [
+      ['apply', '--namespace', 'fixture-owned', '-f', 'block.yaml'],
+      ['apply', '--namespace', 'fixture-owned', '-f', 'restore.yaml'],
+    ]);
+  });
+}
+
+for (const status of [502, 503, 504]) {
+  test(`provider interruption consumes HTTP ${status} and revalidates recovery before surface probes`, async (t) => {
+    const gate = new ManagedProviderGate(
+      {
+        namespace: 'fixture-owned',
+        baseUrl: 'https://fixture.test',
+        requestHeaders: {},
+        interruptionManifests: [
+          { name: 'fixture outage', applyFile: 'block.yaml', restoreFile: 'restore.yaml', restoreAction: 'apply' },
+        ],
+      },
+      'unused',
+      'unused',
+    );
+    const steps: string[] = [];
+    gate.validateInterruptionManifest = async () => {};
+    gate.kubectl = async (args: string[]) => {
+      steps.push(args.at(-1)!);
+    };
+    gate.assertPublicHealth = async () => {
+      steps.push('readiness');
+    };
+    gate.assertPublicSurface = async () => {
+      steps.push('surfaces');
+    };
+    const response = new Response('temporarily unavailable', { status });
+    t.mock.method(globalThis, 'fetch', async () => response);
+    await gate.verifyDependencyInterruptions();
+    assert.equal(response.bodyUsed, true);
+    assert.deepEqual(steps, ['block.yaml', 'restore.yaml', 'readiness', 'surfaces']);
+  });
+}
+
+test('a frontend HTML 200 cannot certify runtime readiness and reports the routing defect', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  const gate = new ManagedReleaseGate({}, 'unused', 'unused');
+  const response = new Response('<!doctype html><title>Rivet editor</title>', {
+    headers: { 'content-type': 'text/html' },
+  });
+  t.mock.method(globalThis, 'fetch', async () => response);
+  const outcome = assert.rejects(
+    gate.waitForReady('http://fixture', 'proxy readiness'),
+    /Timed out waiting for proxy readiness: \/readyz returned non-JSON content \(HTTP 200\); check proxy health routing/,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(response.bodyUsed, true);
+  t.mock.timers.tick(90_000);
+  await outcome;
+});
 
 test('outage diagnostics read the owned backend API directly even when Service routing is unavailable', async (t) => {
   const server = http.createServer((req, res) => {
@@ -241,13 +432,14 @@ test('readiness recovery consumes responses and rejects a 200 maintenance or non
   const responses = [
     new Response('bad gateway', { status: 502 }),
     Response.json({ ok: true, restoreMaintenance: true }),
+    Response.json({ ...readyHealth, restoreMaintenance: true, restoreWarmup: true }),
     Response.json({ ok: true, state: 'starting' }),
     Response.json(readyHealth),
   ];
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => responses[calls++]);
   await gate.waitForReady('http://fixture', 'test recovery');
-  assert.equal(calls, 4);
+  assert.equal(calls, 5);
   assert.ok(responses.every((response) => response.bodyUsed));
 });
 

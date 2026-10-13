@@ -491,6 +491,40 @@ Managed runtime-library startup now serializes its shared Postgres schema initia
 
 `yarn studio-server:verify:kubernetes` is the fast deterministic gate. It renders and validates the chart plus Kubernetes contracts, but it does not start a cluster.
 
+The public proxy routes exactly `/healthz`, `/livez` and `/readyz` to the control
+API, outside the editor login/SPA fallback. These read-only health endpoints
+accept GET/HEAD only; other methods receive HTTP 405 and `Allow: GET, HEAD`
+before forwarding. Do not use 401/403 for this rejection: the proxy's existing
+authentication error handlers intentionally render a login page for those codes.
+They preserve API JSON, HTTP status and `Cache-Control: no-store`; they do not
+certify execution-replica readiness. A frontend HTML response or login page is not
+readiness, even when it returns HTTP 200. The gate distinguishes non-JSON content
+from failed HTTP status in its diagnostic. This routing is shared by the image
+and compatibility Compose templates. The existing real-NGINX DNS fixture
+(`node deploy/studio-server/scripts/verify-proxy-dns.mjs`, enrolled in the gateway
+CI lane) checks all three templates without an operator session, including API
+503 propagation (including HEAD), method rejection, unchanged operator API
+authentication, non-health path isolation, API outage and address recovery.
+The image-template fixture uses `nginx:1.27-alpine`, matching the production
+proxy Dockerfile rather than testing that template only on a floating NGINX tag.
+Release readiness also rejects `restoreMaintenance: true`, including restore
+warmup responses whose process health is ready. This changes only the gate's
+acceptance check, not the runtime health contract used by restore coordination.
+
+Release qualification, both provider-gateway modes, and the cross-store restore
+drill share `lib/kubernetes-runtime-readiness.mjs`: HTTP 200 must carry API JSON
+with `ok: true`, `state: ready`, and no active restore maintenance. A substring
+such as "ready" in HTML or "not-ready" is insufficient. Invalid readiness stops
+later surface probes. This validator is deliberately not used for proxy/frontend
+liveness or the restore coordinator's warmup handshake, whose semantics differ.
+Provider interruption checks accept only HTTP 502/503/504 as runtime/gateway
+unavailability, consume/cancel each response, and still restore the owned network
+policy after a failed assertion. Redirects, authentication errors and missing
+routes cannot certify an outage.
+The gate owners are import-safe for behavioral tests: importing them does not
+start a CLI, create a namespace or mutate a staging release. Direct-invocation
+tests retain the required context/confirmation checks before cluster work.
+
 The image workflow now also runs a disposable live managed-mode gate before it promotes public tags. It creates a four-node Kind cluster (one control plane plus three workers), starts isolated PostgreSQL and MinIO dependencies, installs the real chart with the exact OCI digest for every candidate image, and accesses the app only through the proxy. The disposable MinIO server is pinned to a Docker Hub release and OCI digest, matching the local Minikube dependency manifest and managed API integration test. Each API process initializes managed workflow storage before starting the bootstrap runtime-library sync: the workflow blob store creates the shared bucket on first install, rechecking after a creation conflict, while bootstrap sync expects it to exist. This ordering also covers the separate execution replicas; the co-located executor waits for the control API. These fixtures do not pull a separate client image. The disposable hostPath/PVC is initially root-owned, so only the fixture MinIO container overrides the image's unprivileged default user. The smoke suite verifies:
 
 - singleton backend plus two proxy and two execution replicas;

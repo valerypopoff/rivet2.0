@@ -1066,6 +1066,16 @@ never work around this by relaxing authentication or trusting forwarded headers.
 After changing a mounted template, restart only the dev proxy so its entrypoint
 renders the new configuration; a plain nginx reload does not render templates.
 
+The image and both compatibility Compose templates route `/healthz`, `/livez`
+and `/readyz` to the control API without an operator session, allowing only
+GET/HEAD and returning HTTP 405 with `Allow: GET, HEAD` for other methods before
+forwarding (401/403 are reserved for the existing login-page handling). Preserve
+API health JSON, failure status and no-store caching; these paths must never
+reach the SPA or a login page. The real-NGINX fixture below also checks health
+routing, 503 propagation, HEAD/method handling, unchanged operator authentication, exact path
+matching and health recovery after an API address change. Its image-template
+case uses the production Dockerfile's `nginx:1.27-alpine` base.
+
 `verify-proxy-dns.mjs` checks real upstream Host preservation through all three
 templates for hostname/port, IPv6/port and default-port authorities. Run headless
 `studio-server:ui:observe local-storage-upgrade-origin.spec.ts` on an enabled,

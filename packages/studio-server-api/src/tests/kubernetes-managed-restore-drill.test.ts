@@ -16,11 +16,54 @@ import {
   createRestoreProbeRequest,
   getRestoreDriverJobState,
   measureRestoreObjectives,
+  ManagedRestoreDrill,
   parseRestoreDriverJsonMarker,
 } from '../../../../deploy/studio-server/scripts/kubernetes-managed-restore-drill.mjs';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const digest = (letter: string): string => `sha256:${letter.repeat(64)}`;
+
+for (const body of [
+  '<!doctype html><title>Ready to log in</title>',
+  '{"ok":false,"state":"not-ready"}',
+  '{"ok":true,"state":"ready","restoreMaintenance":true}',
+]) {
+  test(`restore qualification rejects false readiness ${body.slice(0, 30)} before probing restored data`, async (t) => {
+    const drill = new ManagedRestoreDrill(
+      {
+        target: { baseUrl: 'https://restore.test' },
+        requestHeaders: {},
+        probes: { project: { path: '/project', method: 'GET', expectedStatus: 200, contains: 'restored' } },
+      },
+      { kubectlBin: 'unused', helmBin: 'unused' },
+    );
+    const paths: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (url: URL) => {
+      paths.push(url.pathname);
+      return new Response(body);
+    });
+    await assert.rejects(drill.verifyDurableSurfaces(), /\/readyz/);
+    assert.deepEqual(paths, ['/readyz']);
+  });
+}
+
+test('restore qualification verifies readiness, then retains the durable probe marker checks', async (t) => {
+  const drill = new ManagedRestoreDrill(
+    {
+      target: { baseUrl: 'https://restore.test' },
+      requestHeaders: {},
+      probes: { project: { path: '/project', method: 'GET', expectedStatus: 200, contains: 'restored' } },
+    },
+    { kubectlBin: 'unused', helmBin: 'unused' },
+  );
+  const paths: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: URL) => {
+    paths.push(url.pathname);
+    return url.pathname === '/readyz' ? Response.json({ ok: true, state: 'ready' }) : new Response('wrong project');
+  });
+  await assert.rejects(drill.verifyDurableSurfaces(), /project probe did not include/);
+  assert.deepEqual(paths, ['/readyz', '/project']);
+});
 
 function releaseManifest() {
   return {
