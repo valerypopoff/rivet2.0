@@ -3,6 +3,7 @@ import {
   normalizeHostedRuntimeConfig,
   RIVET_API_BASE_URL,
 } from '../../studio-server-shared/hosted-env';
+import type { ProjectBundleImportResult, ProjectBundleUploadFile } from '../../studio-server-shared/project-bundle-types';
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
   type WorkflowProjectReferencesResponse,
@@ -143,6 +144,18 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
     cache: 'no-store',
   });
   return workflowJsonResponse<WorkflowTreeResponse>(response);
+}
+
+export async function uploadWorkflowBundle(folderRelativePath: string, files: ProjectBundleUploadFile[]) {
+  const body = JSON.stringify({ folderRelativePath, files });
+  if (new TextEncoder().encode(body).length > 100 * 1024 * 1024)
+    throw new Error('Encoded bundle upload exceeds the 100 MiB request limit.');
+  const response = await fetch(`${API}/workflows/project-bundles/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
+    body,
+  });
+  return workflowJsonResponse<ProjectBundleImportResult>(response);
 }
 
 function parseWorkflowTreeSyncEvent(

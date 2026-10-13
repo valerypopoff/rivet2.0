@@ -35,6 +35,10 @@ There is one workspace and lockfile, not a nested checkout or second installatio
 
 Use `deploy/studio-server/.env.example` as the shared configuration reference.
 Missing local credentials are generated once and added atomically to `.env`.
+Use shared `RIVET_LOCAL_POSTGRES_PASSWORD`, `RIVET_LOCAL_S3_ACCESS_KEY_ID` and
+`RIVET_LOCAL_S3_SECRET_ACCESS_KEY` for all tiers. Containers/data remain isolated.
+Existing agreeing tier-prefixed credentials are preserved during upgrade, not
+replaced with new passwords; conflicting old tiers require explicit reconciliation.
 
 ```bash
 yarn studio-server:dev:local-storage
@@ -43,7 +47,11 @@ yarn studio-server:dev:external-storage
 
 Both build the checkout's images and serve built assets, not Vite hot reload.
 Only the proxy is published, on loopback; the dev port defaults to 8080.
-Set `RIVET_DEV_PORT` to change it and use the configured `RIVET_KEY` to sign in.
+Set shared `RIVET_PORT` to change it for any tier/storage choice. UI auth defaults
+to `RIVET_SERVER_UI_AUTH_MODE=key`, using the configured `RIVET_KEY` to sign in.
+To use `oauth`, first save OAuth provider settings and server-UI administrator
+emails in key mode, then change the shared auth mode and restart. OAuth without
+complete settings or an allowed administrator denies access, without key fallback.
 PostgreSQL, MinIO and internal API/executor ports remain private.
 
 `studio-server:dev` and `studio-server:vm` alias dev/local storage.
@@ -66,7 +74,9 @@ yarn studio-server:prod:external-storage -- --manifest <promoted.json> --confirm
 ```
 
 All six commands read the same private `.env`. Tier settings use `RIVET_DEV_`,
-`RIVET_STAGING_` and `RIVET_PROD_`; default browser ports are 8080, 8082 and 8083.
+`RIVET_STAGING_` and `RIVET_PROD_`, except shared `RIVET_LOCAL_*` credentials,
+`RIVET_PORT` and `RIVET_SERVER_UI_AUTH_MODE`; default browser ports are 8080, 8082 and 8083.
+With a shared port override, separate installations cannot run on that port at once.
 Each independent installation needs a dedicated PostgreSQL database and distinct
 Compose project. External buckets must exist. Keep deployment credentials,
 encryption keys, private launcher state and durable volumes together.

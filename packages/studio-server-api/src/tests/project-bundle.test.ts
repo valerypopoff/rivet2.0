@@ -1161,6 +1161,40 @@ test('filesystem saved export HTTP requires auth and supports exact Range/If-Ran
           403,
         );
         const headers = { 'Content-Type': 'application/json', 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+        // Rejected admission must happen before JSON parsing or artifact work.
+        for (const rejected of [
+          {},
+          headers,
+          { ...headers, 'X-Rivet-Bundle-Intent': '1', 'Sec-Fetch-Site': 'cross-site' },
+        ]) {
+          assert.equal(
+            (
+              await fetch(`${url}/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...rejected },
+                body: '{invalid JSON',
+              })
+            ).status,
+            403,
+          );
+        }
+        const uploadFiles: { path: string; contents: string }[] = [];
+        await collectProjectBundle({
+          source: { ...f.source, versionPolicy: 'latest' },
+          rootVersion: 'latest',
+          signal: new AbortController().signal,
+          progress() {},
+          writeFile: async (path, contents) => {
+            uploadFiles.push({ path, contents });
+          },
+        });
+        const unsupported = await fetch(`${url}/import`, {
+          method: 'POST',
+          headers: { ...headers, 'X-Rivet-Bundle-Intent': '1' },
+          body: JSON.stringify({ folderRelativePath: '', files: uploadFiles }),
+        });
+        assert.equal(unsupported.status, 409);
+        assert.match(await unsupported.text(), /PostgreSQL and S3/);
         const started = await fetch(url, {
           method: 'POST',
           headers,

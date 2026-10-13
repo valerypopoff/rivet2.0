@@ -21,6 +21,8 @@ import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evalu
 import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
+import { serializeProject } from '@valerypopoff/rivet2-node';
+import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -299,6 +301,73 @@ try {
   try {
     await publicationBackend.initialize();
     await verifyWorkflowPublicationContract(publicationBackend);
+    const failedId = randomUUID();
+    const failedFolder = `Failed bundle ${failedId}`;
+    const fixture = projectBundleFixture();
+    const contents = serializeProject(fixture.root.project) as string;
+    // Force a second-row uniqueness failure after the folder and first project
+    // have been written, exercising real PostgreSQL rollback and S3 cleanup.
+    await assert.rejects(
+      publicationBackend.importProjectBundle('', {
+        folderName: failedFolder,
+        rootProjectId: failedId,
+        projects: [
+          { id: failedId, name: 'First', contents, datasetsContents: null },
+          { id: failedId, name: 'Second', contents, datasetsContents: null },
+        ],
+      }),
+      /destination changed/,
+    );
+    assert.equal(
+      (await pool.query('SELECT count(*)::int AS count FROM workflow_folders WHERE relative_path = $1', [failedFolder]))
+        .rows[0].count,
+      0,
+    );
+    assert.equal(
+      (await pool.query('SELECT count(*)::int AS count FROM workflows WHERE workflow_id = $1', [failedId])).rows[0]
+        .count,
+      0,
+    );
+    assert.equal(
+      (await pool.query('SELECT count(*)::int AS count FROM workflow_revisions WHERE workflow_id = $1', [failedId]))
+        .rows[0].count,
+      0,
+    );
+    const parent = await publicationBackend.createWorkflowFolderItem(`Import race ${randomUUID()}`, '');
+    const childPath = `${parent.relativePath}/Imported group`;
+    const writer = await pool.connect();
+    try {
+      await writer.query('BEGIN');
+      const writerPid = (await writer.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      await writer.query('SELECT relative_path FROM workflow_folders WHERE relative_path = $1 FOR KEY SHARE', [
+        parent.relativePath,
+      ]);
+      const deletion = publicationBackend.deleteWorkflowFolderItem(parent.relativePath).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const deadline = Date.now() + 3_000;
+      while (
+        !(await pool.query('SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))', [writerPid]))
+          .rowCount
+      ) {
+        if (Date.now() >= deadline) throw new Error('Folder deletion did not wait for the import parent lock.');
+        await delay(10);
+      }
+      await writer.query(
+        'INSERT INTO workflow_folders(relative_path,name,parent_relative_path,updated_at) VALUES ($1,$2,$3,NOW())',
+        [childPath, 'Imported group', parent.relativePath],
+      );
+      await writer.query('COMMIT');
+      const error = await deletion;
+      assert.ok(error instanceof Error, 'deletion must recheck the imported child after waiting');
+      assert.equal((error as Error & { status: number }).status, 409);
+    } finally {
+      await writer.query('ROLLBACK');
+      writer.release();
+    }
+    await publicationBackend.deleteWorkflowFolderItem(childPath);
+    await publicationBackend.deleteWorkflowFolderItem(parent.relativePath);
     console.log(
       'Shared SQL publication contract: PostgreSQL route ownership, reviewed state and endpoint/web-app independence passed.',
     );
@@ -306,11 +375,14 @@ try {
     await publicationBackend.dispose();
   }
   await verifyProjectBundleDownload({
+    verifyImport: true,
     workflowsBaseUrl: `${api.baseUrl}/api/workflows`,
     projectsBaseUrl: `${api.baseUrl}/api/projects`,
     headers: { 'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex') },
   });
-  console.log('Managed bundles: PostgreSQL/S3 snapshots, versions, datasets, ZIP resume and local execution passed.');
+  console.log(
+    'Managed bundles: snapshots, ZIP resume, atomic import rollback, movable dependencies and execution passed.',
+  );
   // Managed exports must not reconstruct project files under the VM's virtual root.
   assert.deepEqual(await fs.readdir(path.join(api.root, 'workflows')), []);
   const exportNamespaces = await fs.readdir(path.join(api.root, 'exports'));

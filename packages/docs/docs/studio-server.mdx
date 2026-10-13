@@ -45,6 +45,27 @@ enlarged before uploading again. Large backups also need adequate container memo
 You can cancel validation or dismiss a non-destructive failure. Once you confirm
 replacement, it cannot be cancelled.
 
+## Upload a project bundle
+
+Right-click the workflow library or a destination folder and choose **Upload
+bundle**, beside **Upload project**. Select an extracted bundle folder or its ZIP
+archive containing `rivet-bundle.json`. Bundle contents must fit within 64 MiB.
+
+Rivet imports the projects and their datasets together into a new folder. Existing
+projects are not overwritten. You can then move or rename any imported project;
+references within the bundle continue to work. Imported projects are unpublished,
+and their Subgraphs use the imported saved-latest drafts. Publish endpoints as
+needed afterward. Plugin installations, credentials and server settings are not
+included in project bundles.
+Disabled nodes, unused library templates and saved variants can retain targets
+outside the exported bundle. Supply or select those targets before activating
+that configuration; imported internal targets are remapped automatically.
+
+If an old bundle contains several versions of the same project, download it again
+with one bundle-wide version choice before uploading. If the upload loses its
+connection, refresh the tree before retrying: it may already have completed, and
+uploading again creates another folder.
+
 ## Installation options
 
 Rivet Server uses PostgreSQL and S3-compatible object storage. Docker Compose or
@@ -59,9 +80,14 @@ does not provide high availability: keep recoverable backups off the VM.
 With Docker/Compose running, `yarn studio-server:dev:local-storage`
 builds the server, provisions PostgreSQL/MinIO and starts Rivet automatically,
 without starting Kubernetes. It adds missing local credentials to private `.env`
-once, preserving the existing file; use its `RIVET_KEY` to sign in at the printed local address.
+once, preserving the existing file; by default use its `RIVET_KEY` to sign in at the printed local address.
 The database and object-store containers have private networking and durable
 volumes. Do not replace the credential file while keeping those volumes.
+Local-storage credentials are shared across tiers:
+`RIVET_LOCAL_POSTGRES_PASSWORD`, `RIVET_LOCAL_S3_ACCESS_KEY_ID` and
+`RIVET_LOCAL_S3_SECRET_ACCESS_KEY`. Each tier still has separate containers and
+data volumes. Older tier-prefixed values are preserved on upgrade when they agree;
+conflicting old passwords require explicit configuration, not automatic replacement.
 
 For the six `dev|staging|prod:local-storage|external-storage` commands, configure the same `.env` using
 `deploy/studio-server/.env.example`, then use
@@ -71,7 +97,9 @@ has the same promoted-release safety gates. Public TLS/routing and
 backups still require deployment configuration.
 
 Default browser ports are dev **8080**, staging **8082**, and production **8083**;
-override the selected tier's `RIVET_DEV_PORT`, `RIVET_STAGING_PORT`, or `RIVET_PROD_PORT`.
+set shared `RIVET_PORT` to override the browser port for any of the six commands.
+Tier-specific port variables are no longer used. Two installations cannot use
+the same host port simultaneously.
 The Docker listener is loopback-only. Stop without deleting data with, for example,
 `yarn studio-server:dev:local-storage -- --stop`. Staging/production require their
 installation confirmation when stopping as well as starting.
@@ -84,14 +112,30 @@ installation; do not delete its private deployment state or replace its keys.
 All six commands deploy the same Rivet application. Local-storage ignores external
 connection settings and uses private PostgreSQL/MinIO; external-storage uses
 only the selected tier's external connections. Settings are prefixed by
-`RIVET_DEV_`, `RIVET_STAGING_` or `RIVET_PROD_`. You do not need to edit a mode switch or swap environment files.
+`RIVET_DEV_`, `RIVET_STAGING_` or `RIVET_PROD_`, except shared local-storage credentials,
+browser-port and UI-auth selection. You do not need to edit a storage-mode switch or swap environment files.
+
+Set `RIVET_SERVER_UI_AUTH_MODE=key` (default) or `oauth` in the shared `.env`.
+For a fresh installation, start with key mode, configure **Settings → OAuth**
+and the administrator-email allowlist in **Settings → Server UI access**, then
+select `oauth` and restart. OAuth without complete settings or an allowed email
+denies access; it does not fall back to key login. Keep `RIVET_KEY` in either mode
+for internal authentication. Development-auth bypass flags are not forwarded.
 
 The [supported stack guide](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/server-stack.md)
 covers Docker startup, optional Kubernetes deployment, private `.env` credentials,
 promoted release manifests, installation and upgrades. Release tiers retain schema migration, release identity
 and recovery checks. Configure a TLS gateway before exposing the server.
 
-Storage connections are deployment configuration, not editable UI settings.
+**Settings → Storage** shows PostgreSQL/S3 connections read-only, with secrets
+hidden. There is no Local folders option: local-storage uses private PostgreSQL
+and MinIO; external-storage uses the services you provide. The panel explains how
+to configure the selected tier's connections in `.env` and start its
+`external-storage` command. Starting another deployment does not move existing
+data—keep the original data and keys until a supported transfer is verified.
+The legacy Migration and Local storage upgrade tabs are not shown on managed
+deployments. **Restore legacy backup** remains available for original v1 legacy
+archives; it is not a general PostgreSQL/S3 backup restore.
 Environment variables entered in Rivet's Settings remain supported and are
 restored from compatible legacy backups.
 

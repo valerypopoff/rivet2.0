@@ -12,6 +12,7 @@ import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
+import { BundleTransferIcon } from './BundleTransferIcon';
 
 type WorkflowProjectContextMenuProps = {
   isOpen: boolean;
@@ -126,20 +127,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
         <span>Download project</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownloadBundle}>
-        <svg
-          className="workflow-project-context-menu-item-icon"
-          aria-hidden="true"
-          focusable="false"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M7 3v13m-4-4 4 4 4-4" />
-          <path d="M17 6v13m-4-4 4 4 4-4" />
-        </svg>
+        <BundleTransferIcon direction="down" />
         <span>Download bundle</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDuplicate}>

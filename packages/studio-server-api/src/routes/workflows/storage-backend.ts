@@ -1,4 +1,5 @@
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
+import type { PreparedProjectBundleImport } from './project-bundle-import.js';
 import { workflowFailure } from './workflow-failure.js';
 import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
@@ -216,6 +217,12 @@ export function getLocalWorkflowPendingCatalogOperationCount(): number {
 }
 const getDataBackend = () => getWorkflowStorageServices().getData();
 const getManagedBackend = () => getWorkflowStorageServices().getManaged();
+export async function importProjectBundleWithBackend(parent: string, bundle: PreparedProjectBundleImport) {
+  const services = getWorkflowStorageServices();
+  if (services.mode !== 'managed')
+    throw createHttpError(409, 'Bundle upload requires PostgreSQL and S3 storage.', { expose: true });
+  return (await services.getManaged()).importProjectBundle(parent, bundle);
+}
 const resetFilesystemLLMProfileHealthForProject = (id: ProjectId) =>
   getWorkflowStorageServices().resetLocalProjectHealth(id);
 function usesDatabaseCatalog(): boolean {

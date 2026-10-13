@@ -9,6 +9,8 @@ import type {
   ManagedReconciliationFindingDetail,
 } from './managed/reconciliation.js';
 import { createHttpError } from '../../utils/httpError.js';
+import type { PreparedProjectBundleImport } from './project-bundle-import.js';
+import type { ProjectBundleImportResult } from '../../../../studio-server-shared/project-bundle-types.js';
 
 type Disposable = { dispose(): Promise<void> };
 export interface LocalWorkflowResources extends WorkflowDataBackend, Disposable {
@@ -19,6 +21,7 @@ export interface LocalWorkflowResources extends WorkflowDataBackend, Disposable 
   cleanupRecordings(): Promise<number>;
 }
 export interface ManagedWorkflowResources extends WorkflowDataBackend, Disposable {
+  importProjectBundle(parent: string, bundle: PreparedProjectBundleImport): Promise<ProjectBundleImportResult>;
   initialize(): Promise<void>;
   drain(): Promise<void>;
   checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;

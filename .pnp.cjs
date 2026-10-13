@@ -16794,6 +16794,7 @@ const RAW_RUNTIME_STATE =
           ]],\
           ["fake-indexeddb", "npm:6.2.5"],\
           ["fast-deep-equal", "npm:3.1.3"],\
+          ["fflate", "npm:0.8.3"],\
           ["fuse.js", "npm:6.6.2"],\
           ["github-markdown-css", "npm:5.9.0"],\
           ["gpt-tokenizer", "npm:2.1.2"],\
@@ -23516,6 +23517,15 @@ const RAW_RUNTIME_STATE =
           ["fetch-blob", "npm:3.2.0"],\
           ["node-domexception", "npm:1.0.0"],\
           ["web-streams-polyfill", "npm:3.3.3"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["fflate", [\
+      ["npm:0.8.3", {\
+        "packageLocation": "./.yarn/cache/fflate-npm-0.8.3-35acaff861-6ebf528dc9.zip/node_modules/fflate/",\
+        "packageDependencies": [\
+          ["fflate", "npm:0.8.3"]\
         ],\
         "linkType": "HARD"\
       }]\

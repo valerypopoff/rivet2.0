@@ -45,6 +45,83 @@ URL, preserving native browser downloads and resume rather than buffering a blob
 
 ## Ownership and snapshots
 
+### Uploading bundles into the workflow library
+
+The folder context menu offers **Upload bundle** beside **Upload project**, including
+at the library root. `BundleTransferIcon` renders the existing staggered downward
+arrows for download and their upward counterparts for upload. Both paths retain
+accessible menu labels and the shared dark modal styling, including the existing
+spaced, non-scrolling footer and button styles rather than new upload-specific CSS.
+
+`WorkflowBundleUploadModal` captures the destination folder and prevents duplicate
+submission or closing during an accepted upload. `projectBundleUpload.ts` reads a
+directory selection or ZIP with `fflate` streaming decompression; it never extracts
+archive paths to disk. One optional wrapper directory is stripped. macOS
+`__MACOSX` and `.DS_Store` entries are ignored. Traversal, duplicate paths, multiple
+manifests, files outside the wrapper and invalid UTF-8 are rejected.
+
+Upload limits differ from background export limits: 64 MiB compressed ZIP size,
+64 MiB total actual decoded file contents, 514 meaningful files (up to 256 projects
+with sidecars, manifest and README), 1 MiB manifest, and the existing 100 MiB JSON
+control-plane request limit. Actual decoded sizes are checked independently of ZIP
+headers; directory entries and ignored metadata also have a bounded entry count.
+
+Authenticated `POST /api/workflows/project-bundles/import` requires
+`X-Rivet-Bundle-Intent: 1` and rejects cross-site intent before parsing the body.
+`project-bundle-import.ts` validates the complete manifest, project identities,
+datasets, dependency closure and saved graph boundaries using the existing Core
+bundle validators. Undeclared files and missing active dependencies are rejected.
+Dataset and row identities must be unique within their respective project/dataset;
+optional row embeddings contain only finite numbers. Directory uploads enforce
+the same meaningful-file limit as ZIPs before reading excess files.
+Parsed private dataset objects are reused for ID remapping and serialization;
+import does not parse the same large sidecar twice.
+Legacy bundles containing multiple versions of the same project require re-export
+with one bundle-wide version selection; import never arbitrarily picks a version.
+
+Preparation gives each project a fresh metadata ID, retaining graph/node/port IDs,
+wires and attached data. It remaps cross-project Subgraphs (including prefab source
+nodes and saved node variants), legacy references/aliases and dataset ownership to the new group; obsolete
+path hints are removed. Subgraph version bindings become `latest`, since imported
+snapshots are ordinary unpublished editable drafts, not new published endpoints.
+Exports intentionally omit dependencies used only by disabled nodes, unused
+prefabs, or inactive variants. Import preserves those uncaptured authored bindings
+without treating them as active dependencies or silently retargeting them.
+Enabling such a configuration may require selecting its target or supplying that
+project. Bindings to projects that are captured are remapped even in inactive
+configurations. Active dependency validation still occurs before any mutation.
+Project names are sanitized and made unique within the group. A fresh
+`<root title> bundle <suffix>` folder is created under the captured destination,
+expanded after success, and announced through the existing tree-change mechanism.
+Existing projects are never overwritten. Ordinary move/rename operations work
+after import because references bind to stable project IDs, not folder paths.
+
+The supported PostgreSQL/S3 deployments use `managed/bundle-import.ts`: immutable
+artifacts are prepared before one SQL transaction creates the folder and entire
+project group. The destination parent is locked and rechecked before insertion.
+Managed empty-folder deletion locks that folder before checking its children, so
+an overlapping import cannot leave its group under a deleted parent. Folder moves
+retain the existing PostgreSQL function's lock-before-traversal contract.
+Failures roll back all metadata; unused artifacts go through the existing
+reference-aware deletion outbox, including uncertain commit outcomes. No automatic
+write retry occurs. A lost response can mean a committed import: refresh the tree
+before manually retrying, since another upload creates a separate group. Historical
+filesystem/SQLite compatibility backends return 409 rather than attempting a
+non-atomic multi-project import. Upload does not execute nodes, install plugins,
+transfer credentials, or import server settings/publication history.
+
+Verification owners: `project-bundle-import.test.ts` covers preparation/remapping
+and rejected input; web `project-bundle-upload.test.ts` covers directory/ZIP limits;
+`project-bundle-upload.spec.ts` covers both browser pickers, destination expansion,
+the icon, and explicit same-file retry after a failed response without partial tree
+updates. The real PostgreSQL/MinIO async integration includes a second-row
+rollback, empty-folder deletion waiting for an imported child, import of an
+exported bundle, moving its dependency and executing the
+imported root with preserved datasets. Its test-owned recordings are removed
+through the normal recording API before later recording contracts run.
+
+### Export and local execution ownership
+
 - Core owns the versioned `ProjectBundleManifest`, validation, prefab-aware
   dependency enumeration and saved Subgraph boundary validation in `ProjectBundle.ts`.
 - API `routes/workflows/project-bundle.ts` collects all graphs, not only Main.

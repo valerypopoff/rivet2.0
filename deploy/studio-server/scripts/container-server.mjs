@@ -55,6 +55,14 @@ export function parseContainerArgs(argv) {
   return result;
 }
 
+export function containerStartupMessage(config) {
+  const login =
+    config.uiAuthMode === 'oauth'
+      ? 'Sign in using your configured OAuth provider. A fresh installation needs key-mode setup of the OAuth provider and administrator emails first.'
+      : 'Sign in using the selected tier key or RIVET_KEY in your shared .env.';
+  return `Rivet started: http://127.0.0.1:${config.port}. ${login} Existing data was not imported or deleted.`;
+}
+
 function run(program, args, { capture = false, ...options } = {}) {
   // The shared dotenv is NOT an env_file for serving containers. Only the
   // normalized configuration reaches Docker; never pass host PnP preloads.
@@ -101,7 +109,7 @@ async function main() {
         ? { RIVET_KEY: randomBytes(32).toString('hex') }
         : {}),
       ...Object.fromEntries(
-        containerCredentialDefaults(stage, storage).map(([name, fixed]) => [
+        containerCredentialDefaults(stage, storage, source).map(([name, fixed]) => [
           name,
           fixed || randomBytes(32).toString('hex'),
         ]),
@@ -187,7 +195,7 @@ async function main() {
     });
     if (options['--config']) {
       console.log(
-        `Validated ${stage}/${storage}: project=${config.project}, local dependencies=${config.local}, URL=http://127.0.0.1:${config.port}. Credentials were not printed; no Docker state changed.`,
+        `Validated ${stage}/${storage}: project=${config.project}, local dependencies=${config.local}, UI auth=${config.uiAuthMode}, URL=http://127.0.0.1:${config.port}. Credentials were not printed; no Docker state changed.`,
       );
       return;
     }
@@ -226,9 +234,7 @@ async function main() {
     await startContainerInstallation(config, compose);
     if (manifest) writeContainerState(statePath, JSON.stringify(manifest));
     fs.unlinkSync(pendingPath);
-    console.log(
-      `Rivet started: http://127.0.0.1:${config.port}. Sign in using the key in your shared .env. Existing data was not imported or deleted.`,
-    );
+    console.log(containerStartupMessage(config));
   } finally {
     fs.closeSync(lock);
     fs.unlinkSync(lockPath);

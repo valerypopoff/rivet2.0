@@ -27,7 +27,8 @@ operator supplies a dedicated PostgreSQL database and S3 bucket/prefix.
 Only the proxy is published, on loopback by default. Ports default to dev 8080,
 staging 8082, production 8083. Configure an authenticated TLS gateway before
 public exposure. PostgreSQL, MinIO/console and internal API/executor ports are
-not published. Host volumes require disk monitoring/capacity planning; Compose
+not published. Shared `RIVET_PORT` overrides the browser port for all six commands;
+two installations cannot bind the same host port simultaneously. Host volumes require disk monitoring/capacity planning; Compose
 does not provide Kubernetes PVC/ephemeral-storage quota enforcement or HA.
 
 Development builds the checkout's API, web and proxy images with unique source
@@ -53,9 +54,45 @@ Explicit Kubernetes rehearsal/release commands remain supported.
 
 Use `deploy/studio-server/.env.example` as the canonical template. Common
 `RIVET_KEY` is the fallback authentication/encryption key (at least 32 characters).
+The template intentionally contains only commented assignments: copying it to a
+new `.env` leaves local credentials eligible for automatic initialization. Merge
+into an existing private file rather than overwriting it. External mode requires
+an explicit shared/tier key and selected-tier database/bucket/region/S3 credentials;
+neither storage-mode selection nor release-manifest flags belong in dotenv.
+`RIVET_PORT` is the shared loopback browser port override; retired tier-specific
+`RIVET_DEV_PORT`/`RIVET_STAGING_PORT`/`RIVET_PROD_PORT` are ignored.
+`RIVET_SERVER_UI_AUTH_MODE` accepts `key` (default) or `oauth`, normalized without
+allowing no-gate or unknown values. It is projected to all API roles and migration
+tasks; the internal proxy key remains required in both modes. On a fresh catalog,
+bootstrap with key mode, save OAuth provider settings and the administrator email
+allowlist, then switch to OAuth and restart. Missing OAuth settings or an empty
+allowlist fails closed, never silently falling back to a key session. Port/auth-mode
+changes do not change storage identity or require deleting/rebinding the installation.
+Development-auth bypass flags remain unforwarded; dummy OAuth is not enabled by
+selecting OAuth. The existing API owns sessions, policy revocation and restore access.
+Launcher validation reports the selected auth mode without secrets; successful
+startup gives mode-specific login guidance and the fresh-OAuth bootstrap requirement.
+Regression coverage checks that an old key UI cookie does not authorize dashboard
+or sensitive storage operations after switching to OAuth, even before provider setup.
+Local credentials use shared `RIVET_LOCAL_POSTGRES_PASSWORD`,
+`RIVET_LOCAL_S3_ACCESS_KEY_ID` and `RIVET_LOCAL_S3_SECRET_ACCESS_KEY` for all tiers.
+Missing values are initialized once, not per tier. The containers, volumes and
+installation identities remain separate; only credentials are shared.
+For upgrades, missing shared values resolve from agreeing legacy tier-prefixed
+local credentials and are appended atomically on startup without rotation. Stops
+can resolve these aliases without writing/generating credentials. Ambiguous legacy
+values fail before dotenv mutation; explicit shared values take precedence. Older
+installations with different passwords need separate `RIVET_ENV_FILE` files or
+deliberate credential reconciliation, never automatic rotation. Ownership checks
+still reject credentials inconsistent with retained volumes.
+Each tier's remaining optional/required fields are listed independently, including
+encryption-key overrides. PostgreSQL `verify-full` validates the server certificate;
+the default `require` provides encryption without certificate validation. The
+example uses `verify-full` for external connections; trusted certificates and
+container-reachable addresses are operator prerequisites.
 Tier-specific settings use `RIVET_DEV_`, `RIVET_STAGING_` or `RIVET_PROD_`:
 
-- `KEY`: optional key override; `PORT`: loopback browser port.
+- `KEY`: optional key override.
 - `APP_SETTINGS_ENCRYPTION_KEY`: optional dedicated encryption key; falls back
   to shared `RIVET_APP_SETTINGS_ENCRYPTION_KEY`, then the authentication key.
   `APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS` has the equivalent tier/shared lookup
@@ -66,9 +103,6 @@ Tier-specific settings use `RIVET_DEV_`, `RIVET_STAGING_` or `RIVET_PROD_`:
   Configured tiers must not share a Compose project. Resources carry their
   deployment stage; an immutable installation cannot be adopted by dev/source
   startup, even if its credentials happen to match.
-- Local: `LOCAL_POSTGRES_PASSWORD`, `LOCAL_S3_ACCESS_KEY_ID`,
-  `LOCAL_S3_SECRET_ACCESS_KEY`. Missing local credentials and a missing common
-  key are generated/appended once. Keep them with the retained volumes.
 - External: `DATABASE_CONNECTION_STRING`, `DATABASE_SSL_MODE`,
   `STORAGE_ENDPOINT` (optional for AWS), `STORAGE_BUCKET`, `STORAGE_REGION`,
   `STORAGE_PREFIX`, `STORAGE_FORCE_PATH_STYLE`, `STORAGE_ACCESS_KEY_ID`,
@@ -100,6 +134,16 @@ Earlier `RIVET_VM_K8S_*` settings belong only to the explicit Kubernetes launche
 the Docker aliases create a distinct installation. Neither silently imports its
 PVCs, old Compose volumes or file/SQLite data. Keep prior credentials and data
 until a verified backup/transfer restores the destination.
+
+Old root dotenv entries such as `PORT`, `RIVET_API_PORT`,
+`VITE_*`, `RIVET_ARTIFACTS_HOST_PATH`, development-auth controls, forwarded-header
+controls and web-build/debug switches are not consumed by the six-command Docker
+launcher. Do not add them to the canonical template as if they configured this
+stack. Its internal ports and safety/runtime defaults are explicit
+deployment policy. Workflow/provider values belong in Settings → Environment
+variables. `RIVET_ENV_FILE` selects a private file from the caller's process
+environment; a declaration inside dotenv cannot select itself. This parser treats
+values literally (no variable interpolation) and does not strip inline comments.
 
 ## Ownership, startup and recovery
 
@@ -143,7 +187,7 @@ The ownership/release inventory is checked both before build/pull and immediatel
 afterward, before writing the pending receipt or draining services. A foreign
 resource or leftover one-shot task appearing during a long image build must not
 be authorized by the earlier snapshot. The port probe uses the published
-`127.0.0.1` address and identifies the selected tier's `RIVET_<TIER>_PORT` setting.
+`127.0.0.1` address and identifies the shared `RIVET_PORT` setting.
 
 The fingerprint includes the primary settings key; adding a previous decryption
 key does not change it. Changing primary keys or connection credentials requires
@@ -181,6 +225,14 @@ manifest. Preserve private configuration and release evidence. A crashed launche
 that failed during its first startup can also recover with that matching pending
 receipt; no successful release record is required until it becomes healthy.
 Remove a crashed launcher's lock manually only after the old process is stopped.
+The lock is the empty exclusive file
+`.data/container-server/<compose-project>/launcher.lock`; its existence alone does
+not prove that a launcher is still alive, and it does not contain a PID. Check the
+matching `container-server.mjs` process and any owned Docker build, migration or
+volume-preparation task before removing only this file. Do not delete the state
+directory, pending/release receipts or volumes to resolve a lock error. Once the
+owner and its tasks have stopped, rerun the same launcher so the normal ownership
+and unfinished-deployment checks decide whether recovery is safe.
 Successful releases record their exact manifest; missing/contradictory evidence
 blocks unidentified adoption. Do not use ad-hoc Docker/Helm rollback to bypass
 these gates.
@@ -197,6 +249,29 @@ rollback in this launcher. Back up matching PostgreSQL, S3 contents and encrypti
 keys off-machine. Local MinIO/PostgreSQL is not managed cloud durability.
 Shutdown drains application services before stopping local PostgreSQL/MinIO;
 if the application stop fails, persistence is left running.
+
+## Storage settings and deployment changes
+
+Settings → Storage is a read-only PostgreSQL/S3 connection summary in both local
+and external modes. It has no filesystem selector, database-provider selector,
+editable credentials or Save/Revert actions. The browser receives only secret
+configured flags, not the database URL or S3 secret. The read-only hook does not
+expose write actions, and the API rejects writes for the managed serving contract.
+Legacy fixtures can report their previous configuration but cannot activate a
+different backend through this panel. The old Migration tab is shown only when
+the existing authenticated legacy-source eligibility check permits it; supported
+managed Docker/Kubernetes deployments have neither Migration nor Local storage
+upgrade tabs. Transient eligibility failures preserve already-admitted legacy UI.
+
+The panel explains how to provision external services, set the selected tier's
+connections in the same `.env`, stop the local installation and start the matching
+`external-storage` command. Default local/external installation names are distinct.
+Starting external mode does **not** copy data or overwrite an existing settings
+row. Preserve the source until an explicitly supported transfer is verified;
+original v1 legacy restore is not a managed PostgreSQL/S3 backup restore. Changes
+to an established destination remain subject to ownership/fingerprint/bootstrap
+drift checks and coordinated operator procedures. External PostgreSQL URLs must
+identify a database explicitly; both a missing path and `/` fail before startup.
 
 ## Legacy backup restoration
 
@@ -224,6 +299,10 @@ See [Kubernetes](./kubernetes.md) for placement, gateway, capacity and qualifica
 `container-server.test.mjs` covers all six configurations, private endpoints,
 role parity, rejected stage sharing/foreign resources, fingerprint changes,
 stop-before-migrate ordering and no automatic replay/resume on failure.
+It also checks the published dotenv declaration contract and exercises all six
+documented configurations using private temporary files, including local automatic
+credential initialization and external TLS/addressing choices, without Docker or
+reading the operator's root `.env`.
 Managed serving-contract tests admit the same roles with/without Kubernetes while
 rejecting filesystem/SQLite or serving migrations.
 The repository-structure verifier guards the shipping managed entry point;
@@ -241,7 +320,7 @@ their own test descendants; sandbox denial is not equivalent to a passing check.
 The destructive Docker check is explicitly opt-in and restricted to the disposable
 `rivet-container-test` project with ownership/fingerprint checks. Start it using
 `RIVET_ENV_FILE` pointing to a private fixture dotenv with `RIVET_DEV_COMPOSE_PROJECT=rivet-container-test`
-and an unused `RIVET_DEV_PORT`, then run the normal headless UI runner with
+and an unused `RIVET_PORT`, then run the normal headless UI runner with
 `PLAYWRIGHT_LOCAL_DOCKER_RESTORE=1` and `local-docker-restore.spec.ts`.
 It generates a real v1 archive inside Linux, restores through the UI, checks the
 restored settings/project and invokes the published internal endpoint once after

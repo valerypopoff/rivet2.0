@@ -1,4 +1,6 @@
 import type { WorkflowRecordingPageQuery } from '../data-backend.js';
+import type { PreparedProjectBundleImport } from '../project-bundle-import.js';
+import { importManagedProjectBundle } from './bundle-import.js';
 import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 import type {
   WorkflowFolderItem,
@@ -150,6 +152,11 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
 
   async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {
     return this.#catalog.getTree();
+  }
+
+  async importProjectBundle(parent: string, bundle: PreparedProjectBundleImport) {
+    await this.initialize();
+    return importManagedProjectBundle(this.#context, parent, bundle);
   }
 
   async listProjectPathsForHostedIo(): Promise<string[]> {

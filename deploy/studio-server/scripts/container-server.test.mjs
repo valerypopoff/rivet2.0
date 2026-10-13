@@ -1,5 +1,5 @@
 import test, { mock } from 'node:test';
-// test-style: fixture-read: reads only test-owned generated receipts and dotenv artifacts.
+// test-style: fixture-read: reads the published dotenv setup template and test-owned receipt/dotenv artifacts, not implementation text.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,16 +29,16 @@ import {
   startContainerInstallation,
   stopContainerInstallation,
 } from './lib/container-server-lifecycle.mjs';
-import { parseContainerArgs } from './container-server.mjs';
+import { containerStartupMessage, parseContainerArgs } from './container-server.mjs';
 
 const images = { api: 'test/api:source', web: 'test/web:source', proxy: 'test/proxy:source' };
 function environment(stage) {
   const p = `RIVET_${stage.toUpperCase()}_`;
   return {
     RIVET_KEY: 'test-key-'.repeat(8),
-    [p + 'LOCAL_POSTGRES_PASSWORD']: 'private-postgres-password',
-    [p + 'LOCAL_S3_ACCESS_KEY_ID']: 'rivet',
-    [p + 'LOCAL_S3_SECRET_ACCESS_KEY']: 'private-minio-password',
+    RIVET_LOCAL_POSTGRES_PASSWORD: 'private-postgres-password',
+    RIVET_LOCAL_S3_ACCESS_KEY_ID: 'rivet',
+    RIVET_LOCAL_S3_SECRET_ACCESS_KEY: 'private-minio-password',
     [p + 'DATABASE_CONNECTION_STRING']: `postgresql://user:secret@db.example/${stage}`,
     [p + 'STORAGE_BUCKET']: `${stage}-bucket`,
     [p + 'STORAGE_REGION']: 'us-east-1',
@@ -46,6 +46,210 @@ function environment(stage) {
     [p + 'STORAGE_ACCESS_KEY']: 'external-secret',
   };
 }
+
+test('the shared dotenv example declares the complete current launcher input contract without retired assignments', () => {
+  const example = fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
+  const declarations = [...example.matchAll(/^# (RIVET_[A-Z0-9_]+)=([^\r\n]*)$/gm)];
+  const shared = [
+    'RIVET_KEY',
+    'RIVET_APP_SETTINGS_ENCRYPTION_KEY',
+    'RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS',
+    'RIVET_PORT',
+    'RIVET_SERVER_UI_AUTH_MODE',
+    'RIVET_LOCAL_POSTGRES_PASSWORD',
+    'RIVET_LOCAL_S3_ACCESS_KEY_ID',
+    'RIVET_LOCAL_S3_SECRET_ACCESS_KEY',
+  ];
+  const fields = [
+    'KEY',
+    'APP_SETTINGS_ENCRYPTION_KEY',
+    'APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS',
+    'COMPOSE_PROJECT',
+    'DATABASE_CONNECTION_STRING',
+    'DATABASE_SSL_MODE',
+    'STORAGE_ENDPOINT',
+    'STORAGE_BUCKET',
+    'STORAGE_REGION',
+    'STORAGE_PREFIX',
+    'STORAGE_FORCE_PATH_STYLE',
+    'STORAGE_ACCESS_KEY_ID',
+    'STORAGE_ACCESS_KEY',
+  ];
+  const expected = [
+    ...shared,
+    ...['DEV', 'STAGING', 'PROD'].flatMap((stage) => fields.map((field) => `RIVET_${stage}_${field}`)),
+  ];
+  assert.deepEqual(declarations.map((match) => match[1]).sort(), expected.sort());
+  // Copying the template alone is intentionally a blank local-start configuration.
+  assert.ok(!/^[A-Z][A-Z0-9_]*=/m.test(example));
+});
+
+test('documented local auto-initialization and explicit external examples configure every tier without Docker', () => {
+  const example = fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
+  const externalFields = new Set([
+    'DATABASE_CONNECTION_STRING',
+    'DATABASE_SSL_MODE',
+    'STORAGE_ENDPOINT',
+    'STORAGE_BUCKET',
+    'STORAGE_REGION',
+    'STORAGE_PREFIX',
+    'STORAGE_FORCE_PATH_STYLE',
+    'STORAGE_ACCESS_KEY_ID',
+    'STORAGE_ACCESS_KEY',
+  ]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-documented-env-'));
+  try {
+    for (const stage of ['dev', 'staging', 'prod']) {
+      const prefix = `RIVET_${stage.toUpperCase()}_`;
+      for (const storage of ['local-storage', 'external-storage']) {
+        const file = path.join(root, `${stage}-${storage}.env`);
+        const selected =
+          storage === 'local-storage'
+            ? example
+            : example.replace(/^# (RIVET_[A-Z0-9_]+)=([^\r\n]*)$/gm, (line, name, value) => {
+                if (name === 'RIVET_KEY') return `${name}=${'fixture-auth-key-'.repeat(4)}`;
+                if (!name.startsWith(prefix) || !externalFields.has(name.slice(prefix.length))) return line;
+                const safe = value.startsWith('replace-with-')
+                  ? 'fixture-secret'
+                  : value.replace('replace-with-password', 'fixture-password');
+                return `${name}=${safe}`;
+              });
+        fs.writeFileSync(file, selected);
+        if (storage === 'local-storage') {
+          initializeServerEnvironment(root, file, () => ({
+            RIVET_KEY: 'fixture-auth-key-'.repeat(4),
+            ...Object.fromEntries(
+              containerCredentialDefaults(stage, storage).map(([name, fixed]) => [
+                name,
+                fixed || 'fixture-private-secret',
+              ]),
+            ),
+          }));
+        }
+        const config = containerServerConfig(parseEnvFile(file), stage, storage);
+        const model = createManagedCompose(config, images);
+        assert.equal(config.project, `rivet-${stage}-${storage === 'local-storage' ? 'local' : 'external'}`);
+        assert.equal(config.port, { dev: 8080, staging: 8082, prod: 8083 }[stage]);
+        assert.equal(config.sslMode, storage === 'local-storage' ? 'disable' : 'verify-full');
+        assert.equal(Boolean(model.services.postgres), storage === 'local-storage');
+        assert.equal(Boolean(model.services.minio), storage === 'local-storage');
+        assert.equal(
+          config.objectStorage.endpoint,
+          storage === 'local-storage' ? 'http://minio:9000' : stage === 'prod' ? '' : `https://s3.${stage}.example`,
+        );
+        assert.equal(
+          config.objectStorage.forcePathStyle,
+          storage === 'external-storage' && stage === 'prod' ? 'false' : 'true',
+        );
+      }
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('local credentials are initialized once and reused across all tiers', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-shared-local-env-'));
+  const file = path.join(root, '.env');
+  try {
+    fs.writeFileSync(file, `RIVET_KEY=${environment('dev').RIVET_KEY}\n`);
+    for (const stage of ['dev', 'staging', 'prod']) {
+      initializeServerEnvironment(root, file, (source) =>
+        Object.fromEntries(
+          containerCredentialDefaults(stage, 'local-storage', source).map(([name, fixed]) => [
+            name,
+            fixed || 'fixture-original-secret',
+          ]),
+        ),
+      );
+      const source = parseEnvFile(file);
+      const config = containerServerConfig(source, stage, 'local-storage');
+      assert.equal(config.password, 'fixture-original-secret');
+      assert.equal(config.objectStorage.accessKeyId, 'rivet');
+      assert.equal(config.objectStorage.secretAccessKey, 'fixture-original-secret');
+    }
+    const saved = fs.readFileSync(file, 'utf8');
+    for (const [name] of containerCredentialDefaults('dev', 'local-storage'))
+      assert.equal(saved.split(`${name}=`).length, 2);
+    assert.equal(containerCredentialDefaults('prod', 'external-storage').length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy tier credentials migrate without rotating secrets or changing storage identity', () => {
+  for (const legacyTier of ['DEV', 'STAGING', 'PROD']) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-local-credential-upgrade-'));
+    const file = path.join(root, '.env');
+    try {
+      const original = environment('dev');
+      const legacy = { ...original };
+      for (const [name] of containerCredentialDefaults('dev', 'local-storage')) {
+        legacy[name.replace('RIVET_', `RIVET_${legacyTier}_`)] = legacy[name];
+        delete legacy[name];
+      }
+      const expectedIdentity = containerStorageIdentity(containerServerConfig(original, 'dev', 'local-storage'));
+      // Stops can still resolve legacy names without generating or writing anything.
+      assert.equal(containerStorageIdentity(containerServerConfig(legacy, 'dev', 'local-storage')), expectedIdentity);
+      fs.writeFileSync(
+        file,
+        Object.entries(legacy)
+          .map(([name, value]) => `${name}=${value}`)
+          .join('\n') + '\n',
+      );
+      initializeServerEnvironment(root, file, (source) =>
+        Object.fromEntries(containerCredentialDefaults('dev', 'local-storage', source)),
+      );
+      const migrated = parseEnvFile(file);
+      for (const [name] of containerCredentialDefaults('dev', 'local-storage'))
+        assert.equal(migrated[name], original[name]);
+      assert.equal(containerStorageIdentity(containerServerConfig(migrated, 'dev', 'local-storage')), expectedIdentity);
+      const saved = fs.readFileSync(file, 'utf8');
+      initializeServerEnvironment(root, file, (source) =>
+        Object.fromEntries(containerCredentialDefaults('prod', 'local-storage', source)),
+      );
+      assert.equal(fs.readFileSync(file, 'utf8'), saved);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('conflicting legacy credentials fail before dotenv mutation; an explicit shared value takes precedence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-local-credential-conflict-'));
+  const file = path.join(root, '.env');
+  try {
+    const base = environment('dev');
+    for (const [name] of containerCredentialDefaults('dev', 'local-storage')) {
+      const env = {
+        ...base,
+        [name.replace('RIVET_', 'RIVET_DEV_')]: 'dev-private',
+        [name.replace('RIVET_', 'RIVET_PROD_')]: 'prod-private',
+      };
+      delete env[name];
+      const original =
+        Object.entries(env)
+          .map(([key, value]) => `${key}=${value}`)
+          .join('\n') + '\n';
+      fs.writeFileSync(file, original);
+      assert.throws(() => containerServerConfig(env, 'dev', 'local-storage'), /Legacy local credentials differ/);
+      assert.throws(
+        () =>
+          initializeServerEnvironment(root, file, (source) =>
+            Object.fromEntries(containerCredentialDefaults('dev', 'local-storage', source)),
+          ),
+        /Legacy local credentials differ/,
+      );
+      assert.equal(fs.readFileSync(file, 'utf8'), original);
+      assert.ok(!fs.existsSync(`${file}.rivet-init.lock`));
+      assert.doesNotThrow(() => containerServerConfig({ ...env, [name]: base[name] }, 'dev', 'local-storage'));
+      assert.doesNotThrow(() => containerServerConfig(env, 'dev', 'external-storage'));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('all six commands share one managed application model without Kubernetes markers or Docker socket mounts', () => {
   for (const stage of ['dev', 'staging', 'prod'])
     for (const choice of ['local-storage', 'external-storage']) {
@@ -63,6 +267,10 @@ test('all six commands share one managed application model without Kubernetes ma
         assert.equal(m.services[name].environment.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE, 'verify');
         assert.equal(m.services[name].environment.RIVET_APP_SETTINGS_BACKEND, 'postgres');
         assert.equal(m.services[name].environment.KUBERNETES_SERVICE_HOST, undefined);
+        assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING, c.database);
+        assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_DATABASE_SSL_MODE, c.sslMode);
+        assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_STORAGE_ENDPOINT, c.objectStorage.endpoint);
+        assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY, c.objectStorage.secretAccessKey);
       }
       assert.equal(m.services.proxy.ports[0], `127.0.0.1:${c.port}:8080`);
       assert.equal(m.services.postgres?.ports, undefined);
@@ -80,6 +288,84 @@ test('all six commands share one managed application model without Kubernetes ma
       } else assert.ok(!commands.includes('CreateBucketCommand'));
     }
 });
+test('shared port and UI auth configure all six deployments without changing internal ports or storage identity', () => {
+  for (const stage of ['dev', 'staging', 'prod']) {
+    for (const storage of ['local-storage', 'external-storage']) {
+      const base = containerServerConfig(environment(stage), stage, storage);
+      assert.equal(base.uiAuthMode, 'key');
+      for (const mode of ['key', 'oauth']) {
+        const config = containerServerConfig(
+          {
+            ...environment(stage),
+            RIVET_PORT: '8081',
+            RIVET_DEV_PORT: '9991',
+            RIVET_STAGING_PORT: '9992',
+            RIVET_PROD_PORT: '9993',
+            RIVET_SERVER_UI_AUTH_MODE: mode,
+            RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
+            RIVET_DEVELOPMENT_AUTH_CLIENTS: '0.0.0.0/0',
+          },
+          stage,
+          storage,
+        );
+        const model = createManagedCompose(config, images);
+        assert.equal(config.port, 8081);
+        assert.equal(containerStorageIdentity(config), containerStorageIdentity(base));
+        assert.deepEqual(model.services.proxy.ports, ['127.0.0.1:8081:8080']);
+        for (const service of ['backend', 'execution', 'evaluation', 'migrate']) {
+          const env = model.services[service].environment;
+          assert.equal(env.RIVET_SERVER_UI_AUTH_MODE, mode);
+          assert.equal(env.RIVET_REQUIRE_UI_GATE_KEY, 'true');
+          assert.equal(env.RIVET_KEY, config.key);
+          assert.equal(env.RIVET_ENABLE_DEVELOPMENT_AUTH, undefined);
+          assert.equal(env.RIVET_DEVELOPMENT_AUTH_CLIENTS, undefined);
+        }
+        assert.equal(model.services.backend.environment.PORT, '8080');
+        assert.equal(model.services.backend.environment.RIVET_BACKEND_EXECUTOR_PORT, '21889');
+      }
+    }
+  }
+});
+
+test('shared port and auth validation reject unsafe inputs before generating container configuration', () => {
+  const env = environment('dev');
+  for (const port of ['', '0', '65536', '2.5', '-1', '8081 # comment'])
+    assert.throws(() => containerServerConfig({ ...env, RIVET_PORT: port }, 'dev', 'local-storage'), /RIVET_PORT/);
+  for (const mode of ['', 'none', 'off', 'invalid', 'oauth # comment'])
+    assert.throws(
+      () => containerServerConfig({ ...env, RIVET_SERVER_UI_AUTH_MODE: mode }, 'dev', 'local-storage'),
+      /RIVET_SERVER_UI_AUTH_MODE/,
+    );
+  assert.equal(
+    containerServerConfig({ ...env, RIVET_SERVER_UI_AUTH_MODE: ' OAuth ' }, 'dev', 'local-storage').uiAuthMode,
+    'oauth',
+  );
+});
+
+test('startup guidance follows the selected auth mode and never prints credentials', () => {
+  for (const mode of ['key', 'oauth']) {
+    const config = containerServerConfig(
+      {
+        ...environment('dev'),
+        RIVET_PORT: '8081',
+        RIVET_SERVER_UI_AUTH_MODE: mode,
+      },
+      'dev',
+      'local-storage',
+    );
+    const message = containerStartupMessage(config);
+    assert.ok(message.startsWith('Rivet started: http://127.0.0.1:8081.'));
+    assert.ok(message.endsWith('Existing data was not imported or deleted.'));
+    if (mode === 'oauth') {
+      assert.ok(message.includes('Sign in using your configured OAuth provider.'));
+      assert.ok(message.includes('key-mode setup'));
+      assert.ok(!message.includes('Sign in using the selected tier key'));
+    } else assert.ok(message.includes('Sign in using the selected tier key or RIVET_KEY'));
+    for (const secret of [config.key, config.password, config.objectStorage.secretAccessKey])
+      assert.ok(!message.includes(secret));
+  }
+});
+
 test('local stores ignore external values; staging/dev never fall back to production credentials', () => {
   const env = { ...environment('prod'), ...environment('dev') };
   const local = containerServerConfig(env, 'dev', 'local-storage');
@@ -106,7 +392,7 @@ test('local stores ignore external values; staging/dev never fall back to produc
   assert.throws(() =>
     containerServerConfig({ ...environment('dev'), RIVET_DEV_COMPOSE_PROJECT: '../bad' }, 'dev', 'local-storage'),
   );
-  assert.throws(() => containerServerConfig({ ...environment('dev'), RIVET_DEV_PORT: '2.5' }, 'dev', 'local-storage'));
+  assert.throws(() => containerServerConfig({ ...environment('dev'), RIVET_PORT: '2.5' }, 'dev', 'local-storage'));
   assert.throws(
     () =>
       containerServerConfig(
@@ -117,6 +403,17 @@ test('local stores ignore external values; staging/dev never fall back to produc
     (e) => !e.message.includes('password@'),
   );
   assert.equal(containerCredentialDefaults('dev', 'external-storage').length, 0);
+  for (const connection of ['postgresql://db.example', 'postgresql://db.example/']) {
+    assert.throws(
+      () =>
+        containerServerConfig(
+          { ...environment('dev'), RIVET_DEV_DATABASE_CONNECTION_STRING: connection },
+          'dev',
+          'external-storage',
+        ),
+      /identify a database/,
+    );
+  }
 });
 
 test('Compose serialization preserves literal dollar signs in credentials and migration code', () => {
@@ -342,7 +639,7 @@ test('an occupied browser port blocks before storage initialization or migration
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'stop');
 });
-test('real port collisions identify the selected tier setting before migration', async () => {
+test('real port collisions identify the shared port setting before migration', async () => {
   const server = net.createServer();
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -352,7 +649,7 @@ test('real port collisions identify the selected tier setting before migration',
       startContainerInstallation({ stage: 'staging', port: server.address().port, local: false }, async (args) => {
         calls.push(args);
       }),
-      /RIVET_STAGING_PORT/,
+      /RIVET_PORT/,
     );
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], 'stop');

@@ -96,7 +96,7 @@ export async function startContainerInstallation(
     ensurePortAvailable(Number(config.port), {
       envFileLabel: 'the shared .env',
       label: 'container-server',
-      portVariable: `RIVET_${config.stage.toUpperCase()}_PORT`,
+      portVariable: 'RIVET_PORT',
       host: '127.0.0.1',
     }),
 ) {

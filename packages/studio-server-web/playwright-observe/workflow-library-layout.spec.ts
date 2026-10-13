@@ -139,21 +139,21 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     updatedAt: null as string | null,
     source: 'default',
   };
-  let deploymentStorageSettings = {
-    storageMode: 'filesystem',
+  const deploymentStorageSettings = {
+    storageMode: 'managed',
     artifactsHostPath: '../',
-    databaseMode: 'local-docker',
+    databaseMode: 'managed',
     databaseSslMode: 'disable',
-    databaseConnectionStringConfigured: false,
+    databaseConnectionStringConfigured: true,
     storageUrl: '',
-    objectStorageBucket: '',
-    objectStorageEndpoint: '',
+    objectStorageBucket: 'rivet',
+    objectStorageEndpoint: 'http://minio:9000',
     objectStorageRegion: 'us-east-1',
     objectStoragePrefix: 'workflows/',
-    objectStorageForcePathStyle: false,
-    deploymentManaged: false,
-    storageAccessKeyId: '',
-    storageAccessKeyConfigured: false,
+    objectStorageForcePathStyle: true,
+    deploymentManaged: true,
+    storageAccessKeyId: 'fixture-public-id',
+    storageAccessKeyConfigured: true,
     updatedAt: null as string | null,
     source: 'default',
   };
@@ -194,6 +194,13 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     source: 'default',
   };
   let environmentVariableValues = new Map<string, string>();
+
+  await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
+    route.fulfill({ json: { eligible: false, liveSqlite: false } }),
+  );
+  await page.route('**/api/legacy-restore', (route) =>
+    route.fulfill({ json: { available: false, reason: 'Restore is unavailable in this fixture.' } }),
+  );
 
   await page.route('**/api/config', async (route) => {
     const url = new URL(route.request().url());
@@ -555,39 +562,11 @@ async function installAppSettingsRoute(page: Page): Promise<void> {
     }
 
     if (url.pathname === '/api/app-settings/deployment-storage') {
-      if (method === 'PATCH') {
-        const body = route.request().postDataJSON() as Record<string, unknown>;
-        deploymentStorageSettings = {
-          storageMode: String(body.storageMode ?? deploymentStorageSettings.storageMode),
-          artifactsHostPath: String(body.artifactsHostPath ?? deploymentStorageSettings.artifactsHostPath),
-          databaseMode: String(body.databaseMode ?? deploymentStorageSettings.databaseMode),
-          databaseSslMode: String(body.databaseSslMode ?? deploymentStorageSettings.databaseSslMode),
-          databaseConnectionStringConfigured:
-            Boolean(body.databaseConnectionString) || deploymentStorageSettings.databaseConnectionStringConfigured,
-          storageUrl: String(body.storageUrl ?? deploymentStorageSettings.storageUrl),
-          objectStorageBucket: String(body.objectStorageBucket ?? deploymentStorageSettings.objectStorageBucket),
-          objectStorageEndpoint: String(body.objectStorageEndpoint ?? deploymentStorageSettings.objectStorageEndpoint),
-          objectStorageRegion: String(body.objectStorageRegion ?? deploymentStorageSettings.objectStorageRegion),
-          objectStoragePrefix: String(body.objectStoragePrefix ?? deploymentStorageSettings.objectStoragePrefix),
-          objectStorageForcePathStyle: Boolean(
-            body.objectStorageForcePathStyle ?? deploymentStorageSettings.objectStorageForcePathStyle,
-          ),
-          storageAccessKeyId: String(body.storageAccessKeyId ?? deploymentStorageSettings.storageAccessKeyId),
-          storageAccessKeyConfigured:
-            Boolean(body.storageAccessKey) || deploymentStorageSettings.storageAccessKeyConfigured,
-          updatedAt: '2026-06-30T12:01:00.000Z',
-          source: 'app-settings',
-        };
-        await route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify(deploymentStorageSettings),
-        });
-        return;
-      }
-
       if (method !== 'GET') {
-        await route.fallback();
+        await route.fulfill({
+          status: 400,
+          json: { error: 'Storage connections are deployment-owned and read-only.' },
+        });
         return;
       }
 
@@ -955,72 +934,27 @@ test.describe('Workflow library layout', () => {
       .toBeGreaterThan(0.9);
 
     await appSettingsModal.getByRole('tab', { name: 'Storage', exact: true }).click();
-    await expect(appSettingsModal.getByRole('tab', { name: 'Storage', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section-title')).toHaveCount(0);
-    await expect(appSettingsModal.locator('.app-settings-storage-panel .app-settings-section')).toHaveCount(1);
-    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveAttribute(
-      'aria-pressed',
+    await expect(appSettingsModal.getByRole('tab', { name: 'Storage', exact: true })).toHaveAttribute(
+      'aria-selected',
       'true',
     );
-    await expect(appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    );
-    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
-    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveValue('../');
-    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveAttribute('readonly', '');
     await expect(
-      appSettingsModal.getByText(
-        'The running app shows it for reference only because changing it here cannot remount host folders.',
-      ),
+      appSettingsModal.getByText('S3-compatible object storage + PostgreSQL', { exact: true }),
     ).toBeVisible();
+    await expect(appSettingsModal.getByRole('button', { name: 'Local folders' })).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Host artifacts folder')).toHaveCount(0);
+    await expect(appSettingsModal.getByLabel('Object storage bucket')).toHaveValue('rivet');
+    await expect(appSettingsModal.getByLabel('Object storage bucket')).toHaveAttribute('readonly', '');
+    await expect(appSettingsModal.getByLabel('Object storage secret access key')).toHaveAttribute(
+      'placeholder',
+      'Configured (hidden)',
+    );
+    await expect(appSettingsModal.getByLabel('PostgreSQL connection string')).toHaveAttribute('readonly', '');
+    await expect(appSettingsModal.getByRole('heading', { name: 'How to use external storage' })).toBeVisible();
+    await expect(appSettingsModal.getByRole('tab', { name: 'Migration', exact: true })).toHaveCount(0);
+    await expect(appSettingsActions).toHaveCount(0);
     const storageFieldGrids = appSettingsModal.locator('.app-settings-storage-panel .app-settings-field-grid');
     await expect(storageFieldGrids.first()).toHaveCSS('gap', '18px');
-    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
-    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toBeVisible();
-    await expect(storageFieldGrids.nth(1)).toHaveCSS('gap', '18px');
-    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await appSettingsModal.getByRole('button', { name: 'Local folders' }).click();
-    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
-    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
-    await expect(appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await appSettingsModal.getByRole('button', { name: 'Managed Postgres' }).click();
-    await expect(appSettingsModal.getByLabel('PostgreSQL connection string')).toBeVisible();
-    await appSettingsModal.getByRole('button', { name: 'Local folders' }).click();
-    await expect(appSettingsModal.locator('.app-settings-section[aria-label="Metadata database"]')).toHaveCount(0);
-    await appSettingsModal.getByRole('button', { name: 'Object storage + PostgreSQL' }).click();
-    await expect(appSettingsModal.getByRole('button', { name: 'Managed Postgres' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await appSettingsModal.getByRole('button', { name: 'Local Docker Postgres' }).click();
-    await expect(
-      appSettingsModal.getByText('It must already be running before object storage mode can apply.'),
-    ).toBeVisible();
-    await expect(appSettingsModal.getByLabel('Object storage bucket')).toHaveValue('');
-    await expect(appSettingsModal.getByLabel('Object storage access key ID')).toHaveValue('');
-    await appSettingsModal.getByLabel('Object storage bucket').fill('rivet-workflows');
-    await appSettingsModal.getByLabel('Object storage endpoint').fill('http://workflow-minio:9000');
-    await appSettingsModal.getByRole('button', { name: 'Path style' }).click();
-    await appSettingsModal.getByLabel('Object storage access key ID').fill('minioadmin');
-    await appSettingsModal.getByLabel('Object storage secret access key').fill('minioadmin');
-    await expect(appSettingsActions).toHaveCount(1);
-    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('height', '40px');
-    await expect(appSettingsActions.locator('.app-settings-action-button').first()).toHaveCSS('min-width', '84px');
-    await expect(appSettingsActions).toHaveCSS('border-top-width', '1px');
-    await appSettingsActions.getByRole('button', { name: 'Save' }).click();
-    await expect(appSettingsActions.locator('.project-settings-success')).toHaveText(
-      'Saved. Restart Docker services to apply storage changes.',
-    );
-    await expect(
-      appSettingsModal.locator('.app-settings-storage-panel .app-settings-section > .project-settings-success'),
-    ).toHaveCount(0);
 
     await appSettingsModal.getByRole('tab', { name: 'Run recordings' }).click();
     await expect(appSettingsModal.getByRole('tab', { name: 'Run recordings' })).toHaveAttribute(
@@ -1308,35 +1242,97 @@ test.describe('Workflow library layout', () => {
     await expect(title).toHaveText('Rivet Studio Server');
   });
 
-  test('shows Kubernetes deployment storage as read-only', async ({ page }) => {
+  for (const storageChoice of ['local-storage', 'external-storage']) {
+    test(`shows ${storageChoice} connections and credentials as read-only`, async ({ page }) => {
+      let storageWrites = 0;
+      page.on('request', (request) => {
+        if (request.url().includes('/api/app-settings/deployment-storage') && request.method() !== 'GET')
+          storageWrites++;
+      });
+      await installAppSettingsRoute(page);
+      await page.route('**/api/app-settings/deployment-storage', (route) =>
+        route.fulfill({
+          json: {
+            storageMode: 'managed',
+            artifactsHostPath: '../',
+            databaseMode: 'managed',
+            databaseSslMode: storageChoice === 'local-storage' ? 'disable' : 'verify-full',
+            databaseConnectionStringConfigured: true,
+            storageUrl: 'https://rivet.s3.us-east-1.amazonaws.com',
+            objectStorageBucket: 'rivet',
+            objectStorageEndpoint: storageChoice === 'local-storage' ? 'http://minio:9000' : '',
+            objectStorageRegion: 'us-east-1',
+            objectStoragePrefix: 'workflows/',
+            objectStorageForcePathStyle: storageChoice === 'local-storage',
+            deploymentManaged: true,
+            storageAccessKeyId: 'access',
+            storageAccessKeyConfigured: true,
+            databaseConnectionString: 'private-database-secret-must-not-be-rendered',
+            storageAccessKey: 'private-s3-secret-must-not-be-rendered',
+            updatedAt: null,
+            source: 'app-settings',
+          },
+        }),
+      );
+      await page.route('**/?editor', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
+        }),
+      );
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      const modal = page.getByTestId('app-settings-modal');
+      await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
+      await expect(modal.getByText('S3-compatible object storage + PostgreSQL', { exact: true })).toBeVisible();
+      await expect(modal.getByRole('button', { name: 'Local folders' })).toHaveCount(0);
+      await expect(modal.getByRole('button', { name: 'Local Docker Postgres' })).toHaveCount(0);
+      await expect(modal.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+      for (const label of [
+        'Object storage bucket',
+        'Object storage access key ID',
+        'Object storage secret access key',
+        'PostgreSQL connection string',
+        'PostgreSQL SSL',
+        'S3 address style',
+      ]) {
+        await expect(modal.getByLabel(label)).toHaveAttribute('readonly', '');
+      }
+      await expect(modal.getByLabel('PostgreSQL connection string')).toHaveValue('');
+      await expect(modal.getByLabel('PostgreSQL connection string')).toHaveAttribute(
+        'placeholder',
+        'Configured (hidden)',
+      );
+      await expect(modal.getByLabel('Object storage secret access key')).toHaveValue('');
+      await expect(modal).not.toContainText('private-database-secret-must-not-be-rendered');
+      await expect(modal).not.toContainText('private-s3-secret-must-not-be-rendered');
+      await expect(modal.getByLabel('PostgreSQL SSL')).toHaveValue(
+        storageChoice === 'local-storage' ? 'Disabled' : 'Verify full',
+      );
+      await expect(modal.getByRole('heading', { name: 'How to use external storage' })).toBeVisible();
+      await expect(modal.getByText('yarn studio-server:dev:external-storage', { exact: true })).toBeVisible();
+      await expect(modal).toContainText('does not move existing data');
+      await expect(modal.getByRole('tab', { name: 'Migration', exact: true })).toHaveCount(0);
+      await expect(modal.getByRole('tab', { name: 'Local storage upgrade', exact: true })).toHaveCount(0);
+      await modal.getByLabel('Object storage bucket').focus();
+      await page.keyboard.type('must-not-edit');
+      await expect(modal.getByLabel('Object storage bucket')).toHaveValue('rivet');
+      expect(storageWrites).toBe(0);
+    });
+  }
+
+  test('Storage loading and read failures do not show legacy controls or an endless loading message', async ({
+    page,
+  }) => {
     await installAppSettingsRoute(page);
-    await page.route('**/api/app-settings/deployment-storage', (route) =>
-      route.fulfill({
-        json: {
-          storageMode: 'managed',
-          artifactsHostPath: '../',
-          databaseMode: 'managed',
-          databaseSslMode: 'require',
-          databaseConnectionStringConfigured: true,
-          storageUrl: 'https://rivet.s3.us-east-1.amazonaws.com',
-          objectStorageBucket: 'rivet',
-          objectStorageEndpoint: '',
-          objectStorageRegion: 'us-east-1',
-          objectStoragePrefix: 'workflows/',
-          objectStorageForcePathStyle: false,
-          deploymentManaged: true,
-          storageAccessKeyId: 'access',
-          storageAccessKeyConfigured: true,
-          updatedAt: null,
-          source: 'app-settings',
-        },
-      }),
-    );
+    let failRead: (() => Promise<void>) | undefined;
+    await page.route('**/api/app-settings/deployment-storage', (route) => {
+      failRead = () => route.fulfill({ status: 503, json: { error: 'Storage configuration unavailable.' } });
+    });
     await page.route('**/?editor', (route) =>
-      route.fulfill({
-        contentType: 'text/html',
-        body: '<script>setInterval(() => parent.postMessage({type:"editor-ready",editorInstanceId:"fixture-editor"}, location.origin), 100)</script>',
-      }),
+      route.fulfill({ contentType: 'text/html', body: '<div>Fixture editor</div>' }),
     );
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await authenticateIfNeeded(page);
@@ -1344,10 +1340,14 @@ test.describe('Workflow library layout', () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const modal = page.getByTestId('app-settings-modal');
     await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
-    await expect(modal.getByText('Kubernetes deployment storage is managed by the operator.')).toBeVisible();
-    await expect(modal.getByRole('button', { name: 'Local folders' })).toBeDisabled();
-    await expect(modal.getByLabel('Object storage bucket')).toBeDisabled();
-    await expect(modal.getByLabel('PostgreSQL connection string')).toBeDisabled();
+    await expect(modal.getByRole('status')).toHaveText('Loading storage configuration…');
+    await expect(modal.getByRole('button', { name: 'Local folders' })).toHaveCount(0);
+    await expect(modal.getByLabel('Object storage secret access key')).toHaveCount(0);
+    await expect.poll(() => !!failRead).toBe(true);
+    await failRead!();
+    await expect(modal.getByRole('alert')).toContainText('Storage configuration unavailable.');
+    await expect(modal.getByText('Loading storage configuration…')).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
   });
 
   test('resizes with a wider drag target and folds while dragging below half the minimum width', async ({ page }) => {

@@ -15,16 +15,28 @@ function requireValue(env, name, fallback) {
   if (!result || result.startsWith('replace-')) throw new Error(`Configure ${name} in the shared .env.`);
   return result;
 }
-export function containerCredentialDefaults(stage, storage) {
+export function containerCredentialDefaults(stage, storage, env = {}) {
   if (!containerStages.includes(stage) || !containerStorageChoices.includes(storage))
     throw new Error('Invalid container deployment selection.');
-  return storage === 'local-storage'
-    ? [
-        [`RIVET_${stage.toUpperCase()}_LOCAL_POSTGRES_PASSWORD`, null],
-        [`RIVET_${stage.toUpperCase()}_LOCAL_S3_ACCESS_KEY_ID`, 'rivet'],
-        [`RIVET_${stage.toUpperCase()}_LOCAL_S3_SECRET_ACCESS_KEY`, null],
-      ]
-    : [];
+  if (storage !== 'local-storage') return [];
+  return [
+    ['RIVET_LOCAL_POSTGRES_PASSWORD', null],
+    ['RIVET_LOCAL_S3_ACCESS_KEY_ID', 'rivet'],
+    ['RIVET_LOCAL_S3_SECRET_ACCESS_KEY', null],
+  ].map(([name, fallback]) => {
+    const shared = value(env, name);
+    if (shared) return [name, shared];
+    // Preserve retained installations on upgrade, without choosing one tier's
+    // password arbitrarily when older installations used different credentials.
+    const legacy = new Set(
+      containerStages.map((tier) => value(env, name.replace('RIVET_', `RIVET_${tier.toUpperCase()}_`))).filter(Boolean),
+    );
+    if (legacy.size > 1)
+      throw new Error(
+        `Legacy local credentials differ between tiers. Configure ${name} explicitly; retained installations must keep their existing credentials.`,
+      );
+    return [name, [...legacy][0] || fallback];
+  });
 }
 
 export function containerServerConfig(env, stage, storage, root = process.cwd()) {
@@ -49,12 +61,14 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
     prefix + 'APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS',
     env.RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS,
   );
-  const port = value(env, prefix + 'PORT', stage === 'dev' ? '8080' : stage === 'staging' ? '8082' : '8083');
-  if (!/^[1-9][0-9]*$/.test(port) || Number(port) > 65535)
-    throw new Error('Rivet host port must be between 1 and 65535.');
+  const port = value(env, 'RIVET_PORT', stage === 'dev' ? '8080' : stage === 'staging' ? '8082' : '8083');
+  if (!/^[1-9][0-9]*$/.test(port) || Number(port) > 65535) throw new Error('RIVET_PORT must be between 1 and 65535.');
+  const uiAuthMode = value(env, 'RIVET_SERVER_UI_AUTH_MODE', 'key').toLowerCase();
+  if (!['key', 'oauth'].includes(uiAuthMode)) throw new Error('RIVET_SERVER_UI_AUTH_MODE must be key or oauth.');
   const external = (name, fallback) =>
     requireValue(env, prefix + name, stage === 'prod' ? value(env, `RIVET_K8S_${name}`, fallback) : fallback);
-  const password = local ? requireValue(env, prefix + 'LOCAL_POSTGRES_PASSWORD') : '';
+  const localCredentials = Object.fromEntries(containerCredentialDefaults(stage, storage, env));
+  const password = local ? requireValue(localCredentials, 'RIVET_LOCAL_POSTGRES_PASSWORD') : '';
   const database = local
     ? `postgresql://rivet:${encodeURIComponent(password)}@postgres:5432/rivet`
     : external('DATABASE_CONNECTION_STRING');
@@ -64,7 +78,7 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
   } catch {
     throw new Error('Invalid PostgreSQL connection string.');
   }
-  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || url.pathname === '/')
+  if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.pathname || url.pathname === '/')
     throw new Error('PostgreSQL URL must identify a database.');
   const objectStorage = local
     ? {
@@ -73,8 +87,8 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
         region: 'us-east-1',
         prefix: 'workflows/',
         forcePathStyle: 'true',
-        accessKeyId: requireValue(env, prefix + 'LOCAL_S3_ACCESS_KEY_ID'),
-        secretAccessKey: requireValue(env, prefix + 'LOCAL_S3_SECRET_ACCESS_KEY'),
+        accessKeyId: requireValue(localCredentials, 'RIVET_LOCAL_S3_ACCESS_KEY_ID'),
+        secretAccessKey: requireValue(localCredentials, 'RIVET_LOCAL_S3_SECRET_ACCESS_KEY'),
       }
     : {
         endpoint: value(env, prefix + 'STORAGE_ENDPOINT', stage === 'prod' ? env.RIVET_K8S_STORAGE_ENDPOINT : ''),
@@ -160,6 +174,7 @@ export function containerServerConfig(env, stage, storage, root = process.cwd())
     settingsKey,
     previousSettingsKey,
     port: Number(port),
+    uiAuthMode,
     password,
     database,
     sslMode,
@@ -216,7 +231,7 @@ export function createManagedCompose(config, images, { offline = false, releaseD
     RIVET_KEY: config.key,
     RIVET_APP_SETTINGS_ENCRYPTION_KEY: config.settingsKey,
     RIVET_APP_SETTINGS_ENCRYPTION_KEY_PREVIOUS: config.previousSettingsKey,
-    RIVET_SERVER_UI_AUTH_MODE: 'key',
+    RIVET_SERVER_UI_AUTH_MODE: config.uiAuthMode,
     RIVET_REQUIRE_UI_GATE_KEY: 'true',
     RIVET_MANAGED_WORKFLOW_SCHEMA_MODE: 'verify',
     RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: String(schema.minimumRollbackCompatibleVersion),

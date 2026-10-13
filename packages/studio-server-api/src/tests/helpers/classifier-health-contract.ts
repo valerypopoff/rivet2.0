@@ -44,9 +44,17 @@ export async function verifyClassifierHealthContract(stores: readonly RivetStudi
     // a different wall clock. Wait the store-reported duration, not a local
     // comparison against its absolute timestamp.
     await delay(Math.max(0, suspended.openUntil! - suspended.updatedAt) + 20);
-    const recovery = await Promise.all(
-      Array.from({ length: 8 }, (_, i) => stores[i % stores.length]!.begin({ identity, policy })),
-    );
+    const beginRecoveryBatch = () =>
+      Promise.all(Array.from({ length: 8 }, (_, i) => stores[i % stores.length]!.begin({ identity, policy })));
+    let recovery = await beginRecoveryBatch();
+    // A local timer is not proof that a virtualized PostgreSQL clock advanced
+    // equally. Poll only while every replica still reports the open state.
+    const recoveryDeadline = performance.now() + 10_000;
+    while (recovery.every((permit) => permit.disposition === 'deny' && permit.state === 'open')) {
+      assert.ok(performance.now() < recoveryDeadline, `Recovery deadline expired: ${JSON.stringify(recovery)}`);
+      await delay(20);
+      recovery = await beginRecoveryBatch();
+    }
     const allowed = recovery.filter((permit) => permit.disposition === 'allow');
     assert.equal(allowed.length, 1, 'Only one replica owns recovery');
     const renewed = await store.renew!({ identity, permitId: allowed[0]!.permitId!, leaseDurationMs: 20_000 });
