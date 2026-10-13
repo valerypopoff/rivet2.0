@@ -7,7 +7,12 @@ import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { RequestHandler } from 'express';
-import { LegacyRestoreControl, restoreBlocksServing, type RestoreOperation } from './control.js';
+import {
+  LegacyRestoreControl,
+  restoreBlocksServing,
+  canProceedAfterRestoreValidationFailure,
+  type RestoreOperation,
+} from './control.js';
 import { LEGACY_RESTORE_LIMITS } from './archive.js';
 import { captureRestoreObjects, preflightRestorePermissions } from './scope.js';
 import { captureRestoreSettings } from '../app-settings/settings-repository.js';
@@ -129,7 +134,14 @@ export class LegacyRestoreService {
     private readonly hooks: LegacyRestoreHooks,
   ) {}
   async status() {
-    return { available: true, operation: await this.control.read() };
+    const operation = await this.control.read();
+    return {
+      available: true,
+      operation: operation && {
+        ...operation,
+        canProceedAnyway: canProceedAfterRestoreValidationFailure(operation),
+      },
+    };
   }
   private async ownedRoot() {
     const stat = await fs.lstat(this.root);
@@ -245,6 +257,39 @@ export class LegacyRestoreService {
       (paused && ['failed', 'completed', 'cancelled'].includes(operation.phase) && !restoreBlocksServing(operation))
     )
       this.launch();
+  }
+  async proceedAnyway(id: string, archiveDigest: string) {
+    if (this.closing || this.cancelling || this.restartRequested) throw conflict('Restore service is stopping.');
+    if (this.uploadJob || paused || warmup) throw conflict('Wait for current restore work to finish.');
+    // A failed validator may have committed its journal just before releasing ownership.
+    if (this.task) await this.task;
+    const lock = await this.control.lock();
+    try {
+      if (this.closing || this.cancelling || this.restartRequested) throw conflict('Restore service is stopping.');
+      if (this.uploadJob || paused || warmup) throw conflict('Wait for current restore work to finish.');
+      const operation = await this.control.read();
+      if (
+        !operation ||
+        !canProceedAfterRestoreValidationFailure(operation) ||
+        operation.id !== id ||
+        operation.archiveDigest !== archiveDigest
+      )
+        throw conflict('Restore override is stale or unavailable.');
+      const payload = await this.control.payload(id);
+      await this.control.write(
+        {
+          ...operation,
+          phase: 'validating',
+          integrityOverridden: true,
+          message: 'Preparing modified backup. Original integrity checks are being bypassed.',
+        },
+        { ...payload, resumePhase: 'validating' },
+      );
+    } finally {
+      await this.control.unlock(lock);
+    }
+    // No drain/deletion here. The existing explicit destructive confirmation remains required.
+    this.launch();
   }
   async start(id: string, archiveDigest: string, confirmation: string) {
     if (this.closing || this.cancelling || this.restartRequested) throw conflict('Restore service is stopping.');

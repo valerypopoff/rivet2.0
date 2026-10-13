@@ -1581,9 +1581,52 @@ Only the migration Job mounts that claim, read-only. Each JSON domain seeds Post
 
 Do not deploy the production overlay with ad hoc image tags or a raw `helm upgrade`. A successful **Build Images** workflow retains one promoted Studio Server release manifest. It binds the source commit, a canonical digest of the complete Helm chart, managed-workflow schema contract, CI run, the exact OCI digest for proxy, web, API, and executor, and one canonical predecessor release. The production chart retains the promoted manifest's own semantic digest in its release-identity ConfigMap, rejects incomplete identity, and the deployment command rejects a manifest whose chart contents do not match the checked-out chart.
 
-Promoted manifests are published to `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest` under `manifest-<canonical-sha256>` tags. The publisher rejects a tag that does not equal the manifest's semantic digest and refuses to overwrite different content. The `production` retag command first pulls and validates that exact promoted artifact, requires the source and destination to use the same repository, and permits only the `production` destination. The pointer advances only after repository/image gates pass, the candidate's predecessor is rechecked, its immutable manifest artifact is published, and the complete runtime image set is promoted. Treat the content-derived tags as permanent release evidence and exclude them from registry cleanup. The 90-day GitHub Actions artifact is a convenient downloadable copy, not the durable authority.
+Promoted manifests are published to `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest` under `manifest-<canonical-sha256>` tags. The publisher rejects a tag that does not equal the manifest's semantic digest and refuses to overwrite different content. The `production` retag command first pulls and validates that exact promoted artifact, requires the source and destination to use the same repository, and permits only the `production` destination. It retags the acknowledged immutable registry digest, not the source tag: a tag change after validation cannot substitute another artifact. The pointer advances only after repository/image gates pass, the candidate's predecessor is rechecked, its immutable manifest artifact is published, and the complete runtime image set is promoted. Treat the content-derived tags as permanent release evidence and exclude them from registry cleanup. The 90-day GitHub Actions artifact is a convenient downloadable copy, not the durable authority.
 
-Download the manifest from the successful workflow run into this repository, for example as `artifacts/releases/<run-id>/release-manifest.json`, then check out the artifact's exact `source.sha`. Both manifest commands and the deployment command reject paths outside this checkout; the deployment command also rejects a different Git `HEAD`, tracked local modifications, or chart contents, so an operator cannot run an old artifact through newer release tooling by accident. Untracked environment values and generated release diagnostics remain allowed. Keep the environment values file limited to cluster-specific configuration and secret references; do not put `images.*`, `release.*`, or `workflowSchema.compatibility.*` in it.
+For ordinary deployment, `--manifest` is optional. The command pulls
+`ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:production` with Docker,
+resolves this pull's acknowledged registry digest to an immutable local image ID,
+and extracts the manifest with `docker create`/`docker cp` without starting the
+artifact container. A concurrent promotion cannot change that selection. Docker
+and registry access (including `docker login ghcr.io` when required) are needed;
+a production release must already have been promoted by CI, even for a first
+installation. A missing pointer, failed authentication/network request, invalid
+or candidate manifest fails closed: there is no cached or mutable-tag fallback.
+Extraction first copies into a private temporary directory. Only a regular
+manifest file of at most 1 MiB is accepted; symlinks and directories are rejected
+before reading or publishing output. Publication uses exclusive file creation,
+so a concurrently created output is not overwritten or deleted on failure.
+Temporary containers receive unique owned names before creation is dispatched,
+so cleanup can target them even if the create acknowledgement is lost. Their
+anonymous volumes and extraction/selection directories are removed on success/failure.
+Cleanup errors remain visible alongside the original extraction error, including
+Docker transport failures; failed cleanup
+cannot be reported as successful deployment or advance the production pointer.
+
+The command prints the selected `source.sha` and semantic manifest digest. Check
+out that exact commit if it differs from `HEAD`; the launcher never changes Git
+state. Selection, promoted-manifest validation, source/clean-checkout/chart and
+schema/image validation all precede cluster changes, including generated Secrets.
+The same selection and validation apply to `--dry-run`, which does not mutate the
+cluster. Validated evidence is retained as `release-manifest.json` and
+`release-selection.json` under `artifacts/kubernetes-production-release/<release>/`;
+the latter records automatic pointer, registry digest and local image identity,
+or the explicit input path, plus source commit and semantic manifest digest.
+An explicit input pin is not rewritten by selection diagnostics, including Windows
+case aliases. If its filename is `release-selection.json` in the diagnostic
+directory, metadata uses `release-selection-metadata.json` instead.
+
+For a reproducible deployment, supply `--manifest <path>` to pin a previously
+validated release. Explicit manifests bypass registry retrieval entirely and
+remain supported for offline preflight. A downloadable copy is also available
+from the successful Build Images workflow. `--rollback-to` always requires an
+explicit `--manifest` identifying the failed release; the current production
+pointer must never infer it. Both manifest commands and the deployment command
+reject paths outside this checkout; the deployment command also rejects a
+different Git `HEAD`, tracked local modifications, or chart contents. Untracked
+environment values and generated diagnostics remain allowed. Keep environment
+values limited to cluster-specific configuration and secret references; do not
+put `images.*`, `release.*`, or `workflowSchema.compatibility.*` in them.
 
 #### One-time release-lineage cutover
 
@@ -1621,7 +1664,6 @@ First render exactly what would be installed. This changes no cluster state and 
 
 ```bash
 yarn studio-server:kubernetes:release -- \
-  --manifest artifacts/releases/<run-id>/release-manifest.json \
   --values path/to/environment-values.yaml \
   --context your-context \
   --release rivet \
@@ -1633,7 +1675,6 @@ After reviewing the generated artifacts, deploy with the explicit release-name c
 
 ```bash
 yarn studio-server:kubernetes:release -- \
-  --manifest artifacts/releases/<run-id>/release-manifest.json \
   --values path/to/environment-values.yaml \
   --context your-context \
   --release rivet \
@@ -1784,6 +1825,8 @@ yarn studio-server:verify:kubernetes
 
 That command proves:
 
+- automatic/explicit promoted-manifest selection, immutable extraction, fail-closed
+  preflight, cleanup, diagnostic pinning and explicit failed-release rollback rules
 - the local rehearsal values path still renders cleanly
 - the static Kubernetes contract tests still pass
 - the production overlay still lint-renders with concrete image repository overrides

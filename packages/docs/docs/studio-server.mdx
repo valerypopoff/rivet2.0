@@ -10,6 +10,13 @@ Rivet Studio Server runs the editor in your browser and lets you manage projects
 
 ## Restore a legacy backup
 
+If a fully uploaded backup fails validation because you edited it, **Proceed
+anyway** lets you bypass its original integrity checks. This is dangerous: removed
+data will not be restored. Removing recordings, including their whole folder, is
+supported this way. You must still confirm replacement after preparation. Unsafe
+archives, invalid data, missing required roots and installation/storage safety
+checks cannot be bypassed. The original backup is recommended.
+
 On a restore-capable managed PostgreSQL/S3 deployment, open **Settings → Storage →
 Restore legacy backup** and select the original `.tar.gz` backup downloaded before
 the legacy-to-SQLite upgrade. Review its date and contents, then type

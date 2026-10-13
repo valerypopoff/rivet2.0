@@ -77,6 +77,13 @@ The nginx configs keep a `100 MiB` server-wide body limit for API/editor payload
 
 ### HTTP body admission and parsing
 
+Legacy backup restore is a separate streaming route with a 10 GiB archive cap,
+including both VM edge listeners. The internal UI-auth subrequest disables its
+own body-size check because it inherits the parent's Content-Length but forwards
+no body. It remains `internal`, with request-body forwarding off and upstream
+Content-Length cleared. Never raise general public limits or bypass authentication
+to work around large restore uploads.
+
 The API does not install a catch-all body parser. Each body-consuming route owns its parser and places authentication or request preflight before it:
 
 - control-plane routes authenticate the trusted proxy header before their route-local JSON parser. Their ordinary limit is `100 MiB`; local-editor recording uploads use `48 MiB`; evaluation recording uploads use `24 MiB`.

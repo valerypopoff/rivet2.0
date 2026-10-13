@@ -69,7 +69,9 @@ async function run() {
         process.env.RIVET_LEGACY_RESTORE_ROOT || '/data/rivet-restore',
         operation.archiveDigest!,
       );
-      const archive = await prepareLegacyArchive(payload.archive as string, path.dirname(roots.workflows));
+      const archive = await prepareLegacyArchive(payload.archive as string, path.dirname(roots.workflows), {
+        allowModifiedBackup: operation.integrityOverridden === true,
+      });
       await normalizeExtractedRuntimeLayout(roots.runtimeLibraries);
       const source = await prepareLegacyRestoreSource(roots, target);
       const tables = await existingRestoreTables(control.pool);
@@ -82,7 +84,9 @@ async function run() {
         {
           ...operation,
           phase: 'awaiting-confirmation',
-          message: 'Backup validated. Confirm replacement.',
+          message: operation.integrityOverridden
+            ? 'Modified backup prepared with original integrity checks bypassed. Confirm replacement.'
+            : 'Backup validated. Confirm replacement.',
           backupCreatedAt: archive.createdAt,
           projects: source.projects,
           recordings: source.recordings,

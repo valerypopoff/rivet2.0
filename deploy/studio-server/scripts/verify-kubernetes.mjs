@@ -145,6 +145,7 @@ async function main() {
   try {
     await spawnProgram(nodeBin, [
       '--test',
+      'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',

@@ -133,7 +133,10 @@ async function scanRoots(roots: LocalMetadataSourceRoots) {
 }
 
 /** Verify portable legacy archives before an importer may normalize its working copy. */
-export async function verifyLegacyBackupDirectory(directory: string): Promise<{ bytes: number; createdAt: string }> {
+export async function verifyLegacyBackupDirectory(
+  directory: string,
+  options: { allowModifiedBackup?: boolean } = {},
+): Promise<{ bytes: number; createdAt: string }> {
   const file = path.join(directory, 'backup.json');
   const stat = await fs.lstat(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Invalid backup manifest.');
@@ -156,9 +159,10 @@ export async function verifyLegacyBackupDirectory(directory: string): Promise<{ 
     .parse(JSON.parse(await fs.readFile(file, 'utf8')));
   const roots = rootsAt(directory);
   const scanned = await scanRoots(roots);
+  const fingerprint = await fingerprintVmMigrationSource(roots);
   if (
-    scanned.hash !== manifest.contentHash ||
-    (await fingerprintVmMigrationSource(roots)) !== manifest.sourceFingerprint
+    !options.allowModifiedBackup &&
+    (scanned.hash !== manifest.contentHash || fingerprint !== manifest.sourceFingerprint)
   )
     throw new Error('Backup contents do not match their manifest.');
   return { bytes: scanned.bytes, createdAt: manifest.createdAt };

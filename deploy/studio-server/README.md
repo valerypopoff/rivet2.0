@@ -121,6 +121,19 @@ release and recovery checks. The optional single-machine chart co-locates roles;
 the cluster profile can scale execution separately. Neither choice changes the
 application's shared PostgreSQL/S3 coordination.
 
+Normal Kubernetes releases automatically select CI's promoted production manifest:
+
+```bash
+yarn studio-server:kubernetes:release -- --context <context> --namespace <namespace> --release rivet --values <environment-values.yaml> --confirm rivet
+```
+
+Docker and registry access are required for automatic selection. Add `--dry-run`
+instead of `--confirm rivet` for preflight without cluster changes. Add
+`--manifest <promoted-manifest>` for an explicit release pin; it remains mandatory
+with `--rollback-to`. The exact clean source checkout, chart, schema, immutable
+images and lineage protections still apply. This default is Kubernetes-only;
+the staging/production Compose commands above still require their explicit pins.
+
 See [Kubernetes](../../developer-docs/studio-server/kubernetes.md) for gateways,
 capacity, isolated local PostgreSQL/MinIO rehearsal and production qualification.
 

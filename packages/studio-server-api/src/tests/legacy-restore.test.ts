@@ -16,6 +16,8 @@ import {
   restoreOperationSchema,
   LegacyRestoreControl,
   acquireRestoreServingLease,
+  canProceedAfterRestoreValidationFailure,
+  type RestoreOperation,
 } from '../legacy-restore/control.js';
 import type { Pool } from 'pg';
 import fs from 'node:fs/promises';
@@ -41,6 +43,8 @@ import {
 import { retainOrdinaryReceiveDeadline } from '../legacy-restore/receive-deadline.js';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { createBrowserBackupArchive, browserBackupDirectory } from '../local-metadata/browser-backup.js';
+import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
 
 test('schema preparation checks existing installation ownership without changing DDL', async () => {
   for (const state of ['empty', 'owned', 'foreign', 'partial']) {
@@ -928,18 +932,179 @@ test('archive inspection rejects duplicate entries and never extracts unknown ro
     await fs.writeFile(path.join(source, 'backup.json'), '{}');
     const duplicate = path.join(root, 'duplicate.tar.gz');
     await tar.c({ file: duplicate, cwd: source, gzip: true }, ['backup.json', 'backup.json']);
-    await assert.rejects(prepareLegacyArchive(duplicate, destination));
+    for (const allowModifiedBackup of [false, true])
+      await assert.rejects(prepareLegacyArchive(duplicate, destination, { allowModifiedBackup }));
     assert.deepEqual(await fs.readdir(destination), []);
     await fs.mkdir(path.join(source, 'outside'));
     await fs.writeFile(path.join(source, 'outside', 'sentinel'), 'unrelated');
     const outside = path.join(root, 'outside.tar.gz');
     await tar.c({ file: outside, cwd: source, gzip: true }, ['outside']);
-    await assert.rejects(prepareLegacyArchive(outside, destination));
+    for (const allowModifiedBackup of [false, true])
+      await assert.rejects(prepareLegacyArchive(outside, destination, { allowModifiedBackup }));
     assert.deepEqual(await fs.readdir(destination), []);
     assert.equal(await fs.readFile(path.join(source, 'outside', 'sentinel'), 'utf8'), 'unrelated');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test('explicit modified-backup override accepts omitted recordings but never missing mandatory roots or invalid manifests', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-modified-backup-'));
+  try {
+    const source = Object.fromEntries(
+      ['workflows', 'recordings', 'appData', 'runtimeLibraries'].map((domain) => [domain, path.join(root, domain)]),
+    ) as { workflows: string; recordings: string; appData: string; runtimeLibraries: string };
+    const control = path.join(root, 'control');
+    for (const directory of [...Object.values(source), control]) await fs.mkdir(directory);
+    await fs.writeFile(path.join(source.recordings, 'removed-recording'), 'old recording');
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    await createBrowserBackupArchive({
+      control,
+      source,
+      assertFrozen: async () => {},
+      state: {
+        id,
+        revision: 1,
+        pausedAt: createdAt,
+        phase: 'creating',
+        archiveHash: null,
+        bytes: 0,
+        createdAt,
+        sourceFingerprint: await fingerprintVmMigrationSource(source),
+      },
+    });
+    const archive = path.join(browserBackupDirectory(control, id), 'backup.tar.gz');
+    const original = path.join(root, 'original');
+    await fs.mkdir(original);
+    await prepareLegacyArchive(archive, original);
+    for (const omitRoot of [false, true]) {
+      const edited = path.join(root, `edited-${omitRoot}`);
+      await fs.cp(original, edited, { recursive: true });
+      await fs.rm(path.join(edited, 'recordings'), { recursive: true });
+      if (!omitRoot) await fs.mkdir(path.join(edited, 'recordings'));
+      const modifiedArchive = path.join(root, `modified-${omitRoot}.tar.gz`);
+      await tar.c({ file: modifiedArchive, cwd: edited, gzip: true }, [
+        'backup.json',
+        'workflows',
+        'appData',
+        'runtimeLibraries',
+        ...(!omitRoot ? ['recordings'] : []),
+      ]);
+      const rejected = path.join(root, `rejected-${omitRoot}`);
+      const accepted = path.join(root, `accepted-${omitRoot}`);
+      await fs.mkdir(rejected);
+      await fs.mkdir(accepted);
+      await assert.rejects(prepareLegacyArchive(modifiedArchive, rejected));
+      assert.equal(
+        (await prepareLegacyArchive(modifiedArchive, accepted, { allowModifiedBackup: true })).createdAt,
+        createdAt,
+      );
+      assert.deepEqual(await fs.readdir(path.join(accepted, 'recordings')), []);
+    }
+    const invalid = path.join(root, 'invalid.tar.gz');
+    const destination = path.join(root, 'invalid');
+    await fs.mkdir(destination);
+    await tar.c({ file: invalid, cwd: original, gzip: true }, ['backup.json', 'appData', 'runtimeLibraries']);
+    await assert.rejects(
+      prepareLegacyArchive(invalid, destination, { allowModifiedBackup: true }),
+      /roots or manifest/,
+    );
+    assert.deepEqual(await fs.readdir(destination), []);
+    await fs.writeFile(path.join(original, 'backup.json'), '{}');
+    await tar.c({ file: invalid, cwd: original, gzip: true }, ['backup.json', ...Object.keys(source)]);
+    await assert.rejects(prepareLegacyArchive(invalid, destination, { allowModifiedBackup: true }));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Proceed anyway is fenced to a complete failed upload and never starts deletion or silently changes archive identity', async () => {
+  const initial: RestoreOperation = {
+    id: randomUUID(),
+    phase: 'failed',
+    destructive: false,
+    createdAt: new Date().toISOString(),
+    archiveDigest: 'a'.repeat(64),
+    bytes: 1,
+    message: 'Backup validation failed.',
+  };
+  assert.equal(canProceedAfterRestoreValidationFailure(initial), true);
+  for (const operation of [
+    null,
+    { ...initial, archiveDigest: undefined },
+    { ...initial, destructive: true },
+    { ...initial, integrityOverridden: true },
+    { ...initial, phase: 'validating' as const },
+  ])
+    assert.equal(canProceedAfterRestoreValidationFailure(operation), false);
+  let operation = initial;
+  let writes = 0;
+  let launches = 0;
+  const payload = { archive: '/owned/archive.tar.gz', sourceManifest: 'earlier-proof' };
+  const control = {
+    lock: async () => ({}),
+    unlock: async () => {},
+    read: async () => operation,
+    payload: async () => payload,
+    write: async (next: RestoreOperation, nextPayload: Record<string, unknown>) => {
+      writes++;
+      operation = restoreOperationSchema.parse(next);
+      assert.equal(nextPayload.archive, payload.archive);
+      assert.equal(nextPayload.resumePhase, 'validating');
+    },
+  };
+  setLegacyRestorePaused(false);
+  setLegacyRestoreWarmup(false);
+  const service = new LegacyRestoreService(control as unknown as LegacyRestoreControl, {} as never, '', {
+    drain: async () => assert.fail('Override must not drain or delete'),
+    restart: async () => {},
+  });
+  const launch = mock.method(service as unknown as { launch(): void }, 'launch', () => {
+    launches++;
+  });
+  try {
+    assert.equal((await service.status()).operation?.canProceedAnyway, true);
+    await assert.rejects(service.proceedAnyway(randomUUID(), initial.archiveDigest!), /stale/);
+    await assert.rejects(service.proceedAnyway(initial.id, 'b'.repeat(64)), /stale/);
+    assert.equal(writes, 0);
+    await service.proceedAnyway(initial.id, initial.archiveDigest!);
+    assert.equal(operation.phase, 'validating');
+    assert.equal(operation.integrityOverridden, true);
+    assert.equal(operation.destructive, false);
+    assert.equal(launches, 1);
+    assert.equal((await service.status()).operation?.canProceedAnyway, false);
+    await assert.rejects(service.proceedAnyway(initial.id, initial.archiveDigest!), /stale/);
+    assert.equal(writes, 1);
+  } finally {
+    launch.mock.restore();
+    await service.dispose();
+  }
+});
+
+test('shutdown racing Proceed anyway admission cannot commit an override', async () => {
+  let unlock!: () => void;
+  const lock = new Promise<object>((resolve) => {
+    unlock = () => resolve({});
+  });
+  let releases = 0;
+  const service = new LegacyRestoreService(
+    {
+      lock: () => lock,
+      unlock: async () => {
+        releases++;
+      },
+      read: async () => assert.fail('Shutdown must fence the override'),
+    } as unknown as LegacyRestoreControl,
+    {} as never,
+    '',
+    { drain: async () => {}, restart: async () => {} },
+  );
+  const pending = assert.rejects(service.proceedAnyway(randomUUID(), 'a'.repeat(64)), /stopping/);
+  await service.dispose();
+  unlock();
+  await pending;
+  assert.equal(releases, 1);
 });
 
 test('interrupted extraction rebuilds only verified UUID-owned scratch and rejects changed archives', async () => {

@@ -11,8 +11,10 @@ bucket, public gateway or TLS certificate is provisioned.
 
 - Node/Yarn, kubectl access to the selected context, and Helm (or
   `yarn studio-server:setup:k8s-tools` for the pinned tool bootstrap).
-- A trusted promoted manifest from successful Build Images release artifacts,
-  and a clean tracked checkout at its exact `sourceSha`. Do not invent manifests
+- Docker and registry access to the production manifest promoted by Build Images
+  CI, and a clean tracked checkout at its exact `source.sha`. The default command
+  retrieves it automatically and reports the required commit when different.
+  An explicit `--manifest` pin bypasses retrieval. Do not invent manifests
   or image tags. Manifest and values paths must be inside that checkout; ignored
   `artifacts/deployment/` is suitable.
 - An existing installation-owned PostgreSQL database with migration/runtime
@@ -35,28 +37,34 @@ Run from the repository root. This is for a **new installation**. `kubectl creat
 deliberately fails instead of overwriting existing Secrets. For upgrades reuse
 the namespace, Secret names and original keys; do not rerun key generation.
 
-First check out the promoted manifest's `sourceSha` and put the manifest at the
-path below. Then copy/edit the example without changing tracked source files:
+Copy/edit the example without changing tracked source files. The initial dry-run
+retrieves the promoted production manifest; if it reports a different source
+commit, check out that commit and repeat before creating any Secrets:
 
 ```bash
 set -euo pipefail
 CONTEXT='REPLACE_WITH_KUBECONFIG_CONTEXT'
 NAMESPACE='rivet'
 RELEASE='rivet'
-MANIFEST='artifacts/deployment/promoted-manifest.json'
 VALUES='artifacts/deployment/environment-values.yaml'
 
 mkdir -p artifacts/deployment
 cp deploy/studio-server/examples/external-storage.values.example.yaml "$VALUES"
 # Edit "$VALUES": bucket, region, endpoint/path style, StorageClass, DB capacity.
-# Download the trusted promoted manifest to "$MANIFEST".
 kubectl --context "$CONTEXT" cluster-info
 
 # Render/validation only: no cluster writes or provider connectivity test.
 yarn studio-server:kubernetes:release -- \
   --context "$CONTEXT" --namespace "$NAMESPACE" --release "$RELEASE" \
-  --manifest "$MANIFEST" --values "$VALUES" --dry-run
+  --values "$VALUES" --dry-run
 ```
+
+The dry-run retains the validated manifest and immutable artifact identity under
+`artifacts/kubernetes-production-release/$RELEASE/`. Pin that saved manifest in
+the actual deployment below so a promotion between preflight and install cannot
+select a different release. This pin avoids another registry request. If the
+production pointer does not exist yet, CI must promote a release first; the
+launcher never invents or falls back to an unverified release.
 
 Create credentials without putting them in shell history, command arguments or
 values. Files are private and have no trailing newline. Save both generated Rivet
@@ -106,7 +114,8 @@ Deploy, then inspect release-scoped workloads and restore PVC:
 ```bash
 yarn studio-server:kubernetes:release -- \
   --context "$CONTEXT" --namespace "$NAMESPACE" --release "$RELEASE" \
-  --manifest "$MANIFEST" --values "$VALUES" --confirm "$RELEASE"
+  --manifest "artifacts/kubernetes-production-release/$RELEASE/release-manifest.json" \
+  --values "$VALUES" --confirm "$RELEASE"
 
 kubectl --context "$CONTEXT" --namespace "$NAMESPACE" get pods,services,jobs,pvc \
   -l "app.kubernetes.io/instance=$RELEASE"

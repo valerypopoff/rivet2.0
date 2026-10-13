@@ -116,6 +116,28 @@ test('VM TLS fixture rejects a partial certificate pair before touching a suppli
   }
 });
 
+test('bodyless UI authentication does not apply its inherited body limit to restore uploads', () => {
+  for (const template of readProxyTemplates()) {
+    const auth = proxyLocation(template, /location = \/__rivet_ui_auth_check\s*\{/);
+    assert.match(auth, /internal;/);
+    assert.match(auth, /client_max_body_size 0;/);
+    assert.match(auth, /proxy_pass_request_body off;/);
+    assert.match(auth, /proxy_set_header Content-Length "";/);
+  }
+  const image = readRepoFile(proxyTemplatePaths[0]);
+  const upload = proxyLocation(image, /location = \/api\/legacy-restore\/upload\s*\{/);
+  assert.match(upload, /auth_request \/__rivet_ui_auth_check;/);
+  assert.match(upload, /client_max_body_size 10g;/);
+  assert.match(upload, /proxy_request_buffering off;/);
+  const edge = readRepoFile('deploy/studio-server/images/proxy/vm-tls.conf.template');
+  const uploads = [...edge.matchAll(/location = \/api\/legacy-restore\/upload\s*\{([^}]+)\}/g)];
+  assert.equal(uploads.length, 2, 'private HTTP and public TLS must both permit restore uploads');
+  for (const [, location] of uploads) {
+    assert.match(location!, /client_max_body_size 10g;/);
+    assert.match(location!, /include \/etc\/nginx\/vm-edge-proxy.conf;/);
+  }
+});
+
 test('VM TLS fixture does not change the supplied certificate pair', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
   const cert = path.join(directory, 'existing-cert.pem');

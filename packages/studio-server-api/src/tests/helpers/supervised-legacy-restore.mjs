@@ -8,6 +8,7 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import * as tar from 'tar';
 
 async function port() {
   const server = createServer();
@@ -30,7 +31,15 @@ async function eventually(label, check) {
 /** Use only the disposable database/bucket/root supplied by the managed migration fixture.
  * Real compiled API, import worker, bundled editor executor and supervisor; no fake restart/drain hooks.
  * Peer process restarts stand in for Kubernetes' container restart policy, not its networking or scheduling. */
-export async function verifySupervisedLegacyRestore({ repoRoot, root, target, archive, secret, installation }) {
+export async function verifySupervisedLegacyRestore({
+  repoRoot,
+  root,
+  target,
+  archive,
+  secret,
+  installation,
+  expectModifiedBackup = false,
+}) {
   const api = path.join(repoRoot, 'packages/studio-server-api/dist/studio-server-api/src/serve.js');
   const executor = path.join(repoRoot, 'packages/studio-server-executor/dist/executor-bundle.cjs');
   await fs.access(api);
@@ -188,6 +197,24 @@ export async function verifySupervisedLegacyRestore({ repoRoot, root, target, ar
     });
     assert.equal(uploaded.status, 202, await uploaded.text());
     let ready;
+    if (expectModifiedBackup) {
+      await eventually('modified backup rejection before override', async () => {
+        ready = await request(`${base}/api/legacy-restore`, { headers })
+          .then((res) => res.json())
+          .then((body) => body.operation);
+        return ready?.phase === 'failed';
+      });
+      assert.equal(ready.destructive, false);
+      assert.equal(ready.canProceedAnyway, true);
+      for (const digest of ['b'.repeat(64), ready.archiveDigest]) {
+        const proceed = await request(`${base}/api/legacy-restore/proceed-anyway`, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: ready.id, archiveDigest: digest }),
+        });
+        assert.equal(proceed.status, digest === ready.archiveDigest ? 202 : 409, await proceed.text());
+      }
+    }
     await eventually('backup validation', async () => {
       const res = await request(`${base}/api/legacy-restore`, { headers });
       const body = await res.json();
@@ -196,6 +223,11 @@ export async function verifySupervisedLegacyRestore({ repoRoot, root, target, ar
       ready = body.operation;
       return ready?.phase === 'awaiting-confirmation';
     });
+    if (expectModifiedBackup) {
+      assert.equal(ready.integrityOverridden, true);
+      assert.equal(ready.recordings, 0);
+      assert.equal(ready.destructive, false);
+    }
     acceptedId = ready.id;
     const start = await request(`${base}/api/legacy-restore/start`, {
       method: 'POST',
@@ -253,12 +285,37 @@ export async function verifySupervisedLegacyRestore({ repoRoot, root, target, ar
     for (const role of ['control', 'editor', 'execution', 'evaluation'])
       await fs.access(path.join(directories[role], 'libraries/current/node_modules/tiny-lib/index.js'));
     console.log(
-      'Legacy restore: compiled server/worker, real editor executor, peer fencing and automatic supervised restarts passed.',
+      `Legacy restore: ${expectModifiedBackup ? 'modified backup with recordings removed and explicit override' : 'original backup'}, compiled worker/editor and automatic supervised restarts passed.`,
     );
   } finally {
     stopping = true;
     for (const peer of peers) peer.child?.kill('SIGTERM');
     signals.emit('SIGTERM');
     await Promise.all([supervisor, ...peers.map((peer) => peer.task)]);
+  }
+  if (!expectModifiedBackup) {
+    // A second full restore uses the same isolated installation, not weakened mocks
+    // or regenerated backup hashes. Preserve the original archive and manifest.
+    const editedRoot = path.join(root, 'modified-backup-round');
+    const editedSource = path.join(editedRoot, 'source');
+    await fs.mkdir(editedSource, { recursive: true });
+    await tar.x({ file: archive, cwd: editedSource });
+    await fs.rm(path.join(editedSource, 'recordings'), { recursive: true });
+    const modifiedArchive = path.join(editedRoot, 'backup.tar.gz');
+    await tar.c({ file: modifiedArchive, cwd: editedSource, gzip: true }, [
+      'backup.json',
+      'workflows',
+      'appData',
+      'runtimeLibraries',
+    ]);
+    await verifySupervisedLegacyRestore({
+      repoRoot,
+      root: editedRoot,
+      target,
+      archive: modifiedArchive,
+      secret,
+      installation,
+      expectModifiedBackup: true,
+    });
   }
 }

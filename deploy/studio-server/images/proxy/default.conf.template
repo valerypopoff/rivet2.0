@@ -94,6 +94,9 @@ server {
 
     location = /__rivet_ui_auth_check {
         internal;
+        # auth_request inherits the upload's Content-Length, but forwards no body.
+        # Enforce size on the public route, not this bodyless internal subrequest.
+        client_max_body_size 0;
         proxy_pass $api_ui_auth_check_upstream;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";

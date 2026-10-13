@@ -37,6 +37,7 @@ export const restoreOperationSchema = z
     destinationProjects: z.number().int().nonnegative().optional(),
     destinationRecordings: z.number().int().nonnegative().optional(),
     backupCreatedAt: z.string().optional(),
+    integrityOverridden: z.boolean().optional(),
     message: z.string(),
   })
   .strict()
@@ -50,6 +51,16 @@ export const restoreOperationSchema = z
     'Restore phase does not match destructive authorization.',
   );
 export type RestoreOperation = z.infer<typeof restoreOperationSchema>;
+
+export function canProceedAfterRestoreValidationFailure(operation: RestoreOperation | null): boolean {
+  return (
+    !!operation &&
+    operation.phase === 'failed' &&
+    !operation.destructive &&
+    !!operation.archiveDigest &&
+    !operation.integrityOverridden
+  );
+}
 
 /** Small durable coordinator. Secrets never enter its public journal. */
 export class LegacyRestoreControl {

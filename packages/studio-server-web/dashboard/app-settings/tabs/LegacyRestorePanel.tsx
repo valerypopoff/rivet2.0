@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Button from '@atlaskit/button';
 import TextField from '@atlaskit/textfield';
 import { RIVET_API_BASE_URL } from '../../../../studio-server-shared/hosted-env';
+import { parseJsonResponse } from '../../apiRequest';
 
 type Operation = {
   id: string;
@@ -14,6 +15,8 @@ type Operation = {
   recordings?: number;
   destinationProjects?: number;
   destinationRecordings?: number;
+  canProceedAnyway?: boolean;
+  integrityOverridden?: boolean;
 };
 type Status = { available: boolean; reason?: string; operation?: Operation | null };
 const headers = { 'X-Rivet-Migration-Intent': '1' };
@@ -76,8 +79,9 @@ export function LegacyRestorePanel() {
         body,
         signal,
       });
-      const value = (await response.json()) as Status & { error?: string };
-      if (!response.ok) throw new Error(value.error || 'Restore request could not be accepted.');
+      const value = await parseJsonResponse<Status>(response, {
+        nonJsonErrorMessage: `Restore request was rejected by the gateway (HTTP ${response.status}). Check the gateway upload limit and server logs before retrying.`,
+      });
       if (mounted.current) {
         setStatus({ available: true, ...value });
         setConfirmation('');
@@ -112,7 +116,8 @@ export function LegacyRestorePanel() {
       name,
       JSON.stringify({
         id: operation?.id,
-        ...(name === 'start' ? { archiveDigest: operation?.archiveDigest, confirmation } : {}),
+        ...(['start', 'proceed-anyway'].includes(name) ? { archiveDigest: operation?.archiveDigest } : {}),
+        ...(name === 'start' ? { confirmation } : {}),
       }),
       'application/json',
     );
@@ -152,6 +157,9 @@ export function LegacyRestorePanel() {
           {operation && (
             <div aria-live="polite">
               <p>{operation.message}</p>
+              {operation.integrityOverridden && (
+                <p>Original backup integrity checks were bypassed. Missing recordings will not be restored.</p>
+              )}
               {operation.backupCreatedAt && (
                 <p>
                   Backup: {new Date(operation.backupCreatedAt).toLocaleString()} · {operation.projects} projects ·{' '}
@@ -192,6 +200,17 @@ export function LegacyRestorePanel() {
                 <Button isDisabled={busy} onClick={() => action('retry')}>
                   Retry restore
                 </Button>
+              )}
+              {operation.phase === 'failed' && !operation.destructive && operation.canProceedAnyway && (
+                <>
+                  <p>
+                    This backup may be incomplete or modified. Proceeding bypasses its original integrity checks. Unsafe
+                    archives and invalid application data remain blocked. Replacement still requires confirmation.
+                  </p>
+                  <Button appearance="danger" isDisabled={busy} onClick={() => action('proceed-anyway')}>
+                    Proceed anyway
+                  </Button>
+                </>
               )}
               {!operation.destructive &&
                 ['validating', 'awaiting-confirmation', 'failed'].includes(operation.phase) && (

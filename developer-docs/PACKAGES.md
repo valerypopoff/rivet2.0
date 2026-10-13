@@ -2,6 +2,28 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-13 — backup restore, bundle upload and managed deployment
+
+The last coordinated version bump is `27af6beb5`. This update covers the four
+subsequent commits through `2ab3748cf` and the restore/upload and automatic
+Kubernetes release-selection work included in this release.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| All five Studio Server packages | `1.25.0` → `1.26.0` | Adds automatic UI legacy-backup replacement with scoped deletion, durable recovery, validation/confirmation, drain, exact verification and supervised restarts. Adds bundle-folder/archive upload into a new project folder. Unifies local/external PostgreSQL/S3 launch modes and deployment-owned read-only Storage settings. Adds automatic immutable promoted-manifest selection for Kubernetes while preserving explicit pins and rollback safeguards. Includes edited-backup integrity approval, large-upload nginx/auth fixes, deployment ownership/recovery and bundle import hardening. API/Web/Shared/Bootstrap changed locally; Executor is a lockstep release companion. |
+| App Executor | `2.11.0` → `2.12.0` | Adds host-managed restore admission/activity coordination so accepted editor runs drain before storage replacement; preserves standalone execution behavior and the existing migration lease path. |
+| App | `2.26.0` → `2.26.1` | Desktop release companion for the updated source-bundled sidecar. Includes narrow retries for transient Apple ticket retrieval failures in the installer pipeline; no new desktop editor feature or package-local source changes. |
+| Docs | `2.18.0` → `2.19.0` | Adds the user-facing legacy-backup restore, bundle upload, managed local/external storage and deployment guidance, including explicit modified-backup approval. |
+| Core, Node, CLI, Evaluations | `2.19.0` (unchanged) | No changes since the last bump; the public npm lockstep family and CLI Docker fallback remain aligned. |
+
+New host/server capabilities use minor increments; Desktop receives a patch
+release rather than claiming a new editor feature. Studio Server's five private
+workspaces remain lockstep, and Tauri/Cargo follows App. These private server
+versions do not imply an in-place upgrade of retired filesystem/SQLite launch
+modes: retain the documented export/restore transition and source keys. Helm
+chart metadata, storage schema, dependencies and `workspace:` ranges are not
+changed by this version update. No publication, deployment or Git push is implied.
+
 ## Version update — classifier observability, port warnings and runtime costs
 
 This bump covers the nine commits after the previous coordinated bump,
@@ -787,7 +809,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.26.0`
+- Version: `2.26.1`
 - Private: yes
 
 ### Runtime shape
@@ -852,7 +874,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.11.0`
+- Version: `2.12.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -1113,7 +1135,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.18.0`
+- Version: `2.19.0`
 - Private: yes
 
 ### Script surface

@@ -39,7 +39,7 @@ const input = z
     confirmation: z.string().optional(),
   })
   .strict();
-for (const action of ['start', 'cancel', 'retry'] as const) {
+for (const action of ['start', 'cancel', 'retry', 'proceed-anyway'] as const) {
   legacyRestoreRouter.post(
     `/${action}`,
     createJsonBodyParser(() => 32 * 1024),
@@ -52,6 +52,7 @@ for (const action of ['start', 'cancel', 'retry'] as const) {
       const body = parsed.data;
       const service = getLegacyRestoreService();
       if (action === 'start') await service.start(body.id, body.archiveDigest ?? '', body.confirmation ?? '');
+      else if (action === 'proceed-anyway') await service.proceedAnyway(body.id, body.archiveDigest ?? '');
       else await service[action](body.id);
       res.status(202).json(await service.status());
     }),

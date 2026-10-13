@@ -149,6 +149,26 @@ test('a late status read cannot discard a newer upload result', async ({ page })
   await expect(page.getByLabel('Legacy backup archive')).toHaveCount(0);
 });
 
+test('restore uploads report gateway HTML failures without exposing body or parser errors', async ({ page }) => {
+  await mockHostedEditorBootstrap(page);
+  await page.route(isRestoreRoute, async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith('/upload')) {
+      return route.fulfill({ status: 500, contentType: 'text/html', body: '<html>private gateway diagnostic</html>' });
+    }
+    return route.fulfill({ json: { available: true, operation: null } });
+  });
+  await openRestoreWorkspace(page);
+  await page.getByLabel('Legacy backup archive').setInputFiles({
+    name: 'backup.tar.gz',
+    mimeType: 'application/gzip',
+    buffer: Buffer.from('fixture'),
+  });
+  await expect(page.getByRole('alert')).toHaveText(
+    'Restore request was rejected by the gateway (HTTP 500). Check the gateway upload limit and server logs before retrying.',
+  );
+  await expect(page.getByRole('button', { name: 'Restore legacy backup', exact: true })).toHaveCount(0);
+});
+
 test('destructive failure offers retry without cancellation or a new archive', async ({ page }) => {
   await mockHostedEditorBootstrap(page);
   let retry = false;
@@ -171,10 +191,62 @@ test('destructive failure offers retry without cancellation or a new archive', a
   });
   await openRestoreWorkspace(page);
   await expect(page.getByRole('button', { name: 'Retry restore' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Proceed anyway', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Cancel restore' })).toHaveCount(0);
   await expect(page.getByLabel('Legacy backup archive')).toHaveCount(0);
   await page.getByRole('button', { name: 'Retry restore' }).click();
   await expect(page.getByText('Resuming restore.')).toBeVisible();
+});
+
+test('Proceed anyway accepts an explicit integrity override and still requires destructive confirmation', async ({
+  page,
+}) => {
+  await mockHostedEditorBootstrap(page);
+  let proceeded = false;
+  let starts = 0;
+  let overrideRequests = 0;
+  const id = '11111111-1111-4111-8111-111111111111';
+  await page.route(isRestoreRoute, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/proceed-anyway')) {
+      expect(route.request().postDataJSON()).toEqual({ id, archiveDigest: 'a'.repeat(64) });
+      expect(route.request().headers()['x-rivet-migration-intent']).toBe('1');
+      overrideRequests++;
+      proceeded = true;
+    }
+    if (path.endsWith('/start')) starts++;
+    await route.fulfill({
+      json: {
+        available: true,
+        operation: {
+          id,
+          phase: proceeded ? 'awaiting-confirmation' : 'failed',
+          destructive: false,
+          archiveDigest: 'a'.repeat(64),
+          canProceedAnyway: !proceeded,
+          integrityOverridden: proceeded,
+          recordings: 0,
+          message: proceeded ? 'Modified backup prepared.' : 'Backup validation failed.',
+        },
+      },
+    });
+  });
+  await openRestoreWorkspace(page);
+  const proceed = page.getByRole('button', { name: 'Proceed anyway', exact: true });
+  await expect(proceed).toBeVisible();
+  await proceed.click();
+  await expect(proceed).toHaveCount(0);
+  await expect(
+    page.getByText('Original backup integrity checks were bypassed. Missing recordings will not be restored.'),
+  ).toBeVisible();
+  const restore = page.getByRole('button', { name: 'Restore legacy backup', exact: true });
+  await expect(restore).toBeDisabled();
+  expect(overrideRequests).toBe(1);
+  expect(starts).toBe(0);
+  await page.reload();
+  await expect(restore).toBeDisabled();
+  await page.getByLabel('Restore confirmation').fill('RESTORE LEGACY BACKUP');
+  await expect(restore).toBeEnabled();
 });
 
 test('validation can be cancelled without starting replacement', async ({ page }) => {

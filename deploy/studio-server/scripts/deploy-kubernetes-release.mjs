@@ -8,6 +8,7 @@ import { parseEnvFile } from './lib/env.mjs';
 import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
 import { productionEnvironment, prepareProductionSecrets } from './lib/server-launch-mode.mjs';
 import { renderKubernetesLauncherValuesYaml } from './lib/kubernetes-launcher-config.mjs';
+import { pullReleaseManifestArtifact, PRODUCTION_RELEASE_MANIFEST_REFERENCE } from './release-manifest-oci.mjs';
 
 import {
   assertReleaseManifestMatchesCurrentChart,
@@ -229,6 +230,78 @@ async function writeArtifact(artifactsDir, fileName, contents) {
   await fs.writeFile(path.join(artifactsDir, fileName), contents, 'utf8');
 }
 
+/** Release selection is a preflight-only boundary: it has no cluster mutation capabilities. */
+export async function resolveDeploymentRelease(
+  options,
+  artifactsDir,
+  {
+    pullArtifact = pullReleaseManifestArtifact,
+    verifyCheckout = assertReleaseManifestMatchesCurrentCheckout,
+    verifyClean = assertCleanTrackedCheckout,
+  } = {},
+) {
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
+  const rollbackManifestPath = options.has('--rollback-to')
+    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
+    : null;
+  let temporaryDirectory;
+  try {
+    let manifest;
+    let identity;
+    const manifestPath = options.has('--manifest')
+      ? insideRepository(required(options, '--manifest'), '--manifest')
+      : path.join(artifactsDir, 'release-manifest.json');
+    if (options.has('--manifest')) {
+      manifest = await readManifest(manifestPath, { requirePromoted: true });
+      identity = { mode: 'explicit', path: path.relative(rootDir, manifestPath) };
+    } else {
+      await fs.mkdir(artifactsDir, { recursive: true });
+      temporaryDirectory = await fs.mkdtemp(path.join(artifactsDir, '.manifest-selection-'));
+      const artifact = await pullArtifact(
+        PRODUCTION_RELEASE_MANIFEST_REFERENCE,
+        path.join(temporaryDirectory, 'manifest.json'),
+      );
+      manifest = assertStudioServerReleaseManifest(artifact.manifest, { requirePromoted: true });
+      identity = { mode: 'production', ...artifact.identity };
+    }
+    const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    console.log(`[${runnerName}] Selected source commit ${manifest.source.sha}; manifest digest ${manifestDigest}.`);
+    await verifyCheckout(manifest);
+    await verifyClean();
+    assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
+    const generatedValues = rollbackManifestPath
+      ? createForwardRollbackHelmValues({
+          failedRelease: manifest,
+          rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
+        })
+      : createProductionHelmValues(manifest);
+    // An explicit pin may itself be the retained diagnostic file. Do not rewrite it.
+    const inputIsArtifact = (fileName) =>
+      options.has('--manifest') && path.relative(manifestPath, path.join(artifactsDir, fileName)) === '';
+    if (!inputIsArtifact('release-manifest.json'))
+      await writeArtifact(artifactsDir, 'release-manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeArtifact(
+      artifactsDir,
+      inputIsArtifact('release-selection.json') ? 'release-selection-metadata.json' : 'release-selection.json',
+      `${JSON.stringify(
+        {
+          ...identity,
+          sourceSha: manifest.source.sha,
+          manifestDigest,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return { manifest, manifestPath, rollbackManifestPath, generatedValues };
+  } finally {
+    if (temporaryDirectory) await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 async function captureHelmDiagnostics(helmBin, release, namespace, artifactsDir) {
   const diagnostics = [
     ['history.json', ['history', release, '--namespace', namespace, '--output', 'json']],
@@ -266,7 +339,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const release = dnsLabel(required(options, '--release'), '--release');
   const namespace = dnsLabel(required(options, '--namespace'), '--namespace');
-  const manifestPath = insideRepository(required(options, '--manifest'), '--manifest');
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
   const singleMachine = options.get('--single-machine') === true;
   if (options.has('--env-file') && options.has('--values'))
     throw new Error('Use either --env-file or --values, not both.');
@@ -284,9 +360,6 @@ async function main() {
     !singleMachine && options.has('--env-file')
       ? productionEnvironment(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
       : null;
-  const rollbackManifestPath = options.has('--rollback-to')
-    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
-    : null;
   const dryRun = options.get('--dry-run') === true;
   const timeout = duration(options.get('--timeout') ?? '15m');
   const artifactsDir = insideRepository(
@@ -301,16 +374,10 @@ async function main() {
   // A forward rollback is still a production operation. Its failed release
   // must have passed the same CI gates as an ordinary deployment; only the
   // image set and migration-Job behavior differ.
-  const manifest = await readManifest(manifestPath, { requirePromoted: true });
-  await assertReleaseManifestMatchesCurrentCheckout(manifest);
-  await assertCleanTrackedCheckout();
-  assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
-  const generatedValues = rollbackManifestPath
-    ? createForwardRollbackHelmValues({
-        failedRelease: manifest,
-        rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
-      })
-    : createProductionHelmValues(manifest);
+  const { manifest, manifestPath, rollbackManifestPath, generatedValues } = await resolveDeploymentRelease(
+    options,
+    artifactsDir,
+  );
   let generatedValuesDir;
   try {
     generatedValuesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-production-release-'));

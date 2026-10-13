@@ -6,10 +6,37 @@ For a disposable destination, use **Settings → Storage → Restore legacy back
 This uploads the original gzip tar archive, validates its version-1
 `rivet-browser-legacy-backup` manifest and source fingerprints, requires the exact
 `RESTORE LEGACY BACKUP` confirmation, then pauses, replaces and exactly verifies
-application state through the same importer described below. Do not extract or
-edit the archive on another OS before uploading it.
+application state through the same importer described below. Prefer the untouched
+archive; unpacking/repacking can change its integrity evidence and permissions.
 The verified working copy normalizes an unambiguous older `active-release`
 runtime layout automatically; the downloaded archive itself remains unchanged.
+
+After a complete upload fails non-destructive validation, the UI exposes a danger
+**Proceed anyway** button. This is explicit permission to bypass the original
+manifest's content hash/source fingerprint, not permission to bypass archive
+containment or storage ownership. The authenticated, same-origin
+`POST /api/legacy-restore/proceed-anyway` binds approval to the operation UUID and
+uploaded archive digest and durably records `integrityOverridden`. It waits for
+the validator handoff, rechecks shutdown/admission under the coordinator lock,
+and reruns preparation. It does not drain or delete anything by itself. Exact
+`RESTORE LEGACY BACKUP` confirmation is still required after preparation.
+
+An edited backup may omit workflow recordings or the entire `recordings` root;
+override preparation creates an empty recordings root when absent. Other roots
+and a valid v1 `backup.json` remain mandatory. Traversal, duplicate entries,
+escaping links, size/capacity, malformed application data, native-runtime,
+schema/deployment binding, destination permissions and drain checks are never
+overridden. If one of those checks fails, restore still stops before deletion.
+The override is not offered again for an already-overridden operation or an
+incomplete upload. Cancel/upload again to change the archive or retry preparation.
+
+The warning survives panel/server restarts. A fresh fingerprint of the actual
+prepared source is captured and rechecked before deletion and through import;
+exact destination verification compares that edited source, not the original
+backup contents. No manifest or original uploaded archive is rewritten. A
+full supervised PostgreSQL/MinIO fixture covers original restore followed by
+modified restore with recordings removed, stale override rejection, typed
+confirmation, exact verification and normal automatic restarts.
 
 Projects, datasets, publication paths/history, recordings, supported operational
 state and runtime libraries are restored. UI-defined environment variable names,
@@ -59,6 +86,15 @@ capability. Archives are limited to 10 GiB compressed/30 GiB declared expanded
 content; extraction also checks actual fingerprints and capacity. The embedded
 proxy streams the upload; external gateways must permit that route's upload size
 and timeout. No broad Kubernetes RBAC or per-restore shell commands are needed.
+The bodyless internal UI-auth subrequest must not enforce the inherited upload's
+Content-Length against the general 100 MiB limit: that produced an auth 413 and
+an outer nginx 500 for large local backups. Its limit is disabled only inside
+the inaccessible internal auth location; the public route still enforces 10 GiB,
+and ordinary API requests retain 100 MiB. Both VM HTTP/TLS edge listeners carry
+the restore-specific limit. `verify-vm-nginx-tls.mjs` streams 101 MiB through both
+listeners and checks authentication, internal-route isolation and size rejection.
+The restore panel uses the shared response parser so outer HTML gateway failures
+show their HTTP status and safe guidance, not raw HTML or a JSON-parser exception.
 Runtime-library import and verification create their intermediate tar in that
 owned restore scratch, not the pod's separate 1 GiB `/tmp`. Capacity must cover
 the compressed upload, extracted roots and intermediate runtime tar together.

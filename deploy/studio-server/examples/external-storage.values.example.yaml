@@ -3,6 +3,8 @@
 # manifest image/source/schema values. Do not put image tags or release metadata here.
 # Copy to artifacts/deployment/environment-values.yaml and edit before deployment.
 # No credentials belong in this file. See the external-storage-deployment guide.
+# Kubernetes releases select CI's production manifest automatically (Docker/registry
+# access required); --manifest optionally pins a release. Dry-run before Secrets.
 
 deploymentProfile: cluster
 clusterDomain: cluster.local # Change only if your cluster uses another DNS domain.

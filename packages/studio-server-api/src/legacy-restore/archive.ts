@@ -90,7 +90,11 @@ export function validateLegacyArchivePath(raw: string): string {
 }
 
 /** Two passes: inspect every entry before extraction, then verify actual restored bytes/modes. */
-export async function prepareLegacyArchive(archive: string, destination: string) {
+export async function prepareLegacyArchive(
+  archive: string,
+  destination: string,
+  options: { allowModifiedBackup?: boolean } = {},
+) {
   const stat = await fs.lstat(archive);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LEGACY_RESTORE_LIMITS.archiveBytes)
     throw new Error('Backup archive exceeds its limit or is not a regular file.');
@@ -177,11 +181,23 @@ export async function prepareLegacyArchive(archive: string, destination: string)
       parent = path.posix.dirname(parent);
     }
   }
-  if (entries.get('backup.json') !== 'File' || [...roots].some((root) => entries.get(root) !== 'Directory'))
+  const missingRecordings = !entries.has('recordings');
+  if (
+    entries.get('backup.json') !== 'File' ||
+    [...roots].some(
+      (root) =>
+        entries.get(root) !== 'Directory' &&
+        !(root === 'recordings' && missingRecordings && options.allowModifiedBackup),
+    )
+  )
     throw new Error('Backup roots or manifest are missing.');
   const space = await fs.statfs(destination);
   if (space.bavail * space.bsize < expandedBytes + 64 * 1024 ** 2)
     throw new Error('Insufficient restore scratch space.');
   await restoreBrowserBackupArchive(archive, destination);
-  return verifyLegacyBackupDirectory(destination);
+  // The operator may have intentionally removed the whole recordings domain.
+  // Only that optional domain can be reconstructed; other roots remain mandatory.
+  if (missingRecordings && options.allowModifiedBackup)
+    await fs.mkdir(path.join(destination, 'recordings'), { recursive: true, mode: 0o700 });
+  return verifyLegacyBackupDirectory(destination, options);
 }
