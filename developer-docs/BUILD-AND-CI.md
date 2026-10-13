@@ -1458,6 +1458,23 @@ verification require the native macOS release jobs.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
+DMG ticket retrieval has a separate, narrower retry boundary in
+[`.github/scripts/staple-macos-dmg.mjs`](../.github/scripts/staple-macos-dmg.mjs).
+Developer release run 38320930955 accepted the Intel DMG, then failed stapling
+with exit 68 and an Apple `NSURLErrorDomain` connection-loss error (-1005).
+The notarization script still signs and submits the DMG exactly once; only the
+subsequent ticket retrieval is retried against those same bytes. At most three
+stapler attempts run, separated by 5 and 15 seconds, with a two-minute timeout
+and bounded output per command. Retry requires both exit 68 and an explicit
+Apple network timeout, connection failure/loss or offline error (-1001, -1004,
+-1005, -1009). Exit 68 alone, missing/invalid tickets, certificate trust errors,
+rejected submissions and all unknown failures remain failures. Exhaustion retains
+the final failure status. The following native signing/Gatekeeper/stapler validation
+step and publication prerequisites are unchanged; retry never skips verification
+or resubmits an uncertain notarization request. Behavioral regression tests are
+enrolled in `test:style`; actual ticket retrieval and final DMG acceptance still
+require the macOS release runners.
+
 The reusable workflow retains the existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now
 with a required macOS architecture field.
