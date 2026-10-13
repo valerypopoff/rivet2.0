@@ -10,6 +10,17 @@ export function isChatV2FiniteNonNegativeNumber(value: unknown): value is number
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+/** Known USD subtotal, independent of whether Usage details are displayed. */
+export function sumChatV2PhysicalCallCost(events: readonly ChatV2CallFinishedEvent[]): number | undefined {
+  let total: number | undefined;
+  for (const event of new Map(events.map((event) => [event.callId, event])).values()) {
+    if (event.pricing.status === 'known' && isChatV2FiniteNonNegativeNumber(event.pricing.costUsd)) {
+      total = (total ?? 0) + event.pricing.costUsd;
+    }
+  }
+  return total;
+}
+
 /**
  * Aggregates one node invocation's physical provider calls into its portable
  * Usage output. The call id is a stable transport identity, so a redelivered

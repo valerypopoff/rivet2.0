@@ -8,10 +8,7 @@ import test from 'node:test';
 
 import type { Pool } from 'pg';
 
-import type {
-  RivetLLMProfileCircuitBreakerPolicy,
-  RivetLLMProfileHealthIdentity,
-} from '@valerypopoff/rivet2-node';
+import type { RivetLLMProfileCircuitBreakerPolicy, RivetLLMProfileHealthIdentity } from '@valerypopoff/rivet2-node';
 import { loadProjectFromFile } from '@valerypopoff/rivet2-node';
 
 import { createApiApp } from '../app.js';
@@ -37,11 +34,9 @@ import {
   createHttpLLMProfileHealthAdminProvider,
   createHttpRivetLLMProfileHealthStore,
 } from '../../../studio-server-shared/llmProfileHealthHttpStore.js';
-import {
-  disposeWorkflowStorage,
-  getLLMProfileHealthStore,
-} from '../routes/workflows/storage-backend.js';
+import { disposeWorkflowStorage, getLLMProfileHealthStore } from '../routes/workflows/storage-backend.js';
 import { resetWorkflowRecordingStorageForTests } from '../routes/workflows/recordings.js';
+import { verifyClassifierHealthContract } from './helpers/classifier-health-contract.js';
 
 const policy: RivetLLMProfileCircuitBreakerPolicy = {
   failureThreshold: 2,
@@ -111,7 +106,7 @@ class FakeManagedHealthPool {
     if (normalized.startsWith('select key, entry_json from llm_profile_health where key = $1 for update')) {
       const row = this.rows.get(String(values[0]));
       return {
-        rows: row == null ? [] as T[] : [{ key: row.key, entry_json: row.entryJson } as T],
+        rows: row == null ? ([] as T[]) : [{ key: row.key, entry_json: row.entryJson } as T],
         rowCount: row == null ? 0 : 1,
       };
     }
@@ -128,14 +123,24 @@ class FakeManagedHealthPool {
 
     if (normalized.startsWith('delete from llm_profile_health where project_id = $1 and key = $2')) {
       const row = this.rows.get(String(values[1]));
-      const deleted = row?.projectId === String(values[0]) && this.rows.delete(row.key);
+      const family = (row?.entryJson as any)?.identity?.family ?? 'llm';
+      const deleted =
+        row?.projectId === String(values[0]) &&
+        (values[2] == null || values[2] === family) &&
+        this.rows.delete(row.key);
       return { rows: [] as T[], rowCount: deleted ? 1 : 0 };
     }
 
     if (normalized.startsWith('delete from llm_profile_health where project_id = $1')) {
       let deleted = 0;
       for (const row of this.rows.values()) {
-        if (row.projectId === String(values[0]) && this.rows.delete(row.key)) deleted += 1;
+        const family = (row.entryJson as any)?.identity?.family ?? 'llm';
+        if (
+          row.projectId === String(values[0]) &&
+          (values[1] == null || values[1] === family) &&
+          this.rows.delete(row.key)
+        )
+          deleted += 1;
       }
       return { rows: [] as T[], rowCount: deleted };
     }
@@ -145,7 +150,9 @@ class FakeManagedHealthPool {
       return { rows: [] as T[], rowCount: deleted ? 1 : 0 };
     }
 
-    if (normalized.startsWith('select key, entry_json from llm_profile_health where entry_json @> $1::jsonb for update')) {
+    if (
+      normalized.startsWith('select key, entry_json from llm_profile_health where entry_json @> $1::jsonb for update')
+    ) {
       const evidence = JSON.parse(String(values[0])) as {
         failureEvidence?: Array<{ correlationId?: string; recordingId?: string }>;
       };
@@ -153,11 +160,14 @@ class FakeManagedHealthPool {
       const rows = [...this.rows.values()]
         .filter((row) => {
           if (row.entryJson == null || typeof row.entryJson !== 'object') return false;
-          const storedEvidence = (row.entryJson as { failureEvidence?: Array<{ correlationId?: string; recordingId?: string }> })
-            .failureEvidence ?? [];
-          return storedEvidence.some((item) =>
-            (needle.correlationId == null || item.correlationId === needle.correlationId) &&
-            (needle.recordingId == null || item.recordingId === needle.recordingId));
+          const storedEvidence =
+            (row.entryJson as { failureEvidence?: Array<{ correlationId?: string; recordingId?: string }> })
+              .failureEvidence ?? [];
+          return storedEvidence.some(
+            (item) =>
+              (needle.correlationId == null || item.correlationId === needle.correlationId) &&
+              (needle.recordingId == null || item.recordingId === needle.recordingId),
+          );
         })
         .map((row) => ({ key: row.key, entry_json: row.entryJson }) as T);
       return { rows, rowCount: rows.length };
@@ -181,55 +191,79 @@ test('health transitions track closed permits, renew only the owning probe, and 
   assert.equal(first.result.state, 'closed');
   assert.ok(first.result.permitId);
 
-  const firstFailure = finishLLMProfileHealthAttempt(first.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: first.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_001);
+  const firstFailure = finishLLMProfileHealthAttempt(
+    first.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: first.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_001,
+  );
   assert.equal(firstFailure.snapshot.failureCount, 1);
 
   const second = beginLLMProfileHealthAttempt(firstFailure.entry, { identity: healthIdentity, policy }, 1_002);
-  const opened = finishLLMProfileHealthAttempt(second.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: second.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_003);
+  const opened = finishLLMProfileHealthAttempt(
+    second.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: second.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_003,
+  );
   assert.equal(opened.snapshot.state, 'open');
 
   const probe = beginLLMProfileHealthAttempt(opened.entry, { identity: healthIdentity, policy }, 1_014);
   assert.equal(probe.result.state, 'half-open');
   const leaseBeforeRenewal = probe.result.snapshot.halfOpenLeaseUntil!;
-  const staleRenewal = renewLLMProfileHealthPermit(probe.entry, {
-    identity: healthIdentity,
-    permitId: 'not-the-probe',
-    leaseDurationMs: 1_000,
-  }, 1_015);
+  const staleRenewal = renewLLMProfileHealthPermit(
+    probe.entry,
+    {
+      identity: healthIdentity,
+      permitId: 'not-the-probe',
+      leaseDurationMs: 1_000,
+    },
+    1_015,
+  );
   assert.equal(staleRenewal.snapshot.halfOpenLeaseUntil, leaseBeforeRenewal);
 
-  const renewed = renewLLMProfileHealthPermit(staleRenewal.entry, {
-    identity: healthIdentity,
-    permitId: probe.result.permitId!,
-    leaseDurationMs: 1_000,
-  }, 1_016);
+  const renewed = renewLLMProfileHealthPermit(
+    staleRenewal.entry,
+    {
+      identity: healthIdentity,
+      permitId: probe.result.permitId!,
+      leaseDurationMs: 1_000,
+    },
+    1_016,
+  );
   assert.equal(renewed.snapshot.halfOpenLeaseUntil, 2_016);
 
-  const recovered = finishLLMProfileHealthAttempt(renewed.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: probe.result.permitId!,
-    outcome: 'healthy',
-  }, 1_017);
+  const recovered = finishLLMProfileHealthAttempt(
+    renewed.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: probe.result.permitId!,
+      outcome: 'healthy',
+    },
+    1_017,
+  );
   assert.equal(recovered.snapshot.state, 'closed');
   assert.equal(recovered.snapshot.failureCount, 0);
 
-  const staleFinish = finishLLMProfileHealthAttempt(null, {
-    identity: healthIdentity,
-    policy,
-    permitId: probe.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_018);
+  const staleFinish = finishLLMProfileHealthAttempt(
+    null,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: probe.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_018,
+  );
   assert.equal(staleFinish.entry, null);
   assert.equal(staleFinish.snapshot.failureCount, 0);
 });
@@ -237,33 +271,52 @@ test('health transitions track closed permits, renew only the owning probe, and 
 test('active suspensions expose only their contributing recording evidence and release it on recovery', () => {
   const healthIdentity = identity('recording-evidence-key');
   const first = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
-  const firstFailure = finishLLMProfileHealthAttempt(first.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: first.result.permitId!,
-    outcome: 'unhealthy',
-    executionCorrelationId: 'correlation-first',
-  }, 1_001);
+  const firstFailure = finishLLMProfileHealthAttempt(
+    first.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: first.result.permitId!,
+      outcome: 'unhealthy',
+      executionCorrelationId: 'correlation-first',
+    },
+    1_001,
+  );
   const second = beginLLMProfileHealthAttempt(firstFailure.entry, { identity: healthIdentity, policy }, 1_002);
-  const opened = finishLLMProfileHealthAttempt(second.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: second.result.permitId!,
-    outcome: 'unhealthy',
-    executionCorrelationId: 'correlation-second',
-  }, 1_003);
+  const opened = finishLLMProfileHealthAttempt(
+    second.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: second.result.permitId!,
+      outcome: 'unhealthy',
+      executionCorrelationId: 'correlation-second',
+    },
+    1_003,
+  );
   assert.ok(opened.entry);
 
   assert.equal(
-    applyLLMProfileHealthRecordingOutcome(opened.entry, {
-      correlationId: 'correlation-first', availability: 'disabled',
-    }, 1_004),
+    applyLLMProfileHealthRecordingOutcome(
+      opened.entry,
+      {
+        correlationId: 'correlation-first',
+        availability: 'disabled',
+      },
+      1_004,
+    ),
     true,
   );
   assert.equal(
-    applyLLMProfileHealthRecordingOutcome(opened.entry, {
-      correlationId: 'correlation-second', availability: 'available', recordingId: 'recording-second',
-    }, 1_005),
+    applyLLMProfileHealthRecordingOutcome(
+      opened.entry,
+      {
+        correlationId: 'correlation-second',
+        availability: 'available',
+        recordingId: 'recording-second',
+      },
+      1_005,
+    ),
     true,
   );
   assert.deepEqual(getLLMProfileHealthContributorRuns(opened.entry), [
@@ -287,12 +340,16 @@ test('active suspensions expose only their contributing recording evidence and r
   assert.deepEqual(getLLMProfileHealthHeldRecordingIds(opened.entry), []);
 
   const probe = beginLLMProfileHealthAttempt(opened.entry, { identity: healthIdentity, policy }, 1_014);
-  const recovered = finishLLMProfileHealthAttempt(probe.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: probe.result.permitId!,
-    outcome: 'healthy',
-  }, 1_015);
+  const recovered = finishLLMProfileHealthAttempt(
+    probe.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: probe.result.permitId!,
+      outcome: 'healthy',
+    },
+    1_015,
+  );
   assert.ok(recovered.entry);
   assert.deepEqual(getLLMProfileHealthContributorRuns(recovered.entry), []);
   assert.deepEqual(getLLMProfileHealthHeldRecordingIds(recovered.entry), []);
@@ -322,48 +379,72 @@ test('permit renewal is monotonic, refreshes closed attempts, and recovery inval
   const second = beginLLMProfileHealthAttempt(first.entry, { identity: healthIdentity, policy }, 1_001);
   const late = beginLLMProfileHealthAttempt(second.entry, { identity: healthIdentity, policy }, 1_002);
   const originalClosedExpiry = late.entry.closedPermits[late.result.permitId!];
-  const refreshedClosed = renewLLMProfileHealthPermit(late.entry, {
-    identity: healthIdentity,
-    permitId: late.result.permitId!,
-    leaseDurationMs: 1,
-  }, 2_000);
+  const refreshedClosed = renewLLMProfileHealthPermit(
+    late.entry,
+    {
+      identity: healthIdentity,
+      permitId: late.result.permitId!,
+      leaseDurationMs: 1,
+    },
+    2_000,
+  );
   assert.ok(refreshedClosed.entry!.closedPermits[late.result.permitId!] > originalClosedExpiry);
 
-  const firstFailure = finishLLMProfileHealthAttempt(refreshedClosed.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: first.result.permitId!,
-    outcome: 'unhealthy',
-  }, 2_001);
-  const opened = finishLLMProfileHealthAttempt(firstFailure.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: second.result.permitId!,
-    outcome: 'unhealthy',
-  }, 2_002);
+  const firstFailure = finishLLMProfileHealthAttempt(
+    refreshedClosed.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: first.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    2_001,
+  );
+  const opened = finishLLMProfileHealthAttempt(
+    firstFailure.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: second.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    2_002,
+  );
   const probe = beginLLMProfileHealthAttempt(opened.entry, { identity: healthIdentity, policy }, 2_013);
   const originalLease = probe.result.snapshot.halfOpenLeaseUntil!;
-  const shorterRenewal = renewLLMProfileHealthPermit(probe.entry, {
-    identity: healthIdentity,
-    permitId: probe.result.permitId!,
-    leaseDurationMs: 1,
-  }, 2_014);
+  const shorterRenewal = renewLLMProfileHealthPermit(
+    probe.entry,
+    {
+      identity: healthIdentity,
+      permitId: probe.result.permitId!,
+      leaseDurationMs: 1,
+    },
+    2_014,
+  );
   assert.equal(shorterRenewal.snapshot.halfOpenLeaseUntil, originalLease);
 
-  const recovered = finishLLMProfileHealthAttempt(shorterRenewal.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: probe.result.permitId!,
-    outcome: 'healthy',
-  }, 2_015);
+  const recovered = finishLLMProfileHealthAttempt(
+    shorterRenewal.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: probe.result.permitId!,
+      outcome: 'healthy',
+    },
+    2_015,
+  );
   assert.deepEqual(recovered.entry?.closedPermits, {});
 
-  const stalePreOpenFailure = finishLLMProfileHealthAttempt(recovered.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: late.result.permitId!,
-    outcome: 'unhealthy',
-  }, 2_016);
+  const stalePreOpenFailure = finishLLMProfileHealthAttempt(
+    recovered.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: late.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    2_016,
+  );
   assert.equal(stalePreOpenFailure.snapshot.state, 'closed');
   assert.equal(stalePreOpenFailure.snapshot.failureCount, 0);
 });
@@ -372,10 +453,15 @@ test('an existing health key cannot be rebound to a different project', () => {
   const originalIdentity = identity('project-bound-key', 'project-a');
   const existing = beginLLMProfileHealthAttempt(null, { identity: originalIdentity, policy }, 1_000);
   assert.throws(
-    () => beginLLMProfileHealthAttempt(existing.entry, {
-      identity: identity(originalIdentity.key, 'project-b'),
-      policy,
-    }, 1_001),
+    () =>
+      beginLLMProfileHealthAttempt(
+        existing.entry,
+        {
+          identity: identity(originalIdentity.key, 'project-b'),
+          policy,
+        },
+        1_001,
+      ),
     /belongs to a different project scope/,
   );
   assert.equal(existing.entry.identity.projectId, originalIdentity.projectId);
@@ -384,9 +470,11 @@ test('an existing health key cannot be rebound to a different project', () => {
 test('recording evidence drain waits for outcomes that are outside the response path', async () => {
   let complete: (() => void) | undefined;
   let settled = false;
-  const outcome = trackLLMProfileHealthRecordingOutcome(new Promise<void>((resolve) => {
-    complete = resolve;
-  }));
+  const outcome = trackLLMProfileHealthRecordingOutcome(
+    new Promise<void>((resolve) => {
+      complete = resolve;
+    }),
+  );
   const flush = flushLLMProfileHealthRecordingOutcomes().then(() => {
     settled = true;
   });
@@ -406,14 +494,8 @@ test('durable health stores reject unscoped runtime identities', async () => {
   const managed = new PostgresRivetLLMProfileHealthStore(new FakeManagedHealthPool() as unknown as Pool);
 
   try {
-    await assert.rejects(
-      async () => filesystem.begin({ identity: unscopedIdentity, policy }),
-      /require a projectId/,
-    );
-    await assert.rejects(
-      async () => managed.begin({ identity: unscopedIdentity, policy }),
-      /require a projectId/,
-    );
+    await assert.rejects(async () => filesystem.begin({ identity: unscopedIdentity, policy }), /require a projectId/);
+    await assert.rejects(async () => managed.begin({ identity: unscopedIdentity, policy }), /require a projectId/);
   } finally {
     await filesystem.dispose();
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -425,25 +507,37 @@ test('a late closed failure cannot extend an already-open circuit', () => {
   const first = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
   const second = beginLLMProfileHealthAttempt(first.entry, { identity: healthIdentity, policy }, 1_001);
   const late = beginLLMProfileHealthAttempt(second.entry, { identity: healthIdentity, policy }, 1_002);
-  const oneFailure = finishLLMProfileHealthAttempt(late.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: first.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_003);
-  const opened = finishLLMProfileHealthAttempt(oneFailure.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: second.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_004);
+  const oneFailure = finishLLMProfileHealthAttempt(
+    late.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: first.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_003,
+  );
+  const opened = finishLLMProfileHealthAttempt(
+    oneFailure.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: second.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_004,
+  );
   const originalOpenUntil = opened.snapshot.openUntil;
-  const lateFailure = finishLLMProfileHealthAttempt(opened.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: late.result.permitId!,
-    outcome: 'unhealthy',
-  }, 1_005);
+  const lateFailure = finishLLMProfileHealthAttempt(
+    opened.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: late.result.permitId!,
+      outcome: 'unhealthy',
+    },
+    1_005,
+  );
 
   assert.equal(lateFailure.snapshot.state, 'open');
   assert.equal(lateFailure.snapshot.openUntil, originalOpenUntil);
@@ -454,20 +548,20 @@ test('abandoned closed permits expire without letting a stale finish mutate heal
   const abandoned = beginLLMProfileHealthAttempt(null, { identity: healthIdentity, policy }, 1_000);
   const abandonedPermitId = abandoned.result.permitId!;
   const afterRetention = 1_000 + LLM_PROFILE_CLOSED_PERMIT_RETENTION_FLOOR_MS + 1;
-  const current = beginLLMProfileHealthAttempt(
-    abandoned.entry,
-    { identity: healthIdentity, policy },
-    afterRetention,
-  );
+  const current = beginLLMProfileHealthAttempt(abandoned.entry, { identity: healthIdentity, policy }, afterRetention);
 
   assert.deepEqual(Object.keys(current.entry.closedPermits), [current.result.permitId]);
 
-  const staleFinish = finishLLMProfileHealthAttempt(current.entry, {
-    identity: healthIdentity,
-    policy,
-    permitId: abandonedPermitId,
-    outcome: 'unhealthy',
-  }, afterRetention + 1);
+  const staleFinish = finishLLMProfileHealthAttempt(
+    current.entry,
+    {
+      identity: healthIdentity,
+      policy,
+      permitId: abandonedPermitId,
+      outcome: 'unhealthy',
+    },
+    afterRetention + 1,
+  );
   assert.equal(staleFinish.snapshot.failureCount, 0);
   assert.equal(staleFinish.snapshot.state, 'closed');
 });
@@ -544,6 +638,60 @@ test('filesystem health store serializes half-open probes and resets exact proje
     await store.dispose();
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('filesystem profile families isolate administration, resets, and stale permits', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-profile-families-'));
+  const store = new FilesystemRivetLLMProfileHealthStore(path.join(root, 'health.sqlite'));
+  const llm = identity('llm-family');
+  const classifier = {
+    ...identity('classifier-family'),
+    family: 'classifier' as const,
+    provider: 'liquid',
+    model: 'd1',
+  };
+  try {
+    const llmPermit = await store.begin({ identity: llm, policy });
+    const classifierPermit = await store.begin({ identity: classifier, policy });
+    assert.equal((await store.listAdmin({ projectId: llm.projectId!, family: 'llm' })).length, 1);
+    assert.equal((await store.listAdmin({ projectId: llm.projectId!, family: 'classifier' })).length, 1);
+    assert.equal(await store.resetProjectKey(llm.projectId!, llm.key, 'classifier'), false);
+    await assert.rejects(store.begin({ identity: { ...llm, family: 'classifier' }, policy }), /scope/);
+    await store.reset({ projectId: llm.projectId!, family: 'classifier' });
+    await store.finish({ identity: classifier, policy, permitId: classifierPermit.permitId!, outcome: 'unhealthy' });
+    assert.equal((await store.list({ family: 'classifier' })).length, 0);
+    assert.equal((await store.list({ family: 'llm' })).length, 1);
+    await store.finish({ identity: llm, policy, permitId: llmPermit.permitId!, outcome: 'healthy' });
+  } finally {
+    await store.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('classifier suspension coordinates two SQLite connections, recording evidence and recovery/reset fencing', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-classifier-health-'));
+  const stores = [0, 1].map(() => new FilesystemRivetLLMProfileHealthStore(path.join(root, 'health.sqlite')));
+  try {
+    await verifyClassifierHealthContract(stores);
+  } finally {
+    await Promise.all(stores.map((store) => store.dispose()));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('managed profile families isolate reset operations and preserve legacy LLM entries', async () => {
+  const pool = new FakeManagedHealthPool();
+  const store = new PostgresRivetLLMProfileHealthStore(pool as unknown as Pool);
+  const llm = identity('legacy-llm');
+  const classifier = { ...identity('classifier'), family: 'classifier' as const, provider: 'openai' };
+  await store.begin({ identity: llm, policy });
+  const permit = await store.begin({ identity: classifier, policy });
+  assert.equal((await store.listAdmin({ projectId: llm.projectId!, family: 'classifier' })).length, 1);
+  assert.equal(await store.resetProjectKey(llm.projectId!, llm.key, 'classifier'), false);
+  await store.reset({ projectId: llm.projectId!, family: 'classifier' });
+  await store.finish({ identity: classifier, policy, permitId: permit.permitId!, outcome: 'unhealthy' });
+  assert.equal((await store.list({ family: 'classifier' })).length, 0);
+  assert.equal((await store.list({ family: 'llm' })).length, 1);
 });
 
 test('managed health store preserves transition, lease, project, and reset semantics', async () => {
@@ -658,7 +806,10 @@ test('filesystem and managed health stores persist recording evidence for active
 
       const [entry] = await store.listAdmin({ projectId: healthIdentity.projectId! });
       assert.ok(entry);
-      assert.deepEqual(entry.contributingRuns.map((run) => run.availability), ['disabled', 'available']);
+      assert.deepEqual(
+        entry.contributingRuns.map((run) => run.availability),
+        ['disabled', 'available'],
+      );
       assert.equal(entry.contributingRuns[1]?.recordingId, `${label}-recording`);
       assert.equal(entry.contributingRuns[1]?.triggeredSuspension, true);
 
@@ -699,15 +850,24 @@ test('HTTP health clients preserve runtime requests and scope administration by 
   await admin.reset({ projectId: 'project a' as never });
 
   await assert.rejects(() => Promise.resolve(store.list()), /requires a projectId/);
-  await assert.rejects(
-    () => Promise.resolve(store.reset({ key: healthIdentity.key })),
-    /requires a projectId/,
-  );
+  await assert.rejects(() => Promise.resolve(store.reset({ key: healthIdentity.key })), /requires a projectId/);
 
   assert.equal(requests[0]?.url, 'https://rivet.example/api/workflows/llm-profile-health/begin');
   assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), { identity: healthIdentity, policy });
-  assert.equal(requests[1]?.url, 'https://rivet.example/api/workflows/llm-profile-health/admin?projectId=project%20a');
-  assert.deepEqual(JSON.parse(String(requests[2]?.init.body)), { projectId: 'project a' });
+  assert.equal(
+    requests[1]?.url,
+    'https://rivet.example/api/workflows/llm-profile-health/admin?projectId=project%20a&family=llm',
+  );
+  assert.deepEqual(JSON.parse(String(requests[2]?.init.body)), { projectId: 'project a', family: 'llm' });
+  const classifierAdmin = createHttpLLMProfileHealthAdminProvider({ baseUrl, fetch: fetchMock, family: 'classifier' });
+  await classifierAdmin.list({ projectId: 'project a' as never });
+  await classifierAdmin.reset({ projectId: 'project a' as never, key: 'classifier-key' });
+  assert.match(requests[3]!.url, /family=classifier$/);
+  assert.deepEqual(JSON.parse(String(requests[4]!.init.body)), {
+    projectId: 'project a',
+    key: 'classifier-key',
+    family: 'classifier',
+  });
 });
 
 test('authenticated health API scopes resets by exact project and rejects caller timestamps', async () => {
@@ -772,7 +932,7 @@ test('authenticated health API scopes resets by exact project and rejects caller
       body: JSON.stringify({ identity: healthIdentity, policy }),
     });
     assert.equal(beginResponse.status, 200);
-    const begin = await beginResponse.json() as { permitId: string };
+    const begin = (await beginResponse.json()) as { permitId: string };
 
     const wrongProjectReset = await fetch(`${baseUrl}/reset`, {
       method: 'POST',
@@ -783,11 +943,11 @@ test('authenticated health API scopes resets by exact project and rejects caller
 
     const projectEntries = await fetch(`${baseUrl}/?projectId=project-a`, { headers });
     assert.equal(projectEntries.status, 200);
-    assert.equal((await projectEntries.json() as unknown[]).length, 1);
+    assert.equal(((await projectEntries.json()) as unknown[]).length, 1);
 
     const adminEntries = await fetch(`${baseUrl}/admin?projectId=project-a`, { headers });
     assert.equal(adminEntries.status, 200);
-    const [adminEntry] = await adminEntries.json() as Array<{ contributingRuns?: unknown }>;
+    const [adminEntry] = (await adminEntries.json()) as Array<{ contributingRuns?: unknown }>;
     assert.deepEqual(adminEntry?.contributingRuns, []);
 
     const resetResponse = await fetch(`${baseUrl}/reset`, {
@@ -808,10 +968,10 @@ test('authenticated health API scopes resets by exact project and rejects caller
       }),
     });
     assert.equal(lateFinish.status, 200);
-    assert.equal((await lateFinish.json() as { failureCount: number }).failureCount, 0);
+    assert.equal(((await lateFinish.json()) as { failureCount: number }).failureCount, 0);
 
     const emptyProjectEntries = await fetch(`${baseUrl}/?projectId=project-a`, { headers });
-    assert.equal((await emptyProjectEntries.json() as unknown[]).length, 0);
+    assert.equal(((await emptyProjectEntries.json()) as unknown[]).length, 0);
   } finally {
     server.close();
     await once(server, 'close');
@@ -852,7 +1012,7 @@ test('filesystem project deletion removes durable LLM profile health before dele
       body: JSON.stringify({ name: 'Health cleanup' }),
     });
     assert.equal(createResponse.status, 201);
-    const created = await createResponse.json() as {
+    const created = (await createResponse.json()) as {
       project: { id: string; relativePath: string; absolutePath: string };
     };
     const project = await loadProjectFromFile(created.project.absolutePath);

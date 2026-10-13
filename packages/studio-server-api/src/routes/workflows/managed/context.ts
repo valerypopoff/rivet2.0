@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 
 import { checkPostgresPoolHealth } from '../../../managed-health.js';
 import { acquireManagedPostgresPool } from '../../../managed-postgres-pool.js';
@@ -46,6 +47,7 @@ import {
 } from './schema-migrations.js';
 import { createManagedWorkflowTransactionRunner } from './transactions.js';
 import type { TransactionHooks } from './types.js';
+import { assertManagedSchemaMigrationSafe } from '../../../managed-schema-cutover.js';
 
 export type ManagedWorkflowContext = {
   pool: Pool;
@@ -75,7 +77,7 @@ export type ManagedWorkflowContext = {
 export function createManagedWorkflowContext(
   config: ManagedWorkflowStorageConfig,
   blobStore?: ManagedWorkflowBlobStore,
-  options?: { migrationMode?: 'copy' | 'verify' },
+  options?: { migrationMode?: 'copy' | 'verify' | 'restore' },
 ): ManagedWorkflowContext {
   const poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
   const { pool } = poolLease;
@@ -83,7 +85,7 @@ export function createManagedWorkflowContext(
   const executionCache = new ManagedWorkflowExecutionCache();
   const queries = createManagedWorkflowQueries(pool);
   const staleUploadRetentionConfig = getManagedStaleUploadRetentionConfig(process.env);
-  const runBackgroundTasks = options?.migrationMode === undefined;
+  const runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
   const maintenance = createManagedWorkflowMaintenance({
     pool,
     blobStore: resolvedBlobStore,
@@ -170,17 +172,19 @@ export function createManagedWorkflowContext(
     if (!schemaReadyPromise) {
       schemaReadyPromise = (async () => {
         // Blob storage must exist before the schema can reference uploaded objects.
-        if (options?.migrationMode === 'verify') await resolvedBlobStore.checkHealth?.();
+        if (options?.migrationMode === 'verify' || options?.migrationMode === 'restore')
+          await resolvedBlobStore.checkHealth?.();
         else await resolvedBlobStore.initialize?.();
         // Every API process reaches this path. The database-wide migration protocol
         // serializes mutation, while Kubernetes API pods can use verify-only mode
         // after the dedicated migration Job has completed.
         const schemaMode =
-          options?.migrationMode === 'verify'
+          options?.migrationMode === 'verify' || options?.migrationMode === 'restore'
             ? 'verify'
             : options?.migrationMode === 'copy'
               ? 'migrate'
               : getManagedWorkflowSchemaMode();
+        if (schemaMode === 'migrate') await assertManagedSchemaMigrationSafe(pool);
         await withManagedDbRetry(`managed schema ${schemaMode}`, () =>
           schemaMode === 'migrate' ? migrateManagedWorkflowSchema(pool) : verifyManagedWorkflowSchema(pool),
         );

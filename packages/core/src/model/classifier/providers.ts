@@ -3,6 +3,8 @@ import {
   JEV_DEFAULT_CREDENTIAL_NAMES,
   LIQUID_DEFAULT_CREDENTIAL_NAMES,
   OPENAI_DEFAULT_CREDENTIAL_NAMES,
+  OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
+  PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
 } from './credentials.js';
 import type { DataValue } from '../DataValue.js';
 import { assertLiquidImageLimits } from './images.js';
@@ -14,6 +16,7 @@ import {
 } from './state.js';
 import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
+import { assertPerplexityDecisionLimits, perplexityDecisionState, PERPLEXITY_DECISION_MODELS } from './perplexity.js';
 import { prepareClassifierQuestion } from './questions.js';
 import { classifierArrayValues } from './json.js';
 import {
@@ -21,9 +24,12 @@ import {
   ClassifierValueBudget,
   CLASSIFIER_LIMITS,
   ClassifierResourceLimitError,
+  ClassifierResponseReadError,
   readClassifierResponse,
 } from './limits.js';
 import type {
+  ClassifierFailureKind,
+  ClassifierAttemptUsage,
   ClassifierEvaluationResponse,
   ClassifierQuestionDefinition,
   PreparedClassifierQuestion,
@@ -34,6 +40,8 @@ export { validateApiCompatibleClassifierResponse } from './response.js';
 export const JEV_SYSTEM_ONE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const LIQUID_SYSTEM_ONE_ENDPOINT = 'https://api.liquid.ai/decisions/v1/systemone';
 export const OPENAI_DECISIONS_ENDPOINT = 'https://api.openai.com/v1/decisions';
+export const OPENROUTER_DECISIONS_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
+export const PERPLEXITY_DECISIONS_ENDPOINT = 'https://api.perplexity.ai/v1/decisions';
 
 /** Jev's published USD rates. Keep this Core-owned rather than graph-authored. */
 export const JEV_TOKEN_PRICING = {
@@ -98,6 +106,20 @@ export type ClassifierProviderEvaluationResult = {
 };
 
 export type ClassifierProviderEvaluateArgs = {
+  /** Privacy-bounded physical-attempt observer; never includes bodies or credentials. */
+  onAttempt?: (attempt: {
+    attemptIndex: number;
+    outcome: 'success' | 'failure' | 'aborted';
+    status?: number;
+    kind?: ClassifierProviderError['kind'];
+    error?: string;
+    classifierUsage?: ClassifierAttemptUsage;
+    /** Physical request through response validation, excluding retry waits. */
+    durationMs?: number;
+  }) => void;
+  /** Opt-in node diagnostics, separate from privacy-bounded attempt events. */
+  onRequestBody?: (getBody: () => Record<string, unknown>) => void;
+  onResponseBody?: (body: unknown) => void;
   apiKey: string;
   model: string;
   questions: readonly ClassifierQuestionDefinition[];
@@ -127,6 +149,7 @@ type ClassifierProviderSpec = Omit<ClassifierProvider, 'evaluate' | 'evaluateInp
   buildRequest(args: PreparedClassifierEvaluation): Record<string, unknown>;
   validateResponse: typeof validateClassifierEvaluationResponse;
   checkState?(state: PreparedClassifierState, check: () => void): void;
+  checkRequest?(request: PreparedClassifierEvaluation, check: () => void): void;
 };
 
 export type ApiCompatibleClassifierProviderConfig = {
@@ -189,6 +212,23 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   },
 });
 
+/** Native Decisions API, not chat completions. Microsoft Decision-1 is text-only.
+ * https://openrouter.ai/microsoft/microsoft-decision-1
+ */
+export const openrouterClassifierProvider = createApiCompatibleClassifierProvider({
+  id: 'openrouter',
+  label: 'OpenRouter',
+  defaultModel: 'microsoft/microsoft-decision-1',
+  credentialNames: OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
+  endpoint: OPENROUTER_DECISIONS_ENDPOINT,
+  modelPricing: [
+    {
+      models: ['microsoft/microsoft-decision-1'],
+      pricing: { inputPerMillionTokens: 0.042, outputPerMillionTokens: 0 },
+    },
+  ],
+});
+
 /** Decisions-specific rates, not GPT-6 Luna's Chat/Responses cache/output rates.
  * https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
  */
@@ -214,11 +254,37 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   validateResponse: validateOpenAIDecisionResponse,
 });
 
+/** https://docs.perplexity.ai/docs/decisions/quickstart */
+export const perplexityClassifierProvider: ClassifierProvider = createClassifierProvider({
+  id: 'perplexity',
+  label: 'Perplexity',
+  defaultModel: 'pplx-decider-v1.1-27b',
+  credentialNames: PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  endpoint: PERPLEXITY_DECISIONS_ENDPOINT,
+  supportsImages: (model) => PERPLEXITY_DECISION_MODELS.includes(model),
+  modelPricing: [
+    {
+      models: PERPLEXITY_DECISION_MODELS,
+      pricing: { inputPerMillionTokens: 0.02, outputPerMillionTokens: 0 },
+    },
+  ],
+  checkRequest: assertPerplexityDecisionLimits,
+  buildRequest: ({ model, state, questions }) => ({
+    model,
+    state: perplexityDecisionState(state),
+    questions: createQuestionMap(questions),
+  }),
+  validateResponse: validateClassifierEvaluationResponse,
+});
+
 /** Ordered so adding compatible providers does not alter authored IDs. */
 export const classifierProviders: readonly ClassifierProvider[] = [
   jevClassifierProvider,
   liquidClassifierProvider,
   openaiClassifierProvider,
+  openrouterClassifierProvider,
+  perplexityClassifierProvider,
 ];
 
 type ClassifierOperation = {
@@ -226,6 +292,40 @@ type ClassifierOperation = {
   deadline: number;
   check(attemptSignal?: AbortSignal): void;
 };
+
+export class ClassifierProviderError extends Error {
+  constructor(
+    message: string,
+    readonly kind:
+      | 'configuration'
+      | 'capability'
+      | 'timeout'
+      | 'transport'
+      | 'http'
+      | 'response-parsing'
+      | 'response-validation',
+    readonly statusCode?: number,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'ClassifierProviderError';
+  }
+}
+
+export function classifierFailureKind(kind: ClassifierProviderError['kind'], status?: number): ClassifierFailureKind {
+  return kind === 'http' && (status === 401 || status === 403) ? 'authentication' : kind;
+}
+
+/** Bounded preparation/provider explanation, without traversing causes or capturing response bodies. */
+export function classifierErrorMessage(error: unknown, apiKey?: string): string {
+  try {
+    const text =
+      error instanceof Error ? error.message : typeof error === 'string' ? error : 'Classifier request failed.';
+    return (apiKey ? text.split(apiKey).join('[redacted]') : text).slice(0, 2000);
+  } catch {
+    return 'Classifier request failed with unreadable error metadata.';
+  }
+}
 
 function createOperation(args: ClassifierProviderEvaluateArgs, label: string): ClassifierOperation {
   if (
@@ -239,7 +339,8 @@ function createOperation(args: ClassifierProviderEvaluateArgs, label: string): C
   // Node turns overflowing setTimeout delays into 1 ms, not a long timeout.
   if (deadline - now > MAX_TIMER_DELAY_MS)
     throw new Error(`Classifier effective timeout must not exceed ${MAX_TIMER_DELAY_MS} ms.`);
-  const timeoutError = () => new Error(`${label} request timed out after ${args.timeoutMs} ms.`);
+  const timeoutError = () =>
+    new ClassifierProviderError(`${label} request timed out after ${args.timeoutMs} ms.`, 'timeout');
   return {
     signal: args.signal,
     deadline,
@@ -252,7 +353,7 @@ function createOperation(args: ClassifierProviderEvaluateArgs, label: string): C
 
 /** A plain specification and one runner for both graph and direct provider inputs. */
 function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvider {
-  const { endpoint, buildRequest, validateResponse, checkState, ...provider } = spec;
+  const { endpoint, buildRequest, validateResponse, checkState, checkRequest, ...provider } = spec;
   const evaluate = async (input: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult> => {
     // Reject removed evidence fields before object spread can read a getter or
     // discard non-enumerable/inherited content.
@@ -281,12 +382,26 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
       questions.push(question);
     }
     if (state.kind === 'messages' && state.images.length && !provider.supportsImages?.(args.model))
-      throw new Error(`${provider.label} model '${args.model}' does not support classifier images.`);
-    checkState?.(state, operation.check);
+      throw new ClassifierProviderError(
+        `${provider.label} model '${args.model}' does not support classifier images.`,
+        'capability',
+      );
+    try {
+      checkState?.(state, operation.check);
+      checkRequest?.({ model: args.model, state, questions }, operation.check);
+    } catch (error) {
+      operation.check();
+      throw new ClassifierProviderError(
+        error instanceof Error ? error.message : `${provider.label} does not support this classifier evidence.`,
+        'capability',
+        undefined,
+        { cause: error },
+      );
+    }
     operation.check();
     const result = await callClassifierHttp(
       args,
-      { endpoint, validateResponse, label: provider.label, maxRequestBytes: provider.maxRequestBytes },
+      { ...provider, endpoint, validateResponse },
       { model: args.model, state, questions },
       buildRequest,
       operation,
@@ -375,7 +490,10 @@ function createQuestionMap(
 
 async function callClassifierHttp(
   args: ClassifierProviderEvaluateArgs & { fetchImplementation: typeof fetch },
-  spec: Pick<ClassifierProviderSpec, 'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse'>,
+  spec: Pick<
+    ClassifierProviderSpec,
+    'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse' | 'defaultModel' | 'pricing' | 'modelPricing'
+  >,
   prepared: PreparedClassifierEvaluation,
   buildRequest: ClassifierProviderSpec['buildRequest'],
   operation: ClassifierOperation,
@@ -393,14 +511,48 @@ async function callClassifierHttp(
   assertClassifierResourceLimits(request, operation.check);
   const requestJson = JSON.stringify(request);
   if (maxRequestBytes !== undefined && new TextEncoder().encode(requestJson).byteLength >= maxRequestBytes) {
-    throw new Error(
+    throw new ClassifierProviderError(
       `${providerLabel} request must be smaller than ${maxRequestBytes / 1_000_000} MB, including State, images, and questions. Resize images or reduce input content.`,
+      'capability',
     );
   }
   let requestBody: Record<string, unknown> | undefined;
+  let attemptIndex = -1;
+  let attemptStartedAt = 0;
+  const report = (
+    outcome: 'success' | 'failure' | 'aborted',
+    status?: number,
+    kind?: ClassifierProviderError['kind'],
+    classifierUsage?: ClassifierAttemptUsage,
+    error?: string,
+  ) => {
+    try {
+      args.onAttempt?.({
+        attemptIndex,
+        durationMs: Math.max(0, Date.now() - attemptStartedAt),
+        outcome,
+        status,
+        kind,
+        ...(classifierUsage ? { classifierUsage } : {}),
+        ...(error ? { error: classifierErrorMessage(error, apiKey) } : {}),
+      });
+    } catch {
+      /* Observers cannot alter execution. */
+    }
+  };
   operation.check();
 
   for (;;) {
+    operation.check();
+    attemptIndex++;
+    attemptStartedAt = Date.now();
+    if (args.onRequestBody) {
+      try {
+        args.onRequestBody(() => (requestBody ??= JSON.parse(requestJson) as Record<string, unknown>));
+      } catch {
+        /* Observation only. */
+      }
+    }
     operation.check();
     const remainingMs = deadline - Date.now();
 
@@ -429,10 +581,26 @@ async function callClassifierHttp(
       );
     } catch (error) {
       cleanupAttempt();
+      if (signal.aborted) {
+        report('aborted', undefined, undefined, undefined, `${providerLabel} request was canceled.`);
+        operation.check();
+      }
+      const kind = controller.signal.aborted && !signal.aborted ? 'timeout' : 'transport';
+      report(
+        'failure',
+        undefined,
+        kind,
+        undefined,
+        kind === 'timeout'
+          ? `${providerLabel} request timed out after ${args.timeoutMs} ms.`
+          : `${providerLabel} transport request failed.`,
+      );
       operation.check(controller.signal);
       if (automaticRetryCount >= MAX_AUTOMATIC_ATTEMPTS - 1) {
-        throw new Error(
+        throw new ClassifierProviderError(
           `${providerLabel} request failed after ${MAX_AUTOMATIC_ATTEMPTS} attempts due to a transport error.`,
+          'transport',
+          undefined,
           { cause: error },
         );
       }
@@ -446,58 +614,157 @@ async function callClassifierHttp(
     } catch (error) {
       cleanupAttempt();
       discardResponseBody(response);
+      report(
+        signal.aborted ? 'aborted' : 'failure',
+        response.status,
+        signal.aborted ? undefined : 'timeout',
+        undefined,
+        signal.aborted
+          ? `${providerLabel} request was canceled.`
+          : `${providerLabel} request timed out after ${args.timeoutMs} ms.`,
+      );
       throw error;
     }
 
     if (!response.ok) {
+      report(
+        'failure',
+        response.status,
+        'http',
+        undefined,
+        response.status === 401 || response.status === 403
+          ? `${providerLabel} authentication failed (HTTP ${response.status}). Check the ${providerLabel} API key.`
+          : `${providerLabel} rejected the request (HTTP ${response.status}).`,
+      );
+      const retryable = RETRYABLE_STATUSES.has(response.status);
+      const permanent = [400, 401, 402, 403, 413, 422].includes(response.status);
+      const willRetry =
+        (retryable && automaticRetryCount < MAX_AUTOMATIC_ATTEMPTS - 1) ||
+        (!retryable && !permanent && configuredRetryCountUsed < configuredRetryCount);
+      if (args.onResponseBody && !willRetry) {
+        // Opt-in diagnostics must not hold up fallback on a stalled error body.
+        const diagnosticTimer = setTimeout(() => controller.abort(), Math.min(1000, deadline - Date.now()));
+        try {
+          await waitForAttempt(
+            readClassifierResponse(response, controller.signal, assertAttemptActive, args.onResponseBody),
+            controller.signal,
+          );
+        } catch {
+          // Missing, malformed, oversized or interrupted diagnostics cannot replace the HTTP rejection.
+        } finally {
+          clearTimeout(diagnosticTimer);
+        }
+      }
       cleanupAttempt();
       // Rejected bodies are not answer outputs. Release every response, not just
       // retries, so caught terminal failures cannot leave connections occupied.
       // Initiate cancellation without awaiting a hostile stream's cleanup;
       // neither the final error nor the next bounded retry may depend on it.
       discardResponseBody(response);
-      if (RETRYABLE_STATUSES.has(response.status) && automaticRetryCount < MAX_AUTOMATIC_ATTEMPTS - 1) {
-        automaticRetryCount += 1;
-        const delayMs = getRetryDelayMs(response.headers.get('retry-after'), automaticRetryCount, deadline);
+      // Diagnostic collection introduces an await after receiving the rejection.
+      // Caller cancellation and the overall deadline still outrank HTTP suppression.
+      // Do not check the diagnostic-only controller: its 1 s cap preserves the HTTP error.
+      operation.check();
+      if (willRetry) {
+        let delayMs: number;
+        if (retryable) {
+          automaticRetryCount += 1;
+          delayMs = getRetryDelayMs(response.headers.get('retry-after'), automaticRetryCount, deadline);
+        } else {
+          configuredRetryCountUsed += 1;
+          delayMs = Math.min(configuredCooldownMs, deadline - Date.now());
+        }
         await waitForRetry(delayMs, signal, providerLabel);
         continue;
       }
       if (response.status === 401 || response.status === 403) {
-        throw Object.assign(new Error(`${providerLabel} authentication failed. Check the ${providerLabel} API key.`), {
-          statusCode: response.status,
-        });
+        throw new ClassifierProviderError(
+          `${providerLabel} authentication failed. Check the ${providerLabel} API key.`,
+          'http',
+          response.status,
+        );
       }
-      if (response.status === 422 || response.status === 400) {
-        throw Object.assign(new Error(`${providerLabel} rejected the request (HTTP ${response.status}).`), {
-          statusCode: response.status,
-        });
+      // Repeating an unchanged invalid/oversized request or an unfunded account
+      // cannot recover. These remain HTTP failures so profile fallback works.
+      if ([400, 402, 413, 422].includes(response.status)) {
+        throw new ClassifierProviderError(
+          `${providerLabel} rejected the request (HTTP ${response.status}).`,
+          'http',
+          response.status,
+        );
       }
-      if (configuredRetryCountUsed < configuredRetryCount && !RETRYABLE_STATUSES.has(response.status)) {
-        configuredRetryCountUsed += 1;
-        await waitForRetry(Math.min(configuredCooldownMs, deadline - Date.now()), signal, providerLabel);
-        continue;
-      }
-      throw Object.assign(new Error(`${providerLabel} request failed (HTTP ${response.status}).`), {
-        statusCode: response.status,
-      });
+      throw new ClassifierProviderError(
+        `${providerLabel} request failed (HTTP ${response.status}).`,
+        'http',
+        response.status,
+      );
     }
 
     let body: unknown;
     try {
       body = await waitForAttempt(
-        readClassifierResponse(response, controller.signal, assertAttemptActive),
+        readClassifierResponse(response, controller.signal, assertAttemptActive, args.onResponseBody),
         controller.signal,
       );
       assertAttemptActive();
     } catch (error) {
+      if (signal.aborted) {
+        report('aborted', response.status, undefined, undefined, `${providerLabel} request was canceled.`);
+        discardResponseBody(response);
+        operation.check();
+      }
+      const kind =
+        controller.signal.aborted && !signal.aborted
+          ? 'timeout'
+          : error instanceof ClassifierResponseReadError
+            ? 'transport'
+            : 'response-parsing';
+      report(
+        'failure',
+        response.status,
+        kind,
+        undefined,
+        kind === 'timeout'
+          ? `${providerLabel} request timed out after ${args.timeoutMs} ms.`
+          : error instanceof ClassifierResourceLimitError
+            ? error.message
+            : kind === 'transport'
+              ? `${providerLabel} response body could not be read.`
+              : `${providerLabel} returned an invalid JSON response.`,
+      );
       discardResponseBody(response);
       operation.check(controller.signal);
       if (error instanceof ClassifierResourceLimitError) throw error;
-      throw new Error(`${providerLabel} returned an invalid JSON response.`, { cause: error });
+      throw new ClassifierProviderError(
+        kind === 'transport'
+          ? `${providerLabel} response body could not be read.`
+          : `${providerLabel} returned an invalid JSON response.`,
+        kind,
+        undefined,
+        { cause: error },
+      );
     } finally {
       cleanupAttempt();
     }
-    const validatedResponse = validateResponse(body, prepared.questions, providerLabel);
+    let validatedResponse: ClassifierEvaluationResponse;
+    try {
+      validatedResponse = validateResponse(body, prepared.questions, providerLabel);
+    } catch (error) {
+      report(
+        'failure',
+        response.status,
+        'response-validation',
+        classifierAttemptUsage(body, spec, args.model),
+        error instanceof Error ? error.message : `${providerLabel} returned an invalid classifier response.`,
+      );
+      throw new ClassifierProviderError(
+        error instanceof Error ? error.message : `${providerLabel} returned an invalid classifier response.`,
+        'response-validation',
+        undefined,
+        { cause: error },
+      );
+    }
+    report('success', response.status, undefined, classifierAttemptUsage(body, spec, args.model));
     return {
       // Preserve the direct-provider result contract, but graph runs with the
       // diagnostic disabled never allocate this second representation.
@@ -513,6 +780,37 @@ async function callClassifierHttp(
       responseBody: body as Record<string, unknown>,
     };
   }
+}
+
+/** The bounded reader produced plain JSON; do not require valid answers to retain usable usage. */
+function classifierAttemptUsage(
+  body: unknown,
+  provider: Pick<ClassifierProvider, 'defaultModel' | 'pricing' | 'modelPricing'>,
+  requestedModel: string,
+): ClassifierAttemptUsage | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'usage')) return;
+  const { usage, model } = body as { usage?: ClassifierEvaluationResponse['usage']; model?: string };
+  if (
+    !usage ||
+    typeof usage !== 'object' ||
+    Array.isArray(usage) ||
+    !Object.hasOwn(usage, 'input_tokens') ||
+    !Object.hasOwn(usage, 'output_tokens') ||
+    !Number.isSafeInteger(usage.input_tokens) ||
+    usage.input_tokens < 0 ||
+    !Number.isSafeInteger(usage.output_tokens) ||
+    usage.output_tokens < 0
+  )
+    return;
+  const estimatedCostUsd =
+    typeof model === 'string' && Object.hasOwn(body, 'model')
+      ? calculateClassifierUsageCost(provider, usage, { requestedModel, responseModel: model })
+      : undefined;
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }),
+  };
 }
 
 /** Bound awaiting even when a custom transport ignores its abort signal. */

@@ -4,8 +4,54 @@ import { executeLLMInvocation } from '../../../src/model/chat-v2/llmInvocationCo
 import { LLMInvocationJournal } from '../../../src/model/chat-v2/llmInvocationJournal.js';
 import type { LLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmChatV2NodeRuntime.js';
 
-describe('LLM invocation coordinator', () => {
-  it('records a failed terminal disposition without changing the thrown error', async () => {
+void describe('LLM invocation coordinator', () => {
+  void it('carries internally delegated graph cost separately from model rounds', async () => {
+    let rounds = 0;
+    let handlers = 0;
+    const signal = new AbortController().signal;
+    const context = {
+      signal,
+      project: { graphs: { handler: { metadata: { id: 'handler', name: 'foo' } } } },
+      externalFunctions: {},
+      createSubProcessor: () => ({
+        processGraph: async () => {
+          handlers++;
+          return {
+            output: { type: 'string', value: 'tool result' },
+            cost: { type: 'number', value: 0.03 },
+            costBreakdown: { type: 'object', value: { llm: 0, classifier: 0.03, other: 0 } },
+          };
+        },
+      }),
+    } as never;
+    const runtime = {
+      ...failingRuntime(new Error('unused')),
+      shouldAutoContinueToolCalls: true,
+      functions: [{ name: 'foo', description: 'Foo', parameters: { type: 'object', properties: {} } }],
+      runOptions: { provider: 'openrouter', modelId: 'fixture', prompt: { type: 'string', value: 'Hello' }, context },
+      runPipeline: async () => ({
+        commonOutputs: {},
+        requestMessages: [],
+        allMessages: [],
+        response: 'done',
+        functionCalls:
+          rounds++ === 0
+            ? [{ type: 'function', id: 'call', name: 'foo', arguments: '{}', lastParsedArguments: {} }]
+            : [],
+      }),
+    } as unknown as LLMChatV2RuntimeConfig;
+    const result = await executeLLMInvocation({
+      context,
+      runtime,
+      journal: new LLMInvocationJournal(),
+      toolCallContinuation: undefined,
+    });
+    assert.equal(handlers, 1);
+    assert.equal(rounds, 2);
+    assert.deepEqual(result.toolCost, { llm: 0, classifier: 0.03, other: 0 });
+  });
+
+  void it('records a failed terminal disposition without changing the thrown error', async () => {
     const journal = new LLMInvocationJournal();
     const expected = new Error('provider setup failed');
 
@@ -22,7 +68,7 @@ describe('LLM invocation coordinator', () => {
     assert.deepEqual(journal.events, [{ type: 'terminal', kind: 'failed' }]);
   });
 
-  it('classifies a thrown cancellation from the root signal as cancelled', async () => {
+  void it('classifies a thrown cancellation from the root signal as cancelled', async () => {
     const controller = new AbortController();
     const journal = new LLMInvocationJournal();
     const expected = new Error('cancelled');
@@ -41,7 +87,7 @@ describe('LLM invocation coordinator', () => {
     assert.deepEqual(journal.events, [{ type: 'terminal', kind: 'cancelled' }]);
   });
 
-  it('classifies a diagnostic provider failure even when it carries partial response text', async () => {
+  void it('classifies a diagnostic provider failure even when it carries partial response text', async () => {
     const journal = new LLMInvocationJournal();
     const result = {
       commonOutputs: {

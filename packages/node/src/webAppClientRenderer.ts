@@ -1,5 +1,10 @@
 import {
   clearUiGraphChatSearchMatches,
+  buildAgentProfileAttemptInspectorRows,
+  getClassifierRequestCount,
+  formatClassifierRequestCount,
+  getProfileAttemptOmissionNotice,
+  isClassifierRequest,
   applyUiGraphWebAppStorageActionPatchAsync,
   copyUiGraphText,
   createUiGraphChatHistoryFlushStatePatch,
@@ -53,6 +58,8 @@ type DomPurifyApi = {
 };
 
 function createResponseInspectorElement(trace: AgentResponseTrace | null, onClose: () => void): HTMLElement {
+  const classifierOnly = trace?.scope === 'classifier-invocation';
+  const classifierRequestCount = trace == null ? undefined : getClassifierRequestCount(trace);
   const metric = (label: string, value: string) =>
     createElement('div', {}, [createElement('dt', { text: label }), createElement('dd', { text: value })]);
   const metricGroup = (title: string, metrics: HTMLElement[], description?: string) =>
@@ -75,24 +82,31 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
           metricGroup('Execution', [
             metric('Status', trace.status),
             metric('Total duration', formatTraceDuration(trace.durationMs)),
-            metric('Model calls', String(trace.summary.modelCallCount)),
-            metric('Tool calls', String(trace.summary.toolCallCount)),
+            ...(classifierOnly ? [] : [metric('Model calls', String(trace.summary.modelCallCount))]),
+            ...(classifierRequestCount == null
+              ? []
+              : [metric('Classifier requests', formatClassifierRequestCount(trace)!)]),
+            ...(classifierOnly ? [] : [metric('Tool calls', String(trace.summary.toolCallCount))]),
           ]),
           metricGroup(
             'Recovery behavior',
             [
               metric('Provider request retries', String(trace.summary.retryCount)),
-              metric('LLM profile fallbacks', String(trace.summary.fallbackCount)),
+              metric('Profile fallbacks', String(trace.summary.fallbackCount)),
             ],
-            'Provider request retries repeat a failed request. LLM profile fallbacks move to the next configured profile.',
+            'Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or classifier profile.',
           ),
           metricGroup('Usage and cost', [
             metric('Input tokens', formatTraceTokens(trace.summary.promptTokens)),
             metric('Output tokens', formatTraceTokens(trace.summary.completionTokens)),
-            metric('Cached input tokens', formatTraceTokens(trace.summary.cachedTokens)),
-            metric('Reasoning tokens', formatTraceTokens(trace.summary.reasoningTokens)),
+            ...(classifierOnly
+              ? []
+              : [
+                  metric('Cached input tokens', formatTraceTokens(trace.summary.cachedTokens)),
+                  metric('Reasoning tokens', formatTraceTokens(trace.summary.reasoningTokens)),
+                ]),
             metric(
-              'Model cost',
+              classifierOnly ? 'Estimated cost' : 'Model cost',
               trace.summary.costStatus === 'unknown'
                 ? 'Unknown'
                 : `$${trace.summary.knownCostUsd.toFixed(6)}${trace.summary.costStatus === 'partial' ? ' (partial)' : ''}`,
@@ -133,35 +147,66 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
                   ]),
                 ]),
               ]),
-          createTraceDetails(
-            'Model calls',
-            trace.modelCalls.map((call) =>
-              createElement('article', {}, [
-                createElement('strong', { text: formatTraceModelCallLabel(call) }),
-                createElement('span', {
-                  text: `${call.outcome}${call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`} · round ${(call.roundIndex ?? 0) + 1} · attempt ${call.attemptIndex + 1}`,
-                }),
-                createElement('span', {
-                  text: `${formatTraceDuration(call.durationMs)} · ${formatTraceCallUsage(call.usage)} · ${call.pricing.status === 'known' && call.pricing.costUsd != null ? `$${call.pricing.costUsd.toFixed(6)}` : 'cost unknown'}`,
-                }),
-                ...(call.finishReason ? [createElement('span', { text: `Finish reason: ${call.finishReason}` })] : []),
+          ...(classifierOnly
+            ? []
+            : [
+                createTraceDetails(
+                  'Model calls',
+                  trace.modelCalls.map((call) =>
+                    createElement('article', {}, [
+                      createElement('strong', { text: formatTraceModelCallLabel(call) }),
+                      createElement('span', {
+                        text: `${call.outcome}${call.profileIndex == null ? '' : ` · profile ${call.profileIndex + 1}`} · round ${(call.roundIndex ?? 0) + 1} · attempt ${call.attemptIndex + 1}`,
+                      }),
+                      createElement('span', {
+                        text: `${formatTraceDuration(call.durationMs)} · ${formatTraceCallUsage(call.usage)} · ${call.pricing.status === 'known' && call.pricing.costUsd != null ? `$${call.pricing.costUsd.toFixed(6)}` : 'cost unknown'}`,
+                      }),
+                      ...(call.finishReason
+                        ? [createElement('span', { text: `Finish reason: ${call.finishReason}` })]
+                        : []),
+                    ]),
+                  ),
+                  trace.omittedModelCallCount,
+                  'No provider requests recorded.',
+                ),
               ]),
-            ),
-            trace.omittedModelCallCount,
-          ),
-          createTraceDetails(
-            'Tool calls',
-            trace.toolCalls.map((call) =>
-              createElement('article', {}, [
-                createElement('strong', { text: call.toolName }),
-                createElement('span', {
-                  text: `${call.outcome} · ${call.handlerKind}${call.handlerName ? ` · ${call.handlerName}` : ''}`,
-                }),
-                createElement('span', { text: formatTraceDuration(call.durationMs) }),
+          ...(classifierRequestCount == null
+            ? []
+            : [
+                createTraceDetails(
+                  'Classifier requests',
+                  createProfileAttemptRows((trace.profileAttempts ?? []).filter(isClassifierRequest)),
+                  0,
+                  'No classifier requests recorded.',
+                ),
               ]),
-            ),
-            trace.omittedToolCallCount,
+          createTraceDetails(
+            'Profile attempts',
+            createProfileAttemptRows((trace.profileAttempts ?? []).filter((attempt) => !isClassifierRequest(attempt))),
+            0,
+            'No profile fallback or suspension decisions recorded.',
           ),
+          ...(getProfileAttemptOmissionNotice(trace)
+            ? [createElement('p', { text: getProfileAttemptOmissionNotice(trace) })]
+            : []),
+          ...(classifierOnly
+            ? []
+            : [
+                createTraceDetails(
+                  'Tool calls',
+                  trace.toolCalls.map((call) =>
+                    createElement('article', {}, [
+                      createElement('strong', { text: call.toolName }),
+                      createElement('span', {
+                        text: `${call.outcome} · ${call.handlerKind}${call.handlerName ? ` · ${call.handlerName}` : ''}`,
+                      }),
+                      createElement('span', { text: formatTraceDuration(call.durationMs) }),
+                    ]),
+                  ),
+                  trace.omittedToolCallCount,
+                  'No tool executions recorded.',
+                ),
+              ]),
         ]);
   return createElement(
     'div',
@@ -199,7 +244,6 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
   );
 }
 
-
 function formatTraceModelCallLabel(call: AgentResponseTrace['modelCalls'][number]): string {
   const profileName = call.profileName?.trim();
   return profileName
@@ -207,14 +251,20 @@ function formatTraceModelCallLabel(call: AgentResponseTrace['modelCalls'][number
     : call.provider + ' · ' + call.model;
 }
 
-function createTraceDetails(title: string, rows: HTMLElement[], omitted: number): HTMLElement {
+function createProfileAttemptRows(attempts: NonNullable<AgentResponseTrace['profileAttempts']>): HTMLElement[] {
+  return buildAgentProfileAttemptInspectorRows(attempts).map((row) =>
+    createElement('article', {}, [
+      createElement('strong', { text: row.providerAndModel }),
+      createElement('span', { text: row.context }),
+      ...(row.error == null ? [] : [createElement('span', { text: row.error })]),
+    ]),
+  );
+}
+
+function createTraceDetails(title: string, rows: HTMLElement[], omitted: number, empty: string): HTMLElement {
   const details = createElement('details', { className: 'rivet-agent-response-inspector-section' }, [
     createElement('summary', { text: title }),
-    createElement(
-      'div',
-      {},
-      rows.length ? rows : [createElement('p', { text: `No ${title.toLowerCase()} recorded.` })],
-    ),
+    createElement('div', {}, rows.length ? rows : [createElement('p', { text: empty })]),
     ...(omitted > 0 ? [createElement('p', { text: `${omitted} additional rows omitted by the trace limit.` })] : []),
   ]) as HTMLDetailsElement;
   details.open = true;

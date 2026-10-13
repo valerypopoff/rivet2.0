@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
+import { isLegacyRestorePaused } from './legacy-restore/service.js';
 import { watchAuthorization } from './watch-authorization.js';
 import { runOutsideAppSettingsSnapshot } from './app-settings/settings-repository.js';
 import type { IncomingMessage, Server } from 'node:http';
@@ -38,7 +39,7 @@ import {
   type WebAppSocketAuthorizationStatus,
   type WebAppSocketExecutionResolution,
   type WebAppRouteKind,
-} from './routes/workflows/execution.js';
+} from './routes/workflows/web-app-execution.js';
 import { subscribeWebAppSocketPolicyInvalidation } from './routes/workflows/web-app-policy-invalidation.js';
 import {
   getWorkflowExecutionRecorderOptions,
@@ -558,7 +559,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
-    if (isVmMigrationMaintenanceActive()) {
+    if (isVmMigrationMaintenanceActive() || isLegacyRestorePaused()) {
       rejectUpgrade(socket, 503, 'Service Unavailable');
       return;
     }

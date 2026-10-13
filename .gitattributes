@@ -1,5 +1,6 @@
 /.gitattributes text eol=lf
 /.yarn/** linguist-vendored
+/.yarn/patches/*.patch text eol=lf whitespace=-blank-at-eol
 /.yarn/releases/* binary
 /.yarn/plugins/**/* binary
 /.pnp.* binary linguist-generated

@@ -21,6 +21,7 @@ let child;
 let stopping = false;
 let retry;
 const compiler = createCompilerOwner();
+let publication = Promise.resolve();
 function restart(error) {
   if (stopping || retry) return;
   // Retire ownership before any delayed message/error/exit can be delivered.
@@ -50,6 +51,17 @@ function start() {
   observeBuilder(child, {
     isCurrent: (builder) => !stopping && child === builder,
     compiler,
+    beforeCompile: () => publication.catch(() => undefined),
+    onPublish(isCurrent) {
+      publication = publication
+        .catch(() => undefined)
+        .then(async () => {
+          const generation = await store.publish(path.join(root, 'working'), { isCurrent });
+          if (store.pruned) console.log(`[tunnel-build] Reclaimed ${store.pruned} unused frontend generations.`);
+          return { generation, bytes: store.bytes };
+        });
+      return publication;
+    },
     onStatus(message) {
       if (message.phase === 'ready') {
         store.latest = message.generation;

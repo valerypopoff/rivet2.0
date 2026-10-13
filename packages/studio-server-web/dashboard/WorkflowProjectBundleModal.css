@@ -1,9 +1,11 @@
-[data-testid='workflow-project-bundle-modal'] {
+[data-testid='workflow-project-bundle-modal'],
+[data-testid='workflow-bundle-upload-modal'] {
   display: flex;
   flex-direction: column;
   max-height: calc(100dvh - 40px);
 }
-[data-testid='workflow-project-bundle-modal--body'] {
+[data-testid='workflow-project-bundle-modal--body'],
+[data-testid='workflow-bundle-upload-modal--body'] {
   display: flex;
   min-height: 0;
   overflow: hidden;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 import { LRUCache } from 'lru-cache';
+import type { CodeRunner, CodeRunnerOptions, DataValue } from '@valerypopoff/rivet2-core';
 import {
   createScopedNodeProcess,
   resolveCodeInterpolationExpression,
@@ -11,22 +12,7 @@ import {
 
 import { prepareRuntimeLibrariesForExecution } from './backend.js';
 
-interface CodeRunnerOptions {
-  includeFetch: boolean;
-  includeRequire: boolean;
-  includeRivet: boolean;
-  includeProcess: boolean;
-  includeConsole: boolean;
-  interpolationHelperIdentifier?: string;
-  globalValuesIdentifier?: string;
-}
-
-interface DataValue {
-  type: string;
-  value: unknown;
-}
-
-type Inputs = Record<string, DataValue>;
+type Inputs = Record<string, { type: string; value: unknown } | undefined>;
 type Outputs = Record<string, DataValue>;
 
 type PrepareRuntimeLibraries = () => Promise<void>;
@@ -291,12 +277,8 @@ function getCachedManagedRequire(snapshot: ManagedRequireSnapshot): NodeRequire 
  * A wrapper-owned CodeRunner that resolves packages from the active managed
  * runtime-library release. Falls back to standard Node module resolution
  * (NODE_PATH) when no managed release exists.
- *
- * Implements the CodeRunner interface from @valerypopoff/rivet2-core without
- * importing it directly, since the API depends on @valerypopoff/rivet2-node
- * which re-exports everything.
  */
-export class ManagedCodeRunner {
+export class ManagedCodeRunner implements CodeRunner {
   private readonly prepareRuntimeLibraries: PrepareRuntimeLibraries;
   private readonly loadRivet: LoadRivetModule;
   private readonly telemetry: ManagedCodeRunnerTelemetry | null;

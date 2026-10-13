@@ -184,6 +184,7 @@ test('projects stable exact invocation rows, bounded stored previews, children, 
     toolCallCount: 1,
     knownCostUsd: 0.01,
     costStatus: 'partial',
+    incomplete: true,
   });
   assert.equal(viewModel.omittedItemCount, 3);
   assert.match(viewModel.partialReason ?? '', /exact run identity/);
@@ -815,27 +816,69 @@ test('renders suspension skips, reliability-service decisions, timeouts, and omi
 
   assert.equal(item.category, 'model');
   assert.equal(item.children?.[0]?.status, 'not-ran');
-  assert.match(item.children?.[0]?.secondaryText ?? '', /^profile suspended until .+ \/ profile 1 \/ round 1$/);
+  assert.match(
+    item.children?.[0]?.secondaryText ?? '',
+    /^reliability check \/ profile suspended until .+ \/ profile 1 \/ round 1$/,
+  );
   assert.deepEqual(
     item.children?.slice(1).map((child) => [child.status, child.secondaryText]),
     [
       [
         'error',
-        'reliability service unavailable; profile request continued: Health store unavailable / profile 2 / round 1',
+        'reliability check / reliability service unavailable; profile request continued / profile 2 / round 1: Health store unavailable',
       ],
-      ['error', 'first output timed out / profile 2 / round 1'],
+      ['error', 'request / first output timed out / profile 2 / round 1'],
     ],
   );
   assert.equal(item.hasErrors, true);
   assert.deepEqual(
-    item.detailRows?.find((row) => row.label === 'LLM profile attempt rows omitted'),
+    item.detailRows?.find((row) => row.label === 'Profile attempt rows omitted'),
     {
-      label: 'LLM profile attempt rows omitted',
+      label: 'Profile attempt rows omitted',
       value: '2',
     },
   );
   assert.ok(item.searchTerms?.includes('first-output'));
   assert.ok(item.searchTerms?.includes('fail-open'));
+});
+
+test('Run Activity retains timeout explanations for LLM and classifier attempts', () => {
+  for (const timeoutKind of ['first-output', 'stream-inactivity', 'response'] as const) {
+    const journal = createRunActivityJournal();
+    const selectedRoot = root(newerActiveRootId, 1, 'error');
+    const capturedInvocation = invocation({
+      key: 'timeout',
+      sequence: 1,
+      graphId: 'graph',
+      graphRunId: 'run',
+      nodeId: 'evaluate',
+      processId: 'process',
+    });
+    capturedInvocation.profileAttempts = [
+      {
+        sequence: 2,
+        eventId: 'timeout',
+        roundIndex: 0,
+        profileIndex: 0,
+        nodeId: capturedInvocation.nodeId,
+        processId: capturedInvocation.processId,
+        ...(timeoutKind === 'response' ? { family: 'classifier' as const } : {}),
+        provider: timeoutKind === 'response' ? 'perplexity' : 'openai',
+        model: 'model',
+        stage: 'request',
+        outcome: 'failure',
+        timeoutKind,
+        error: 'Provider request timed out after 500 ms.',
+      },
+    ];
+    selectedRoot.nodeInvocationsByKey[capturedInvocation.key] = capturedInvocation;
+    selectedRoot.nodeInvocationOrder = [capturedInvocation.key];
+    journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+    journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+    const item = buildRunActivityViewModel(journal, () => ({ nodeTitle: 'Evaluate' })).items[0]!;
+    assert.match(item.children?.[0]?.secondaryText ?? '', /Provider request timed out after 500 ms/);
+    assert.equal(item.children?.[0]?.status, 'error');
+  }
 });
 
 test('keeps older Run Activity journals without profile-attempt fields readable', () => {
@@ -948,6 +991,125 @@ test('uses a replayed node start rather than the local playback receipt time', (
 
   const item = buildRunActivityViewModel(journal, () => undefined).items[0]!;
   assert.equal(item.startedAt, 10_200);
+});
+
+test('classifier activity includes winning routing, failed usage, physical requests and searchable profile names', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const classifier = invocation({
+    key: 'classifier',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'evaluate',
+    processId: 'classify',
+  });
+  classifier.nodeType = 'classifierEvaluate';
+  classifier.status = 'completed';
+  const base = {
+    nodeId: classifier.nodeId,
+    processId: classifier.processId,
+    roundIndex: 0,
+    family: 'classifier' as const,
+    provider: 'perplexity',
+    model: 'decider',
+    stage: 'request' as const,
+  };
+  classifier.profileAttempts = [
+    {
+      ...base,
+      eventId: 'bad',
+      sequence: 2,
+      profileIndex: 0,
+      profileName: 'First classifier',
+      attemptIndex: 0,
+      outcome: 'failure',
+      failureKind: 'response-validation',
+      status: 200,
+      classifierUsage: { inputTokens: 1000, outputTokens: 0, estimatedCostUsd: 0.00004 },
+    },
+    {
+      ...base,
+      eventId: 'winner',
+      sequence: 3,
+      profileIndex: 1,
+      profileName: 'Fast backup',
+      attemptIndex: 0,
+      provider: 'liquid',
+      model: 'd1',
+      outcome: 'success',
+      status: 200,
+      classifierUsage: { inputTokens: 50, outputTokens: 5, estimatedCostUsd: 0.00002 },
+    },
+    { ...base, eventId: 'health', sequence: 4, profileIndex: 1, stage: 'health-update', outcome: 'success' },
+    {
+      ...base,
+      eventId: 'unused',
+      sequence: 5,
+      profileIndex: 2,
+      stage: 'configuration',
+      outcome: 'skipped',
+      skipReason: 'unreached',
+    },
+  ];
+  selectedRoot.nodeInvocationsByKey[classifier.key] = classifier;
+  selectedRoot.nodeInvocationOrder = [classifier.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+  const model = buildRunActivityViewModel(journal, () => ({ inspectable: true }));
+  const item = model.items[0]!;
+  assert.equal(item.category, 'model');
+  assert.equal(item.provider, 'liquid');
+  assert.equal(item.model, 'd1');
+  assert.equal(item.classifierRequestCount, 2);
+  assert.equal(item.modelCallCount, undefined);
+  assert.equal(item.hasErrors, true);
+  assert.equal(item.inspectable, true);
+  assert.equal(item.detailRows?.some((row) => row.value === 'No provider request was recorded') ?? false, false);
+  assert.match(item.children![0]!.secondaryText!, /HTTP 200/);
+  assert.match(item.children![0]!.secondaryText!, /1000 input \/ 0 output tokens/);
+  assert.equal(
+    item.children!.some((row) => row.secondaryText?.includes('round')),
+    false,
+  );
+  assert.equal(
+    filterRunActivityItems(model.items, { filter: 'llm-tools', graphId: '', query: 'Fast backup' }).length,
+    1,
+  );
+  assert.equal(filterRunActivityItems(model.items, { filter: 'errors', graphId: '', query: '' }).length, 1);
+  assert.equal(model.accounting?.classifierRequestCount, 2);
+  assert.equal(model.accounting?.promptTokens, 1050);
+  assert.equal(model.accounting?.completionTokens, 5);
+  assert.equal(model.accounting?.knownCostUsd, 0.00004 + 0.00002);
+  assert.equal(model.accounting?.costStatus, 'known');
+  selectedRoot.omittedNodeInvocationCount = 1;
+  const cappedRoot = buildRunActivityViewModel(journal, () => undefined).accounting!;
+  assert.equal(cappedRoot.incomplete, true);
+  assert.equal(cappedRoot.costStatus, 'partial');
+  assert.equal(cappedRoot.classifierRequestCount, 2);
+  assert.equal(cappedRoot.knownCostUsd, model.accounting?.knownCostUsd);
+  selectedRoot.omittedNodeInvocationCount = 0;
+  classifier.profileAttempts[1]!.classifierUsage = undefined;
+  assert.equal(buildRunActivityViewModel(journal, () => undefined).accounting?.costStatus, 'partial');
+  classifier.omittedProfileAttemptCount = 1;
+  assert.equal(buildRunActivityViewModel(journal, () => undefined).accounting?.incomplete, true);
+  classifier.profileAttempts = [];
+  const omitted = buildRunActivityViewModel(journal, () => undefined).accounting!;
+  assert.equal(omitted.incomplete, true);
+  assert.equal(omitted.costStatus, 'unknown');
+});
+
+test('omitted whole invocations never imply complete accounting even without retained calls', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  selectedRoot.omittedNodeInvocationCount = 1;
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+  const accounting = buildRunActivityViewModel(journal, () => undefined).accounting!;
+  assert.equal(accounting.incomplete, true);
+  assert.equal(accounting.costStatus, 'unknown');
+  assert.equal(accounting.knownCostUsd, 0);
+  assert.equal(accounting.modelCallCount, 0);
 });
 
 function root(rootRunId: RootRunId, sequence: number, status: RunActivityRoot['status']): RunActivityRoot {

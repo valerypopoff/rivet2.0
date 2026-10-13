@@ -31,6 +31,63 @@ Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It 
 
 ## Connection Mode
 
+Established non-warning ports use a subtly stronger gray fill from
+`--node-port-connected-bg`, mixed from the neutral fill and border so it adapts to
+both themes. Borders and labels stay neutral; connection presence controls the
+existing label emphasis and interaction state, not the active accent color.
+Connected-label emphasis uses opacity only; the retired accent-color token is
+removed rather than retaining unused theme overrides.
+Only the destination input gets a yellow fill and dark-yellow border when the declared
+output type needs coercion or is incompatible. Output ports never inherit warnings
+from their consumers.
+Warnings are advisory: they do not remove wires, block connection creation, affect
+execution, or add serialized metadata.
+
+`getConnectedInputWarnings(...)` reuses the drag compatibility checker and indexes
+each source's output definitions once per projection. `useInputConnectionWarnings`
+owns a component-local derived atom created by the canvas selector layer and subscribed
+to raw canvas endpoint definitions (types, not display-only Passthrough labels),
+including plugins, linked nodes and Subgraph boundaries. It uses the rendered
+surface's connections rather than importing active-graph edges into decorative
+Node library surfaces. Missing definitions remain neutral. Removing/rewiring an
+edge or changing either endpoint's settings recalculates the warning; no warning
+cache or new atom family needs lifecycle cleanup.
+
+The existing `PortInfo` hover popup explains yellow inputs using
+`getConnectedInputWarningDetails(...)`, the same projection that supplies warning
+IDs. It labels the connected source type as "Actual input" and shows the expected
+input type, distinguishing conversion ("Rivet will convert it") from incompatible
+types. These are declared types, not types inferred from execution values.
+The type row is labeled "Expected data type:" for inputs and "Data type:" for
+outputs; both labels include the colon and use a normal inline space before the
+value, not a grid-column gap. Generic "Input"/"Output" headings are omitted
+(case-insensitively); meaningful port names and IDs are retained.
+The popup fits its content within the viewport; removing the old fixed-width
+columns must not squeeze ordinary type values onto a second line.
+Names, descriptions and warning prose wrap at 350px, including unbroken IDs;
+the viewport cap includes padding and borders. The port heading and description
+sit outside the definition list, whose grouped rows pair each label with its value.
+The browser regression covers a long unbroken port name without truncation or
+horizontal overflow as well as the ordinary single-space type row.
+The hover-only derived atom follows live endpoint changes without a persistent
+cache. Missing definitions and compatible connections have no warning explanation.
+During a wire drag, the existing prospective-connection hints retain precedence.
+
+While dragging, unrelated established ports retain their gray or warning styling;
+connection presence alone must never apply active colors. Unconnected candidate
+inputs keep the preview borders: compatible green, coercible yellow, incompatible red.
+The current closest drop target takes precedence over an established warning while
+it is being considered for a new connection. The shared `Port` owns this precedence;
+regular, Loop, conditional and Data Bus presentations use its neutral connected
+styling. Data Bus output-count text likewise stays legible on a neutral port.
+Ordinary hover highlighting remains independent of connection warnings. The
+`port-connection-warnings.spec.ts` CI/browser scenario verifies real connection
+creation, disconnection and undo/redo as well as neutral idle colors and drag
+preview precedence and warning hover explanations, plus midpoint hover, selection
+and unselected dragging.
+Selector tests cover live types, linked sources, unavailable
+definitions, Subgraph boundary changes and self-connections without mutating wires.
+
 Connection mode survives canvas pan/zoom and keeps its pending wire attached to the
 pointer. It exits on successful connection, right-click canvas, consumed Escape, or
 click outside the canvas. Existing connections are removed only by the intended
@@ -39,6 +96,9 @@ left-click/reconnect path; right-click must not disconnect them.
 Wire hit testing uses a wider invisible interaction path rather than expensive
 geometry work in JavaScript. Bend points are graph connection metadata and older
 Rivet versions ignore them while still rendering the underlying connection.
+Persisted bend handles use neutral port fill/border colors unless selected, when
+they use the active fill/dark border. Hovering or dragging an unselected handle
+does not activate its color. Unselected creation ghosts are neutral too.
 
 Before a wire is created or rewired, `useDraggingWire` validates the complete
 proposed topology. It rejects any connection that would leave an enabled

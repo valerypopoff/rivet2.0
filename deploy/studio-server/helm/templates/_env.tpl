@@ -3,6 +3,26 @@
   value: {{ .Values.vault.dotenvFileName | quote }}
 {{- end -}}
 
+{{- define "rivet.env.legacyRestore" -}}
+{{- $root := .root -}}
+- name: RIVET_LEGACY_RESTORE_ENABLED
+  value: {{ ternary "1" "0" (and $root.Values.legacyRestore.enabled (eq $root.Values.workflowStorage.backend "managed") (not $root.Values.compatibility.legacyStartupSettingsFiles)) | quote }}
+- name: RIVET_LEGACY_RESTORE_INSTALLATION
+  value: {{ printf "%s/%s" $root.Release.Namespace $root.Release.Name | quote }}
+{{- if and (eq (default "" .profile) "control") $root.Values.legacyRestore.enabled (not $root.Values.compatibility.legacyStartupSettingsFiles) }}
+- name: RIVET_LEGACY_RESTORE_ROOT
+  value: /data/rivet-restore
+{{- if or (gt (int $root.Values.replicaCount.execution) 0) $root.Values.autoscaling.execution.enabled }}
+- name: RIVET_LEGACY_RESTORE_EXECUTION_READY_URL
+  value: {{ printf "http://%s:%v/readyz" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.executionServiceName" $root))) $root.Values.service.execution.port | quote }}
+{{- end }}
+{{- if $root.Values.hostedEvaluations.enabled }}
+- name: RIVET_LEGACY_RESTORE_EVALUATION_READY_URL
+  value: {{ printf "http://%s:%v/readyz" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.evaluationServiceName" $root))) $root.Values.service.evaluation.port | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "rivet.env.databasePool" -}}
 - name: RIVET_DEPLOYMENT_DATABASE_POOL_MAX
   value: {{ .Values.postgres.poolMaxPerApiPod | quote }}
@@ -19,6 +39,7 @@
 {{ include "rivet.env.databasePool" $root }}
 - name: RIVET_DEPLOYMENT_TOPOLOGY
   value: "replicated"
+{{ include "rivet.env.legacyRestore" (dict "root" $root "profile" (default "" .profile)) }}
 - name: RIVET_APP_DATA_ROOT
   value: {{ $appDataRoot | quote }}
 - name: RIVET_DEPLOYMENT_STORAGE_MODE
@@ -158,12 +179,11 @@
 
 {{- define "rivet.env.apiWorkload" -}}
 {{- $root := .root -}}
-{{- include "rivet.env.vaultDotenv" $root }}
-{{ include "rivet.env.databasePool" $root }}
 - name: PORT
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
+{{ include "rivet.env.deploymentStorageBootstrap" (dict "root" $root "profile" .profile) }}
 {{- if eq .profile "control" }}
 - name: RIVET_PROJECT_BUNDLE_SCRATCH_ROOT
   value: /data/project-bundles
@@ -172,10 +192,10 @@
 - name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL
   value: {{ printf "http://%s:%v/internal/workflows-latest" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.apiServiceName" $root))) $root.Values.service.api.port | quote }}
 {{- end }}
-- name: RIVET_DEPLOYMENT_TOPOLOGY
-  value: "replicated"
 - name: RIVET_HOSTED_EVALUATIONS_ENABLED
   value: {{ $root.Values.hostedEvaluations.enabled | quote }}
+- name: RIVET_RELEASE_MAINTENANCE
+  value: {{ $root.Values.workflowSchema.maintenanceValidation | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY
   value: {{ $root.Values.hostedEvaluations.workerConcurrency | quote }}
 - name: RIVET_HOSTED_EVALUATIONS_LEASE_MS
@@ -192,8 +212,6 @@
   value: /workspace
 - name: RIVET_WORKFLOWS_ROOT
   value: /workflows
-- name: RIVET_APP_DATA_ROOT
-  value: /data/rivet-app
 - name: RIVET_RUNTIME_LIBRARIES_ROOT
   value: /data/runtime-libraries
 - name: RIVET_RUNTIME_PROCESS_ROLE
@@ -201,7 +219,7 @@
 - name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER
   value: {{ .replicaTier | quote }}
 - name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED
-  value: {{ .jobWorkerEnabled | quote }}
+  value: {{ if $root.Values.workflowSchema.maintenanceValidation }}"false"{{ else }}{{ .jobWorkerEnabled | quote }}{{ end }}
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MODE
   value: verify
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION
@@ -209,7 +227,7 @@
 - name: RIVET_DEPLOYMENT_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION
   value: {{ $root.Values.workflowSchema.compatibility.maximumVersion | quote }}
 - name: RIVET_MANAGED_MAINTENANCE_ENABLED
-  value: {{ if eq .profile "control" }}"true"{{ else }}"false"{{ end }}
+  value: {{ if and (eq .profile "control") (not $root.Values.workflowSchema.maintenanceValidation) }}"true"{{ else }}"false"{{ end }}
 - name: RIVET_MANAGED_MAINTENANCE_INTERVAL_MS
   value: {{ $root.Values.managedMaintenance.intervalMs | quote }}
 - name: RIVET_MANAGED_MAINTENANCE_LEASE_MS
@@ -244,7 +262,7 @@
 - name: RIVET_DEPLOYMENT_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS
   value: {{ $root.Values.publishedExecutionAdmission.retryAfterSeconds | quote }}
 {{- end }}
-{{ include "rivet.env.appSettings" $root }}
+{{ include "rivet.env.appSettings" (dict "root" $root "includeDatabase" false) }}
 {{ include "rivet.env.authKey" $root }}
 {{ include "rivet.env.globalValues" $root }}
 {{- end -}}
@@ -252,6 +270,7 @@
 {{- define "rivet.env.executorWorkload" -}}
 {{- $root := .root -}}
 {{- include "rivet.env.vaultDotenv" $root }}
+{{ include "rivet.env.legacyRestore" (dict "root" $root) }}
 - name: PORT
   value: {{ .port | quote }}
 - name: HOME

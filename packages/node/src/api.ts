@@ -580,6 +580,7 @@ function createNodeProcessContext(
         openAiApiKey: executionEnvironment.OPENAI_API_KEY ?? '',
         anthropicApiKey: executionEnvironment.ANTHROPIC_API_KEY ?? '',
         googleApiKey: executionEnvironment.GOOGLE_GENERATIVE_AI_API_KEY ?? '',
+        openRouterApiKey: executionEnvironment.OPENROUTER_API_KEY ?? '',
         customAiApiKey: executionEnvironment.CUSTOM_PROVIDER_API_KEY ?? executionEnvironment.CUSTOM_AI_API_KEY ?? '',
         openAiOrganization: executionEnvironment.OPENAI_ORG_ID ?? '',
       },

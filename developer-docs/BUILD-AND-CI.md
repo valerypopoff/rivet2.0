@@ -1041,7 +1041,8 @@ of the tracked cache, and the next `--immutable-cache` install will fail before
 tests start.
 
 The documentation stack uses `image-size` while reading checked-in image assets.
-Root `resolutions` applies the checked-in `image-size` patch because its Node 22
+Root `resolutions` pins `image-size` 2.0.4, fixing the ICNS/JXL/HEIF parser loops,
+and applies the checked-in PnP patch because its Node 22
 file-handle path reads incorrectly from a Yarn zip archive. Keep the patch and
 resolution together unless the package removes that PnP incompatibility; this no
 longer requires `dependenciesMeta` or an unplugged package copy.
@@ -1073,12 +1074,43 @@ validates policy rather than a frozen advisory count, so a newly published high
 finding or a new unreviewed dependent fails CI even when lower-severity counts
 change.
 
-The `image-size` documentation-only exception tracks the current advisory IDs
-for the unpatched ICNS and JXL/HEIF parser-loop findings. If the registry
-reissues these findings under new IDs, review the advisory contents and direct
-dependent before replacing the old IDs; unused exceptions are intentionally
-fatal so stale waivers cannot accumulate. This exception does not cover image
-parsing in a running Rivet service.
+The October 2026 CI repair replaces six obsolete exceptions with pinned upstream
+fixes: Babel SystemJS 7.29.8, React Router's path-to-regexp 1.9.0, Picomatch 2.3.2,
+serialize-javascript 7.1.2, pkg-fetch's tar-fs 2.1.5, and image-size 2.0.4. The
+overrides preserve the consumers' APIs; serialization's newer major remains
+CommonJS-compatible on the repository's supported Node 22+ runtime. Check the
+documentation production build when refreshing its webpack/Babel dependencies.
+
+Only two temporary JavaScript exceptions remain, both backed by local Yarn
+security patches because no verified upstream fix is available. They are not
+approvals to execute the original vulnerable code:
+
+- `braces` 3.0.3 limits nesting to 256 levels in its parser and compile, expand,
+  and stringify AST walkers. The limit cannot be overridden by caller options.
+  This deliberately rejects extreme nesting, while ordinary watcher patterns
+  and brace expansion retain their behavior.
+- `http-cache-semantics` 4.2.0 synchronously revalidates zero-lifetime responses
+  before honoring `max-stale` or stale-while-revalidate. This prevents security-
+  zeroed cookies/private/no-store/no-cache/proxy-revalidate responses from being
+  revived. Ordinary fresh and positive-lifetime stale public caching is retained;
+  zero-TTL public entries conservatively revalidate too.
+
+Yarn still reports the underlying versions for patched packages. The exceptions
+are restricted to their existing docs/build ancestry, record the actual
+mitigation, and expire on 2026-11-01 for upstream re-review. The unchanged audit
+gate still rejects new runtime consumers, expired or unused exceptions, and
+every critical finding. Remove a patch and its exception together only when a
+replacement passes the same consumer-level regression tests.
+Patch files retain LF endings. Their unified-diff format requires a single
+context-marker space on empty context lines; the path-scoped Git whitespace
+attribute recognizes that format without relaxing source-file whitespace checks.
+
+`dependency-security-regressions.test.mjs` exercises these patches through
+Docusaurus and both executor watcher paths, not a root library copy. Parser
+attacks run in disposable children with a 15-second timeout so an infinite-loop
+regression fails instead of hanging CI. It covers deeply nested patterns and
+caller-supplied ASTs, serialized HTTP cache policies, security-zeroed entries,
+normal expansion/caching, malformed image containers and ordinary PNG reads.
 
 An exception for a parser used only by a build tool must state that the input is
 repository-controlled and identify the owning toolchain. An exception for a
@@ -1423,8 +1455,37 @@ The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounde
 retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
 They run on every host; actual `hdiutil`/`plutil` execution and finished-package
 verification require the native macOS release jobs.
+Developer release run 38370519350 exposed a separate earlier boundary: Tauri's
+own app stapling lost its Apple CloudKit connection (-1005) after notarization
+was accepted. Tauri wraps native stapler exit 68 as build exit 1. The build
+helper now also recognizes that exact combination: confirmed
+`Finished with status Accepted`, `failed to staple app`,
+`The staple and validate action failed! Error 68.`, and one of the existing
+explicit transient Apple network codes. It reuses the stapler classifier and
+the same bounded full-build retry/cleanup path; it does not treat arbitrary
+exit 1/68, certificate errors or uncertain notarization submission as retryable.
+Unlike the final-DMG retry below, this can repeat app signing/notarization through
+Tauri. All signing, stapling, packaged-executor and release validation still run.
+Regression tests cover the wrapped failure, permanent lookalikes and exhaustion.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
+
+DMG ticket retrieval has a separate, narrower retry boundary in
+[`.github/scripts/staple-macos-dmg.mjs`](../.github/scripts/staple-macos-dmg.mjs).
+Developer release run 38320930955 accepted the Intel DMG, then failed stapling
+with exit 68 and an Apple `NSURLErrorDomain` connection-loss error (-1005).
+The notarization script still signs and submits the DMG exactly once; only the
+subsequent ticket retrieval is retried against those same bytes. At most three
+stapler attempts run, separated by 5 and 15 seconds, with a two-minute timeout
+and bounded output per command. Retry requires both exit 68 and an explicit
+Apple network timeout, connection failure/loss or offline error (-1001, -1004,
+-1005, -1009). Exit 68 alone, missing/invalid tickets, certificate trust errors,
+rejected submissions and all unknown failures remain failures. Exhaustion retains
+the final failure status. The following native signing/Gatekeeper/stapler validation
+step and publication prerequisites are unchanged; retry never skips verification
+or resubmits an uncertain notarization request. Behavioral regression tests are
+enrolled in `test:style`; actual ticket retrieval and final DMG acceptance still
+require the macOS release runners.
 
 The reusable workflow retains the existing rolling GitHub Release feeds and
 `official-release.json`/`developer-release.json` download-page contract, now

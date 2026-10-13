@@ -2818,7 +2818,9 @@
         {
           "path": "packages/studio-server-api/src/runtime-libraries/managed/job-stream.ts",
           "migrationMode": "100644",
-          "migrationBlob": "2a24bf06c4904e34750774839382b74193d5481e"
+          "migrationBlob": "2a24bf06c4904e34750774839382b74193d5481e",
+          "currentPath": "packages/studio-server-api/src/routes/runtime-library-job-stream.ts",
+          "currentReason": "Runtime-library observation is backend-neutral; the HTTP adapter owns SSE connections separately from durable jobs."
         }
       ]
     },
@@ -5568,7 +5570,9 @@
         {
           "path": "packages/studio-server-web/dashboard/useEditorCommandQueue.ts",
           "migrationMode": "100644",
-          "migrationBlob": "4b0e46a210b9a0694bfa5d05e0c0aa486d7bd455"
+          "migrationBlob": "4b0e46a210b9a0694bfa5d05e0c0aa486d7bd455",
+          "currentPath": "packages/studio-server-web/dashboard/useEditorBridgeSession.ts",
+          "currentReason": "The bounded editor bridge session owns command delivery, acknowledgement, expiry and editor replacement."
         }
       ]
     },

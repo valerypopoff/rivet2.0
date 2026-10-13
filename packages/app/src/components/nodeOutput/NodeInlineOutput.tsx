@@ -34,7 +34,7 @@ import {
 import { overlayOpenState } from '../../state/ui.js';
 import { Tooltip } from '../Tooltip.js';
 import { AgentResponseInspector } from '../agentTrace/AgentResponseInspector.js';
-import { buildLlmInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
+import { buildModelInvocationTrace, hasModelResponseInspector } from '../agentTrace/agentTraceViewModel.js';
 import { CodeNodeErrorOutput } from '../nodes/CodeNode.js';
 import {
   getNodeOutputContentKey,
@@ -197,7 +197,12 @@ const LiveStreamingInputPreview: FC<{
       <div className="live-streaming-input-preview-description">
         Preview only — this node runs after the response is complete.
       </div>
-      <RenderDataOutputs definitions={io.inputDefinitions} outputs={preview} isCompact={false} mode="expanded-preview" />
+      <RenderDataOutputs
+        definitions={io.inputDefinitions}
+        outputs={preview}
+        isCompact={false}
+        mode="expanded-preview"
+      />
     </div>
   );
 };
@@ -239,7 +244,8 @@ const NodeOutputSingleProcess: FC<{
   const setPromptDesignerAttachedNode = useSetAtom(promptDesignerAttachedChatNodeState);
   const io = useNodeIO(node.id);
   const presentationData = useMemo(
-    () => (node.type === 'llmChatV2' ? getLLMChatSplitOutputHistoryPresentationData(data, node.isSplitRun === true) : data),
+    () =>
+      node.type === 'llmChatV2' ? getLLMChatSplitOutputHistoryPresentationData(data, node.isSplitRun === true) : data,
     [data, node.isSplitRun, node.type],
   );
   const hasSplitOutputData = presentationData.splitOutputData != null;
@@ -288,8 +294,8 @@ const NodeOutputSingleProcess: FC<{
   );
   const hasPromptDesignerAction =
     node.type === 'llmChatV2' && (node as LLMChatV2Node).data.configurationMode !== 'profile';
-  const hasResponseInspectorAction = node.type === 'llmChatV2';
-  const responseTrace = useMemo(() => buildLlmInvocationTrace(node, processData), [node, processData]);
+  const hasResponseInspectorAction = hasModelResponseInspector(node);
+  const responseTrace = useMemo(() => buildModelInvocationTrace(node, processData), [node, processData]);
   const responseInspector = isInspectorOpen ? (
     <AgentResponseInspector trace={responseTrace} onClose={() => setInspectorOpen(false)} renderInPortal />
   ) : null;

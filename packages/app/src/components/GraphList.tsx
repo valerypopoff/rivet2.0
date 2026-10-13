@@ -1,6 +1,16 @@
 import { DndContext, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { css } from '@emotion/react';
-import { type FC, type KeyboardEvent, type MouseEvent, type PointerEvent, memo, useMemo, useRef, useState, type SVGProps } from 'react';
+import {
+  type FC,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  memo,
+  useMemo,
+  useRef,
+  useState,
+  type SVGProps,
+} from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
@@ -447,7 +457,7 @@ const styles = css`
     height: 14px;
     flex-shrink: 0;
     color: currentColor;
-    transform: translateY(-1px);
+    transform: translateY(2px);
   }
 
   .graph-main-icon {
@@ -471,6 +481,10 @@ const styles = css`
     line-height: 1.2;
     text-align: center;
     transform: translateY(1px);
+  }
+
+  .folder-graph-item .graph-folder-count {
+    transform: translateY(-1px);
   }
 
   .graph-folder-count > span {

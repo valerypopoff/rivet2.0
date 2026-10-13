@@ -1063,7 +1063,7 @@ test('local catalog retries exactly, rejects drift, extra rows, and route collis
     await assert.rejects(catalog.verifyExact(['folder'], []), /project set differs/);
     await assert.rejects(
       catalog.importProject(project({ workflowId: 'second-id', relativePath: 'second.rivet-project' })),
-      /UNIQUE constraint failed/,
+      { status: 409, code: 'workflow_destination_conflict' },
     );
     assert.deepEqual(catalog.listProjectPaths(), [source.relativePath]);
     await catalog.verifyExact(['folder'], [source]);
@@ -1449,7 +1449,7 @@ test('local catalog rolls back a failed project update without changing the rout
           publishedWebApps: [],
         }),
       ),
-      /UNIQUE constraint failed/,
+      { status: 409, code: 'workflow_destination_conflict' },
     );
     assert.deepEqual(await catalog.readProject(before.relativePath), before);
     assert.deepEqual(await catalog.readProject(other.relativePath), other);

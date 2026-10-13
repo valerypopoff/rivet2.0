@@ -1,4 +1,9 @@
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { assertPortableRuntimeTree } from '../legacy-restore/native-runtime.js';
+import { withLocalSourceBudget, localSourceBundleLimit } from '../local-metadata/source-budget.js';
+import { LocalUpgradeDiagnosticError } from '../local-metadata/upgrade-diagnostics.js';
+import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -6,7 +11,6 @@ import { config as loadDotEnv } from 'dotenv';
 import { Pool } from 'pg';
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 
-import type { WorkflowRecordingWorkflowSummary } from '../../../studio-server-shared/workflow-recording-types.js';
 import { listWorkflowFolders } from '../routes/workflows/workflow-query.js';
 import { getWorkflowRecordingMetadataPath } from '../routes/workflows/fs-helpers.js';
 import {
@@ -31,12 +35,22 @@ import { initializeFilesystemProjectTransactions } from '../routes/workflows/fil
 import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
 import type { VmMigrationVerificationReport } from '../vm-migration-service.js';
 import { collectSourceAppSettings, migrateAppSettings } from './migrate-app-settings.js';
-import { migrateOperationalSqlite } from './migrate-operational-sqlite.js';
-import { migrateRuntimeLibraries } from './migrate-runtime-libraries.js';
+import { migrateOperationalSqlite, validateOperationalMigrationSource } from './migrate-operational-sqlite.js';
+import {
+  migrateRuntimeLibraries,
+  readSourceManifest,
+  validateRuntimeLibraryDirectory,
+  assertRuntimeLibraryArchiveSpace,
+} from './migrate-runtime-libraries.js';
 import { createPrecopyAwareMigrationBlobStore, precopyMigrationTexts } from './migration-precopy.js';
 import { fingerprintVmMigrationSourceParts, readVmMigrationSourceParts } from './vm-migration-source-manifest.js';
 import { recordMigrationProgress } from './migration-progress.js';
-import { collectSourceWorkflows, type SourceWorkflow } from '../local-metadata/filesystem-workflow-source.js';
+import {
+  collectSourceWorkflows,
+  iterateSourceWorkflows,
+  type SourceWorkflow,
+} from '../local-metadata/filesystem-workflow-source.js';
+import { iterateSourceRecordings } from '../local-metadata/filesystem-recording-source.js';
 import { SqliteMigrationSource } from './sqlite-migration-source.js';
 import {
   acquireVmMigrationImporterLock,
@@ -79,8 +93,6 @@ function loadNearestEnvFile(startDir: string): void {
     currentDir = parentDir;
   }
 }
-
-loadNearestEnvFile(process.cwd());
 
 function getSourceRoot(): string {
   const cliSourceRoot = process.argv.find((arg) => arg.startsWith('--source-root='))?.slice('--source-root='.length);
@@ -290,7 +302,12 @@ async function importSourceRecordings(
     const pageSize = 100;
     while (true) {
       const runsPage = native
-        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, pageSize, 'all')
+        ? await native.workflows.listWorkflowRecordingRunsPage({
+            workflowId: sourceWorkflow.workflowId,
+            page: page,
+            pageSize: pageSize,
+            statusFilter: 'all',
+          })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
       for (const run of runsPage.runs) {
         const readArtifact = (artifact: 'recording' | 'replay-project' | 'replay-dataset') =>
@@ -395,7 +412,7 @@ async function verifyMigration(
   const [sourceFolders, sourceWorkflows, sourceRecordingWorkflows, targetTree, targetRecordingWorkflows] =
     await Promise.all([
       native ? native.workflows.getTree().then((tree) => tree.folders) : listWorkflowFolders(root),
-      native ? native.projectHeaders() : collectSourceWorkflows(root),
+      native ? native.projectHeaders() : readFilesystemProjectHeaders(root),
       native ? native.workflows.listWorkflowRecordingWorkflows() : listWorkflowRecordingWorkflows(root),
       backend.getTree(),
       backend.listWorkflowRecordingWorkflows(),
@@ -444,7 +461,7 @@ async function verifyMigration(
     targetRecordingState,
   });
 
-  for await (const source of native ? native.projects() : (sourceWorkflows as SourceWorkflow[])) {
+  for await (const source of native ? native.projects() : iterateSourceWorkflows(root)) {
     assertWorkflowSnapshotMatches(source, await backend.readWorkflowMigrationSnapshot(source.relativePath));
     if (source.publishedEndpointName) {
       const resolved = await backend.loadPublishedExecutionProject(source.publishedEndpointName);
@@ -485,9 +502,19 @@ async function verifyMigration(
       throw new Error(`Managed recording workflow is missing: ${sourceWorkflow.project.relativePath}`);
     for (let page = 1; ; page += 1) {
       const sourceRuns = native
-        ? await native.workflows.listWorkflowRecordingRunsPage(sourceWorkflow.workflowId, page, 100, 'all')
+        ? await native.workflows.listWorkflowRecordingRunsPage({
+            workflowId: sourceWorkflow.workflowId,
+            page: page,
+            pageSize: 100,
+            statusFilter: 'all',
+          })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, 100, 'all');
-      const targetRuns = await backend.listWorkflowRecordingRunsPage(targetWorkflow.workflowId, page, 100, 'all');
+      const targetRuns = await backend.listWorkflowRecordingRunsPage({
+        workflowId: targetWorkflow.workflowId,
+        page: page,
+        pageSize: 100,
+        statusFilter: 'all',
+      });
       if (sourceRuns.runs.length !== targetRuns.runs.length) {
         throw new Error(`Managed recording page differs for ${sourceWorkflow.project.relativePath}`);
       }
@@ -541,7 +568,128 @@ async function verifyMigration(
   return summary;
 }
 
+export type LegacyRestoreRoots = { workflows: string; recordings: string; appData: string; runtimeLibraries: string };
+
+/** Retain only cross-domain identity/route metadata, never full project histories. */
+async function readFilesystemProjectHeaders(root: string) {
+  const headers: Array<
+    Pick<SourceWorkflow, 'workflowId' | 'relativePath' | 'endpointName' | 'lastPublishedAt' | 'endpointStatus'>
+  > = [];
+  for await (const workflow of iterateSourceWorkflows(root)) {
+    const { workflowId, relativePath, endpointName, lastPublishedAt, endpointStatus } = workflow;
+    headers.push({ workflowId, relativePath, endpointName, lastPublishedAt, endpointStatus });
+  }
+  return headers.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+/** Complete non-mutating source preflight, shared by UI restore and its worker. */
+export async function prepareLegacyRestoreSource(
+  roots: LegacyRestoreRoots,
+  target: ManagedWorkflowStorageConfig,
+  options: { runtimePlatformValidated?: boolean } = {},
+) {
+  enableWorkflowRecordingMigrationCopyMode();
+  const workflows = await readFilesystemProjectHeaders(roots.workflows);
+  let recordings = 0;
+  // Use the bounded authoritative reader, not the serving index/normalizer.
+  // Missing project owners, duplicate run IDs and gzip bombs must fail before deletion.
+  for await (const _recording of iterateSourceRecordings(roots.recordings, workflows)) recordings++;
+  const settings = await collectSourceAppSettings(roots.appData, target);
+  await validateOperationalMigrationSource(roots.appData);
+  const manifest = await readSourceManifest(roots.runtimeLibraries);
+  if (Object.keys(manifest.packages).length) {
+    if (!options.runtimePlatformValidated)
+      await assertPortableRuntimeTree(path.join(roots.runtimeLibraries, 'current'));
+    await validateRuntimeLibraryDirectory(path.join(roots.runtimeLibraries, 'current'));
+    const archiveAllowance = await assertRuntimeLibraryArchiveSpace(
+      path.join(roots.runtimeLibraries, 'current'),
+      path.dirname(roots.runtimeLibraries),
+    );
+    if (archiveAllowance > BigInt(localSourceBundleLimit()))
+      throw new LocalUpgradeDiagnosticError('source-bundle-limit');
+  }
+  return {
+    projects: workflows.length,
+    recordings,
+    runtimePackages: Object.keys(manifest.packages).length,
+    settings,
+    sourceManifest: fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)),
+  };
+}
+
+/** Restore uses the same per-domain importer and exact verifier, not an alternate graph/settings parser. */
+export async function importLegacyRestoreSource(options: {
+  roots: LegacyRestoreRoots;
+  target: ManagedWorkflowStorageConfig;
+  encryptionKey: string;
+  settings: readonly import('./migrate-app-settings.js').SettingsRow[];
+  sourceManifest: string;
+  verifyOnly: boolean;
+}) {
+  const { roots, target, verifyOnly } = options;
+  enableWorkflowRecordingMigrationCopyMode();
+  if (fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)) !== options.sourceManifest)
+    throw new Error('Prepared restore source changed.');
+  // UI restore replaces data in an initialized installation. Only the deployment
+  // migration Job may migrate its schema; serving pods must verify it instead.
+  const backend = new ManagedWorkflowBackend(target, undefined, { migrationMode: verifyOnly ? 'verify' : 'restore' });
+  const gatePool = new Pool(getManagedDbPoolConfig(target));
+  const releaseGate = await acquireVmMigrationImporterLock(gatePool);
+  const sourceIdentity = migrationSourceIdentity([
+    roots.workflows,
+    roots.appData,
+    roots.recordings,
+    roots.runtimeLibraries,
+  ]);
+  const targetIdentity = migrationTargetIdentity(target);
+  try {
+    if (!verifyOnly) {
+      await beginVmMigrationTarget(gatePool, sourceIdentity, targetIdentity);
+      await bindVmMigrationSourceManifest(gatePool, sourceIdentity, targetIdentity, options.sourceManifest);
+    }
+    await backend.initialize();
+    if (!verifyOnly) {
+      await importSourceFolders(roots.workflows, backend);
+      const projects = await importSourceWorkflows(iterateSourceWorkflows(roots.workflows), backend);
+      await importSourceRecordings(roots.workflows, backend, projects);
+    }
+    const summary = await verifyMigration(roots.workflows, backend);
+    await migrateOperationalSqlite({ sourceAppDataRoot: roots.appData, target, verifyOnly });
+    await withLocalSourceBudget(() =>
+      migrateRuntimeLibraries({
+        sourceRoot: roots.runtimeLibraries,
+        target,
+        verifyOnly,
+        platformValidated: true,
+        artifactTemporaryDirectory: path.dirname(roots.runtimeLibraries),
+      }),
+    );
+    await migrateAppSettings({
+      sourceRoot: roots.appData,
+      target,
+      encryptionKey: options.encryptionKey,
+      verifyOnly,
+      preparedRows: options.settings,
+    });
+    if (fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)) !== options.sourceManifest)
+      throw new Error('Restore source changed during import.');
+    if (verifyOnly) await verifyVmMigrationTargetGate(gatePool, sourceIdentity, targetIdentity);
+    return summary;
+  } finally {
+    try {
+      await backend.dispose();
+    } finally {
+      try {
+        await releaseGate();
+      } finally {
+        await gatePool.end();
+      }
+    }
+  }
+}
+
 async function main() {
+  loadNearestEnvFile(process.cwd());
   const command = process.argv[2];
   if (command !== 'precopy' && command !== 'migrate' && command !== 'verify' && command !== 'freeze-source') {
     throw new Error('Expected migration command: freeze-source, precopy, migrate or verify.');
@@ -836,31 +984,32 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const databasePassword = (() => {
-    try {
-      return new URL(process.env.RIVET_MIGRATION_TARGET_DATABASE_URL ?? '').password;
-    } catch {
-      return '';
-    }
-  })();
-  const decodedDatabasePassword = (() => {
-    try {
-      return decodeURIComponent(databasePassword);
-    } catch {
-      return databasePassword;
-    }
-  })();
-  const secrets = [
-    process.env.RIVET_MIGRATION_TARGET_DATABASE_URL,
-    databasePassword,
-    decodedDatabasePassword,
-    process.env.RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID,
-    process.env.RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY,
-    process.env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
-  ].filter((secret): secret is string => Boolean(secret));
-  const redacted = secrets.reduce((value, secret) => value.replaceAll(secret, '[redacted]'), message);
-  console.error(`[workflow-storage] Migration failed: ${redacted}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const databasePassword = (() => {
+      try {
+        return new URL(process.env.RIVET_MIGRATION_TARGET_DATABASE_URL ?? '').password;
+      } catch {
+        return '';
+      }
+    })();
+    const decodedDatabasePassword = (() => {
+      try {
+        return decodeURIComponent(databasePassword);
+      } catch {
+        return databasePassword;
+      }
+    })();
+    const secrets = [
+      process.env.RIVET_MIGRATION_TARGET_DATABASE_URL,
+      databasePassword,
+      decodedDatabasePassword,
+      process.env.RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID,
+      process.env.RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY,
+      process.env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+    ].filter((secret): secret is string => Boolean(secret));
+    const redacted = secrets.reduce((value, secret) => value.replaceAll(secret, '[redacted]'), message);
+    console.error(`[workflow-storage] Migration failed: ${redacted}`);
+    process.exit(1);
+  });

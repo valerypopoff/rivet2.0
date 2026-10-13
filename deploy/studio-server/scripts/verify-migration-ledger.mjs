@@ -82,6 +82,22 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-api/src/runtime-libraries/managed/job-stream.ts',
+    {
+      path: 'packages/studio-server-api/src/routes/runtime-library-job-stream.ts',
+      reason:
+        'Runtime-library observation is backend-neutral; the HTTP adapter owns SSE connections separately from durable jobs.',
+    },
+  ],
+  [
+    'packages/studio-server-web/dashboard/useEditorCommandQueue.ts',
+    {
+      path: 'packages/studio-server-web/dashboard/useEditorBridgeSession.ts',
+      reason:
+        'The bounded editor bridge session owns command delivery, acknowledgement, expiry and editor replacement.',
+    },
+  ],
+  [
     'packages/studio-server-web/tests/hosted-fonts.test.ts',
     {
       path: 'packages/studio-server-web/playwright-observe/hosted-dashboard-contracts.spec.ts',

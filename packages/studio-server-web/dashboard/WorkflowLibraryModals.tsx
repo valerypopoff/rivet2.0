@@ -6,6 +6,7 @@ import { PublishedItemsModal } from './PublishedItemsModal';
 import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
+import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -67,6 +68,14 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleUploadFolder ? (
+        <WorkflowBundleUploadModal
+          key={controller.bundleUploadFolder.id}
+          folder={controller.bundleUploadFolder}
+          onClose={controller.closeBundleUpload}
+          onImported={controller.handleBundleImported}
+        />
+      ) : null}
       {controller.bundleProject ? (
         <WorkflowProjectBundleModal
           key={controller.bundleProject.id}
@@ -79,6 +88,7 @@ export const WorkflowLibraryModals: FC<{
         suppressed={
           scheduledRunsOpen ||
           controller.bundleOpen ||
+          controller.bundleUploadFolder != null ||
           appSettingsOpen ||
           settingsModalOpen ||
           runRecordingsOpen ||

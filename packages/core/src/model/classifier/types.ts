@@ -1,4 +1,22 @@
 export type ClassifierQuestionType = 'choice' | 'score' | 'noul';
+/** Secret-free classification used by fallback diagnostics and recording traces. */
+export const classifierFailureKinds = [
+  'configuration',
+  'capability',
+  'authentication',
+  'transport',
+  'http',
+  'timeout',
+  'response-parsing',
+  'response-validation',
+] as const;
+export type ClassifierFailureKind = (typeof classifierFailureKinds)[number];
+/** Safe provider-reported receipt accounting; absent usage/cost is unknown, not zero. */
+export type ClassifierAttemptUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd?: number;
+};
 export type ClassifierEntryEditorType = 'text' | 'lines' | 'object';
 
 export type ClassifierStructuredValue =

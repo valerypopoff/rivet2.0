@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { legacyServingFixtureEntrypoint } from './lib/legacy-serving-fixture.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const fixturePath = path.join(
@@ -144,7 +145,36 @@ async function main() {
     .replace(/[^a-z0-9_-]/g, '-');
   const port = await getAvailablePort();
   const key = `candidate-smoke-${process.env.GITHUB_RUN_ID ?? process.pid}`;
-  const composeArgs = ['compose', '-p', projectName, '-f', 'deploy/studio-server/compose/docker-compose.yml'];
+  const fixtureEntrypoint = path.join(tempRoot, 'legacy-api-entrypoint.sh');
+  await fs.writeFile(
+    fixtureEntrypoint,
+    legacyServingFixtureEntrypoint(
+      await fs.readFile(path.join(rootDir, 'deploy/studio-server/images/api/entrypoint.sh'), 'utf8'),
+    ),
+    { mode: 0o755 },
+  );
+  const fixtureOverride = path.join(tempRoot, 'legacy-fixture.json');
+  await fs.writeFile(
+    fixtureOverride,
+    JSON.stringify({
+      services: {
+        api: {
+          volumes: [
+            { type: 'bind', source: fixtureEntrypoint, target: '/opt/rivet/api-entrypoint.sh', read_only: true },
+          ],
+        },
+      },
+    }),
+  );
+  const composeArgs = [
+    'compose',
+    '-p',
+    projectName,
+    '-f',
+    'deploy/studio-server/compose/docker-compose.yml',
+    '-f',
+    fixtureOverride,
+  ];
   const directories = {
     workflows: path.join(tempRoot, 'workflows'),
     recordings: path.join(tempRoot, 'recordings'),

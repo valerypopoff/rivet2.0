@@ -842,7 +842,7 @@ const drawerStyles = css`
 
 const FILTERS: ReadonlyArray<{ value: RunActivityFilter; label: string }> = [
   { value: 'all', label: 'All' },
-  { value: 'llm-tools', label: 'LLM and tools' },
+  { value: 'llm-tools', label: 'Models and tools' },
   { value: 'errors', label: 'Errors' },
 ];
 
@@ -1575,6 +1575,7 @@ const ActivityDetails: FC<{ item: RunActivityItemViewModel }> = ({ item }) => {
     item.model && { label: 'Model', value: item.model },
     item.toolName && { label: 'Tool', value: item.toolName },
     item.modelCallCount != null && { label: 'Model calls', value: String(item.modelCallCount) },
+    item.classifierRequestCount != null && { label: 'Classifier requests', value: String(item.classifierRequestCount) },
     item.toolCallCount != null && { label: 'Tool calls', value: String(item.toolCallCount) },
     item.splitCount != null && { label: 'Split results', value: String(item.splitCount) },
     ...(item.detailRows ?? []),
@@ -1640,7 +1641,7 @@ function getEmptyStateMessage(
   if (totalItemCount === 0) return 'Run a graph to see its activity.';
   if (query.trim()) return 'No activity metadata matches this search.';
   if (graphFilter) return 'No activity in this graph matches the selected type.';
-  if (filter === 'llm-tools') return 'No LLM or tool activity was recorded in this run.';
+  if (filter === 'llm-tools') return 'No model or tool activity was recorded in this run.';
   if (filter === 'errors') return 'No errors were recorded in this run.';
   return 'No activity matches the current filters.';
 }
@@ -1654,6 +1655,11 @@ function formatAccounting(accounting: NonNullable<RunActivityViewModel['accounti
     `${accounting.modelCallCount} model ${accounting.modelCallCount === 1 ? 'call' : 'calls'}`,
     `${accounting.toolCallCount} tool ${accounting.toolCallCount === 1 ? 'call' : 'calls'}`,
   ];
+  if (accounting.classifierRequestCount != null) {
+    parts.push(
+      `${accounting.classifierRequestCount} classifier ${accounting.classifierRequestCount === 1 ? 'request' : 'requests'}`,
+    );
+  }
   if (accounting.promptTokens != null || accounting.completionTokens != null) {
     parts.push(`${accounting.promptTokens ?? 0} in / ${accounting.completionTokens ?? 0} out tokens`);
   }
@@ -1665,6 +1671,7 @@ function formatAccounting(accounting: NonNullable<RunActivityViewModel['accounti
   if (accounting.costStatus !== 'unknown') {
     parts.push(`$${accounting.knownCostUsd.toFixed(6)}${accounting.costStatus === 'partial' ? ' partial' : ''}`);
   }
+  if (accounting.incomplete) parts.push('retained evidence only');
   return parts.join(' · ');
 }
 

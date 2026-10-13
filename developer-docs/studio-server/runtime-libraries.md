@@ -4,6 +4,51 @@ Managed runtime libraries let hosted Rivet `Code` nodes `require()` packages tha
 
 The dashboard exposes this through `Settings` -> `Runtime libraries`.
 
+## Ownership and job observation
+
+Legacy-backup restore reuses the managed npm installer in a private preparation
+tree before destructive confirmation. Native releases use the archived npm lock
+to reinstall target-platform optional binaries without running archive/dependency
+scripts or exposing server secrets; portable releases remain byte-preserving.
+The prepared tree is fingerprinted, retained for retries and bound to OS/CPU,
+Node ABI/version and libc identity. See
+[restore preparation](./vm-to-managed-migration.md#target-platform-runtime-preparation)
+for supported lock sources, memory/disk limits and recovery behavior.
+
+`RuntimeLibraryServices` owns one lazily constructed backend. Drain rejects new
+construction but retains an existing backend for accepted work; failed disposal
+keeps that backend fenced and permits cleanup retry. Server composition registers
+its disposal before app-settings closure. Drain fences admission on the existing
+backend as well as new construction. Local disposal cancels and awaits the
+accepted job through process/candidate cleanup; terminal UI status is not a
+cleanup acknowledgement. Managed disposal preserves failed cleanup for retry,
+without admitting new jobs. Repeated pool lease releases share the same close
+promise and cannot hide a failed or still-pending database close.
+
+Backends expose `subscribeJob`, not Express response objects. Filesystem jobs
+publish native job-runner notifications; managed jobs use a single-flight polling
+observer. `routes/runtime-library-job-stream.ts` owns SSE framing, initial lookup,
+read/subscribe-gap reconciliation, keepalive and connection cleanup. Disconnect,
+revocation and an actual stalled connection unsubscribe only the observation,
+never the durable job. A false `Response.write()` result means the chunk was
+accepted: pause until `drain`, then resume at the next log cursor. While blocked,
+retain only the latest job snapshot, suppress keepalives, and do not queue
+serialized events. Terminal delivery also waits for drain without duplicating
+`done`. A connection that does not drain within 30 seconds is destroyed; drain,
+disconnect and completion remove the stall timer and listeners.
+Pending reads and observer failures cannot update a closed connection.
+
+Managed shutdown fences new claims, terminates both existing and late-registered
+install processes, and awaits the worker's accepted job and outstanding heartbeat
+before releasing its database lease. Heartbeat writes are single-flight. On
+Windows, cancellation terminates the owned command process tree rather than
+only `cmd.exe`; otherwise npm retains the output pipes and the job cannot finish.
+Process-tree termination failures are logged, not treated as confirmed exit.
+
+Native log notifications advance an observation cursor and read only the new
+tail. They must not rescan retained history on every append; otherwise long
+installation logs turn observation into quadratic work.
+
 ## Backend modes
 
 Runtime libraries follow the same storage mode as workflow storage. Operators set it in `Settings` -> `Storage`. Fresh/upgraded single-host deployments persist the domain in SQLite; legacy file mode uses `settings/deployment-storage.json` under app data; Kubernetes stores the same typed domain in encrypted PostgreSQL settings. APIs start synchronization from the loaded row, and the co-located editor executor receives its startup configuration over authenticated loopback without a pod-local settings file.
@@ -37,7 +82,8 @@ That managed facade keeps the supported runtime modes visible instead of hiding 
 - `managed/backend.ts` owns lifecycle, chooses whether this process is worker-enabled or sync-only, and preserves the public API surface
 - `managed/context.ts` owns the shared Postgres/blob-store/local-cache/process identity dependencies
 - `managed/job-store.ts` owns job persistence, job-log appends, heartbeats, and cancellation flags
-- `managed/job-stream.ts` owns SSE framing and termination semantics
+- `job-observation.ts` owns backend-neutral polling observation
+- `routes/runtime-library-job-stream.ts` owns SSE framing and termination semantics
 - `managed/job-worker.ts` owns claim/heartbeat/recovery loops for worker-enabled processes
 - `managed/artifact-activation.ts` owns build-upload-activate-finalize sequencing
 - `managed/process-registry.ts` owns in-flight child-process tracking and termination
@@ -285,6 +331,7 @@ Cancellation behavior:
 - the backend records `cancelRequestedAt` and stops the install/remove flow as soon as it can do so safely
 - cancellation does not create a partial successful release; the previously active release remains active
 - the current terminal state remains `failed`, with the cancellation time preserved in the job payload
+- Windows CLI-shim descendants are terminated together; ordinary POSIX children retain SIGTERM then bounded SIGKILL escalation
 
 ## Install/remove model
 
@@ -457,7 +504,8 @@ The separate `Run recordings` action browses stored workflow execution recording
 - `packages/studio-server-api/src/runtime-libraries/managed/backend.ts` - managed facade that keeps job-worker-enabled versus sync-only ownership explicit
 - `packages/studio-server-api/src/runtime-libraries/managed/context.ts` - managed Postgres/blob-store/local-cache context plus global prepare-hook fallback
 - `packages/studio-server-api/src/runtime-libraries/managed/job-store.ts` - managed job persistence, logs, cancellation, and heartbeats
-- `packages/studio-server-api/src/runtime-libraries/managed/job-stream.ts` - SSE framing and done/error termination
+- `packages/studio-server-api/src/runtime-libraries/job-observation.ts` - backend-neutral polling observation
+- `packages/studio-server-api/src/routes/runtime-library-job-stream.ts` - SSE framing and done/error termination
 - `packages/studio-server-api/src/runtime-libraries/managed/job-worker.ts` - worker loop, job claiming, and stale-job recovery
 - `packages/studio-server-api/src/runtime-libraries/managed/artifact-activation.ts` - build-upload-activate-finalize flow
 - `packages/studio-server-api/src/runtime-libraries/managed/process-registry.ts` - running-process tracking and termination

@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 void test('Classifier settings is strict and provider-scoped while Automatic preserves credential precedence', () => {
-  for (const providerId of ['jev', 'liquid', 'openai']) {
+  for (const providerId of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity']) {
     const provider = getClassifierProvider(providerId);
     const context = {
       settings: {
@@ -106,6 +106,8 @@ void test('All providers price aggregate multi-question usage once and preserve 
     ['jev', 0.042],
     ['liquid', 0.04],
     ['openai', 0.1],
+    ['openrouter', 0.042],
+    ['perplexity', 0.02],
   ] as const) {
     for (const outputUsage of [false, true]) {
       const provider = getClassifierProvider(providerId);
@@ -138,7 +140,12 @@ void test('All providers price aggregate multi-question usage once and preserve 
         {
           state: {
             type: 'chat-message[]',
-            value: [{ type: 'user', message: providerId === 'jev' ? ['Seven', 'Three'] : ['Caption', image] }],
+            value: [
+              {
+                type: 'user',
+                message: provider.supportsImages?.(provider.defaultModel) ? ['Caption', image] : ['Seven', 'Three'],
+              },
+            ],
           },
           question1: { type: 'object[]', value: questions },
         },
@@ -153,6 +160,8 @@ void test('All providers price aggregate multi-question usage once and preserve 
       assert.equal(Object.keys(sent.questions).length, 2);
       if (providerId === 'liquid') assert.deepEqual(sent.images, [image]);
       if (providerId === 'openai') assert.equal(sent.input[0].content[1].type, 'input_image');
+      if (providerId === 'perplexity')
+        assert.deepEqual(sent.state, ['Caption', '\n', { type: 'image_url', image_url: { url: image } }]);
       assert.equal(outputs.cost!.type, 'number');
       assert.equal(outputs.cost!.value, expected);
       assert.deepEqual(outputs.usage!.value, outputUsage ? { ...usage, totalCost: expected } : usage);

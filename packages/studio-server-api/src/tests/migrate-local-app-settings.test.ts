@@ -5,8 +5,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { SqliteAppSettingsBackend } from '../app-settings/sqlite-settings-store.js';
+import { LocalUpgradeDiagnosticError, localUpgradeFailure } from '../local-metadata/upgrade-diagnostics.js';
 import { runtimeLimitSettingsRepository } from '../runtime-limit-settings.js';
 import { migrateLocalAppSettings } from '../scripts/migrate-local-app-settings.js';
+
+// test-style: fixture-read: Read only test-generated malformed settings bytes to verify source preservation.
 
 test('local App Settings candidate import is idempotent and verifies every domain', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-local-settings-import-'));
@@ -102,14 +105,19 @@ test('local App Settings import rejects malformed UTF-8 before creating a candid
     await assert.rejects(
       migrateLocalAppSettings({ sourceRoot, databasePath, encryptionKey: 'candidate-secret' }),
       (error: unknown) => {
-        assert.ok(error instanceof Error);
-        assert.match(error.message, /Cannot read source App Settings domain runtime limit/);
-        assert.ok(error.cause instanceof Error);
-        assert.match(error.cause.message, /not valid UTF-8/);
+        assert.ok(error instanceof LocalUpgradeDiagnosticError);
+        assert.equal(error.reason, 'source-invalid-utf8');
+        assert.deepEqual(localUpgradeFailure('settings', error), {
+          stage: 'settings',
+          code: 'invalid-data',
+          reason: 'source-invalid-utf8',
+        });
         return true;
       },
     );
     await assert.rejects(fs.stat(databasePath), { code: 'ENOENT' });
+    await assert.rejects(fs.stat(path.dirname(databasePath)), { code: 'ENOENT' });
+    assert.deepEqual(await fs.readFile(settingsPath), Buffer.from([0xff]));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

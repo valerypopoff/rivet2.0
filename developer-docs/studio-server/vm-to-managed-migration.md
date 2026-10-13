@@ -1,5 +1,233 @@
 # VM local storage to managed PostgreSQL and S3 migration
 
+## Restore a downloaded legacy backup into initialized Kubernetes
+
+For a disposable destination, use **Settings → Storage → Restore legacy backup**.
+This uploads the original gzip tar archive, validates its version-1
+`rivet-browser-legacy-backup` manifest and source fingerprints, requires the exact
+`RESTORE LEGACY BACKUP` confirmation, then pauses, replaces and exactly verifies
+application state through the same importer described below. Prefer the untouched
+archive; unpacking/repacking can change its integrity evidence and permissions.
+The verified working copy normalizes an unambiguous older `active-release`
+runtime layout automatically; the downloaded archive itself remains unchanged.
+
+After a complete upload fails non-destructive validation, the UI exposes a danger
+**Proceed anyway** button. This is explicit permission to bypass the original
+manifest's content hash/source fingerprint, not permission to bypass archive
+containment or storage ownership. The authenticated, same-origin
+`POST /api/legacy-restore/proceed-anyway` binds approval to the operation UUID and
+uploaded archive digest and durably records `integrityOverridden`. It waits for
+the validator handoff, rechecks shutdown/admission under the coordinator lock,
+and reruns preparation. It does not drain or delete anything by itself. Exact
+`RESTORE LEGACY BACKUP` confirmation is still required after preparation.
+
+An edited backup may omit workflow recordings or the entire `recordings` root;
+override preparation creates an empty recordings root when absent. Other roots
+and a valid v1 `backup.json` remain mandatory.
+
+Override preparation also accepts a conventional `.`/`./` tar root directory
+and excludes regular macOS `.DS_Store`/`._*` metadata files from extraction.
+Their bytes and entry counts still consume the archive limits; duplicate,
+set-ID, link, directory and traversal checks are not bypassed by metadata names.
+The untouched-archive path stays strict. Do not include an extra enclosing folder.
+Controlled archive-layout failures explain the remedy without leaking paths or
+credentials; unknown post-override failures do not misleadingly ask for the original
+archive again. The supervised edited-backup fixture includes macOS repacking.
+
+Source-reader failures reuse the existing fixed local-upgrade diagnostic vocabulary
+and validated opaque source reference, never raw messages, paths, nested causes
+or parser excerpts. In particular, the decoded per-project/history bundle limit
+is distinct from the 10 GiB archive upload limit. An integrity override does not
+relax archive or application-data limits. Restore chooses a per-bundle decoded budget
+from worker heap/available memory, up to 128 MiB, using the existing conservative
+8× payload + 64 MiB working-set estimate within 75% of measured capacity.
+An explicit `RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB` remains a lower cap.
+The selection is saved in the private operation payload and rechecked on every
+worker start; import/retry cannot silently raise it. Ordinary legacy-to-SQLite
+conversion retains its 32 MiB default. Oversized bundles fail before replacement.
+
+Restore preparation, import and exact workflow verification iterate full project
+payloads instead of retaining all project histories simultaneously. Only lightweight
+identity/route headers are retained for cross-domain checks.
+The memory tradeoff is an additional source-read pass during exact verification;
+this is not a claim of faster restoration. Recording preparation
+uses the existing authoritative bounded iterator, rejecting missing project owners,
+duplicate run IDs, invalid artifact sizes/UTF-8 and gzip expansion before confirmation.
+Settings collection establishes or reuses the existing decoded budget even when
+called outside a larger source operation, including catalog-backed source rows.
+Diagnostic classification tolerates throwing getters and exposes only validated
+fixed reasons/references. None of these changes bypasses exact source fingerprints
+or destructive confirmation.
+
+The local App Settings candidate-import regression asserts the structured
+`source-invalid-utf8` reason and its safe `settings`/`invalid-data` projection,
+not incidental error-wrapper wording. Malformed source bytes must remain unchanged
+and rejection must occur before even the candidate directory is created.
+Its readback is limited to test-generated malformed settings bytes and carries
+the repository's required `test-style: fixture-read` annotation. Run the full
+root `yarn test:style` gate; the narrower Studio Server style gate does not check
+this filesystem-read policy.
+
+Operational exact verification compares PostgreSQL timestamp objects directly
+as ISO values, preserving milliseconds. Converting them through `String(Date)`
+would incorrectly reject ordinary Evaluation runs even after a correct import.
+The shared managed and supervised restore fixtures retain fractional timestamps.
+
+### Target-platform runtime preparation
+
+Runtime tar buffering is checked against the selected decoded budget during
+preparation and immediately before deletion, using a conservative header/padding
+allowance. Reinstallation additionally reserves four source-tree allowances for
+the candidate, npm cache and artifact margin. Upload size alone never certifies
+memory or scratch capacity.
+
+Portable JavaScript releases retain the existing byte-preserving path. A native
+runtime release is instead reinstalled **before confirmation**, into a separate
+`prepared-runtime/` child of the UUID-owned restore scratch. The existing runtime
+npm installer is reused with `npm ci --omit=dev --ignore-scripts`; archive scripts,
+`.npmrc` files, administrator credentials and application environment variables
+are never passed to it. Public npm registry HTTPS access is required.
+The backup's v2/v3 npm lockfile must match the manifest and installed root-package
+versions and contain integrity-pinned public-registry artifacts, not file/git/link
+or credential-bearing sources. `latest` in the manifest does not select today's
+latest version: the original lock selects exact root and transitive versions.
+Lifecycle build scripts are intentionally not executed; packages that depend on
+them require separate compatibility verification. Private registries and unsupported
+locks are rejected, and installation failures remain non-destructive. No package
+is silently replaced with a newer version or omitted from the root package set.
+
+Derived packages are validated using the existing candidate and confined-tree
+validators. Both original and derived source fingerprints are retained; the
+original working copy is not rewritten. The Node/platform identity is recorded
+only in the encrypted operation payload. Confirmation rechecks original bytes,
+derived bytes, capacity and platform identity. Destructive retries reuse the
+prepared tree, with no repeat registry resolution. A deployment/runtime change
+cannot silently re-certify an old native artifact. Cancellation terminates the
+worker's private process group (or Windows child tree), including npm descendants,
+before scratch cleanup. Target execution images must remain platform-compatible
+with the control API image, as for ordinary managed runtime installations.
+
+Traversal, duplicate entries,
+escaping links, size/capacity, malformed application data, runtime preparation,
+schema/deployment binding, destination permissions and drain checks are never
+overridden. If one of those checks fails, restore still stops before deletion.
+The override is not offered again for an already-overridden operation or an
+incomplete upload. Cancel/upload again to change the archive or retry preparation.
+
+If validation fails and the container launcher is restarted, it brings up the
+restore UI after read-only schema/installation verification, without migrating
+or seeding settings over the unfinished restore. Open the recovery URL printed
+by the launcher to proceed/cancel. Do not delete the restore journal, private
+launcher receipts or volumes to unblock startup. The existing service retains
+responsibility for already accepted work and destructive retry/maintenance.
+For interrupted destructive imports, private restart preparation accepts only a
+closed import gate matching the encrypted restore's source/destination identities
+and manifest. It leaves the gate closed, performs no schema/settings mutation and
+does not grant that exception to an unrelated VM import or ordinary deployment.
+
+The warning survives panel/server restarts. A fresh fingerprint of the actual
+prepared source is captured and rechecked before deletion and through import;
+exact destination verification compares that edited source, not the original
+backup contents. No manifest or original uploaded archive is rewritten. A
+full supervised PostgreSQL/MinIO fixture covers original restore followed by
+modified restore with recordings removed, stale override rejection, typed
+confirmation, exact verification and normal automatic restarts.
+
+Projects, datasets, publication paths/history, recordings, supported operational
+state and runtime libraries are restored. UI-defined environment variable names,
+values and Browser permissions are included. Current database/S3 connections,
+deployment keys and administrator access remain destination-owned. Shared OAuth
+settings are preserved when the UI uses OAuth; otherwise source web-app OAuth
+settings are restored. Endpoint
+origins follow the new host; values containing old paths/URLs are not rewritten.
+Imported schedules stay disabled. Copied native modules and ELF/PE/Mach-O runtime
+binaries are never assumed portable; the prepared target installation above replaces them.
+An ambiguous or incomplete runtime layout is rejected before replacement.
+Verification and warmup suppress retention. After normal restart the restored
+policies resume against original timestamps; already-expired history can be
+removed by those policies. Do not rewrite timestamps to make an exact import look
+new, or promise that restoration indefinitely pins all backed-up evidence.
+
+The server, not the browser, owns accepted work. Opening the normal UI during
+maintenance automatically displays recovery, including after a restart. The
+dedicated `/?restore-legacy-backup` URL is optional, not a manual step in the
+procedure. Cancellation is allowed during validation, while awaiting confirmation,
+or after a non-destructive failure; confirmed replacement cannot be cancelled.
+After deletion begins, failed operations remain in maintenance and expose
+**Retry restore**. There is no automatic backup or merge of the current
+destination. A failed/interrupted upload is cancelled and uploaded again.
+
+Only referenced installation-owned objects and registered application tables are
+cleared. Unknown objects, unrelated tables and unproven historical S3 versions
+remain untouched. Runtime-library archives are also retained because their fixed
+bucket-global namespace and deterministic migration IDs cannot prove exclusive
+ownership; the runtime catalog/active release still comes from the backup.
+Missing artifacts, unsafe references, external dependencies,
+insufficient permissions or an unconfirmed drain stop the operation. Existing
+offline migration commands still require an empty destination; their checks are
+not weakened to support restore.
+Restore verifies the already-installed workflow schema and bucket; it never runs
+the CLI's fresh-target schema migration from a serving pod. A schema mismatch
+remains an error, requiring the normal deployment migration, not additional
+restore permissions or a bypass of Kubernetes cutover checks.
+Restore is unavailable when Helm's bootstrap storage location differs from the
+authoritative settings; reconcile that configuration first rather than allowing
+restore to adopt a different namespace. The catalog is bound to one Helm
+namespace/release identity. Independent installations must not share its tables.
+
+The chart enables managed restore with `legacyRestore.enabled`, a dedicated
+single-backend scratch PVC (`64Gi` by default) and supervisor-owned restart
+capability. Archives are limited to 10 GiB compressed/30 GiB declared expanded
+content; extraction also checks actual fingerprints and capacity. The embedded
+proxy streams the upload; external gateways must permit that route's upload size
+and timeout. No broad Kubernetes RBAC or per-restore shell commands are needed.
+The bodyless internal UI-auth subrequest must not enforce the inherited upload's
+Content-Length against the general 100 MiB limit: that produced an auth 413 and
+an outer nginx 500 for large local backups. Its limit is disabled only inside
+the inaccessible internal auth location; the public route still enforces 10 GiB,
+and ordinary API requests retain 100 MiB. Both VM HTTP/TLS edge listeners carry
+the restore-specific limit. `verify-vm-nginx-tls.mjs` streams 101 MiB through both
+listeners and checks authentication, internal-route isolation and size rejection.
+The restore panel uses the shared response parser so outer HTML gateway failures
+show their HTTP status and safe guidance, not raw HTML or a JSON-parser exception.
+Runtime-library import and verification create their intermediate tar in that
+owned restore scratch, not the pod's separate 1 GiB `/tmp`. Capacity must cover
+the compressed upload, extracted roots and intermediate runtime tar together.
+Preflight checks a conservative tar/PAX size allowance against remaining scratch
+space before confirmation and again immediately before deletion; archive creation
+rechecks it before writing. An undersized claim is rejected without replacement.
+The existing importer still buffers runtime artifacts; archive limits are not a
+promise that every backup fits a particular pod's memory or runtime-cache budget.
+
+`test:migration-managed` builds the API and additionally starts its compiled
+server/worker, the actual bundled editor executor and the backend supervisor
+against the fixture's disposable PostgreSQL/MinIO. Execution and Evaluation API
+peers use independent restart loops to exercise standby, warmup and normal
+serving. Confirmation must reach completed and healthy normal generations without
+manual finalization or fake drain/restart hooks. This is process-level deployment
+evidence, not proof of Kubernetes scheduling, gateway policy or a user's archive.
+The executor bundle must be built before running the fixture.
+For faster restore-only feedback, use
+`yarn workspace @valerypopoff/rivet-studio-server-api test:legacy-restore-managed`.
+It uses the same disposable source/managed services and supervised restore test;
+the full migration command remains the CI compatibility gate. Failure diagnostics
+log the phase and fixed local failure categories, never arbitrary provider error
+details or archive paths.
+
+Use an isolated actual-data rehearsal before a production restore. Unit/HTTP
+fixtures and a successful synthetic import do not certify arbitrary Code nodes,
+provider durability, native packages or a real Kubernetes rollout.
+
+Actual-data check on 2026-10-13: the edited 170.5 MiB archive with recordings
+removed prepared successfully in the Linux API image, imported 102 projects and
+19 folders into disposable PostgreSQL/MinIO, and passed a separate exact verifier
+(including 10 settings domains and the six Evaluation runs' fractional timestamps).
+Pinned Sharp 0.35.3 produced a PNG and html-to-text converted a fixture after target
+reinstallation. The original server mounts were read-only throughout; this is
+not a live restore or Kubernetes/provider qualification. Windows preparation
+regressions, Linux process-group cancellation, supervised original/edited restore
+and the 11 headless restore-panel checks also passed.
+
 The operational importer includes legacy `scheduled-runs.sqlite` when present.
 It preserves definitions/history but disables every imported schedule and retires
 queued/claimed work as cancelled and accepted work as interrupted. Verification
@@ -457,9 +685,13 @@ local PostgreSQL+MinIO copy/retry/verify fixture is
 it is not a substitute for a rehearsal using the production VM snapshot and
 the actual managed provider credentials.
 
-The browser flow still depends on the operator to keep the destination pods
+The VM-to-managed source wizard (not **Restore legacy backup** into an initialized
+Kubernetes installation) still depends on the operator to keep destination pods
 offline, use matching deployment secrets, and conduct the Kubernetes release
 rehearsal. There is no one-click or atomic cross-cluster traffic cutover.
+The initialized-Kubernetes restore path owns its own fencing, import, verification
+and supervised restart and does not require manually scaling pods or running CLI
+migration commands after upload/confirmation.
 
 The disposable integration fixture also exercises the supervised SQLite UI
 service: source inspection, pause/drain, native copy, asynchronous final review,

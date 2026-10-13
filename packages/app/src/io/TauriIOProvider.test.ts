@@ -6,18 +6,72 @@ import { TauriIOProvider } from './TauriIOProvider.js';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 
 /** Exercise the real Tauri API adapter without a native process or real files. */
-function nativeFixture(t: TestContext) {
+function nativeFixture(t: TestContext, asBundle = false) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const project = createBlankProjectWithDefaultGraph();
   const calls: string[] = [];
+  const bundleReads: { projectFilePath?: string; bundleManifestPath?: string }[] = [];
+  const dialogs: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } }[] = [];
+  let selectedPath: string | null = asBundle ? '/fixture/rivet-bundle.json' : '/fixture/project.rivet-project';
   let failWrite = false;
   const runtime: Record<string, unknown> = { __TAURI__: {}, crypto: globalThis.crypto };
-  runtime.__TAURI_IPC__ = (request: { callback: number; error: number; message: { cmd: string } }) => {
-    const command = request.message.cmd;
+  runtime.__TAURI_IPC__ = (request: {
+    callback: number;
+    error: number;
+    cmd?: string;
+    projectFilePath?: string;
+    bundleManifestPath?: string;
+    message?: { cmd: string; options?: { filters?: { name: string; extensions: string[] }[] } };
+  }) => {
+    const command = request.message?.cmd ?? request.cmd!;
     calls.push(command);
+    if (command === 'read_project_bundle') bundleReads.push(request);
+    if (command === 'openDialog' || command === 'saveDialog') dialogs.push(request.message!);
     const error = command === 'writeFile' && failWrite;
     const callback = runtime[`_${error ? request.error : request.callback}`] as (value: unknown) => void;
-    callback(error ? 'native write failed' : command === 'readTextFile' ? serializeProject(project) : false);
+    callback(
+      error
+        ? 'native write failed'
+        : command === 'openDialog' || command === 'saveDialog'
+          ? selectedPath
+          : command === 'read_project_bundle' && asBundle
+            ? {
+                manifestPath: '/fixture/rivet-bundle.json',
+                selectedProjectPath: request.projectFilePath?.endsWith('rivet-bundle.json')
+                  ? null
+                  : '/fixture/projects/root.rivet-project',
+                manifestContents: JSON.stringify({
+                  format: 'rivet-project-bundle',
+                  schemaVersion: 1,
+                  requiredLoaderVersion: 2,
+                  exportingRuntimeVersion: 'fixture',
+                  rootArtifact: 'root',
+                  targets: [],
+                  references: [],
+                  plugins: [],
+                  artifacts: [
+                    {
+                      id: 'root',
+                      projectId: project.metadata.id,
+                      title: project.metadata.title,
+                      version: 'latest',
+                      revision: 'original',
+                      project: { path: 'projects/root.rivet-project' },
+                    },
+                  ],
+                }),
+                files: [
+                  {
+                    path: 'projects/root.rivet-project',
+                    sourceProjectPath: '/fixture/projects/root.rivet-project',
+                    contents: serializeProject(project),
+                  },
+                ],
+              }
+            : command === 'readTextFile'
+              ? serializeProject(project)
+              : false,
+    );
   };
   Object.defineProperty(globalThis, 'window', { configurable: true, value: runtime });
   t.after(() => {
@@ -37,6 +91,11 @@ function nativeFixture(t: TestContext) {
   return {
     provider,
     calls,
+    bundleReads,
+    dialogs,
+    cancelDialog: () => {
+      selectedPath = null;
+    },
     project,
     imports: () => imports,
     failWrite: () => {
@@ -44,6 +103,42 @@ function nativeFixture(t: TestContext) {
     },
   };
 }
+
+test('native Open picker offers project and explicit bundle filters and opens a selected JSON manifest', async (t) => {
+  const fixture = nativeFixture(t, true);
+  let loadedPath: string | undefined;
+  await fixture.provider.loadProjectData(
+    (loaded) => {
+      loadedPath = loaded.path;
+      assert.equal(loaded.project.metadata.id, fixture.project.metadata.id);
+      assert.equal(fixture.imports(), 0);
+    },
+    { deferCommit: true },
+  );
+  assert.equal(loadedPath, '/fixture/projects/root.rivet-project');
+  assert.deepEqual(fixture.calls, ['openDialog', 'read_project_bundle']);
+  assert.deepEqual(fixture.dialogs[0]?.options?.filters, [
+    { name: 'Rivet Project or Bundle', extensions: ['rivet-project', 'json'] },
+    { name: 'Rivet Bundle (rivet-bundle.json)', extensions: ['json'] },
+    { name: 'Rivet Project', extensions: ['rivet-project'] },
+  ]);
+});
+
+test('cancelling the native Open picker performs no project reads or dataset imports', async (t) => {
+  const fixture = nativeFixture(t, true);
+  fixture.cancelDialog();
+  await fixture.provider.loadProjectData(() => assert.fail('Cancelled picker must not open a project'));
+  assert.deepEqual(fixture.calls, ['openDialog']);
+  assert.equal(fixture.imports(), 0);
+});
+
+test('native Save picker stays project-only', async (t) => {
+  const fixture = nativeFixture(t, true);
+  fixture.cancelDialog();
+  await fixture.provider.saveProjectData(fixture.project);
+  assert.deepEqual(fixture.dialogs[0]?.options?.filters, [{ name: 'Rivet Project', extensions: ['rivet-project'] }]);
+  assert.deepEqual(fixture.calls, ['saveDialog']);
+});
 
 test('native reads prepare datasets without side effects and honor guarded commit', async (t) => {
   const fixture = nativeFixture(t);
@@ -63,6 +158,17 @@ test('native reads prepare datasets without side effects and honor guarded commi
   assert.equal(fixture.imports(), 1);
 });
 
+test('opening a native bundle manifest returns its actual project save path and imports only after guarded commit', async (t) => {
+  const fixture = nativeFixture(t, true);
+  const result = await fixture.provider.loadProjectDataNoPrompt('/fixture/rivet-bundle.json', { deferCommit: true });
+  assert.equal(result.path, '/fixture/projects/root.rivet-project');
+  assert.equal(result.project.metadata.id, fixture.project.metadata.id);
+  assert.equal(fixture.imports(), 0);
+  assert.equal(await result.commit!(() => true), true);
+  assert.equal(fixture.imports(), 1);
+  assert.deepEqual(fixture.calls, ['read_project_bundle']);
+});
+
 test('a pre-cancelled native load performs no filesystem IO', async (t) => {
   const fixture = nativeFixture(t);
   const controller = new AbortController();
@@ -72,6 +178,33 @@ test('a pre-cancelled native load performs no filesystem IO', async (t) => {
     /abort/i,
   );
   assert.deepEqual(fixture.calls, []);
+});
+
+test('desktop run passes its remembered manifest to native IO and does not silently discard it', async (t) => {
+  const fixture = nativeFixture(t, true);
+  await fixture.provider.readProjectBundle('/fixture/projects/root.rivet-project', '/fixture/rivet-bundle.json');
+  assert.equal(fixture.bundleReads[0]?.projectFilePath, '/fixture/projects/root.rivet-project');
+  assert.equal(fixture.bundleReads[0]?.bundleManifestPath, '/fixture/rivet-bundle.json');
+});
+
+test('individual bundled member opens retain membership and tab reloads use the remembered manifest', async (t) => {
+  const fixture = nativeFixture(t, true);
+  const result = await fixture.provider.loadProjectDataNoPrompt('/fixture/projects/root.rivet-project', {
+    deferCommit: true,
+    bundleManifestPath: '/fixture/rivet-bundle.json',
+  });
+  assert.equal(result.bundleProjects, undefined);
+  assert.equal(result.bundleManifestPath, '/fixture/rivet-bundle.json');
+  assert.equal(result.path, '/fixture/projects/root.rivet-project');
+  assert.equal(fixture.bundleReads[0]?.bundleManifestPath, '/fixture/rivet-bundle.json');
+});
+
+test('a missing remembered bundle rejects before standalone execution', async (t) => {
+  const fixture = nativeFixture(t);
+  await assert.rejects(
+    fixture.provider.readProjectBundle('/fixture/project.rivet-project', '/fixture/rivet-bundle.json'),
+    /Reopen rivet-bundle.json/,
+  );
 });
 
 test('native save rejects a failed write instead of acknowledging persistence', async (t) => {

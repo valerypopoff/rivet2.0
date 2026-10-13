@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { chmodSync, copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -81,6 +82,42 @@ function request(port, host, requestPath, secure = false, headers = {}, timeoutM
     req.on('timeout', () => req.destroy(new Error('VM gateway request timed out')));
     req.on('error', reject);
     req.end();
+  });
+}
+
+// Stream the protected workload through real nginx without allocating a backup-sized buffer.
+function upload(port, host, secure, bytes) {
+  return new Promise((resolve, reject) => {
+    const req = (secure ? https : http).request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: '/api/legacy-restore/upload',
+        method: 'POST',
+        servername: secure ? host : undefined,
+        rejectUnauthorized: false,
+        headers: { Host: host, 'Content-Type': 'application/gzip', 'Content-Length': bytes },
+        timeout: 30_000,
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('error', reject);
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('Restore proxy upload timed out')));
+    void (async () => {
+      const chunk = Buffer.alloc(1024 * 1024);
+      for (let remaining = bytes; remaining > 0; remaining -= chunk.length) {
+        if (!req.write(chunk.subarray(0, Math.min(chunk.length, remaining)))) await once(req, 'drain');
+      }
+      req.end();
+    })().catch((error) => req.destroy(error));
   });
 }
 
@@ -301,7 +338,42 @@ async function main() {
     assert.equal(JSON.parse((await request(httpsPort, publicHost, '/workflows-latest/demo', true)).body).plane, 'api');
     assert.equal((await request(httpsPort, publicHost, '/internal/workflows/demo', true)).status, 404);
     assert.equal(await upgrade(httpsPort, publicHost, '/ws/executor/internal'), 'executor');
-    console.log('PASS: VM nginx TLS, host routing, trusted headers, published/latest planes, and executor websocket.');
+    const uploadBytes = 101 * 1024 ** 2;
+    for (const [port, host, secure] of [
+      [httpPort, internalHost, false],
+      [httpsPort, publicHost, true],
+    ]) {
+      const accepted = await upload(port, host, secure, uploadBytes);
+      assert.equal(accepted.status, 202, 'restore uploads over 100 MiB must pass both proxy/auth layers');
+      assert.equal(JSON.parse(accepted.body).bytes, uploadBytes);
+      console.log(`PASS: streamed ${uploadBytes} restore bytes through ${secure ? 'TLS' : 'HTTP'}.`);
+      const denied = await request(port, host, '/api/legacy-restore/upload', secure, {
+        Cookie: 'fixture-denied',
+      });
+      assert.equal(denied.status, 401, 'restore route must retain session authentication');
+      assert.equal((await request(port, host, '/__rivet_ui_auth_check', secure)).status, 404);
+      assert.equal(
+        (
+          await request(port, host, '/api/echo', secure, {
+            'Content-Length': String(uploadBytes),
+          })
+        ).status,
+        413,
+        'ordinary API limits must not change',
+      );
+      assert.equal(
+        (
+          await request(port, host, '/api/legacy-restore/upload', secure, {
+            'Content-Length': String(10 * 1024 ** 3 + 1),
+          })
+        ).status,
+        413,
+        'restore archive limit remains enforced',
+      );
+    }
+    console.log(
+      'PASS: VM nginx TLS/routing/auth, 101 MiB streamed restore uploads, bounded bodies, and executor websocket.',
+    );
   } finally {
     for (const args of [
       ['rm', '-f', name],

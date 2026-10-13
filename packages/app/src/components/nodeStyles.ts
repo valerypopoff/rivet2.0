@@ -745,7 +745,6 @@ export const nodeStyles = css`
   .conditional-if-port-label.connected {
     background: color-mix(in srgb, var(--canvas-background-color, var(--grey-darker)) 82%, transparent);
     border-radius: calc(4px * var(--ui-font-scale));
-    color: var(--port-connected-label-color);
     opacity: var(--port-connected-label-opacity);
   }
 
@@ -1010,7 +1009,10 @@ export const nodeStyles = css`
     left: calc(100% + 8px);
   }
 
-  .port.connected .port-circle,
+  .port.connected .port-circle {
+    background-color: var(--node-port-connected-bg);
+  }
+
   .port.closest .port-circle {
     background-color: var(--primary);
     border: 2px solid var(--primary-dark);
@@ -1028,8 +1030,12 @@ export const nodeStyles = css`
     border: 2px solid var(--error);
   }
 
+  .port.connection-warning .input-port {
+    background-color: var(--warning);
+    border: 2px solid var(--warning-dark);
+  }
+
   .port.connected .port-label {
-    color: var(--port-connected-label-color);
     opacity: var(--port-connected-label-opacity);
   }
 

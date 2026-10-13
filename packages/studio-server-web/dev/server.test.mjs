@@ -61,8 +61,9 @@ test('incomplete builds and disk/generation budgets retain the last successful g
     false,
   );
   assert.match(await (await fetch(base + '/')).text(), new RegExp(first));
+  await writeFile(path.join(output, 'entry.js'), 'export const value = 2;');
   store.maxGenerations = 1;
-  await assert.rejects(store.publish(output), /cache is full/);
+  await assert.rejects(store.publish(output), /no room/);
 });
 
 test('content addressing deduplicates files and cannot mutate previous HTML', async (t) => {
@@ -125,7 +126,7 @@ test('asset compression honors explicit refusal and valid gzip quality', async (
   assert.match(await compressed.text(), /value = 1/);
 });
 
-test('failed publication objects are reclaimed without removing any retained generation', async (t) => {
+test('oversized candidates consume no pooled space and preserve the last good generation', async (t) => {
   const { store, output } = await fixture(t, { maxBytes: 512 });
   const first = await store.publish(output);
   const before = store.bytes;
@@ -133,11 +134,110 @@ test('failed publication objects are reclaimed without removing any retained gen
   await writeFile(path.join(output, 'aaa.js'), 'export const orphan = true;');
   await writeFile(path.join(output, 'entry.js'), 'x'.repeat(1024));
   await assert.rejects(store.publish(output), /disk budget/);
-  assert.ok(store.bytes > before);
+  assert.equal(store.bytes, before);
   await store.initialize();
   assert.equal(store.bytes, before);
   assert.match(await readFile(path.join(store.directory(first), 'entry.js'), 'utf8'), /value = 1/);
   await writeFile(path.join(output, 'entry.js'), 'export const value = 2;');
   await assert.doesNotReject(store.publish(output));
   assert.match(await readFile(path.join(store.directory(first), 'entry.js'), 'utf8'), /value = 1/);
+});
+
+test('a full cache from previous sessions recovers without serving stale HTML', async (t) => {
+  const { store, output, base } = await fixture(t, { maxGenerations: 3 });
+  for (let value = 1; value <= 3; value++) {
+    await writeFile(path.join(output, 'entry.js'), `export const value = ${value};`);
+    await store.publish(output);
+  }
+  await store.initialize();
+  assert.equal((await fetch(base + '/readyz')).status, 503);
+  const previous = store.previous;
+  await writeFile(path.join(output, 'entry.js'), 'export const value = 4;');
+  const current = await store.publish(output);
+  assert.equal(store.pruned, 1);
+  assert.ok((await readdir(path.join(store.root, 'generations'))).includes(previous));
+  assert.match(await (await fetch(base)).text(), new RegExp(current));
+});
+
+test('disk pressure reclaims unreferenced objects, including shared candidate objects', async (t) => {
+  const { store, output } = await fixture(t, { maxBytes: 400, graceMs: 0 });
+  await writeFile(path.join(output, 'entry.js'), 'a'.repeat(100));
+  const first = await store.publish(output);
+  await writeFile(path.join(output, 'entry.js'), 'b'.repeat(100));
+  const second = await store.publish(output);
+  await writeFile(path.join(output, 'entry.js'), 'c'.repeat(150));
+  await store.publish(output);
+  assert.equal(store.pruned, 1);
+  await assert.rejects(readFile(path.join(store.directory(first), 'entry.js')), /ENOENT/);
+  assert.equal(await readFile(path.join(store.directory(second), 'entry.js'), 'utf8'), 'b'.repeat(100));
+  assert.ok(store.bytes <= store.maxBytes);
+});
+
+test('live SSE pins old lazy chunks; disconnect grace expires before reclamation', async (t) => {
+  let now = 0;
+  const { store, output, base } = await fixture(t, { maxGenerations: 2, graceMs: 100, now: () => now });
+  const first = await store.publish(output);
+  const controller = new AbortController();
+  const events = await fetch(`${base}/__rivet_dev/events?generation=${first}`, { signal: controller.signal });
+  await events.body.getReader().read();
+  await writeFile(path.join(output, 'entry.js'), 'export const value = 2;');
+  const second = await store.publish(output);
+  await writeFile(path.join(output, 'entry.js'), 'export const value = 3;');
+  await assert.rejects(store.publish(output), /no room/);
+  assert.match(await (await fetch(`${base}${bundlePrefix}${first}/entry.js`)).text(), /value = 1/);
+  controller.abort();
+  // Wait for the actual server-side close, not a timing assumption.
+  for (let i = 0; store.pins.has(first) && i < 100; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(store.pins.has(first), false);
+  await assert.rejects(store.publish(output), /no room/);
+  now = 100;
+  await store.publish(output);
+  assert.equal((await fetch(`${base}${bundlePrefix}${first}/entry.js`)).status, 404);
+  assert.equal((await fetch(`${base}${bundlePrefix}${second}/entry.js`)).status, 200);
+});
+
+test('legacy observers conservatively pin history; failed or superseded publication leaves it usable', async (t) => {
+  const { store, output } = await fixture(t, { maxGenerations: 2, graceMs: 0 });
+  const first = await store.publish(output);
+  const release = store.retainLegacy();
+  await store.publish(output);
+  await assert.rejects(store.publish(output), /no room/);
+  release();
+  release();
+  assert.equal(store.legacyPins, 0);
+  await assert.rejects(store.publish(output, { isCurrent: () => false }), /superseded/);
+  assert.equal(await readFile(path.join(store.directory(first), 'entry.js'), 'utf8'), 'export const value = 1;');
+  await store.publish(output);
+  assert.equal((await readdir(path.join(store.root, 'generations'))).length, 2);
+});
+
+test('retirement during artifact staging reclaims candidate objects and preserves the working build', async (t) => {
+  const { store, output } = await fixture(t);
+  const first = await store.publish(output);
+  const before = store.bytes;
+  await writeFile(path.join(output, 'entry.js'), 'export const value = 2;');
+  let checks = 0;
+  await assert.rejects(store.publish(output, { isCurrent: () => ++checks === 1 }), /superseded/);
+  assert.equal(store.latest, first);
+  assert.equal(store.bytes, before);
+  assert.deepEqual(await readdir(path.join(store.root, 'generations')), [first]);
+  const release = store.retain(first);
+  const releaseAgain = store.retain(first);
+  release();
+  release();
+  assert.equal(store.pins.get(first), 1);
+  releaseAgain();
+  assert.equal(store.pins.has(first), false);
+});
+
+test('cache collection refuses unowned generation and object entries', async (t) => {
+  const { store, output } = await fixture(t, { maxGenerations: 2 });
+  const first = await store.publish(output);
+  await store.publish(output);
+  await writeFile(path.join(store.directory(first), 'page.html'), 'Not a generated frontend');
+  await assert.rejects(store.publish(output), /ownership is invalid/);
+  assert.equal((await readdir(path.join(store.root, 'generations'))).length, 2);
+  await writeFile(path.join(store.root, 'objects', 'not-a-cache-object'), 'Keep this evidence');
+  await assert.rejects(store.initialize(), /unexpected object entry/);
+  assert.equal(await readFile(path.join(store.root, 'objects', 'not-a-cache-object'), 'utf8'), 'Keep this evidence');
 });

@@ -80,6 +80,36 @@ Future LLM work must keep failure evidence terminal, optional, additive, and
 display-only; it must not reintroduce a second authoritative partial-output
 path.
 
+### Classifier reliability parity delivery (2026-10-11)
+
+**Completed:** Classifier Evaluate now uses the existing terminal failure-evidence
+channel and shared attempt/activity protocol rather than a parallel diagnostics
+pipeline. The classifier-specific request format and fallback policy remain owned
+by the classifier runner.
+
+- Chain errors include bounded, API-key-redacted reasons for every failed physical
+  attempt, even when the optional Attempts output is disabled. Summaries reflect
+  the terminal execution outcome; health-service observations cannot overwrite it.
+- Enabled request/response body outputs survive thrown, caught and HTTP-suppressed
+  failures, split invocations and recording replay. They remain display-only on
+  uncaught failures: Answers/Usage/Cost do not become successful downstream data.
+- Bodies stay paired to the final prepared attempt, with successful fallback
+  retaining the winner's bodies. Capture proves construction, not remote delivery;
+  missing credentials before preparation do not invent a request body.
+- Rejected body collection is opt-in, bounded by existing payload/JSON limits and
+  a one-second diagnostic cap within the operation deadline. Unavailable bodies
+  cannot replace the underlying HTTP error. Observer copies prevent diagnostics
+  from mutating validated answers, usage, retained attempts or error metadata.
+- Caller cancellation remains cancellation, not a provider outage: one physical
+  aborted event, no retry/fallback, and ignored health-permit completion. Cancellation
+  and overall deadlines are rechecked after diagnostic awaits and before dispatch.
+
+Owner-level classifier/provider/GraphProcessor/recorder regression tests, App
+activity/inspector tests and headless Studio Server recording-replay checks cover
+these boundaries. Future changes must preserve the separation between safe attempt
+metadata and potentially sensitive opt-in bodies; no storage format, second event
+bus or synthetic request-preview pipeline is introduced.
+
 ## Current Architecture
 
 ```text

@@ -167,9 +167,13 @@ export function assertOwnedRehearsalCompose(config, model) {
           assert.equal(mount.target, '/fixture-registry.mjs');
         } else {
           assert.equal(name, 'api', 'Foreign bind mount.');
-          const file = REHEARSAL_TOOLS.find((file) => mount.target === '/fixture-tools/' + file);
-          assert.ok(file, 'Foreign fixture tool.');
-          assert.equal(mount.source, path.join(path.dirname(config.registryScript), 'fixture-tools', file));
+          if (mount.target === '/opt/rivet/api-entrypoint.sh') {
+            assert.equal(mount.source, path.join(path.dirname(config.registryScript), 'legacy-api-entrypoint.sh'));
+          } else {
+            const file = REHEARSAL_TOOLS.find((file) => mount.target === '/fixture-tools/' + file);
+            assert.ok(file, 'Foreign fixture tool.');
+            assert.equal(mount.source, path.join(path.dirname(config.registryScript), 'fixture-tools', file));
+          }
         }
         assert.equal(mount.read_only, true);
       } else assert.equal(mount.type, 'tmpfs');

@@ -50,6 +50,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s-proxy" (include "rivet.fullname" .) -}}
 {{- end -}}
 
+{{- define "rivet.serviceSelector" -}}
+{{- $component := .component -}}
+{{- if eq .root.Values.deploymentProfile "single-machine" -}}
+{{- $component = "backend" -}}
+{{- end -}}
+{{ include "rivet.componentLabels" (dict "root" .root "component" $component) }}
+{{- end -}}
+
 {{- define "rivet.webServiceName" -}}
 {{- printf "%s-web" (include "rivet.fullname" .) -}}
 {{- end -}}

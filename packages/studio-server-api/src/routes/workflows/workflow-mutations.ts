@@ -34,7 +34,6 @@ import {
   ensureWorkflowEndpointNameIsUnique,
   getWorkflowProjectSettings,
   hasPublishedWorkflowLineage,
-  normalizeWorkflowProjectSettingsDraft,
   readStoredWorkflowProjectSettings,
   resolvePublishedWorkflowProjectPath,
 } from './publication.js';
@@ -47,6 +46,7 @@ import { saveFilesystemPublicationTransaction } from './filesystem-publication-t
 import { moveProjectWithSidecars } from './filesystem-project-move-transactions.js';
 import { assertFilesystemPublicationPreconditions } from './publication-preconditions.js';
 import { requireProjectMainGraphForEndpoint } from './main-graph.js';
+import { createEndpointPublication, assertEndpointAccess } from './publication-policy.js';
 import { getWorkflowDuplicateProjectName } from './workflow-project-naming.js';
 import { deleteWorkflowRecordingsBySourceProjectPath, deleteWorkflowRecordingsByWorkflowId } from './recordings.js';
 import { getWorkflowFolder, getWorkflowProject } from './workflow-query.js';
@@ -449,11 +449,12 @@ export async function publishWorkflowProjectItem(relativePath: unknown, settings
   const projectName = path.basename(projectPath, PROJECT_EXTENSION);
   const existingSettings = await readStoredWorkflowProjectSettings(projectPath, projectName);
   await assertFilesystemPublicationPreconditions(projectPath, existingSettings, preconditions, 'publish-endpoint');
-  const normalizedSettings = normalizeWorkflowProjectSettingsDraft(settings);
+  const publication = createEndpointPublication(settings);
+  const normalizedSettings = { endpointName: publication.endpointName };
   requireProjectMainGraphForEndpoint(await loadProjectFromFile(projectPath));
   await ensureWorkflowEndpointNameIsUnique(root, projectPath, normalizedSettings.endpointName);
-  const publishedSnapshotId = randomUUID();
-  const lastPublishedAt = new Date().toISOString();
+  const publishedSnapshotId = publication.versionId;
+  const lastPublishedAt = publication.publishedAt;
 
   const legacyMetadataChange = await getCurrentPublishedWorkflowVersionMetadataChange({
     root,
@@ -535,9 +536,7 @@ export async function updateWorkflowEndpointAccess(relativePath: unknown, access
   const projectPath = requireProjectPath(resolveWorkflowRelativePath(root, relativePath, { allowProjectFile: true }));
   const settings = await readStoredWorkflowProjectSettings(projectPath, path.basename(projectPath, PROJECT_EXTENSION));
   await assertFilesystemPublicationPreconditions(projectPath, settings, preconditions, 'set-endpoint-access');
-  if (!hasPublishedWorkflowLineage(settings)) {
-    throw conflict('Publish the workflow before changing endpoint access');
-  }
+  assertEndpointAccess(access);
 
   await saveFilesystemPublicationTransaction({
     root,

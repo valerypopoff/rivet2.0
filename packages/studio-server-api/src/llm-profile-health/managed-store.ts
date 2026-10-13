@@ -37,16 +37,15 @@ const LLM_PROFILE_HEALTH_PROJECT_LOCK_NAMESPACE = 1_815_101_512;
 
 function parseEntry(row: ManagedRow | undefined): StoredLLMProfileHealthEntry | null {
   if (!row?.entry_json) return null;
-  const parsed = typeof row.entry_json === 'string' ? JSON.parse(row.entry_json) as StoredLLMProfileHealthEntry : row.entry_json;
+  const parsed =
+    typeof row.entry_json === 'string' ? (JSON.parse(row.entry_json) as StoredLLMProfileHealthEntry) : row.entry_json;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.failureTimestamps)) {
     throw new Error(`Invalid persisted LLM Profile health entry for ${row.key}.`);
   }
   return normalizeStoredLLMProfileHealthEntry(parsed);
 }
 
-function requireProjectId(
-  identity: RivetLLMProfileHealthBeginRequest['identity'],
-): ProjectId {
+function requireProjectId(identity: RivetLLMProfileHealthBeginRequest['identity']): ProjectId {
   if (identity.projectId == null || String(identity.projectId).trim() === '') {
     throw new Error('Studio Server LLM Profile health operations require a projectId.');
   }
@@ -55,7 +54,9 @@ function requireProjectId(
 
 export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfileHealthStore {
   readonly #pool: Pool;
-  constructor(pool: Pool) { this.#pool = pool; }
+  constructor(pool: Pool) {
+    this.#pool = pool;
+  }
 
   async #transaction<T>(run: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect();
@@ -65,7 +66,11 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch { /* Preserve the operation error. */ }
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* Preserve the operation error. */
+      }
       throw error;
     } finally {
       client.release();
@@ -73,20 +78,26 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
   }
 
   async #readForBegin(client: PoolClient, key: string): Promise<StoredLLMProfileHealthEntry | null> {
-    await client.query('INSERT INTO llm_profile_health (key, entry_json, updated_at) VALUES ($1, NULL, NOW()) ON CONFLICT (key) DO NOTHING', [key]);
+    await client.query(
+      'INSERT INTO llm_profile_health (key, entry_json, updated_at) VALUES ($1, NULL, NOW()) ON CONFLICT (key) DO NOTHING',
+      [key],
+    );
     return this.#readForUpdate(client, key);
   }
 
   async #readForUpdate(client: PoolClient, key: string): Promise<StoredLLMProfileHealthEntry | null> {
-    const result = await client.query<ManagedRow>('SELECT key, entry_json FROM llm_profile_health WHERE key = $1 FOR UPDATE', [key]);
+    const result = await client.query<ManagedRow>(
+      'SELECT key, entry_json FROM llm_profile_health WHERE key = $1 FOR UPDATE',
+      [key],
+    );
     return parseEntry(result.rows[0]);
   }
 
   async #lockProject(client: PoolClient, projectId: ProjectId): Promise<void> {
-    await client.query(
-      'SELECT pg_advisory_xact_lock($1, hashtext($2))',
-      [LLM_PROFILE_HEALTH_PROJECT_LOCK_NAMESPACE, String(projectId)],
-    );
+    await client.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+      LLM_PROFILE_HEALTH_PROJECT_LOCK_NAMESPACE,
+      String(projectId),
+    ]);
   }
 
   async #now(client: PoolClient): Promise<number> {
@@ -99,11 +110,19 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
   }
 
   async #write(client: PoolClient, key: string, entry: StoredLLMProfileHealthEntry): Promise<void> {
-    await client.query(`
+    await client.query(
+      `
       UPDATE llm_profile_health
       SET project_id = $2, entry_json = $3::jsonb, updated_at = to_timestamp($4 / 1000.0)
       WHERE key = $1
-    `, [key, entry.identity.projectId == null ? null : String(entry.identity.projectId), JSON.stringify(entry), entry.updatedAt]);
+    `,
+      [
+        key,
+        entry.identity.projectId == null ? null : String(entry.identity.projectId),
+        JSON.stringify(entry),
+        entry.updatedAt,
+      ],
+    );
   }
 
   begin(request: RivetLLMProfileHealthBeginRequest): Promise<RivetLLMProfileHealthBeginResult> {
@@ -147,74 +166,96 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
 
   async reset(request: RivetLLMProfileHealthResetRequest): Promise<void> {
     if (request.key != null) {
-      await this.#pool.query('DELETE FROM llm_profile_health WHERE key = $1', [request.key]);
+      await this.#pool.query(
+        "DELETE FROM llm_profile_health WHERE key = $1 AND ($2::text IS NULL OR COALESCE(entry_json->'identity'->>'family', 'llm') = $2)",
+        [request.key, request.family ?? null],
+      );
     } else {
       await this.#transaction(async (client) => {
         await this.#lockProject(client, request.projectId);
         await client.query(
-          'DELETE FROM llm_profile_health WHERE project_id = $1',
-          [String(request.projectId)],
+          "DELETE FROM llm_profile_health WHERE project_id = $1 AND ($2::text IS NULL OR COALESCE(entry_json->'identity'->>'family', 'llm') = $2)",
+          [String(request.projectId), request.family ?? null],
         );
       });
     }
   }
 
-  async resetProjectKey(projectId: ProjectId, key: string): Promise<boolean> {
+  async resetProjectKey(projectId: ProjectId, key: string, family?: 'llm' | 'classifier'): Promise<boolean> {
     return this.#transaction(async (client) => {
       await this.#lockProject(client, projectId);
       const result = await client.query(
-        'DELETE FROM llm_profile_health WHERE project_id = $1 AND key = $2',
-        [String(projectId), key],
+        "DELETE FROM llm_profile_health WHERE project_id = $1 AND key = $2 AND ($3::text IS NULL OR COALESCE(entry_json->'identity'->>'family', 'llm') = $3)",
+        [String(projectId), key, family ?? null],
       );
       return (result.rowCount ?? 0) > 0;
     });
   }
 
   async list(request: RivetLLMProfileHealthListRequest = {}): Promise<RivetLLMProfileHealthSnapshot[]> {
-    const result = request.projectId == null
-      ? await this.#pool.query<ManagedRow>('SELECT key, entry_json FROM llm_profile_health WHERE entry_json IS NOT NULL ORDER BY updated_at DESC, key ASC')
-      : await this.#pool.query<ManagedRow>(`
+    const result =
+      request.projectId == null
+        ? await this.#pool.query<ManagedRow>(
+            'SELECT key, entry_json FROM llm_profile_health WHERE entry_json IS NOT NULL ORDER BY updated_at DESC, key ASC',
+          )
+        : await this.#pool.query<ManagedRow>(
+            `
           SELECT key, entry_json
           FROM llm_profile_health
           WHERE entry_json IS NOT NULL AND project_id = $1
           ORDER BY updated_at DESC, key ASC
-        `, [String(request.projectId)]);
+        `,
+            [String(request.projectId)],
+          );
     const clockResult = await this.#pool.query<ManagedClockRow>(
       'SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms',
     );
     const now = Number(clockResult.rows[0]?.now_ms);
     if (!Number.isFinite(now)) throw new Error('Postgres did not return a valid health-store clock.');
-    return result.rows.map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now));
+    return result.rows
+      .map((row) => createLLMProfileHealthSnapshot(parseEntry(row)!, now))
+      .filter((entry) => request.family == null || (entry.identity.family ?? 'llm') === request.family);
   }
-  async listAdmin(input: { projectId: ProjectId }): Promise<readonly LLMProfileHealthAdminEntry[]> {
-    const result = await this.#pool.query<ManagedRow>(`
+  async listAdmin(input: {
+    projectId: ProjectId;
+    family?: 'llm' | 'classifier';
+  }): Promise<readonly LLMProfileHealthAdminEntry[]> {
+    const result = await this.#pool.query<ManagedRow>(
+      `
       SELECT key, entry_json
       FROM llm_profile_health
       WHERE entry_json IS NOT NULL AND project_id = $1
       ORDER BY updated_at DESC, key ASC
-    `, [String(input.projectId)]);
+    `,
+      [String(input.projectId)],
+    );
     const clockResult = await this.#pool.query<ManagedClockRow>(
       'SELECT (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms',
     );
     const now = Number(clockResult.rows[0]?.now_ms);
     if (!Number.isFinite(now)) throw new Error('Postgres did not return a valid health-store clock.');
-    return result.rows.map((row) => {
-      const entry = parseEntry(row)!;
-      return {
-        ...createLLMProfileHealthSnapshot(entry, now),
-        contributingRuns: getLLMProfileHealthContributorRuns(entry),
-      };
-    });
+    return result.rows
+      .map((row) => {
+        const entry = parseEntry(row)!;
+        return {
+          ...createLLMProfileHealthSnapshot(entry, now),
+          contributingRuns: getLLMProfileHealthContributorRuns(entry),
+        };
+      })
+      .filter((entry) => input.family == null || (entry.identity.family ?? 'llm') === input.family);
   }
 
   async recordRecordingOutcome(input: LLMProfileHealthRecordingOutcome): Promise<void> {
     await this.#transaction(async (client) => {
-      const result = await client.query<ManagedRow>(`
+      const result = await client.query<ManagedRow>(
+        `
         SELECT key, entry_json
         FROM llm_profile_health
         WHERE entry_json @> $1::jsonb
         FOR UPDATE
-      `, [JSON.stringify({ failureEvidence: [{ correlationId: input.correlationId }] })]);
+      `,
+        [JSON.stringify({ failureEvidence: [{ correlationId: input.correlationId }] })],
+      );
       const now = await this.#now(client);
       for (const row of result.rows) {
         const entry = parseEntry(row)!;
@@ -227,12 +268,15 @@ export class PostgresRivetLLMProfileHealthStore implements RivetStudioLLMProfile
 
   async markRecordingDeleted(recordingId: string): Promise<void> {
     await this.#transaction(async (client) => {
-      const result = await client.query<ManagedRow>(`
+      const result = await client.query<ManagedRow>(
+        `
         SELECT key, entry_json
         FROM llm_profile_health
         WHERE entry_json @> $1::jsonb
         FOR UPDATE
-      `, [JSON.stringify({ failureEvidence: [{ recordingId }] })]);
+      `,
+        [JSON.stringify({ failureEvidence: [{ recordingId }] })],
+      );
       const now = await this.#now(client);
       for (const row of result.rows) {
         const entry = parseEntry(row)!;

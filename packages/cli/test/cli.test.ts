@@ -717,6 +717,7 @@ test('createServeApp rejects single-node streaming without event streaming enabl
 test('shapeOutputs can select and unwrap graph outputs', () => {
   const outputs = {
     cost: { type: 'number', value: 1 },
+    costBreakdown: { type: 'object', value: { llm: 0.7, classifier: 0.3, other: 0 } },
     output: { type: 'string', value: 'hello' },
   };
 
@@ -725,6 +726,7 @@ test('shapeOutputs can select and unwrap graph outputs', () => {
   });
   assert.deepEqual(shapeOutputs(outputs, { outputKey: 'output' }), { type: 'string', value: 'hello' });
   assert.equal(shapeOutputs(outputs, { unwrapOutput: 'output' }), 'hello');
+  assert.deepEqual(shapeOutputs(outputs, { includeCost: true }), outputs);
   assert.throws(() => shapeOutputs(outputs, { outputKey: 'missing' }), /was not returned/);
   assert.throws(() => shapeOutputs(outputs, { outputKey: 'output', unwrapOutput: 'output' }), /Use only one/);
 });

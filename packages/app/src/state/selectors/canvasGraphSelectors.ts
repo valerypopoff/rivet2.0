@@ -4,6 +4,7 @@ import {
   type ChartNode,
   type NodeConnection,
   type NodeId,
+  type PortId,
   type NodeImpl,
   type NodeInputDefinition,
   type NodeOutputDefinition,
@@ -18,6 +19,10 @@ import { effectiveNodesByIdState, nodeInstanceByIdState } from './nodeSelectors.
 import { projectNodeRegistryState } from '../plugins.js';
 import { nodePrefabSourceNodesByIdState } from './nodePrefabSelectors.js';
 import { applyPassthroughConnectionLabels } from '../../domain/graphEditing/passthroughPortLabels.js';
+import {
+  getConnectedInputWarnings,
+  getConnectedInputWarningDetails,
+} from '../../domain/graphEditing/portCompatibility.js';
 
 export const canvasPreviewConnectionsState = atom((get) => {
   const connections = get(connectionsState);
@@ -164,6 +169,33 @@ const rawCanvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefine
       : { inputDefinitions: [], outputDefinitions: [] };
   }),
 );
+
+/** Component-owned projection: use the surface's edges and skip display-only label traversal. */
+export function createInputConnectionWarningsAtom(nodeId: NodeId, connections: readonly NodeConnection[]) {
+  return atom((get) =>
+    getConnectedInputWarnings({
+      nodeId,
+      connections,
+      inputDefinitions: get(rawCanvasIoDefinitionsForNodeState(nodeId)).inputDefinitions,
+      getOutputDefinitions: (sourceId) => get(rawCanvasIoDefinitionsForNodeState(sourceId)).outputDefinitions,
+    }),
+  );
+}
+
+/** Hover-only projection; live endpoint types use the same rules as the yellow circles. */
+export function createInputConnectionWarningDetailsAtom(nodeId: NodeId, portId: PortId, isInput: boolean) {
+  return atom((get) => {
+    if (!isInput) return [];
+    return (
+      getConnectedInputWarningDetails({
+        nodeId,
+        connections: get(canvasConnectionsForSingleNodeState(nodeId)).filter((edge) => edge.inputId === portId),
+        inputDefinitions: get(rawCanvasIoDefinitionsForNodeState(nodeId)).inputDefinitions,
+        getOutputDefinitions: (sourceId) => get(rawCanvasIoDefinitionsForNodeState(sourceId)).outputDefinitions,
+      }).get(portId) ?? []
+    );
+  });
+}
 
 export const canvasIoDefinitionsForNodeState = atomFamily((nodeId: NodeId | undefined) =>
   atom((get) => {

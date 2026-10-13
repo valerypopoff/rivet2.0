@@ -7,8 +7,11 @@ import { cloneLLMChatV2EditorCacheOutputs } from './chatV2EditorCache.js';
 
 /** Projects cache hits as current-run output without inventing provider work. */
 export function projectLLMChatV2EditorCacheHit(runtime: LLMChatV2RuntimeConfig): Outputs | undefined {
-  const outputs = runtime.cachedOutputs;
-  if (outputs == null) return undefined;
+  if (runtime.cachedOutputs == null) return undefined;
+  // Keep cached response/Usage evidence, but account only work performed in
+  // this invocation. Neither the model nor its delegated tools run on a hit.
+  const outputs: Outputs = { ...runtime.cachedOutputs, ['cost' as PortId]: { type: 'number', value: 0 } };
+  delete outputs['costBreakdown' as PortId];
 
   if (runtime.getProfileSummary != null) {
     outputs['llmProfileSummary' as PortId] = {

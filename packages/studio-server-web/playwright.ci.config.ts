@@ -19,11 +19,13 @@ export default defineConfig({
     'sidebar-name-wrapping.spec.ts',
     'streaming-nodes.spec.ts',
     'project-tree-activation.spec.ts',
+    'port-connection-warnings.spec.ts',
     'cross-project-subgraph-loading.spec.ts',
     'node-editor-ownership.spec.ts',
     'node-editor-lifecycle.spec.ts',
     'llm-temperature.spec.ts',
     'evaluation-history-paging.spec.ts',
+    'tunnel-cache-retention.spec.ts',
   ],
   timeout: 180_000,
   expect: {

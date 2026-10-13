@@ -1,0 +1,17 @@
+{{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rivet.fullname" . }}-legacy-restore
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.legacyRestore.size }}
+  {{- if .Values.legacyRestore.storageClassName }}
+  storageClassName: {{ .Values.legacyRestore.storageClassName }}
+  {{- end }}
+{{- end }}

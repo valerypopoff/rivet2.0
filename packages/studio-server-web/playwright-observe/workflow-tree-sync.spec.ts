@@ -6,6 +6,7 @@ import {
 } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 
 import { authenticateIfNeeded, panGraphCanvas, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { readCommittedWorkspaceCheckpoint } from './helpers/workspaceRecovery';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import type { HostedProjectConflictSnapshot } from '../../studio-server-shared/editor-bridge';
 
@@ -20,6 +21,22 @@ declare global {
 }
 
 let api: Awaited<ReturnType<typeof startAsyncWorkflowProcess>>;
+
+async function waitForViewportCheckpoint(page: Page, projectName: string, transform: string) {
+  await expect
+    .poll(async () => {
+      const raw = await readCommittedWorkspaceCheckpoint(page);
+      if (!raw) return undefined;
+      const checkpoint = JSON.parse(raw);
+      const position =
+        checkpoint.groups.project?.projectEditorStateByProjectId?.[`${projectName}-project-id`]
+          ?.canvasPositionsByGraph?.[`${projectName}-graph-id`];
+      return position
+        ? `scale(${position.zoom}, ${position.zoom}) translate(${position.x}px, ${position.y}px)`
+        : undefined;
+    })
+    .toBe(transform);
+}
 test.beforeAll(async () => {
   api = await startAsyncWorkflowProcess();
 });
@@ -236,9 +253,10 @@ test('dragging a project into a folder sends the move and follows the new projec
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page
-    .locator('.project-row', { hasText: project.name })
-    .dragTo(page.locator('.folder-row', { hasText: folder.name }));
+  const projectRow = page.locator('.project-row', { hasText: project.name });
+  // dragTo does not wait for enabled: a visible row can precede iframe readiness.
+  await expect(projectRow).toBeEnabled();
+  await projectRow.dragTo(page.locator('.folder-row', { hasText: folder.name }));
 
   await expect
     .poll(() => moveRequests)
@@ -305,6 +323,7 @@ test('folder context menu creates a nested folder inside the selected folder', a
     'New folder',
     'New project',
     'Upload project',
+    'Upload bundle',
     'Delete folder',
   ]);
   page.once('dialog', (dialog) => {
@@ -551,6 +570,7 @@ test('a page reload restores the latest graph canvas position', async ({ page })
   const canvasContents = editor.locator('.canvas-node-contents');
   const movedTransform = await panGraphCanvas(page);
 
+  await waitForViewportCheckpoint(page, projectName, movedTransform);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
@@ -589,26 +609,12 @@ test('closing a preview project before reload preserves its canvas position when
   const canvasContents = editor.locator('.canvas-node-contents');
   const movedTransform = await panGraphCanvas(page);
 
-  // Match a normal editing session: startup hydrates the last loaded graph
-  // separately from the project-scoped editor state.
+  // Recovery is one committed workspace envelope, not separate legacy groups.
+  await waitForViewportCheckpoint(page, projectName, movedTransform);
   await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open('jotai-store');
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
-        try {
-          return await new Promise<string | undefined>((resolve, reject) => {
-            const request = database.transaction('state').objectStore('state').get('graph');
-            request.onsuccess = () => resolve(JSON.parse(request.result ?? '{}').graphState?.metadata?.id);
-            request.onerror = () => reject(request.error);
-          });
-        } finally {
-          database.close();
-        }
-      }),
+    .poll(
+      async () =>
+        JSON.parse((await readCommittedWorkspaceCheckpoint(page)) ?? '{}').groups?.graph?.graphState?.metadata?.id,
     )
     .toBe(`${projectName}-graph-id`);
   const activeProjectTab = editor.locator('.projects-container .project.active', { hasText: projectName });
@@ -765,6 +771,69 @@ test('a remote project rename updates the open tab title and notifies the user w
   await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
   await expect(page.locator('.active-project-name')).toHaveText(renamedName);
   expect(projectLoadRequests).toBe(1);
+});
+
+test('an overloaded committed rename reconciles the open tab and subsequent save without a tree event', async ({
+  page,
+}) => {
+  const originalName = 'Overloaded rename';
+  const renamedName = 'Recovered rename';
+  const project = createProjectFixture(originalName);
+  const renamedProject = {
+    ...project,
+    name: renamedName,
+    fileName: `${renamedName}.rivet-project`,
+    relativePath: `${renamedName}.rivet-project`,
+    absolutePath: `/managed/workflows/${renamedName}.rivet-project`,
+  };
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+  let projectLoads = 0;
+  const saves: { path: string }[] = [];
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, { count: 0 });
+  await page.route('**/api/projects/load', (route) => {
+    projectLoads++;
+    return route.fulfill({
+      json: { contents: createProjectContents(originalName), datasetsContents: null, revisionId: null },
+    });
+  });
+  await page.route('**/api/projects/save', (route) => {
+    saves.push(route.request().postDataJSON());
+    return route.fulfill({ json: { path: renamedProject.absolutePath, revisionId: 'saved-revision' } });
+  });
+  await page.route('**/api/workflows/projects', (route) => {
+    expect(route.request().method()).toBe('PATCH');
+    state.projects = [renamedProject];
+    state.revision++;
+    return route.fulfill({
+      json: {
+        project: renamedProject,
+        movedProjectPaths: [
+          { fromAbsolutePath: project.absolutePath, toAbsolutePath: renamedProject.absolutePath },
+          // Exceed the real bridge byte limit without exposing a test-only queue
+          // control. This committed notification must fall back to the tree owner.
+          { fromAbsolutePath: 'x'.repeat(17 * 1024 * 1024), toAbsolutePath: '/unused.rivet-project' },
+        ],
+      },
+    });
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const row = page.locator('.project-row', { hasText: originalName });
+  await row.dblclick();
+  const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: originalName })).toBeVisible();
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename project' }).click();
+  const input = page.getByRole('textbox', { name: `Rename ${originalName}` });
+  await input.fill(renamedName);
+  await input.press('Enter');
+  await expect(editorFrame.locator('.projects-container .project.active', { hasText: renamedName })).toBeVisible();
+  await expect(page.locator('.active-project-name')).toHaveText(renamedName);
+  expect(projectLoads).toBe(1, 'reconciliation must preserve the existing authored tab, not reload it');
+  await saveThroughEditor(page);
+  await expect.poll(() => saves.map((save) => save.path)).toEqual([renamedProject.absolutePath]);
 });
 
 test('a remote content edit keeps an open project in place and requires an explicit reload or keep-mine choice', async ({

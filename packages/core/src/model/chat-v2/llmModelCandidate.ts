@@ -64,7 +64,8 @@ export async function resolveLLMModelCandidate(params: {
       customEnvironmentName: effectiveData.customProviderApiKeyEnvVarName,
     });
   const transformRequestBody =
-    (provider === 'openai' || provider === 'custom') && plan.instructionRoles.includes('developer')
+    (provider === 'openai' || provider === 'custom' || provider === 'openrouter') &&
+    plan.instructionRoles.includes('developer')
       ? (body: unknown) => restoreOpenAICompatibleInstructionRoles(body, plan.instructionRoles)
       : undefined;
   const resolvedProvider = await createResolvedChatV2Provider({

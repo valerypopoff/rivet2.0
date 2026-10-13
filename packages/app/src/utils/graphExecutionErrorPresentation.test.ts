@@ -36,7 +36,7 @@ test('shows async branch safety violations serialized by Node and remote executo
   );
 });
 
-test('keeps ordinary graph failures out of the global toast channel', () => {
+test('does not request extra node-local toasts for ordinary failures', () => {
   assert.equal(shouldToastAsyncBranchSafetyError(new Error('Provider request failed.')), false);
   assert.equal(
     shouldToastAsyncBranchSafetyError(

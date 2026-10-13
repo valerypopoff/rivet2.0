@@ -21,6 +21,11 @@ function readJson(relativePath) {
   return JSON.parse(readText(relativePath));
 }
 
+// Shipping startup must retain managed validation; legacy fixture rewriting is test-only.
+const apiEntrypoint = readText('deploy/studio-server/images/api/entrypoint.sh');
+assert.match(apiEntrypoint, /server-deployment-contract/);
+assert.match(apiEntrypoint, /exec node \/app\/packages\/studio-server-api\/dist\/studio-server-api\/src\/serve\.js/);
+
 const requiredPaths = [
   'AGENTS.md',
   'package.json',
@@ -34,8 +39,15 @@ const requiredPaths = [
   'deploy/studio-server/scripts/candidate-image-smoke.mjs',
   'deploy/studio-server/.env.example',
   'deploy/studio-server/.env.kubernetes-local.example',
+  'deploy/studio-server/.env.single-machine.example',
+  'deploy/studio-server/.env.production.example',
+  'deploy/studio-server/scripts/start-server.mjs',
+  'deploy/studio-server/scripts/lib/server-launch-mode.mjs',
+  'deploy/studio-server/scripts/server-launch-mode.test.mjs',
+  'deploy/studio-server/helm/overlays/single-machine.yaml',
+  'developer-docs/studio-server/server-stack.md',
   'deploy/studio-server/README.md',
-  'deploy/studio-server/kubernetes-test/local-dependencies.yaml',
+  'deploy/studio-server/scripts/lib/local-kubernetes-services.mjs',
   'deploy/studio-server/helm/Chart.yaml',
   'deploy/studio-server/compose/docker-compose.yml',
   'deploy/studio-server/compose/docker-compose.dev.yml',
@@ -157,7 +169,11 @@ assert.equal(rootPackage.scripts?.['dev:server'], undefined, 'Studio Server comm
 // not unit tests that assert production implementation source text.
 assert.equal(
   rootPackage.scripts['studio-server:dev:tunnel'],
-  'node deploy/studio-server/scripts/dev-docker.mjs dev tunnel',
+  'node deploy/studio-server/scripts/retired-server-launcher.mjs',
+);
+assert.equal(
+  rootPackage.scripts['studio-server:dev'],
+  'node deploy/studio-server/scripts/container-server.mjs dev local-storage',
 );
 const devServices = parse(readText('deploy/studio-server/compose/docker-compose.dev.yml')).services;
 assert.notEqual(
@@ -253,6 +269,16 @@ assert.match(
   rootPackage.scripts['studio-server:test'],
   /studio-server:verify:migration-ledger/,
   'The full Studio Server gate must verify the source-file migration ledger.',
+);
+assert.equal(
+  rootPackage.scripts['studio-server:dev:recreate'],
+  rootPackage.scripts['studio-server:dev'],
+  'Development recreation must use the same managed Docker deployment, not implicit Kubernetes.',
+);
+assert.equal(
+  rootPackage.scripts['studio-server:prod:prebuilt'],
+  'node deploy/studio-server/scripts/retired-server-launcher.mjs',
+  'Retired production commands must not silently select a different orchestrator.',
 );
 
 for (const markdownPath of [

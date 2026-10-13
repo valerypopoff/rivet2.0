@@ -54,6 +54,9 @@ import {
 import type { RuntimeHealthReader } from './runtime-health.js';
 import { captureAppSettingsSnapshot } from './middleware/app-settings-snapshot.js';
 import { vmMigrationRequestBarrier } from './vm-migration-maintenance.js';
+import { releaseMaintenanceBarrier } from './release-maintenance.js';
+import { legacyRestoreRequestBarrier, isLegacyRestorePaused, isLegacyRestoreWarmup } from './legacy-restore/service.js';
+import { legacyRestoreRouter } from './legacy-restore/router.js';
 import { closeResponseConnectionAfterFlush, getHttpBodyAdmissionSnapshot } from './middleware/body-admission.js';
 import { getManagedPostgresPoolMetrics } from './managed-postgres-pool.js';
 import { getStudioMetrics, type MetricsHttpRoute, type StudioMetrics } from './metrics.js';
@@ -235,6 +238,7 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
       '/api/runtime-libraries/*',
       '/api/deployment-status/*',
       '/api/app-settings/*',
+      '/api/legacy-restore/*',
       '/api/config*',
       '/internal/app-settings/proxy-config',
     );
@@ -357,6 +361,7 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
   app.use('/api/deployment-status', createDeploymentStatusRouter(profile));
   app.use('/api/app-settings', appSettingsRouter);
+  app.use('/api/legacy-restore', legacyRestoreRouter);
   app.use('/api', configRouter);
 }
 
@@ -396,13 +401,31 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     res.setHeader('Cache-Control', 'no-store');
     res.status(snapshot.ok ? 200 : 503).json({ ok: snapshot.ok });
   });
-  app.get('/livez', (_req, res) => sendHealth(health.getLiveness(), res));
-  app.get('/readyz', (_req, res) => sendHealth(health.getReadiness(), res));
+  app.get('/livez', (_req, res) => {
+    if (isLegacyRestorePaused() && !isLegacyRestoreWarmup()) {
+      res.json({ ok: true, restoreMaintenance: true, restoreWarmup: false });
+      return;
+    }
+    sendHealth(health.getLiveness(), res);
+  });
+  app.get('/readyz', (_req, res) => {
+    if (isLegacyRestorePaused()) {
+      if (!isLegacyRestoreWarmup()) res.json({ ok: true, restoreMaintenance: true, restoreWarmup: false });
+      else {
+        const snapshot = health.getReadiness();
+        res.status(snapshot.ok ? 200 : 503).json({ ...snapshot, restoreMaintenance: true, restoreWarmup: true });
+      }
+      return;
+    }
+    sendHealth(health.getReadiness(), res);
+  });
 
   // Do not count platform probes or Prometheus scrapes as application traffic.
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(vmMigrationRequestBarrier);
+  app.use(releaseMaintenanceBarrier);
+  app.use(legacyRestoreRequestBarrier);
 
   app.use(captureAppSettingsSnapshot);
 
@@ -427,7 +450,8 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
     if (response.status >= 500) {
       if (
         matchesPath(req.path, '/api/app-settings/local-upgrade') ||
-        matchesPath(req.path, '/api/app-settings/vm-migration')
+        matchesPath(req.path, '/api/app-settings/vm-migration') ||
+        matchesPath(req.path, '/api/legacy-restore')
       ) {
         // Parsers and storage drivers may embed source values, SQL or provider
         // credentials in errors. Keep operator diagnostics in fixed vocabulary

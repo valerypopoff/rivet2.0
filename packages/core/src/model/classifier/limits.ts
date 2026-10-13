@@ -13,6 +13,9 @@ export type ClassifierPreparationCheck = () => void;
 
 export class ClassifierResourceLimitError extends Error {}
 
+/** Receipt failed before JSON decoding/validation, rather than malformed evidence. */
+export class ClassifierResponseReadError extends Error {}
+
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const byteBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer')!.get!;
 const byteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset')!.get!;
@@ -231,6 +234,7 @@ export async function readClassifierResponse(
   response: Response,
   signal: AbortSignal,
   check: ClassifierPreparationCheck = () => signal.throwIfAborted(),
+  onBody?: (body: unknown) => void,
 ): Promise<unknown> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > CLASSIFIER_LIMITS.responseBytes)
@@ -248,7 +252,9 @@ export async function readClassifierResponse(
   try {
     for (;;) {
       check();
-      const { done, value } = await reader.read();
+      const { done, value } = await reader.read().catch((cause: unknown) => {
+        throw new ClassifierResponseReadError('Classifier response body could not be read.', { cause });
+      });
       check();
       if (done) break;
       const chunk = classifierByteView(value);
@@ -265,8 +271,29 @@ export async function readClassifierResponse(
     check();
     const json = text.join('');
     checkClassifierJsonWork(json, check);
-    const body: unknown = JSON.parse(json);
+    let body: unknown;
+    try {
+      body = JSON.parse(json);
+    } catch (error) {
+      check();
+      try {
+        onBody?.(json);
+      } catch {
+        /* Observation only. */
+      }
+      check();
+      throw error;
+    }
     assertClassifierResourceLimits(body, check, CLASSIFIER_LIMITS.responseBytes);
+    check();
+    try {
+      // Diagnostics must not modify the private response before validation or pricing.
+      // Only opt-in observers allocate a detached copy of this bounded, plain JSON.
+      if (onBody) onBody(structuredClone(body));
+    } catch {
+      /* Observation only. */
+    }
+    check();
     return body;
   } catch (error) {
     cancel();

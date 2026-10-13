@@ -24,10 +24,10 @@ import type {
   StoredWorkflowPublishedWebApp,
   StoredWorkflowProjectSettings,
   WorkflowProjectSettings,
-  WorkflowProjectSettingsDraft,
   WorkflowProjectStatus,
 } from './types.js';
 import type { PublicationFileChange } from './filesystem-publication-transactions.js';
+import { normalizeEndpointSettings } from './publication-policy.js';
 import { nextPublicationVersion, normalizePublicationVersion } from './publication-preconditions.js';
 import { normalizeStoredEndpointName, normalizeWorkflowEndpointLookupName } from './endpoint-names.js';
 import { getWorkflowProjectIndexDataFromFileCached } from './project-stats.js';
@@ -195,15 +195,7 @@ export function createDefaultStoredWorkflowProjectSettings(): StoredWorkflowProj
   };
 }
 
-export function normalizeWorkflowProjectSettingsDraft(value: unknown): WorkflowProjectSettingsDraft {
-  const defaults = createDefaultStoredWorkflowProjectSettings();
-  const raw = (value ?? {}) as Record<string, unknown>;
-  const endpointName = typeof raw.endpointName === 'string' ? raw.endpointName : defaults.endpointName;
-
-  return {
-    endpointName: normalizeStoredEndpointName(endpointName),
-  };
-}
+export const normalizeWorkflowProjectSettingsDraft = normalizeEndpointSettings;
 
 export function normalizeStoredWorkflowProjectSettings(value: unknown): StoredWorkflowProjectSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

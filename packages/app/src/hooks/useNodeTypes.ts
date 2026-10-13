@@ -29,7 +29,11 @@ import { passthroughNodeDescriptor } from '../components/nodes/PassthroughNode.j
 import { dataBusNodeDescriptor } from '../components/nodes/DataBusNode.js';
 import { llmChatV2NodeDescriptor } from '../components/nodes/LLMChatV2Node.js';
 import { llmProfileNodeDescriptor } from '../components/nodes/LLMProfileNode.js';
-import { classifierEvaluateNodeDescriptor, classifierQuestionNodeDescriptor } from '../components/nodes/ClassifierNodes.js';
+import {
+  classifierEvaluateNodeDescriptor,
+  classifierQuestionNodeDescriptor,
+  classifierProfileNodeDescriptor,
+} from '../components/nodes/ClassifierNodes.js';
 import { toolNodeDescriptor } from '../components/nodes/ToolNode.js';
 import { assemblePromptNodeDescriptor } from '../components/nodes/AssemblePromptNode.js';
 import { useAtomValue } from 'jotai';
@@ -102,6 +106,7 @@ const overriddenDescriptors: Partial<NodeComponentDescriptors> = {
   llmProfile: llmProfileNodeDescriptor,
   classifierQuestion: classifierQuestionNodeDescriptor,
   classifierEvaluate: classifierEvaluateNodeDescriptor,
+  classifierProfile: classifierProfileNodeDescriptor,
   gptFunction: toolNodeDescriptor,
   assemblePrompt: assemblePromptNodeDescriptor,
 };

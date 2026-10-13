@@ -23,7 +23,11 @@ import {
   assertContentAddressedManifestReference,
   assertProductionManifestRetag,
   isMissingRegistryManifestError,
+  pullReleaseManifestArtifact,
+  retagReleaseManifestArtifact,
+  PRODUCTION_RELEASE_MANIFEST_REFERENCE,
 } from './release-manifest-oci.mjs';
+import { parseArgs, resolveDeploymentRelease } from './deploy-kubernetes-release.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
@@ -64,8 +68,8 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 14,
-    minimumRollbackCompatibleVersion: 2,
+    version: 15,
+    minimumRollbackCompatibleVersion: 15,
   });
 });
 
@@ -417,13 +421,352 @@ test('production deployment verifies a clean manifest source checkout before ren
   );
   assert.match(
     deployer,
-    /const manifest = await readManifest\(manifestPath, \{ requirePromoted: true \}\);\s+await assertReleaseManifestMatchesCurrentCheckout\(manifest\);\s+await assertCleanTrackedCheckout\(\);\s+assertReleaseManifestMatchesCurrentChart\(manifest, rootDir\);/,
+    /await verifyCheckout\(manifest\);\s+await verifyClean\(\);\s+assertReleaseManifestMatchesCurrentChart\(manifest, rootDir\);/,
   );
+  const selectionOffset = deployer.search(/await resolveDeploymentRelease\s*\(\s*options,\s*artifactsDir,?\s*\)/u);
+  assert.ok(selectionOffset >= 0, 'The deployment entry point must resolve its release before mutation');
+  for (const mutation of ['await prepareProductionSecrets(', 'await prepareSingleMachine(']) {
+    const mutationOffset = deployer.indexOf(mutation);
+    assert.ok(mutationOffset >= 0 && selectionOffset < mutationOffset);
+  }
   assert.match(deployer, /label: 'unstaged tracked changes',\s+args: \['diff', '--quiet', '--exit-code', '--'\]/);
   assert.match(
     deployer,
     /label: 'staged tracked changes',\s+args: \['diff', '--cached', '--quiet', '--exit-code', '--'\]/,
   );
+});
+
+function artifactDocker(
+  manifest,
+  { pullFailure, copyFailure, removeFailure, removalTransportFailure, copy, createFailure, emptyAcknowledgement } = {},
+) {
+  const calls = [];
+  const selectedDigest = digest('e');
+  const imageId = digest('f');
+  const execute = async (program, args) => {
+    assert.equal(program, 'docker');
+    calls.push(args);
+    const ok = (stdout = '') => ({ exitCode: 0, stdout, stderr: '' });
+    if (args[0] === 'pull')
+      return pullFailure
+        ? { exitCode: 1, stdout: '', stderr: pullFailure }
+        : ok(`Downloaded\nDigest: ${selectedDigest}\nStatus: Downloaded newer image\n`);
+    if (args[0] === 'image') {
+      assert.equal(args.at(-1), `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest@${selectedDigest}`);
+      return ok(imageId);
+    }
+    if (args[0] === 'create') {
+      // The production pointer has moved by now. Only the acknowledged image is correct.
+      assert.equal(args[1], '--name');
+      assert.match(args[2], /^rivet-manifest-[a-f0-9-]{36}$/);
+      assert.equal(args[3], imageId);
+      if (createFailure) throw new Error('Docker create acknowledgement lost');
+      if (emptyAcknowledgement) return ok();
+      return ok('temporary-artifact-container');
+    }
+    if (args[0] === 'cp') {
+      if (copyFailure) throw new Error('Artifact copy failed');
+      if (copy) copy(args[2]);
+      else fs.writeFileSync(args[2], typeof manifest === 'string' ? manifest : JSON.stringify(manifest));
+      return ok();
+    }
+    if (args[0] === 'rm') {
+      if (removalTransportFailure) throw new Error('Docker cleanup transport failed');
+      return removeFailure ? { exitCode: 1, stdout: '', stderr: 'Removal failed' } : ok();
+    }
+    assert.fail(`Unexpected Docker command: ${args}`);
+  };
+  return { calls, execute, selectedDigest, imageId };
+}
+
+test('promoted artifact extraction pins this pull, never starts a container, and cleans up on success and failure', async () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-manifest-pull-test-'));
+  const output = path.join(temporaryDirectory, 'manifest.json');
+  try {
+    for (const scenario of [
+      'success',
+      'copy failure',
+      'malformed',
+      'candidate',
+      'cleanup failure',
+      'copy and cleanup failure',
+      'copy and cleanup transport failure',
+      'create acknowledgement failure',
+      'empty create acknowledgement',
+    ]) {
+      const docker = artifactDocker(
+        scenario === 'malformed' ? '{invalid' : scenario === 'candidate' ? candidate() : promoted(),
+        {
+          copyFailure: scenario.startsWith('copy'),
+          removeFailure: scenario === 'cleanup failure' || scenario === 'copy and cleanup failure',
+          removalTransportFailure: scenario === 'copy and cleanup transport failure',
+          createFailure: scenario === 'create acknowledgement failure',
+          emptyAcknowledgement: scenario === 'empty create acknowledgement',
+        },
+      );
+      const pending = pullReleaseManifestArtifact(PRODUCTION_RELEASE_MANIFEST_REFERENCE, output, docker);
+      if (scenario === 'success') {
+        const result = await pending;
+        assert.deepEqual(result.manifest, promoted());
+        assert.deepEqual(result.identity, {
+          reference: PRODUCTION_RELEASE_MANIFEST_REFERENCE,
+          resolvedReference: `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest@${docker.selectedDigest}`,
+          imageId: docker.imageId,
+        });
+      } else
+        await assert.rejects(pending, (error) => {
+          if (scenario.startsWith('copy and cleanup')) {
+            assert.ok(error instanceof AggregateError);
+            assert.match(error.message, /Artifact copy failed/);
+            assert.match(error.message, /Removal failed|cleanup transport failed/);
+          }
+          return true;
+        });
+      assert.deepEqual(docker.calls.at(-1), [
+        'rm',
+        '--force',
+        '--volumes',
+        docker.calls.find((args) => args[0] === 'create')[2],
+      ]);
+      const copyPath = docker.calls.find((args) => args[0] === 'cp')?.[2];
+      if (copyPath) assert.equal(fs.existsSync(path.dirname(copyPath)), false);
+      assert.equal(
+        docker.calls.some((args) => ['start', 'run'].includes(args[0])),
+        false,
+      );
+      if (scenario !== 'success') assert.equal(fs.existsSync(output), false);
+    }
+    for (const failure of ['manifest unknown', 'unauthorized: authentication required', 'TLS handshake timeout']) {
+      // Previously cached valid bytes must never authorize a failed pull.
+      fs.writeFileSync(output, JSON.stringify(promoted()));
+      const docker = artifactDocker(promoted(), { pullFailure: failure });
+      await assert.rejects(
+        pullReleaseManifestArtifact(PRODUCTION_RELEASE_MANIFEST_REFERENCE, output, docker),
+        /No cached or candidate release/,
+      );
+      assert.deepEqual(docker.calls, [['pull', PRODUCTION_RELEASE_MANIFEST_REFERENCE]]);
+      assert.equal(fs.existsSync(output), false);
+    }
+    const noDigest = async () => ({ exitCode: 0, stdout: 'Status: Image is up to date', stderr: '' });
+    await assert.rejects(
+      pullReleaseManifestArtifact(PRODUCTION_RELEASE_MANIFEST_REFERENCE, output, { execute: noDigest }),
+      /immutable artifact digest/,
+    );
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('artifact extraction rejects oversized and linked manifests without writing through host paths', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-manifest-file-test-'));
+  const sentinel = path.join(directory, 'sentinel.json');
+  const originalBytes = JSON.stringify(promoted());
+  fs.writeFileSync(sentinel, originalBytes);
+  try {
+    for (const kind of ['oversized', 'directory', 'link', 'concurrent-output']) {
+      const output = path.join(directory, 'output.json');
+      const docker = artifactDocker(promoted(), {
+        copy: (extracted) => {
+          if (kind === 'oversized') fs.writeFileSync(extracted, `${' '.repeat(1024 * 1024)}${originalBytes}`);
+          if (kind === 'directory') fs.mkdirSync(extracted);
+          if (kind === 'link')
+            fs.symlinkSync(
+              process.platform === 'win32' ? directory : sentinel,
+              extracted,
+              process.platform === 'win32' ? 'junction' : 'file',
+            );
+          if (kind === 'concurrent-output') {
+            fs.writeFileSync(extracted, originalBytes);
+            fs.writeFileSync(output, 'another operation owns this file');
+          }
+        },
+      });
+      await assert.rejects(pullReleaseManifestArtifact(PRODUCTION_RELEASE_MANIFEST_REFERENCE, output, docker));
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), originalBytes);
+      if (kind === 'concurrent-output') {
+        assert.equal(fs.readFileSync(output, 'utf8'), 'another operation owns this file');
+      } else assert.equal(fs.existsSync(output), false);
+      const extracted = docker.calls.find((args) => args[0] === 'cp')[2];
+      assert.equal(fs.existsSync(path.dirname(extracted)), false);
+      assert.deepEqual(docker.calls.at(-1), [
+        'rm',
+        '--force',
+        '--volumes',
+        docker.calls.find((args) => args[0] === 'create')[2],
+      ]);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('production promotion retags only the verified immutable registry artifact', async () => {
+  const manifest = promoted();
+  const source = `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:manifest-${getStudioServerReleaseManifestDigest(manifest).slice(7)}`;
+  const docker = artifactDocker(manifest);
+  const retags = [];
+  await retagReleaseManifestArtifact(source, PRODUCTION_RELEASE_MANIFEST_REFERENCE, {
+    execute: async (program, args) => {
+      if (args[0] !== 'buildx') return docker.execute(program, args);
+      retags.push(args);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.deepEqual(retags, [
+    [
+      'buildx',
+      'imagetools',
+      'create',
+      '--tag',
+      PRODUCTION_RELEASE_MANIFEST_REFERENCE,
+      `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest@${docker.selectedDigest}`,
+    ],
+  ]);
+  assert.deepEqual(docker.calls.at(-1), [
+    'rm',
+    '--force',
+    '--volumes',
+    docker.calls.find((args) => args[0] === 'create')[2],
+  ]);
+});
+
+test('automatic deployment selection equals an explicit release pin and retains immutable diagnostic evidence', async () => {
+  const directory = fs.mkdtempSync(path.join(rootDir, 'artifacts', 'release-selection-test-'));
+  try {
+    const manifest = promoted();
+    const source = path.join(directory, 'pinned.json');
+    fs.writeFileSync(source, JSON.stringify(manifest));
+    const verification = [];
+    const checks = {
+      verifyCheckout: async (selected) => {
+        verification.push('checkout');
+        assertReleaseManifestMatchesCurrentSource(selected, manifest.source.sha);
+      },
+      verifyClean: async () => {
+        verification.push('clean');
+      },
+    };
+    const docker = artifactDocker(manifest);
+    const automatic = await resolveDeploymentRelease(parseArgs(['--dry-run']), path.join(directory, 'automatic'), {
+      ...checks,
+      pullArtifact: (reference, output) => pullReleaseManifestArtifact(reference, output, docker),
+    });
+    const explicit = await resolveDeploymentRelease(
+      parseArgs(['--manifest', path.relative(rootDir, source)]),
+      path.join(directory, 'explicit'),
+      {
+        ...checks,
+        pullArtifact: () => assert.fail('An explicit manifest must not contact the registry'),
+      },
+    );
+    assert.deepEqual(automatic.generatedValues, explicit.generatedValues);
+    assert.deepEqual(verification, ['checkout', 'clean', 'checkout', 'clean']);
+    assert.deepEqual(JSON.parse(fs.readFileSync(automatic.manifestPath, 'utf8')), manifest);
+    const identity = JSON.parse(fs.readFileSync(path.join(directory, 'automatic', 'release-selection.json'), 'utf8'));
+    assert.equal(identity.mode, 'production');
+    assert.equal(identity.imageId, docker.imageId);
+    assert.equal(identity.sourceSha, manifest.source.sha);
+    assert.equal(identity.manifestDigest, getStudioServerReleaseManifestDigest(manifest));
+    assert.match(identity.resolvedReference, /@sha256:[a-f0-9]{64}$/);
+    assert.deepEqual(fs.readdirSync(path.join(directory, 'automatic')).sort(), [
+      'release-manifest.json',
+      'release-selection.json',
+    ]);
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(directory, 'explicit', 'release-selection.json'), 'utf8')).mode,
+      'explicit',
+    );
+    // A pin selected from earlier diagnostics remains byte-for-byte unchanged.
+    const pinnedBytes = JSON.stringify(manifest);
+    fs.writeFileSync(automatic.manifestPath, pinnedBytes);
+    await resolveDeploymentRelease(
+      new Map([['--manifest', path.relative(rootDir, automatic.manifestPath)]]),
+      path.join(directory, 'automatic'),
+      {
+        ...checks,
+        pullArtifact: () => assert.fail('A diagnostic pin must not contact the registry'),
+      },
+    );
+    assert.equal(fs.readFileSync(automatic.manifestPath, 'utf8'), pinnedBytes);
+    const metadataPin = path.join(directory, 'automatic', 'release-selection.json');
+    fs.writeFileSync(metadataPin, pinnedBytes);
+    await resolveDeploymentRelease(
+      new Map([['--manifest', path.relative(rootDir, metadataPin)]]),
+      path.dirname(metadataPin),
+      {
+        ...checks,
+        pullArtifact: () => assert.fail('An explicit metadata-filename pin must not contact the registry'),
+      },
+    );
+    assert.equal(fs.readFileSync(metadataPin, 'utf8'), pinnedBytes);
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(path.dirname(metadataPin), 'release-selection-metadata.json'), 'utf8')).mode,
+      'explicit',
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('release selection rejects untrusted releases and checkout drift before returning deployable values', async () => {
+  const directory = fs.mkdtempSync(path.join(rootDir, 'artifacts', 'release-selection-rejected-'));
+  try {
+    for (const scenario of ['candidate', 'malformed', 'source', 'chart', 'dirty', 'missing', 'auth', 'network']) {
+      const release = scenario === 'candidate' ? candidate() : promoted();
+      if (scenario === 'chart') release.chart.contentDigest = digest('e');
+      const output = path.join(directory, scenario);
+      const pullFailures = { missing: 'manifest unknown', auth: 'unauthorized', network: 'connection timed out' };
+      const docker = artifactDocker(scenario === 'malformed' ? 'invalid JSON' : release, {
+        pullFailure: pullFailures[scenario],
+      });
+      await assert.rejects(
+        resolveDeploymentRelease(new Map(), output, {
+          pullArtifact: (reference, file) => pullReleaseManifestArtifact(reference, file, docker),
+          verifyCheckout: async (selected) =>
+            assertReleaseManifestMatchesCurrentSource(
+              selected,
+              scenario === 'source' ? 'b'.repeat(40) : 'a'.repeat(40),
+            ),
+          verifyClean: async () => {
+            if (scenario === 'dirty') throw new Error('Tracked checkout is dirty');
+          },
+        }),
+      );
+      assert.deepEqual(fs.readdirSync(output), [], 'No validated deployment artifacts or temporary extraction remain');
+      if (pullFailures[scenario]) assert.deepEqual(docker.calls, [['pull', PRODUCTION_RELEASE_MANIFEST_REFERENCE]]);
+      else
+        assert.deepEqual(docker.calls.at(-1), [
+          'rm',
+          '--force',
+          '--volumes',
+          docker.calls.find((args) => args[0] === 'create')[2],
+        ]);
+    }
+    await assert.rejects(
+      resolveDeploymentRelease(new Map([['--rollback-to', 'previous.json']]), directory, {
+        pullArtifact: () => assert.fail('Rollback must not consult the current production pointer'),
+      }),
+      /requires an explicit --manifest/,
+    );
+    const rollback = spawnSync(
+      process.execPath,
+      [
+        path.join(rootDir, 'deploy/studio-server/scripts/deploy-kubernetes-release.mjs'),
+        '--release',
+        'rivet',
+        '--namespace',
+        'rivet',
+        '--rollback-to',
+        'previous.json',
+        '--dry-run',
+      ],
+      { cwd: rootDir, encoding: 'utf8' },
+    );
+    assert.equal(rollback.status, 1);
+    assert.match(rollback.stderr, /requires an explicit --manifest/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('only promoted manifests can produce production Helm values', () => {
@@ -433,7 +776,7 @@ test('only promoted manifests can produce production Helm values', () => {
   assert.equal(values.release.production.enabled, true);
   assert.match(values.release.production.manifestDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 14, maximumVersion: 14 });
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 15, maximumVersion: 15 });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 
@@ -456,8 +799,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
       chart: { ...rollbackRelease.chart, contentDigest: digest('f') },
       database: {
         managedWorkflowSchema: {
-          version: 15,
-          minimumRollbackCompatibleVersion: 8,
+          version: 16,
+          minimumRollbackCompatibleVersion: 15,
         },
       },
     },
@@ -467,8 +810,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
   assert.equal(values.compatibility.legacyStartupSettingsFiles, true);
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 2, maximumVersion: 15 });
-  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 15);
+  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 15, maximumVersion: 16 });
+  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 16);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));
   assert.equal(values.images.api.repository, 'example.test/rivet/api');
 });
@@ -489,8 +832,8 @@ test('forward rollback refuses a schema that did not declare the previous releas
     ...previous,
     database: {
       managedWorkflowSchema: {
-        version: 9,
-        minimumRollbackCompatibleVersion: previous.database.managedWorkflowSchema.minimumRollbackCompatibleVersion,
+        version: 14,
+        minimumRollbackCompatibleVersion: 2,
       },
     },
   };
@@ -499,8 +842,8 @@ test('forward rollback refuses a schema that did not declare the previous releas
       ...promoted({}, { predecessorRelease: rollbackRelease, sourceSha: 'b'.repeat(40) }),
       database: {
         managedWorkflowSchema: {
-          version: 11,
-          minimumRollbackCompatibleVersion: 11,
+          version: 15,
+          minimumRollbackCompatibleVersion: 15,
         },
       },
     },

@@ -1,11 +1,17 @@
 import 'dotenv/config';
+import { ServerResourceLifecycle, ServerStartupCancelledError } from './server-resource-lifecycle.js';
 import { initializeScheduledRuns, stopScheduledRuns } from './scheduled-runs/runtime.js';
 import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
+import { retainOrdinaryReceiveDeadline, RESTORE_UPLOAD_RECEIVE_TIMEOUT_MS } from './legacy-restore/receive-deadline.js';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
-import { checkRuntimeLibrariesHealth, disposeRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
+import {
+  beginRuntimeLibrariesDrain,
+  checkRuntimeLibrariesHealth,
+  disposeRuntimeLibrariesBackend,
+} from './runtime-libraries/backend.js';
 import {
   disposeLatestWorkflowRemoteDebugger,
   initializeLatestWorkflowRemoteDebugger,
@@ -38,6 +44,7 @@ import {
 } from './deployment-storage-settings.js';
 import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
 import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
+import { isReleaseMaintenanceActive } from './release-maintenance.js';
 import { initializeLocalMetadataServing, assertLocalMetadataWritesAllowed } from './local-metadata/runtime-control.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { initializeLocalRuntimeLibraryAuthority } from './local-metadata/runtime-library-authority.js';
@@ -45,6 +52,17 @@ import { enableWorkflowRecordingMigrationCopyMode } from './routes/workflows/rec
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './routes/workflows/storage-config.js';
 import { getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { assertVmMigrationTargetMayServe } from './vm-migration-target-gate.js';
+import { LegacyRestoreControl, acquireRestoreServingLease, restoreBlocksServing } from './legacy-restore/control.js';
+import {
+  LegacyRestoreService,
+  setLegacyRestoreService,
+  setLegacyRestorePaused,
+  setLegacyRestoreWarmup,
+  isLegacyRestorePaused,
+  getLegacyRestoreActiveRequests,
+  setLegacyRestoreWorkspaceEpoch,
+} from './legacy-restore/service.js';
+import { captureRestoreSettings, installRestoreSettings } from './app-settings/settings-repository.js';
 import {
   getPostgresAppSettingsPoolConfigFromEnv,
   isPostgresAppSettingsBackendEnabled,
@@ -55,6 +73,12 @@ const apiRuntimeProfile = getApiRuntimeProfile();
 const metrics = configureStudioMetrics(apiRuntimeProfile);
 let webAppActionWebSockets: WebAppActionWebSocketRuntime | null = null;
 let disposeLocalRuntimeLibraryAuthority: (() => void) | undefined;
+let releaseRestoreLease: (() => Promise<void>) | undefined;
+let restoreLeasePool: Pool | undefined;
+let legacyRestoreControl: LegacyRestoreControl | undefined;
+let legacyRestoreService: LegacyRestoreService | undefined;
+let restorePoll: NodeJS.Timeout | undefined;
+let restoreControlOnly = false;
 const runtimeHealthChecks: RuntimeHealthCheck[] = [
   {
     name: 'app-settings',
@@ -99,20 +123,18 @@ const server = createServer(app);
 // JSON body. It does not limit graph execution after the body has arrived.
 // Keep it below the normal proxy request timeout so a slow client cannot keep
 // an admitted parser reservation indefinitely.
-server.requestTimeout = 120_000;
+server.requestTimeout = process.env.RIVET_LEGACY_RESTORE_ENABLED === '1' ? RESTORE_UPLOAD_RECEIVE_TIMEOUT_MS : 120_000;
+if (process.env.RIVET_LEGACY_RESTORE_ENABLED === '1') server.on('request', retainOrdinaryReceiveDeadline);
 
-if (isControlPlaneApiProfile(apiRuntimeProfile)) {
+if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive()) {
   initializeLatestWorkflowRemoteDebugger(server);
 }
+if (isReleaseMaintenanceActive()) server.on('upgrade', (_request, socket) => socket.destroy());
 
 let shuttingDown = false;
 let startupPromise: Promise<void> | null = null;
-let resourceDisposalQueue = Promise.resolve();
-
-class StartupCancelledError extends Error {}
-
 function assertStartupActive(): void {
-  if (shuttingDown) throw new StartupCancelledError();
+  resources.assertStartupActive();
 }
 
 function readShutdownGraceMs(): number {
@@ -157,41 +179,179 @@ async function closeHttpServer(deadline: number): Promise<boolean> {
   return closed;
 }
 
-function disposeResources(interruptWebAppRuns: boolean): Promise<void> {
-  const disposal = resourceDisposalQueue.then(() => disposeResourcesOnce(interruptWebAppRuns));
-  resourceDisposalQueue = disposal;
-  return disposal;
+const resources = new ServerResourceLifecycle([
+  { name: 'scheduled-runs', dispose: () => stopScheduledRuns(0).then(() => undefined) },
+  { name: 'recording-input-extractor', dispose: disposeWorkflowRecordingInputExtractor },
+  {
+    name: 'web-app-actions',
+    beginDrain: () => webAppActionWebSockets?.drain(),
+    async dispose(interrupt) {
+      await webAppActionWebSockets?.dispose({ interrupt });
+      webAppActionWebSockets = null;
+    },
+  },
+  { name: 'latest-debugger', dispose: disposeLatestWorkflowRemoteDebugger },
+  { name: 'bundle-exports', dispose: () => projectBundleJobs.dispose() },
+  { name: 'workflow-storage', dispose: disposeWorkflowStorage },
+  { name: 'runtime-libraries', beginDrain: beginRuntimeLibrariesDrain, dispose: disposeRuntimeLibrariesBackend },
+  {
+    name: 'local-runtime-library-authority',
+    dispose() {
+      disposeLocalRuntimeLibraryAuthority?.();
+      disposeLocalRuntimeLibraryAuthority = undefined;
+    },
+  },
+  { name: 'app-settings', dispose: disposeAppSettingsRepositories },
+  {
+    name: 'restore-serving-lease',
+    async dispose() {
+      await (
+        globalThis as typeof globalThis & { __rivetDisposeManagedRuntimeLibraries?: () => Promise<void> }
+      ).__rivetDisposeManagedRuntimeLibraries?.();
+      await releaseRestoreLease?.();
+      releaseRestoreLease = undefined;
+      await restoreLeasePool?.end();
+      restoreLeasePool = undefined;
+    },
+  },
+]);
+
+async function requestRestoreRestart(): Promise<void> {
+  const token = process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN;
+  if (!token) throw new Error('The managed restore restart capability is unavailable.');
+  const response = await fetch(`http://127.0.0.1:${process.env.RIVET_BACKEND_HEALTH_PORT}/legacy-restore/restart`, {
+    method: 'POST',
+    headers: { 'x-rivet-supervisor-token': token },
+    signal: AbortSignal.timeout(5000),
+    redirect: 'error',
+  });
+  await response.body?.cancel();
+  if (response.status !== 202) throw new Error('Supervisor refused restore restart.');
 }
 
-async function disposeResourcesOnce(interruptWebAppRuns: boolean): Promise<void> {
-  await stopScheduledRuns(0);
-  disposeWorkflowRecordingInputExtractor();
-
-  if (webAppActionWebSockets) {
-    await webAppActionWebSockets.dispose({ interrupt: interruptWebAppRuns }).catch((error) => {
-      console.error('[web-app-actions] Failed to dispose WebSocket actions during shutdown:', error);
-    });
+async function initializeRestoreRole(): Promise<boolean> {
+  if (process.env.RIVET_LEGACY_RESTORE_ENABLED !== '1' || process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated')
+    return false;
+  const poolConfig = getPostgresAppSettingsPoolConfigFromEnv();
+  const secret = process.env.RIVET_APP_SETTINGS_ENCRYPTION_KEY || process.env.RIVET_KEY;
+  if (!secret) throw new Error('Restore settings encryption key is unavailable.');
+  legacyRestoreControl = new LegacyRestoreControl(
+    poolConfig,
+    secret,
+    isControlPlaneApiProfile(apiRuntimeProfile) ? 2 : 1,
+  );
+  const deployment = process.env.RIVET_LEGACY_RESTORE_INSTALLATION;
+  if (!deployment) throw new Error('Managed restore deployment identity is missing.');
+  if (isControlPlaneApiProfile(apiRuntimeProfile)) await legacyRestoreControl.initialize(deployment);
+  const present = (
+    await legacyRestoreControl.pool.query("SELECT to_regclass('rivet_restore_control.operation') AS name")
+  ).rows[0]?.name;
+  const operation = present ? await legacyRestoreControl.read() : null;
+  setLegacyRestoreWorkspaceEpoch(present ? await legacyRestoreControl.readEpoch() : 'initial');
+  if (present) await legacyRestoreControl.assertDeployment(deployment);
+  const blocked = restoreBlocksServing(operation);
+  setLegacyRestoreWarmup(operation?.phase === 'restarting');
+  setLegacyRestorePaused(blocked);
+  if (blocked && operation && isControlPlaneApiProfile(apiRuntimeProfile)) {
+    const payload = await legacyRestoreControl.payload(operation.id);
+    if (operation.phase !== 'restarting')
+      installRestoreSettings(payload.preserved as ReturnType<typeof captureRestoreSettings>, operation.id);
+    restoreControlOnly = operation.phase !== 'restarting';
+  } else if (blocked && operation?.phase !== 'restarting') {
+    // Keep a fenced, probe-responsive standby instead of crash-looping for long restores.
+    // It owns no stores or writer lease and restarts into the restored generation when warmup begins.
+    restoreControlOnly = true;
   }
-  webAppActionWebSockets = null;
+  if (!restoreControlOnly) {
+    restoreLeasePool = new Pool({ ...poolConfig, max: 1 });
+    releaseRestoreLease = await acquireRestoreServingLease(restoreLeasePool);
+  }
+  let pollBusy = false;
+  restorePoll = setInterval(() => {
+    if (pollBusy) return;
+    pollBusy = true;
+    void legacyRestoreControl!
+      .read()
+      .then(async (operation) => {
+        setLegacyRestoreWorkspaceEpoch(await legacyRestoreControl!.readEpoch());
+        legacyRestoreService?.observe(operation);
+        if (restoreBlocksServing(operation) && operation?.phase !== 'restarting') {
+          setLegacyRestorePaused(true);
+          if (!isControlPlaneApiProfile(apiRuntimeProfile) && !restoreControlOnly)
+            void shutdown('legacy restore').then(() => process.exit(0));
+        } else if (
+          ((operation?.phase === 'restarting' && restoreControlOnly) || !restoreBlocksServing(operation)) &&
+          isLegacyRestorePaused() &&
+          !isControlPlaneApiProfile(apiRuntimeProfile)
+        ) {
+          void shutdown('restore generation changed').then(() => process.exit(0));
+        }
+      })
+      .catch(() => {
+        setLegacyRestorePaused(true);
+        void shutdown('restore gate unavailable').then(() => process.exit(1));
+      })
+      .finally(() => {
+        pollBusy = false;
+      });
+  }, 1000);
+  restorePoll.unref();
+  return restoreControlOnly;
+}
 
-  await disposeLatestWorkflowRemoteDebugger().catch((error) => {
-    console.error('[latest-debugger] Failed to dispose during shutdown:', error);
-  });
+async function configureRestoreService() {
+  if (!legacyRestoreControl || !isControlPlaneApiProfile(apiRuntimeProfile)) return;
+  if (!process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN) return;
+  // Never adopt a UI-selected foreign namespace just because its database is reachable.
+  // Existing serving settings remain authoritative; restore requires explicit deployment alignment.
+  if (getDeploymentStorageBootstrapDrift(readDeploymentStorageRuntimeSettingsSync()).length) return;
+  const bootstrapUrl = new URL(getPostgresAppSettingsPoolConfigFromEnv().connectionString!);
+  const targetUrl = new URL(getManagedWorkflowStorageConfig().databaseUrl);
+  if (
+    bootstrapUrl.hostname !== targetUrl.hostname ||
+    (bootstrapUrl.port || '5432') !== (targetUrl.port || '5432') ||
+    bootstrapUrl.pathname !== targetUrl.pathname
+  )
+    return;
+  legacyRestoreService = new LegacyRestoreService(
+    legacyRestoreControl,
+    getManagedWorkflowStorageConfig(),
+    process.env.RIVET_LEGACY_RESTORE_ROOT || '/data/rivet-restore',
+    {
+      async drain() {
+        setLegacyRestorePaused(true);
+        beginActiveHttpExecutionDrain();
+        getPublishedExecutionAdmission().beginDrain();
+        webAppActionWebSockets?.drain();
+        await stopScheduledRuns(120000);
+        const deadline = Date.now() + 120000;
+        while (
+          getLegacyRestoreActiveRequests() ||
+          getActiveHttpExecutionCount() ||
+          webAppActionWebSockets?.getActiveRunCount()
+        ) {
+          if (Date.now() > deadline) throw new Error('Application activity did not drain.');
+          await wait(250);
+        }
+        const preserved = captureRestoreSettings();
+        runtimeHealth.stop();
+        await resources.dispose(false);
+        installRestoreSettings(preserved, (await legacyRestoreControl!.read())!.id);
+      },
+      restart: requestRestoreRestart,
+    },
+  );
+  setLegacyRestoreService(legacyRestoreService);
+  await legacyRestoreService.recover();
+}
 
-  await projectBundleJobs.dispose().catch((error) => {
-    console.error('[project-bundles] Failed to dispose exports during shutdown:', error);
-  });
-  await disposeWorkflowStorage().catch((error) => {
-    console.error('[managed-workflows] Failed to dispose storage backend during shutdown:', error);
-  });
-  await disposeRuntimeLibrariesBackend().catch((error) => {
-    console.error('[runtime-libraries] Failed to dispose backend during shutdown:', error);
-  });
-  disposeLocalRuntimeLibraryAuthority?.();
-  disposeLocalRuntimeLibraryAuthority = undefined;
-  await disposeAppSettingsRepositories().catch((error) => {
-    console.error('[app-settings] Failed to dispose settings backend during shutdown:', error);
-  });
+async function disposeResources(interrupt: boolean): Promise<void> {
+  try {
+    await resources.dispose(interrupt);
+  } catch (error) {
+    console.error('[rivet-api] Resource disposal incomplete; ownership retained:', error);
+    process.exitCode = 1;
+  }
 }
 
 async function listenHttpServer(): Promise<void> {
@@ -220,7 +380,12 @@ async function shutdown(signal: string): Promise<void> {
   if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
     getPublishedExecutionAdmission().beginDrain();
   }
-  webAppActionWebSockets?.drain();
+  try {
+    resources.beginDrain();
+  } catch (error) {
+    console.error('[rivet-api] Resource admission fencing failed; cleanup will retry the fence.', error);
+    process.exitCode = 1;
+  }
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
   const scheduledDrain = stopScheduledRuns(shutdownGraceMs);
@@ -269,8 +434,11 @@ async function shutdown(signal: string): Promise<void> {
   }
 
   await disposeResources(!webAppRunsCompleted);
+  if (restorePoll) clearInterval(restorePoll);
+  await legacyRestoreService?.dispose();
+  await legacyRestoreControl?.dispose();
   runtimeHealth.stop();
-  process.exitCode = 0;
+  process.exitCode ??= 0;
 }
 
 process.once('SIGINT', () => {
@@ -283,103 +451,182 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
-    await initializeLocalMetadataServing();
-    // A paused migration survives a process restart. Disable source recording
-    // retention before storage initialization can run its startup cleanup.
-    const vmMigrationPaused = isVmMigrationMaintenanceActive();
-    if (vmMigrationPaused) enableWorkflowRecordingMigrationCopyMode();
-    if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
-      getPublishedExecutionAdmission();
+    if (await initializeRestoreRole()) {
+      await listenHttpServer();
+      await configureRestoreService();
+      return;
     }
-    // PostgreSQL settings initialization seeds missing rows. An incomplete
-    // migration target must fail before that first potential target write.
-    if (isPostgresAppSettingsBackendEnabled()) {
-      const bootstrapPool = new Pool(getPostgresAppSettingsPoolConfigFromEnv());
-      try {
-        await assertVmMigrationTargetMayServe(bootstrapPool);
-      } finally {
-        await bootstrapPool.end();
+    await resources.initialize(async () => {
+      await initializeLocalMetadataServing();
+      // A paused migration survives a process restart. Disable source recording
+      // retention before storage initialization can run its startup cleanup.
+      const vmMigrationPaused = isVmMigrationMaintenanceActive();
+      if (vmMigrationPaused) enableWorkflowRecordingMigrationCopyMode();
+      if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
+        getPublishedExecutionAdmission();
       }
-    }
-    await initializeAppSettingsRepositories();
-    assertStartupActive();
-    if (isManagedWorkflowStorageEnabled()) {
-      const gatePool = new Pool(getManagedDbPoolConfig(getManagedWorkflowStorageConfig()));
-      try {
-        await assertVmMigrationTargetMayServe(gatePool);
-      } finally {
-        await gatePool.end();
-      }
-    }
-    assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
-    let startManagedRuntimeLibraries: (() => Promise<void>) | undefined;
-    if (getLocalMetadataServingSelection()) {
-      if (readDeploymentStorageRuntimeSettingsSync().storageMode !== 'filesystem')
-        throw new Error('Local SQLite generation must keep local artifact storage selected.');
-      const apply = (
-        globalThis as typeof globalThis & {
-          __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
+      // PostgreSQL settings initialization seeds missing rows. An incomplete
+      // migration target must fail before that first potential target write.
+      if (isPostgresAppSettingsBackendEnabled()) {
+        const bootstrapPool = new Pool(getPostgresAppSettingsPoolConfigFromEnv());
+        try {
+          await assertVmMigrationTargetMayServe(bootstrapPool);
+        } finally {
+          await bootstrapPool.end();
         }
-      ).__rivetApplyNodeExecutorProxySettings;
-      if (!apply) throw new Error('Local SQL runtime bootstrap is not installed.');
-      await apply(nodeExecutorProxySettingsRepository.readSync().value);
-      disposeLocalRuntimeLibraryAuthority = await initializeLocalRuntimeLibraryAuthority(
-        getLocalMetadataServingSelection()!,
-        assertLocalMetadataWritesAllowed,
-      );
-    }
-    if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
-      const storageSettings = readDeploymentStorageRuntimeSettingsSync();
-      const mismatchedFields =
-        process.env.RIVET_DEPLOYMENT_STORAGE_BUCKET || process.env.RIVET_DEPLOYMENT_STORAGE_URL
-          ? getDeploymentStorageBootstrapDrift(storageSettings)
-          : [];
-      if (mismatchedFields.length > 0) {
-        console.warn(
-          `[deployment-storage] Helm bootstrap differs from the authoritative PostgreSQL settings row (${mismatchedFields.join(', ')}). The row remains authoritative; reconcile configuration before rollout.`,
+      }
+      await initializeAppSettingsRepositories();
+      assertStartupActive();
+      if (isManagedWorkflowStorageEnabled()) {
+        const gatePool = new Pool(getManagedDbPoolConfig(getManagedWorkflowStorageConfig()));
+        try {
+          await assertVmMigrationTargetMayServe(gatePool);
+        } finally {
+          await gatePool.end();
+        }
+      }
+      assertApiRuntimeProfileStartupPreconditions(apiRuntimeProfile);
+      let startManagedRuntimeLibraries: (() => Promise<void>) | undefined;
+      if (getLocalMetadataServingSelection()) {
+        if (readDeploymentStorageRuntimeSettingsSync().storageMode !== 'filesystem')
+          throw new Error('Local SQLite generation must keep local artifact storage selected.');
+        const apply = (
+          globalThis as typeof globalThis & {
+            __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
+          }
+        ).__rivetApplyNodeExecutorProxySettings;
+        if (!apply) throw new Error('Local SQL runtime bootstrap is not installed.');
+        await apply(nodeExecutorProxySettingsRepository.readSync().value);
+        disposeLocalRuntimeLibraryAuthority = await initializeLocalRuntimeLibraryAuthority(
+          getLocalMetadataServingSelection()!,
+          assertLocalMetadataWritesAllowed,
         );
       }
-      const bootstrap = globalThis as typeof globalThis & {
-        __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
-        __rivetStartManagedRuntimeLibraries?: (settings: unknown) => Promise<void>;
-      };
-      const start = bootstrap.__rivetStartManagedRuntimeLibraries;
-      if (!bootstrap.__rivetApplyNodeExecutorProxySettings || !start) {
-        throw new Error('Managed runtime configuration bootstrap is not installed.');
+      if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
+        const storageSettings = readDeploymentStorageRuntimeSettingsSync();
+        const mismatchedFields =
+          process.env.RIVET_DEPLOYMENT_STORAGE_BUCKET || process.env.RIVET_DEPLOYMENT_STORAGE_URL
+            ? getDeploymentStorageBootstrapDrift(storageSettings)
+            : [];
+        if (mismatchedFields.length > 0) {
+          console.warn(
+            `[deployment-storage] Helm bootstrap differs from the authoritative PostgreSQL settings row (${mismatchedFields.join(', ')}). The row remains authoritative; reconcile configuration before rollout.`,
+          );
+        }
+        const bootstrap = globalThis as typeof globalThis & {
+          __rivetApplyNodeExecutorProxySettings?: (settings: unknown) => Promise<void>;
+          __rivetStartManagedRuntimeLibraries?: (settings: unknown) => Promise<void>;
+        };
+        const start = bootstrap.__rivetStartManagedRuntimeLibraries;
+        if (!bootstrap.__rivetApplyNodeExecutorProxySettings || !start) {
+          throw new Error('Managed runtime configuration bootstrap is not installed.');
+        }
+        await bootstrap.__rivetApplyNodeExecutorProxySettings(nodeExecutorProxySettingsRepository.readSync().value);
+        startManagedRuntimeLibraries = () => start(storageSettings);
       }
-      await bootstrap.__rivetApplyNodeExecutorProxySettings(nodeExecutorProxySettingsRepository.readSync().value);
-      startManagedRuntimeLibraries = () => start(storageSettings);
+      // On first install the workflow store creates the shared S3 bucket. The
+      // bootstrap runtime-library sync only checks for that bucket, so it must
+      // not start first on a fresh managed deployment.
+      await initializeWorkflowStorage();
+      assertStartupActive();
+      await startManagedRuntimeLibraries?.();
+      // Reconciliation can rewrite the source manifest or migrate a legacy
+      // release layout. Keep the frozen runtime-library tree untouched too.
+      if (!vmMigrationPaused) await reconcileRuntimeLibraries();
+      assertStartupActive();
+      if (apiRuntimeProfile !== 'evaluation') {
+        webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
+      }
+      assertStartupActive();
+      await runtimeHealth.start();
+      assertStartupActive();
+      await listenHttpServer();
+      assertStartupActive();
+      // Existing schedules may be due immediately. Do not start their execution
+      // until runtime-library reconciliation and the rest of startup have finished.
+      if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive() && !isLegacyRestorePaused())
+        await initializeScheduledRuns();
+      assertStartupActive();
+    });
+    await configureRestoreService();
+    if (isLegacyRestorePaused() && legacyRestoreService) {
+      const urls = [
+        { url: `http://127.0.0.1:${process.env.RIVET_BACKEND_HEALTH_PORT}/readyz`, warmup: false },
+        ...[process.env.RIVET_LEGACY_RESTORE_EXECUTION_READY_URL, process.env.RIVET_LEGACY_RESTORE_EVALUATION_READY_URL]
+          .filter((url): url is string => !!url)
+          .map((url) => ({ url, warmup: true })),
+      ];
+      const deadline = Date.now() + 300000;
+      for (const { url, warmup } of urls) {
+        while (true) {
+          const ready = await fetch(url, { signal: AbortSignal.timeout(3000), redirect: 'error' })
+            .then(async (response) => {
+              if (warmup) {
+                const body = await response.json().catch(() => null);
+                return response.status === 200 && body?.restoreWarmup === true;
+              }
+              await response.body?.cancel();
+              return response.status === 200;
+            })
+            .catch(() => false);
+          if (ready) break;
+          if (Date.now() > deadline)
+            throw new Error('Restored consumers did not become ready. Maintenance remains active.');
+          await wait(1000);
+        }
+      }
+      await legacyRestoreService.complete();
     }
-    // On first install the workflow store creates the shared S3 bucket. The
-    // bootstrap runtime-library sync only checks for that bucket, so it must
-    // not start first on a fresh managed deployment.
-    await initializeWorkflowStorage();
-    assertStartupActive();
-    await startManagedRuntimeLibraries?.();
-    // Reconciliation can rewrite the source manifest or migrate a legacy
-    // release layout. Keep the frozen runtime-library tree untouched too.
-    if (!vmMigrationPaused) await reconcileRuntimeLibraries();
-    assertStartupActive();
-    if (apiRuntimeProfile !== 'evaluation') {
-      webAppActionWebSockets = await initializeWebAppActionWebSockets(server);
-    }
-    assertStartupActive();
-    await runtimeHealth.start();
-    assertStartupActive();
-    await listenHttpServer();
-    assertStartupActive();
-    // Existing schedules may be due immediately. Do not start their execution
-    // until runtime-library reconciliation and the rest of startup have finished.
-    if (isControlPlaneApiProfile(apiRuntimeProfile)) await initializeScheduledRuns();
-    assertStartupActive();
   } catch (error) {
-    if (error instanceof StartupCancelledError) {
+    if (
+      legacyRestoreControl &&
+      isControlPlaneApiProfile(apiRuntimeProfile) &&
+      isLegacyRestorePaused() &&
+      !(error instanceof ServerStartupCancelledError)
+    ) {
+      const operation = await legacyRestoreControl.read();
+      if (operation) {
+        if (operation.phase === 'completed') {
+          // Verification is durable, but restart acknowledgement may have been lost.
+          // Close this generation so the ordinary supervisor/container lifecycle brings up a normal one.
+          runtimeHealth.stop();
+          await disposeResources(true);
+          if (restorePoll) clearInterval(restorePoll);
+          await legacyRestoreService?.dispose();
+          await legacyRestoreControl.dispose();
+          server.closeAllConnections();
+          server.close();
+          process.exitCode = 1;
+          return;
+        }
+        const payload = await legacyRestoreControl.payload(operation.id);
+        setLegacyRestoreWarmup(false);
+        runtimeHealth.stop();
+        await resources.dispose(false).catch(() => undefined);
+        installRestoreSettings(payload.preserved as ReturnType<typeof captureRestoreSettings>, operation.id);
+        await legacyRestoreControl.write(
+          {
+            ...operation,
+            phase: 'failed',
+            message: 'Restored consumers could not become ready. Maintenance remains active; retry restore.',
+          },
+          { ...payload, resumePhase: operation.phase },
+        );
+        if (!server.listening) await listenHttpServer();
+        if (!legacyRestoreService) await configureRestoreService();
+        return;
+      }
+    }
+    if (error instanceof ServerStartupCancelledError) {
       await disposeResources(true);
       return;
     }
     console.error('[rivet-api] Startup reconciliation failed:', error);
     runtimeHealth.stop();
     await disposeResources(true);
+    if (restorePoll) clearInterval(restorePoll);
+    await legacyRestoreService?.dispose();
+    await legacyRestoreControl?.dispose();
     process.exitCode = 1;
     return;
   }

@@ -17,6 +17,7 @@ export interface RunActivityGraphOption {
 
 export interface RunActivityAccountingSummary {
   modelCallCount: number;
+  classifierRequestCount?: number;
   toolCallCount: number;
   promptTokens?: number;
   completionTokens?: number;
@@ -24,6 +25,8 @@ export interface RunActivityAccountingSummary {
   reasoningTokens?: number;
   knownCostUsd: number;
   costStatus: 'known' | 'partial' | 'unknown';
+  /** Activity evidence was capped; counts, usage and cost cover retained evidence only. */
+  incomplete?: boolean;
 }
 
 export interface RunActivityInvocationIdentity {
@@ -82,6 +85,7 @@ export interface RunActivityItemViewModel {
   model?: string;
   toolName?: string;
   modelCallCount?: number;
+  classifierRequestCount?: number;
   toolCallCount?: number;
   detailRows?: RunActivityDetailRow[];
   children?: RunActivityChildViewModel[];

@@ -13,6 +13,7 @@ import {
   runCapture,
 } from './lib/docker-launcher.mjs';
 import { assertNoRetiredEnv, dropAmbientNodeOptionsForDocker } from './lib/docker-launcher-env.mjs';
+import { withLauncherProgress } from './lib/launcher-progress.mjs';
 import {
   assertPinnedComposeImages,
   assertStagingDataMounts,
@@ -117,37 +118,45 @@ async function dockerVolumeExists(volumeName, environment) {
 }
 
 async function prepareStagingDeployment({ composeBase, environment }) {
+  const progress = (step, operation) => withLauncherProgress('prod-docker', step, operation);
   const git = (args) => runArgsCapture('git', args, environment, { cwd: rootDir });
-  const [branch, revision, status] = await Promise.all([
-    git(['branch', '--show-current']),
-    git(['rev-parse', '--verify', 'HEAD']),
-    git(['status', '--porcelain', '--untracked-files=no']),
-  ]);
-  const expectedRevision = assertStagingCheckout({
-    branch: branch.stdout,
-    revision: revision.stdout,
-    status: status.stdout,
+  const docker = (args, options) => runArgsCapture('docker', args, environment, { cwd: rootDir, ...options });
+  const expectedRevision = await progress('Checking the staging checkout', async () => {
+    const [branch, revision, status] = await Promise.all([
+      git(['branch', '--show-current']),
+      git(['rev-parse', '--verify', 'HEAD']),
+      git(['status', '--porcelain', '--untracked-files=no']),
+    ]);
+    return assertStagingCheckout({
+      branch: branch.stdout,
+      revision: revision.stdout,
+      status: status.stdout,
+    });
   });
 
-  const config = JSON.parse(
-    (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
-  );
-  const existingId = singleContainerId(
-    (await runCapture(`${composeBase} ps -a -q api`, environment, { cwd: rootDir })).stdout,
-  );
-  const docker = (args) => runArgsCapture('docker', args, environment, { cwd: rootDir });
-  if (!existingId) throw new Error('Staging requires an existing API container to verify data continuity.');
-  const existing = JSON.parse((await docker(['inspect', existingId])).stdout)[0];
-  if (!existing) throw new Error('Could not inspect the existing API container.');
-  assertStagingDataMounts(config, environment, existing);
+  const existing = await progress('Verifying existing data mounts', async () => {
+    const config = JSON.parse(
+      (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
+    );
+    const existingId = singleContainerId(
+      (await runCapture(`${composeBase} ps -a -q api`, environment, { cwd: rootDir })).stdout,
+    );
+    if (!existingId) throw new Error('Staging requires an existing API container to verify data continuity.');
+    const existing = JSON.parse((await docker(['inspect', existingId])).stdout)[0];
+    if (!existing) throw new Error('Could not inspect the existing API container.');
+    assertStagingDataMounts(config, environment, existing);
+    return existing;
+  });
 
-  const pinned = await pinStagingImages(docker, expectedRevision);
+  const pinned = await pinStagingImages(docker, expectedRevision, { progress });
   Object.assign(environment, pinned);
-  const pinnedConfig = JSON.parse(
-    (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
-  );
-  assertPinnedComposeImages(pinnedConfig, pinned);
-  assertStagingDataMounts(pinnedConfig, environment, existing);
+  await progress('Verifying the digest-pinned deployment plan', async () => {
+    const pinnedConfig = JSON.parse(
+      (await runCapture(`${composeBase} config --format json`, environment, { cwd: rootDir })).stdout,
+    );
+    assertPinnedComposeImages(pinnedConfig, pinned);
+    assertStagingDataMounts(pinnedConfig, environment, existing);
+  });
   console.log(
     `[prod-docker] Staging images match ${expectedRevision}; using immutable digests and unchanged artifact mounts.`,
   );
@@ -159,6 +168,8 @@ function composeCommand(project, suffix) {
 
 async function main() {
   const action = process.argv[2] == null ? 'prebuilt' : process.argv[2];
+  const starting = ['prebuilt', 'staging', 'restart', 'custom'].includes(action);
+  const progress = (step, operation) => (starting ? withLauncherProgress('prod-docker', step, operation) : operation());
   const { mergedEnv, envPath, hasEnvFile, fileEnv } = loadDevEnv(rootDir);
   dropAmbientNodeOptionsForDocker(mergedEnv, fileEnv);
   const vmTls = resolveVmTlsConfiguration(mergedEnv);
@@ -174,10 +185,12 @@ async function main() {
   }
 
   const envFileLabel = path.basename(envPath);
-  const { composeProject, source } = await resolveProductionComposeProject({
-    environment: mergedEnv,
-    volumeExists: (volumeName) => dockerVolumeExists(volumeName, mergedEnv),
-  });
+  const { composeProject, source } = await progress('Identifying the existing VM stack', () =>
+    resolveProductionComposeProject({
+      environment: mergedEnv,
+      volumeExists: (volumeName) => dockerVolumeExists(volumeName, mergedEnv),
+    }),
+  );
   if (source === 'detected') {
     console.log(
       `[prod-docker] Reusing detected legacy app-data volume ${appDataVolumeName(composeProject)} (Compose project ${composeProject}).`,
@@ -206,30 +219,34 @@ async function main() {
     await prepareStagingDeployment({ composeBase, environment: mergedEnv });
   }
 
-  if (action === 'custom') {
-    if (!Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
-      mergedEnv.COMPOSE_PARALLEL_LIMIT = '1';
-    }
+  if (starting && !Object.prototype.hasOwnProperty.call(mergedEnv, 'COMPOSE_PARALLEL_LIMIT')) {
+    mergedEnv.COMPOSE_PARALLEL_LIMIT = action === 'custom' ? '1' : '2';
   }
 
-  const waitTimeoutSeconds = await readDockerWaitTimeoutSeconds({
-    composeBase,
-    cwd: rootDir,
-    env: mergedEnv,
-    label: 'prod-docker',
-  });
+  const waitTimeoutSeconds = await progress('Reading startup readiness limits', () =>
+    readDockerWaitTimeoutSeconds({
+      composeBase,
+      cwd: rootDir,
+      env: mergedEnv,
+      label: 'prod-docker',
+    }),
+  );
   const proxyPort = assertValidPort(mergedEnv.RIVET_PORT, 8080);
   const httpsPort = vmTls.enabled ? assertValidPort(mergedEnv.RIVET_HTTPS_PORT, 443) : undefined;
   if (httpsPort === proxyPort) throw new Error('VM HTTP and HTTPS host ports must differ.');
   const recreate = `${composeBase} up -d --no-build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`;
+  const recreateStep = { step: 'Recreating services; waiting for readiness', command: recreate };
   const commandsByAction = {
-    config: [`${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution`],
-    services: [`${composeBase} config --services`],
-    prebuilt: [`${composeBase} pull proxy web api`, recreate],
-    staging: [recreate],
-    restart: [recreate],
+    config: [{ command: `${composeBase} config --no-interpolate --no-env-resolution --no-path-resolution` }],
+    services: [{ command: `${composeBase} config --services` }],
+    prebuilt: [{ step: 'Pulling production images', command: `${composeBase} pull proxy web api` }, recreateStep],
+    staging: [recreateStep],
+    restart: [recreateStep],
     custom: [
-      `${composeBase} up -d --build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+      {
+        step: 'Building and starting services; waiting for readiness',
+        command: `${composeBase} up -d --build --force-recreate --remove-orphans --wait --wait-timeout ${waitTimeoutSeconds}`,
+      },
     ],
   };
 
@@ -243,24 +260,26 @@ async function main() {
 
   try {
     if (action !== 'config' && action !== 'services') {
-      const proxyAlreadyRunning = await isComposeServiceRunning('proxy', {
-        composeBase,
-        cwd: rootDir,
-        env: mergedEnv,
-      });
-      if (!proxyAlreadyRunning) {
-        await ensurePortAvailable(proxyPort, {
-          envFileLabel,
-          label: 'prod-docker',
+      await progress('Checking published ports', async () => {
+        const proxyAlreadyRunning = await isComposeServiceRunning('proxy', {
+          composeBase,
+          cwd: rootDir,
+          env: mergedEnv,
         });
-        if (vmTls.enabled) {
-          await ensurePortAvailable(httpsPort, { envFileLabel, label: 'prod-docker' });
+        if (!proxyAlreadyRunning) {
+          await ensurePortAvailable(proxyPort, {
+            envFileLabel,
+            label: 'prod-docker',
+          });
+          if (vmTls.enabled) {
+            await ensurePortAvailable(httpsPort, { envFileLabel, label: 'prod-docker' });
+          }
         }
-      }
+      });
     }
 
-    for (const command of commands) {
-      await run(command, mergedEnv, { cwd: rootDir });
+    for (const { step, command } of commands) {
+      await progress(step, () => run(command, mergedEnv, { cwd: rootDir }));
     }
   } catch (error) {
     await printFailureDiagnostics({

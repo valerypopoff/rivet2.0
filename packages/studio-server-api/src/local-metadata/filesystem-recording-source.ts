@@ -14,6 +14,7 @@ import type {
   LocalRecordingSourceArtifact,
 } from './workflow-catalog.js';
 import { chargeLocalSourceBytes, remainingLocalSourceBytes, withLocalSourceBudget } from './source-budget.js';
+import { LocalUpgradeDiagnosticError } from './upgrade-diagnostics.js';
 
 async function assertRegularFile(filePath: string): Promise<void> {
   const stat = await fs.lstat(filePath);
@@ -162,7 +163,7 @@ export async function* iterateSourceRecordingImports(
           // full compressed buffer or let a gzip bomb exhaust memory.
           const file = await fs.lstat(artifactPath);
           if (file.size > (remainingLocalSourceBytes() ?? Infinity))
-            throw new Error('Local recording exceeds the decoded-memory budget.');
+            throw new LocalUpgradeDiagnosticError('source-bundle-limit');
           const input = createReadStream(artifactPath);
           const gunzip = encoding === 'gzip' ? createGunzip() : null;
           const output = gunzip ?? input;

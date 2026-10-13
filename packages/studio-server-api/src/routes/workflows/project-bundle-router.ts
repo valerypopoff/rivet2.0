@@ -6,6 +6,11 @@ import { createControlPlaneJsonBodyParser } from '../../middleware/body-parsers.
 import { requireAuth } from '../../middleware/auth.js';
 import { projectBundleJobs } from './project-bundle-jobs.js';
 import { createSavedBundleSource } from './project-bundle.js';
+import { prepareProjectBundleImport } from './project-bundle-import.js';
+import { importProjectBundleWithBackend } from './storage-backend.js';
+import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
+import { notifyWorkflowTreeChanged } from './workflow-tree-events.js';
+import { PROJECT_BUNDLE_UPLOAD_MAX_FILES } from '../../../../studio-server-shared/project-bundle-types.js';
 
 export const projectBundleRouter = Router();
 projectBundleRouter.use(requireAuth, (_req, res, next) => {
@@ -17,22 +22,52 @@ const input = z
   .object({
     relativePath: z.string().min(1).max(4096),
     version: z.enum(['live', 'published']),
+    versionPolicy: z.enum(['latest', 'published']).optional(),
     requestId: z.string().uuid().optional(),
   })
   .strict();
 const jobId = z.string().uuid();
+projectBundleRouter.post(
+  '/import',
+  (req, _res, next) => {
+    if (req.get('X-Rivet-Bundle-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site')
+      throw createHttpError(403, 'Bundle upload must be requested from the server UI.');
+    next();
+  },
+  createControlPlaneJsonBodyParser(),
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        folderRelativePath: z.string().max(4096),
+        files: z
+          .array(z.object({ path: z.string().min(1).max(4096), contents: z.string() }).strict())
+          .min(1)
+          .max(PROJECT_BUNDLE_UPLOAD_MAX_FILES),
+      })
+      .strict()
+      .parse(req.body);
+    const parent = normalizeWorkflowRelativePath(input.folderRelativePath, {
+      allowProjectFile: false,
+      allowEmpty: true,
+    });
+    const bundle = prepareProjectBundleImport(input.files);
+    const result = await importProjectBundleWithBackend(parent, bundle);
+    notifyWorkflowTreeChanged(req);
+    res.status(201).json(result);
+  }),
+);
 projectBundleRouter.post(
   '/',
   createControlPlaneJsonBodyParser(),
   asyncHandler(async (req, res) => {
     if (req.get('Sec-Fetch-Site') === 'cross-site')
       throw createHttpError(403, 'Cross-site bundle preparation is not allowed.');
-    const { relativePath, version, requestId } = input.parse(req.body);
+    const { relativePath, version, versionPolicy, requestId } = input.parse(req.body);
     res
       .status(202)
       .json(
         await projectBundleJobs.start(
-          createSavedBundleSource(relativePath, version),
+          createSavedBundleSource(relativePath, version, versionPolicy),
           version === 'live' ? 'latest' : 'published',
           requestId,
         ),

@@ -171,7 +171,11 @@ try {
     },
     0,
   );
-  await measure('recording page (20 runs)', () => backend.listWorkflowRecordingRunsPage('', 1, 20), 0);
+  await measure(
+    'recording page (20 runs)',
+    () => backend.listWorkflowRecordingRunsPage({ workflowId: '', page: 1, pageSize: 20 }),
+    0,
+  );
   await measure('legacy tree cold', () => backend.getTree(), workload.projects + 1);
   await measure('legacy tree warm', () => backend.getTree(), 0);
   console.log(

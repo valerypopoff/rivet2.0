@@ -38,9 +38,7 @@ export type RivetUIContext = {
   getPluginConfig(name: string): string | undefined;
 
   /** Best-effort UI-side model discovery for provider-backed chat nodes. */
-  getChatModelOptions?: (
-    provider: 'openai' | 'anthropic' | 'google',
-  ) => Promise<
+  getChatModelOptions?: (provider: 'openai' | 'anthropic' | 'google' | 'openrouter') => Promise<
     {
       value: string;
       label: string;

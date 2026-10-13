@@ -67,6 +67,7 @@ test('managed or unsupported deployments do not receive the local setup modal', 
   await expect(
     page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
   ).toHaveCount(0);
+  await expect(page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true })).toHaveCount(0);
 });
 
 test('completed SQLite stays quiet if the operator later disables upgrade controls', async ({ page }) => {
@@ -81,6 +82,9 @@ test('completed SQLite stays quiet if the operator later disables upgrade contro
   await expect(
     page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Local storage upgrade', exact: true }),
   ).toHaveCount(0);
+  // Authenticated legacy-source eligibility, not the files-to-SQLite upgrade state,
+  // controls the retained native transfer UI.
+  await expect(page.getByTestId('app-settings-modal').getByRole('tab', { name: 'Migration', exact: true })).toBeVisible();
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitForDashboardReady(page);
   await expect(page.getByTestId('local-storage-upgrade-prompt')).toHaveCount(0);
@@ -233,7 +237,7 @@ test('SQLite awaiting a final restart keeps the continuation reminder on reload'
   await expect(prompt).toBeVisible();
 });
 
-test('Storage cannot enable managed mode before local migration; existing managed mode stays editable', async ({
+test('Storage is read-only and reports legacy configuration without offering retired backend switches', async ({
   page,
 }) => {
   await page.route('**/api/app-settings/local-upgrade/setup', (route) =>
@@ -266,10 +270,12 @@ test('Storage cannot enable managed mode before local migration; existing manage
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const modal = page.getByTestId('app-settings-modal');
   await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
-  await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeDisabled();
-  await expect(modal.getByRole('note')).toContainText('files-to-SQLite');
-  await expect(modal.getByRole('note')).toContainText('in the "Local storage upgrade" tab');
-  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeEnabled();
+  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toHaveCount(0);
+  await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toHaveCount(0);
+  await expect(
+    modal.getByText('This installation reports a legacy storage configuration.', { exact: false }),
+  ).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
   await page.route('**/api/app-settings/deployment-storage', (route) =>
     route.fulfill({
       json: {
@@ -285,9 +291,11 @@ test('Storage cannot enable managed mode before local migration; existing manage
   await waitForDashboardReady(page);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await modal.getByRole('tab', { name: 'Storage', exact: true }).click();
-  await expect(modal.getByRole('button', { name: 'Object storage + PostgreSQL', exact: true })).toBeEnabled();
-  await expect(modal.getByRole('note')).toContainText('separate verified operator migration');
-  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toBeDisabled();
+  await expect(modal.getByLabel('Object storage bucket')).toHaveAttribute('readonly', '');
+  await expect(modal.getByLabel('Object storage secret access key')).toHaveAttribute('readonly', '');
+  await expect(modal.getByRole('button', { name: 'Local folders', exact: true })).toHaveCount(0);
+  await expect(modal.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
+  await expect(modal).not.toContainText('files-to-SQLite');
 });
 
 test('closing Settings rereads the selected phase before showing recovery guidance', async ({ page }) => {

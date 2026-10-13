@@ -561,7 +561,14 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       const folderRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: false });
 
       await deps.withTransaction(async (client) => {
-        await deps.assertFolderExists(client, folderRelativePath);
+        // Lock before checking children: a bundle import may hold KEY SHARE
+        // while inserting its group. After waiting, inspect the committed tree.
+        const folder = await deps.queryOne(
+          client,
+          'SELECT relative_path FROM workflow_folders WHERE relative_path = $1 FOR UPDATE',
+          [folderRelativePath],
+        );
+        if (!folder) throw createHttpError(404, 'Folder not found');
 
         const childFolder = await deps.queryOne(
           client,

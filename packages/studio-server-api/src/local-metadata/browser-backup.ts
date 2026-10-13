@@ -132,6 +132,42 @@ async function scanRoots(roots: LocalMetadataSourceRoots) {
   return { hash: hash.digest('hex'), bytes };
 }
 
+/** Verify portable legacy archives before an importer may normalize its working copy. */
+export async function verifyLegacyBackupDirectory(
+  directory: string,
+  options: { allowModifiedBackup?: boolean } = {},
+): Promise<{ bytes: number; createdAt: string }> {
+  const file = path.join(directory, 'backup.json');
+  const stat = await fs.lstat(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Invalid backup manifest.');
+  const manifest = z
+    .object({
+      version: z.literal(1),
+      kind: z.literal('rivet-browser-legacy-backup'),
+      createdAt: z.string().datetime(),
+      sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+      roots: z.tuple([
+        z.literal('workflows'),
+        z.literal('recordings'),
+        z.literal('appData'),
+        z.literal('runtimeLibraries'),
+      ]),
+      encryptionKeyIncluded: z.literal(false),
+    })
+    .strict()
+    .parse(JSON.parse(await fs.readFile(file, 'utf8')));
+  const roots = rootsAt(directory);
+  const scanned = await scanRoots(roots);
+  const fingerprint = await fingerprintVmMigrationSource(roots);
+  if (
+    !options.allowModifiedBackup &&
+    (scanned.hash !== manifest.contentHash || fingerprint !== manifest.sourceFingerprint)
+  )
+    throw new Error('Backup contents do not match their manifest.');
+  return { bytes: scanned.bytes, createdAt: manifest.createdAt };
+}
+
 const rootsAt = (directory: string): LocalMetadataSourceRoots =>
   Object.fromEntries(domains.map((domain) => [domain, path.join(directory, domain)])) as LocalMetadataSourceRoots;
 
@@ -147,7 +183,11 @@ export async function hashBackupArchive(file: string): Promise<string> {
 /** Restore only into fresh owned scratch. Apply the archive's own permissions
  * after extraction: tar's parent creation and the process umask can otherwise
  * change directory/file modes while processing subsequent entries. */
-export async function restoreBrowserBackupArchive(archive: string, destination: string): Promise<void> {
+export async function restoreBrowserBackupArchive(
+  archive: string,
+  destination: string,
+  { includeEntry }: { includeEntry?: (name: string) => boolean } = {},
+): Promise<void> {
   await realDirectory(destination);
   if ((await fs.readdir(destination)).length) throw new Error('Backup restore requires empty scratch storage.');
   const modes: Array<{ file: string; mode: number; directory: boolean }> = [];
@@ -157,7 +197,9 @@ export async function restoreBrowserBackupArchive(archive: string, destination: 
     file: archive,
     strict: true,
     preservePaths: false,
+    filter: (name) => includeEntry?.(name) ?? true,
     onReadEntry: (entry) => {
+      if (includeEntry && !includeEntry(entry.path)) return;
       if (!['File', 'Directory'].includes(entry.type)) return;
       const file = path.resolve(destination, entry.path);
       const relative = path.relative(destination, file);

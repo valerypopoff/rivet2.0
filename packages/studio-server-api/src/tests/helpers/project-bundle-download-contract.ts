@@ -10,6 +10,7 @@ import {
   SubGraphNodeImpl,
   getGraphBoundary,
   loadProjectBundle,
+  deserializeDatasets,
   serializeDatasets,
   serializeProject,
   type DatasetId,
@@ -27,6 +28,7 @@ export async function verifyProjectBundleDownload(options: {
   workflowsBaseUrl: string;
   projectsBaseUrl: string;
   headers: Record<string, string>;
+  verifyImport?: boolean;
 }) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bundle-backend-download-'));
   const request = async <T>(url: string, body?: unknown): Promise<T> => {
@@ -126,9 +128,18 @@ export async function verifyProjectBundleDownload(options: {
     const rootLatestData = datasets(fixture.root.project.metadata.id, 'root-latest');
     await save(root, fixture.root.project, rootLatestData);
 
-    for (const version of ['published', 'live'] as const) {
+    for (const [version, versionPolicy] of [
+      ['published', undefined],
+      ['live', undefined],
+      ['published', 'published'],
+      ['live', 'latest'],
+    ] as const) {
       const url = `${options.workflowsBaseUrl}/project-bundles`;
-      const started = await request<ProjectBundleJobStatus>(url, { relativePath: root.relativePath, version });
+      const started = await request<ProjectBundleJobStatus>(url, {
+        relativePath: root.relativePath,
+        version,
+        versionPolicy,
+      });
       try {
         const deadline = Date.now() + 20_000;
         let status = await request<ProjectBundleJobStatus>(`${url}/${started.id}`);
@@ -137,7 +148,7 @@ export async function verifyProjectBundleDownload(options: {
           status = await request<ProjectBundleJobStatus>(`${url}/${started.id}`);
         }
         assert.equal(status.phase, 'ready', JSON.stringify(status));
-        assert.equal(status.projects, 3, 'root plus both selected versions of the child');
+        assert.equal(status.projects, versionPolicy ? 2 : 3, 'explicit policy selects one artifact per project');
         const full = await fetch(`${url}/${started.id}/download`, {
           headers: options.headers,
           signal: AbortSignal.timeout(10_000),
@@ -156,9 +167,11 @@ export async function verifyProjectBundleDownload(options: {
           (await fetch(`${url}/${started.id}/download`, { signal: AbortSignal.timeout(10_000) })).status,
           403,
         );
-        const extracted = path.join(temporary, version);
+        const extracted = path.join(temporary, `${version}-${versionPolicy ?? 'legacy'}`);
         await extractProjectBundleFixture(bytes, extracted);
         const bundle = await loadProjectBundle(path.join(extracted, 'rivet-bundle.json'));
+        assert.equal(bundle.manifest.versionPolicy, versionPolicy);
+        assert.equal(bundle.manifest.requiredLoaderVersion, versionPolicy ? 3 : 2);
         assert.equal(bundle.root.description, version === 'published' ? 'root-published' : 'root-latest');
         for (const artifact of bundle.manifest.artifacts) {
           const expected =
@@ -174,18 +187,100 @@ export async function verifyProjectBundleDownload(options: {
         const reference = bundle.manifest.references.find((entry) => entry.projectId === child.projectMetadataId)!;
         assert.equal(
           bundle.manifest.artifacts.find((artifact) => artifact.id === reference.artifact)!.version,
-          'published',
+          versionPolicy ?? 'published',
           'legacy references bind to the captured published child',
         );
         for (const [graph, expected] of [
-          [undefined, 'child-published'],
-          ['latest-helper', 'child-latest'],
+          [undefined, versionPolicy === 'latest' ? 'child-latest' : 'child-published'],
+          ['latest-helper', versionPolicy === 'published' ? 'child-published' : 'child-latest'],
         ] as const) {
           const runner = bundle.createProcessor({ graph });
           try {
             assert.deepEqual((await runner.run()).result?.value, { id: 'row', data: [expected] });
           } finally {
             runner.dispose();
+          }
+        }
+        if (options.verifyImport && versionPolicy === 'latest') {
+          const files = [
+            {
+              path: 'rivet-bundle.json',
+              contents: await fs.readFile(path.join(extracted, 'rivet-bundle.json'), 'utf8'),
+            },
+          ];
+          for (const artifact of bundle.manifest.artifacts)
+            for (const descriptor of [artifact.project, artifact.datasets])
+              if (descriptor)
+                files.push({
+                  path: descriptor.path,
+                  contents: await fs.readFile(path.join(extracted, descriptor.path), 'utf8'),
+                });
+          const importedResponse = await fetch(`${options.workflowsBaseUrl}/project-bundles/import`, {
+            method: 'POST',
+            headers: { ...options.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+            body: JSON.stringify({ folderRelativePath: '', files }),
+            signal: AbortSignal.timeout(30_000),
+          });
+          assert.equal(importedResponse.status, 201, await importedResponse.clone().text());
+          const imported = (await importedResponse.json()) as {
+            folder: { relativePath: string };
+            projects: WorkflowProjectItem[];
+            rootProjectId: string;
+          };
+          assert.equal(imported.projects.length, bundle.manifest.artifacts.length);
+          const importedRoot = imported.projects.find((p) => p.projectMetadataId === imported.rootProjectId)!;
+          assert.ok(importedRoot);
+          const childMember = imported.projects.find((p) => p.projectMetadataId !== imported.rootProjectId)!;
+          const destination = await request<{ folder: { relativePath: string } }>(
+            `${options.workflowsBaseUrl}/folders`,
+            {
+              name: `Moved bundle ${imported.rootProjectId.slice(0, 8)}`,
+              parentRelativePath: '',
+            },
+          );
+          const moved = await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/move`, {
+            itemType: 'project',
+            sourceRelativePath: childMember.relativePath,
+            destinationFolderRelativePath: destination.folder.relativePath,
+          });
+          assert.equal(moved.project.projectMetadataId, childMember.projectMetadataId);
+          assert.equal(importedRoot.settings.status, 'unpublished');
+          const endpoint = `imported-bundle-${imported.rootProjectId.slice(0, 8)}`;
+          await publish(importedRoot, endpoint);
+          const executed = await request<{ result: { value: unknown } }>(
+            `${options.workflowsBaseUrl.replace('/api/workflows', '/internal/workflows-latest')}/${endpoint}`,
+            {},
+          );
+          assert.deepEqual(executed.result.value, { id: 'row', data: ['child-latest'] });
+          const saved = await request<{ contents: string; datasetsContents: string }>(
+            `${options.projectsBaseUrl}/load`,
+            { path: importedRoot.absolutePath },
+          );
+          assert.equal(deserializeDatasets(saved.datasetsContents)[0]!.meta.projectId, imported.rootProjectId);
+          assert.deepEqual(
+            deserializeDatasets(saved.datasetsContents)[0]!.data,
+            deserializeDatasets(rootLatestData)[0]!.data,
+          );
+          // Execution persists asynchronously. Remove only this import's evidence,
+          // leaving subsequent recording contracts with their original empty baseline.
+          const recordingIds = new Set<string>();
+          const recordingDeadline = Date.now() + 10_000;
+          while (recordingIds.size < 2 && Date.now() < recordingDeadline) {
+            for (const project of imported.projects) {
+              const page = await request<{ runs: { id: string }[] }>(
+                `${options.workflowsBaseUrl}/recordings/workflows/${project.projectMetadataId}/runs?includeSubgraphRuns=true&pageSize=100`,
+              );
+              for (const run of page.runs) recordingIds.add(run.id);
+            }
+            if (recordingIds.size < 2) await delay(10);
+          }
+          assert.equal(recordingIds.size, 2, 'root and called-project evidence persisted');
+          for (const id of recordingIds) {
+            const deleted = await fetch(`${options.workflowsBaseUrl}/recordings/${id}`, {
+              method: 'DELETE',
+              headers: options.headers,
+            });
+            assert.equal(deleted.status, 200, await deleted.text());
           }
         }
       } finally {

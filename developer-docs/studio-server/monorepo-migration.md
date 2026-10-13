@@ -73,21 +73,19 @@ yarn studio-server:verify:migration-ledger
 yarn studio-server:verify:kubernetes
 ```
 
-Compatibility aliases from the former repository are retained under the same
-namespace, including `studio-server:dev:docker`, `studio-server:dev:down`,
-`studio-server:dev:recreate`, and `studio-server:prod:prebuilt`.
+Current server startup uses the six managed-storage commands in
+[Supported Server Stack](./server-stack.md). `studio-server:dev:down` preserves
+the managed local installation; `studio-server:dev:recreate` rebuilds that same
+Docker installation. Old file/SQLite start and prebuilt/custom commands fail with
+retirement guidance; only explicit Kubernetes commands orchestrate a cluster.
 
 Focused package work uses `yarn workspace`. Dependency installation is always
 `yarn install --immutable` at the repository root.
 
-The old standalone npm operator surface is intentionally not preserved. VM
-automation must migrate
-pm install` to `corepack enable` followed by
-`yarn install --immutable`,
-pm run prod` to `yarn studio-server:prod`, and
-
-pm run prod:custom` to `yarn studio-server:prod:custom`. `yarn dev` continues
-to mean the Rivet desktop/editor; Studio Server commands remain namespaced.
+The old standalone npm operator surface is intentionally not preserved. Use
+`corepack enable` followed by `yarn install --immutable`, then select the managed
+deployment command and its required release arguments. `yarn dev` continues to
+mean the Rivet desktop/editor; Studio Server commands remain namespaced.
 
 npm remains only at boundaries where npm itself is the external protocol or an
 isolated tool: publishing public packages to the npm registry, installing

@@ -4,6 +4,12 @@ import {
   createBuiltInRegistry,
   DelegateFunctionCallNodeImpl,
   LLMChatV2NodeImpl,
+  getSubgraphProjectKey,
+  GraphInputNodeImpl,
+  GraphOutputNodeImpl,
+  SubGraphNodeImpl,
+  NodePrefabInstanceNodeImpl,
+  GetStoredValueNodeImpl,
   type NodeConnection,
   type NodePrefabId,
   type ProjectId,
@@ -15,11 +21,200 @@ import {
   canvasIoDefinitionsForNodeState,
   canvasPreviewConnectionsState,
   getCanvasLabelConnectionsForNode,
+  createInputConnectionWarningsAtom,
+  createInputConnectionWarningDetailsAtom,
 } from './canvasGraphSelectors';
-import { projectState } from '../savedGraphs';
+import { projectState, referencedProjectsState } from '../savedGraphs';
 import { definitionValidConnectionsState, ioDefinitionsForNodeState } from './ioDefinitions.js';
 
 describe('canvasGraphSelectors', () => {
+  it('recomputes input warnings for live endpoint types without changing connections', () => {
+    const store = createStore();
+    const source = GraphInputNodeImpl.create();
+    const destination = GraphOutputNodeImpl.create();
+    source.data.dataType = 'number';
+    destination.data.dataType = 'number';
+    const connection = {
+      outputNodeId: source.id,
+      outputId: 'data',
+      inputNodeId: destination.id,
+      inputId: 'value',
+    } as NodeConnection;
+    const graph = {
+      metadata: { id: 'type-warning-graph', name: 'Types' },
+      nodes: [source, destination],
+      connections: [connection],
+    };
+    store.set(graphState, graph as any);
+    const warnings = createInputConnectionWarningsAtom(destination.id, graph.connections);
+    const details = createInputConnectionWarningDetailsAtom(destination.id, connection.inputId, true);
+    assert.equal(store.get(warnings).size, 0);
+    assert.deepEqual(store.get(details), []);
+    store.set(graphState, {
+      ...graph,
+      nodes: [source, { ...destination, data: { ...destination.data, dataType: 'string' } }],
+    } as any);
+    assert.deepEqual([...store.get(warnings)], ['value']);
+    assert.deepEqual(store.get(details), [{ status: 'coerced', sourceType: 'number', targetType: 'string' }]);
+    assert.deepEqual(store.get(createInputConnectionWarningDetailsAtom(source.id, connection.outputId, false)), []);
+    store.set(graphState, {
+      ...graph,
+      nodes: [
+        { ...source, data: { ...source.data, dataType: 'string' } },
+        { ...destination, data: { ...destination.data, dataType: 'string' } },
+      ],
+    } as any);
+    assert.equal(store.get(warnings).size, 0);
+    assert.deepEqual(store.get(details), []);
+    assert.equal(
+      store.get(createInputConnectionWarningsAtom(destination.id, [])).size,
+      0,
+      'Decorative surfaces must not inherit live graph edges',
+    );
+    assert.deepEqual(store.get(graphState).connections, [connection]);
+    store.set(graphState, { ...graph, connections: [] } as any);
+    assert.deepEqual(store.get(details), []);
+  });
+
+  it('updates warnings when a target Subgraph boundary changes', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const source = registry.createDynamic('number');
+    const caller = SubGraphNodeImpl.create();
+    const childInput = GraphInputNodeImpl.create();
+    caller.data.graphId = 'child' as any;
+    childInput.data.id = 'argument';
+    childInput.data.dataType = 'number';
+    const child = { metadata: { id: 'child', name: 'Child' }, nodes: [childInput], connections: [] };
+    const project = { metadata: { id: 'warning-project', title: 'Warnings', description: '' }, graphs: { child } };
+    const connection = {
+      outputNodeId: source.id,
+      outputId: 'value',
+      inputNodeId: caller.id,
+      inputId: 'argument',
+    } as NodeConnection;
+    store.set(projectState, project as any);
+    store.set(graphState, {
+      metadata: { id: 'main', name: 'Main' },
+      nodes: [source, caller],
+      connections: [connection],
+    } as any);
+    const warnings = createInputConnectionWarningsAtom(caller.id, [connection]);
+    assert.equal(store.get(warnings).size, 0);
+    store.set(projectState, {
+      ...project,
+      graphs: { child: { ...child, nodes: [{ ...childInput, data: { ...childInput.data, dataType: 'string' } }] } },
+    } as any);
+    assert.deepEqual([...store.get(warnings)], ['argument']);
+  });
+
+  it('updates warnings as referenced-project definitions arrive or change, without removing wires', () => {
+    const store = createStore();
+    const registry = createBuiltInRegistry();
+    const source = registry.createDynamic('number');
+    const caller = SubGraphNodeImpl.create();
+    const childInput = GraphInputNodeImpl.create();
+    caller.data.graphId = 'child' as any;
+    caller.data.targetProjectId = 'referenced' as ProjectId;
+    childInput.data.id = 'argument';
+    childInput.data.dataType = 'number';
+    const child = { metadata: { id: 'child', name: 'Child' }, nodes: [childInput], connections: [] };
+    const referenced = {
+      metadata: { id: 'referenced', title: 'Referenced', description: '' },
+      graphs: { child },
+    };
+    const connection = {
+      outputNodeId: source.id,
+      outputId: 'value',
+      inputNodeId: caller.id,
+      inputId: 'argument',
+    } as NodeConnection;
+    store.set(graphState, {
+      metadata: { id: 'main', name: 'Main' },
+      nodes: [source, caller],
+      connections: [connection],
+    } as any);
+    const warnings = createInputConnectionWarningsAtom(caller.id, [connection]);
+    assert.equal(store.get(warnings).size, 0, 'Unknown boundaries are not type mismatches');
+    const key = getSubgraphProjectKey({ projectId: 'referenced' as ProjectId, version: 'latest' });
+    store.set(referencedProjectsState, { [key]: referenced } as any);
+    assert.equal(store.get(warnings).size, 0);
+    store.set(referencedProjectsState, {
+      [key]: {
+        ...referenced,
+        graphs: { child: { ...child, nodes: [{ ...childInput, data: { ...childInput.data, dataType: 'string' } }] } },
+      },
+    } as any);
+    assert.deepEqual([...store.get(warnings)], ['argument']);
+    store.set(referencedProjectsState, {});
+    assert.equal(store.get(warnings).size, 0);
+    assert.deepEqual(store.get(graphState).connections, [connection]);
+  });
+
+  it('handles self-connections and missing sources without recursive warning dependencies', () => {
+    const store = createStore();
+    const node = GraphOutputNodeImpl.create();
+    node.isConditional = true;
+    node.data.dataType = 'string';
+    const connection = {
+      outputNodeId: node.id,
+      outputId: 'valueOutput',
+      inputNodeId: node.id,
+      inputId: '$if',
+    } as NodeConnection;
+    const graph = {
+      metadata: { id: 'self-warning-graph', name: 'Self warning' },
+      nodes: [node],
+      connections: [connection],
+    };
+    store.set(graphState, graph as any);
+    const warnings = createInputConnectionWarningsAtom(node.id, graph.connections);
+    assert.deepEqual([...store.get(warnings)], ['$if']);
+    store.set(graphState, { ...graph, nodes: [] } as any);
+    assert.equal(store.get(warnings).size, 0);
+    store.set(graphState, graph as any);
+    assert.deepEqual([...store.get(warnings)], ['$if']);
+    assert.deepEqual(store.get(graphState).connections, [connection]);
+  });
+
+  it('recomputes warnings when a linked source changes in the Node library', () => {
+    const store = createStore();
+    const source = GetStoredValueNodeImpl.create();
+    source.data.dataType = 'number';
+    const linked = NodePrefabInstanceNodeImpl.create();
+    const prefabId = 'typed-source' as NodePrefabId;
+    linked.data.prefabId = prefabId;
+    const destination = GraphOutputNodeImpl.create();
+    destination.data.dataType = 'string';
+    const project = {
+      metadata: { id: 'warning-project', title: 'Warnings', description: '' },
+      graphs: {},
+      nodePrefabs: { [prefabId]: { id: prefabId, sourceNode: source } },
+    };
+    const connection = {
+      outputNodeId: linked.id,
+      outputId: 'value',
+      inputNodeId: destination.id,
+      inputId: 'value',
+    } as NodeConnection;
+    store.set(projectState, project as any);
+    store.set(graphState, {
+      metadata: { id: 'linked-warning-graph', name: 'Linked warning' },
+      nodes: [linked, destination],
+      connections: [connection],
+    } as any);
+    const warnings = createInputConnectionWarningsAtom(destination.id, [connection]);
+    assert.deepEqual([...store.get(warnings)], ['value']);
+    store.set(projectState, {
+      ...project,
+      nodePrefabs: {
+        [prefabId]: { id: prefabId, sourceNode: { ...source, data: { ...source.data, dataType: 'string' } } },
+      },
+    } as any);
+    assert.equal(store.get(warnings).size, 0);
+    assert.deepEqual(store.get(graphState).connections, [connection]);
+  });
+
   it('keeps the source node dynamic ports stable during an input-origin rewire preview', () => {
     const store = createStore();
     const registry = createBuiltInRegistry();

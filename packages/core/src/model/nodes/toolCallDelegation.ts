@@ -4,6 +4,7 @@ import type { GraphId } from '../NodeGraph.js';
 import type { InternalProcessContext, ProcessId, ToolCallFinishedEvent } from '../ProcessContext.js';
 import type { NodeId, PortId } from '../NodeBase.js';
 import type { Outputs } from '../GraphProcessor.js';
+import { readGraphCostBreakdown, type GraphCostBreakdown } from '../GraphBoundaryEffects.js';
 import { coerceTypeOptional } from '../../utils/coerceType.js';
 import { getError } from '../../utils/errors.js';
 import {
@@ -28,6 +29,7 @@ export type ToolCallDelegationResult = {
   record: DelegatedToolCallRecord;
   /** Cost from this live delegation. Kept out of the replay record so replay cannot charge it again. */
   cost?: number;
+  costBreakdown?: GraphCostBreakdown;
   /** Internal trace disposition; never exposed through node ports. */
   traceOutcome?: 'success' | 'passthrough-error';
 };
@@ -86,6 +88,7 @@ export function buildDelegatedToolCallOutputs(
   records: DelegatedToolCallRecord[],
   preToolMessage?: string,
   cost?: number,
+  costBreakdown?: GraphCostBreakdown,
 ): Outputs {
   const preToolMessageOutput =
     preToolMessage == null
@@ -162,6 +165,7 @@ export function buildDelegatedToolCallOutputs(
 
   if (cost != null) {
     outputs['cost' as PortId] = { type: 'number', value: cost };
+    if (costBreakdown) outputs['costBreakdown' as PortId] = { type: 'object', value: { ...costBreakdown } };
   }
 
   return outputs;
@@ -364,6 +368,7 @@ async function delegateResolvedToolCall(
     message: createToolResultMessage(functionCall, outputString),
     record: createDelegatedToolCallRecord(functionCall, outputString, executionTimeMs),
     cost,
+    costBreakdown: readGraphCostBreakdown(outputs),
   };
 }
 

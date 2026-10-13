@@ -322,8 +322,11 @@ function getInlineModelBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[]
 
 function getParameterBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
   const reasoningEffort =
-    data.provider === 'openai'
-      ? getOptionLabel(openAIReasoningEffortOptions, data.openAIReasoningEffort)
+    data.provider === 'openai' || data.provider === 'openrouter'
+      ? getOptionLabel(
+          openAIReasoningEffortOptions,
+          data.provider === 'openrouter' ? data.openRouterReasoningEffort : data.openAIReasoningEffort,
+        )
       : data.provider === 'anthropic'
         ? getOptionLabel(anthropicEffortOptions, data.anthropicEffort)
         : data.provider === 'google'

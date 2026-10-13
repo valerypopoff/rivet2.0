@@ -10,8 +10,31 @@ if (!['web', 'api', 'execution', 'executor'].every((plane) => Number.isInteger(p
 function createMock(plane) {
   const server = http.createServer((req, res) => {
     if (plane === 'api' && req.url === '/ui-auth/check') {
-      res.writeHead(req.headers['x-rivet-proxy-auth'] === token ? 204 : 403);
+      // Even a large parent upload must arrive as a bodyless auth check.
+      res.writeHead(
+        req.headers.cookie === 'fixture-denied'
+          ? 401
+          : req.headers['x-rivet-proxy-auth'] === token && !req.headers['content-length']
+            ? 204
+            : 403,
+      );
       res.end();
+      return;
+    }
+    if (plane === 'api' && req.url === '/ui-auth/prompt') {
+      res.writeHead(401, { 'content-type': 'text/plain' });
+      res.end('Fixture login required.');
+      return;
+    }
+    if (plane === 'api' && req.method === 'POST' && req.url === '/api/legacy-restore/upload') {
+      let bytes = 0;
+      req.on('data', (chunk) => {
+        bytes += chunk.length;
+      });
+      req.on('end', () => {
+        res.writeHead(202, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ bytes }));
+      });
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });

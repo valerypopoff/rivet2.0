@@ -6,7 +6,7 @@ import type {
 } from '../../studio-server-shared/llmProfileHealthTypes';
 import { type FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { hostedLLMProfileHealthAdmin } from './hostedRivetProviders';
+import { hostedLLMProfileHealthAdmin, hostedClassifierProfileHealthAdmin } from './hostedRivetProviders';
 import {
   getLLMProfileHealthDisplayName,
   getLLMProfileHealthIdentityLabel,
@@ -45,16 +45,18 @@ function getRecordingAvailabilityDetail(run: LLMProfileHealthContributorRun): st
 
 function getContributingRunLabel(run: LLMProfileHealthContributorRun): string {
   const occurredAt = new Date(run.occurredAt).toLocaleString();
-  const contributions = run.contributionCount === 1
-    ? 'one contributing failure'
-    : `${run.contributionCount} contributing failures`;
+  const contributions =
+    run.contributionCount === 1 ? 'one contributing failure' : `${run.contributionCount} contributing failures`;
   return `${occurredAt} - ${contributions}${run.triggeredSuspension ? ' - suspension threshold reached' : ''}`;
 }
 
 export const LLMProfileHealthSettings: FC<{
+  family?: 'llm' | 'classifier';
   activeProject: WorkflowProjectItem;
   onOpenRecording: (recordingId: string) => void;
-}> = ({ activeProject, onOpenRecording }) => {
+}> = ({ activeProject, onOpenRecording, family = 'llm' }) => {
+  const label = family === 'classifier' ? 'Classifier' : 'LLM';
+  const admin = family === 'classifier' ? hostedClassifierProfileHealthAdmin : hostedLLMProfileHealthAdmin;
   const catalogProjectId = activeProject.projectMetadataId as ProjectId | undefined;
   const [projectContext, setProjectContext] = useState<{
     relativePath: string;
@@ -62,11 +64,12 @@ export const LLMProfileHealthSettings: FC<{
     project?: Project;
     projectId?: ProjectId;
   }>();
-  const activeProjectContext = projectContext?.relativePath === activeProject.relativePath &&
+  const activeProjectContext =
+    projectContext?.relativePath === activeProject.relativePath &&
     projectContext.updatedAt === activeProject.updatedAt &&
     (catalogProjectId == null || projectContext.projectId === catalogProjectId)
-    ? projectContext
-    : undefined;
+      ? projectContext
+      : undefined;
   const projectId = catalogProjectId ?? activeProjectContext?.projectId;
   const [entries, setEntries] = useState<readonly LLMProfileHealthAdminEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,29 +81,32 @@ export const LLMProfileHealthSettings: FC<{
   activeProjectId.current = projectId;
 
   const operationalEntries = useMemo(
-    () => projectId == null ? [] : getOperationalLLMProfileHealthEntries(projectId, entries),
+    () => (projectId == null ? [] : getOperationalLLMProfileHealthEntries(projectId, entries)),
     [entries, projectId],
   );
   const hasHealthHistory = projectId != null && entries.some((entry) => entry.identity.projectId === projectId);
 
-  const refresh = useCallback(async (showLoading = false) => {
-    if (projectId == null) return;
-    const sequence = ++refreshSequence.current;
-    if (showLoading) setLoading(true);
+  const refresh = useCallback(
+    async (showLoading = false) => {
+      if (projectId == null) return;
+      const sequence = ++refreshSequence.current;
+      if (showLoading) setLoading(true);
 
-    try {
-      const nextEntries = await hostedLLMProfileHealthAdmin.list({ projectId });
-      if (refreshSequence.current !== sequence) return;
-      setEntries(nextEntries);
-      setError(undefined);
-    } catch (refreshError) {
-      if (refreshSequence.current !== sequence) return;
-      setEntries([]);
-      setError(getErrorMessage(refreshError));
-    } finally {
-      if (refreshSequence.current === sequence) setLoading(false);
-    }
-  }, [projectId]);
+      try {
+        const nextEntries = await admin.list({ projectId });
+        if (refreshSequence.current !== sequence) return;
+        setEntries(nextEntries);
+        setError(undefined);
+      } catch (refreshError) {
+        if (refreshSequence.current !== sequence) return;
+        setEntries([]);
+        setError(getErrorMessage(refreshError));
+      } finally {
+        if (refreshSequence.current === sequence) setLoading(false);
+      }
+    },
+    [projectId, admin],
+  );
 
   useEffect(() => {
     if (projectId == null) {
@@ -130,10 +136,7 @@ export const LLMProfileHealthSettings: FC<{
 
   useEffect(() => {
     let active = true;
-    if (
-      activeProjectContext?.project != null ||
-      (catalogProjectId != null && operationalEntries.length === 0)
-    ) {
+    if (activeProjectContext?.project != null || (catalogProjectId != null && operationalEntries.length === 0)) {
       return () => {
         active = false;
       };
@@ -184,7 +187,7 @@ export const LLMProfileHealthSettings: FC<{
     setResettingKey(resetKey);
     setError(undefined);
     try {
-      await hostedLLMProfileHealthAdmin.reset(key == null ? { projectId } : { projectId, key });
+      await admin.reset(key == null ? { projectId } : { projectId, key });
       if (activeProjectId.current !== resetProjectId) return;
       await refresh();
     } catch (resetError) {
@@ -202,8 +205,9 @@ export const LLMProfileHealthSettings: FC<{
       <div className="project-settings-llm-health-toolbar">
         <div className="project-settings-help project-settings-llm-health-help">
           Rivet Studio Server remembers provider failures and suspensions across workflow runs. Clearing history
-          completely forgets this information; it does not change LLM profile suspension settings saved in the project.
-          After a suspension expires, the profile remains visible here while it awaits or runs its recovery attempt.
+          completely forgets this information; it does not change {label} profile suspension settings saved in the
+          project. After a suspension expires, the profile remains visible here while it awaits or runs its recovery
+          attempt.
         </div>
         <div className="project-settings-llm-health-actions">
           <Button
@@ -228,16 +232,14 @@ export const LLMProfileHealthSettings: FC<{
       <div className="project-settings-llm-health-status">
         {error ? (
           <div className="project-settings-error project-settings-llm-health-error">
-            Could not load LLM profile suspension state: {error}
+            Could not load {label} profile suspension state: {error}
           </div>
         ) : null}
 
         {loading ? (
-          <div className="project-settings-help">Loading LLM profile suspension state...</div>
+          <div className="project-settings-help">Loading {label} profile suspension state...</div>
         ) : operationalEntries.length === 0 ? (
-          <div className="project-settings-help">
-            No LLM profiles are currently suspended or awaiting recovery.
-          </div>
+          <div className="project-settings-help">No {label} profiles are currently suspended or awaiting recovery.</div>
         ) : (
           <div className="project-settings-llm-health-list">
             {operationalEntries.map((entry) => {
@@ -256,7 +258,9 @@ export const LLMProfileHealthSettings: FC<{
                       <div className="project-settings-llm-health-name">
                         {getLLMProfileHealthDisplayName(activeProjectContext?.project, entry)}
                       </div>
-                      <div className={`project-settings-llm-health-metadata project-settings-llm-health-metadata-${tone}`}>
+                      <div
+                        className={`project-settings-llm-health-metadata project-settings-llm-health-metadata-${tone}`}
+                      >
                         {getLLMProfileHealthIdentityLabel(entry)} - {getLLMProfileHealthStatusDetail(entry, statusNow)}
                       </div>
                     </div>
@@ -319,15 +323,17 @@ export const LLMProfileHealthSettings: FC<{
         <div
           className="project-settings-llm-health-confirmation"
           role="alertdialog"
-          aria-label="Clear all LLM profile suspension history"
+          aria-label={`Clear all ${label} profile suspension history`}
         >
           <div>
-            Clear all contributing failures, suspensions, and recovery attempts for this project? The next request starts
-            with no recorded history. LLM Profile node settings are not changed, and requests already in progress are
-            not cancelled; their late completion cannot recreate deleted history.
+            Clear all contributing failures, suspensions, and recovery attempts for this project? The next request
+            starts with no recorded history. {label} Profile node settings are not changed, and requests already in
+            progress are not cancelled; their late completion cannot recreate deleted history.
           </div>
           <div className="project-settings-llm-health-confirmation-actions">
-            <Button onClick={() => setConfirmResetAll(false)} isDisabled={resettingKey != null}>Cancel</Button>
+            <Button onClick={() => setConfirmResetAll(false)} isDisabled={resettingKey != null}>
+              Cancel
+            </Button>
             <LoadingButton
               appearance="danger"
               onClick={() => {

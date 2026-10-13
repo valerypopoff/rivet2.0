@@ -59,8 +59,11 @@ function resolveConfiguredCredential(
     customEnvironmentName?: string | undefined;
   },
 ): ChatV2CredentialResult {
-  if (isChatV2BuiltInProvider(provider) && options.providerApiKeyNames?.[provider] != null) {
-    const names = normalizeChatV2CredentialNames(provider, options.providerApiKeyNames[provider]);
+  if (
+    isChatV2BuiltInProvider(provider) &&
+    (provider === 'openrouter' || options.providerApiKeyNames?.[provider] != null)
+  ) {
+    const names = normalizeChatV2CredentialNames(provider, options.providerApiKeyNames?.[provider]);
     const programmaticValue = getStringSetting(context.settings, names.programmaticName);
     if (programmaticValue) {
       return {

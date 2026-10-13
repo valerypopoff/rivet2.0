@@ -163,7 +163,7 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function canonicalRow(row: Row): string {
+export function canonicalOperationalMigrationRow(row: Row): string {
   return canonicalJson(
     Object.fromEntries(
       Object.entries(row).map(([key, value]) => [
@@ -174,7 +174,7 @@ function canonicalRow(row: Row): string {
               value !== null
             ? String(value)
             : key === 'started_at'
-              ? new Date(String(value)).toISOString()
+              ? (value instanceof Date ? value : new Date(String(value))).toISOString()
               : value,
       ]),
     ),
@@ -237,7 +237,7 @@ async function readSourceRows(filePath: string, tables: Table[]): Promise<Map<st
           if (row.project_id == null) row.project_id = inferredProjectId;
         }
       }
-      for (const row of rows) canonicalRow(row); // Fail before target writes on invalid JSON or timestamps.
+      for (const row of rows) canonicalOperationalMigrationRow(row); // Fail before target writes on invalid JSON or timestamps.
       result.set(table.name, rows);
     }
     return result;
@@ -248,8 +248,8 @@ async function readSourceRows(filePath: string, tables: Table[]): Promise<Map<st
 
 function assertRowsMatch(table: Table, source: Row[], target: Row[]): void {
   if (source.length !== target.length) throw new Error(`Managed ${table.name} row count differs from source`);
-  const sourceRows = source.map(canonicalRow).sort();
-  const targetRows = target.map(canonicalRow).sort();
+  const sourceRows = source.map(canonicalOperationalMigrationRow).sort();
+  const targetRows = target.map(canonicalOperationalMigrationRow).sort();
   for (let index = 0; index < sourceRows.length; index += 1) {
     if (sourceRows[index] !== targetRows[index]) {
       throw new Error(`Managed ${table.name} row contents differ from source`);
@@ -277,6 +277,12 @@ async function copyAndVerify(
 }
 
 /** Import exact SQLite operational state after workflow identities exist in PostgreSQL. */
+export async function validateOperationalMigrationSource(sourceAppDataRoot: string): Promise<void> {
+  await readSourceRows(path.join(sourceAppDataRoot, 'evaluation-runs.sqlite'), evaluationTables);
+  await readSourceRows(path.join(sourceAppDataRoot, 'llm-profile-health.sqlite'), [healthTable]);
+  await readSourceRows(path.join(sourceAppDataRoot, 'scheduled-runs.sqlite'), scheduleTables);
+}
+
 export async function migrateOperationalSqlite(options: {
   sourceAppDataRoot: string;
   target: ManagedWorkflowStorageConfig;

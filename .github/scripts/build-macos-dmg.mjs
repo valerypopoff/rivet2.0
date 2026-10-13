@@ -3,6 +3,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { isTransientStaplerFailure } from './staple-macos-dmg.mjs';
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const appRoot = join(repositoryRoot, 'packages', 'app');
@@ -39,6 +40,17 @@ const transientMacDmgBuildFailures = [
 
 export const getTransientMacDmgBuildFailure = (result) => {
   if (result.status === 0) return undefined;
+  // Tauri wraps stapler's native exit 68 in build exit 1. Require the exact
+  // inner failure and known Apple network error, not the outer exit alone.
+  if (
+    result.status === 1 &&
+    result.output.includes('Finished with status Accepted') &&
+    result.output.includes('failed to staple app') &&
+    result.output.includes('The staple and validate action failed! Error 68.') &&
+    isTransientStaplerFailure({ status: 68, output: result.output })
+  ) {
+    return { kind: 'apple-app-stapler-network', description: 'Apple app-ticket network failure' };
+  }
   if (/hdiutil: couldn't eject "disk\d+" - Resource busy/.test(result.output)) {
     return { kind: 'hdiutil-detach-busy', description: 'hdiutil scratch-image unmount failure' };
   }

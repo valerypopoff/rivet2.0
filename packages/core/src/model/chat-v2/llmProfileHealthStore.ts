@@ -5,7 +5,6 @@ import type { NodeId } from '../NodeBase.js';
 import type { ProjectId } from '../Project.js';
 import type { ChatV2CredentialResult } from './chatV2ProviderProfile.js';
 import type { LLMChatV2ProfileData } from './llmChatV2NodeData.js';
-import type { ChatV2Provider } from './chatV2ProviderTypes.js';
 import type { CustomProviderApi } from './customProviderApi.js';
 
 export const DEFAULT_LLM_PROFILE_FIRST_OUTPUT_TIMEOUT_MS = 30_000;
@@ -84,12 +83,14 @@ export function resolveRivetLLMProfileCircuitBreakerPolicy(
  * contract.
  */
 export type RivetLLMProfileHealthIdentity = {
+  /** Absent on legacy LLM records. Classifiers share the atomic store, not its namespace. */
+  family?: 'llm' | 'classifier';
   key: string;
   projectId?: ProjectId;
   profileNodeId?: NodeId;
   /** Current source-node title used only for operator-facing identification. */
   profileName?: string;
-  provider: ChatV2Provider;
+  provider: string;
   model: string;
   customProviderApi?: CustomProviderApi;
   configurationFingerprint: string;
@@ -114,6 +115,10 @@ export function createRivetLLMProfileHealthIdentity(params: {
   // not to generation policy. A temperature/cooldown edit must not silently
   // create a fresh circuit, while changing the model, endpoint, auth, or
   // routing headers must never inherit another route's outage history.
+  const openRouterRouting =
+    params.configuration.provider === 'openrouter' && params.configuration.extraProviderOptions
+      ? pickOpenRouterRouting(JSON.parse(params.configuration.extraProviderOptions))
+      : {};
   const routingConfiguration = {
     provider: params.configuration.provider,
     model: params.configuration.model,
@@ -124,6 +129,7 @@ export function createRivetLLMProfileHealthIdentity(params: {
           customProviderBaseURL: params.configuration.customProviderBaseURL,
         }),
     headers: canonicalizeEffectiveRoutingHeaders(params.chatNodeHeaders, params.configuration.headers),
+    ...(Object.keys(openRouterRouting).length > 0 ? { openRouterRouting } : {}),
   };
   const serialized =
     stableStringify({
@@ -154,6 +160,14 @@ export function createRivetLLMProfileHealthIdentity(params: {
       : { customProviderApi: params.configuration.customProviderApi ?? 'completions' }),
     configurationFingerprint,
   };
+}
+
+function pickOpenRouterRouting(options: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    ['model', 'provider', 'models', 'route']
+      .filter((key) => options[key] !== undefined)
+      .map((key) => [key, options[key]]),
+  );
 }
 
 function canonicalizeEffectiveRoutingHeaders(
@@ -224,11 +238,12 @@ export type RivetLLMProfileHealthRenewRequest = {
 };
 
 export type RivetLLMProfileHealthResetRequest =
-  | { key: string; projectId?: never }
-  | { key?: never; projectId: ProjectId };
+  | { key: string; projectId?: never; family?: 'llm' | 'classifier' }
+  | { key?: never; projectId: ProjectId; family?: 'llm' | 'classifier' };
 
 export type RivetLLMProfileHealthListRequest = {
   projectId?: ProjectId;
+  family?: 'llm' | 'classifier';
 };
 
 /**
@@ -266,7 +281,7 @@ type MutableHealthEntry = {
 function requireMatchingProjectScope(existing: MutableHealthEntry, identity: RivetLLMProfileHealthIdentity): void {
   const storedProjectId = existing.identity.projectId == null ? undefined : String(existing.identity.projectId);
   const requestProjectId = identity.projectId == null ? undefined : String(identity.projectId);
-  if (storedProjectId !== requestProjectId) {
+  if (storedProjectId !== requestProjectId || (existing.identity.family ?? 'llm') !== (identity.family ?? 'llm')) {
     throw new Error(`LLM profile reliability key ${identity.key} belongs to a different project scope.`);
   }
 }
@@ -481,12 +496,17 @@ export class InMemoryRivetLLMProfileHealthStore implements RivetLLMProfileHealth
 
   reset(request: RivetLLMProfileHealthResetRequest): void {
     if (request.key != null) {
-      this.#entries.delete(request.key);
+      const entry = this.#entries.get(request.key);
+      if (request.family == null || (entry?.identity.family ?? 'llm') === request.family)
+        this.#entries.delete(request.key);
       return;
     }
 
     for (const [key, entry] of this.#entries) {
-      if (entry.identity.projectId === request.projectId) {
+      if (
+        entry.identity.projectId === request.projectId &&
+        (request.family == null || (entry.identity.family ?? 'llm') === request.family)
+      ) {
         this.#entries.delete(key);
       }
     }
@@ -497,6 +517,7 @@ export class InMemoryRivetLLMProfileHealthStore implements RivetLLMProfileHealth
     this.#pruneStaleEntries(now);
     return [...this.#entries.entries()]
       .filter(([, entry]) => request.projectId == null || entry.identity.projectId === request.projectId)
+      .filter(([, entry]) => request.family == null || (entry.identity.family ?? 'llm') === request.family)
       .map(([, entry]) => {
         pruneFailures(entry, entry.policy, now);
         pruneClosedPermits(entry, now);

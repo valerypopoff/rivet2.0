@@ -2,6 +2,77 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-13 — backup restore, bundle upload and managed deployment
+
+The last coordinated version bump is `27af6beb5`. This update covers the four
+subsequent commits through `2ab3748cf` and the restore/upload and automatic
+Kubernetes release-selection work included in this release.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| All five Studio Server packages | `1.25.0` → `1.26.0` | Adds automatic UI legacy-backup replacement with scoped deletion, durable recovery, validation/confirmation, drain, exact verification and supervised restarts. Adds bundle-folder/archive upload into a new project folder. Unifies local/external PostgreSQL/S3 launch modes and deployment-owned read-only Storage settings. Adds automatic immutable promoted-manifest selection for Kubernetes while preserving explicit pins and rollback safeguards. Includes edited-backup integrity approval, large-upload nginx/auth fixes, deployment ownership/recovery and bundle import hardening. API/Web/Shared/Bootstrap changed locally; Executor is a lockstep release companion. |
+| App Executor | `2.11.0` → `2.12.0` | Adds host-managed restore admission/activity coordination so accepted editor runs drain before storage replacement; preserves standalone execution behavior and the existing migration lease path. |
+| App | `2.26.0` → `2.26.1` | Desktop release companion for the updated source-bundled sidecar. Includes narrow retries for transient Apple ticket retrieval failures in the installer pipeline; no new desktop editor feature or package-local source changes. |
+| Docs | `2.18.0` → `2.19.0` | Adds the user-facing legacy-backup restore, bundle upload, managed local/external storage and deployment guidance, including explicit modified-backup approval. |
+| Core, Node, CLI, Evaluations | `2.19.0` (unchanged) | No changes since the last bump; the public npm lockstep family and CLI Docker fallback remain aligned. |
+
+New host/server capabilities use minor increments; Desktop receives a patch
+release rather than claiming a new editor feature. Studio Server's five private
+workspaces remain lockstep, and Tauri/Cargo follows App. These private server
+versions do not imply an in-place upgrade of retired filesystem/SQLite launch
+modes: retain the documented export/restore transition and source keys. Helm
+chart metadata, storage schema, dependencies and `workspace:` ranges are not
+changed by this version update. No publication, deployment or Git push is implied.
+
+## Version update — classifier observability, port warnings and runtime costs
+
+This bump covers the nine commits after the previous coordinated bump,
+`aab636029f042f014bd9dfb1d15945a2631ddea8`, through
+`ad1c79eb4d1cd0accfbbc1e61b297642b0d1bffc`.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.18.0` → `2.19.0` | Adds combined runtime `cost` and `{ llm, classifier, other }` `costBreakdown`, including nested graphs, delegated tools and managed background work. Adds classifier trace/presentation support; preserves failure reasons, opt-in request/response evidence and cancellation. Consolidates provider metadata, child construction and boundary planning; hardens OpenRouter options, cached-call accounting and web-app rendering. Node forwards the runtime metrics; CLI cost flags cover both fields. Evaluations has no package-local changes and is a required public npm companion. |
+| App | `2.25.0` → `2.26.0` | Adds classifier response inspection and Run Activity discovery, persistent destination-port warnings and explanatory hover feedback. Refines connected ports, midpoints and graph-tree alignment. Consolidates execution display transitions while retaining active/inactive policies, retention and reference cleanup. |
+| App Executor | `2.10.0` → `2.11.0` | Bundled-runtime companion for Core/Node's cost reporting, classifier evidence and execution hardening. No package-local source changes; the sidecar bundles those workspace sources. |
+| All five Studio Server packages | `1.24.0` → `1.25.0` | Hosts the new editor inspection/port feedback. Consolidates editor bridge deadlines and settlement, typed workflow failures/commands, resource lifecycle and transport policy. Hardens filesystem root destinations, settings refresh, PostgreSQL cleanup, runtime-library observers and tunnel generation retention. API/Web changed locally; Shared/Executor/Bootstrap are lockstep release companions. |
+| Docs | `2.17.0` → `2.18.0` | Documents classifier inspection/activity, failure diagnostics and runtime cost breakdowns, including CLI visibility and incomplete-pricing semantics. |
+
+Compatible features justify minor increments; accompanying refactors and fixes
+do not require a major release. Public npm packages and Studio Server retain
+their separate lockstep families. Tauri/Cargo follows App and the CLI Docker
+fallback follows the public npm family. Internal `workspace:` dependencies need
+no lockfile resolution changes. Helm/schema/dependency versions are unchanged.
+This changes release metadata, not package publication or deployment.
+
+## Version update: 2026-10-11 — profiles, bundles, storage and execution ownership
+
+The previous coordinated bump is `be437aad477b99b0d71f04d15687469146b1c904`
+(2026-10-07). This release includes the 27 commits after that baseline through
+`94f7fd5bc`, plus the current OpenRouter LLM implementation and collapsed-folder
+selection highlight. The [post-version inventory](./studio-server/audits/2026-10-10-post-version-review.md)
+documents the earlier feature groups and their correctness boundaries; later
+ownership refactors are documented in the execution and Studio Server contracts.
+
+| Packages | Version | Changes |
+| --- | --- | --- |
+| Core, Node, CLI, Evaluations | `2.17.0` → `2.18.0` | Adds Classifier Profile chains, durable host-supported suspension, Microsoft Decision through OpenRouter and Perplexity Decisions, and first-class OpenRouter LLM Chat/Profile support. Adds editable bundle execution/bindings and cross-project port continuity; hardens cancellation, streaming errors, tool/reasoning continuity, usage accounting and Node bundle execution. Refactors Core run/boundary state, Node execution configuration and Evaluation workspace/history commands without introducing cross-run mutable state sharing. CLI remains a required public npm companion. |
+| App | `2.24.0` → `2.25.0` | Adds classifier profile authoring/extraction and matching suspension controls, OpenRouter LLM settings/catalog/credentials, desktop bundle opening across project tabs and Node execution, Chrome-style project-tab shortcuts, and external Subgraph navigation/port updates. Fixes hosted modal focus, recovery/selection races and execution error reporting; consolidates prepared editor runs and session ownership. |
+| App Executor | `2.9.0` → `2.10.0` | Adds desktop Node bundle bindings/loading and preserves bundle identity through debugger/execution boundaries. Includes the updated Core/Node providers and execution lifecycle in the source-bundled sidecar. |
+| All five Studio Server packages | `1.23.0` → `1.24.0` | Adds UI-driven SQLite-to-managed migration, guided duplicate-ID repair, OAuth sign-out, classifier suspension management and uniform bundle version selection. Optimizes SQL catalogs, recordings, saves/publications, Evaluation projections and parsed definitions; isolates SQLite operations and consolidates publication policy, storage ownership and execution sessions. Hardens schema recovery, artifact integrity/retention, transaction cleanup, TLS policy, cutover/drain fencing, launch progress and hosted editor behavior. Includes renamed download actions, target-graph navigation and the collapsed-folder selection highlight. API/Web/Shared/Executor/Bootstrap remain one release family. |
+| Docs | `2.16.0` → `2.17.0` | Documents classifier profiles/providers, OpenRouter LLM capabilities, suspension, editable desktop bundles, project-tab navigation, hosted settings/migration and the refactored execution/storage ownership contracts. |
+
+Compatible feature additions use minor increments; refactors and fixes accompany
+them rather than requiring separate patch releases. Public npm packages and the
+five Studio Server workspaces remain lockstep within their respective families.
+Tauri/Cargo metadata follows App; the CLI Docker fallback follows the public npm
+family. Helm metadata, storage schema versions and third-party dependency versions
+are not package-release versions and are not changed by this bump. Internal
+dependencies still use `workspace:` ranges, so the bump does not require a Yarn
+lockfile refresh. Existing OpenRouter dependency/lockfile edits belong to that
+feature, not this version update. Version changes do not publish packages or
+deploy artifacts; publication and deployment remain separate release steps.
+
 ## Version update: 2026-10-07 — classifier providers, editor commands and server performance
 
 The previous public-runtime/App Executor bump is `051b183b1`; App, Docs and
@@ -226,7 +297,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -266,7 +337,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -738,7 +809,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.24.0`
+- Version: `2.26.1`
 - Private: yes
 
 ### Runtime shape
@@ -803,7 +874,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.9.0`
+- Version: `2.12.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -908,7 +979,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.19.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -1032,7 +1103,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.17.0`
+- Version: `2.19.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1064,7 +1135,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.16.0`
+- Version: `2.19.0`
 - Private: yes
 
 ### Script surface

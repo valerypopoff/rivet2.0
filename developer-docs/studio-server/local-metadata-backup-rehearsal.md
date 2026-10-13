@@ -184,6 +184,16 @@ Operational backup validation also requires the supported Evaluation and profile
 
 ## Linux-host orchestration release gate
 
+The restored-copy runner stages the existing test-only legacy entrypoint
+transformation into its fresh private output and mounts that executable read-only
+over `/opt/rivet/api-entrypoint.sh` for its isolated containers. Production images
+and launchers retain the PostgreSQL/S3 deployment guard. The rehearsal must boot
+retired filesystem/SQLite states to test export/recovery compatibility; invoking
+the production `serve.js` path there fails intentionally at `initial-startup`.
+Reuse `legacyServingFixtureEntrypoint` rather than adding a serving bypass flag.
+Staging is exclusive, preserves environment/proxy setup, and refuses overwrite.
+The ordinary host regression checks this exact mount and retained setup.
+
 The restored runner's container has no nginx. Its operator requests log in through the API's direct `/ui-auth` route, attach the derived proxy service token on login and subsequent requests, and retain the signed operator cookie plus migration-intent header. `/__rivet_auth` is the external nginx route and cannot be used inside this container. Missing keys or missing login cookies stop the runner before a mutation; credentials and tokens are never printed. Loopback HTTP regression tests cover this direct-backend boundary.
 
 The host gate validates the entire restored runner receipt before publishing PASS: all five recovery phases must be present exactly once in the required order, with valid timestamps, the supplied backup receipt and exact image/limits must match, a positive memory sample must exist, the final clone must remain fenced, and no owned container may remain after successful cleanup. Unexpected phase fields are refused instead of being forwarded into public diagnostics. The public summary records the image's commit label; cleanup failures have a separate redacted failure summary and can never issue a PASS receipt. This evidence is still a synthetic-host gate, not production-data certification.
@@ -200,7 +210,7 @@ node --test deploy/studio-server/scripts/local-upgrade-restored-host.test.mjs
 Remove-Item Env:RIVET_REHEARSAL_API_IMAGE
 ```
 
-Without that explicit image, only the Docker case is skipped; the mount/import regressions still run. With it, the test pins the inspected image ID, executes the exact host fixture command with no network and a fresh labeled volume, requires a real checksum receipt, and removes only its ownership-checked container/volume. This seed test works with Docker Desktop but does **not** qualify the later native Linux-host writer discovery, restore or orchestration phases. The full Linux-host gate remains required in image CI.
+Without that explicit image, only the Docker case is skipped; the mount/import regressions still run. With it, the test pins the inspected image ID, executes the exact host fixture command with no network and a fresh labeled volume, requires a real checksum receipt, verifies that production admission rejects single-host serving, and boots the legacy compatibility backend to supervisor readiness as UID 10001 with a read-only image. The generated data volume is the only writable persistent source; ownership-checked containers/volume are removed afterward. This component test works with Docker Desktop but does **not** qualify the later native Linux-host writer discovery, restore or orchestration phases. The full Linux-host gate remains required in image CI.
 
 The isolated clone sets `RIVET_SHUTDOWN_GRACE_SECONDS=10` because the rehearsal admits no active workflow executions and deliberately restarts the backend several times. Production keeps its normal shutdown grace. Docker still has its separate 150-second stop allowance if cleanup does not finish promptly. Without the shorter clone-only grace, repeated idle shutdowns can consume the host runner's 15-minute deadline before the final legacy-resumption assertion.
 

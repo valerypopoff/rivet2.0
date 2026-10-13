@@ -3,6 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { parseEnvFile } from './lib/env.mjs';
+import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
+import { productionEnvironment, prepareProductionSecrets } from './lib/server-launch-mode.mjs';
+import { renderKubernetesLauncherValuesYaml } from './lib/kubernetes-launcher-config.mjs';
+import { pullReleaseManifestArtifact, PRODUCTION_RELEASE_MANIFEST_REFERENCE } from './release-manifest-oci.mjs';
 
 import {
   assertReleaseManifestMatchesCurrentChart,
@@ -10,8 +16,17 @@ import {
   assertStudioServerReleaseManifest,
   createForwardRollbackHelmValues,
   createProductionHelmValues,
+  getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
-import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { resolveHelmBinOrThrow, findExecutableOnPath } from './lib/k8s-tools.mjs';
+import {
+  maintenanceValidationValues,
+  assertCutoverJournal,
+  assertOrdinaryReleaseAllowed,
+  blocksCutoverStop,
+  requiresMaintenanceCutover,
+  runManagedReleaseCutover,
+} from './lib/managed-release-cutover.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const chartPath = path.join(rootDir, 'deploy', 'studio-server', 'helm');
@@ -27,9 +42,15 @@ const supportedOptions = new Set([
   '--dry-run',
   '--timeout',
   '--artifacts',
+  '--maintenance-cutover',
+  '--resume-cutover',
+  '--single-machine',
+  '--env-file',
+  '--context',
 ]);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  if (argv[0] === '--') argv = argv.slice(1);
   const options = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
@@ -42,7 +63,7 @@ function parseArgs(argv) {
     if (options.has(key)) {
       throw new Error(`${key} may only be supplied once`);
     }
-    if (key === '--dry-run') {
+    if (key === '--dry-run' || key === '--maintenance-cutover' || key === '--single-machine') {
       options.set(key, true);
       continue;
     }
@@ -97,7 +118,7 @@ async function readManifest(manifestPath, { requirePromoted = false } = {}) {
   }
 }
 
-async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
+export async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
   let result;
   try {
     result = await run('git', ['rev-parse', '--verify', 'HEAD'], { capture: true });
@@ -109,7 +130,7 @@ async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
   return assertReleaseManifestMatchesCurrentSource(manifest, result.stdout.trim());
 }
 
-async function assertCleanTrackedCheckout() {
+export async function assertCleanTrackedCheckout() {
   const checks = [
     {
       label: 'unstaged tracked changes',
@@ -146,16 +167,29 @@ function commandLine(program, args) {
   return [program, ...args].map((value) => (/\s|"/u.test(value) ? JSON.stringify(value) : value)).join(' ');
 }
 
-async function run(program, args, { capture = false, allowFailure = false } = {}) {
+async function run(program, args, { capture = false, allowFailure = false, input } = {}) {
+  // Pin every operation, including diagnostics and maintenance cutover, to the
+  // selected context. Never change the operator's current kubeconfig context.
+  const context = selectedContext;
+  if (context && (program === selectedKubectl || program === selectedHelm)) {
+    args = [program === selectedHelm ? '--kube-context' : '--context', context, ...args];
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       cwd: rootDir,
       shell: false,
       windowsHide: true,
-      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+      stdio: capture ? [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] : 'inherit',
     });
     let stdout = '';
     let stderr = '';
+    let inputError;
+    if (input != null) {
+      child.stdin.on('error', (error) => {
+        inputError = error;
+      });
+      child.stdin.end(input);
+    }
     if (capture) {
       child.stdout.on('data', (chunk) => {
         stdout += String(chunk);
@@ -165,7 +199,13 @@ async function run(program, args, { capture = false, allowFailure = false } = {}
       });
     }
     child.once('error', reject);
-    child.once('exit', (code) => {
+    // Wait for pipes as well as process exit: journal JSON is an acknowledgement,
+    // and truncated output or a broken stdin pipe must not count as success.
+    child.once('close', (code) => {
+      if (inputError) {
+        reject(new Error(`Command input acknowledgement failed: ${commandLine(program, args)}`, { cause: inputError }));
+        return;
+      }
       const exitCode = code ?? 1;
       const result = { exitCode, stdout, stderr };
       if (exitCode === 0 || allowFailure) {
@@ -181,9 +221,85 @@ async function run(program, args, { capture = false, allowFailure = false } = {}
   });
 }
 
+let selectedContext;
+let selectedKubectl;
+let selectedHelm;
+
 async function writeArtifact(artifactsDir, fileName, contents) {
   await fs.mkdir(artifactsDir, { recursive: true });
   await fs.writeFile(path.join(artifactsDir, fileName), contents, 'utf8');
+}
+
+/** Release selection is a preflight-only boundary: it has no cluster mutation capabilities. */
+export async function resolveDeploymentRelease(
+  options,
+  artifactsDir,
+  {
+    pullArtifact = pullReleaseManifestArtifact,
+    verifyCheckout = assertReleaseManifestMatchesCurrentCheckout,
+    verifyClean = assertCleanTrackedCheckout,
+  } = {},
+) {
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
+  const rollbackManifestPath = options.has('--rollback-to')
+    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
+    : null;
+  let temporaryDirectory;
+  try {
+    let manifest;
+    let identity;
+    const manifestPath = options.has('--manifest')
+      ? insideRepository(required(options, '--manifest'), '--manifest')
+      : path.join(artifactsDir, 'release-manifest.json');
+    if (options.has('--manifest')) {
+      manifest = await readManifest(manifestPath, { requirePromoted: true });
+      identity = { mode: 'explicit', path: path.relative(rootDir, manifestPath) };
+    } else {
+      await fs.mkdir(artifactsDir, { recursive: true });
+      temporaryDirectory = await fs.mkdtemp(path.join(artifactsDir, '.manifest-selection-'));
+      const artifact = await pullArtifact(
+        PRODUCTION_RELEASE_MANIFEST_REFERENCE,
+        path.join(temporaryDirectory, 'manifest.json'),
+      );
+      manifest = assertStudioServerReleaseManifest(artifact.manifest, { requirePromoted: true });
+      identity = { mode: 'production', ...artifact.identity };
+    }
+    const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    console.log(`[${runnerName}] Selected source commit ${manifest.source.sha}; manifest digest ${manifestDigest}.`);
+    await verifyCheckout(manifest);
+    await verifyClean();
+    assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
+    const generatedValues = rollbackManifestPath
+      ? createForwardRollbackHelmValues({
+          failedRelease: manifest,
+          rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
+        })
+      : createProductionHelmValues(manifest);
+    // An explicit pin may itself be the retained diagnostic file. Do not rewrite it.
+    const inputIsArtifact = (fileName) =>
+      options.has('--manifest') && path.relative(manifestPath, path.join(artifactsDir, fileName)) === '';
+    if (!inputIsArtifact('release-manifest.json'))
+      await writeArtifact(artifactsDir, 'release-manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeArtifact(
+      artifactsDir,
+      inputIsArtifact('release-selection.json') ? 'release-selection-metadata.json' : 'release-selection.json',
+      `${JSON.stringify(
+        {
+          ...identity,
+          sourceSha: manifest.source.sha,
+          manifestDigest,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return { manifest, manifestPath, rollbackManifestPath, generatedValues };
+  } finally {
+    if (temporaryDirectory) await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 async function captureHelmDiagnostics(helmBin, release, namespace, artifactsDir) {
@@ -223,11 +339,27 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const release = dnsLabel(required(options, '--release'), '--release');
   const namespace = dnsLabel(required(options, '--namespace'), '--namespace');
-  const manifestPath = insideRepository(required(options, '--manifest'), '--manifest');
-  const valuesPath = insideRepository(required(options, '--values'), '--values');
-  const rollbackManifestPath = options.has('--rollback-to')
-    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
+  const singleMachine = options.get('--single-machine') === true;
+  if (options.has('--env-file') && options.has('--values'))
+    throw new Error('Use either --env-file or --values, not both.');
+  if (singleMachine && options.has('--values')) throw new Error('--single-machine uses --env-file, not --values.');
+  selectedContext = required(options, '--context');
+  const valuesPath = options.has('--env-file')
+    ? insideRepository(required(options, '--env-file'), '--env-file')
+    : insideRepository(required(options, '--values'), '--values');
+  if (options.has('--env-file') && !(await fs.lstat(valuesPath)).isFile())
+    throw new Error('--env-file must be a regular file, not a symlink.');
+  const localConfig = singleMachine
+    ? singleMachineConfig(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
     : null;
+  const productionConfig =
+    !singleMachine && options.has('--env-file')
+      ? productionEnvironment(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
+      : null;
   const dryRun = options.get('--dry-run') === true;
   const timeout = duration(options.get('--timeout') ?? '15m');
   const artifactsDir = insideRepository(
@@ -242,16 +374,10 @@ async function main() {
   // A forward rollback is still a production operation. Its failed release
   // must have passed the same CI gates as an ordinary deployment; only the
   // image set and migration-Job behavior differ.
-  const manifest = await readManifest(manifestPath, { requirePromoted: true });
-  await assertReleaseManifestMatchesCurrentCheckout(manifest);
-  await assertCleanTrackedCheckout();
-  assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
-  const generatedValues = rollbackManifestPath
-    ? createForwardRollbackHelmValues({
-        failedRelease: manifest,
-        rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
-      })
-    : createProductionHelmValues(manifest);
+  const { manifest, manifestPath, rollbackManifestPath, generatedValues } = await resolveDeploymentRelease(
+    options,
+    artifactsDir,
+  );
   let generatedValuesDir;
   try {
     generatedValuesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-production-release-'));
@@ -259,7 +385,25 @@ async function main() {
     await fs.writeFile(generatedValuesPath, `${JSON.stringify(generatedValues, null, 2)}\n`, 'utf8');
 
     const helmBin = resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName: runnerName });
-    const valueArgs = ['--values', productionOverlayPath, '--values', valuesPath, '--values', generatedValuesPath];
+    selectedHelm = helmBin;
+    let effectiveValuesPath = valuesPath;
+    if (localConfig) {
+      effectiveValuesPath = path.join(generatedValuesDir, 'single-machine.yaml');
+      await fs.writeFile(effectiveValuesPath, singleMachineValues(localConfig), { mode: 0o600 });
+    }
+    if (productionConfig) {
+      effectiveValuesPath = path.join(generatedValuesDir, 'production-environment.yaml');
+      await fs.writeFile(effectiveValuesPath, renderKubernetesLauncherValuesYaml(productionConfig), { mode: 0o600 });
+    }
+    const valueArgs = [
+      '--values',
+      productionOverlayPath,
+      ...(localConfig ? ['--values', path.join(chartPath, 'overlays/single-machine.yaml')] : []),
+      '--values',
+      effectiveValuesPath,
+      '--values',
+      generatedValuesPath,
+    ];
     const record = createOperationRecord({
       release,
       namespace,
@@ -282,9 +426,85 @@ async function main() {
       return;
     }
 
+    selectedKubectl = findExecutableOnPath(process.env.RIVET_K8S_KUBECTL_BIN ?? 'kubectl');
+    if (!selectedKubectl) throw new Error('kubectl is required to inspect release ownership.');
+
     await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
-    try {
-      await run(helmBin, [
+    const installedResult = await run(
+      helmBin,
+      ['list', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+      { capture: true },
+    );
+    const exists = JSON.parse(installedResult.stdout).length > 0;
+    const installed = exists
+      ? JSON.parse(
+          (
+            await run(helmBin, ['get', 'values', release, '--namespace', namespace, '--all', '--output', 'json'], {
+              capture: true,
+            })
+          ).stdout,
+        )
+      : null;
+    const kubectl = selectedKubectl;
+    if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
+    const journalName = `${release.slice(0, 32)}-${createHash('sha256').update(release).digest('hex').slice(0, 8)}-cutover`;
+    const savedJournal = await run(
+      kubectl,
+      [
+        '--namespace',
+        namespace,
+        '--request-timeout=30s',
+        'get',
+        'configmap',
+        journalName,
+        '--ignore-not-found',
+        '-o',
+        'json',
+      ],
+      { capture: true },
+    );
+    const journalResource = savedJournal.stdout.trim() ? JSON.parse(savedJournal.stdout) : null;
+    const pendingJournal = journalResource
+      ? { ...JSON.parse(journalResource.data.record), resourceVersion: journalResource.metadata.resourceVersion }
+      : null;
+    assertCutoverJournal(pendingJournal, { release, namespace });
+    if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
+    const installedDigest = installed?.release?.production?.manifestDigest;
+    const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    if (
+      exists &&
+      installedDigest &&
+      installedDigest !== candidateDigest &&
+      installedDigest !== manifest.lineage?.predecessor?.manifestDigest
+    )
+      throw new Error(
+        'The installed release does not match the candidate or its certified predecessor. Refuse a stale or sibling rollout.',
+      );
+    const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
+    if (exists && !installedDigest && !cutover)
+      throw new Error(
+        'The installed release identity is unknown. Use an explicitly owned maintenance cutover, not an unverified rolling rollout.',
+      );
+    if (requiresMaintenanceCutover(manifest, installed) && !cutover)
+      throw new Error(
+        'This release is incompatible with older readers. Use --maintenance-cutover after draining accepted runs, pausing external controllers, and confirming this release owns every database consumer.',
+      );
+    if (cutover && rollbackManifestPath)
+      throw new Error('Maintenance cutover cannot be combined with forward rollback.');
+    if (cutover && !exists)
+      throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
+    if (localConfig) {
+      await prepareSingleMachine(localConfig, (args, extra = {}) =>
+        run(selectedKubectl, args, { capture: true, ...extra }),
+      );
+    }
+    if (productionConfig) {
+      await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
+        run(selectedKubectl, args, { capture: true, ...extra }),
+      );
+    }
+    const upgrade = (extra = []) =>
+      run(helmBin, [
         'upgrade',
         '--install',
         release,
@@ -292,17 +512,126 @@ async function main() {
         '--namespace',
         namespace,
         ...valueArgs,
-        // A candidate migration is not reversible. Do not let Helm silently
-        // restore the previous workloads after its migration Job has already
-        // advanced PostgreSQL; recovery must use the explicit forward
-        // rollback path below. A forward rollback itself does not mutate the
-        // schema, so Helm may safely make that one operation atomic.
+        ...extra,
         ...(rollbackManifestPath ? ['--atomic'] : []),
         '--wait',
         '--wait-for-jobs',
         '--timeout',
         timeout,
       ]);
+    try {
+      if (cutover) {
+        const kube = async (args, extra = {}) =>
+          run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+        const name = journalName;
+        const selector = `app.kubernetes.io/instance=${release}`;
+        const inventory = async () => {
+          const resources = JSON.parse(
+            (await kube(['get', 'deployment,statefulset,hpa', '-l', selector, '-o', 'json'])).stdout,
+          ).items;
+          return {
+            workloads: resources
+              .filter((item) => item.kind !== 'HorizontalPodAutoscaler')
+              .map((item) => ({
+                kind: item.kind.toLowerCase(),
+                name: item.metadata.name,
+                component: item.metadata.labels?.['app.kubernetes.io/component'],
+                replicas: item.spec.replicas ?? 1,
+              })),
+            autoscalers: resources
+              .filter((item) => item.kind === 'HorizontalPodAutoscaler')
+              .map((item) => item.metadata.name),
+          };
+        };
+        const readJournal = async () => {
+          const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
+          if (!result.stdout.trim()) return null;
+          const resource = JSON.parse(result.stdout);
+          return { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion };
+        };
+        const saveJournal = async (record, resourceVersion) => {
+          const { resourceVersion: _discard, ...data } = record;
+          const resource = {
+            apiVersion: 'v1',
+            kind: 'ConfigMap',
+            metadata: { name, namespace, ...(resourceVersion ? { resourceVersion } : {}) },
+            data: { record: JSON.stringify(data) },
+          };
+          const saved = JSON.parse(
+            (
+              await kube([resourceVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], {
+                input: JSON.stringify(resource),
+              })
+            ).stdout,
+          );
+          return { ...data, resourceVersion: saved.metadata.resourceVersion };
+        };
+        const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
+        await fs.writeFile(maintenancePath, JSON.stringify(maintenanceValidationValues), 'utf8');
+        await runManagedReleaseCutover({
+          release,
+          namespace,
+          manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
+          resumeToken: options.get('--resume-cutover'),
+          inventory,
+          readJournal,
+          createJournal: (record) => saveJournal(record),
+          replaceJournal: saveJournal,
+          scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
+          removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
+          waitForStopped: async () => {
+            const amount =
+              Number.parseInt(timeout, 10) *
+              (timeout.endsWith('h') ? 3_600_000 : timeout.endsWith('m') ? 60_000 : 1000);
+            const deadline = Date.now() + amount;
+            while (true) {
+              const pods = JSON.parse((await kube(['get', 'pods', '-l', selector, '-o', 'json'])).stdout).items;
+              if (!pods.some(blocksCutoverStop)) break;
+              if (Date.now() >= deadline)
+                throw new Error('Old pods have not stopped. No forced deletion was attempted.');
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+            }
+          },
+          installValidation: () => upgrade(['--values', maintenancePath]),
+          validate: async () => {
+            const pods = JSON.parse(
+              (await kube(['get', 'pods', '-l', `${selector},app.kubernetes.io/component=backend`, '-o', 'json']))
+                .stdout,
+            ).items;
+            if (pods.length !== 1) throw new Error('Expected one validation backend.');
+            await kube([
+              'exec',
+              pods[0].metadata.name,
+              '-c',
+              'backend',
+              '--',
+              'node',
+              '-e',
+              'const base=`http://127.0.0.1:${process.env.RIVET_BACKEND_API_PORT || 80}`; Promise.all([fetch(`${base}/readyz`,{signal:AbortSignal.timeout(10000)}),fetch(`${base}/api/workflows/tree`,{signal:AbortSignal.timeout(10000)})]).then(async([health,traffic])=>{if(!health.ok||traffic.status!==503||(await traffic.json()).code!=="release_maintenance")throw Error("Validation readiness or maintenance admission failed")}).catch(e=>{console.error(e.message);process.exitCode=1})',
+            ]);
+          },
+          resume: () => upgrade(),
+        });
+      } else
+        await run(helmBin, [
+          'upgrade',
+          '--install',
+          release,
+          chartPath,
+          '--namespace',
+          namespace,
+          ...valueArgs,
+          // A candidate migration is not reversible. Do not let Helm silently
+          // restore the previous workloads after its migration Job has already
+          // advanced PostgreSQL; recovery must use the explicit forward
+          // rollback path below. A forward rollback itself does not mutate the
+          // schema, so Helm may safely make that one operation atomic.
+          ...(rollbackManifestPath ? ['--atomic'] : []),
+          '--wait',
+          '--wait-for-jobs',
+          '--timeout',
+          timeout,
+        ]);
     } catch (error) {
       await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
       const recoveryGuidance = rollbackManifestPath
@@ -323,7 +652,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`[${runnerName}] ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[${runnerName}] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

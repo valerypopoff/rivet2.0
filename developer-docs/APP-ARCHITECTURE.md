@@ -28,6 +28,43 @@ feature-specific detail.
 
 The app is not just a thin client over `rivet-core`. A large amount of product behavior lives here in React components, Jotai state, commands, and hooks.
 
+## Extracted project bundles
+
+Desktop project IO accepts the manifest itself or a declared member in its
+`projects/` directory. `TauriIOProvider` prepares the root/member snapshot and
+returns its real save path; workspace opening must honor `LoadedProjectData.path`.
+Manifest opening additionally returns `bundleProjects` and `bundleManifestPath`.
+`useWorkspaceHostOpenProject.openLoadedProject` imports new members, registers
+inactive clean snapshots and selects the root without replacing existing edits.
+Existing roots reuse the caller's activation intent rather than superseding it.
+Deferred imports guard every member's open path; closed/moved tabs invalidate the
+pending workspace open before sibling registration.
+Member-file opening remains single-tab. Tab normalization preserves the additive
+manifest identity used for execution display routing; it is not serialized to YAML.
+The native `project_bundle` module performs bounded contained reads off the UI
+thread. `DesktopProjectBundle` prepares editor snapshots without enforcing graph
+compatibility until Run, allowing users to repair outdated Subgraph boundaries.
+`useReloadProjectReferences` supplies bundle-bound graph definitions to the editor.
+
+Browser and desktop Node execution use Core's `createProjectBundleRuntime` for
+isolated dependencies and data while retaining the visible entry project and
+capturing its datasets before asynchronous Run preparation. Each run (and each
+Evaluation trial) gets an isolated dataset provider, so tab switches cannot redirect
+reads or writes to another project's data. Bundle dataset mutations are run-local.
+The Node protocol carries a manifest path/artifact ID, the captured entry datasets,
+and the usual uploaded entry snapshot. Hosted executors reject that local capability
+unless explicitly opted in; external debugger runs fail with guidance to choose
+Browser or desktop Node mode. See [Project bundles](./studio-server/project-bundles.md)
+for discovery, saving, plugin and compatibility limits.
+`useBundleExecutionRouting` projects live dependency events into their owning
+project snapshots using additive `GraphExecutionMetadata.projectId`, shared by
+Browser and desktop Node transports. It does not transfer run ownership or
+terminal/user-input controls away from the entry project.
+
+Desktop release promotion also requires the bundle WebSocket smoke to pass
+against the built native executor, not just a source-level Node process. See the
+bundle regression checks for `RIVET_TEST_PACKAGED_EXECUTOR` and local commands.
+
 ## Stack
 
 Current major libraries:
@@ -251,7 +288,7 @@ Current structure:
 - shared plugin-config form rendering for the plugin pages lives in [`packages/app/src/components/settings/pages/PluginSettingsSection.tsx`](../packages/app/src/components/settings/pages/PluginSettingsSection.tsx). Plugin names render as content section headers with dividers, not side-navigation headers, so long `Plugins settings` pages stay visually scannable.
 - the `Plugins` page hosts app-level plugin catalog/search/install/remove UI through [`packages/app/src/components/settings/pages/PluginsCatalogPage.tsx`](../packages/app/src/components/settings/pages/PluginsCatalogPage.tsx). It writes installed plugin specs to `appPluginSpecsState`; it is not a workspace overlay and does not edit the current project's YAML directly. Catalog rows use a compact 32px logo and a 120px name/author column (rather than the former 64px logo and 200px name column), with a 12px inter-column gap; this keeps the entire identity area narrow and returns the recovered width to descriptions. Async plugin actions launched from React event props must be wrapped or explicitly `void`ed so UI callbacks stay fire-and-forget and lint does not hide dropped promises.
 - the `Plugins settings` page hosts loaded plugin configuration and failed-plugin retry UI through [`packages/app/src/components/settings/pages/PluginsSettingsPage.tsx`](../packages/app/src/components/settings/pages/PluginsSettingsPage.tsx). Keep it distinct from the app-level catalog page so plugin availability and plugin configuration do not share one overloaded surface.
-- the `LLM` page hosts shared provider credentials for OpenAI, Anthropic, Google, and custom providers. These values live in the app settings store, not project YAML, and flow into `settings.openAiApiKey`/legacy `settings.openAiKey`, `settings.anthropicApiKey`, `settings.googleApiKey`, and `settings.customAiApiKey` so LLM Chat configured-key mode uses the same credentials in Browser, Node, Remote Debugger, app model-catalog refresh paths, and the node-settings `Generate using AI` drafting flow. The five shared credential controls (`OpenAI API Key`, `Anthropic API Key`, `Google API Key`, `Custom provider API Key`, and `OpenAI Organization`) live together under the `LLM credentials` section with one shared helper paragraph that explains app/editor use, project-YAML exclusion, canonical environment-variable fallback such as `CUSTOM_PROVIDER_API_KEY` for the shared custom-provider key, and programmatic runtime keys; do not reintroduce duplicated per-field helper paragraphs for that same credential contract. The app settings UI no longer exposes the legacy OpenAI-compatible endpoint, chat headers, or chat timeout controls on this page; built-in LLM Chat and Generate using AI must not read `settings.openAiEndpoint` or `OPENAI_ENDPOINT`, and OpenAI-compatible hosts belong in the Custom provider base URL instead. The same page owns the Generate using AI drafting choice through `selectedAssistModelState`, `aiAssistCustomProviderBaseURLState`, and `aiAssistCustomModelState`; the UI presents the choice as provider first and provider-filtered model second, but keeps the stored model value combined for compatibility with existing settings. For supported drafting providers, the model row mirrors the LLM Chat model-catalog UX: it starts from the Chat v2 static model registry, lets the user re-fetch provider models with the configured settings key, stores refreshed options in session memory, preserves a current model that is not in the fetched list, and shows the same success/warning status banner via `chatV2ModelCatalogStatus.ts`; keep the dropdown/button row and banner inside the local `ai-assist-model-control` stack so the settings page owns the row/banner gap instead of relying on adjacent fragments or ad hoc margins, and keep the `Re-fetch Model List` action at normal Atlaskit button height rather than forcing a taller local minimum. The Generate using AI modal resolver must use an exact-label lookup and fall back to the selected model id, not the provider default option, because re-fetched provider catalogs can contain models that are not present in Rivet's static registry. The modal only reads and displays the resolved model, and should not reintroduce an inline model selector. Custom drafting models keep a freeform model field because arbitrary OpenAI-compatible APIs have no shared catalog contract, but the actual request uses the Chat v2 custom provider path with the saved custom provider base URL instead of temporarily pretending the provider is OpenAI. The modal still runs the bundled generator Rivet project through `coreCreateProcessor(...)`; that generator graph owns the specialized Text/Prompt/Object/legacy Code/Regex instructions, but the bundled generator graph stores generator-only `aiAssistGeneratorChatV2` adapter nodes directly. [`packages/app/src/utils/aiAssistVercelGenerator.ts`](../packages/app/src/utils/aiAssistVercelGenerator.ts) exposes the same generator graph ports, preserves exact option values such as stop sequences, and delegates the real model request to `runChatV2Pipeline(...)` / the Vercel AI SDK without runtime-swapping legacy Chat nodes. `AiAssistEditorBase` guards the generation command itself against read-only editors, disabled editors, missing model configuration, and overlapping in-flight runs, and sets its working state before deserializing/building the generator processor, so footer clicks, modal button clicks, and Ctrl/Cmd+Enter cannot start overlapping generator runs during the same render frame. When the generated response is applied, the editor uses the latest props for the same node id instead of the stale data snapshot captured when the request started, so a slow generation does not overwrite other same-node setting changes made while it was running. Generic Monaco editor drafting adds app-side node-type/editor-language instructions before entering the Text generator. If a user had text selected in the paired Monaco editor when opening the modal, the footer action bridge snapshots that selection and includes it as `<selected_editor_content>`; generic prompts also include the full current editor content so the model can return a complete replacement. Keep the selection getter owned by the editor wrapper and passed through `NodeCodeEditorFooterActionContext`; do not query Monaco or DOM state from `AiAssistEditorBase`. Do not move Anthropic/Google LLM Chat configured-key UI back into `Plugins settings`; the plugin pages remain the compatibility/config surface for legacy provider plugin nodes, and `getPluginConfig(...)` bridges the shared Anthropic/Google LLM settings into legacy plugin nodes after non-empty explicit plugin settings and before env fallbacks. Blank or unrelated plugin settings must not suppress the shared LLM key.
+- the `LLM` page hosts shared provider credentials for OpenAI, Anthropic, Google, OpenRouter, and custom providers. These values live in the app settings store, not project YAML, and flow into `settings.openAiApiKey`/legacy `settings.openAiKey`, `settings.anthropicApiKey`, `settings.googleApiKey`, `settings.openRouterApiKey`, and `settings.customAiApiKey` so LLM Chat configured-key mode uses the same credentials in Browser, Node, Remote Debugger, app model-catalog refresh paths, and the node-settings `Generate using AI` drafting flow. The six shared credential controls (`OpenAI API Key`, `Anthropic API Key`, `Google API Key`, `OpenRouter API Key`, `Custom provider API Key`, and `OpenAI Organization`) live together under the `LLM credentials` section with one shared helper paragraph that explains app/editor use, project-YAML exclusion, canonical environment-variable fallback such as `CUSTOM_PROVIDER_API_KEY` for the shared custom-provider key, and programmatic runtime keys; do not reintroduce duplicated per-field helper paragraphs for that same credential contract. The app settings UI no longer exposes the legacy OpenAI-compatible endpoint, chat headers, or chat timeout controls on this page; built-in LLM Chat and Generate using AI must not read `settings.openAiEndpoint` or `OPENAI_ENDPOINT`, and OpenAI-compatible hosts belong in the Custom provider base URL instead. The same page owns the Generate using AI drafting choice through `selectedAssistModelState`, `aiAssistCustomProviderBaseURLState`, and `aiAssistCustomModelState`; the UI presents the choice as provider first and provider-filtered model second, but keeps the stored model value combined for compatibility with existing settings. For supported drafting providers, the model row mirrors the LLM Chat model-catalog UX: it starts from the Chat v2 static model registry, lets the user re-fetch provider models with the configured settings key, stores refreshed options in session memory, preserves a current model that is not in the fetched list, and shows the same success/warning status banner via `chatV2ModelCatalogStatus.ts`; keep the dropdown/button row and banner inside the local `ai-assist-model-control` stack so the settings page owns the row/banner gap instead of relying on adjacent fragments or ad hoc margins, and keep the `Re-fetch Model List` action at normal Atlaskit button height rather than forcing a taller local minimum. The Generate using AI modal resolver must use an exact-label lookup and fall back to the selected model id, not the provider default option, because re-fetched provider catalogs can contain models that are not present in Rivet's static registry. The modal only reads and displays the resolved model, and should not reintroduce an inline model selector. Custom drafting models keep a freeform model field because arbitrary OpenAI-compatible APIs have no shared catalog contract, but the actual request uses the Chat v2 custom provider path with the saved custom provider base URL instead of temporarily pretending the provider is OpenAI. The modal still runs the bundled generator Rivet project through `coreCreateProcessor(...)`; that generator graph owns the specialized Text/Prompt/Object/legacy Code/Regex instructions, but the bundled generator graph stores generator-only `aiAssistGeneratorChatV2` adapter nodes directly. [`packages/app/src/utils/aiAssistVercelGenerator.ts`](../packages/app/src/utils/aiAssistVercelGenerator.ts) exposes the same generator graph ports, preserves exact option values such as stop sequences, and delegates the real model request to `runChatV2Pipeline(...)` / the Vercel AI SDK without runtime-swapping legacy Chat nodes. `AiAssistEditorBase` guards the generation command itself against read-only editors, disabled editors, missing model configuration, and overlapping in-flight runs, and sets its working state before deserializing/building the generator processor, so footer clicks, modal button clicks, and Ctrl/Cmd+Enter cannot start overlapping generator runs during the same render frame. When the generated response is applied, the editor uses the latest props for the same node id instead of the stale data snapshot captured when the request started, so a slow generation does not overwrite other same-node setting changes made while it was running. Generic Monaco editor drafting adds app-side node-type/editor-language instructions before entering the Text generator. If a user had text selected in the paired Monaco editor when opening the modal, the footer action bridge snapshots that selection and includes it as `<selected_editor_content>`; generic prompts also include the full current editor content so the model can return a complete replacement. Keep the selection getter owned by the editor wrapper and passed through `NodeCodeEditorFooterActionContext`; do not query Monaco or DOM state from `AiAssistEditorBase`. Do not move Anthropic/Google LLM Chat configured-key UI back into `Plugins settings`; the plugin pages remain the compatibility/config surface for legacy provider plugin nodes, and `getPluginConfig(...)` bridges the shared Anthropic/Google LLM settings into legacy plugin nodes after non-empty explicit plugin settings and before env fallbacks. Blank or unrelated plugin settings must not suppress the shared LLM key.
 - Shared LLM credentials are persisted only through the `settings` member of the `recoil-persist` app record. Runtime environment values are resolved into a separate run-time settings copy and are never written into that record. `clearLegacyInvalidOpenAiApiKeyPlaceholder()` runs after storage initialization and clears only the exact accidental legacy `admin@123` value from either OpenAI-key alias, then flushes the corrected record before the settings UI mounts.
 - `getLLMChatV2ApiKeyEnvVarNames(...)` scans `llmChatV2` and detached `llmProfile` nodes in project graphs plus node-prefab source nodes. Local and remote executor setup uses that list to preload each configured Custom-provider env name and each explicit OpenAI/Anthropic/Google env alias; adding another provider-configuration container without extending this scan would make its credential work in direct Node runs but fail in browser or remote editor paths. The deprecated custom-only export remains as a source-compatibility alias, but new code must use the generalized name.
 - [`AiAssistPromptModal`](../packages/app/src/components/AiAssistPromptModal.tsx) is the shared prompt modal for AI generation surfaces. Node-settings `Generate using AI` and the bottom-left canvas Graph Builder must use this component instead of duplicating Atlaskit modal/text-area/model-note/footer markup. [`AiGraphCreatorInput`](../packages/app/src/components/AiGraphCreatorInput.tsx) latches exactly one implementation mode when the user starts a session. Transactional sessions route through [`usePlanBGraphBuilder`](../packages/app/src/hooks/usePlanBGraphBuilder.ts), keep every model/read/patch result private until the controller reaches `ready-for-preview`, and expose clarification, Apply, Discard, Start over, conflict, cancellation, and failure states without publishing intermediate graph snapshots. The selectable legacy rollback path has the same publication invariant: [`legacyDraftRunner.ts`](../packages/app/src/features/graphBuilder/legacyDraftRunner.ts) owns a pure session-private authoring-project draft and accepts an injected agent executor, while [`legacyGraphCreatorAgentExecutor.ts`](../packages/app/src/features/graphBuilder/legacyGraphCreatorAgentExecutor.ts) binds that seam to the checked bundled Graph Creator processor. Legacy mutation tools return the draft revision they describe and emit bounded draft deltas for progress; they never call `setGraph`, clear history, recenter, or lay out/publish the editor during generation. Successful completion leaves the modal at an explicit preview, and both implementations send Apply through the same editor compare-and-swap gateway for one atomic graph/history publication. Cancel, failure, conflict, and Discard dispose the legacy draft without changing the editor. Closing a nonterminal session confirms Discard. The local **Settings > Graphs > Graph Builder implementation** segmented control owns the temporary rollout/rollback mode through `graphBuilderImplementationModeState`. A mode change affects only a later session; it must never switch an in-flight session or dual-run both implementations. Legacy remains the default until the frozen evaluation, hidden-holdout, and dogfood gates pass; persisted missing or invalid mode values therefore normalize to legacy rather than silently opting a user into the candidate.
@@ -1419,6 +1456,9 @@ project-keyed runtime registry. Together they centralize:
 
 Current architectural detail:
 
+- `preparedEditorRun.ts` owns the shared authored-project capture and run-from/run-to selection policy. Capture happens before asynchronous preparation; authored graph/data and supplied inputs are copied once, while host callbacks and runtime handles retain identity. Browser and remote adapters use the same selection result. `prepareEvaluationRun` resolves the suite's target graph and dataset independently of the visible canvas.
+- `EditorRunSession` owns one run's parent cancellation subscription and cleanup. It does not own a socket or replace `executorSession`. Cancellation during preparation propagates when execution is bound later; disposal is single-flight and attempts all cleanups. Early graph outputs and abort notifications are not disposal boundaries: Browser runs retain the owner until processor completion, remote early-output runs until root done/error or disconnect.
+- Remote preparation binds to the selected target and ready socket. Closing the originating project or replacing that connection prevents dispatch. Prepared project upload and run dispatch are consecutive synchronous operations, after bundle/environment/recording preparation, so an asynchronous preparation cannot interleave another upload between them. Cancellation must never address a replacement socket.
 - `RivetApp` mounts `useExecutorSessionCoordinator` once so executor session ownership does not follow every `useGraphExecutor` consumer
 - `RivetApp` freezes the persisted `defaultExecutorState` into transient `selectedExecutorState` on startup, so changing the Settings modal's `Default executor` value only affects the next app start
 - `useGraphExecutor` is now thinner and mainly selects local vs remote execution from shared session state
@@ -1430,9 +1470,24 @@ Current architectural detail:
 - other live-execution features such as Evaluations test runs continue to follow the selected live executor.
 - recording load/unload is blocked while any execution is running, and while loaded-recording playback is in the short pre-start phase, so the active Abort/Pause/Resume controls keep targeting the executor that actually owns the run.
 
+### Shared preparation and run lifetime
+
+Session disposal owns recording finalization as well as processor/request
+cleanup. Terminal transport callbacks observe cleanup failures instead of leaving
+unhandled promises. A recorder failure cannot prevent the other cleanup actions.
+Evaluation graph-input conversion is shared in `preparedEditorRun`, so Browser
+and Node apply the same target-port types and unknown-input validation.
+Authored capture is one detached project snapshot, not a clone of the entire
+runtime: providers, sockets, signals and callbacks retain their identities.
+Settings, project context and bundle datasets are captured by each adapter before
+its asynchronous work; bundle discovery and transport upload remain adapter work.
+The [execution refactor acceptance checklist](EXECUTION-REFACTOR-ACCEPTANCE.md)
+documents scope ownership, inheritance and the protected verification workload.
+
 ### Local executor
 
 `useLocalExecutor` runs `GraphProcessor` in-process.
+Browser repaint yields close both MessageChannel ports after delivery.
 
 Current responsibilities:
 
@@ -1469,6 +1524,16 @@ Freeze node output is attached only for normal live editor runs. Browser executi
 
 `useRemoteExecutor` runs graphs through the remote-debugger protocol, usually talking to the internal sidecar.
 
+`remoteExecutorRunRequest.ts` owns request registration/send/settlement, not the
+socket. Registration is inside the pending-request failure boundary: a throwing
+attachment callback rejects/removes the pending execution and settles its owner
+before sending. Fire-and-forget registration/send failures also release their
+session/recorder without clearing a newer active request. Neither path retries
+execution automatically after a transport error.
+Cancellation requested synchronously during sending waits for the send result:
+an accepted run receives a targeted abort and retains ownership until terminal
+completion; a failed send rejects locally. Sending an abort is not completion.
+
 Current responsibilities:
 
 - bridge remote debugger events into `useCurrentExecution`
@@ -1486,8 +1551,8 @@ Current architectural detail:
 - it does not reconnect the internal sidecar directly on disconnect; `executorSession` owns reconnect timing so callers do not race ahead of Tauri sidecar startup
 - remote graph and Evaluation runs now carry request IDs through the debugger protocol so multiple pending remote runs can resolve independently
 - read-only UI consumers should use shared session/debugger state directly rather than mounting `useRemoteExecutor`, because that hook still owns remote event subscriptions and execution side effects
-- shared graph/Evaluation orchestration helpers now live in [`packages/app/src/hooks/remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts)
-- that helper module holds context-value shaping, editor run-from planning/preload derivation, and event-dispatch fan-out without depending on React state; Evaluations suite/dataset selection remains in the application-local Evaluations state
+- shared authored capture, Evaluation target/input preparation and selection policy live in [`preparedEditorRun.ts`](../packages/app/src/hooks/preparedEditorRun.ts)
+- [`remoteExecutorHelpers.ts`](../packages/app/src/hooks/remoteExecutorHelpers.ts) remains the pure planner/preload, frozen-output policy and event-dispatch helper; project context shaping belongs to [`projectContextValues.ts`](../packages/app/src/utils/projectContextValues.ts). None owns the socket or Evaluation persistence.
 - frozen-output snapshots are sent only to internal executor targets (`internal-desktop` and `internal-hosted`) and only for normal graph runs. External Remote Debugger runs, recording playback, and evaluation execution must not receive frozen payloads or frozen run-from preload data. The app validates and prepares internal-executor frozen payloads before serializing the run message because the app-to-executor command channel is JSON; explicit `undefined` values are represented with debugger transport sentinels and decoded only on the `frozenNodeOutputs` field in [`packages/node/src/debugger.ts`](../packages/node/src/debugger.ts), while genuinely non-JSON-safe frozen values must fail with a user-visible error before websocket send. The app-executor sidecar attaches the same core frozen-output resolver before `processor.run()`, so Browser and internal Node executor modes share replay semantics for JSON-transportable values.
 - execution-data sanitization now lives in [`packages/app/src/utils/executionDataSanitization.ts`](../packages/app/src/utils/executionDataSanitization.ts), so node-event persistence does not duplicate Uint8Array repair across event branches
 - execution-data storage/ref ownership now lives in [`packages/app/src/utils/executionDataStorage.ts`](../packages/app/src/utils/executionDataStorage.ts): it stores node data, creates stable execution-scoped ref ids, restores ref-backed values, collects refs, and clears removed/preserved refs. New storage behavior and tests should target this owner directly rather than adding app-private compatibility facades.
@@ -2129,6 +2194,51 @@ If planning significant refactors, these are the highest-value seams already vis
 - `useGraphListDragDrop`
 
 ### Execution seams
+
+Active-tab hooks and inactive-project snapshots share payload normalization in
+`nodeExecutionData.ts`, node-history merging/retention decisions in
+`executionDataTransitions.ts`, and graph-history transitions in
+`graphExecutionEventHelpers.ts`. These are small functions, not a second event
+dispatcher or store. Their results keep reference allocation/deletion and UI
+selection with the existing adapters. Compute replacement data before releasing
+old references; active atom updates commit first. Reject detached late partial
+outputs before allocating them.
+
+LLM round-history invocation creation/redelivery is also a shared transition:
+`updateLLMChatOutputHistory` consumes an already stored page, preserves terminal
+outputs/status and page selection, and returns only obsolete refs. Both adapters
+allocate once before this transition and release replaced refs afterwards.
+The paired-adapter test runs the same split streaming, terminal failure, late
+partial, history redelivery and clear sequence against separate ref stores.
+
+Keep policy differences explicit: active runs support preloaded-node suppression,
+partial-rerun preservation, Evaluation history accumulation, configured payload
+retention, authored debug-source capture and graph-view-aware selection. Inactive
+snapshots retain their existing reset/selection policy. Local, remote and bundle
+event owners supply the same live per-node payload-retention setting to snapshots;
+switching tabs must not bypass that setting. Eviction keeps invocation metadata,
+releases stored payload/history refs and removes obsolete round-page selections.
+Late events for evicted invocations retain metadata without restoring payloads.
+Round-history creation/upserts use the same invocation/retention transition, even
+if no node-start event arrived first; terminal data and page selection remain
+observationally preserved for retained invocations.
+Model-call, profile-attempt and tool-call diagnostics use
+`agentTraceEventStorage.ts` for trace identity/merging, then the same shared node
+transition for invocation creation and retention. A diagnostic-first invocation
+must evict old payloads and selections immediately, not wait for `nodeStart`.
+Tool diagnostics belong to their source node/process, not a result owner or
+incidental target ID. Identified redeliveries retain their position; anonymous
+tool calls stay distinct. Existing status, outputs and page selection remain
+observationally unchanged except required payload eviction.
+Called-project observations remain journal-only except live user-input prompts
+and their terminal cleanup. Replay prompts never become interactive.
+
+Tab capture/restoration uses the exhaustive typed field declaration in
+`projectExecutionSnapshotBindings.ts`. Adding a display field requires adding
+its binding and legacy default there; capture/restore do not clone payloads or
+persist execution state into authored project files. Regression coverage lives
+beside the hooks, including round-trip bindings, split evidence, stale events,
+bundle tab routing and partial-rerun behavior.
 
 - `useGraphExecutor`
 - `useExecutorSessionCoordinator`

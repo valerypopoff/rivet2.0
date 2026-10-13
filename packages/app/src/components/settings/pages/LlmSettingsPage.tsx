@@ -231,8 +231,8 @@ export const LlmSettingsPage: FC = () => {
         <FieldHelperMessage>
           These credentials can be used by LLM-powered nodes and the Rivet editor. They are not saved into project YAML.
           They may also be set with corresponding environment variables such as OPENAI_API_KEY, ANTHROPIC_API_KEY,
-          GOOGLE_GENERATIVE_AI_API_KEY, CUSTOM_PROVIDER_API_KEY, and OPENAI_ORG_ID, or passed as matching runtime keys
-          when running projects programmatically.
+          GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY, CUSTOM_PROVIDER_API_KEY, and OPENAI_ORG_ID, or passed as
+          matching runtime keys when running projects programmatically.
         </FieldHelperMessage>
         <div className="settings-section-fields">
           <Field name="openai-api-key" label="OpenAI API Key">
@@ -268,6 +268,18 @@ export const LlmSettingsPage: FC = () => {
                 value={settings.googleApiKey ?? ''}
                 onChange={(event) =>
                   setSettings((state) => ({ ...state, googleApiKey: (event.target as HTMLInputElement).value }))
+                }
+              />
+            )}
+          </Field>
+          <Field name="openrouter-api-key" label="OpenRouter API Key">
+            {({ fieldProps }) => (
+              <TextField
+                {...fieldProps}
+                type="password"
+                value={settings.openRouterApiKey ?? ''}
+                onChange={(event) =>
+                  setSettings((state) => ({ ...state, openRouterApiKey: (event.target as HTMLInputElement).value }))
                 }
               />
             )}

@@ -16,6 +16,10 @@ server {
     listen 8080;
     server_name ${RIVET_PROXY_INTERNAL_HOST};
     client_max_body_size 100m;
+    location = /api/legacy-restore/upload {
+        client_max_body_size 10g;
+        include /etc/nginx/vm-edge-proxy.conf;
+    }
     location / {
         include /etc/nginx/vm-edge-proxy.conf;
     }
@@ -38,6 +42,10 @@ server {
     ssl_certificate_key /run/rivet/tls/key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     client_max_body_size 100m;
+    location = /api/legacy-restore/upload {
+        client_max_body_size 10g;
+        include /etc/nginx/vm-edge-proxy.conf;
+    }
     location / {
         include /etc/nginx/vm-edge-proxy.conf;
     }

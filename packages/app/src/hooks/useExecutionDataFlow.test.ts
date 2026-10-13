@@ -7,7 +7,78 @@ import {
   mergeNodeRunDataForProcess,
   prepareNodeRunDataForStorage,
   removeUserInputQuestionsForProcess,
-} from './useExecutionDataFlow.js';
+  updateNodeRunData,
+  clearNodeRunData,
+} from './executionDataTransitions.js';
+
+test('shared history clearing removes exactly one process and reports only its references', () => {
+  const nodeId = 'clear-node' as NodeId;
+  const processId = 'clear-process' as ProcessId;
+  const previous = {
+    [nodeId]: [
+      {
+        processId,
+        data: {
+          outputData: {
+            ['out' as PortId]: {
+              storage: 'ref' as const,
+              type: 'string' as const,
+              refId: 'ref-to-clear',
+              preview: { kind: 'text' as const, excerpt: 'saved', totalChars: 5, lineCount: 1 },
+            },
+          },
+        },
+      },
+      { processId: 'keep-process' as ProcessId, data: { status: { type: 'running' as const } } },
+    ],
+  };
+  const missing = clearNodeRunData(previous, nodeId, 'missing' as ProcessId);
+  assert.equal(missing.runData, previous);
+  assert.deepEqual(missing.obsoleteRefIds, []);
+  const next = clearNodeRunData(previous, nodeId, processId);
+  assert.deepEqual(next.obsoleteRefIds, ['ref-to-clear']);
+  assert.equal(next.runData[nodeId]!.length, 1);
+  assert.equal(next.runData[nodeId]![0], previous[nodeId]![1]);
+  assert.equal(previous[nodeId]!.length, 2);
+  assert.equal(Object.hasOwn(clearNodeRunData(previous, nodeId).runData, nodeId), false);
+});
+
+test('shared node transition rejects late partials and evicts only old payloads, not invocation records', () => {
+  const nodeId = 'node' as NodeId;
+  const processId = 'old' as ProcessId;
+  const previous = {
+    [nodeId]: [
+      {
+        processId,
+        data: {
+          status: { type: 'ok' as const },
+          outputData: { ['out' as PortId]: { storage: 'inline' as const, type: 'string' as const, value: 'saved' } },
+        },
+      },
+    ],
+  };
+  const rejected = updateNodeRunData(previous, { nodeId, processId, data: { outputData: {} }, ignoreIfTerminal: true });
+  assert.equal(rejected.applied, false);
+  assert.equal(rejected.runData, previous);
+  assert.deepEqual(rejected.obsoleteRefIds, []);
+  const unlimited = updateNodeRunData(previous, {
+    nodeId,
+    processId: 'new' as ProcessId,
+    data: { status: { type: 'running' } },
+  });
+  assert.equal(unlimited.runData[nodeId]![0]!.data.outputData, previous[nodeId]![0]!.data.outputData);
+  const bounded = updateNodeRunData(previous, {
+    nodeId,
+    processId: 'new' as ProcessId,
+    data: { status: { type: 'running' } },
+    previousDataPerNodeToKeep: 0,
+  });
+  assert.equal(bounded.runData[nodeId]!.length, 2);
+  assert.deepEqual(bounded.evictedProcessIds, [processId]);
+  assert.deepEqual(bounded.runData[nodeId]![0]!.data.outputData, {});
+  assert.equal(bounded.runData[nodeId]![0]!.data.status?.type, 'ok');
+  assert.equal(previous[nodeId]![0]!.data.outputData!['out' as PortId]!.value, 'saved');
+});
 
 test('terminal prompt removal preserves other nodes and removes empty entries without mutating state', () => {
   const nodeId = 'finished-node' as NodeId;
@@ -196,8 +267,5 @@ test('collectReplacedRefIds releases split references removed by a complete repl
     },
   };
 
-  assert.deepEqual(
-    collectReplacedRefIds(previousData, { splitOutputData: {} }),
-    ['sibling-ref'],
-  );
+  assert.deepEqual(collectReplacedRefIds(previousData, { splitOutputData: {} }), ['sibling-ref']);
 });

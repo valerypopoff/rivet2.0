@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 ## Overview
 
-LLM Chat is the recommended chat node for new Rivet 2 graphs. It is a vendor-agnostic chat node built on the Vercel AI SDK and supports OpenAI, Anthropic, Google, and custom OpenAI-compatible providers from one node.
+LLM Chat is the recommended chat node for new Rivet 2 graphs. It is a vendor-agnostic chat node built on the Vercel AI SDK and supports OpenAI, Anthropic, Google, OpenRouter, and custom OpenAI-compatible providers from one node.
 
 Use LLM Chat when you want to:
 
@@ -22,6 +22,32 @@ Use LLM Chat when you want to:
 - retry non-200 provider responses and inspect one chronological attempt record
 
 The older [Chat Node](./chat.mdx) remains available for existing graphs, but new work should prefer LLM Chat.
+
+### OpenRouter
+
+Select **OpenRouter** and choose a model from its public catalog, or use the
+**Model** input for a model ID such as `openai/gpt-4.1`. Configure the separate
+OpenRouter key in **Settings > LLM**, pass `openRouterApiKey` to the runtime,
+set `OPENROUTER_API_KEY`, or connect the node's **API Key** input.
+
+Generation parameters, reasoning effort, text streaming, JSON/JSON-schema
+responses, Rivet tools and continuation, retries, diagnostics, profiles, and
+suspension use the normal LLM Chat controls. Support depends on the chosen model:
+Rivet requests endpoints that support the configured parameters, so unsupported
+combinations fail rather than silently ignoring them. Clear optional parameters
+to use provider defaults. OpenAI-only tools and Previous Response ID are not shown.
+
+**Extra provider options** are raw OpenRouter request fields; for example,
+`{"provider":{"order":["OpenAI"],"require_parameters":true}}` controls routing.
+These overrides deliberately replace same-named generated fields. Usage and
+cost use OpenRouter's reported values; absent cost is unknown, not zero.
+Rejected structured replies can still incur costs, which remain in the call trace.
+Errors received within a stream keep their provider status for retries and suspension;
+an authentication error does not suspend the profile.
+An unexpectedly closed stream fails instead of returning partial text as a
+completed answer or executing an unfinished tool call.
+Incoming cache breakpoints are forwarded to supporting endpoints. **All Messages**
+retains provider-returned reasoning details for subsequent tool/conversation rounds.
 
 <Tabs
   defaultValue="inputs"
@@ -121,7 +147,7 @@ This section is available in Inline configuration mode.
 
 | Setting                           | Description                                                                                                                                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Provider                          | OpenAI, Anthropic, Google, or Custom provider.                                                                                                                                                               |
+| Provider                          | OpenAI, Anthropic, Google, OpenRouter, or Custom provider.                                                                                                                                                               |
 | Provider base URL                 | Custom provider only. OpenAI-compatible hosts belong here by choosing Custom provider, not by overriding built-in OpenAI. A full `/chat/completions` or `/responses` endpoint is normalized to its base URL. |
 | API                               | Custom provider only. **Completions** is the backward-compatible default and calls `/chat/completions`; **Responses** opts into the OpenAI Responses wire contract at `/responses`.                          |
 | Model                             | Provider model. For Custom provider, enter the model ID expected by that provider.                                                                                                                           |
@@ -186,7 +212,7 @@ bodies, and response-token accounting describe only provider calls that actually
 occurred. A round with multiple calls always uses normal continuation, including
 mixed and all-direct rounds.
 
-**Allow parallel toolcalls** is available for OpenAI, Anthropic, and Custom providers. It permits a supported model to return more than one tool call in a response; it does not require the model to do so. OpenAI and Anthropic receive an explicit provider setting for either switch state. Custom **Responses** mode uses the Responses API `parallel_tool_calls` option for either switch state. Custom **Completions** mode generates `parallel_tool_calls: true` only when enabled and otherwise leaves the field absent so existing endpoints keep their defaults. A same-named field in **Extra provider options** is applied last and therefore overrides the generated value. Some partially compatible Custom endpoints may ignore or reject the field. Google does not show this switch because its current adapter has no equivalent control. In **From profile** mode the switch remains invocation-local and applies only to fallback candidates whose providers support it; unsupported candidates ignore it.
+**Allow parallel toolcalls** is available for OpenAI, Anthropic, OpenRouter, and Custom providers. It permits a supported model to return more than one tool call in a response; it does not require the model to do so. OpenAI, Anthropic, and OpenRouter receive an explicit provider setting for either switch state. Custom **Responses** mode uses the Responses API `parallel_tool_calls` option for either switch state. Custom **Completions** mode generates `parallel_tool_calls: true` only when enabled and otherwise leaves the field absent so existing endpoints keep their defaults. A same-named field in **Extra provider options** is applied last and therefore overrides the generated value. Some partially compatible Custom endpoints may ignore or reject the field. Google does not show this switch because its current adapter has no equivalent control. In **From profile** mode the switch remains invocation-local and applies only to fallback candidates whose providers support it; unsupported candidates ignore it.
 
 To make tool work visible and configurable in the graph:
 
@@ -271,7 +297,7 @@ before it when the unresolved output can contain several calls.
 
 ### Provider Advanced
 
-Provider Advanced contains optional Headers and Extra provider options. Headers are added to every physical provider request, including retries, fallback candidates, and auto-continued tool rounds. Built-in OpenAI, Anthropic, and Google providers use their provider-owned endpoints. For OpenAI-compatible custom hosts, choose Custom provider, set the Model section's Provider base URL, and select the API contract implemented by that host.
+Provider Advanced contains optional Headers and Extra provider options. Headers are added to every physical provider request, including retries, fallback candidates, and auto-continued tool rounds. Built-in OpenAI, Anthropic, Google, and OpenRouter providers use their provider-owned endpoints. For OpenAI-compatible custom hosts, choose Custom provider, set the Model section's Provider base URL, and select the API contract implemented by that host.
 
 **Extra provider options** must be a JSON object. Rivet adds its fields exactly as written to the top level of the physical provider request after the normal request is generated. Field spelling is preserved, and these values override generated fields with the same name. This intentionally permits low-level control such as `reasoning_effort`, as well as replacement of `model`, `messages`, `input`, `tools`, or response-format fields. Rivet does not validate whether an arbitrary field is supported by the selected provider.
 
@@ -329,7 +355,7 @@ A Custom provider URL may be a base URL or a full `/chat/completions` or `/respo
 
 For an intentionally keyless Custom endpoint, use configured-key mode, clear both alternative key-name fields, and leave the shared Custom provider key empty. If any configured programmatic or environment key name is present but cannot be resolved, Rivet fails that configuration and does not silently retry without authentication. A manually configured `Authorization` header is preserved.
 
-OpenAI, Anthropic, Google, and custom-provider configured keys are set in Settings > LLM. When running through `@valerypopoff/rivet2-node`, unset configured keys can also come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, and the canonical custom-provider `CUSTOM_PROVIDER_API_KEY` env var. Legacy `CUSTOM_AI_API_KEY` is still accepted as a compatibility alias.
+OpenAI, Anthropic, Google, OpenRouter, and custom-provider configured keys are set in Settings > LLM. When running through `@valerypopoff/rivet2-node`, unset configured keys can also come from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and the canonical custom-provider `CUSTOM_PROVIDER_API_KEY` env var. Legacy `CUSTOM_AI_API_KEY` is still accepted as a compatibility alias.
 
 ## Error Handling
 

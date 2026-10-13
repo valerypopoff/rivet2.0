@@ -48,6 +48,7 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            openRouterReasoningEffort: ""
             outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false
@@ -207,6 +208,7 @@ data:
             openAIReasoningEffort: ""
             openAIReasoningSummary: ""
             openAIWebSearchContextSize: medium
+            openRouterReasoningEffort: ""
             outputLLMAttempts: false
             outputReasoning: false
             outputRequestBody: false

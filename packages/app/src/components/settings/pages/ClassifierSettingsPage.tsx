@@ -24,8 +24,9 @@ export const ClassifierSettingsPage: FC = () => {
         <div className="settings-section-fields">
           {classifierProviders.map((provider) => (
             <Field key={provider.id} name={`classifier-${provider.id}-api-key`} label={`${provider.label} API Key`}>
-              {() => (
+              {({ fieldProps }) => (
                 <TextField
+                  {...fieldProps}
                   type="password"
                   value={settings.classifierProviders?.[provider.id]?.apiKey ?? ''}
                   onChange={(event) => {

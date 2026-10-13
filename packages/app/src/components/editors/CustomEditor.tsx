@@ -36,6 +36,7 @@ export const CustomEditor: FC<
     .with('PromptNodeAiAssist', () => <PromptNodeAiAssistEditor {...props} editor={editor} />)
     .with('TextNodeAiAssist', () => <TextNodeAiAssistEditor {...props} editor={editor} />)
     .with('LLMChatV2Configuration', () => <LLMChatV2ConfigurationEditor {...props} editor={editor} />)
+    .with('ClassifierConfiguration', () => <LLMChatV2ConfigurationEditor {...props} editor={editor} />)
     .with('LLMChatV2CredentialNames', () => <LLMChatV2CredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierCredentialNames', () => <ClassifierCredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierScoreCriteria', () => <ClassifierScoreCriteriaEditor {...props} editor={editor} />)

@@ -9,7 +9,7 @@ once and inspecting nodes individually no longer tells the whole story.
 
 ## Open Run Activity
 
-Click **Runtime** in the lower-right status bar to open or close Run Activity.
+Click **Run activity** in the lower-right status bar to open or close Run Activity.
 The view is available before the first run and updates as soon as an execution
 starts.
 
@@ -34,7 +34,7 @@ preview. Repeated subgraph calls, split runs, and multiple invocations of the
 same node remain separate rows.
 
 Expand a row to inspect the metadata available for that invocation, including
-declared context-input previews and recorded model-call or tool-call metadata.
+recorded LLM calls, classifier requests, profile decisions and tool calls.
 Rivet calls out result origin only when a value was replayed, preloaded, or came
 from an older runtime whose origin cannot be verified; ordinary executions do
 not repeat that expected detail on every row.
@@ -58,12 +58,13 @@ after the graph's outputs are ready.
 Use the filters to focus on:
 
 - **All** activity
-- **LLM and tools**
+- **Models and tools**, including classifiers
 - **Errors**
 
 When several graphs participated in the run, you can also select a graph.
-Search matches node titles as well as graph names, node types, tool names, and
-short error text. Multiple search terms may match different metadata fields.
+Search matches node and profile names as well as graph names, node types,
+providers, models, tool names, and short error text. Multiple search terms may
+match different metadata fields.
 It does not load every large output merely to search it.
 
 ## Return to the exact invocation
@@ -76,7 +77,20 @@ not all lead to whichever invocation happened most recently.
 Depending on the row, the actions can also include:
 
 - **Open full output** for the existing node-output viewer
-- **Inspect response** for the metadata-only LLM response inspector
+- **Inspect response** for the shared LLM Chat / Classifier Evaluate summary
+
+Classifier summaries show requests, retries, profile fallback and suspension
+decisions, HTTP status, failure reasons, timing, tokens and estimated cost.
+The same inspector is available from the eye on the node's inline or fullscreen
+output, without enabling optional diagnostics. Request/response bodies remain
+in their opt-in outputs, not in the summary. Missing usage or pricing is unknown;
+the drawer labels capped accounting **retained evidence only**.
+
+An open inspector follows the selected invocation as requests arrive and the
+node finishes. If its execution data is no longer available, it says so instead
+of showing a different invocation. When older recordings have limited attempt
+details, inferred request counts say **retained evidence only**; the omission
+notice can cover either requests or profile decisions.
 
 Use **Copy diagnostics** in the drawer header when low-level run identities are
 needed for a bug report.

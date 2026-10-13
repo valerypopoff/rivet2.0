@@ -1,7 +1,6 @@
 import { produce } from 'immer';
 import {
   type AgentTraceEvent,
-  type GraphRunId,
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
@@ -10,41 +9,42 @@ import {
   createEmptyProjectExecutionSnapshot,
   type GraphRunRecord,
   type NodeRunData,
-  type NodeRunDataWithRefs,
-  type ProcessDataForNode,
   type ProjectExecutionSnapshot,
 } from '../state/dataFlow.js';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { buildGraphViewKeyFromExecution, isLiveCalledProjectExecutionEvent } from '../utils/executionIdentity.js';
-import { sanitizeInputsOrOutputs, sanitizeSplitOutputs } from '../utils/executionDataSanitization.js';
-import { getEventOccurredAt, getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
+import { sanitizeInputsOrOutputs } from '../utils/executionDataSanitization.js';
+import { getEventOccurredAt } from '../utils/recordedNodeTiming.js';
+import { nodeExecutionData } from './nodeExecutionData.js';
 import {
   clearExecutionDataRefs,
-  collectStoredRefIds,
   deleteStoredRefIds,
   storeInputsOrOutputsForHistory,
   storeNodeDataForHistory,
 } from '../utils/executionDataStorage.js';
 import {
+  startGraphRunHistory,
+  finishGraphRunHistory,
+  interruptRunningProcesses,
   reconcileRunningProcessesAfterSuccessfulDone,
   removeRunningGraphEntry,
   updateSelectedGraphRunForGraphStart,
 } from './graphExecutionEventHelpers.js';
 import {
-  collectReplacedRefIds,
   isTerminalNodeRunStatus,
-  mergeNodeRunDataForProcess,
+  clearNodeRunData,
+  updateNodeRunData,
+  updateLLMChatOutputHistory,
   prepareNodeRunDataForStorage,
   removeUserInputQuestionsForProcess,
-} from './useExecutionDataFlow.js';
+} from './executionDataTransitions.js';
 import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
 import { createRunActivityJournal } from '../features/runActivity/runActivityJournal.js';
 import { handleError } from '../utils/errorHandling.js';
-import { upsertAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
+import { updateAgentTraceEventForInvocation } from './agentTraceEventStorage.js';
 import {
   removeLLMChatOutputHistorySelectionsForProcess,
   toLLMChatOutputHistoryEntry,
-  upsertLLMChatOutputHistoryEntry,
 } from '../utils/llmChatOutputHistory.js';
 import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
 
@@ -59,6 +59,7 @@ type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap
   projectId: ProjectId;
   refStore: DataRefStore;
   snapshot: ProjectExecutionSnapshot | undefined;
+  previousDataPerNodeToKeep?: number;
 };
 
 export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(
@@ -123,7 +124,11 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
   if (options.message !== 'userInput' && isLiveCalledProjectExecutionEvent(options.data)) {
     if (options.message === 'nodeFinish' || options.message === 'nodeError' || options.message === 'nodeExcluded') {
       const { node, processId } = options.data as ProcessEvents['nodeFinish'];
-      const userInputQuestions = removeUserInputQuestionsForProcess(snapshot.userInputQuestions, node.id, processId);
+      const userInputQuestions = removeUserInputQuestionsForProcess(
+        snapshot.userInputQuestions ?? {},
+        node.id,
+        processId,
+      );
       if (userInputQuestions !== snapshot.userInputQuestions) {
         return { changed: true, snapshot: { ...snapshot, userInputQuestions } };
       }
@@ -143,12 +148,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeStart'],
-          {
-            inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeStart']).inputs),
-            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeStart'], 'start'),
-            startedAt: Date.now(),
-            status: { type: 'running' },
-          },
+          nodeExecutionData.start(options.data as ProcessEvents['nodeStart'], false),
           options,
         ),
       };
@@ -158,17 +158,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeFinish'],
-          {
-            durationMs: (options.data as ProcessEvents['nodeFinish']).durationMs,
-            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeFinish'], 'terminal'),
-            finishedAt: Date.now(),
-            outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeFinish']).outputs),
-            splitRunDurationMs: (options.data as ProcessEvents['nodeFinish']).splitRunDurationMs,
-            ...((options.data as ProcessEvents['nodeFinish']).streamingWatchTerminal
-              ? { streamingWatchTerminal: true }
-              : {}),
-            status: { type: 'ok' },
-          },
+          nodeExecutionData.finish(options.data as ProcessEvents['nodeFinish']),
           options,
         ),
       };
@@ -178,25 +168,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeError'],
-          {
-            durationMs: (options.data as ProcessEvents['nodeError']).durationMs,
-            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeError'], 'terminal'),
-            finishedAt: Date.now(),
-            splitRunDurationMs: (options.data as ProcessEvents['nodeError']).splitRunDurationMs,
-            ...((options.data as ProcessEvents['nodeError']).outputs === undefined
-              ? {}
-              : { outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeError']).outputs!) }),
-            ...((options.data as ProcessEvents['nodeError']).splitOutputs === undefined
-              ? {}
-              : { splitOutputData: sanitizeSplitOutputs((options.data as ProcessEvents['nodeError']).splitOutputs!) }),
-            status: {
-              type: 'error',
-              error:
-                typeof (options.data as ProcessEvents['nodeError']).error === 'string'
-                  ? ((options.data as ProcessEvents['nodeError']).error as string)
-                  : (options.data as ProcessEvents['nodeError']).error.toString(),
-            },
-          },
+          nodeExecutionData.error(options.data as ProcessEvents['nodeError']),
           options,
         ),
       };
@@ -206,14 +178,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeExcluded'],
-          {
-            finishedAt: Date.now(),
-            ...getRecordedNodeTimingPatch(options.data as ProcessEvents['nodeExcluded'], 'excluded'),
-            inputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).inputs),
-            outputData: sanitizeInputsOrOutputs((options.data as ProcessEvents['nodeExcluded']).outputs),
-            startedAt: Date.now(),
-            status: { type: 'notRan', reason: (options.data as ProcessEvents['nodeExcluded']).reason },
-          },
+          nodeExecutionData.excluded(options.data as ProcessEvents['nodeExcluded'], false),
           options,
         ),
       };
@@ -226,10 +191,14 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
       const data = options.data as ProcessEvents['llmCallFinished'];
       return {
         changed: true,
-        snapshot: applyAgentTraceEvent(snapshot, {
-          type: 'llm-call-finished',
-          ...data,
-        }),
+        snapshot: applyAgentTraceEvent(
+          snapshot,
+          {
+            type: 'llm-call-finished',
+            ...data,
+          },
+          options,
+        ),
       };
     }
     case 'llmChatOutputSnapshot':
@@ -241,20 +210,28 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
       const data = options.data as ProcessEvents['llmProfileAttempt'];
       return {
         changed: true,
-        snapshot: applyAgentTraceEvent(snapshot, {
-          type: 'llm-profile-attempt',
-          ...data,
-        }),
+        snapshot: applyAgentTraceEvent(
+          snapshot,
+          {
+            type: 'llm-profile-attempt',
+            ...data,
+          },
+          options,
+        ),
       };
     }
     case 'toolCallFinished': {
       const data = options.data as ProcessEvents['toolCallFinished'];
       return {
         changed: true,
-        snapshot: applyAgentTraceEvent(snapshot, {
-          type: 'tool-call-finished',
-          ...data,
-        }),
+        snapshot: applyAgentTraceEvent(
+          snapshot,
+          {
+            type: 'tool-call-finished',
+            ...data,
+          },
+          options,
+        ),
       };
     }
     case 'nodeOutputsCleared':
@@ -346,16 +323,33 @@ function applyStreamingOutputWatchTerminal(
   });
 }
 
-function applyAgentTraceEvent(snapshot: ProjectExecutionSnapshot, event: AgentTraceEvent): ProjectExecutionSnapshot {
-  return produce(snapshot, (draft) => {
-    upsertAgentTraceEventForInvocation(draft.lastRunDataByNode, event);
-  });
+function applyAgentTraceEvent(
+  snapshot: ProjectExecutionSnapshot,
+  event: AgentTraceEvent,
+  options: { refStore: DataRefStore; previousDataPerNodeToKeep?: number },
+): ProjectExecutionSnapshot {
+  const result = updateAgentTraceEventForInvocation(
+    snapshot.lastRunDataByNode,
+    event,
+    options.previousDataPerNodeToKeep,
+  );
+  const nextSnapshot = {
+    ...snapshot,
+    lastRunDataByNode: result.runData,
+    selectedLLMChatOutputPageByInvocation: result.evictedProcessIds.reduce(
+      (selections, processId) =>
+        removeLLMChatOutputHistorySelectionsForProcess({ nodeId: result.nodeId, processId, selections }),
+      snapshot.selectedLLMChatOutputPageByInvocation ?? {},
+    ),
+  };
+  deleteStoredRefIds(options.refStore, result.obsoleteRefIds);
+  return nextSnapshot;
 }
 
 function applyLLMChatOutputSnapshot(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['llmChatOutputSnapshot'],
-  options: { projectId: ProjectId; refStore: DataRefStore },
+  options: { projectId: ProjectId; refStore: DataRefStore; previousDataPerNodeToKeep?: number },
 ): ProjectExecutionSnapshot {
   const storedOutputData = storeInputsOrOutputsForHistory(sanitizeInputsOrOutputs(data.outputs), options.refStore, {
     channel: 'llm-chat-output-history',
@@ -366,26 +360,21 @@ function applyLLMChatOutputSnapshot(
     splitIndex: data.splitIndex,
   })!;
   const entry = toLLMChatOutputHistoryEntry(data, storedOutputData);
-  const refIdsToDelete: string[] = [];
-  const nextSnapshot = produce(snapshot, (draft) => {
-    draft.lastRunDataByNode[data.nodeId] ??= [];
-    let process = draft.lastRunDataByNode[data.nodeId]!.find((candidate) => candidate.processId === data.processId);
-    if (!process) {
-      process = {
-        data: {},
-        graphId: data.execution.graphId,
-        graphRunId: data.execution.graphRunId,
-        parentGraphRunId: data.execution.parentGraphRunId,
-        processId: data.processId,
-        rootRunId: data.execution.rootRunId,
-      };
-      draft.lastRunDataByNode[data.nodeId]!.push(process);
-    }
-    const updated = upsertLLMChatOutputHistoryEntry(process.data, entry);
-    refIdsToDelete.push(...updated.replacedRefIds);
-    process.data = updated.data;
-  });
-  deleteStoredRefIds(options.refStore, refIdsToDelete);
+  const result = updateLLMChatOutputHistory(snapshot.lastRunDataByNode, data, entry, options.previousDataPerNodeToKeep);
+  const nextSnapshot = {
+    ...snapshot,
+    lastRunDataByNode: result.runData,
+    selectedLLMChatOutputPageByInvocation: result.evictedProcessIds.reduce(
+      (selections, processId) =>
+        removeLLMChatOutputHistorySelectionsForProcess({
+          nodeId: data.nodeId,
+          processId,
+          selections,
+        }),
+      snapshot.selectedLLMChatOutputPageByInvocation ?? {},
+    ),
+  };
+  deleteStoredRefIds(options.refStore, result.obsoleteRefIds);
   return nextSnapshot;
 }
 
@@ -462,22 +451,7 @@ function applyGraphStart(
 
   return produce(snapshot, (draft) => {
     draft.runningGraphs.push(graphId);
-    draft.graphRunHistoryByView[graphViewKey] ??= [];
-
-    const existing = draft.graphRunHistoryByView[graphViewKey]!.find(
-      (graphRun) => graphRun.graphRunId === data.execution.graphRunId,
-    );
-    if (!existing) {
-      draft.graphRunHistoryByView[graphViewKey]!.push({
-        executor: data.execution.executor,
-        graphId: data.execution.graphId,
-        graphRunId: data.execution.graphRunId,
-        parentGraphRunId: data.execution.parentGraphRunId,
-        rootRunId: data.execution.rootRunId,
-        startedAt: Date.now(),
-        status: 'running',
-      });
-    }
+    draft.graphRunHistoryByView = startGraphRunHistory(draft.graphRunHistoryByView, graphViewKey, data.execution);
 
     draft.selectedGraphRunByView = updateSelectedGraphRunForGraphStart(draft.selectedGraphRunByView, graphViewKey);
   });
@@ -496,7 +470,12 @@ function applyGraphFinish(
 
   return produce(snapshot, (draft) => {
     draft.runningGraphs = removeRunningGraphEntry(draft.runningGraphs, graphId);
-    finishGraphRun(draft, graphViewKey, data.execution.graphRunId, status);
+    draft.graphRunHistoryByView = finishGraphRunHistory(
+      draft.graphRunHistoryByView,
+      graphViewKey,
+      data.execution?.graphRunId,
+      status,
+    );
   });
 }
 
@@ -504,111 +483,54 @@ function setDataForNodeInSnapshot(
   snapshot: ProjectExecutionSnapshot,
   event: Pick<ProcessEvents['nodeStart'], 'execution' | 'node' | 'processId'>,
   data: Partial<NodeRunData>,
-  options: { projectId: ProjectId; refStore: DataRefStore },
+  options: { projectId: ProjectId; refStore: DataRefStore; previousDataPerNodeToKeep?: number },
 ): ProjectExecutionSnapshot {
   const storedData = storeNodeDataForHistory(prepareNodeRunDataForStorage(data), options.refStore, {
     nodeId: event.node.id,
     processId: event.processId,
     projectId: options.projectId,
   });
-  const refIdsToDelete: string[] = [];
-
-  const nextSnapshot = produce(snapshot, (draft) => {
-    if (data.status && data.status.type !== 'running') {
-      draft.userInputQuestions = removeUserInputQuestionsForProcess(
-        draft.userInputQuestions ?? {},
-        event.node.id,
-        event.processId,
-      );
-    }
-    draft.lastRunDataByNode[event.node.id] ??= [];
-
-    const existingProcess = draft.lastRunDataByNode[event.node.id]!.find(
-      (process) => process.processId === event.processId,
-    );
-    if (existingProcess) {
-      existingProcess.graphId = event.execution?.graphId ?? existingProcess.graphId;
-      existingProcess.graphRunId = event.execution?.graphRunId ?? existingProcess.graphRunId;
-      existingProcess.parentGraphRunId = event.execution?.parentGraphRunId ?? existingProcess.parentGraphRunId;
-      existingProcess.rootRunId = event.execution?.rootRunId ?? existingProcess.rootRunId;
-      const nextProcessData = mergeNodeRunDataForProcess(existingProcess.data, storedData);
-      refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, nextProcessData));
-      existingProcess.data = nextProcessData;
-      return;
-    }
-
-    draft.lastRunDataByNode[event.node.id]!.push({
-      data: storedData as NodeRunDataWithRefs,
-      graphId: event.execution?.graphId,
-      graphRunId: event.execution?.graphRunId,
-      parentGraphRunId: event.execution?.parentGraphRunId,
-      processId: event.processId,
-      rootRunId: event.execution?.rootRunId,
-    });
-    draft.selectedProcessPageNodes[event.node.id] = 'latest';
+  const result = updateNodeRunData(snapshot.lastRunDataByNode, {
+    nodeId: event.node.id,
+    processId: event.processId,
+    execution: event.execution,
+    data: storedData,
+    previousDataPerNodeToKeep: options.previousDataPerNodeToKeep,
   });
-
-  deleteStoredRefIds(options.refStore, refIdsToDelete);
+  const nextSnapshot = {
+    ...snapshot,
+    lastRunDataByNode: result.runData,
+    selectedLLMChatOutputPageByInvocation: result.evictedProcessIds.reduce(
+      (selections, processId) =>
+        removeLLMChatOutputHistorySelectionsForProcess({
+          nodeId: event.node.id,
+          processId,
+          selections,
+        }),
+      snapshot.selectedLLMChatOutputPageByInvocation ?? {},
+    ),
+    userInputQuestions:
+      data.status && data.status.type !== 'running'
+        ? removeUserInputQuestionsForProcess(snapshot.userInputQuestions ?? {}, event.node.id, event.processId)
+        : snapshot.userInputQuestions,
+    selectedProcessPageNodes: snapshot.lastRunDataByNode[event.node.id]?.some(
+      (process) => process.processId === event.processId,
+    )
+      ? snapshot.selectedProcessPageNodes
+      : { ...snapshot.selectedProcessPageNodes, [event.node.id]: 'latest' as const },
+  };
+  deleteStoredRefIds(options.refStore, result.obsoleteRefIds);
   return nextSnapshot;
 }
 
 function applyPartialOutput(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['partialOutput'],
-  options: { projectId: ProjectId; refStore: DataRefStore },
+  options: { projectId: ProjectId; refStore: DataRefStore; previousDataPerNodeToKeep?: number },
 ): ProjectExecutionSnapshot {
-  const sanitizedOutputs = sanitizeInputsOrOutputs(data.outputs);
-
-  if (!data.node.isSplitRun) {
-    return setDataForNodeInSnapshot(snapshot, data, { outputData: sanitizedOutputs }, options);
-  }
-
-  const storedOutputs = storeInputsOrOutputsForHistory(sanitizedOutputs, options.refStore, {
-    channel: 'output',
-    nodeId: data.node.id,
-    processId: data.processId,
-    projectId: options.projectId,
-    splitIndex: data.index,
-  });
-  const refIdsToDelete: string[] = [];
-
-  const nextSnapshot = produce(snapshot, (draft) => {
-    draft.lastRunDataByNode[data.node.id] ??= [];
-
-    const existingProcess = draft.lastRunDataByNode[data.node.id]!.find(
-      (process) => process.processId === data.processId,
-    );
-    if (existingProcess) {
-      existingProcess.graphId = data.execution.graphId;
-      existingProcess.graphRunId = data.execution.graphRunId;
-      existingProcess.parentGraphRunId = data.execution.parentGraphRunId;
-      existingProcess.rootRunId = data.execution.rootRunId;
-      const nextSplitOutputData = {
-        ...existingProcess.data.splitOutputData,
-        [data.index]: storedOutputs!,
-      };
-      refIdsToDelete.push(...collectReplacedRefIds(existingProcess.data, { splitOutputData: nextSplitOutputData }));
-      existingProcess.data.splitOutputData = nextSplitOutputData;
-    } else {
-      draft.lastRunDataByNode[data.node.id]!.push({
-        data: {
-          splitOutputData: {
-            [data.index]: storedOutputs!,
-          },
-        },
-        graphId: data.execution.graphId,
-        graphRunId: data.execution.graphRunId,
-        parentGraphRunId: data.execution.parentGraphRunId,
-        processId: data.processId,
-        rootRunId: data.execution.rootRunId,
-      });
-    }
-
-    draft.selectedProcessPageNodes[data.node.id] = 'latest';
-  });
-
-  deleteStoredRefIds(options.refStore, refIdsToDelete);
-  return nextSnapshot;
+  const next = setDataForNodeInSnapshot(snapshot, data, nodeExecutionData.partial(data), options);
+  if (!data.node.isSplitRun) return next;
+  return { ...next, selectedProcessPageNodes: { ...next.selectedProcessPageNodes, [data.node.id]: 'latest' } };
 }
 
 function isTerminalNodeProcess(
@@ -625,62 +547,19 @@ function applyNodeOutputsCleared(
   data: ProcessEvents['nodeOutputsCleared'],
   refStore: DataRefStore,
 ): ProjectExecutionSnapshot {
-  const refIdsToDelete: string[] = [];
-
+  const result = clearNodeRunData(snapshot.lastRunDataByNode, data.node.id, data.processId);
   const nextSnapshot = produce(snapshot, (draft) => {
-    const nodeRuns = draft.lastRunDataByNode[data.node.id];
-    if (!nodeRuns) {
-      return;
-    }
-
-    if (data.processId) {
-      const index = nodeRuns.findIndex((process) => process.processId === data.processId);
-      if (index !== -1) {
-        refIdsToDelete.push(...collectStoredRefIds(nodeRuns[index]!.data));
-        nodeRuns.splice(index, 1);
-      }
-    } else {
-      refIdsToDelete.push(...nodeRuns.flatMap((process) => collectStoredRefIds(process.data)));
-      delete draft.lastRunDataByNode[data.node.id];
-    }
+    if (!snapshot.lastRunDataByNode[data.node.id]) return;
+    draft.lastRunDataByNode = result.runData;
 
     draft.selectedProcessPageNodes[data.node.id] = 'latest';
     draft.selectedLLMChatOutputPageByInvocation = removeLLMChatOutputHistorySelectionsForProcess({
       nodeId: data.node.id,
       processId: data.processId,
-      selections: draft.selectedLLMChatOutputPageByInvocation,
+      selections: draft.selectedLLMChatOutputPageByInvocation ?? {},
     });
   });
 
-  deleteStoredRefIds(refStore, refIdsToDelete);
+  deleteStoredRefIds(refStore, result.obsoleteRefIds);
   return nextSnapshot;
-}
-
-function finishGraphRun(
-  snapshot: ProjectExecutionSnapshot,
-  graphViewKey: string,
-  graphRunId: GraphRunId | undefined,
-  status: GraphRunRecord['status'],
-): void {
-  if (!graphRunId) {
-    return;
-  }
-
-  const run = snapshot.graphRunHistoryByView[graphViewKey]?.find((graphRun) => graphRun.graphRunId === graphRunId);
-  if (run) {
-    run.finishedAt = Date.now();
-    run.status = status;
-  }
-}
-
-function interruptRunningProcesses(lastRunData: ProjectExecutionSnapshot['lastRunDataByNode']) {
-  return produce(lastRunData, (draft) => {
-    for (const processes of Object.values(draft) as ProcessDataForNode[][]) {
-      for (const process of processes) {
-        if (process.data.status?.type === 'running') {
-          process.data.status = { type: 'interrupted' };
-        }
-      }
-    }
-  });
 }

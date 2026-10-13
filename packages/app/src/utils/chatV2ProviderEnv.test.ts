@@ -65,6 +65,23 @@ describe('getLLMChatV2ApiKeyEnvVarNames', () => {
             {
               type: 'llmChatV2',
               data: {
+                provider: 'openrouter',
+                apiKeySource: 'environment',
+                providerApiKeyNames: {
+                  openrouter: {
+                    programmaticName: 'routerKey',
+                    environmentVariableName: 'ROUTER_CHAT_KEY',
+                  },
+                  openai: {
+                    programmaticName: 'unusedKey',
+                    environmentVariableName: 'UNUSED_ROUTER_OPENAI_KEY',
+                  },
+                },
+              },
+            },
+            {
+              type: 'llmChatV2',
+              data: {
                 provider: 'google',
                 apiKeySource: 'environment',
                 providerApiKeyNames: {
@@ -80,6 +97,21 @@ describe('getLLMChatV2ApiKeyEnvVarNames', () => {
         },
       },
       nodePrefabs: {
+        routerProfile: {
+          sourceNode: {
+            type: 'llmProfile',
+            data: {
+              provider: 'openrouter',
+              apiKeySource: 'environment',
+              providerApiKeyNames: {
+                openrouter: {
+                  programmaticName: 'routerProfileKey',
+                  environmentVariableName: 'ROUTER_PROFILE_KEY',
+                },
+              },
+            },
+          },
+        },
         reusableProfile: {
           sourceNode: {
             type: 'llmProfile',
@@ -102,6 +134,8 @@ describe('getLLMChatV2ApiKeyEnvVarNames', () => {
       'CEREBRAS_API_KEY',
       'PROFILE_API_KEY',
       'BILLING_OPENAI_KEY',
+      'ROUTER_CHAT_KEY',
+      'ROUTER_PROFILE_KEY',
       'PREFAB_GOOGLE_KEY',
     ]);
   });

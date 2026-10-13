@@ -90,6 +90,33 @@ export async function assertVmMigrationTargetMayServe(pool: Pool): Promise<void>
   }
 }
 
+/** Private restart preparation may show recovery for the same accepted restore,
+ * but must never open the gate or admit an unrelated unfinished VM migration. */
+export async function assertVmMigrationTargetMayRecoverRestore(
+  pool: Pool,
+  expected: { sourceIdentity: string; targetIdentity: string; sourceManifest: string },
+): Promise<void> {
+  if (!Object.values(expected).every((value) => /^[a-f0-9]{64}$/.test(value)))
+    throw new Error('Restore recovery source identity is invalid.');
+  if (!(await hasVmMigrationTargetGate(pool))) return;
+  const { rows } = await pool.query<{
+    phase: string;
+    source_identity: string;
+    target_identity: string;
+    source_manifest_hash: string | null;
+  }>(`SELECT phase, source_identity, target_identity, source_manifest_hash FROM ${GATE_TABLE} WHERE singleton = TRUE`);
+  const row = rows[0];
+  // A verified preceding installation also permits recovery before this restore's first deletion.
+  if (row?.phase === 'verified') return;
+  if (
+    row?.phase !== 'copying' ||
+    row.source_identity !== expected.sourceIdentity ||
+    row.target_identity !== expected.targetIdentity ||
+    (row.source_manifest_hash !== null && row.source_manifest_hash !== expected.sourceManifest)
+  )
+    throw new Error('Incomplete migration target does not belong to this restore.');
+}
+
 /** Called before the importer creates any workflow schema or target objects. */
 export async function beginVmMigrationTarget(
   pool: Pool,

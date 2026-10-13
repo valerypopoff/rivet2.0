@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { createLocalCatalogNativeApi } from '../local-metadata/execution-io.js';
+import {
+  createHostedRuntimeOptions,
+  type HostedRuntimeDependencies,
+} from '../routes/workflows/hosted-runtime-policy.js';
+import { ExecutionSession } from '../routes/workflows/execution-session.js';
 
 import {
   createProcessor,
   deserializeDatasets,
-  ExecutionRecorder,
+  type ExecutionRecorder,
   NodeDatasetProvider,
   type LooseDataValue,
 } from '@valerypopoff/rivet2-node';
@@ -16,16 +20,14 @@ import {
   type PortableJson,
 } from '@valerypopoff/rivet2-evaluations';
 
-import { readExecutionEnvironmentVariables } from '../environment-variable-settings.js';
-import { ManagedCodeRunner } from '../runtime-libraries/managed-code-runner.js';
-import { getRootPath } from '../runtime-libraries/manifest.js';
-import type { PostgresRivetLLMProfileHealthStore } from '../llm-profile-health/managed-store.js';
-import type { PostgresRivetEvaluationStore } from './managed-store.js';
+import type { RivetStudioLLMProfileHealthStore } from '../llm-profile-health/store.js';
+import type { RivetStudioEvaluationStore } from './store.js';
 import type { HostedEvaluationGraphRunner } from './hosted-coordinator.js';
 
 type HostedEvaluationExecutionDependencies = {
-  evaluationStore: PostgresRivetEvaluationStore;
-  llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
+  evaluationStore: Pick<RivetStudioEvaluationStore, 'putRecording'>;
+  llmProfileHealthStore: RivetStudioLLMProfileHealthStore | undefined;
+  createSubgraphProjectLoader?: HostedRuntimeDependencies['createSubgraphProjectLoader'];
   createProjectReferenceLoader(): Promise<NonNullable<Parameters<typeof createProcessor>[1]['projectReferenceLoader']>>;
 };
 
@@ -60,13 +62,14 @@ export function createHostedEvaluationGraphRunner(
   return async ({ project, graphId, inputs, signal, metadata, projectPath, datasetsContents, contextValues }) => {
     const startedAt = Date.now();
     const captured = createEvaluationEventCollector('full');
-    const recorder = new ExecutionRecorder();
+    let recorder: ExecutionRecorder | undefined;
     const reference = createTemporaryReference();
     let persistedReference: EvaluationRecordingReference | undefined;
     let processor: ReturnType<typeof createProcessor> | undefined;
+    let session: ExecutionSession | undefined;
 
     const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
-      if (recorder.events.length === 0) return undefined;
+      if (!recorder || recorder.events.length === 0) return undefined;
       await dependencies.evaluationStore.putRecording({
         projectId: project.metadata.id,
         runId: metadata.evaluationRunId,
@@ -81,27 +84,33 @@ export function createHostedEvaluationGraphRunner(
 
     try {
       signal?.throwIfAborted();
+      const runtime = await createHostedRuntimeOptions(
+        {
+          abortSignal: signal,
+          projectPath,
+          datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
+        },
+        {
+          createProjectReferenceLoader: dependencies.createProjectReferenceLoader,
+          createSubgraphProjectLoader: dependencies.createSubgraphProjectLoader,
+          getProfileHealth: async () => dependencies.llmProfileHealthStore,
+        },
+      );
       processor = createProcessor(project, {
+        ...runtime,
         graph: graphId,
         inputs: toLooseInputValues(inputs),
         context: toLooseContextValues(contextValues),
-        abortSignal: signal,
-        codeRunner: new ManagedCodeRunner(getRootPath(), {
-          executionEnvironment: await readExecutionEnvironmentVariables(),
-        }) as any,
-        projectPath,
-        nativeApi: createLocalCatalogNativeApi(),
-        projectReferenceLoader: await dependencies.createProjectReferenceLoader(),
-        datasetProvider: new NodeDatasetProvider(datasetsContents ? deserializeDatasets(datasetsContents) : []),
-        llmProfileHealthStore: dependencies.llmProfileHealthStore,
         evaluation: metadata,
       });
       processor.processor.on('llmCallFinished', captured.llmCallFinished);
       processor.processor.on('llmProfileAttempt', captured.llmProfileAttempt);
       processor.processor.on('toolCallFinished', captured.toolCallFinished);
-      recorder.record(processor.processor);
-
-      const outputs = await processor.run();
+      session = new ExecutionSession(processor, { recording: true });
+      recorder = session.recorder!;
+      const outcome = await session.run();
+      if (outcome.failure) throw outcome.failure.error;
+      const outputs = outcome.outputs!;
       captured.metrics.durationMs = Date.now() - startedAt;
       const portableOutputs = Object.fromEntries(
         Object.entries(outputs).map(([key, value]) => {
@@ -128,7 +137,8 @@ export function createHostedEvaluationGraphRunner(
         ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
       });
     } finally {
-      processor?.dispose();
+      // The session owns disposal once constructed, including late failures.
+      if (!session) processor?.dispose();
     }
   };
 }

@@ -181,30 +181,26 @@ export function startActiveRemoteGraphRunRequest(options: {
   activeRequestIdRef: ActiveRemoteRunRequestRef;
   createRequestId: () => RemoteRunRequestId;
   onRequestCreated?(requestId: RemoteRunRequestId): void;
+  onRequestFailed?(requestId: RemoteRunRequestId): void;
   payload: RemoteRunPayloadWithoutRequestId;
   sendRun: RemoteRunRequestSender;
 }): ActiveRemoteRunRequestResult {
   const { activeRequestIdRef, createRequestId, payload, sendRun } = options;
   const requestId = createRequestId();
   activeRequestIdRef.current = requestId;
-  options.onRequestCreated?.(requestId);
-
-  const runSent = sendRun({
-    ...payload,
-    requestId,
-  });
-
-  if (!runSent) {
-    activeRequestIdRef.current = null;
-    return {
-      requestId,
-      type: 'send-failed',
-    };
+  try {
+    options.onRequestCreated?.(requestId);
+    if (sendRun({ ...payload, requestId })) return { requestId, type: 'sent' };
+  } catch (error) {
+    clearActiveRemoteRunRequestIfMatches(activeRequestIdRef, requestId);
+    options.onRequestFailed?.(requestId);
+    throw error;
   }
-
+  clearActiveRemoteRunRequestIfMatches(activeRequestIdRef, requestId);
+  options.onRequestFailed?.(requestId);
   return {
     requestId,
-    type: 'sent',
+    type: 'send-failed',
   };
 }
 
@@ -222,10 +218,13 @@ export async function sendPendingRemoteGraphRunRequest(options: {
   const { abortSignal, disconnectErrorMessage, executorSession, payload, sendRun } = options;
   abortSignal?.throwIfAborted();
   const { requestId, promise } = executorSession.createPendingGraphExecution(undefined, options.onProgress);
-  options.onRequestCreated?.(requestId);
   let runSent = false;
+  let sending = false;
 
   const handleAbort = () => {
+    // A synchronous transport/start observer can request cancellation while
+    // sendRun is still returning. Its accepted/failed outcome is not known yet.
+    if (sending) return;
     let abortSent = false;
     try {
       abortSent = runSent && (options.sendAbort?.(requestId) ?? false);
@@ -243,12 +242,19 @@ export async function sendPendingRemoteGraphRunRequest(options: {
   abortSignal?.addEventListener('abort', handleAbort, { once: true });
 
   try {
+    try {
+      options.onRequestCreated?.(requestId);
+    } catch (error) {
+      executorSession.rejectPendingGraphExecution(requestId, error);
+      return await promise;
+    }
     if (abortSignal?.aborted) {
       handleAbort();
       return await promise;
     }
 
     try {
+      sending = true;
       runSent = sendRun({
         ...payload,
         requestId,
@@ -256,10 +262,14 @@ export async function sendPendingRemoteGraphRunRequest(options: {
     } catch (error) {
       executorSession.rejectPendingGraphExecution(requestId, error);
       return await promise;
+    } finally {
+      sending = false;
     }
 
     if (!runSent) {
       executorSession.rejectPendingGraphExecution(requestId, new Error(disconnectErrorMessage));
+    } else if (abortSignal?.aborted) {
+      handleAbort();
     }
 
     return await promise;

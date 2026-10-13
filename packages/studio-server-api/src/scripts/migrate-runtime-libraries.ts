@@ -110,12 +110,12 @@ export async function readSourceManifest(root: string): Promise<RuntimeLibraryMa
   };
 }
 
-export async function createSourceArchive(root: string): Promise<Buffer> {
+export async function createSourceArchive(root: string, temporaryDirectory?: string): Promise<Buffer> {
   await assertRealSourceDirectory(root);
-  return createRuntimeLibraryDirectoryArchive(path.join(root, 'current'));
+  return createRuntimeLibraryDirectoryArchive(path.join(root, 'current'), temporaryDirectory);
 }
 
-export async function createRuntimeLibraryDirectoryArchive(current: string): Promise<Buffer> {
+export async function validateRuntimeLibraryDirectory(current: string): Promise<void> {
   await assertRealSourceDirectory(current);
   const archiveRoot = await fs.realpath(current);
   async function validateEntry(filePath: string): Promise<void> {
@@ -144,7 +144,16 @@ export async function createRuntimeLibraryDirectoryArchive(current: string): Pro
   ) {
     throw new Error('Runtime-library release needs a package.json file and node_modules directory');
   }
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-runtime-migration-'));
+}
+
+export async function createRuntimeLibraryDirectoryArchive(
+  current: string,
+  temporaryDirectory = os.tmpdir(),
+): Promise<Buffer> {
+  await validateRuntimeLibraryDirectory(current);
+  await assertRealSourceDirectory(temporaryDirectory);
+  await assertRuntimeLibraryArchiveSpace(current, temporaryDirectory);
+  const temporaryRoot = await fs.mkdtemp(path.join(temporaryDirectory, 'rivet-runtime-migration-'));
   try {
     const archivePath = path.join(temporaryRoot, 'release.tar');
     await tar.c({ cwd: current, file: archivePath, portable: true, noMtime: true, strict: true }, ['.']);
@@ -155,16 +164,38 @@ export async function createRuntimeLibraryDirectoryArchive(current: string): Pro
   }
 }
 
+/** Conservative tar/PAX allowance, checked before restore deletes data and again before writing the tar. */
+export async function assertRuntimeLibraryArchiveSpace(current: string, temporaryDirectory: string): Promise<bigint> {
+  let bytes = 1024n;
+  const visit = async (file: string): Promise<void> => {
+    const stat = await fs.lstat(file, { bigint: true });
+    const nameBytes = Buffer.byteLength(path.relative(current, file));
+    const linkBytes = stat.isSymbolicLink() ? Buffer.byteLength(await fs.readlink(file)) : 0;
+    bytes += 8192n + BigInt(4 * (nameBytes + linkBytes));
+    if (stat.isFile()) bytes += ((stat.size + 511n) / 512n) * 512n;
+    else if (stat.isDirectory()) for (const name of await fs.readdir(file)) await visit(path.join(file, name));
+  };
+  await visit(current);
+  const space = await fs.statfs(temporaryDirectory, { bigint: true });
+  if (space.bavail * space.bsize < bytes + 64n * 1024n ** 2n)
+    throw new Error('Insufficient restore scratch space for the runtime-library artifact.');
+  return bytes;
+}
+
 /** Copies an installed release as immutable bytes; the target must run a compatible Linux/Node image. */
 export async function migrateRuntimeLibraries(options: {
   sourceRoot: string;
   target: ManagedWorkflowStorageConfig;
   verifyOnly?: boolean;
   sourceState?: LocalRuntimeLibraryState;
+  /** Restore preflight either rejects copied native modules or attests a fresh target-platform installation. */
+  platformValidated?: boolean;
+  /** Restore has dedicated PVC scratch; do not spill its archive onto the pod's small /tmp volume. */
+  artifactTemporaryDirectory?: string;
 }): Promise<number> {
   const manifest = options.sourceState?.manifest ?? (await readSourceManifest(options.sourceRoot));
   const hasPackages = Object.keys(manifest.packages).length > 0;
-  if (hasPackages && process.env.RIVET_MIGRATION_RUNTIME_PLATFORM_ACK !== '1') {
+  if (hasPackages && !options.platformValidated && process.env.RIVET_MIGRATION_RUNTIME_PLATFORM_ACK !== '1') {
     throw new Error(
       'Runtime libraries may contain native binaries. Confirm matching source/target image, OS, architecture and Node ABI with RIVET_MIGRATION_RUNTIME_PLATFORM_ACK=1.',
     );
@@ -172,7 +203,7 @@ export async function migrateRuntimeLibraries(options: {
   const archive = hasPackages
     ? options.sourceState
       ? options.sourceState.archive
-      : await createSourceArchive(options.sourceRoot)
+      : await createSourceArchive(options.sourceRoot, options.artifactTemporaryDirectory)
     : null;
   if (hasPackages && !archive) throw new Error('Selected runtime libraries have packages but no immutable archive.');
   const archiveSha = archive ? createHash('sha256').update(archive).digest('hex') : null;

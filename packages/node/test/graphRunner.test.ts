@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  createGraphRunner,
-  type CodeRunner,
-  type DataValue,
-  type Inputs,
-  type Outputs,
-} from '../src/index.js';
+  LLMChatV2NodeImpl,
+  ClassifierEvaluateNodeImpl,
+  TextNodeImpl,
+  GraphInputNodeImpl,
+  GraphOutputNodeImpl,
+  type GraphId,
+  type ProjectId,
+  type Project,
+  type NodeConnection,
+} from '@valerypopoff/rivet2-core';
+import { createGraphRunner, type CodeRunner, type DataValue, type Inputs, type Outputs } from '../src/index.js';
 import {
   makeAbortSignalProject,
   makeAsyncDelayProject,
@@ -30,6 +35,77 @@ class CountingCodeRunner implements CodeRunner {
 }
 
 void describe('createGraphRunner', () => {
+  void it('returns combined LLM and classifier cost with separate families without Usage outputs', async () => {
+    const llm = LLMChatV2NodeImpl.create();
+    llm.data.provider = 'openrouter';
+    llm.data.model = 'test/model';
+    llm.data.outputUsage = false;
+    const classifier = ClassifierEvaluateNodeImpl.create();
+    classifier.data.provider = 'jev';
+    classifier.data.model = 'jev-latest';
+    classifier.data.outputUsage = false;
+    const prompt = TextNodeImpl.create();
+    prompt.data.text = 'Hello';
+    const question = GraphInputNodeImpl.create();
+    question.data.id = 'question';
+    question.data.dataType = 'object';
+    const output = GraphOutputNodeImpl.create();
+    const id = 'mixed' as GraphId;
+    const project: Project = {
+      metadata: { id: 'mixed-project' as ProjectId, title: 'Mixed', description: '', mainGraphId: id },
+      graphs: {
+        [id]: {
+          metadata: { id, name: 'Mixed', description: '' },
+          nodes: [llm, classifier, prompt, question, output],
+          connections: [
+            { outputNodeId: prompt.id, outputId: 'output', inputNodeId: llm.id, inputId: 'prompt' },
+            { outputNodeId: question.id, outputId: 'data', inputNodeId: classifier.id, inputId: 'question1' },
+            { outputNodeId: llm.id, outputId: 'response', inputNodeId: output.id, inputId: 'value' },
+          ] as NodeConnection[],
+        },
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async (url) => {
+      calls++;
+      return Response.json(
+        String(url).includes('openrouter')
+          ? {
+              id: 'fixture',
+              object: 'chat.completion',
+              created: 1,
+              model: 'test/model',
+              choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 10, completion_tokens: 6, total_tokens: 16, cost: 0.004 },
+            }
+          : {
+              model: classifier.data.model,
+              answers: { q: { type: 'noul', noul: 0.8 } },
+              usage: { input_tokens: 1_000_000, output_tokens: 0 },
+            },
+      );
+    };
+    const runner = createGraphRunner(project, {
+      graph: id,
+      openRouterApiKey: 'fixture',
+      classifierProviders: { jev: { apiKey: 'fixture' } },
+    });
+    try {
+      for (let run = 0; run < 2; run++) {
+        const outputs = await runner.run({
+          inputs: { question: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Check' } } },
+        });
+        assert.equal(outputs.cost?.value, 0.004 + 0.042);
+        assert.deepEqual(outputs.costBreakdown?.value, { llm: 0.004, classifier: 0.042, other: 0 });
+      }
+      assert.equal(calls, 4);
+    } finally {
+      runner.dispose();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   void it('reuses stable Node setup while accepting per-run inputs and context', async () => {
     const fixture = makeInputContextTextProject();
     const runner = createGraphRunner(fixture.project, {

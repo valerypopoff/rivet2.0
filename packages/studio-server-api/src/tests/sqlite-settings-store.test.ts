@@ -23,6 +23,38 @@ const { assertSettingsBackupSchema } = await import(
 
 // test-style: fixture-read: reads only generated retained settings JSON and temporary encrypted database fixtures.
 
+test('readiness validates settings without page scrubbing; explicit integrity remains available', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-settings-health-probe-'));
+  const backend = new SqliteAppSettingsBackend({
+    databasePath: path.join(root, 'settings.sqlite'),
+    encryptionSecret: 'test-secret',
+  });
+  const original = DatabaseSync.prototype.prepare;
+  const statements: string[] = [];
+  try {
+    await backend.initialize();
+    t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+      statements.push(sql);
+      return original.call(this, sql);
+    });
+    await backend.checkHealth();
+    assert.equal(
+      statements.some((sql) => /PRAGMA (?:quick_check|integrity_check)/i.test(sql)),
+      false,
+    );
+    assert.equal(
+      statements.some((sql) => sql === 'SELECT * FROM app_settings'),
+      true,
+    );
+    statements.length = 0;
+    backend.verifyIntegrity();
+    assert.equal(statements.includes('PRAGMA integrity_check'), true);
+  } finally {
+    await backend.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('settings shutdown drains notifications against SQLite instead of retained JSON', { timeout: 5000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-sqlite-settings-shutdown-'));
   const settingsPath = path.join(root, 'settings.json');

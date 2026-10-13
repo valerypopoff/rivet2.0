@@ -6,6 +6,7 @@ import { isTrustedProxyRequest } from './auth.js';
 import { isServerUiAuthRequestAllowed } from './server-ui-auth.js';
 import { watchAuthorization } from './watch-authorization.js';
 import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
+import { isLegacyRestorePaused } from './legacy-restore/service.js';
 
 export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 
@@ -54,7 +55,7 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
         return;
       }
 
-      if (isVmMigrationMaintenanceActive()) {
+      if (isVmMigrationMaintenanceActive() || isLegacyRestorePaused()) {
         rejectWebSocketUpgrade(socket, 503, 'Service Unavailable');
         return;
       }

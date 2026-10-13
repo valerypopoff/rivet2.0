@@ -1,4 +1,10 @@
 import type { Pool, PoolClient } from "pg";
+import { deleteManagedEvaluationRun } from './managed-run-deletion.js';
+import {
+  assembledEvaluationRunSql,
+  HOSTED_TRIAL_PROJECTION_KEY,
+  withoutHostedProjectionMarker,
+} from "./hosted-projection.js";
 import { evaluationHistoryPageQuery, type EvaluationHistoryRow } from "./history-page.js";
 import type { EvaluationRunHistoryQuery } from "@valerypopoff/rivet2-evaluations";
 import type { ProjectId } from "@valerypopoff/rivet2-node";
@@ -39,8 +45,13 @@ type LibraryRow = {
 function parseRun(row: Row | undefined): EvaluationRun | undefined {
   if (!row) return undefined;
   return normalizeEvaluationRun(
-    typeof row.run_json === "string" ? JSON.parse(row.run_json) : row.run_json,
+    withoutHostedProjectionMarker(typeof row.run_json === "string" ? JSON.parse(row.run_json) : row.run_json),
   );
+}
+
+function isJobProjection(row: Row | undefined): boolean {
+  const value = typeof row?.run_json === "string" ? JSON.parse(row.run_json) : row?.run_json;
+  return (value as Record<string, unknown> | undefined)?.[HOSTED_TRIAL_PROJECTION_KEY] === true;
 }
 
 function parseRecording(
@@ -251,7 +262,7 @@ export class PostgresRivetEvaluationStore
   }
 
   async put(run: EvaluationRun): Promise<void> {
-    const incoming = normalizeEvaluationRun(run);
+    const incoming = normalizeEvaluationRun(withoutHostedProjectionMarker(run));
     await this.#withRunLock(
       { projectId: incoming.projectId, runId: incoming.id },
       async (client) => {
@@ -260,6 +271,9 @@ export class PostgresRivetEvaluationStore
           [String(incoming.projectId), incoming.id],
         );
         const existing = parseRun(current.rows[0]);
+        if (isJobProjection(current.rows[0])) {
+          throw new Error("A running hosted Evaluation can only be updated by its fenced coordinator.");
+        }
         const next = reconcileEvaluationRunSnapshots(existing, incoming);
         if (next === existing) return;
         if (existing) {
@@ -309,15 +323,28 @@ export class PostgresRivetEvaluationStore
       const existing = parseRun(current.rows[0]);
       if (!existing) return undefined;
       const renamed = normalizeEvaluationRun({ ...existing, name: input.name });
+      const projected = isJobProjection(current.rows[0]);
       await client.query(
         `
         UPDATE evaluation_runs
         SET run_json = $3::jsonb, updated_at = NOW()
         WHERE project_id = $1 AND run_id = $2
       `,
-        [String(input.projectId), input.runId, JSON.stringify(renamed)],
+        [
+          String(input.projectId),
+          input.runId,
+          JSON.stringify({
+            ...renamed,
+            ...(projected ? { [HOSTED_TRIAL_PROJECTION_KEY]: true } : {}),
+          }),
+        ],
       );
-      return renamed;
+      if (!projected) return renamed;
+      const assembled = await client.query<Row>(
+        `SELECT ${assembledEvaluationRunSql()} AS run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2`,
+        [String(input.projectId), input.runId],
+      );
+      return parseRun(assembled.rows[0]);
     });
   }
 
@@ -326,7 +353,7 @@ export class PostgresRivetEvaluationStore
     runId: string;
   }): Promise<EvaluationRun | undefined> {
     const result = await this.#pool.query<Row>(
-      "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2",
+      `SELECT ${assembledEvaluationRunSql()} AS run_json FROM evaluation_runs WHERE project_id = $1 AND run_id = $2`,
       [String(input.projectId), input.runId],
     );
     return parseRun(result.rows[0]);
@@ -339,11 +366,11 @@ export class PostgresRivetEvaluationStore
     const result =
       input.suiteId == null
         ? await this.#pool.query<Row>(
-            "SELECT run_json FROM evaluation_runs WHERE project_id = $1 ORDER BY started_at DESC, run_id DESC",
+            `SELECT ${assembledEvaluationRunSql()} AS run_json FROM evaluation_runs WHERE project_id = $1 ORDER BY started_at DESC, run_id DESC`,
             [String(input.projectId)],
           )
         : await this.#pool.query<Row>(
-            "SELECT run_json FROM evaluation_runs WHERE project_id = $1 AND suite_id = $2 ORDER BY started_at DESC, run_id DESC",
+            `SELECT ${assembledEvaluationRunSql()} AS run_json FROM evaluation_runs WHERE project_id = $1 AND suite_id = $2 ORDER BY started_at DESC, run_id DESC`,
             [String(input.projectId), input.suiteId],
           );
     return result.rows.map((row) => parseRun(row)!);
@@ -359,17 +386,10 @@ export class PostgresRivetEvaluationStore
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        "DELETE FROM evaluation_recordings WHERE project_id = $1 AND run_id = $2",
-        [String(input.projectId), input.runId],
-      );
-      await client.query(
-        "DELETE FROM evaluation_runs WHERE project_id = $1 AND run_id = $2",
-        [String(input.projectId), input.runId],
-      );
+      await deleteManagedEvaluationRun(client, input);
       await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
@@ -582,6 +602,9 @@ export class PostgresRivetEvaluationStore
         [String(event.projectId), event.runId],
       );
       const existing = parseRun(result.rows[0]);
+      if (isJobProjection(result.rows[0])) {
+        throw new Error("A running hosted Evaluation can only be updated by its fenced coordinator.");
+      }
       if (!existing) {
         throw new Error(
           "Evaluation run checkpoint arrived before its run-started event.",

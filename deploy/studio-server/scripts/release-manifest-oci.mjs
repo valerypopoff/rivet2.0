@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import {
   assertStudioServerReleaseManifest,
@@ -14,6 +15,8 @@ const dockerfile = path.join(rootDir, 'deploy', 'studio-server', 'images', 'rele
 const referencePattern =
   /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/u;
 const manifestDigestPattern = /^sha256:[a-f0-9]{64}$/u;
+export const PRODUCTION_RELEASE_MANIFEST_REFERENCE =
+  'ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:production';
 
 function splitImageReference(reference) {
   if (!referencePattern.test(reference)) {
@@ -129,7 +132,7 @@ async function run(program, args, { allowFailure = false } = {}) {
       stderr += String(chunk);
     });
     child.once('error', reject);
-    child.once('exit', (code) => {
+    child.once('close', (code) => {
       const exitCode = code ?? 1;
       const result = { exitCode, stdout, stderr };
       if (exitCode === 0 || allowFailure) {
@@ -146,38 +149,100 @@ async function run(program, args, { allowFailure = false } = {}) {
 }
 
 async function readPromotedManifest(inputPath) {
+  const stat = await fs.lstat(inputPath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024)
+    throw new Error('Release manifest must be a regular file of at most 1 MiB, not a symlink or directory.');
   return assertStudioServerReleaseManifest(JSON.parse(await fs.readFile(inputPath, 'utf8')), {
     requirePromoted: true,
   });
 }
 
-async function pullManifest(reference, outputPath, { allowMissing }) {
+export async function pullReleaseManifestArtifact(reference, outputPath, { allowMissing = false, execute = run } = {}) {
+  const { repository } = splitImageReference(reference);
   await fs.rm(outputPath, { force: true });
-  const pull = await run('docker', ['pull', reference], { allowFailure: true });
+  const pull = await execute('docker', ['pull', reference], { allowFailure: true });
   if (pull.exitCode !== 0) {
     const missing = isMissingRegistryManifestError(`${pull.stdout}\n${pull.stderr}`);
     if (allowMissing && missing) {
       console.log(`No promoted release-manifest artifact exists at ${reference}.`);
       return null;
     }
-    throw new Error(`Could not pull ${reference}: ${pull.stderr || pull.stdout}`);
+    throw new Error(
+      `Could not pull ${reference}. Docker and registry access are required; CI must have promoted a production release. No cached or candidate release will be used.\n${pull.stderr || pull.stdout}`,
+    );
   }
 
-  const created = await run('docker', ['create', reference]);
-  const containerId = created.stdout.trim();
-  if (!containerId) throw new Error(`Docker did not return a container ID for ${reference}`);
+  // Resolve from this pull's acknowledgement, never inspect the mutable tag.
+  // Another pull/promotion may change that tag before extraction starts.
+  const digests = [...`${pull.stdout}\n${pull.stderr}`.matchAll(/^Digest:\s*(sha256:[a-f0-9]{64})\s*$/gmu)];
+  if (digests.length !== 1)
+    throw new Error(`Docker did not acknowledge one immutable artifact digest for ${reference}.`);
+  const resolvedReference = `${repository}@${digests[0][1]}`;
+  const inspected = await execute('docker', ['image', 'inspect', '--format', '{{.Id}}', resolvedReference]);
+  const imageId = inspected.stdout.trim();
+  if (!manifestDigestPattern.test(imageId))
+    throw new Error(`Docker returned an invalid image identity for ${resolvedReference}.`);
+  // Name ownership before dispatch so even a lost create acknowledgement can be cleaned up.
+  const containerName = `rivet-manifest-${randomUUID()}`;
+  let temporaryDirectory;
+  let result;
+  let ownsOutput = false;
+  const failures = [];
   try {
+    const created = await execute('docker', ['create', '--name', containerName, imageId]);
+    if (!created.stdout.trim()) throw new Error(`Docker did not acknowledge artifact container ${containerName}.`);
+    temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-manifest-extract-'));
+    const extractedPath = path.join(temporaryDirectory, 'release-manifest.json');
+    await execute('docker', ['cp', `${containerName}:/release-manifest.json`, extractedPath]);
+    const manifest = await readPromotedManifest(extractedPath);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await run('docker', ['cp', `${containerId}:/release-manifest.json`, outputPath]);
-    const manifest = await readPromotedManifest(outputPath);
-    await fs.writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    console.log(
-      `Pulled promoted release manifest ${getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true })} from ${reference}.`,
-    );
-    return manifest;
+    const output = await fs.open(outputPath, 'wx');
+    ownsOutput = true;
+    try {
+      await output.writeFile(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    } finally {
+      await output.close();
+    }
+    result = {
+      manifest,
+      identity: { reference, resolvedReference, imageId },
+    };
+  } catch (error) {
+    failures.push(error);
   } finally {
-    await run('docker', ['rm', '--force', containerId], { allowFailure: true });
+    try {
+      const removed = await execute('docker', ['rm', '--force', '--volumes', containerName], { allowFailure: true });
+      if (removed.exitCode !== 0)
+        throw new Error(
+          `Could not remove temporary artifact container ${containerName}: ${removed.stderr || removed.stdout}`,
+        );
+    } catch (error) {
+      failures.push(error);
+    }
+    if (temporaryDirectory) {
+      try {
+        await fs.rm(temporaryDirectory, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
   }
+  if (failures.length) {
+    // Never erase somebody else's concurrently published output after an EEXIST.
+    if (ownsOutput) {
+      try {
+        await fs.rm(outputPath, { force: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, failures.map((error) => error.message).join('\n'));
+  }
+  console.log(
+    `Pulled promoted release manifest ${getStudioServerReleaseManifestDigest(result.manifest, { requirePromoted: true })} from ${reference}.`,
+  );
+  return result;
 }
 
 async function pushManifest(reference, inputPath) {
@@ -187,7 +252,8 @@ async function pushManifest(reference, inputPath) {
     const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
     assertContentAddressedManifestReference(reference, manifestDigest);
     const existingPath = path.join(temporaryDirectory, 'existing-release-manifest.json');
-    const existing = await pullManifest(reference, existingPath, { allowMissing: true });
+    const artifact = await pullReleaseManifestArtifact(reference, existingPath, { allowMissing: true });
+    const existing = artifact?.manifest;
     if (existing) {
       const existingDigest = getStudioServerReleaseManifestDigest(existing, { requirePromoted: true });
       if (existingDigest !== manifestDigest) {
@@ -224,15 +290,20 @@ async function pushManifest(reference, inputPath) {
   }
 }
 
-async function retagManifest(source, destination) {
+export async function retagReleaseManifestArtifact(source, destination, { execute = run } = {}) {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-release-manifest-retag-'));
   try {
-    const manifest = await pullManifest(source, path.join(temporaryDirectory, 'release-manifest.json'), {
-      allowMissing: false,
-    });
+    const { manifest, identity } = await pullReleaseManifestArtifact(
+      source,
+      path.join(temporaryDirectory, 'release-manifest.json'),
+      {
+        allowMissing: false,
+        execute,
+      },
+    );
     const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
     assertProductionManifestRetag({ source, destination, manifestDigest });
-    await run('docker', ['buildx', 'imagetools', 'create', '--tag', destination, source]);
+    await execute('docker', ['buildx', 'imagetools', 'create', '--tag', destination, identity.resolvedReference]);
     console.log(`Advanced ${destination} to promoted release manifest ${manifestDigest}.`);
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
@@ -242,7 +313,7 @@ async function retagManifest(source, destination) {
 async function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
   if (command === 'pull') {
-    await pullManifest(imageReference(options, '--reference'), repositoryPath(options, '--output'), {
+    await pullReleaseManifestArtifact(imageReference(options, '--reference'), repositoryPath(options, '--output'), {
       allowMissing: options.get('--allow-missing') === true,
     });
     return;
@@ -251,7 +322,7 @@ async function main() {
     await pushManifest(imageReference(options, '--reference'), repositoryPath(options, '--input'));
     return;
   }
-  await retagManifest(imageReference(options, '--source'), imageReference(options, '--destination'));
+  await retagReleaseManifestArtifact(imageReference(options, '--source'), imageReference(options, '--destination'));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

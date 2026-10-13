@@ -1,3 +1,4 @@
+import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 import path from 'node:path';
 
 import {
@@ -12,43 +13,7 @@ import {
 } from '../../../../studio-server-shared/workflow-types.js';
 import { badRequest } from '../../utils/httpError.js';
 
-function normalizeRelativeSegments(relativePath: string, options: { allowProjectFile: boolean; allowEmpty?: boolean }): string {
-  const normalized = relativePath.replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '');
-
-  if (!normalized) {
-    if (options.allowEmpty) {
-      return '';
-    }
-
-    throw badRequest('Missing relativePath');
-  }
-
-  const segments = normalized.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.startsWith('.'))) {
-    throw badRequest('Invalid relativePath');
-  }
-
-  if (!options.allowProjectFile && normalized.endsWith(WORKFLOW_PROJECT_EXTENSION)) {
-    throw badRequest('Expected folder path, received project path');
-  }
-
-  return normalized;
-}
-
-export function normalizeManagedWorkflowRelativePath(
-  relativePath: unknown,
-  options: { allowProjectFile: boolean; allowEmpty?: boolean },
-): string {
-  if (typeof relativePath !== 'string') {
-    if (options.allowEmpty && (relativePath == null || relativePath === '')) {
-      return '';
-    }
-
-    throw badRequest('Missing relativePath');
-  }
-
-  return normalizeRelativeSegments(relativePath, options);
-}
+export const normalizeManagedWorkflowRelativePath = normalizeWorkflowRelativePath;
 
 export function getManagedWorkflowVirtualRoot(): string {
   return MANAGED_WORKFLOW_VIRTUAL_ROOT;
@@ -68,7 +33,7 @@ export function parseManagedWorkflowProjectVirtualPath(filePath: string): string
     throw badRequest('Expected managed workflow project path');
   }
 
-  return normalizeRelativeSegments(relativePath, { allowProjectFile: true });
+  return normalizeWorkflowRelativePath(relativePath, { allowProjectFile: true });
 }
 
 export function parseManagedWorkflowFolderVirtualPath(filePath: string): string {
@@ -77,7 +42,7 @@ export function parseManagedWorkflowFolderVirtualPath(filePath: string): string 
     throw badRequest('Expected managed workflow folder path');
   }
 
-  return normalizeRelativeSegments(relativePath, { allowProjectFile: false, allowEmpty: true });
+  return normalizeWorkflowRelativePath(relativePath, { allowProjectFile: false, allowEmpty: true });
 }
 
 export function isManagedWorkflowProjectVirtualPath(filePath: string): boolean {
@@ -113,7 +78,7 @@ export function resolveManagedWorkflowRelativeReference(currentProjectPath: stri
   const currentDirectory = path.posix.dirname(currentRelativePath);
   const resolvedRelativePath = path.posix.normalize(path.posix.join(currentDirectory, projectFilePath));
 
-  return normalizeRelativeSegments(resolvedRelativePath, { allowProjectFile: true });
+  return normalizeWorkflowRelativePath(resolvedRelativePath, { allowProjectFile: true });
 }
 
 export function isManagedWorkflowVirtualReference(filePath: string): boolean {

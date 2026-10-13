@@ -71,6 +71,62 @@ void test('cleans and retries a transient DMG failure', async () => {
   assert.deepEqual(events, ['run', 'cleanup', 'wait:5000', 'run']);
 });
 
+const appStaplerNetworkFailure = {
+  status: 1,
+  output: [
+    'Notarizing Finished with status Accepted',
+    'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."',
+    'The staple and validate action failed! Error 68.',
+    'Error [tauri_cli_node] failed to bundle project: failed to staple app.',
+  ].join('\n'),
+};
+
+test('Tauri app stapling retries only its explicit wrapped native network failure', () => {
+  for (const code of [1001, 1004, 1005, 1009]) {
+    assert.equal(
+      getTransientMacDmgBuildFailure({
+        ...appStaplerNetworkFailure,
+        output: appStaplerNetworkFailure.output.replace('Code=-1005', `Code=-${code}`),
+      })?.kind,
+      'apple-app-stapler-network',
+    );
+  }
+  for (const failure of [
+    { ...appStaplerNetworkFailure, status: 0 },
+    { ...appStaplerNetworkFailure, status: null },
+    { ...appStaplerNetworkFailure, status: 2 },
+    { ...appStaplerNetworkFailure, output: appStaplerNetworkFailure.output.replace('Code=-1005', 'Code=-1202') },
+    { ...appStaplerNetworkFailure, output: appStaplerNetworkFailure.output.replace('Code=-1005', 'Code=-10050') },
+    { status: 1, output: 'failed to staple app. The staple and validate action failed! Error 68.' },
+    { status: 1, output: 'Error Domain=NSURLErrorDomain Code=-1005; notarization submission failed.' },
+    { ...appStaplerNetworkFailure, output: appStaplerNetworkFailure.output.replace('Error 68.', 'Error 65.') },
+    { ...appStaplerNetworkFailure, output: appStaplerNetworkFailure.output.replace('Finished with status Accepted', 'submission outcome unknown') },
+    { ...appStaplerNetworkFailure, output: appStaplerNetworkFailure.output.replace('failed to staple app', 'compilation failed') },
+  ]) {
+    assert.equal(getTransientMacDmgBuildFailure(failure), undefined);
+  }
+});
+
+test('app-ticket network retries remain bounded and preserve terminal failure or success', async () => {
+  for (const recover of [false, true]) {
+    const events = [];
+    const success = { status: 0, output: 'completed' };
+    let attempts = 0;
+    const result = await runMacDmgBuildWithRetries({
+      run: async () => {
+        events.push('run');
+        attempts += 1;
+        return recover && attempts === 3 ? success : appStaplerNetworkFailure;
+      },
+      cleanup: async () => events.push('cleanup'),
+      wait: async (ms) => events.push(`wait:${ms}`),
+      warn: () => {},
+    });
+    assert.equal(result, recover ? success : appStaplerNetworkFailure);
+    assert.deepEqual(events, ['run', 'cleanup', 'wait:5000', 'run', 'cleanup', 'wait:15000', 'run']);
+  }
+});
+
 void test('retries a transient Apple secure-timestamp failure', async () => {
   const events = [];
   const warnings = [];

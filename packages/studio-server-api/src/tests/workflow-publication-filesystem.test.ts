@@ -37,6 +37,24 @@ type StoredWorkflowProjectSettings = Awaited<ReturnType<typeof workflowPublicati
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+test('publication command captures reviewed state before asynchronous backend dispatch', async () => {
+  const project = await workflowMutations.createWorkflowProjectItem('', 'Reviewed state');
+  const before = await workflowQuery.getWorkflowProject(workflowsRoot, project.absolutePath);
+  const expected = {
+    expectedProjectId: before.projectMetadataId!,
+    expectedPublicationVersion: '1', // Deliberately stale; the new project is version zero.
+  };
+  const pending = workflowStorageBackend.executeWorkflowPublicationCommandWithBackend({
+    kind: 'unpublish-endpoint',
+    relativePath: project.relativePath,
+    preconditions: expected,
+  });
+  expected.expectedPublicationVersion = before.settings.publicationVersion!;
+  await assert.rejects(pending, { status: 409, code: 'publication_state_changed' });
+  const after = await workflowQuery.getWorkflowProject(workflowsRoot, project.absolutePath);
+  assert.deepEqual(after.settings, before.settings);
+});
+
 test('authenticated filesystem reference check preserves references in serving publications after draft removal', async () => {
   const target = await workflowMutations.createWorkflowProjectItem('', 'Target');
   const caller = await workflowMutations.createWorkflowProjectItem('', 'Caller');

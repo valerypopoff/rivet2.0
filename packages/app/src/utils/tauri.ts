@@ -129,23 +129,32 @@ export async function fillMissingSettingsFromEnvironmentVariables(
     pluginEnvVarNames.add(envVarName);
   }
 
-  const [openAiApiKey, anthropicApiKey, googleApiKey, customAiApiKey, openAiOrganization, pluginEnvEntries] =
-    await Promise.all([
-      resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
-      resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
-      resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),
-      resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_PROVIDER_API_KEY', 'CUSTOM_AI_API_KEY']),
-      resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
-      Promise.all(
-        [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
-      ),
-    ]);
+  const [
+    openAiApiKey,
+    anthropicApiKey,
+    googleApiKey,
+    openRouterApiKey,
+    customAiApiKey,
+    openAiOrganization,
+    pluginEnvEntries,
+  ] = await Promise.all([
+    resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
+    resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
+    resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),
+    resolveSetting(settings.openRouterApiKey, 'OPENROUTER_API_KEY'),
+    resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_PROVIDER_API_KEY', 'CUSTOM_AI_API_KEY']),
+    resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
+    Promise.all(
+      [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
+    ),
+  ]);
   const fullSettings: Settings = {
     ...settings,
     openAiApiKey: openAiApiKey ?? '',
     openAiKey: openAiApiKey ?? '',
     anthropicApiKey: anthropicApiKey ?? '',
     googleApiKey: googleApiKey ?? '',
+    openRouterApiKey: openRouterApiKey ?? '',
     customAiApiKey: customAiApiKey ?? '',
     openAiOrganization: openAiOrganization ?? '',
     openAiEndpoint: settings.openAiEndpoint ?? '',

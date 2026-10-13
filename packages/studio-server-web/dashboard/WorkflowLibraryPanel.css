@@ -128,6 +128,7 @@
 [data-testid='published-items-modal--blanket'],
 [data-testid='workflow-project-version-modal--blanket'],
 [data-testid='workflow-project-bundle-modal--blanket'],
+[data-testid='workflow-bundle-upload-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -142,6 +143,7 @@
 [data-testid='published-items-modal'],
 [data-testid='workflow-project-version-modal'],
 [data-testid='workflow-project-bundle-modal'],
+[data-testid='workflow-bundle-upload-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
   background: #1f1f22 !important;
@@ -172,6 +174,7 @@
 [data-testid='published-items-modal--header'],
 [data-testid='workflow-project-version-modal--header'],
 [data-testid='workflow-project-bundle-modal--header'],
+[data-testid='workflow-bundle-upload-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
 [data-testid='app-settings-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -185,6 +188,7 @@
 [data-testid='published-items-modal--body'],
 [data-testid='workflow-project-version-modal--body'],
 [data-testid='workflow-project-bundle-modal--body'],
+[data-testid='workflow-bundle-upload-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='app-settings-modal--body'] {
   padding: 0 !important;
@@ -816,6 +820,10 @@
 .workflow-library-panel .folder-row {
   justify-content: space-between;
   cursor: pointer;
+}
+
+.workflow-library-panel .folder-row.contains-selection {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .workflow-library-panel .folder-row.editing {

@@ -4,7 +4,7 @@ import ChevronRightIcon from 'majesticons/line/chevron-right-line.svg?react';
 import type { WorkflowFolderItem, WorkflowProjectItem } from './types';
 import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
-import { countProjectsInFolder } from './workflowLibraryHelpers';
+import { countProjectsInFolder, normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { WorkflowProjectRow } from './WorkflowProjectRow';
 
 type WorkflowFolderTreeProps = {
@@ -70,6 +70,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
   onFolderDragLeave,
   getParentRelativePath,
 }) => {
+  const normalizedActivePath = normalizeWorkflowPath(activePath);
   const renderFolderRenameInput = (folder: WorkflowFolderItem) => (
     <FolderRenameInput
       folder={folder}
@@ -108,6 +109,11 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
     const projectCount = countProjectsInFolder(folder);
     const rowClassName = [
       'folder-row',
+      // Closed ancestors do not render their children, so only the outermost
+      // closed folder containing the selection can receive this highlight.
+      !expanded && normalizedActivePath.startsWith(`${normalizeWorkflowPath(folder.absolutePath)}/`)
+        ? 'contains-selection'
+        : null,
       isEditing ? 'editing' : null,
       isRenaming ? 'renaming' : null,
       dropTargetFolderPath === folder.relativePath ? 'drag-over' : null,

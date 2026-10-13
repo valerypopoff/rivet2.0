@@ -13,6 +13,7 @@ import EditPenIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
+import { BundleTransferIcon } from './BundleTransferIcon';
 
 type WorkflowFolderContextMenuProps = {
   isOpen: boolean;
@@ -25,6 +26,7 @@ type WorkflowFolderContextMenuProps = {
   onCreateFolder: () => void;
   onCreateProject: () => void;
   onUploadProject: () => void;
+  onUploadBundle: () => void;
   onDelete: () => void;
 };
 
@@ -56,6 +58,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   onCreateFolder,
   onCreateProject,
   onUploadProject,
+  onUploadBundle,
   onDelete,
 }) => {
   const { context, refs, floatingStyles, update } = useFloating({
@@ -110,6 +113,10 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onUploadProject}>
         <ArrowUpIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Upload project</span>
+      </button>
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onUploadBundle}>
+        <BundleTransferIcon direction="up" />
+        <span>Upload bundle</span>
       </button>
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button

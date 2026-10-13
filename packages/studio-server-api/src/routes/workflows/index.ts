@@ -1,3 +1,5 @@
+import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
+import { sanitizeWorkflowName } from './fs-helpers.js';
 import { Router, type Request, type Response } from 'express';
 import { scheduledRunsRouter } from '../../scheduled-runs/router.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
@@ -17,7 +19,6 @@ import {
   type WorkflowRunStatisticsQuery,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH } from '../../../../studio-server-shared/workflow-types.js';
-import { PROJECT_EXTENSION } from './fs-helpers.js';
 import {
   internalLatestWorkflowsRouter,
   internalPublishedWorkflowsRouter,
@@ -109,40 +110,51 @@ workflowsRouter.use((req, res, next) => {
   next();
 });
 
+const workflowPathSchema = z
+  .unknown()
+  .transform((value) => normalizeWorkflowRelativePath(value, { allowProjectFile: true }));
+const workflowFolderSchema = z
+  .unknown()
+  // Omitted destinations mean the root. Zod object fields otherwise reject a
+  // missing transformed value before the normalizer can supply that root.
+  .prefault('')
+  .transform((value) => normalizeWorkflowRelativePath(value, { allowProjectFile: false, allowEmpty: true }));
+const workflowNameSchema = z.unknown().transform((value) => sanitizeWorkflowName(value, 'name'));
+
 const moveSchema = z.object({
   itemType: z.enum(['project', 'folder']),
-  sourceRelativePath: z.unknown(),
-  destinationFolderRelativePath: z.unknown().optional(),
+  sourceRelativePath: workflowPathSchema,
+  destinationFolderRelativePath: workflowFolderSchema,
 });
 
 const createFolderSchema = z.object({
-  name: z.unknown(),
-  parentRelativePath: z.unknown().optional(),
+  name: workflowNameSchema,
+  parentRelativePath: workflowFolderSchema,
 });
 
 const renameFolderSchema = z.object({
-  relativePath: z.unknown(),
-  newName: z.unknown(),
+  relativePath: workflowPathSchema,
+  newName: workflowNameSchema,
 });
 
 const deleteFolderSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
 });
 
 const createProjectSchema = z.object({
-  folderRelativePath: z.unknown().optional(),
-  name: z.unknown(),
+  folderRelativePath: workflowFolderSchema,
+  name: workflowNameSchema,
 });
 
 const uploadProjectSchema = z.object({
-  folderRelativePath: z.unknown().optional(),
-  fileName: z.unknown(),
-  contents: z.unknown(),
+  folderRelativePath: workflowFolderSchema,
+  fileName: z.string(),
+  contents: z.string(),
 });
 
 const renameProjectSchema = z.object({
-  relativePath: z.unknown(),
-  newName: z.unknown(),
+  relativePath: workflowPathSchema,
+  newName: workflowNameSchema,
 });
 
 const publicationPreconditionsSchema = z
@@ -158,7 +170,7 @@ const draftPublicationPreconditionsSchema = publicationPreconditionsSchema.exten
 
 const publishProjectSchema = z
   .object({
-    relativePath: z.unknown(),
+    relativePath: workflowPathSchema,
     preconditions: draftPublicationPreconditionsSchema,
     settings: z
       .object({
@@ -183,7 +195,7 @@ const publishProjectSchema = z
   });
 
 const endpointAccessSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
   preconditions: publicationPreconditionsSchema,
   access: z.enum(['public', 'internal']),
 });
@@ -206,7 +218,7 @@ workflowsRouter.get(
 );
 
 const publishProjectWebAppsSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
   preconditions: draftPublicationPreconditionsSchema,
   publications: z.array(
     z.object({
@@ -218,7 +230,7 @@ const publishProjectWebAppsSchema = z.object({
 });
 
 const updateProjectWebAppAccessSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
   preconditions: publicationPreconditionsSchema,
   accessUpdates: z.array(
     z.object({
@@ -229,34 +241,34 @@ const updateProjectWebAppAccessSchema = z.object({
 });
 
 const unpublishProjectWebAppSchema = z.object({
-  relativePath: z.unknown(),
-  uiGraphId: z.unknown(),
+  relativePath: workflowPathSchema,
+  uiGraphId: z.string(),
   preconditions: publicationPreconditionsSchema,
 });
 
 const pathOnlySchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
 });
 
 const publicationPathSchema = pathOnlySchema.extend({ preconditions: publicationPreconditionsSchema });
 
 const duplicateProjectSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
   version: z.enum(['live', 'published']).optional(),
 });
 
 const downloadProjectSchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
   version: z.enum(['live', 'published']),
 });
 
 const publishedVersionsQuerySchema = z.object({
-  relativePath: z.unknown(),
+  relativePath: workflowPathSchema,
 });
 
 const publishedVersionDownloadSchema = z.object({
-  relativePath: z.unknown(),
-  versionId: z.unknown(),
+  relativePath: workflowPathSchema,
+  versionId: z.string(),
 });
 
 const publishedVersionRestoreSchema = publishedVersionDownloadSchema.extend({
@@ -264,14 +276,14 @@ const publishedVersionRestoreSchema = publishedVersionDownloadSchema.extend({
 });
 
 const publishedVersionStarSchema = z.object({
-  relativePath: z.unknown(),
-  versionId: z.unknown(),
+  relativePath: workflowPathSchema,
+  versionId: z.string(),
   isStarred: z.boolean(),
 });
 
 const publishedVersionCommentSchema = z.object({
-  relativePath: z.unknown(),
-  versionId: z.unknown(),
+  relativePath: workflowPathSchema,
+  versionId: z.string(),
   comment: z.string().max(WORKFLOW_PUBLISHED_VERSION_COMMENT_MAX_LENGTH),
 });
 
@@ -513,17 +525,17 @@ workflowsRouter.get(
     }
 
     try {
-      const runsPage = await listWorkflowRecordingRunsPageWithBackend(
-        String(req.params.workflowId ?? ''),
-        parsedQuery.page,
-        parsedQuery.pageSize,
-        parsedQuery.status,
+      const runsPage = await listWorkflowRecordingRunsPageWithBackend({
+        workflowId: String(req.params.workflowId ?? ''),
+        page: parsedQuery.page,
+        pageSize: parsedQuery.pageSize,
+        statusFilter: parsedQuery.status,
         inputFilter,
-        parsedQuery.inputCursor,
-        requestAbort.signal,
-        parsedQuery.inputAfter,
-        parsedQuery.includeSubgraphRuns,
-      );
+        inputCursor: parsedQuery.inputCursor,
+        signal: requestAbort.signal,
+        inputAfter: parsedQuery.inputAfter,
+        includeSubgraphRuns: parsedQuery.includeSubgraphRuns,
+      });
       if (!requestAbort.signal.aborted && !res.destroyed) {
         res.json(runsPage);
       }
@@ -546,18 +558,7 @@ workflowsRouter.get(
     const { page, pageSize } = recordingsRunsQuerySchema.pick({ page: true, pageSize: true }).parse(req.query);
     const recordingId = z.string().min(1).max(256).parse(req.params.recordingId);
     res.json(
-      await listWorkflowRecordingRunsPageWithBackend(
-        recordingId,
-        page,
-        pageSize,
-        'all',
-        null,
-        0,
-        undefined,
-        undefined,
-        false,
-        'children',
-      ),
+      await listWorkflowRecordingRunsPageWithBackend({ workflowId: recordingId, page, pageSize, runScope: 'children' }),
     );
   }),
 );

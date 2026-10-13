@@ -482,7 +482,7 @@ The Docker, development, and Kubernetes proxy templates define this stream as an
 
 Unpublishing does not delete published version history. It closes the public/latest route lineage, but previous published versions remain downloadable from Project Settings. If a pre-history legacy project still has only a current published pointer, unpublish first backfills that current snapshot/revision into history before clearing the pointer.
 
-In the current dashboard UI, the project-row context menu exposes `Rename project`, compare actions, `Download`, `Duplicate`, and `Delete project`.
+In the current dashboard UI, the project-row context menu exposes `Rename project`, compare actions, `Download project`, `Download bundle`, `Duplicate`, and `Delete project`.
 
 Single-clicking a project row opens that project in the editor as a preview tab, so browsing through projects does not clutter the editor tab row. Opening another not-yet-open project by single click replaces the previous clean preview tab; when the old preview is active, it is replaced in place so the project selection does not blink back to a persistent project first. Preview tabs are marked through Rivet's transient tab UI state and render italic in the editor tab row. Clicking an already-open persistent project just activates that tab and leaves the current preview tab open until another project needs the preview slot. Double-clicking the row, editing the opened project, running it, saving it, activating Remote Debugger on the active preview project, or hitting an unsafe replacement condition promotes that tab to a normal persistent editor tab. Remote Debugger promotion observes Rivet's `external-debugger` session target only, so hosted internal Node executor reconnects do not persist preview tabs. The project details card keeps the visibly button-like `Settings` action before `Save`; it does not provide a separate edit/open button and shows `Save` only when the selected workflow is the active editor project and has unsaved changes. Clicking folders or blank tree space (including either side of a project row) preserves the selected project and its details, even when its folder is collapsed. Clicking another project selects that project instead; ordinary folder navigation does not reload the editor.
 
@@ -605,7 +605,7 @@ What upload does **not** copy:
 
 ## Project downloading
 
-The separate **Download with dependencies** project-row action prepares a ZIP with
+The separate **Download bundle** project-row action prepares a ZIP with
 recursive saved project/version snapshots, matching datasets and a portable manifest.
 It does not alter the ordinary single-file behavior below. See
 [Portable project bundles](project-bundles.md) for the async API, resumable downloads,
@@ -635,7 +635,7 @@ Current download behavior by status:
   - downloads the saved live project file
   - filename tag: `[unpublished]`
 - **Published**
-  - one-click `Download` in the dashboard downloads the published version, even if the saved live file currently matches it
+  - one-click `Download project` in the dashboard downloads the published version, even if the saved live file currently matches it
   - filename tag: `[published]`
 - **Unpublished changes**
   - opens a chooser in the dashboard
@@ -849,6 +849,14 @@ Published endpoints and web-app actions receive one API-created opaque correlati
 A hosted editor run is different. When the user enables **Record local graph executions**, the hosted provider confirms support for `GET /api/workflows/local-editor-recordings/capability` and creates a one-run opaque correlation id shared by the parent, cross-project Subgraph runs, and any LLM health evidence. This applies to both Browser-mode execution and Node-mode execution on Studio Server's internal executor. Browser mode gives the id directly to the local processor. Node mode adds it to the private remote-run protocol, starts an exact-request WebSocket recorder before the run is sent, and the Studio Server executor forwards the validated id into its processor options. After each captured live run completes, the browser sends the recorder, execution project snapshot, and optional dataset snapshot to the authenticated `POST /api/workflows/local-editor-recordings` route. This includes successful runs with no LLM nodes; an unhealthy health update is not required. A socket that disconnects before a terminal frame, or a local snapshot/upload that cannot be retained, explicitly resolves any pending health evidence as unavailable instead of leaving it pending.
 
 The API resolves the saved hosted project through the authoritative tree by stable metadata ID, with an exact relative tree-path fallback for an older or temporarily unindexed client, and never reads a raw requested filesystem path. It then requires both project IDs to match before writing the normal replay bundle with `runKind: editor`; these editor rows are excluded from endpoint and web-app Run statistics. The upload is capped at 24 MiB of UTF-8 snapshot data, uses normal recording retention, and respects server recording policy. It is browser-to-the-same-authenticated-Studio-Server storage, not a public workflow endpoint or a cloud sync feature. The API resolves matching health evidence to that recording ID only after durable persistence. Disabled recording policy, an oversized/invalid upload, a persistence failure, a queue rejection, an unrecordable socket, or explicit recording deletion is shown as an unavailable explanation rather than a broken replay link. A mixed-version dashboard checks the capability route before it gives either hosted editor mode a correlation id, so an older server cleanly falls back to `not recorded` instead of leaving evidence pending. Desktop and external-debugger Node executors never upload editor replays through this route.
+
+Classifier failure recordings retain enabled request/response bodies alongside
+the terminal node error through the existing failure-output contract. Attempt
+metadata stays separate, bounded and credential-redacted; it does not contain
+these bodies. Caller cancellation records an interrupted request, not an outage,
+and cannot increment suspension failures or start another fallback request.
+The recording replay browser tests cover both failure bodies and interrupted
+classifier attempts in Run Activity. See [classifier ownership and limits](../CLASSIFIER-NODES.md).
 
 The wrapper-owned Project Settings > LLM profile suspension tab shows profiles that
 are currently suspended, awaiting their recovery attempt, or running that attempt.

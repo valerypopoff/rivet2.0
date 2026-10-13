@@ -294,6 +294,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
           return {
             ['output' as PortId]: { type: 'string', value: 'exact output' },
             ['cost' as PortId]: { type: 'number', value: 1.25 },
+            ['costBreakdown' as PortId]: { type: 'object', value: { llm: 1, classifier: 0.25, other: 0 } },
           };
         },
       ),
@@ -302,6 +303,7 @@ describe('DelegateFunctionCallNodeImpl', () => {
     assert.equal(selectedGraphId, exactGraphId);
     assert.equal(result.output?.value, 'exact output');
     assert.deepEqual(result['cost' as PortId], { type: 'number', value: 1.25 });
+    assert.deepEqual(result.costBreakdown?.value, { llm: 1, classifier: 0.25, other: 0 });
   });
 
   it('keeps Rivet-owned tool inputs safe from reserved and prototype-like arguments', async () => {

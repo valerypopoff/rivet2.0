@@ -56,3 +56,13 @@ for (const vector of ['env', 'execArgv', 'filename']) {
     );
   });
 }
+
+for (const vector of ['braces', 'http-cache', 'image-size']) {
+  test(`build tool consumers reject malicious ${vector} input and preserve ordinary behavior`, () => {
+    execFileSync(
+      process.execPath,
+      [fileURLToPath(new URL('./fixtures/dependency-parser-security.mjs', import.meta.url)), vector],
+      { timeout: 15_000, stdio: 'pipe' },
+    );
+  });
+}

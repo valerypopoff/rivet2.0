@@ -10,6 +10,22 @@ import {
   StudioMetrics,
 } from '../metrics.js';
 
+test('catalog and parsed metrics have submillisecond buckets and aggregate owner accounting', () => {
+  const metrics = new StudioMetrics({ enabled: true, profile: 'control' });
+  metrics.adjustCatalogState({ pending: 2, active: 1, reservedBytes: 10, workers: 1 });
+  metrics.adjustCatalogState({ pending: 1, active: 1, reservedBytes: 5, workers: 1 });
+  metrics.observeCatalogOperation('queue', 0.2);
+  metrics.observeParsedExecution('clone', 0.05);
+  metrics.recordCatalogEvent('count_rejected');
+  assert.match(metrics.render(), /rivet_catalog_worker_pending_operations\{profile="control"\} 3/);
+  assert.match(
+    metrics.render(),
+    /rivet_catalog_worker_duration_seconds_bucket\{le="0.00025",profile="control",stage="queue"\} 1/,
+  );
+  metrics.adjustCatalogState({ pending: -3, active: -2, reservedBytes: -15, workers: -2 });
+  assert.match(metrics.render(), /rivet_catalog_worker_instances\{profile="control"\} 0/);
+});
+
 test('recording search metrics use bounded payload-free labels', () => {
   const metrics = new StudioMetrics(getMetricsConfig({ RIVET_METRICS_ENABLED: 'true' }));
   metrics.recordRecordingInputCacheEvent('hit');

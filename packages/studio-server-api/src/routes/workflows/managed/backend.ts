@@ -1,8 +1,13 @@
+import type { WorkflowRecordingPageQuery } from '../data-backend.js';
+import type { PreparedProjectBundleImport } from '../project-bundle-import.js';
+import { importManagedProjectBundle } from './bundle-import.js';
+import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 import type {
   WorkflowFolderItem,
   WorkflowEndpointAccess,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
+  WorkflowProjectSettingsDraft,
   WorkflowPublicationPreconditions,
   WorkflowDraftPublicationPreconditions,
   WorkflowProjectPathMove,
@@ -14,8 +19,6 @@ import type {
   WorkflowPublishedVersionsResponse,
 } from '../../../../../studio-server-shared/workflow-types.js';
 import type {
-  WorkflowRecordingFilterStatus,
-  WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
@@ -44,6 +47,7 @@ import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
 import { createManagedWorkflowRevisionService } from './revisions.js';
 import { readManagedWorkflowMigrationSnapshot } from './migration-snapshot.js';
+import type { WorkflowDataBackend } from '../data-backend.js';
 import type {
   ImportManagedWorkflowOptions,
   ImportManagedWorkflowRecordingOptions,
@@ -55,7 +59,7 @@ import type {
 
 export { resolveManagedHostedProjectSaveTarget } from './revision-factory.js';
 
-export class ManagedWorkflowBackend {
+export class ManagedWorkflowBackend implements WorkflowDataBackend {
   readonly #context;
   readonly #executionService: ManagedWorkflowExecutionService;
   readonly #catalog: ReturnType<typeof createManagedWorkflowCatalogService>;
@@ -66,13 +70,17 @@ export class ManagedWorkflowBackend {
   readonly #evaluationStore: PostgresRivetEvaluationStore;
   readonly #hostedEvaluationCoordinator?: HostedEvaluationCoordinator;
   readonly #runBackgroundTasks: boolean;
+  #phase: 'open' | 'draining' | 'closed' = 'open';
+  #initializing?: Promise<void>;
+  #draining?: Promise<void>;
+  #disposing?: Promise<void>;
 
   constructor(
     config: ManagedWorkflowStorageConfig,
     blobStore?: ManagedWorkflowBlobStore,
-    options?: { migrationMode?: 'copy' | 'verify' },
+    options?: { migrationMode?: 'copy' | 'verify' | 'restore' },
   ) {
-    this.#runBackgroundTasks = options?.migrationMode === undefined;
+    this.#runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
     this.#context = createManagedWorkflowContext(config, blobStore, options);
     this.#executionService = new ManagedWorkflowExecutionService({
       context: this.#context,
@@ -101,22 +109,41 @@ export class ManagedWorkflowBackend {
           evaluationStore: this.#evaluationStore,
           llmProfileHealthStore: this.#llmProfileHealthStore,
           createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
+          createSubgraphProjectLoader: () => ({
+            loadTarget: (target) => this.#executionService.loadSubgraphTarget(target),
+          }),
         }),
       });
     }
   }
 
   async initialize(): Promise<void> {
+    if (this.#phase === 'closed' || (this.#phase === 'draining' && !this.#initializing)) {
+      throw new Error('Managed workflow storage is shutting down.');
+    }
     // Migration verification must not run startup retention or start a
     // scheduler against an offline destination being compared byte-for-byte.
-    if (this.#runBackgroundTasks) await this.#recordings.initialize();
-    else await this.#context.initialize();
-    this.#hostedEvaluationCoordinator?.start();
+    return (this.#initializing ??= (async () => {
+      if (this.#runBackgroundTasks) await this.#recordings.initialize();
+      else await this.#context.initialize();
+      if (this.#phase === 'open') this.#hostedEvaluationCoordinator?.start();
+    })());
   }
 
   async dispose(): Promise<void> {
-    await this.#hostedEvaluationCoordinator?.stop();
-    await this.#context.dispose();
+    return (this.#disposing ??= (async () => {
+      await this.drain();
+      this.#phase = 'closed';
+      await this.#context.dispose();
+    })());
+  }
+
+  async drain(): Promise<void> {
+    this.#phase = this.#phase === 'closed' ? 'closed' : 'draining';
+    return (this.#draining ??= (async () => {
+      await this.#initializing?.catch(() => undefined);
+      await this.#hostedEvaluationCoordinator?.stop();
+    })());
   }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
@@ -125,6 +152,11 @@ export class ManagedWorkflowBackend {
 
   async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {
     return this.#catalog.getTree();
+  }
+
+  async importProjectBundle(parent: string, bundle: PreparedProjectBundleImport) {
+    await this.initialize();
+    return importManagedProjectBundle(this.#context, parent, bundle);
   }
 
   async listProjectPathsForHostedIo(): Promise<string[]> {
@@ -166,69 +198,69 @@ export class ManagedWorkflowBackend {
     return this.#catalog.resolveManagedRelativeProjectText(relativeFrom, projectFilePath);
   }
 
-  async createWorkflowFolderItem(name: unknown, parentRelativePath: unknown) {
+  async createWorkflowFolderItem(name: string, parentRelativePath: string) {
     return this.#catalog.createWorkflowFolderItem(name, parentRelativePath);
   }
 
   async renameWorkflowFolderItem(
-    relativePath: unknown,
-    newName: unknown,
+    relativePath: string,
+    newName: string,
   ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.renameWorkflowFolderItem(relativePath, newName);
   }
 
   async moveWorkflowFolder(
-    sourceRelativePath: unknown,
-    destinationFolderRelativePath: unknown,
+    sourceRelativePath: string,
+    destinationFolderRelativePath: string,
   ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.moveWorkflowFolder(sourceRelativePath, destinationFolderRelativePath);
   }
 
-  async deleteWorkflowFolderItem(relativePath: unknown): Promise<void> {
+  async deleteWorkflowFolderItem(relativePath: string): Promise<void> {
     return this.#catalog.deleteWorkflowFolderItem(relativePath);
   }
 
-  async createWorkflowProjectItem(folderRelativePath: unknown, name: unknown): Promise<WorkflowProjectItem> {
+  async createWorkflowProjectItem(folderRelativePath: string, name: string): Promise<WorkflowProjectItem> {
     return this.#catalog.createWorkflowProjectItem(folderRelativePath, name);
   }
 
   async renameWorkflowProjectItem(
-    relativePath: unknown,
-    newName: unknown,
+    relativePath: string,
+    newName: string,
   ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.renameWorkflowProjectItem(relativePath, newName);
   }
 
   async moveWorkflowProject(
-    sourceRelativePath: unknown,
-    destinationFolderRelativePath: unknown,
+    sourceRelativePath: string,
+    destinationFolderRelativePath: string,
   ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
     return this.#catalog.moveWorkflowProject(sourceRelativePath, destinationFolderRelativePath);
   }
 
   async duplicateWorkflowProjectItem(
-    relativePath: unknown,
+    relativePath: string,
     version: WorkflowProjectDownloadVersion = 'live',
   ): Promise<WorkflowProjectItem> {
     return this.#catalog.duplicateWorkflowProjectItem(relativePath, version);
   }
 
   async uploadWorkflowProjectItem(
-    folderRelativePath: unknown,
-    fileName: unknown,
-    contents: unknown,
+    folderRelativePath: string,
+    fileName: string,
+    contents: string,
   ): Promise<WorkflowProjectItem> {
     return this.#catalog.uploadWorkflowProjectItem(folderRelativePath, fileName, contents);
   }
 
   async readWorkflowProjectDownload(
-    relativePath: unknown,
+    relativePath: string,
     version: WorkflowProjectDownloadVersion,
   ): Promise<{ contents: string; fileName: string }> {
     return this.#catalog.readWorkflowProjectDownload(relativePath, version);
   }
 
-  async readWorkflowProjectReferenceSnapshots(relativePath: unknown) {
+  async readWorkflowProjectReferenceSnapshots(relativePath: string) {
     return this.#catalog.readWorkflowProjectReferenceSnapshots(relativePath);
   }
   async listWorkflowProjectReferenceCatalog() {
@@ -263,100 +295,100 @@ export class ManagedWorkflowBackend {
     return this.#hostedEvaluationCoordinator;
   }
 
-  async listWorkflowPublishedVersions(relativePath: unknown): Promise<WorkflowPublishedVersionsResponse> {
+  async listWorkflowPublishedVersions(relativePath: string): Promise<WorkflowPublishedVersionsResponse> {
     return this.#publication.listWorkflowPublishedVersions(relativePath);
   }
 
   async readWorkflowPublishedVersionDownload(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
   ): Promise<{ contents: string; fileName: string }> {
     return this.#publication.readWorkflowPublishedVersionDownload(relativePath, versionId);
   }
 
   async readWorkflowPublishedVersionPreview(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
   ): Promise<{ contents: string; datasetsContents: string | null }> {
     return this.#publication.readWorkflowPublishedVersionPreview(relativePath, versionId);
   }
 
   async setWorkflowPublishedVersionStar(
-    relativePath: unknown,
-    versionId: unknown,
-    isStarred: unknown,
+    relativePath: string,
+    versionId: string,
+    isStarred: boolean,
   ): Promise<WorkflowPublishedVersionSummary> {
     return this.#publication.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred);
   }
 
   async setWorkflowPublishedVersionComment(
-    relativePath: unknown,
-    versionId: unknown,
-    comment: unknown,
+    relativePath: string,
+    versionId: string,
+    comment: string,
   ): Promise<WorkflowPublishedVersionSummary> {
     return this.#publication.setWorkflowPublishedVersionComment(relativePath, versionId, comment);
   }
 
   async restoreWorkflowPublishedVersion(
-    relativePath: unknown,
-    versionId: unknown,
+    relativePath: string,
+    versionId: string,
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowPublishedVersionRestoreResponse> {
     return this.#publication.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions);
   }
 
   async publishWorkflowProjectItem(
-    relativePath: unknown,
-    settings: unknown,
+    relativePath: string,
+    settings: WorkflowProjectSettingsDraft,
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.publishWorkflowProjectItem(relativePath, settings, preconditions);
   }
 
   async updateWorkflowEndpointAccess(
-    relativePath: unknown,
+    relativePath: string,
     access: WorkflowEndpointAccess,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.updateWorkflowEndpointAccess(relativePath, access, preconditions);
   }
 
-  async listWorkflowProjectWebApps(relativePath: unknown): Promise<WorkflowProjectWebAppsResponse> {
+  async listWorkflowProjectWebApps(relativePath: string): Promise<WorkflowProjectWebAppsResponse> {
     return this.#publication.listWorkflowProjectWebApps(relativePath);
   }
 
   async publishWorkflowProjectWebApps(
-    relativePath: unknown,
-    publications: WorkflowProjectWebAppPublicationDraft[] | unknown,
+    relativePath: string,
+    publications: WorkflowProjectWebAppPublicationDraft[],
     preconditions: WorkflowDraftPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.publishWorkflowProjectWebApps(relativePath, publications, preconditions);
   }
 
   async updateWorkflowProjectWebAppAccess(
-    relativePath: unknown,
-    accessUpdates: WorkflowProjectWebAppAccessDraft[] | unknown,
+    relativePath: string,
+    accessUpdates: WorkflowProjectWebAppAccessDraft[],
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions);
   }
 
   async unpublishWorkflowProjectWebApp(
-    relativePath: unknown,
-    uiGraphId: unknown,
+    relativePath: string,
+    uiGraphId: string,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions);
   }
 
   async unpublishWorkflowProjectItem(
-    relativePath: unknown,
+    relativePath: string,
     preconditions: WorkflowPublicationPreconditions,
   ): Promise<WorkflowProjectItem> {
     return this.#publication.unpublishWorkflowProjectItem(relativePath, preconditions);
   }
 
-  async deleteWorkflowProjectItem(relativePath: unknown): Promise<string | null> {
+  async deleteWorkflowProjectItem(relativePath: string): Promise<string | null> {
     return this.#catalog.deleteWorkflowProjectItem(relativePath);
   }
 
@@ -412,18 +444,19 @@ export class ManagedWorkflowBackend {
     return this.#recordings.listWorkflowRecordingWorkflows();
   }
 
-  async listWorkflowRecordingRunsPage(
-    workflowId: string,
-    page: number,
-    pageSize: number,
-    statusFilter: WorkflowRecordingFilterStatus,
-    inputFilter: WorkflowRecordingInputFilter | null = null,
-    inputCursor = 0,
-    signal?: AbortSignal,
-    inputAfter?: string,
-    includeSubgraphRuns = false,
-    runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
-  ): Promise<WorkflowRecordingRunsPageResponse> {
+  async listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse> {
+    const {
+      workflowId,
+      page,
+      pageSize,
+      statusFilter = 'all',
+      inputFilter = null,
+      inputCursor = 0,
+      signal,
+      inputAfter,
+      includeSubgraphRuns = false,
+      runScope = inputFilter ? 'roots' : 'all',
+    } = query;
     return this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
       page,

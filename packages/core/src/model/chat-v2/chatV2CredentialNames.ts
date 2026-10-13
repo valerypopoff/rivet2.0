@@ -22,6 +22,10 @@ export const CHAT_V2_DEFAULT_CREDENTIAL_NAMES = {
     programmaticName: 'googleApiKey',
     environmentVariableName: 'GOOGLE_GENERATIVE_AI_API_KEY',
   },
+  openrouter: {
+    programmaticName: 'openRouterApiKey',
+    environmentVariableName: 'OPENROUTER_API_KEY',
+  },
 } as const satisfies Record<ChatV2BuiltInProvider, ChatV2CredentialNames>;
 
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -100,7 +104,7 @@ export function normalizeChatV2CredentialNamesByProvider(value: unknown): ChatV2
   }
 
   const normalized: ChatV2CredentialNamesByProvider = {};
-  for (const provider of ['openai', 'anthropic', 'google'] as const) {
+  for (const provider of ['openai', 'anthropic', 'google', 'openrouter'] as const) {
     if (raw[provider] != null) {
       normalized[provider] = normalizeChatV2CredentialNames(provider, raw[provider]);
     }

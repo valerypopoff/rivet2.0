@@ -113,6 +113,7 @@ export function useWorkflowLibraryController(options: {
   const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
+  const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
   const selection = useWorkflowLibrarySelection({
     error,
@@ -444,6 +445,22 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const handleUploadBundleFromFolder = () => {
+    const target = folderContextMenuState?.folder;
+    if (!target || treeMutationPending || uploadingFolderPath) return;
+    closeFolderContextMenu();
+    setBundleUploadFolder(target);
+  };
+  const handleBundleImported = (folder: WorkflowFolderItem) => {
+    setExpandedFolders((previous) => ({
+      ...previous,
+      ...(bundleUploadFolder ? { [bundleUploadFolder.id]: true } : {}),
+      [folder.id]: true,
+    }));
+    setBundleUploadFolder(null);
+    void refresh(false);
+  };
+
   const handleCreateProjectFromContextMenu = useCallback(async () => {
     const targetFolder = folderContextMenuState?.folder;
     if (!targetFolder || duplicatingProjectPath || downloadingProjectPath || uploadingFolderPath) {
@@ -637,6 +654,10 @@ export function useWorkflowLibraryController(options: {
   );
 
   return {
+    bundleUploadFolder,
+    closeBundleUpload: () => setBundleUploadFolder(null),
+    handleUploadBundleFromFolder,
+    handleBundleImported,
     bundleProject,
     bundleOpen,
     handleDownloadBundle,

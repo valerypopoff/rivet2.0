@@ -11,6 +11,7 @@ export type EvaluationHistoryRow = {
   project_id: string;
   suite_id: string;
   started_at: string | Date;
+  started_at_cursor?: string;
   summary_json: string | EvaluationRunSummary;
 };
 
@@ -52,7 +53,11 @@ export function evaluationHistoryPageQuery(dialect: 'sqlite' | 'postgres', input
     dialect === 'sqlite'
       ? "CASE WHEN json_extract(run_json, '$.version') = 2 THEN json_remove(run_json, '$.trials', '$.thresholdResults', '$.warnings', '$.provenance') ELSE run_json END"
       : "CASE WHEN run_json::jsonb ->> 'version' = '2' THEN run_json::jsonb - 'trials' - 'thresholdResults' - 'warnings' - 'provenance' ELSE run_json::jsonb END";
-  const sql = `SELECT run_id, project_id, suite_id, started_at, ${projection} AS summary_json FROM evaluation_runs WHERE ${clauses.join(' AND ')} ORDER BY started_at DESC, run_id DESC LIMIT ${bind(limit + 1)}`;
+  // pg's Date parser discards microseconds; SQLite compares timestamp strings
+  // verbatim. Carry the exact SQL value through the cursor for both backends.
+  const cursorTimestamp =
+    dialect === 'postgres' ? `TO_CHAR(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` : 'started_at';
+  const sql = `SELECT run_id, project_id, suite_id, started_at, ${cursorTimestamp} AS started_at_cursor, ${projection} AS summary_json FROM evaluation_runs WHERE ${clauses.join(' AND ')} ORDER BY started_at DESC, run_id DESC LIMIT ${bind(limit + 1)}`;
   return {
     sql,
     values,
@@ -78,7 +83,7 @@ export function evaluationHistoryPageQuery(dialect: 'sqlite' | 'postgres', input
           normalized.id !== row.run_id ||
           normalized.projectId !== row.project_id ||
           normalized.suiteId !== row.suite_id ||
-          Date.parse(normalized.startedAt) !== new Date(row.started_at).getTime()
+          Date.parse(normalized.startedAt) !== new Date(row.started_at_cursor ?? row.started_at).getTime()
         )
           throw new Error('Invalid evaluation history metadata.');
         const {
@@ -86,17 +91,21 @@ export function evaluationHistoryPageQuery(dialect: 'sqlite' | 'postgres', input
           thresholdResults: _thresholds,
           warnings: _warnings,
           provenance: _provenance,
+          _hostedTrialsFromJobs: _hostedTrials,
           ...summary
-        } = normalized as EvaluationRun;
+        } = normalized as EvaluationRun & { _hostedTrialsFromJobs?: boolean };
         return summary;
       });
-      const last = runs.at(-1);
+      const last = rows[Math.min(rows.length, limit) - 1];
+      const timestamp =
+        last?.started_at_cursor ??
+        (last?.started_at instanceof Date ? last.started_at.toISOString() : last?.started_at);
       return {
         runs,
         ...(rows.length > limit && last
           ? {
               nextCursor: Buffer.from(
-                JSON.stringify([String(input.projectId), input.suiteId ?? null, last.startedAt, last.id]),
+                JSON.stringify([String(input.projectId), input.suiteId ?? null, timestamp, last.run_id]),
               ).toString('base64url'),
             }
           : {}),

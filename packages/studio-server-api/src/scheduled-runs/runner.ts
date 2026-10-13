@@ -1,5 +1,9 @@
 import { performance } from 'node:perf_hooks';
-import { ExecutionRecorder, loadProjectAndAttachedDataFromString, type ProjectId } from '@valerypopoff/rivet2-node';
+import {
+  loadProjectAndAttachedDataFromString,
+  type ExecutionRecorder,
+  type ProjectId,
+} from '@valerypopoff/rivet2-node';
 import type { ScheduledOccurrence } from '../../../studio-server-shared/scheduled-run-types.js';
 import {
   createExecutionSubgraphProjectLoader,
@@ -7,6 +11,7 @@ import {
   getLLMProfileHealthStore,
 } from '../routes/workflows/storage-backend.js';
 import { createHostedProcessor } from '../routes/workflows/hosted-processor.js';
+import { ExecutionSession } from '../routes/workflows/execution-session.js';
 import {
   getWorkflowExecutionRecorderOptions,
   isWorkflowRecordingEnabled,
@@ -68,11 +73,11 @@ export async function runScheduledGraph(
   try {
     // Setup also belongs to the processor's cleanup scope. A recorder/listener
     // failure must not leak a processor prepared before durable acceptance.
-    if (recording) {
-      const prepared = new ExecutionRecorder(getWorkflowExecutionRecorderOptions());
-      prepared.record(processor.processor);
-      recorder = prepared;
-    }
+    const session = new ExecutionSession(processor, {
+      recording,
+      recorderOptions: getWorkflowExecutionRecorderOptions(),
+    });
+    recorder = session.recorder;
     // Interactive nodes have no browser owner in this execution surface.
     processor.processor.on('userInput', () => {
       controller.abort();
@@ -82,8 +87,8 @@ export async function runScheduledGraph(
       return { status: 'cancelled' };
     signal.throwIfAborted();
     invoked = true;
-    await processor.run();
-    await processor.processor.waitForRunCompletion();
+    const outcome = await session.run();
+    if (outcome.failure) throw outcome.failure.error;
     if (controller.signal.aborted) throw new Error('Interactive input is not supported for scheduled runs.');
   } catch (error) {
     status = signal.aborted ? 'interrupted' : 'failed';
@@ -96,7 +101,7 @@ export async function runScheduledGraph(
           ? 'Graph execution failed. Inspect its recording when available.'
           : 'Execution preparation or acceptance failed; the graph was not invoked.';
   } finally {
-    processor.dispose();
+    if (!invoked) processor.dispose();
   }
   let recordingId: string | undefined;
   let recordingStatus: ScheduledOccurrence['recordingStatus'] = draft.record ? 'unavailable' : 'off';

@@ -29,6 +29,31 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+test('OpenRouter discovers text models without credentials and retains Auto', async () => {
+  let authorization: string | null = null;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), 'https://openrouter.ai/api/v1/models');
+    authorization = new Headers(init?.headers).get('authorization');
+    return Response.json({
+      data: [
+        { id: 'vendor/chat', name: 'Chat', architecture: { output_modalities: ['text'] } },
+        { id: 'vendor/image', architecture: { output_modalities: ['image'] } },
+        { id: 'vendor/chat', name: 'Chat', architecture: { output_modalities: ['text'] } },
+      ],
+    });
+  };
+  const context = createContext();
+  invalidateChatV2DiscoveredModelOptions('openrouter', context);
+  const result = await getChatV2DiscoveredModelOptionsWithStatus('openrouter', context);
+  assert.equal(result.source, 'api');
+  assert.equal(authorization, null);
+  assert.deepEqual(result.options.map((option) => option.value).sort(), ['openrouter/auto', 'vendor/chat']);
+  assert.equal(
+    getChatV2ModelCatalogCacheKey('openrouter', context),
+    getChatV2ModelCatalogCacheKey('openrouter', createContext('another-key')),
+  );
+});
+
 test('OpenAI model refresh uses the explicit API key override', async () => {
   const context = createContext('input-openai-key');
   let authorization: string | null = null;

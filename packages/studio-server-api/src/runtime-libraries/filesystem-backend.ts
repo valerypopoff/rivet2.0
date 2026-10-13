@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express';
+import type { RuntimeLibraryJobObserver } from './job-observation.js';
 
 import type {
   JobStatus,
@@ -6,16 +6,9 @@ import type {
   RuntimeLibraryReplicaCleanupResult,
   RuntimeLibraryJobLogEntry,
   RuntimeLibraryJobState,
-  RuntimeLibraryLogSource,
   RuntimeLibraryPackageSpec,
 } from '../../../studio-server-shared/runtime-library-types.js';
-import {
-  currentNodeModulesPath,
-  ensureDirectories,
-  getRootPath,
-  readManifest,
-  prepareLocalRuntimeLibraries,
-} from './manifest.js';
+import { ensureDirectories, getRootPath, readManifest, prepareLocalRuntimeLibraries } from './manifest.js';
 import { jobRunner } from './job-runner.js';
 import type { RuntimeLibrariesBackend } from './backend.js';
 import { conflict, createHttpError } from '../utils/httpError.js';
@@ -73,7 +66,18 @@ function mapJob(
 }
 
 class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
+  private draining = false;
+
+  beginDrain(): void {
+    this.draining = true;
+  }
+
+  private assertAdmission(): void {
+    if (this.draining) throw new Error('Runtime-library services are draining.');
+  }
+
   async initialize(): Promise<void> {
+    this.assertAdmission();
     try {
       ensureDirectories();
     } catch (error) {
@@ -86,11 +90,13 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async prepareForExecution(): Promise<void> {
+    this.assertAdmission();
     await prepareLocalRuntimeLibraries();
   }
 
   async dispose(): Promise<void> {
-    // No background resources to release in filesystem mode.
+    this.beginDrain();
+    await jobRunner.drain(true);
   }
 
   async getState(): Promise<RuntimeLibrariesState> {
@@ -121,6 +127,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async enqueueInstall(packages: RuntimeLibraryPackageSpec[]): Promise<RuntimeLibraryJobState> {
+    this.assertAdmission();
     if (jobRunner.isRunning()) {
       const active = jobRunner.getActiveJob()!;
       throw conflict(`A job is already running (job ${active.id})`);
@@ -136,6 +143,7 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async enqueueRemove(packageNames: string[]): Promise<RuntimeLibraryJobState> {
+    this.assertAdmission();
     if (jobRunner.isRunning()) {
       const active = jobRunner.getActiveJob()!;
       throw conflict(`A job is already running (job ${active.id})`);
@@ -166,83 +174,31 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     };
   }
 
-  streamJob(req: Request, res: Response): void {
-    if (res.destroyed || res.writableEnded) return;
-    const job = jobRunner.getJob(req.params.jobId);
-    if (!job) {
-      res.status(404).json({ error: 'Job not found' });
-      return;
-    }
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    for (const entry of job.logEntries) {
-      res.write(
-        `data: ${JSON.stringify({ type: 'log', message: entry.message, createdAt: entry.createdAt, source: entry.source })}\n\n`,
-      );
-    }
-
-    res.write(
-      `data: ${JSON.stringify({ type: 'status', status: job.status, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`,
-    );
-
-    if (job.status === 'succeeded' || job.status === 'failed') {
-      res.write(
-        `data: ${JSON.stringify({ type: 'done', status: job.status, error: job.error, createdAt: job.lastProgressAt, cancelRequestedAt: job.cancelRequestedAt ?? null })}\n\n`,
-      );
-      res.end();
-      return;
-    }
-
-    const onLog = (jobId: string, message: string, createdAt: string, source: RuntimeLibraryLogSource) => {
-      if (res.destroyed || res.writableEnded || jobId !== req.params.jobId) {
-        return;
-      }
-
-      res.write(`data: ${JSON.stringify({ type: 'log', message, createdAt, source })}\n\n`);
+  subscribeJob(jobId: string, observer: RuntimeLibraryJobObserver): () => void {
+    let closed = false;
+    const stop = () => {
+      if (closed) return;
+      closed = true;
+      jobRunner.off('log', changed);
+      jobRunner.off('status', changed);
     };
-
-    const onStatus = (jobId: string, status: JobStatus, createdAt: string, cancelRequestedAt: string | null) => {
-      if (res.destroyed || res.writableEnded || jobId !== req.params.jobId) {
-        return;
-      }
-
-      res.write(`data: ${JSON.stringify({ type: 'status', status, createdAt, cancelRequestedAt })}\n\n`);
-
-      if (status === 'succeeded' || status === 'failed') {
-        const finishedJob = jobRunner.getJob(jobId);
-        res.write(
-          `data: ${JSON.stringify({ type: 'done', status, error: finishedJob?.error, createdAt: finishedJob?.lastProgressAt, cancelRequestedAt: finishedJob?.cancelRequestedAt ?? null })}\n\n`,
-        );
-        cleanup();
-        res.end();
+    const changed = (changedId: string) => {
+      if (closed || changedId !== jobId) return;
+      try {
+        observer.state(mapJob(jobRunner.getJob(jobId)));
+      } catch (error) {
+        stop();
+        // Observation failures must never become durable job failures.
+        try {
+          observer.error(error);
+        } catch {
+          /* This observation is retired. */
+        }
       }
     };
-
-    const keepalive = setInterval(() => {
-      if (res.destroyed || res.writableEnded) return;
-      res.write(':keepalive\n\n');
-    }, 30_000);
-
-    const cleanup = () => {
-      clearInterval(keepalive);
-      jobRunner.removeListener('log', onLog);
-      jobRunner.removeListener('status', onStatus);
-      req.off('close', cleanup);
-      res.off('close', cleanup);
-      res.off('finish', cleanup);
-    };
-
-    jobRunner.on('log', onLog);
-    jobRunner.on('status', onStatus);
-
-    req.once('close', cleanup);
-    res.once('close', cleanup);
-    res.once('finish', cleanup);
+    jobRunner.on('log', changed);
+    jobRunner.on('status', changed);
+    return stop;
   }
 }
 

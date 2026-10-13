@@ -2,9 +2,7 @@ import type { RuntimeSettings, Settings } from '../model/Settings.js';
 import { DEFAULT_CHAT_NODE_TIMEOUT } from '../utils/defaults.js';
 
 function definedRuntimeSettings(settings: Settings): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(settings).filter(([, value]) => value !== undefined && value !== ''),
-  );
+  return Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== undefined && value !== ''));
 }
 
 export function resolveProcessSettings(settings?: Settings, fallbacks?: Partial<RuntimeSettings>): RuntimeSettings;
@@ -12,8 +10,12 @@ export function resolveProcessSettings<T extends Record<string, unknown>>(
   settings?: Settings & T,
   fallbacks?: Partial<RuntimeSettings>,
 ): RuntimeSettings & T;
-export function resolveProcessSettings(settings: Settings = {}, fallbacks: Partial<RuntimeSettings> = {}): RuntimeSettings {
-  const openAiApiKey = settings.openAiApiKey || settings.openAiKey || fallbacks.openAiApiKey || fallbacks.openAiKey || '';
+export function resolveProcessSettings(
+  settings: Settings = {},
+  fallbacks: Partial<RuntimeSettings> = {},
+): RuntimeSettings {
+  const openAiApiKey =
+    settings.openAiApiKey || settings.openAiKey || fallbacks.openAiApiKey || fallbacks.openAiKey || '';
 
   return {
     ...fallbacks,
@@ -22,6 +24,7 @@ export function resolveProcessSettings(settings: Settings = {}, fallbacks: Parti
     openAiKey: openAiApiKey,
     anthropicApiKey: settings.anthropicApiKey || fallbacks.anthropicApiKey || '',
     googleApiKey: settings.googleApiKey || fallbacks.googleApiKey || '',
+    openRouterApiKey: settings.openRouterApiKey || fallbacks.openRouterApiKey || '',
     customAiApiKey: settings.customAiApiKey || fallbacks.customAiApiKey || '',
     openAiOrganization: settings.openAiOrganization ?? fallbacks.openAiOrganization ?? '',
     openAiEndpoint: settings.openAiEndpoint ?? fallbacks.openAiEndpoint ?? '',
