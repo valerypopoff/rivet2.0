@@ -108,6 +108,7 @@ export const defaultApiTestFiles = [
   'src/tests/recordings-store.test.ts',
   'src/tests/release-maintenance.test.ts',
   'src/tests/request-correlation.test.ts',
+  'src/tests/restore-preparation.test.ts',
   'src/tests/runtime-health.test.ts',
   'src/tests/runtime-libraries.test.ts',
   'src/tests/runtime-library-artifact-activation.test.ts',

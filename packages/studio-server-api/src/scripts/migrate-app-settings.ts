@@ -26,7 +26,8 @@ import { runRecordingsSettingsRepository } from '../routes/workflows/recordings-
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { decodeMigrationSourceUtf8 } from './migration-source-utf8.js';
-import { chargeLocalSourceBytes } from '../local-metadata/source-budget.js';
+import { chargeLocalSourceBytes, withLocalSourceBudget } from '../local-metadata/source-budget.js';
+import { LocalUpgradeDiagnosticError } from '../local-metadata/upgrade-diagnostics.js';
 import type { SqliteAppSettingsBackend } from '../app-settings/sqlite-settings-store.js';
 
 const descriptors: ReadonlyArray<SettingsRepositoryDescriptor<unknown>> = [
@@ -96,7 +97,15 @@ async function readSourceSettingsFile(filePath: string, mayBeMissing: boolean): 
   }
 }
 
-export async function collectSourceAppSettings(
+export function collectSourceAppSettings(
+  sourceRoot: string,
+  target?: ManagedWorkflowStorageConfig,
+  catalog?: SqliteAppSettingsBackend,
+): Promise<SettingsRow[]> {
+  return withLocalSourceBudget(() => readSourceAppSettings(sourceRoot, target, catalog), { reuse: true });
+}
+
+async function readSourceAppSettings(
   sourceRoot: string,
   target?: ManagedWorkflowStorageConfig,
   catalog?: SqliteAppSettingsBackend,
@@ -135,8 +144,10 @@ export async function collectSourceAppSettings(
       if (catalog) {
         const stored = await catalog.read(descriptor.key);
         raw = stored ? JSON.stringify(stored.value) : null;
+        if (raw !== null) chargeLocalSourceBytes(Buffer.byteLength(raw));
       } else raw = await readSourceSettingsFile(sourcePath, !presentNames.has(path.basename(sourcePath)));
     } catch (error) {
+      if (error instanceof LocalUpgradeDiagnosticError) throw error;
       throw new Error(`Cannot read source App Settings domain ${descriptor.key}`, { cause: error });
     }
     const sourceValue =

@@ -86,15 +86,23 @@ export class LegacyRestoreControl {
   }
   /** Serialize first-install ownership, DDL and binding with other migrations
    * and the existing restore coordinator. An unfinished restore must recover first. */
-  async withDeploymentMigration<T>(deployment: string, migrate: () => Promise<T>): Promise<T> {
+  async withDeploymentMigration<T>(
+    deployment: string,
+    migrate: () => Promise<T>,
+    { verifyUnfinishedRestore }: { verifyUnfinishedRestore?: (operation: RestoreOperation) => Promise<T> } = {},
+  ): Promise<T> {
     if (this.maxConnections < 2)
       throw new Error('Deployment migration requires its dedicated two-connection coordinator.');
     const client = await this.lock();
     try {
       if (await this.assertDeploymentIfInitialized(deployment)) {
         const operation = await this.read();
-        if (operation && !['completed', 'cancelled'].includes(operation.phase))
+        if (operation && !['completed', 'cancelled'].includes(operation.phase)) {
+          // Container restart preparation may verify the current schema while fenced.
+          // Ordinary migration callers must still fail; never cancel or rewrite the journal.
+          if (verifyUnfinishedRestore) return await verifyUnfinishedRestore(operation);
           throw new Error('Finish or cancel the existing legacy restore before migrating this deployment.');
+        }
       }
       const result = await migrate();
       await this.initialize(deployment);

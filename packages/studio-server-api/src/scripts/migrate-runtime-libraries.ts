@@ -165,7 +165,7 @@ export async function createRuntimeLibraryDirectoryArchive(
 }
 
 /** Conservative tar/PAX allowance, checked before restore deletes data and again before writing the tar. */
-export async function assertRuntimeLibraryArchiveSpace(current: string, temporaryDirectory: string): Promise<void> {
+export async function assertRuntimeLibraryArchiveSpace(current: string, temporaryDirectory: string): Promise<bigint> {
   let bytes = 1024n;
   const visit = async (file: string): Promise<void> => {
     const stat = await fs.lstat(file, { bigint: true });
@@ -179,6 +179,7 @@ export async function assertRuntimeLibraryArchiveSpace(current: string, temporar
   const space = await fs.statfs(temporaryDirectory, { bigint: true });
   if (space.bavail * space.bsize < bytes + 64n * 1024n ** 2n)
     throw new Error('Insufficient restore scratch space for the runtime-library artifact.');
+  return bytes;
 }
 
 /** Copies an installed release as immutable bytes; the target must run a compatible Linux/Node image. */
@@ -187,7 +188,7 @@ export async function migrateRuntimeLibraries(options: {
   target: ManagedWorkflowStorageConfig;
   verifyOnly?: boolean;
   sourceState?: LocalRuntimeLibraryState;
-  /** Only a restore preflight that rejects native modules may establish this without operator attestation. */
+  /** Restore preflight either rejects copied native modules or attests a fresh target-platform installation. */
   platformValidated?: boolean;
   /** Restore has dedicated PVC scratch; do not spill its archive onto the pod's small /tmp volume. */
   artifactTemporaryDirectory?: string;

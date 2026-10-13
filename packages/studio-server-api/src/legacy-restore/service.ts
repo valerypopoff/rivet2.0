@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { terminateChildProcess } from '../utils/exec.js';
 import type { RequestHandler } from 'express';
 import {
   LegacyRestoreControl,
@@ -513,7 +514,14 @@ export class LegacyRestoreService {
       RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY: this.target.objectStorageSecretAccessKey,
     };
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, compiled ? [file] : ['--import', 'tsx', source], { env, stdio: 'ignore' });
+      // The worker and npm descendants share a private process group, so cancellation
+      // cannot leave an installer writing after scratch cleanup or owner handoff.
+      const child = spawn(process.execPath, compiled ? [file] : ['--import', 'tsx', source], {
+        env,
+        stdio: 'ignore',
+        detached: process.platform !== 'win32',
+        windowsHide: true,
+      });
       this.child = child;
       const deadline = setTimeout(() => void this.stopWorker().catch(() => undefined), 6 * 60 * 60 * 1000);
       deadline.unref();
@@ -535,10 +543,23 @@ export class LegacyRestoreService {
     const child = this.child;
     if (child && child.exitCode === null && child.pid !== undefined) {
       const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-      child.kill('SIGTERM');
-      const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+      const kill = (signal: NodeJS.Signals) => {
+        if (process.platform === 'win32') {
+          terminateChildProcess(child, signal);
+        } else {
+          try {
+            process.kill(-child.pid!, signal);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          }
+        }
+      };
+      kill('SIGTERM');
+      const force = setTimeout(() => kill('SIGKILL'), 5000);
       try {
         await exited;
+        // The leader may exit before a descendant. Kill the remaining private group.
+        if (process.platform !== 'win32') kill('SIGKILL');
       } finally {
         clearTimeout(force);
       }

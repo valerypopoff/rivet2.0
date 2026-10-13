@@ -175,6 +175,45 @@ export async function verifySupervisedLegacyRestore({
   };
   const base = `http://127.0.0.1:${apiPort}`;
   const request = async (url, options) => fetch(url, { signal: AbortSignal.timeout(5000), ...options });
+  const schemaPreparation = async (command) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(path.dirname(api), 'scripts/migrate-managed-workflow-schema.js'), command],
+      {
+        cwd: repoRoot,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '',
+      stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const timer = setTimeout(() => child.kill(), 60_000);
+    try {
+      const [code] = await once(child, 'close');
+      return { code, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const verifyRecoveryPreparation = async (pending) => {
+    await eventually('read-only container recovery preparation', async () => {
+      const result = await schemaPreparation('prepare-container-startup');
+      if (result.code !== 75) return false; // Validator ownership handoff may still be finishing.
+      assert.match(result.stdout, /No migration or settings seeding was performed/);
+      return true;
+    });
+    const blocked = await schemaPreparation('migrate');
+    assert.equal(blocked.code, 1);
+    assert.match(blocked.stderr, /Finish or cancel/);
+    const retained = await request(`${base}/api/legacy-restore`, { headers }).then((res) => res.json());
+    assert.deepEqual(retained.operation, pending, 'Restart preparation must not alter the pending archive or journal');
+  };
   const healthy = async (port) =>
     request(`http://127.0.0.1:${port}/readyz`)
       .then(async (res) => {
@@ -206,6 +245,7 @@ export async function verifySupervisedLegacyRestore({
       });
       assert.equal(ready.destructive, false);
       assert.equal(ready.canProceedAnyway, true);
+      await verifyRecoveryPreparation(ready);
       for (const digest of ['b'.repeat(64), ready.archiveDigest]) {
         const proceed = await request(`${base}/api/legacy-restore/proceed-anyway`, {
           method: 'POST',
@@ -223,6 +263,7 @@ export async function verifySupervisedLegacyRestore({
       ready = body.operation;
       return ready?.phase === 'awaiting-confirmation';
     });
+    await verifyRecoveryPreparation(ready);
     if (expectModifiedBackup) {
       assert.equal(ready.integrityOverridden, true);
       assert.equal(ready.recordings, 0);
@@ -301,13 +342,10 @@ export async function verifySupervisedLegacyRestore({
     await fs.mkdir(editedSource, { recursive: true });
     await tar.x({ file: archive, cwd: editedSource });
     await fs.rm(path.join(editedSource, 'recordings'), { recursive: true });
+    for (const name of ['._.', '.DS_Store', '._backup.json', 'workflows/.DS_Store', 'appData/._settings'])
+      await fs.writeFile(path.join(editedSource, name), 'macOS metadata');
     const modifiedArchive = path.join(editedRoot, 'backup.tar.gz');
-    await tar.c({ file: modifiedArchive, cwd: editedSource, gzip: true }, [
-      'backup.json',
-      'workflows',
-      'appData',
-      'runtimeLibraries',
-    ]);
+    await tar.c({ file: modifiedArchive, cwd: editedSource, gzip: true }, ['./']);
     await verifySupervisedLegacyRestore({
       repoRoot,
       root: editedRoot,

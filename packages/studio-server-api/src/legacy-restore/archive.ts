@@ -89,6 +89,25 @@ export function validateLegacyArchivePath(raw: string): string {
   return value;
 }
 
+function isMacMetadata(name: string): boolean {
+  const base = path.posix.basename(name);
+  return base === '.DS_Store' || (base.startsWith('._') && base.length > 2);
+}
+
+function archiveEntryPath(raw: string, allowModifiedBackup: boolean): string {
+  if (allowModifiedBackup) {
+    if (raw === '.' || raw === './') return '.';
+    const name = raw.replace(/^\.\//, '');
+    // macOS tar writes top-level AppleDouble/Finder files outside the data roots.
+    // Validate their lexical safety just like a domain path before ignoring them.
+    if (!name.includes('/') && isMacMetadata(name)) {
+      validateLegacyArchivePath(`appData/${name}`);
+      return name;
+    }
+  }
+  return validateLegacyArchivePath(raw);
+}
+
 /** Two passes: inspect every entry before extraction, then verify actual restored bytes/modes. */
 export async function prepareLegacyArchive(
   archive: string,
@@ -100,13 +119,14 @@ export async function prepareLegacyArchive(
     throw new Error('Backup archive exceeds its limit or is not a regular file.');
   const entries = new Map<string, string>();
   const links = new Set<string>();
+  const excluded = new Set<string>();
   let expandedBytes = 0;
   const parser = new tar.Parser({
     strict: true,
     maxMetaEntrySize: 64 * 1024,
     onReadEntry: (entry) => {
       try {
-        const name = validateLegacyArchivePath(entry.path);
+        const name = archiveEntryPath(entry.path, options.allowModifiedBackup === true);
         if (entries.has(name) || entries.size >= LEGACY_RESTORE_LIMITS.entries)
           throw new Error('Duplicate backup entry or entry limit exceeded.');
         if (
@@ -118,6 +138,9 @@ export async function prepareLegacyArchive(
         expandedBytes += entry.size;
         if (!Number.isSafeInteger(expandedBytes) || expandedBytes > LEGACY_RESTORE_LIMITS.expandedBytes)
           throw new Error('Expanded backup exceeds its limit.');
+        const ignored = options.allowModifiedBackup && (name === '.' || isMacMetadata(name));
+        if (ignored && entry.type !== (name === '.' ? 'Directory' : 'File'))
+          throw new Error('Unsupported backup entry.');
         if (entry.type === 'SymbolicLink') {
           const target = entry.linkpath;
           if (
@@ -134,6 +157,7 @@ export async function prepareLegacyArchive(
           links.add(name);
         }
         entries.set(name, entry.type);
+        if (ignored) excluded.add(entry.path);
         entry.resume();
       } catch (error) {
         parser.abort(error as Error);
@@ -194,7 +218,7 @@ export async function prepareLegacyArchive(
   const space = await fs.statfs(destination);
   if (space.bavail * space.bsize < expandedBytes + 64 * 1024 ** 2)
     throw new Error('Insufficient restore scratch space.');
-  await restoreBrowserBackupArchive(archive, destination);
+  await restoreBrowserBackupArchive(archive, destination, { includeEntry: (name) => !excluded.has(name) });
   // The operator may have intentionally removed the whole recordings domain.
   // Only that optional domain can be reconstructed; other roots remain mandatory.
   if (missingRecordings && options.allowModifiedBackup)

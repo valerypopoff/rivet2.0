@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 // test-style: fixture-read: Reads only test-owned temporary backup and runtime artifacts, never implementation text.
 import { test, mock } from 'node:test';
 import { randomUUID, createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import { LocalUpgradeDiagnosticError } from '../local-metadata/upgrade-diagnostics.js';
 import { validateLegacyArchivePath } from '../legacy-restore/archive.js';
 import {
   validateRestoreObjectKey,
@@ -45,6 +47,47 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createBrowserBackupArchive, browserBackupDirectory } from '../local-metadata/browser-backup.js';
 import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
+import {
+  assertVmMigrationTargetMayRecoverRestore,
+  assertVmMigrationTargetMayServe,
+} from '../vm-migration-target-gate.js';
+
+test('closed migration recovery is read-only and restricted to the accepted restore identity', async () => {
+  const expected = { sourceIdentity: 'a'.repeat(64), targetIdentity: 'b'.repeat(64), sourceManifest: 'c'.repeat(64) };
+  for (const state of [
+    'missing',
+    'verified',
+    'matching',
+    'unbound',
+    'foreign-source',
+    'foreign-target',
+    'changed-manifest',
+    'empty',
+  ]) {
+    const statements: string[] = [];
+    const row = {
+      phase: state === 'verified' ? 'verified' : 'copying',
+      source_identity: state === 'foreign-source' ? 'd'.repeat(64) : expected.sourceIdentity,
+      target_identity: state === 'foreign-target' ? 'd'.repeat(64) : expected.targetIdentity,
+      source_manifest_hash:
+        state === 'unbound' ? null : state === 'changed-manifest' ? 'd'.repeat(64) : expected.sourceManifest,
+    };
+    const pool = {
+      query: async (sql: string) => {
+        statements.push(sql);
+        return sql.includes('to_regclass')
+          ? { rows: [{ name: state === 'missing' ? null : 'rivet_vm_migration_gate' }] }
+          : { rows: state === 'empty' ? [] : [row] };
+      },
+    } as unknown as Pool;
+    if (['missing', 'verified', 'matching', 'unbound'].includes(state))
+      await assertVmMigrationTargetMayRecoverRestore(pool, expected);
+    else await assert.rejects(assertVmMigrationTargetMayRecoverRestore(pool, expected), /does not belong/);
+    if (['missing', 'verified'].includes(state)) await assertVmMigrationTargetMayServe(pool);
+    else await assert.rejects(assertVmMigrationTargetMayServe(pool), /incomplete/);
+    assert.ok(statements.every((sql) => sql.startsWith('SELECT')));
+  }
+});
 
 test('schema preparation checks existing installation ownership without changing DDL', async () => {
   for (const state of ['empty', 'owned', 'foreign', 'partial']) {
@@ -138,6 +181,68 @@ test('serving-only single-connection coordinators cannot deadlock by attempting 
   }
 });
 
+test('container recovery verifies unfinished restores under ownership without DDL, binding or journal mutation', async () => {
+  for (const state of [
+    'failed',
+    'awaiting-confirmation',
+    'clearing',
+    'restarting',
+    'foreign',
+    'incompatible-schema',
+  ] as const) {
+    const control = new LegacyRestoreControl({}, 'fixture');
+    const events: string[] = [];
+    const operation = restoreOperationSchema.parse({
+      id: randomUUID(),
+      phase: ['foreign', 'incompatible-schema'].includes(state) ? 'failed' : state,
+      destructive: ['clearing', 'restarting'].includes(state),
+      bytes: 0,
+      createdAt: new Date().toISOString(),
+      message: 'Pending fixture restore',
+    });
+    const patches = [
+      mock.method(control, 'lock', async () => {
+        events.push('lock');
+        return {} as never;
+      }),
+      mock.method(control, 'unlock', async () => {
+        events.push('unlock');
+      }),
+      mock.method(control, 'assertDeploymentIfInitialized', async () => {
+        events.push('ownership');
+        if (state === 'foreign') throw Error('foreign');
+        return true;
+      }),
+      mock.method(control, 'read', async () => operation),
+      mock.method(control, 'initialize', async () => assert.fail('Recovery must not bind or create schema')),
+      mock.method(control, 'write', async () => assert.fail('Recovery must preserve the journal')),
+    ];
+    try {
+      const recovery = control.withDeploymentMigration<string>(
+        'docker/owned',
+        async () => assert.fail('Recovery must not run DDL'),
+        {
+          verifyUnfinishedRestore: async (pending) => {
+            assert.equal(pending, operation);
+            events.push('verify');
+            if (state === 'incompatible-schema') throw Error('Schema is incompatible');
+            return 'recovery';
+          },
+        },
+      );
+      if (['foreign', 'incompatible-schema'].includes(state)) await assert.rejects(recovery);
+      else assert.equal(await recovery, 'recovery');
+      assert.deepEqual(
+        events,
+        state === 'foreign' ? ['lock', 'ownership', 'unlock'] : ['lock', 'ownership', 'verify', 'unlock'],
+      );
+    } finally {
+      for (const patch of patches) patch.mock.restore();
+      await control.dispose();
+    }
+  }
+});
+
 test('capacity rejection identifies the remedy without exposing arbitrary validation details', () => {
   assert.match(
     restoreValidationFailureMessage(new Error('Insufficient restore scratch space for the runtime-library artifact.')),
@@ -148,6 +253,42 @@ test('capacity rejection identifies the remedy without exposing arbitrary valida
     /^Backup validation failed/,
   );
   assert.doesNotMatch(restoreValidationFailureMessage(new Error('private database or archive details')), /private/);
+  assert.match(restoreValidationFailureMessage(new Error('Unsafe backup path.')), /unsupported paths/);
+  assert.match(restoreValidationFailureMessage(new Error('Backup roots or manifest are missing.')), /archive root/);
+  const overridden = restoreValidationFailureMessage(new Error('private credentials'), true);
+  assert.match(overridden, /after bypassing original integrity checks/);
+  assert.doesNotMatch(overridden, /private credentials|Use the original/);
+  const bounded = restoreValidationFailureMessage(
+    new LocalUpgradeDiagnosticError(
+      'source-bundle-limit',
+      'a'.repeat(16),
+      new Error('private cause'),
+      'private error message',
+    ),
+    true,
+  );
+  assert.match(bounded, /retained publication history.*separate from the archive upload limit/);
+  assert.match(bounded, /Source reference: a{16}/);
+  assert.doesNotMatch(bounded, /private/);
+  const invalidUtf8 = restoreValidationFailureMessage(
+    new LocalUpgradeDiagnosticError('source-invalid-utf8', 'private path', undefined, 'secret payload'),
+    true,
+  );
+  assert.match(invalidUtf8, /not valid UTF-8/);
+  assert.doesNotMatch(invalidUtf8, /private path|secret payload/);
+  const hostile = Object.defineProperty(new Error(), 'message', {
+    get() {
+      throw Error('private getter');
+    },
+  });
+  assert.match(restoreValidationFailureMessage(hostile, true), /validation failed after bypassing/);
+  const mutated = new LocalUpgradeDiagnosticError('source-bundle-limit');
+  Object.defineProperty(mutated, 'reason', {
+    get() {
+      throw Error('private reason');
+    },
+  });
+  assert.match(restoreValidationFailureMessage(mutated, true), /validation failed after bypassing/);
 });
 
 test('runtime migration uses dedicated restore scratch without changing its source or leaving temporary files', async () => {
@@ -948,7 +1089,7 @@ test('archive inspection rejects duplicate entries and never extracts unknown ro
   }
 });
 
-test('explicit modified-backup override accepts omitted recordings but never missing mandatory roots or invalid manifests', async () => {
+test('modified-backup override accepts macOS repacking and omitted recordings without extracting metadata', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-modified-backup-'));
   try {
     const source = Object.fromEntries(
@@ -983,14 +1124,10 @@ test('explicit modified-backup override accepts omitted recordings but never mis
       await fs.cp(original, edited, { recursive: true });
       await fs.rm(path.join(edited, 'recordings'), { recursive: true });
       if (!omitRoot) await fs.mkdir(path.join(edited, 'recordings'));
+      for (const name of ['._.', '.DS_Store', '._backup.json', 'workflows/.DS_Store', 'appData/._settings'])
+        await fs.writeFile(path.join(edited, name), 'Finder metadata');
       const modifiedArchive = path.join(root, `modified-${omitRoot}.tar.gz`);
-      await tar.c({ file: modifiedArchive, cwd: edited, gzip: true }, [
-        'backup.json',
-        'workflows',
-        'appData',
-        'runtimeLibraries',
-        ...(!omitRoot ? ['recordings'] : []),
-      ]);
+      await tar.c({ file: modifiedArchive, cwd: edited, gzip: true }, ['./']);
       const rejected = path.join(root, `rejected-${omitRoot}`);
       const accepted = path.join(root, `accepted-${omitRoot}`);
       await fs.mkdir(rejected);
@@ -1001,6 +1138,15 @@ test('explicit modified-backup override accepts omitted recordings but never mis
         createdAt,
       );
       assert.deepEqual(await fs.readdir(path.join(accepted, 'recordings')), []);
+      assert.deepEqual((await fs.readdir(accepted)).sort(), [
+        'appData',
+        'backup.json',
+        'recordings',
+        'runtimeLibraries',
+        'workflows',
+      ]);
+      assert.deepEqual(await fs.readdir(path.join(accepted, 'workflows')), []);
+      assert.deepEqual(await fs.readdir(path.join(accepted, 'appData')), []);
     }
     const invalid = path.join(root, 'invalid.tar.gz');
     const destination = path.join(root, 'invalid');
@@ -1014,6 +1160,42 @@ test('explicit modified-backup override accepts omitted recordings but never mis
     await fs.writeFile(path.join(original, 'backup.json'), '{}');
     await tar.c({ file: invalid, cwd: original, gzip: true }, ['backup.json', ...Object.keys(source)]);
     await assert.rejects(prepareLegacyArchive(invalid, destination, { allowModifiedBackup: true }));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('metadata exclusion never admits links, directories, duplicates or traversal disguised as macOS files', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-restore-metadata-safety-'));
+  try {
+    const source = path.join(root, 'source');
+    await fs.mkdir(source);
+    const cases = [
+      { path: './._link', type: 'SymbolicLink' as const, linkpath: '../outside' },
+      { path: './.DS_Store/', type: 'Directory' as const },
+      { path: './', type: 'File' as const },
+      { path: '../._outside', type: 'File' as const },
+      { path: './workflows/../._outside', type: 'File' as const },
+      { path: './unknown/.DS_Store', type: 'File' as const },
+      { path: './._setid', type: 'File' as const, mode: 0o4755 },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const header = new tar.Header({ ...entry, mode: entry.mode ?? 0o755, size: 0 });
+      header.encode();
+      const archive = path.join(root, `${index}.tar.gz`);
+      await fs.writeFile(archive, gzipSync(Buffer.concat([header.block!, Buffer.alloc(1024)])));
+      const destination = path.join(root, `destination-${index}`);
+      await fs.mkdir(destination);
+      await assert.rejects(prepareLegacyArchive(archive, destination, { allowModifiedBackup: true }));
+      assert.deepEqual(await fs.readdir(destination), []);
+    }
+    await fs.writeFile(path.join(source, '.DS_Store'), 'metadata');
+    const duplicate = path.join(root, 'duplicate.tar.gz');
+    await tar.c({ file: duplicate, cwd: source, gzip: true }, ['.DS_Store', '.DS_Store']);
+    const destination = path.join(root, 'duplicate');
+    await fs.mkdir(destination);
+    await assert.rejects(prepareLegacyArchive(duplicate, destination, { allowModifiedBackup: true }), /Duplicate/);
+    assert.deepEqual(await fs.readdir(destination), []);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

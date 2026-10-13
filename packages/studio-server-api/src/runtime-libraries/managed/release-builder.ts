@@ -6,7 +6,10 @@ import type { ChildProcess } from 'node:child_process';
 
 import * as tar from 'tar';
 
-import type { RuntimeLibraryEntry, RuntimeLibraryLogSource } from '../../../../studio-server-shared/runtime-library-types.js';
+import type {
+  RuntimeLibraryEntry,
+  RuntimeLibraryLogSource,
+} from '../../../../studio-server-shared/runtime-library-types.js';
 import { buildChildProcessEnv, execStreaming } from '../../utils/exec.js';
 import { CANCEL_POLL_INTERVAL_MS } from './schema.js';
 
@@ -43,19 +46,17 @@ export async function buildCandidatePackages(
   return candidatePackages;
 }
 
-export async function buildReleaseArtifact(
-  options: {
-    job: { job_id: string };
-    candidatePackages: Record<string, RuntimeLibraryEntry>;
-    jobsRoot: string;
-    appendJobLog: (jobId: string, message: string, source?: RuntimeLibraryLogSource) => Promise<void>;
-    throwIfCancellationRequested: (jobId: string) => Promise<void>;
-    updateJobStatus: (jobId: string, status: 'validating') => Promise<void>;
-    registerRunningProcess: (jobId: string, process: ChildProcess | null) => void;
-    terminateRunningProcess: (jobId: string, reason: string) => void;
-    isCancellationRequested: (jobId: string) => Promise<boolean>;
-  },
-): Promise<{ archiveBuffer: Buffer; archiveSha256: string }> {
+export async function buildReleaseArtifact(options: {
+  job: { job_id: string };
+  candidatePackages: Record<string, RuntimeLibraryEntry>;
+  jobsRoot: string;
+  appendJobLog: (jobId: string, message: string, source?: RuntimeLibraryLogSource) => Promise<void>;
+  throwIfCancellationRequested: (jobId: string) => Promise<void>;
+  updateJobStatus: (jobId: string, status: 'validating') => Promise<void>;
+  registerRunningProcess: (jobId: string, process: ChildProcess | null) => void;
+  terminateRunningProcess: (jobId: string, reason: string) => void;
+  isCancellationRequested: (jobId: string) => Promise<boolean>;
+}): Promise<{ archiveBuffer: Buffer; archiveSha256: string }> {
   const {
     job,
     candidatePackages,
@@ -129,12 +130,15 @@ export async function buildReleaseArtifact(
     }
 
     await appendJobLog(job.job_id, 'Validation passed');
-    await tar.c({
-      cwd: candidateDir,
-      file: archivePath,
-      portable: true,
-      noMtime: true,
-    }, ['.']);
+    await tar.c(
+      {
+        cwd: candidateDir,
+        file: archivePath,
+        portable: true,
+        noMtime: true,
+      },
+      ['.'],
+    );
 
     const archiveBuffer = fs.readFileSync(archivePath);
     const archiveSha256 = createHash('sha256').update(archiveBuffer).digest('hex');
@@ -145,31 +149,44 @@ export async function buildReleaseArtifact(
   }
 }
 
-async function npmInstall(
+export async function npmInstall(
   jobId: string,
   cwd: string,
   appendJobLog: (jobId: string, message: string, source?: RuntimeLibraryLogSource) => Promise<void>,
   registerRunningProcess: (jobId: string, process: ChildProcess | null) => void,
   terminateRunningProcess: (jobId: string, reason: string) => void,
   isCancellationRequested: (jobId: string) => Promise<boolean>,
+  options: { locked?: boolean; ignoreScripts?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<number> {
   return new Promise((resolve) => {
-    const child = execStreaming('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], {
-      cwd,
-      env: buildChildProcessEnv(),
-      timeoutMs: 300_000,
-    });
+    const child = execStreaming(
+      'npm',
+      [
+        options.locked ? 'ci' : 'install',
+        '--omit=dev',
+        '--no-audit',
+        '--no-fund',
+        ...(options.ignoreScripts ? ['--ignore-scripts'] : []),
+      ],
+      {
+        cwd,
+        env: buildChildProcessEnv(options.env),
+        timeoutMs: 300_000,
+      },
+    );
     registerRunningProcess(jobId, child.process);
 
     const cancelPoll = setInterval(() => {
-      void isCancellationRequested(jobId).then((isCancelled) => {
-        if (isCancelled) {
-          void appendJobLog(jobId, 'Cancellation requested; terminating npm install...').catch(() => {});
-          terminateRunningProcess(jobId, 'Cancellation requested by user.');
-        }
-      }).catch((error) => {
-        console.error('[runtime-libraries] Failed to check cancellation during npm install:', error);
-      });
+      void isCancellationRequested(jobId)
+        .then((isCancelled) => {
+          if (isCancelled) {
+            void appendJobLog(jobId, 'Cancellation requested; terminating npm install...').catch(() => {});
+            terminateRunningProcess(jobId, 'Cancellation requested by user.');
+          }
+        })
+        .catch((error) => {
+          console.error('[runtime-libraries] Failed to check cancellation during npm install:', error);
+        });
     }, CANCEL_POLL_INTERVAL_MS);
     cancelPoll.unref?.();
 
@@ -198,7 +215,7 @@ async function npmInstall(
   });
 }
 
-function validateCandidate(candidateDir: string, packages: Record<string, RuntimeLibraryEntry>): string[] {
+export function validateCandidate(candidateDir: string, packages: Record<string, RuntimeLibraryEntry>): string[] {
   const packageNames = Object.keys(packages);
   if (packageNames.length === 0) {
     return [];

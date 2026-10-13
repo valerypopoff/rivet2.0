@@ -104,7 +104,10 @@ export async function startContainerInstallation(
   await checkPort();
   if (config.local) await compose(['up', '-d', '--wait', '--wait-timeout', '180', 'postgres', 'minio']);
   await compose(['run', '--rm', '--no-deps', 'prepare-volumes']);
-  await compose(['run', '--rm', '--no-deps', 'migrate']);
+  // Exit 75 is the private, read-only verified-restore preparation outcome.
+  // Unknown acknowledgements and every other migration failure still block startup.
+  const preparation = await compose(['run', '--rm', '--no-deps', 'migrate'], { acceptedExitCodes: [75] });
+  const restoreRecovery = preparation?.exitCode === 75;
   try {
     await compose(['up', '-d', '--wait', '--wait-timeout', '300', ...applicationServices]);
   } catch (startupError) {
@@ -120,4 +123,5 @@ export async function startContainerInstallation(
     }
     throw startupError;
   }
+  return { restoreRecovery };
 }

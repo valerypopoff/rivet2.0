@@ -639,6 +639,58 @@ test('an occupied browser port blocks before storage initialization or migration
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'stop');
 });
+
+test('only verified restore preparation starts recovery consumers; other migration outcomes stay blocked', async () => {
+  for (const exitCode of [null, undefined, 1, 74, 75, 76]) {
+    const calls = [];
+    const failure = Object.assign(Error('Preparation result; text is not a decision signal'), { exitCode });
+    const startup = startContainerInstallation(
+      { local: true },
+      async (args, options) => {
+        calls.push(args);
+        if (args[0] === 'run' && args.at(-1) === 'migrate') {
+          assert.deepEqual(options.acceptedExitCodes, [75]);
+          if (exitCode === 75) return { exitCode };
+          throw failure;
+        }
+      },
+      async () => {},
+    );
+    if (exitCode === 75) {
+      assert.deepEqual(await startup, { restoreRecovery: true });
+      assert.equal(calls.at(-1)[0], 'up');
+      assert.ok(calls.at(-1).includes('backend'));
+      const message = containerStartupMessage({ port: 8081, uiAuthMode: 'key' }, { restoreRecovery: true });
+      assert.match(message, /8081\/\?restore-legacy-backup/);
+      assert.match(message, /pending restore was retained/);
+      assert.match(message, /no schema migration or settings seeding/);
+    } else {
+      await assert.rejects(startup, (error) => error === failure);
+      assert.equal(calls.at(-1).at(-1), 'migrate');
+    }
+    assert.equal(calls.filter((args) => args.at(-1) === 'migrate').length, 1);
+    assert.ok(calls.every((args) => !args.includes('down') && !args.includes('--volumes')));
+  }
+});
+
+test('failed recovery readiness still drains producers without replaying preparation', async () => {
+  const calls = [];
+  const failure = Error('Recovery consumer failed');
+  await assert.rejects(
+    startContainerInstallation(
+      { local: false },
+      async (args) => {
+        calls.push(args);
+        if (args.at(-1) === 'migrate') return { exitCode: 75 };
+        if (args[0] === 'up') throw failure;
+      },
+      async () => {},
+    ),
+    (error) => error === failure,
+  );
+  assert.equal(calls.at(-1)[0], 'stop');
+  assert.equal(calls.filter((args) => args.at(-1) === 'migrate').length, 1);
+});
 test('real port collisions identify the shared port setting before migration', async () => {
   const server = net.createServer();
   server.listen(0, '127.0.0.1');

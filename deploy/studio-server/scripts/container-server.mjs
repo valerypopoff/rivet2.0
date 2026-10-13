@@ -55,15 +55,17 @@ export function parseContainerArgs(argv) {
   return result;
 }
 
-export function containerStartupMessage(config) {
+export function containerStartupMessage(config, { restoreRecovery = false } = {}) {
   const login =
     config.uiAuthMode === 'oauth'
       ? 'Sign in using your configured OAuth provider. A fresh installation needs key-mode setup of the OAuth provider and administrator emails first.'
       : 'Sign in using the selected tier key or RIVET_KEY in your shared .env.';
-  return `Rivet started: http://127.0.0.1:${config.port}. ${login} Existing data was not imported or deleted.`;
+  return restoreRecovery
+    ? `Rivet restore recovery: http://127.0.0.1:${config.port}/?restore-legacy-backup. ${login} The pending restore was retained. Finish or cancel it in the UI before deployment migration; no schema migration or settings seeding was run.`
+    : `Rivet started: http://127.0.0.1:${config.port}. ${login} Existing data was not imported or deleted.`;
 }
 
-function run(program, args, { capture = false, ...options } = {}) {
+function run(program, args, { capture = false, acceptedExitCodes = [], ...options } = {}) {
   // The shared dotenv is NOT an env_file for serving containers. Only the
   // normalized configuration reaches Docker; never pass host PnP preloads.
   const env = containerProcessEnvironment(process.env);
@@ -84,15 +86,14 @@ function run(program, args, { capture = false, ...options } = {}) {
       stderr += chunk;
     });
     child.on('error', reject);
-    child.on('close', (code) =>
-      code === 0
-        ? resolve({ stdout, stderr })
-        : reject(
-            new Error(
-              `${path.basename(program)} ${args[0]} failed (${code}).${capture ? ' Inspect the installation with Docker; private configuration was not logged.' : ''}`,
-            ),
-          ),
-    );
+    child.on('close', (code) => {
+      if (code === 0 || acceptedExitCodes.includes(code)) return resolve({ stdout, stderr, exitCode: code });
+      const error = new Error(
+        `${path.basename(program)} ${args[0]} failed (${code}).${capture ? ' Inspect the installation with Docker; private configuration was not logged.' : ''}`,
+      );
+      error.exitCode = code;
+      reject(error);
+    });
   });
 }
 
@@ -231,10 +232,10 @@ async function main() {
       pendingPath,
       JSON.stringify({ project: config.project, storageIdentity: containerStorageIdentity(config), digest }),
     );
-    await startContainerInstallation(config, compose);
+    const startup = await startContainerInstallation(config, compose);
     if (manifest) writeContainerState(statePath, JSON.stringify(manifest));
     fs.unlinkSync(pendingPath);
-    console.log(containerStartupMessage(config));
+    console.log(containerStartupMessage(config, startup));
   } finally {
     fs.closeSync(lock);
     fs.unlinkSync(lockPath);

@@ -338,7 +338,7 @@ export function createManagedCompose(config, images, { offline = false, releaseD
     volumes: prepared,
   };
   const migrationSteps = [
-    `node ${apiScriptRoot}/scripts/migrate-managed-workflow-schema.js migrate`,
+    `node ${apiScriptRoot}/scripts/migrate-managed-workflow-schema.js prepare-container-startup`,
     `node ${apiScriptRoot}/scripts/import-managed-app-settings.js`,
     `node ${apiScriptRoot}/scripts/project-managed-app-settings.js`,
   ];

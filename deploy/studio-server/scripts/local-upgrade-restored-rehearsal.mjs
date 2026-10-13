@@ -6,6 +6,7 @@ import { fsync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { legacyServingFixtureEntrypoint } from './lib/legacy-serving-fixture.mjs';
 import {
   BACKUP_DOMAINS,
   scanBackupRoot,
@@ -24,6 +25,19 @@ const mounts = {
   appData: '/data/rivet-app',
   runtimeLibraries: '/data/runtime-libraries',
 };
+
+/** This isolated legacy rehearsal must not invoke the managed production gate.
+ * Reuse the same fixture-only entrypoint as the packaged image rehearsals. */
+export async function restoredLegacyApiMount(directory) {
+  const file = path.join(directory, 'legacy-api-entrypoint.sh');
+  await fs.writeFile(
+    file,
+    legacyServingFixtureEntrypoint(await fs.readFile(new URL('../images/api/entrypoint.sh', import.meta.url), 'utf8')),
+    { flag: 'wx', mode: 0o755 },
+  );
+  await fs.chmod(file, 0o755);
+  return ['--mount', `type=bind,source=${file},target=/opt/rivet/api-entrypoint.sh,readonly`];
+}
 
 export const RESTORED_REHEARSAL_PHASES = Object.freeze([
   'isolated-startup',
@@ -375,6 +389,7 @@ async function main(signal) {
   const name = 'rivet-restored-rehearsal-' + randomUUID();
   const tracker = createRestoredContainerTracker(runDocker, name, docker);
   const common = [
+    ...(await restoredLegacyApiMount(output)),
     '--network',
     'none',
     '--read-only',

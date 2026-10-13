@@ -183,7 +183,11 @@ export async function hashBackupArchive(file: string): Promise<string> {
 /** Restore only into fresh owned scratch. Apply the archive's own permissions
  * after extraction: tar's parent creation and the process umask can otherwise
  * change directory/file modes while processing subsequent entries. */
-export async function restoreBrowserBackupArchive(archive: string, destination: string): Promise<void> {
+export async function restoreBrowserBackupArchive(
+  archive: string,
+  destination: string,
+  { includeEntry }: { includeEntry?: (name: string) => boolean } = {},
+): Promise<void> {
   await realDirectory(destination);
   if ((await fs.readdir(destination)).length) throw new Error('Backup restore requires empty scratch storage.');
   const modes: Array<{ file: string; mode: number; directory: boolean }> = [];
@@ -193,7 +197,9 @@ export async function restoreBrowserBackupArchive(archive: string, destination: 
     file: archive,
     strict: true,
     preservePaths: false,
+    filter: (name) => includeEntry?.(name) ?? true,
     onReadEntry: (entry) => {
+      if (includeEntry && !includeEntry(entry.path)) return;
       if (!['File', 'Directory'].includes(entry.type)) return;
       const file = path.resolve(destination, entry.path);
       const relative = path.relative(destination, file);

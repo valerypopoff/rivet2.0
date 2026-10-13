@@ -31,6 +31,7 @@ import { collectSourceAppSettings } from '../scripts/migrate-app-settings.js';
 import { createSourceArchive } from '../scripts/migrate-runtime-libraries.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
+import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import { SqliteMigrationSource } from '../scripts/sqlite-migration-source.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
 import { readWorkflowMigrationTargetConfig } from '../scripts/migrate-workflow-storage-lib.js';
@@ -72,6 +73,8 @@ import {
   migrationSourceIdentity,
   migrationTargetIdentity,
   verifyVmMigrationTargetGate,
+  beginVmMigrationTarget,
+  bindVmMigrationSourceManifest,
 } from '../vm-migration-target-gate.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -215,6 +218,93 @@ fixture: try {
       await firstOwner.pool.query("INSERT INTO migration_sentinel VALUES('owned')");
     });
     assert.deepEqual((await firstOwner.pool.query('SELECT value FROM migration_sentinel')).rows, [{ value: 'owned' }]);
+    // Reproduce a crashed, accepted restore: its own importer gate is still copying.
+    // Private restart preparation must permit recovery without opening that gate.
+    const recoveryRoots = {
+      workflows: path.join(root, 'recovery/workflows'),
+      appData: path.join(root, 'recovery/appData'),
+      recordings: path.join(root, 'recovery/recordings'),
+      runtimeLibraries: path.join(root, 'recovery/runtimeLibraries'),
+    };
+    const recoveryTarget = readWorkflowMigrationTargetConfig({
+      RIVET_MIGRATION_TARGET_DATABASE_URL: ownershipConfig.connectionString,
+      RIVET_MIGRATION_TARGET_DATABASE_SSL_MODE: 'disable',
+      RIVET_MIGRATION_TARGET_S3_BUCKET: 'fixture',
+      RIVET_MIGRATION_TARGET_S3_ENDPOINT: `http://127.0.0.1:${s3Port}`,
+      RIVET_MIGRATION_TARGET_S3_REGION: 'eu-west-7',
+      RIVET_MIGRATION_TARGET_S3_PREFIX: 'fixture/',
+      RIVET_MIGRATION_TARGET_S3_FORCE_PATH_STYLE: 'true',
+      RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID: 'migration',
+      RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY: 'migrationsecret',
+    });
+    const sourceIdentity = migrationSourceIdentity([
+      recoveryRoots.workflows,
+      recoveryRoots.appData,
+      recoveryRoots.recordings,
+      recoveryRoots.runtimeLibraries,
+    ]);
+    const targetIdentity = migrationTargetIdentity(recoveryTarget);
+    const sourceManifest = 'a'.repeat(64);
+    await beginVmMigrationTarget(firstOwner.pool, sourceIdentity, targetIdentity);
+    await bindVmMigrationSourceManifest(firstOwner.pool, sourceIdentity, targetIdentity, sourceManifest);
+    await migrateManagedWorkflowSchema(firstOwner.pool);
+    const failed = { ...pending, phase: 'failed' as const, destructive: true };
+    await firstOwner.write(failed, { roots: recoveryRoots, sourceManifest });
+    const schemaScript = path.join(
+      repoRoot,
+      'packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js',
+    );
+    const recoveryEnv = {
+      ...process.env,
+      RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
+      RIVET_LEGACY_RESTORE_ENABLED: '1',
+      RIVET_LEGACY_RESTORE_INSTALLATION: 'docker/first',
+      RIVET_APP_SETTINGS_ENCRYPTION_KEY: 'fixture',
+      RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING: ownershipConfig.connectionString,
+      RIVET_DEPLOYMENT_DATABASE_SSL_MODE: 'disable',
+      RIVET_DEPLOYMENT_DATABASE_MODE: 'managed',
+      RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
+      RIVET_DEPLOYMENT_STORAGE_BUCKET: recoveryTarget.objectStorageBucket,
+      RIVET_DEPLOYMENT_STORAGE_PREFIX: recoveryTarget.objectStoragePrefix,
+      RIVET_DEPLOYMENT_STORAGE_ENDPOINT: recoveryTarget.objectStorageEndpoint ?? '',
+      RIVET_DEPLOYMENT_STORAGE_REGION: recoveryTarget.objectStorageRegion,
+      RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE: 'true',
+      RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID: 'migration',
+      RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY: 'migrationsecret',
+    };
+    const prepare = (command: string) => {
+      try {
+        execFileSync(process.execPath, [schemaScript, command], {
+          cwd: repoRoot,
+          env: recoveryEnv,
+          stdio: 'pipe',
+          timeout: 30_000,
+        });
+        return 0;
+      } catch (error) {
+        return (error as { status: number }).status;
+      }
+    };
+    for (const mismatch of ['none', 'unbound', 'source', 'target', 'manifest']) {
+      await firstOwner.pool.query(
+        `UPDATE rivet_vm_migration_gate SET source_identity=$1,target_identity=$2,source_manifest_hash=$3`,
+        [
+          mismatch === 'source' ? 'b'.repeat(64) : sourceIdentity,
+          mismatch === 'target' ? 'b'.repeat(64) : targetIdentity,
+          mismatch === 'unbound' ? null : mismatch === 'manifest' ? 'b'.repeat(64) : sourceManifest,
+        ],
+      );
+      assert.equal(prepare('prepare-container-startup'), ['none', 'unbound'].includes(mismatch) ? 75 : 1);
+      assert.equal(prepare('migrate'), 1);
+      assert.equal((await firstOwner.pool.query('SELECT phase FROM rivet_vm_migration_gate')).rows[0].phase, 'copying');
+      assert.deepEqual(await firstOwner.read(), failed, 'Recovery preparation cannot alter the destructive journal');
+    }
+    await firstOwner.write({ ...failed, destructive: false });
+    assert.equal(
+      prepare('prepare-container-startup'),
+      1,
+      'Non-destructive recovery cannot bypass an incomplete VM import',
+    );
     console.log('Deployment migration: concurrent first-install ownership and unfinished-restore fencing passed.');
   } finally {
     resume();
@@ -316,7 +406,8 @@ fixture: try {
   const evaluationRunId = randomUUID();
   const evaluationDatabase = new DatabaseSync(path.join(appDataRoot, 'evaluation-runs.sqlite'));
   try {
-    const timestamp = Date.parse('2026-09-26T12:00:00.000Z');
+    // PostgreSQL returns started_at as Date; exact verification must retain milliseconds.
+    const timestamp = Date.parse('2026-09-26T12:00:00.887Z');
     evaluationDatabase.prepare('INSERT INTO evaluation_library_imports VALUES (?, ?)').run('fixture-import', timestamp);
     evaluationDatabase
       .prepare('INSERT INTO evaluation_runs VALUES (?, ?, ?, ?, ?, ?)')

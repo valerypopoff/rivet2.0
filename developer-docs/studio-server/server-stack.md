@@ -210,6 +210,31 @@ first installs cannot both pass an empty-owner check. Any unfinished restore
 must complete or be cancelled through its normal UI before upgrading; migration
 does not recover, cancel or overwrite its journal. Serving verification stays
 read-only and does not acquire that coordinator lock.
+
+Container restart preparation uses the private schema command
+`prepare-container-startup`, not an unconditional `migrate`. With no unfinished
+restore it performs the same guarded migration and subsequent settings seeding.
+With an unfinished restore, it verifies ownership and the existing schema under
+the same coordinator lock, performs no DDL/binding/journal writes, and returns
+the private exit status `75`. The Compose shell stops before settings import or
+projection; the launcher recognizes only that verified status and starts the
+selected consumers so the existing restore UI/service can recover. All other
+errors, unknown acknowledgements, foreign ownership and incompatible schemas
+still block startup. Ordinary/Kubernetes migration continues to reject pending
+restores. There is no text-matching fallback and no automatic journal cancellation.
+Recovery startup prints `/?restore-legacy-backup`, retains the archive and journal,
+and keeps the existing service's maintenance/consumer fencing. Failed readiness
+still drains partially started producers without replaying preparation.
+An interrupted destructive restore may have closed the VM-import gate. Recovery
+admits that copying gate only when its source/destination identities and bound
+manifest match the encrypted restore payload (or the same importer has not yet
+bound its manifest). It never opens the gate. Non-destructive restore recovery
+and ordinary migration still reject incomplete VM imports, as do foreign or
+changed-source copying gates.
+
+This avoids stopping the UI and then requiring that unavailable UI to cancel a
+failed validation before every restart. After finishing/cancelling the restore,
+the next ordinary launcher run performs any pending schema/settings preparation.
 The deployment coordinator requires two connections: one holds the owner lease
 while the other checks/binds state. Single-connection serving coordinators reject
 this operation immediately instead of deadlocking their pool.
@@ -275,6 +300,14 @@ identify a database explicitly; both a missing path and `/` fail before startup.
 
 ## Legacy backup restoration
 
+Restore preparation streams project/history bundles with a capacity-selected,
+operation-pinned limit (maximum 128 MiB); normal legacy conversion limits are
+unchanged. Native runtime packages are rebuilt into owned scratch using the
+backup's integrity-pinned npm lock, not copied across platforms or upgraded to
+`latest`. Original and derived fingerprints and the target runtime identity
+remain part of confirmation/retry admission. See
+[runtime preparation and limits](./vm-to-managed-migration.md#target-platform-runtime-preparation).
+
 Open Settings → Storage → Restore legacy backup. Docker and Kubernetes use the
 same importer, table/object ownership checks, durable journal, database writer
 fencing, consumer warmup and authenticated backend-supervisor restart.
@@ -331,6 +364,10 @@ failure, linked-directory rejection, unexpected services, cross-stage/dev adopti
 and migration/restore coordination. The managed PostgreSQL fixture races two
 first-install owners and verifies both foreign-owner and unfinished-restore
 rejection before the migration callback runs.
+The compiled PostgreSQL/MinIO restore fixture also exercises private restart
+preparation at failed validation and awaiting-confirmation checkpoints, checks
+that normal migration remains blocked, and proves the journal/archive identity
+are retained before completing the original and edited-backup restores.
 Migration command generation is an explicit ordered list (local readiness/bucket
 initialization, schema, settings import, settings verification), not a string
 replacement that can silently omit a step when a script path changes.

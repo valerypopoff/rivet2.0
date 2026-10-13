@@ -6,6 +6,15 @@ The dashboard exposes this through `Settings` -> `Runtime libraries`.
 
 ## Ownership and job observation
 
+Legacy-backup restore reuses the managed npm installer in a private preparation
+tree before destructive confirmation. Native releases use the archived npm lock
+to reinstall target-platform optional binaries without running archive/dependency
+scripts or exposing server secrets; portable releases remain byte-preserving.
+The prepared tree is fingerprinted, retained for retries and bound to OS/CPU,
+Node ABI/version and libc identity. See
+[restore preparation](./vm-to-managed-migration.md#target-platform-runtime-preparation)
+for supported lock sources, memory/disk limits and recovery behavior.
+
 `RuntimeLibraryServices` owns one lazily constructed backend. Drain rejects new
 construction but retains an existing backend for accepted work; failed disposal
 keeps that backend fenced and permits cleanup retry. Server composition registers

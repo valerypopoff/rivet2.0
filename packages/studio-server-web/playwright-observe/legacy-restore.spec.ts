@@ -249,6 +249,35 @@ test('Proceed anyway accepts an explicit integrity override and still requires d
   await expect(restore).toBeEnabled();
 });
 
+test('post-override validation failure explains the bundle limit without offering another bypass or deletion', async ({
+  page,
+}) => {
+  await mockHostedEditorBootstrap(page);
+  const message =
+    'A decoded source bundle exceeds the memory safety limit. A workflow bundle includes its datasets and retained publication history. This is separate from the archive upload limit. Source reference: aaaaaaaaaaaaaaaa. Nothing was deleted.';
+  await page.route(isRestoreRoute, (route) =>
+    route.fulfill({
+      json: {
+        available: true,
+        operation: {
+          id: '11111111-1111-4111-8111-111111111111',
+          phase: 'failed',
+          destructive: false,
+          integrityOverridden: true,
+          canProceedAnyway: false,
+          message,
+        },
+      },
+    }),
+  );
+  await openRestoreWorkspace(page);
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel restore', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Proceed anyway', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Restore legacy backup', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Retry restore', exact: true })).toHaveCount(0);
+});
+
 test('validation can be cancelled without starting replacement', async ({ page }) => {
   await mockHostedEditorBootstrap(page);
   let phase = 'validating';
