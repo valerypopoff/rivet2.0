@@ -59,6 +59,11 @@ Diagnostic classification tolerates throwing getters and exposes only validated
 fixed reasons/references. None of these changes bypasses exact source fingerprints
 or destructive confirmation.
 
+The local App Settings candidate-import regression asserts the structured
+`source-invalid-utf8` reason and its safe `settings`/`invalid-data` projection,
+not incidental error-wrapper wording. Malformed source bytes must remain unchanged
+and rejection must occur before even the candidate directory is created.
+
 Operational exact verification compares PostgreSQL timestamp objects directly
 as ISO values, preserving milliseconds. Converting them through `String(Date)`
 would incorrectly reject ordinary Evaluation runs even after a correct import.
