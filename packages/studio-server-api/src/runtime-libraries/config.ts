@@ -5,6 +5,7 @@ import {
 } from '../routes/workflows/storage-config.js';
 import { badRequest } from '../utils/httpError.js';
 import { parseBoolean, parsePositiveInt } from '../utils/env-parsing.js';
+import { isLegacyRestorePaused } from '../legacy-restore/service.js';
 import type {
   RuntimeLibrariesBackendMode,
   RuntimeLibraryProcessRole,
@@ -25,7 +26,8 @@ export const MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX = 'runtime-librarie
 
 const RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_MS';
 const RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_RETENTION_MS';
-const RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS';
+const RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME =
+  'RIVET_RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_MS';
 const RUNTIME_PROCESS_ROLE_ENV_NAME = 'RIVET_RUNTIME_PROCESS_ROLE';
 const RUNTIME_REPLICA_TIER_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_REPLICA_TIER';
 const RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME = 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED';
@@ -48,7 +50,7 @@ function inferRuntimeProcessRole(): RuntimeLibraryProcessRole {
   if (rawExplicitRole) {
     throw badRequest(
       `Invalid configuration value "${rawExplicitRole}" for ${RUNTIME_PROCESS_ROLE_ENV_NAME}. ` +
-      'Expected "api" or "executor".',
+        'Expected "api" or "executor".',
     );
   }
 
@@ -70,7 +72,7 @@ function inferRuntimeReplicaTier(runtimeProcessRole: RuntimeLibraryProcessRole):
   if (rawExplicitTier) {
     throw badRequest(
       `Invalid configuration value "${rawExplicitTier}" for ${RUNTIME_REPLICA_TIER_ENV_NAME}. ` +
-      'Expected "endpoint", "editor", or "none".',
+        'Expected "endpoint", "editor", or "none".',
     );
   }
 
@@ -78,15 +80,11 @@ function inferRuntimeReplicaTier(runtimeProcessRole: RuntimeLibraryProcessRole):
 }
 
 function getDefaultReplicaStatusRetentionMs(databaseMode: ManagedRuntimeLibrariesConfig['databaseMode']): number {
-  return databaseMode === 'local-docker'
-    ? 24 * 60 * 60 * 1_000
-    : 15 * 60 * 1_000;
+  return databaseMode === 'local-docker' ? 24 * 60 * 60 * 1_000 : 15 * 60 * 1_000;
 }
 
 function getDefaultReplicaStatusCleanupIntervalMs(databaseMode: ManagedRuntimeLibrariesConfig['databaseMode']): number {
-  return databaseMode === 'local-docker'
-    ? 15 * 60 * 1_000
-    : 5 * 60 * 1_000;
+  return databaseMode === 'local-docker' ? 15 * 60 * 1_000 : 5 * 60 * 1_000;
 }
 
 function assertNoRetiredEnv(): void {
@@ -100,7 +98,7 @@ function assertNoRetiredEnv(): void {
 
   throw badRequest(
     `Retired environment variable(s) detected: ${activeRetired.join(', ')}. ` +
-    'Use the canonical runtime-library tuning env names.',
+      'Use the canonical runtime-library tuning env names.',
   );
 }
 
@@ -125,10 +123,7 @@ export function getManagedRuntimeLibrariesConfig(): ManagedRuntimeLibrariesConfi
   return {
     ...workflowConfig,
     objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
-    syncPollIntervalMs: parsePositiveInt(
-      readEnv(RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME),
-      5_000,
-    ),
+    syncPollIntervalMs: parsePositiveInt(readEnv(RUNTIME_LIBRARIES_SYNC_POLL_INTERVAL_ENV_NAME), 5_000),
     runtimeProcessRole,
     runtimeReplicaTier: inferRuntimeReplicaTier(runtimeProcessRole),
     replicaStatusRetentionMs,
@@ -136,9 +131,7 @@ export function getManagedRuntimeLibrariesConfig(): ManagedRuntimeLibrariesConfi
       readEnv(RUNTIME_LIBRARIES_REPLICA_STATUS_CLEANUP_INTERVAL_ENV_NAME),
       getDefaultReplicaStatusCleanupIntervalMs(workflowConfig.databaseMode),
     ),
-    jobWorkerEnabled: parseBoolean(
-      readEnv(RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME),
-      true,
-    ),
+    jobWorkerEnabled:
+      !isLegacyRestorePaused() && parseBoolean(readEnv(RUNTIME_LIBRARIES_JOB_WORKER_ENABLED_ENV_NAME), true),
   };
 }

@@ -1,3 +1,4 @@
+{{- if ne .Values.deploymentProfile "single-machine" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,25 +50,7 @@ spec:
 {{ include "rivet.pod.appSettingsProjectionInitContainer" (dict "root" . "resources" .Values.resources.execution) | nindent 8 }}
       {{- end }}
       containers:
-        - name: api
-          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
-          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
-          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
-          ports:
-            - name: api-http
-              containerPort: {{ .Values.service.execution.targetPort }}
-          {{- include "rivet.pod.apiProbes" (dict "root" . "port" "api-http") | nindent 10 }}
-          {{- include "rivet.pod.preStop" . | nindent 10 }}
-          env:
-{{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.execution.targetPort "profile" "execution" "storageBackend" .Values.workflowStorage.backend "replicaTier" "endpoint" "jobWorkerEnabled" "false") | nindent 12 }}
-            - name: RIVET_RUNNER_SLOT_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-          volumeMounts:
-{{ include "rivet.pod.apiVolumeMounts" . | nindent 12 }}
-          resources:
-{{ toYaml .Values.resources.execution | nindent 12 }}
+{{ include "rivet.containers.execution" . | nindent 8 }}
       volumes:
         - name: workspace
           emptyDir:
@@ -88,3 +71,4 @@ spec:
             sizeLimit: {{ .Values.writableVolumeLimits.runtimeLibraries }}
         {{- end }}
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}
+{{- end }}

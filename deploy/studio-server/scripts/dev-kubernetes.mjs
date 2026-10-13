@@ -3,11 +3,15 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { preserveKubernetesContext } from './lib/kubernetes-context.mjs';
+import { assertSingleMachineCluster } from './lib/single-machine-kubernetes.mjs';
 import { withLauncherProgress } from './lib/launcher-progress.mjs';
 import { loadDevEnv } from './lib/dev-env.mjs';
 import { assertNoRetiredEnv } from './lib/docker-launcher-env.mjs';
 import { assertValidPort, ensurePortAvailable } from './lib/docker-launcher.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { assertLocalResources, prepareLocalServices, removeLocalServices } from './lib/local-kubernetes-services.mjs';
 import {
   buildImageRef,
   buildKubernetesLauncherConfig,
@@ -203,7 +207,11 @@ function getChartName() {
 }
 
 function getStatePaths(config) {
-  const baseName = config.release;
+  const scope = createHash('sha256')
+    .update(`${config.context}\0${config.namespace}\0${config.release}`)
+    .digest('hex')
+    .slice(0, 12);
+  const baseName = config.localServices ? `${config.release}-${scope}` : config.release;
   return {
     valuesPath: path.join(stateDir, `${baseName}.values.generated.yaml`),
     statePath: path.join(stateDir, `${baseName}.state.json`),
@@ -312,7 +320,7 @@ async function stopPortForward(config) {
 
 function getAppUrls(config) {
   const baseUrl = `http://127.0.0.1:${config.localPort}`;
-  if (!config.routeConfig.requireUiGateKey) {
+  if (config.localServices || !config.routeConfig.requireUiGateKey) {
     return { baseUrl, browserUrl: baseUrl };
   }
 
@@ -368,6 +376,11 @@ async function assertKubectlContext(kubectlBin, config, env) {
   }
 
   await spawnProgram(kubectlBin, withKubectlContext(config, ['get', 'nodes']), { env });
+  if (config.deploymentProfile === 'single-machine') {
+    await assertSingleMachineCluster(config, (args, options = {}) =>
+      spawnProgram(kubectlBin, withKubectlContext(config, args), { env, ...options }),
+    );
+  }
 }
 
 async function readMinikubeStatus(minikubeBin, config, env) {
@@ -420,7 +433,25 @@ async function ensureMinikubeReady(minikubeBin, config, env, { autoStart = false
   }
 
   console.log(`[${launcherName}] Starting Minikube profile "${profile}"...`);
-  await spawnProgram(minikubeBin, ['-p', profile, 'start'], { env });
+  await withPreservedContext(config, env, () =>
+    spawnProgram(
+      minikubeBin,
+      ['-p', profile, 'start', '--keep-context', ...(config.localServices ? ['--driver=docker', '--cpus=4', '--memory=8192'] : [])],
+      { env },
+    ),
+  );
+}
+
+function withPreservedContext(config, env, operation) {
+  const kubectl = resolveKubectlBin(env);
+  return preserveKubernetesContext(
+    {
+      targetContext: config.context,
+      readContext: () => readCurrentKubectlContext(kubectl, env),
+      restoreContext: (context) => spawnProgram(kubectl, ['config', 'use-context', context], { env, capture: true }),
+    },
+    operation,
+  );
 }
 
 function renderValuesFile(config) {
@@ -436,6 +467,20 @@ async function applySecrets(kubectlBin, config, env) {
     env,
     input: manifest,
   });
+}
+
+function localServicesRunner(kubectlBin, config, env) {
+  return (args, options = {}) => spawnProgram(kubectlBin, withKubectlContext(config, args), { env, ...options });
+}
+
+async function prepareStorage(kubectlBin, config, env) {
+  const run = localServicesRunner(kubectlBin, config, env);
+  if (config.localServices) {
+    console.log(`[${launcherName}] Preparing isolated PostgreSQL and MinIO...`);
+    await prepareLocalServices(config, run, () => applySecrets(kubectlBin, config, env));
+  } else {
+    await applySecrets(kubectlBin, config, env);
+  }
 }
 
 async function buildImages(dockerBin, config, env) {
@@ -497,7 +542,9 @@ async function loadImagesIntoCluster(dockerBin, kubectlBin, config, env) {
     const profile = config.minikubeProfile ?? config.context;
     for (const imageRef of imageRefs) {
       console.log(`[${launcherName}] Loading ${imageRef} into Minikube profile "${profile}"...`);
-      await spawnProgram(minikubeBin, ['-p', profile, 'image', 'load', '--daemon=true', imageRef], { env });
+      await withPreservedContext(config, env, () =>
+        spawnProgram(minikubeBin, ['-p', profile, 'image', 'load', '--daemon=true', imageRef], { env }),
+      );
     }
     return;
   }
@@ -552,6 +599,7 @@ async function helmUpgradeInstall(helmBin, config, valuesPath, env) {
       config.namespace,
       '-f',
       './deploy/studio-server/helm/overlays/local-kubernetes.yaml',
+      ...(config.deploymentProfile === 'single-machine' ? ['-f', './deploy/studio-server/helm/overlays/single-machine.yaml'] : []),
       '-f',
       valuesPath,
       '--wait',
@@ -571,6 +619,7 @@ async function helmTemplate(helmBin, config, valuesPath, env) {
       config.namespace,
       '-f',
       './deploy/studio-server/helm/overlays/local-kubernetes.yaml',
+      ...(config.deploymentProfile === 'single-machine' ? ['-f', './deploy/studio-server/helm/overlays/single-machine.yaml'] : []),
       '-f',
       valuesPath,
     ]),
@@ -638,18 +687,26 @@ async function printLogs(kubectlBin, config, env) {
   );
 }
 
-async function uninstallRelease(helmBin, kubectlBin, config, env) {
-  await spawnProgram(helmBin, withHelmContext(config, ['uninstall', config.release, '-n', config.namespace]), {
-    env,
-    allowFailure: true,
-  });
+async function uninstallRelease(helmBin, kubectlBin, config, env, { eraseData = false } = {}) {
+  const run = localServicesRunner(kubectlBin, config, env);
+  if (config.localServices) await assertLocalResources(config, run, { checkVolumeSettings: false });
   await spawnProgram(
-    kubectlBin,
-    withKubectlContext(config, ['delete', 'namespace', config.namespace, '--ignore-not-found=true']),
-    {
-      env,
-      allowFailure: true,
-    },
+    helmBin,
+    withHelmContext(config, [
+      'uninstall',
+      config.release,
+      '-n',
+      config.namespace,
+      '--ignore-not-found',
+      '--wait',
+      '--timeout',
+      '180s',
+    ]),
+    { env },
+  );
+  if (config.localServices) await removeLocalServices(config, run, { eraseData });
+  console.log(
+    `[${launcherName}] Namespace preserved.${config.localServices && !eraseData ? ' Local PostgreSQL/MinIO data retained; use up to resume or recreate to erase it.' : ''}`,
   );
 }
 
@@ -779,6 +836,7 @@ async function main() {
       await printLogs(kubectlBin, config, effectiveEnv);
       return;
     case 'down':
+      await assertKubectlContext(kubectlBin, config, effectiveEnv);
       await stopPortForward(config);
       await uninstallRelease(helmBin, kubectlBin, config, effectiveEnv);
       removeState(config);
@@ -790,7 +848,7 @@ async function main() {
       await assertKubectlContext(kubectlBin, config, effectiveEnv);
       await loadImagesIntoCluster(dockerBin, kubectlBin, config, effectiveEnv);
       const valuesPath = renderValuesFile(config);
-      await applySecrets(kubectlBin, config, effectiveEnv);
+      await prepareStorage(kubectlBin, config, effectiveEnv);
       try {
         await helmUpgradeInstall(helmBin, config, valuesPath, effectiveEnv);
       } catch (error) {
@@ -802,8 +860,12 @@ async function main() {
       return;
     }
     case 'recreate':
+      if (config.localClusterProvider === 'minikube') {
+        await ensureMinikubeReady(minikubeBin, config, effectiveEnv, { autoStart: true });
+      }
+      await assertKubectlContext(kubectlBin, config, effectiveEnv);
       await stopPortForward(config);
-      await uninstallRelease(helmBin, kubectlBin, config, effectiveEnv);
+      await uninstallRelease(helmBin, kubectlBin, config, effectiveEnv, { eraseData: true });
       removeState(config);
       await buildImages(dockerBin, config, effectiveEnv);
       if (config.localClusterProvider === 'minikube') {
@@ -811,7 +873,7 @@ async function main() {
       }
       await assertKubectlContext(kubectlBin, config, effectiveEnv);
       await loadImagesIntoCluster(dockerBin, kubectlBin, config, effectiveEnv);
-      await applySecrets(kubectlBin, config, effectiveEnv);
+      await prepareStorage(kubectlBin, config, effectiveEnv);
       await helmUpgradeInstall(helmBin, config, renderValuesFile(config), effectiveEnv);
       await startPortForward(kubectlBin, config, effectiveEnv, envFileLabel);
       return;
@@ -822,7 +884,7 @@ async function main() {
       }
       await assertKubectlContext(kubectlBin, config, effectiveEnv);
       await loadImagesIntoCluster(dockerBin, kubectlBin, config, effectiveEnv);
-      await applySecrets(kubectlBin, config, effectiveEnv);
+      await prepareStorage(kubectlBin, config, effectiveEnv);
       await helmUpgradeInstall(helmBin, config, renderValuesFile(config), effectiveEnv);
       await startPortForward(kubectlBin, config, effectiveEnv, envFileLabel);
       return;

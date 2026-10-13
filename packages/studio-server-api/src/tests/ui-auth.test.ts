@@ -291,6 +291,26 @@ test('server UI auth check accepts the Rivet key session in key mode', async () 
   });
 });
 
+test('switching to OAuth rejects a previous key session even when provider setup is incomplete', async () => {
+  await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key', RIVET_ENABLE_DEVELOPMENT_AUTH: 'false' }, async () => {
+    await writeWebAppAuthSettings({ provider: 'external', serverUiAdminEmails: [] });
+    await withUiAuthServer(async (baseUrl) => {
+      const headers = trustedProxyHeaders({ cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` });
+      assert.equal((await fetch(`${baseUrl}/ui-auth/check`, { headers })).status, 204);
+      process.env.RIVET_SERVER_UI_AUTH_MODE = 'oauth';
+      assert.equal((await fetch(`${baseUrl}/ui-auth/check`, { headers })).status, 401);
+      assert.equal((await fetch(`${baseUrl}/api/app-settings/server-ui-session`, { headers })).status, 403);
+      assert.equal((await fetch(`${baseUrl}/migration-test`, { headers })).status, 403);
+      const start = await fetch(`${baseUrl}/ui-auth/oauth/start`, { headers, redirect: 'manual' });
+      assert.equal(start.status, 500);
+      assert.ok(!(start.headers.get('set-cookie') ?? '').includes('rivet_ui_oauth_session='));
+      // An operator can restart in key mode to finish setup without replacing keys or storage.
+      process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
+      assert.equal((await fetch(`${baseUrl}/ui-auth/check`, { headers })).status, 204);
+    });
+  });
+});
+
 test('server UI prompts keep the error message but retry against a clean return path', async () => {
   await withServerUiAuthEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
     await withUiAuthServer(async (baseUrl) => {

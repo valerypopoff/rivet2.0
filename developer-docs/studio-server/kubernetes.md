@@ -1,5 +1,14 @@
 # Kubernetes
 
+PostgreSQL and S3-compatible storage are the supported server stores. Kubernetes
+is optional; single-machine commands use Docker Compose without starting a cluster.
+[Supported Server Stack](./server-stack.md) covers single-machine containers and
+the shared release contract. Release commands require explicit `--context` and
+never change the current kubeconfig context.
+
+For a complete external PostgreSQL/S3 values example and first-install Secret
+commands, see [External storage deployment handoff](./external-storage-deployment.md).
+
 Open managed-mode risks and recommended remediation work are tracked in
 [`kubernetes-managed-mode.md`](./audits/kubernetes-managed-mode.md).
 
@@ -11,11 +20,33 @@ proxy for existing installations and disposable local/release-gate tests. Do
 not switch an existing release to `external` until its replacement gateway is
 ready: Helm will remove the embedded proxy and Ingress during the upgrade.
 
-This repo supports one Kubernetes application topology today:
+The cluster profile uses separate workloads:
 
 - `web`: fixed at `1` in the current endpoint-heavy recommended shape
 - `backend`: singleton with one application container supervising the control API and hosted editor executor as separate Node processes
 - `execution`: scalable
+
+The `single-machine` profile uses one Rivet application StatefulSet pod, with
+the same role containers and service contracts. PostgreSQL/MinIO remain separate
+private dependency pods and schema migration remains a Job. Role containers
+have distinct ports, file-cache subpaths and worker identities. Internal services
+publish not-ready addresses for bootstrap/restore; the gateway waits for aggregate
+pod readiness. See [Supported Server Stack](./server-stack.md) for the two launch
+commands, prerequisites, production `.env` settings and single-pod tradeoffs.
+
+The normal schema-migration Job initializes the small restore-control schema and
+binds it to the Helm namespace/release before serving starts. Existing complete
+control tables are validated without repeating DDL in serving processes. Restore
+requires bootstrap storage to match the authoritative settings; a drifted or
+shared catalog must not be adopted by the restore UI.
+During a long restore, peers wait in fenced standby without stores/writer leases.
+Their maintenance probes keep them alive but do not certify execution readiness;
+completion waits for actual restored-consumer warmup responses. Ordinary traffic
+remains unavailable until the verified generation is restarted normally.
+The editor participant releases its writer lease only after draining, then stays
+fenced through `restarting`/`completed`. It does not signal itself to exit: the API
+requests the co-located supervisor restart. Otherwise an executor exit can race
+the restart acknowledgement and be mistaken for an unexpected child crash.
 
 ### External gateway contract
 
@@ -333,11 +364,124 @@ Current behavior:
 - on Minikube, loads freshly built images with `minikube image load --daemon=true`
 - on Minikube-backed `dev`, `up`, and `recreate`, starts the target Minikube profile automatically when needed
 
-The launcher expects:
+By default the launcher expects:
 
 - external managed Postgres
 - external S3 or S3-compatible storage
 - local renderer inputs named `RIVET_K8S_DATABASE_*` and `RIVET_K8S_STORAGE_*`
+
+### Local PostgreSQL/MinIO and UI backup restoration
+
+No paid providers are required for a managed-storage restore rehearsal. Opt in with
+`RIVET_K8S_LOCAL_MANAGED_SERVICES=true`. The launcher provisions PostgreSQL 16 and
+the same digest-pinned MinIO image used by the managed integration fixtures, with
+ClusterIP Services and separate persistent claims in an owned namespace. Rivet
+still uses `workflowStorage.backend=managed`, `runtimeLibraries.backend=managed`
+and PostgreSQL App Settings: there is no mock backend or alternate importer.
+
+From the repository root in PowerShell:
+
+```powershell
+Copy-Item deploy/studio-server/.env.kubernetes-local.example .env.kubernetes-local
+# Edit this file; choose your local-only passwords/key before the first startup.
+$env:RIVET_ENV_FILE = '.env.kubernetes-local'
+yarn studio-server:setup:k8s-tools
+yarn studio-server:dev:kubernetes-test
+```
+
+The example explicitly selects a separate Minikube profile/context and namespace
+`rivet-restore-local`, and forwards Rivet to `http://127.0.0.1:8090`. Minikube starts
+automatically if needed (4 CPUs/8192 MiB for this profile); Docker and Minikube must
+already be installed. Startup preserves the current kubectl context. Docker Desktop
+Kubernetes is also supported by setting context/provider to `docker-desktop`; enable
+that cluster and allocate sufficient resources first. A default dynamic StorageClass
+is required, or set `RIVET_K8S_LOCAL_STORAGE_CLASS`. This class also applies to the
+chart's restore scratch claim (64 GiB). Claim sizes are capacity requests, not a
+promise that this much disk is available; extraction must fit the actual local disk.
+
+The `.env` owns the local PostgreSQL database/user/password, S3 bucket/region/access
+credentials, UI key, namespace/release, volume sizes/class, and proxy port. Connection
+URLs are derived from the namespaced Services; optional explicit database/endpoint
+URLs must match these Services. The example shows both URLs. PostgreSQL TLS is
+disabled only for this disposable local fixture; MinIO requires path-style S3
+addressing. Neither dependency is exposed on a host port. Do not use `localhost`
+for a dependency from a Rivet pod.
+
+Local mode requires key UI authentication. Open the printed URL, sign in with
+`RIVET_KEY`, then use **Settings → Storage → Restore legacy backup** and upload the
+original archive. Storage connections remain read-only in Kubernetes. Review the
+archive summary and type `RESTORE LEGACY BACKUP`; accepted restore work drains,
+imports, verifies, and restarts automatically. The restore replaces only this
+installation's scoped state. Verify workflows, publication/access, settings and
+UI-defined environment variables, recordings, and supported runtime libraries;
+exercise a safe endpoint and restart to verify persistence. Do not run arbitrary
+restored production graphs without reviewing their external side effects.
+
+Lifecycle and safety:
+
+- `up` resumes built images; `dev` rebuilds without erasing PostgreSQL/MinIO data.
+- `down` uninstalls Rivet and stops the local dependencies, but retains their PVCs
+  and Secrets. It removes the chart's scratch claim; it is not a pause for an active
+  restore. Wait for restoration to finish first.
+- `recreate` deliberately erases only the named, owned local PostgreSQL/MinIO PVCs
+  and Secrets, then rebuilds a fresh rehearsal. It does not delete the namespace,
+  cluster, host directories, or any external storage. A failed uninstall stops cleanup.
+- An existing namespace without the launcher's ownership label is rejected rather
+  than adopted. Resource/Secret ownership is checked before mutation. Changing
+  database credentials, Rivet encryption/auth key, S3 credentials/location, or volume settings
+  on retained data is rejected: keep the original `.env`, or use explicit `recreate`
+  for disposable data. Local state files are scoped by context/namespace/release.
+- Local mode rejects external service URLs and remote cluster providers. Turn the
+  flag off and use a separate installation with the existing external-service
+  variables to rehearse actual managed PostgreSQL/S3. External mode never provisions
+  dependencies, and `down`/`recreate` no longer delete whole namespaces.
+- Local secrets are submitted to Kubernetes over stdin, not written to generated
+  values or dependency manifests. Local mode does not print key-bearing login URLs.
+  `.env` and Kubernetes Secrets still contain sensitive values; keep them private.
+
+Tests: `kubernetes-local-services.test.ts` covers configuration, parsed manifests,
+provisioning order, readiness waits, ownership, credential preservation, and cleanup.
+It is enrolled in the explicit Kubernetes lane. Local emulation verifies Rivet's
+PostgreSQL/S3 API path, chart networking and restoration, not cloud IAM, provider
+durability/failover or AWS-specific storage guarantees.
+
+For an automated browser-level restore against this disposable installation:
+
+```powershell
+$env:RIVET_ENV_FILE = '.env.kubernetes-local'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:8090'
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_LOCAL_KUBERNETES_RESTORE = '1'
+yarn studio-server:ui:observe local-kubernetes-restore.spec.ts
+Remove-Item Env:PLAYWRIGHT_LOCAL_KUBERNETES_RESTORE
+```
+
+This test is destructive to the disposable installation: it creates an ordinary-mode
+Linux v1 legacy archive in a test-owned scratch directory (avoiding Windows mode
+translation and inherited fsGroup setgid bits), uploads it through the UI,
+confirms replacement, waits through supervised
+restart, and checks a workflow/publication fixture plus a restored browser-visible
+environment variable. It checks the local namespace owner and the server's storage
+endpoint/bucket first, refuses a nonlocal URL, and is skipped without explicit opt-in.
+Before recovery it also checks the control pod's local storage bindings; ordinary
+settings routes remain fenced during accepted restore. A failed earlier attempt
+can be explicitly resumed via **Retry restore** as part of this destructive opt-in
+test, then a new fixture is uploaded. Unexpected persistent HTTP failures or failed
+restore phases fail the test; transient proxy/auth-subrequest errors during the
+supervised restart are polled until verified completion.
+It does not certify your actual archive or execute production graphs. Use the manual
+procedure above for your downloaded backup and additional recording/library checks.
+The test checks exact project identity, published endpoint/access metadata, and
+executes only its own empty graph on an execution pod: public access must remain
+404 for the internal-only fixture, while its internal endpoint returns 200.
+
+Restore import uses the backend's explicit `restore` initialization mode: verify the
+existing workflow schema and destination bucket, suppress background tasks, then
+copy data. It must not use the CLI's `copy` mode, which can migrate a fresh schema
+and requires the Kubernetes migration Job's identity/permissions. The live browser
+test and supervised managed regression cover this serving-pod distinction; no RBAC
+or schema-cutover safety check is relaxed.
 
 The local overlay at [deploy/studio-server/helm/overlays/local-kubernetes.yaml](../../deploy/studio-server/helm/overlays/local-kubernetes.yaml) is not a standalone values file. It is meant to be merged with the generated values file from `deploy/studio-server/scripts/dev-kubernetes.mjs`.
 
@@ -371,12 +515,12 @@ remains bounded to two minutes and still requires the durable interrupted event.
 
 The image workflow is path-gated to Studio Server and its Rivet runtime/deployment dependency closure. Repository verification and immutable candidate-image construction start concurrently. Every candidate set must pass the authenticated Compose smoke (`yarn studio-server:verify:candidate-images`), which verifies API/web routing, the key gate, executor WebSocket connectivity, and a published workflow execution through the production proxy.
 
-Relevant pushes to `staging` run that image workflow before a VM trial. The staging path skips the repository-wide Build matrix (including desktop tests and Rust audit) and the disposable managed-Kubernetes Kind gate, but retains Studio Server verification, candidate image smoke, and local-upgrade rehearsal. Kubernetes code is still checked by the Studio Server contract tests; a later `main` release runs the Kind gate when the changed-path classifier requires it. The protected provider/capacity/Evaluation certificates remain manually selectable. Successful staging promotion may update the `staging` alias, but cannot update `latest` or `release-manifest:production`; those are restricted to a current `main` release. Both mutable branch aliases recheck the branch head before promotion, and a superseded staging run fails rather than appearing green without publishing its alias. Deploy the successful run's immutable candidate tag to the VM rather than treating the mutable `staging` alias as an exact release identity. npm and desktop publishing remain on their existing triggers.
+Relevant pushes to `staging` run the image workflow and Studio Server verification. Image releases always retain the disposable managed-Kubernetes Kind gate: Docker and Kubernetes share the managed serving contract, and cluster qualification must not be skipped merely because a push changes application code. Legacy container smoke and local-upgrade rehearsal remain isolated import/export compatibility checks, not managed Docker deployment certification. Protected provider/capacity/Evaluation certificates remain manually selectable. Staging promotion may update only the staging alias; production deployment still requires a promoted production manifest and the canonical release command. Both aliases recheck branch head before promotion. npm and desktop publishing retain their existing triggers.
 If the production release-manifest pointer is missing, a staging run fails with a recovery instruction; only the main release path may repair or bootstrap production lineage.
 
 The managed release and provider gates compare immutable candidate digests with images actually present in the rendered Helm manifest. The combined backend uses the API image for both API and executor processes, so a normal release does not render the standalone executor image. That image remains in the candidate set for rollback; if a predecessor-compatibility pod does render it, its digest must match the candidate exactly.
 
-The disposable Kind gate remains mandatory when Helm, Kubernetes launchers, production Compose/deployment scripts, proxy or image contracts, or the image workflow changes, and for version tags, scheduled runs, and manual dispatches. Ordinary main-branch application changes may promote after repository verification, all four builds, and the Compose smoke without paying the Kind startup cost. Promotion accepts a skipped Kind job only when classification explicitly selected this fast path; a full-path release requires a successful Kind result. Scheduled runs and the `run_managed_kubernetes_disruption` workflow-dispatch input use `yarn studio-server:verify:kubernetes:managed-disruption`; the latter adds controlled proxy rollout, execution-node drain, long web-app WebSocket owner-loss/reconnect, App Settings encryption-key rotation, and PostgreSQL/MinIO outage/recovery checks. GitHub runs schedules only from the default branch. On dependency startup failure, the gate prints the affected pod's phase and waiting reason (for example, `ImagePullBackOff`) before preserving its complete non-secret manifest, event, pod-description, and log artifacts.
+The disposable Kind gate is mandatory for every image release, including staging and ordinary application changes. A skipped or failed gate cannot certify the supported serving stack. Scheduled runs and `run_managed_kubernetes_disruption` still use `yarn studio-server:verify:kubernetes:managed-disruption`, adding controlled proxy rollout, execution-node drain, WebSocket owner-loss/reconnect, App Settings key rotation and PostgreSQL/MinIO outage/recovery. GitHub runs schedules only from the default branch. Dependency startup failures preserve non-secret pod, event and log diagnostics.
 If Helm installation times out, the gate prints a compact workload status before
 deleting the disposable namespace. Download the `managed-kubernetes-release-gate-*`
 workflow artifact and inspect `failure/kubectl-1.log` for events,
@@ -566,6 +710,45 @@ The observe dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=observe` and uploads bot
 The certificate dispatch sets `RIVET_K8S_CAPACITY_GATE_MODE=certify`. Certification requires `requireExecutionMetrics: true`, the `capacity.prometheus` block, and a complete report whose stage names, request totals, outcome totals, and control-canary counts exactly match the declared configuration. A scheduling-edge sample with no execution Pod is retained as evidence but does not require metrics; every sampled live execution Pod must have all three external high-water values as one finite Prometheus vector sample. The gate otherwise fails if a required event/Prometheus sample is unavailable, a stage exceeds its p95 or unexpected-result limit, a control canary fails, recording drops increase beyond the limit, an overload stage never receives visible `429` admission rejection, or a new restart/OOM/eviction occurs after the baseline sample. Both modes require the exact staging acknowledgement and refuse non-staging contexts. On every normal finalization path, the gate writes `capacity-report.json`, including setup, scheduling, Job, and cleanup failures: it records the completed phase, available Pod snapshots and report data, plus cleanup outcome and only a failure class—not a raw exception, request header, PromQL expression, or credential. If writing the local evidence artifact itself fails, the command fails explicitly rather than claiming a certificate. The separate diagnostic logs retain the bounded command context.
 
 This certificate is deliberately not proof of final production sizing. It requires a healthy pre-load execution-Pod baseline with zero active runs, observes at least one active published run, and fails if a baseline Pod disappears; otherwise idle-only or replaced-Pod samples could understate the peak. It records staging execution memory/node-ephemeral observations and optional downstream concurrency, but it does not infer safe limits or provider/tool correctness from one run. Retain the provider charts and JSON report together. Do not change HPA bounds, admission ceilings, Evaluation quotas, placement, or resource limits automatically from one run. First establish a stable staging envelope, then promote explicit values through normal review. The separate hosted-Evaluation certificate probes public traffic while Evaluation work is active; the optional joint dispatch adds the bounded high-concurrency case, but it still needs retained staging evidence before it can support final public-SLO claims.
+
+### UI legacy restore
+
+Managed deployments support **Settings → Storage → Restore legacy backup**;
+see [the restore procedure](vm-to-managed-migration.md#restore-a-downloaded-legacy-backup-into-initialized-kubernetes).
+The chart creates a separate RWO restore-scratch claim rather than changing the
+existing StatefulSet's immutable volumeClaimTemplates. Configure `legacyRestore.size`
+and `storageClassName` for the cluster; only the control backend mounts this claim.
+The scratch claim is not authoritative application storage. Upload/extraction files
+are removed after successful restoration or cancellation, and encrypted preservation
+snapshots are then erased. Unreferenced objects and unknown S3 versions are preserved,
+not interpreted as installation ownership by their prefix.
+Runtime-library migration's intermediate tar also uses this scratch claim rather
+than the small pod `/tmp`; allow space for both extracted data and that artifact.
+Warmup waits for the execution tier when replicas or its HPA are enabled, and for
+the Evaluation tier when hosted Evaluations are enabled. An intentionally zero
+execution tier with HPA disabled must not make restore wait on an empty Service;
+such a restore does not certify later execution-pod startup.
+
+`RIVET_LEGACY_RESTORE_ENABLED`, root, installation identity and supervisor token are
+deployment-owned across Vault dotenv loading. The schema binds operations to the
+namespace/release identity. Restore needs a dedicated application catalog and
+matching bootstrap/effective PostgreSQL location. The chart reserves two additional
+connections per API pod, one extra for the control owner and two for the editor
+participant. Existing default advertised PostgreSQL capacity remains 200.
+Serving API workloads consume the same storage-bootstrap declaration as the
+migration Job (without duplicate environment names); the declaration receives the
+actual runtime profile. Rendering these values only for init/migration containers
+does not enable restore or fence running peers. Role-level render tests require
+enabled/installation settings on every API and readiness URLs only on control.
+Provider grants must allow the control schema and
+conditional deletion of the scoped artifacts. No extra workload-editing RBAC is granted.
+
+All components must run the restore-capable release. During replacement, new pods
+must honor the durable gate before seeding settings or starting background writers.
+The current administrator session stays usable through a control-only API startup;
+private recovery UI is also reachable at `/?restore-legacy-backup`. Existing live
+Kubernetes release/restore qualification is still required; no production namespace
+is mutated by implementation tests.
 
 ### Cross-store backup and restore drill
 
@@ -1398,9 +1581,52 @@ Only the migration Job mounts that claim, read-only. Each JSON domain seeds Post
 
 Do not deploy the production overlay with ad hoc image tags or a raw `helm upgrade`. A successful **Build Images** workflow retains one promoted Studio Server release manifest. It binds the source commit, a canonical digest of the complete Helm chart, managed-workflow schema contract, CI run, the exact OCI digest for proxy, web, API, and executor, and one canonical predecessor release. The production chart retains the promoted manifest's own semantic digest in its release-identity ConfigMap, rejects incomplete identity, and the deployment command rejects a manifest whose chart contents do not match the checked-out chart.
 
-Promoted manifests are published to `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest` under `manifest-<canonical-sha256>` tags. The publisher rejects a tag that does not equal the manifest's semantic digest and refuses to overwrite different content. The `production` retag command first pulls and validates that exact promoted artifact, requires the source and destination to use the same repository, and permits only the `production` destination. The pointer advances only after repository/image gates pass, the candidate's predecessor is rechecked, its immutable manifest artifact is published, and the complete runtime image set is promoted. Treat the content-derived tags as permanent release evidence and exclude them from registry cleanup. The 90-day GitHub Actions artifact is a convenient downloadable copy, not the durable authority.
+Promoted manifests are published to `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest` under `manifest-<canonical-sha256>` tags. The publisher rejects a tag that does not equal the manifest's semantic digest and refuses to overwrite different content. The `production` retag command first pulls and validates that exact promoted artifact, requires the source and destination to use the same repository, and permits only the `production` destination. It retags the acknowledged immutable registry digest, not the source tag: a tag change after validation cannot substitute another artifact. The pointer advances only after repository/image gates pass, the candidate's predecessor is rechecked, its immutable manifest artifact is published, and the complete runtime image set is promoted. Treat the content-derived tags as permanent release evidence and exclude them from registry cleanup. The 90-day GitHub Actions artifact is a convenient downloadable copy, not the durable authority.
 
-Download the manifest from the successful workflow run into this repository, for example as `artifacts/releases/<run-id>/release-manifest.json`, then check out the artifact's exact `source.sha`. Both manifest commands and the deployment command reject paths outside this checkout; the deployment command also rejects a different Git `HEAD`, tracked local modifications, or chart contents, so an operator cannot run an old artifact through newer release tooling by accident. Untracked environment values and generated release diagnostics remain allowed. Keep the environment values file limited to cluster-specific configuration and secret references; do not put `images.*`, `release.*`, or `workflowSchema.compatibility.*` in it.
+For ordinary deployment, `--manifest` is optional. The command pulls
+`ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:production` with Docker,
+resolves this pull's acknowledged registry digest to an immutable local image ID,
+and extracts the manifest with `docker create`/`docker cp` without starting the
+artifact container. A concurrent promotion cannot change that selection. Docker
+and registry access (including `docker login ghcr.io` when required) are needed;
+a production release must already have been promoted by CI, even for a first
+installation. A missing pointer, failed authentication/network request, invalid
+or candidate manifest fails closed: there is no cached or mutable-tag fallback.
+Extraction first copies into a private temporary directory. Only a regular
+manifest file of at most 1 MiB is accepted; symlinks and directories are rejected
+before reading or publishing output. Publication uses exclusive file creation,
+so a concurrently created output is not overwritten or deleted on failure.
+Temporary containers receive unique owned names before creation is dispatched,
+so cleanup can target them even if the create acknowledgement is lost. Their
+anonymous volumes and extraction/selection directories are removed on success/failure.
+Cleanup errors remain visible alongside the original extraction error, including
+Docker transport failures; failed cleanup
+cannot be reported as successful deployment or advance the production pointer.
+
+The command prints the selected `source.sha` and semantic manifest digest. Check
+out that exact commit if it differs from `HEAD`; the launcher never changes Git
+state. Selection, promoted-manifest validation, source/clean-checkout/chart and
+schema/image validation all precede cluster changes, including generated Secrets.
+The same selection and validation apply to `--dry-run`, which does not mutate the
+cluster. Validated evidence is retained as `release-manifest.json` and
+`release-selection.json` under `artifacts/kubernetes-production-release/<release>/`;
+the latter records automatic pointer, registry digest and local image identity,
+or the explicit input path, plus source commit and semantic manifest digest.
+An explicit input pin is not rewritten by selection diagnostics, including Windows
+case aliases. If its filename is `release-selection.json` in the diagnostic
+directory, metadata uses `release-selection-metadata.json` instead.
+
+For a reproducible deployment, supply `--manifest <path>` to pin a previously
+validated release. Explicit manifests bypass registry retrieval entirely and
+remain supported for offline preflight. A downloadable copy is also available
+from the successful Build Images workflow. `--rollback-to` always requires an
+explicit `--manifest` identifying the failed release; the current production
+pointer must never infer it. Both manifest commands and the deployment command
+reject paths outside this checkout; the deployment command also rejects a
+different Git `HEAD`, tracked local modifications, or chart contents. Untracked
+environment values and generated diagnostics remain allowed. Keep environment
+values limited to cluster-specific configuration and secret references; do not
+put `images.*`, `release.*`, or `workflowSchema.compatibility.*` in them.
 
 #### One-time release-lineage cutover
 
@@ -1438,8 +1664,8 @@ First render exactly what would be installed. This changes no cluster state and 
 
 ```bash
 yarn studio-server:kubernetes:release -- \
-  --manifest artifacts/releases/<run-id>/release-manifest.json \
   --values path/to/environment-values.yaml \
+  --context your-context \
   --release rivet \
   --namespace your-namespace \
   --dry-run
@@ -1449,8 +1675,8 @@ After reviewing the generated artifacts, deploy with the explicit release-name c
 
 ```bash
 yarn studio-server:kubernetes:release -- \
-  --manifest artifacts/releases/<run-id>/release-manifest.json \
   --values path/to/environment-values.yaml \
+  --context your-context \
   --release rivet \
   --namespace your-namespace \
   --confirm rivet
@@ -1465,6 +1691,7 @@ yarn studio-server:kubernetes:release -- \
   --manifest artifacts/releases/<failed-run-id>/release-manifest.json \
   --rollback-to artifacts/releases/<previous-run-id>/release-manifest.json \
   --values path/to/environment-values.yaml \
+  --context your-context \
   --release rivet \
   --namespace your-namespace \
   --confirm rivet
@@ -1598,6 +1825,8 @@ yarn studio-server:verify:kubernetes
 
 That command proves:
 
+- automatic/explicit promoted-manifest selection, immutable extraction, fail-closed
+  preflight, cleanup, diagnostic pinning and explicit failed-release rollback rules
 - the local rehearsal values path still renders cleanly
 - the static Kubernetes contract tests still pass
 - the production overlay still lint-renders with concrete image repository overrides

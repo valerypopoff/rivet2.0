@@ -510,6 +510,11 @@ test('Kubernetes restores chart-owned storage values after Vault dotenv loading'
     'RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE',
     'RIVET_APP_SETTINGS_BACKEND',
     'RIVET_APP_DATA_ROOT',
+    'RIVET_LEGACY_RESTORE_ENABLED',
+    'RIVET_LEGACY_RESTORE_INSTALLATION',
+    'RIVET_LEGACY_RESTORE_ROOT',
+    'RIVET_LEGACY_RESTORE_EXECUTION_READY_URL',
+    'RIVET_LEGACY_RESTORE_EVALUATION_READY_URL',
   ]) {
     assert.match(loadEnv, new RegExp(`export ${name}=`));
   }
@@ -1171,6 +1176,7 @@ test('chart validation keeps the supported managed singleton control-plane bound
 
 test('chart budgets PostgreSQL connections against the maximum execution replica count', async () => {
   const renderedChart = await renderLocalKubernetesChartWithOverrides([
+    'postgres.maxConnections=120',
     'autoscaling.execution.enabled=true',
     'autoscaling.execution.minReplicas=2',
     'autoscaling.execution.maxReplicas=4',
@@ -1181,16 +1187,71 @@ test('chart budgets PostgreSQL connections against the maximum execution replica
 
   await assertHelmTemplateFails(
     ['postgres.maxConnections=100', 'autoscaling.execution.enabled=true', 'autoscaling.execution.maxReplicas=10'],
-    /requires 173 connections \(30 reserved \+ 11 API pods \* \(10 pooled \+ 3 LISTEN\)\), but postgres\.maxConnections is 100/,
+    /requires 198 connections \(30 reserved \+ 11 API pods \* \(10 pooled \+ 3 LISTEN\) \+ 25 restore\), but postgres\.maxConnections is 100/,
   );
   await assertHelmTemplateFails(
     ['env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX=99'],
     /configure postgres\.poolMaxPerApiPod instead/,
   );
   await assertHelmTemplateFails(
-    ['autoscaling.execution.enabled=true', 'autoscaling.execution.maxReplicas=4', 'resources.execution.requests.cpu='],
+    [
+      'postgres.maxConnections=120',
+      'autoscaling.execution.enabled=true',
+      'autoscaling.execution.maxReplicas=4',
+      'resources.execution.requests.cpu=',
+    ],
     /resources\.execution\.requests\.cpu is required when execution autoscaling is enabled/,
   );
+});
+
+test('legacy restore owns a separate durable claim and rejects deployment-bound environment overrides', async () => {
+  const enabled = await renderLocalKubernetesChart();
+  const withEvaluations = await renderLocalKubernetesChartWithOverrides([
+    'hostedEvaluations.enabled=true',
+    'replicaCount.evaluation=1',
+  ]);
+  const roles = new Set<string>();
+  for (const resource of deploymentYaml.parseAllDocuments(withEvaluations).map((document) => document.toJS())) {
+    for (const container of resource.spec?.template?.spec.containers ?? []) {
+      const env = new Map(container.env?.map((entry) => [entry.name, entry.value]));
+      const profile = env.get('RIVET_API_PROFILE');
+      if (!profile) continue;
+      roles.add(profile);
+      assert.equal(env.size, container.env?.length, `${profile} must not have duplicate environment names`);
+      assert.equal(env.get('RIVET_LEGACY_RESTORE_ENABLED'), '1', `${profile} must participate in restore`);
+      assert.equal(env.get('RIVET_LEGACY_RESTORE_INSTALLATION'), 'default/rivet');
+      assert.equal(env.get('RIVET_DEPLOYMENT_STORAGE_BUCKET'), 'test-bucket');
+      assert.equal(env.has('RIVET_LEGACY_RESTORE_EXECUTION_READY_URL'), profile === 'control');
+      assert.equal(env.has('RIVET_LEGACY_RESTORE_EVALUATION_READY_URL'), profile === 'control');
+    }
+  }
+  assert.deepEqual([...roles].sort(), ['control', 'evaluation', 'execution']);
+  assert.match(enabled, /kind: PersistentVolumeClaim[\s\S]*?name: rivet-rivet-legacy-restore/);
+  assert.match(enabled, /mountPath: \/data\/rivet-restore/);
+  const stateful = readRepoFile('deploy/studio-server/helm/templates/backend-statefulset.yaml');
+  assert.doesNotMatch(
+    stateful,
+    /volumeClaimTemplates:[\s\S]*?legacy-restore/,
+    'an upgrade must not change immutable StatefulSet claim templates',
+  );
+  const disabled = await renderLocalKubernetesChartWithOverrides(['legacyRestore.enabled=false']);
+  assert.doesNotMatch(disabled, /mountPath: \/data\/rivet-restore/);
+  const withoutExecution = await renderLocalKubernetesChartWithOverrides([
+    'replicaCount.execution=0',
+    'autoscaling.execution.enabled=false',
+  ]);
+  assert.doesNotMatch(withoutExecution, /name: RIVET_LEGACY_RESTORE_EXECUTION_READY_URL/);
+  const autoscaledExecution = await renderLocalKubernetesChartWithOverrides([
+    'replicaCount.execution=0',
+    'autoscaling.execution.enabled=true',
+    'autoscaling.execution.maxReplicas=2',
+  ]);
+  assert.match(autoscaledExecution, /name: RIVET_LEGACY_RESTORE_EXECUTION_READY_URL/);
+  await assertHelmTemplateFails(
+    ['env.RIVET_LEGACY_RESTORE_ROOT=/unrelated'],
+    /is chart-owned; configure legacyRestore instead/,
+  );
+  await assertHelmTemplateFails(['legacyRestore.size=0Gi'], /must be a positive Kubernetes storage quantity/);
 });
 
 test('chart renders profile-aware probes, graceful lifecycle, and replicated-tier availability policies', async () => {
@@ -1376,28 +1437,27 @@ test('local Kubernetes overlay keeps the backend singleton while scaling endpoin
   assert.doesNotMatch(localOverlay, /RIVET_WEB_APPS_AUTH_MODE|OAUTH_CLIENT_SECRET|OAUTH_AUTHORIZE_URL/);
 });
 
-test('self-contained Minikube dependencies stay isolated and match the local launcher contract', () => {
-  const dependencies = readRepoFile('deploy/studio-server/kubernetes-test/local-dependencies.yaml');
-  const environment = readRepoFile('deploy/studio-server/.env.kubernetes-local.example');
-
-  assert.match(dependencies, /kind: Namespace\s*\nmetadata:\s*\n  name: rivet-local/);
-  assert.match(dependencies, /name: rivet-local-postgres/);
-  assert.match(dependencies, /image: postgres:16\.8-alpine/);
-  assert.match(dependencies, /name: rivet-local-minio/);
-  assert.match(
-    dependencies,
-    /image: alpine\/minio:RELEASE\.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4/,
+test('the checked-in local environment provisions managed services with authenticated restore access', async () => {
+  const configModule = await import(
+    new URL('../../../../deploy/studio-server/scripts/lib/kubernetes-launcher-config.mjs', import.meta.url).href
   );
-  assert.doesNotMatch(dependencies, /quay\.io\/minio|kind: Job/);
-  assert.match(dependencies, /runAsUser: 0/);
-  assert.match(dependencies, /storage: 2Gi/);
-  assert.doesNotMatch(dependencies, /example\.invalid|ghcr\.io|digitaloceanspaces\.com/);
-
-  assert.match(environment, /RIVET_K8S_CONTEXT=rivet-local/);
-  assert.match(environment, /RIVET_K8S_NAMESPACE=rivet-local/);
-  assert.match(environment, /rivet-local-postgres\.rivet-local\.svc\.cluster\.local/);
-  assert.match(environment, /rivet-local-minio\.rivet-local\.svc\.cluster\.local/);
-  assert.match(environment, /RIVET_K8S_DATABASE_SSL_MODE=disable/);
+  const envModule = await import(new URL('../../../../deploy/studio-server/scripts/lib/env.mjs', import.meta.url).href);
+  const services = await import(
+    new URL('../../../../deploy/studio-server/scripts/lib/local-kubernetes-services.mjs', import.meta.url).href
+  );
+  const config = configModule.buildKubernetesLauncherConfig(
+    envModule.parseEnvFile(path.join(repoRoot, 'deploy/studio-server/.env.kubernetes-local.example')),
+  );
+  assert.ok(config.localServices);
+  assert.equal(config.context, config.minikubeProfile);
+  assert.equal(config.routeConfig.serverUiAuthMode, 'key');
+  assert.equal(config.databaseSslMode, 'disable');
+  assert.equal(config.objectStorage.forcePathStyle, true);
+  assert.ok(config.databaseConnectionString.includes(`.${config.namespace}.svc.${config.clusterDomain}`));
+  assert.ok(config.objectStorage.endpoint.includes(`.${config.namespace}.svc.${config.clusterDomain}`));
+  const resources = services.localDependencyResources(config);
+  assert.equal(resources.filter((resource: any) => resource.kind === 'PersistentVolumeClaim').length, 2);
+  assert.ok(resources.every((resource: any) => resource.metadata.namespace === config.namespace));
 });
 
 test('local Kubernetes launcher builds every image from the monorepo root', () => {
@@ -1459,7 +1519,7 @@ test('chart forwards arbitrary runtime credentials without a provider-specific t
     'only the combined backend and execution API should receive arbitrary runtime credentials',
   );
   assert.match(
-    readRepoFile('deploy/studio-server/helm/templates/proxy-deployment.yaml'),
+    readRepoFile('deploy/studio-server/helm/templates/_containers-proxy.tpl'),
     /include "rivet\.env\.proxyValues"/,
   );
   assert.match(

@@ -4,6 +4,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { parseEnvFile } from './lib/env.mjs';
+import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
+import { productionEnvironment, prepareProductionSecrets } from './lib/server-launch-mode.mjs';
+import { renderKubernetesLauncherValuesYaml } from './lib/kubernetes-launcher-config.mjs';
+import { pullReleaseManifestArtifact, PRODUCTION_RELEASE_MANIFEST_REFERENCE } from './release-manifest-oci.mjs';
 
 import {
   assertReleaseManifestMatchesCurrentChart,
@@ -39,9 +44,13 @@ const supportedOptions = new Set([
   '--artifacts',
   '--maintenance-cutover',
   '--resume-cutover',
+  '--single-machine',
+  '--env-file',
+  '--context',
 ]);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  if (argv[0] === '--') argv = argv.slice(1);
   const options = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
@@ -54,7 +63,7 @@ function parseArgs(argv) {
     if (options.has(key)) {
       throw new Error(`${key} may only be supplied once`);
     }
-    if (key === '--dry-run' || key === '--maintenance-cutover') {
+    if (key === '--dry-run' || key === '--maintenance-cutover' || key === '--single-machine') {
       options.set(key, true);
       continue;
     }
@@ -109,7 +118,7 @@ async function readManifest(manifestPath, { requirePromoted = false } = {}) {
   }
 }
 
-async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
+export async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
   let result;
   try {
     result = await run('git', ['rev-parse', '--verify', 'HEAD'], { capture: true });
@@ -121,7 +130,7 @@ async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
   return assertReleaseManifestMatchesCurrentSource(manifest, result.stdout.trim());
 }
 
-async function assertCleanTrackedCheckout() {
+export async function assertCleanTrackedCheckout() {
   const checks = [
     {
       label: 'unstaged tracked changes',
@@ -159,6 +168,12 @@ function commandLine(program, args) {
 }
 
 async function run(program, args, { capture = false, allowFailure = false, input } = {}) {
+  // Pin every operation, including diagnostics and maintenance cutover, to the
+  // selected context. Never change the operator's current kubeconfig context.
+  const context = selectedContext;
+  if (context && (program === selectedKubectl || program === selectedHelm)) {
+    args = [program === selectedHelm ? '--kube-context' : '--context', context, ...args];
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       cwd: rootDir,
@@ -206,9 +221,85 @@ async function run(program, args, { capture = false, allowFailure = false, input
   });
 }
 
+let selectedContext;
+let selectedKubectl;
+let selectedHelm;
+
 async function writeArtifact(artifactsDir, fileName, contents) {
   await fs.mkdir(artifactsDir, { recursive: true });
   await fs.writeFile(path.join(artifactsDir, fileName), contents, 'utf8');
+}
+
+/** Release selection is a preflight-only boundary: it has no cluster mutation capabilities. */
+export async function resolveDeploymentRelease(
+  options,
+  artifactsDir,
+  {
+    pullArtifact = pullReleaseManifestArtifact,
+    verifyCheckout = assertReleaseManifestMatchesCurrentCheckout,
+    verifyClean = assertCleanTrackedCheckout,
+  } = {},
+) {
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
+  const rollbackManifestPath = options.has('--rollback-to')
+    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
+    : null;
+  let temporaryDirectory;
+  try {
+    let manifest;
+    let identity;
+    const manifestPath = options.has('--manifest')
+      ? insideRepository(required(options, '--manifest'), '--manifest')
+      : path.join(artifactsDir, 'release-manifest.json');
+    if (options.has('--manifest')) {
+      manifest = await readManifest(manifestPath, { requirePromoted: true });
+      identity = { mode: 'explicit', path: path.relative(rootDir, manifestPath) };
+    } else {
+      await fs.mkdir(artifactsDir, { recursive: true });
+      temporaryDirectory = await fs.mkdtemp(path.join(artifactsDir, '.manifest-selection-'));
+      const artifact = await pullArtifact(
+        PRODUCTION_RELEASE_MANIFEST_REFERENCE,
+        path.join(temporaryDirectory, 'manifest.json'),
+      );
+      manifest = assertStudioServerReleaseManifest(artifact.manifest, { requirePromoted: true });
+      identity = { mode: 'production', ...artifact.identity };
+    }
+    const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    console.log(`[${runnerName}] Selected source commit ${manifest.source.sha}; manifest digest ${manifestDigest}.`);
+    await verifyCheckout(manifest);
+    await verifyClean();
+    assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
+    const generatedValues = rollbackManifestPath
+      ? createForwardRollbackHelmValues({
+          failedRelease: manifest,
+          rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
+        })
+      : createProductionHelmValues(manifest);
+    // An explicit pin may itself be the retained diagnostic file. Do not rewrite it.
+    const inputIsArtifact = (fileName) =>
+      options.has('--manifest') && path.relative(manifestPath, path.join(artifactsDir, fileName)) === '';
+    if (!inputIsArtifact('release-manifest.json'))
+      await writeArtifact(artifactsDir, 'release-manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeArtifact(
+      artifactsDir,
+      inputIsArtifact('release-selection.json') ? 'release-selection-metadata.json' : 'release-selection.json',
+      `${JSON.stringify(
+        {
+          ...identity,
+          sourceSha: manifest.source.sha,
+          manifestDigest,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return { manifest, manifestPath, rollbackManifestPath, generatedValues };
+  } finally {
+    if (temporaryDirectory) await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 async function captureHelmDiagnostics(helmBin, release, namespace, artifactsDir) {
@@ -248,11 +339,27 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const release = dnsLabel(required(options, '--release'), '--release');
   const namespace = dnsLabel(required(options, '--namespace'), '--namespace');
-  const manifestPath = insideRepository(required(options, '--manifest'), '--manifest');
-  const valuesPath = insideRepository(required(options, '--values'), '--values');
-  const rollbackManifestPath = options.has('--rollback-to')
-    ? insideRepository(required(options, '--rollback-to'), '--rollback-to')
+  if (options.has('--rollback-to') && !options.has('--manifest'))
+    throw new Error(
+      '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
+    );
+  const singleMachine = options.get('--single-machine') === true;
+  if (options.has('--env-file') && options.has('--values'))
+    throw new Error('Use either --env-file or --values, not both.');
+  if (singleMachine && options.has('--values')) throw new Error('--single-machine uses --env-file, not --values.');
+  selectedContext = required(options, '--context');
+  const valuesPath = options.has('--env-file')
+    ? insideRepository(required(options, '--env-file'), '--env-file')
+    : insideRepository(required(options, '--values'), '--values');
+  if (options.has('--env-file') && !(await fs.lstat(valuesPath)).isFile())
+    throw new Error('--env-file must be a regular file, not a symlink.');
+  const localConfig = singleMachine
+    ? singleMachineConfig(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
     : null;
+  const productionConfig =
+    !singleMachine && options.has('--env-file')
+      ? productionEnvironment(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
+      : null;
   const dryRun = options.get('--dry-run') === true;
   const timeout = duration(options.get('--timeout') ?? '15m');
   const artifactsDir = insideRepository(
@@ -267,16 +374,10 @@ async function main() {
   // A forward rollback is still a production operation. Its failed release
   // must have passed the same CI gates as an ordinary deployment; only the
   // image set and migration-Job behavior differ.
-  const manifest = await readManifest(manifestPath, { requirePromoted: true });
-  await assertReleaseManifestMatchesCurrentCheckout(manifest);
-  await assertCleanTrackedCheckout();
-  assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
-  const generatedValues = rollbackManifestPath
-    ? createForwardRollbackHelmValues({
-        failedRelease: manifest,
-        rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
-      })
-    : createProductionHelmValues(manifest);
+  const { manifest, manifestPath, rollbackManifestPath, generatedValues } = await resolveDeploymentRelease(
+    options,
+    artifactsDir,
+  );
   let generatedValuesDir;
   try {
     generatedValuesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-production-release-'));
@@ -284,7 +385,25 @@ async function main() {
     await fs.writeFile(generatedValuesPath, `${JSON.stringify(generatedValues, null, 2)}\n`, 'utf8');
 
     const helmBin = resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName: runnerName });
-    const valueArgs = ['--values', productionOverlayPath, '--values', valuesPath, '--values', generatedValuesPath];
+    selectedHelm = helmBin;
+    let effectiveValuesPath = valuesPath;
+    if (localConfig) {
+      effectiveValuesPath = path.join(generatedValuesDir, 'single-machine.yaml');
+      await fs.writeFile(effectiveValuesPath, singleMachineValues(localConfig), { mode: 0o600 });
+    }
+    if (productionConfig) {
+      effectiveValuesPath = path.join(generatedValuesDir, 'production-environment.yaml');
+      await fs.writeFile(effectiveValuesPath, renderKubernetesLauncherValuesYaml(productionConfig), { mode: 0o600 });
+    }
+    const valueArgs = [
+      '--values',
+      productionOverlayPath,
+      ...(localConfig ? ['--values', path.join(chartPath, 'overlays/single-machine.yaml')] : []),
+      '--values',
+      effectiveValuesPath,
+      '--values',
+      generatedValuesPath,
+    ];
     const record = createOperationRecord({
       release,
       namespace,
@@ -307,6 +426,9 @@ async function main() {
       return;
     }
 
+    selectedKubectl = findExecutableOnPath(process.env.RIVET_K8S_KUBECTL_BIN ?? 'kubectl');
+    if (!selectedKubectl) throw new Error('kubectl is required to inspect release ownership.');
+
     await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
     const installedResult = await run(
       helmBin,
@@ -323,7 +445,7 @@ async function main() {
           ).stdout,
         )
       : null;
-    const kubectl = findExecutableOnPath(process.env.RIVET_K8S_KUBECTL_BIN ?? 'kubectl');
+    const kubectl = selectedKubectl;
     if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
     const journalName = `${release.slice(0, 32)}-${createHash('sha256').update(release).digest('hex').slice(0, 8)}-cutover`;
     const savedJournal = await run(
@@ -371,6 +493,16 @@ async function main() {
       throw new Error('Maintenance cutover cannot be combined with forward rollback.');
     if (cutover && !exists)
       throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
+    if (localConfig) {
+      await prepareSingleMachine(localConfig, (args, extra = {}) =>
+        run(selectedKubectl, args, { capture: true, ...extra }),
+      );
+    }
+    if (productionConfig) {
+      await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
+        run(selectedKubectl, args, { capture: true, ...extra }),
+      );
+    }
     const upgrade = (extra = []) =>
       run(helmBin, [
         'upgrade',
@@ -520,7 +652,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`[${runnerName}] ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(`[${runnerName}] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

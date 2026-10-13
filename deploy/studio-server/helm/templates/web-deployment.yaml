@@ -1,3 +1,4 @@
+{{- if ne .Values.deploymentProfile "single-machine" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,47 +34,9 @@ spec:
       securityContext:
         fsGroup: 10001
       containers:
-        - name: web
-          image: {{ include "rivet.image" (dict "root" . "image" .Values.images.web) }}
-          imagePullPolicy: {{ .Values.images.web.pullPolicy }}
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: {{ .Values.tmpVolume.enabled }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.service.web.targetPort }}
-          startupProbe:
-            httpGet:
-              path: /
-              port: http
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 60
-          livenessProbe:
-            httpGet:
-              path: /
-              port: http
-            periodSeconds: 20
-            timeoutSeconds: 2
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /
-              port: http
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 2
-          {{- include "rivet.pod.preStop" . | nindent 10 }}
-          {{- if .Values.tmpVolume.enabled }}
-          volumeMounts:
-{{ include "rivet.pod.tmpVolumeMount" . | nindent 12 }}
-          {{- end }}
-          resources:
-{{ toYaml .Values.resources.web | nindent 12 }}
+{{ include "rivet.containers.web" . | nindent 8 }}
       {{- if .Values.tmpVolume.enabled }}
       volumes:
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}
       {{- end }}
+{{- end }}

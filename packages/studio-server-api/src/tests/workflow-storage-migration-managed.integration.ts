@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mock } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -33,6 +34,22 @@ import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 import { SqliteMigrationSource } from '../scripts/sqlite-migration-source.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
 import { readWorkflowMigrationTargetConfig } from '../scripts/migrate-workflow-storage-lib.js';
+import { prepareLegacyRestoreSource, importLegacyRestoreSource } from '../scripts/migrate-workflow-storage.js';
+import { captureRestoreObjects, clearRestoreObjects, clearRestoreTables } from '../legacy-restore/scope.js';
+import { LegacyRestoreControl, acquireRestoreServingLease } from '../legacy-restore/control.js';
+import { resetWorkflowRecordingDatabaseForTests } from '../routes/workflows/recordings-db.js';
+import { S3Client, PutObjectCommand, GetObjectCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
+import express from 'express';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { createReadStream } from 'node:fs';
+import { LegacyRestoreService, setLegacyRestoreService, setLegacyRestorePaused } from '../legacy-restore/service.js';
+import { legacyRestoreRouter } from '../legacy-restore/router.js';
+import { installRestoreSettings, configureAppSettingsBackendForTests } from '../app-settings/settings-repository.js';
+import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
+import { createBrowserBackupArchive, browserBackupDirectory } from '../local-metadata/browser-backup.js';
+import { fingerprintVmMigrationSource } from '../scripts/vm-migration-source-manifest.js';
+import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed/blob-store.js';
 import {
   leaveVmMigrationMode,
   reviewVmMigrationDeployment,
@@ -94,7 +111,7 @@ const classifierHealthEntry = {
 };
 let pool: Pool | undefined;
 
-try {
+fixture: try {
   const launch = (port: number, ...args: string[]) => {
     const id = docker('run', '-d', '--name', `rivet-migration-${randomUUID()}`, '-p', `127.0.0.1::${port}`, ...args);
     owned.push(id);
@@ -138,6 +155,72 @@ try {
       if (Date.now() >= deadline) throw error;
       await delay(100);
     }
+  }
+
+  // Two launchers aimed at one fresh catalog must not both pass the empty-owner
+  // preflight and apply DDL before a deployment binding becomes durable.
+  await pool.query('CREATE DATABASE rivet_migration_ownership');
+  const ownershipConfig = { connectionString: databaseUrl.replace(/rivet_migration$/, 'rivet_migration_ownership') };
+  const firstOwner = new LegacyRestoreControl(ownershipConfig, 'fixture');
+  const competingOwner = new LegacyRestoreControl(ownershipConfig, 'fixture');
+  let entered!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let resume!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  try {
+    const first = firstOwner.withDeploymentMigration('docker/first', async () => {
+      await firstOwner.pool.query('CREATE TABLE migration_sentinel(value TEXT)');
+      entered();
+      await blocked;
+    });
+    await Promise.race([preparing, first]); // Surface setup failure instead of waiting forever for callback entry.
+    try {
+      await assert.rejects(
+        competingOwner.withDeploymentMigration('docker/second', async () => {
+          throw Error('Foreign migration callback must not run');
+        }),
+        /Another restore owner/,
+      );
+    } finally {
+      resume();
+    }
+    await first;
+    await assert.rejects(
+      competingOwner.withDeploymentMigration('docker/second', async () => {
+        throw Error('Foreign migration callback must not run');
+      }),
+      /different Rivet deployment/,
+    );
+    const pending = {
+      id: randomUUID(),
+      phase: 'awaiting-confirmation' as const,
+      destructive: false,
+      createdAt: new Date().toISOString(),
+      bytes: 0,
+      message: 'Fixture restore',
+    };
+    await firstOwner.write(pending, {});
+    await assert.rejects(
+      firstOwner.withDeploymentMigration('docker/first', async () => {
+        throw Error('Migration during restore must not run');
+      }),
+      /Finish or cancel/,
+    );
+    await firstOwner.write({ ...pending, phase: 'cancelled' });
+    await firstOwner.withDeploymentMigration('docker/first', async () => {
+      await firstOwner.pool.query("INSERT INTO migration_sentinel VALUES('owned')");
+    });
+    assert.deepEqual((await firstOwner.pool.query('SELECT value FROM migration_sentinel')).rows, [{ value: 'owned' }]);
+    console.log('Deployment migration: concurrent first-install ownership and unfinished-restore fencing passed.');
+  } finally {
+    resume();
+    await firstOwner.dispose();
+    await competingOwner.dispose();
+    await pool.query('DROP DATABASE rivet_migration_ownership');
   }
 
   const workflowsRoot = path.join(root, 'workflows');
@@ -419,6 +502,59 @@ try {
       { cwd: repoRoot, env: { ...env, ...overrides }, encoding: 'utf8', timeout: 180_000 },
     );
 
+  // The same fixture/owners, without unrelated migration negative cases, for fast restore-specific feedback.
+  // CI's default command still runs all cases and the supervised restore below.
+  if (process.argv.includes('--supervised-restore-only')) {
+    run('migrate');
+    run('verify');
+    const target = readWorkflowMigrationTargetConfig(env);
+    const installation = `fixture:${path.basename(root)}`;
+    const coordinator = new LegacyRestoreControl(getManagedDbPoolConfig(target), destination.settingsEncryptionKey);
+    try {
+      await coordinator.initialize(installation);
+    } finally {
+      await coordinator.dispose();
+    }
+    const control = path.join(root, 'supervised-backup');
+    await fs.mkdir(control);
+    const source = {
+      workflows: workflowsRoot,
+      recordings: recordingsRoot,
+      appData: appDataRoot,
+      runtimeLibraries: runtimeRoot,
+    };
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    await createBrowserBackupArchive({
+      control,
+      source,
+      assertFrozen: async () => {},
+      state: {
+        id,
+        revision: 1,
+        pausedAt: createdAt,
+        phase: 'creating',
+        archiveHash: null,
+        bytes: 0,
+        createdAt,
+        sourceFingerprint: await fingerprintVmMigrationSource(source),
+      },
+    });
+    const { verifySupervisedLegacyRestore } = await import(
+      pathToFileURL(path.join(repoRoot, 'packages/studio-server-api/src/tests/helpers/supervised-legacy-restore.mjs'))
+        .href
+    );
+    await verifySupervisedLegacyRestore({
+      repoRoot,
+      root,
+      target,
+      archive: path.join(browserBackupDirectory(control, id), 'backup.tar.gz'),
+      secret: destination.settingsEncryptionKey,
+      installation,
+    });
+    break fixture;
+  }
+
   const previousAppDataRoot = process.env.RIVET_APP_DATA_ROOT;
   const previousEditorControl = process.env.RIVET_VM_MIGRATION_EDITOR_CONTROL;
   const previousUiAuthMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
@@ -518,6 +654,76 @@ try {
   await assert.rejects(() => assertVmMigrationTargetMayServe(pool!), /migration target is incomplete/i);
   run('migrate'); // A second copy must accept exact existing state.
   run('verify');
+  // Destructive restore runs only against this harness's disposable DB/bucket.
+  // Unrelated sentinels deliberately live in the SAME database and workflow prefix.
+  {
+    const target = readWorkflowMigrationTargetConfig(env);
+    const restoreControl = new LegacyRestoreControl(
+      getManagedDbPoolConfig(target),
+      env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+    );
+    await restoreControl.initialize(`fixture:${path.basename(root)}`);
+    await assert.rejects(restoreControl.assertDeployment('another-installation'), /different Rivet deployment/);
+    const owner = await restoreControl.lock();
+    const servingPool = new Pool(getManagedDbPoolConfig(target));
+    const release = await acquireRestoreServingLease(servingPool);
+    assert.equal(await restoreControl.exclusive(owner), false, 'live writer lease must prevent replacement');
+    await release();
+    await servingPool.end();
+    assert.equal(await restoreControl.exclusive(owner), true);
+    const s3 = new S3Client(createManagedWorkflowS3ClientConfig(target));
+    const sentinel = target.objectStoragePrefix + 'unrelated/sentinel.txt';
+    await s3.send(
+      new PutObjectCommand({ Bucket: target.objectStorageBucket, Key: sentinel, Body: 'keep outside Rivet ownership' }),
+    );
+    await pool!.query(
+      "CREATE TABLE unrelated_restore_sentinel(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO unrelated_restore_sentinel VALUES(1,'keep')",
+    );
+    const names = ['RIVET_APP_DATA_ROOT', 'RIVET_WORKFLOWS_ROOT', 'RIVET_WORKFLOW_RECORDINGS_ROOT'];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    Object.assign(process.env, {
+      RIVET_APP_DATA_ROOT: appDataRoot,
+      RIVET_WORKFLOWS_ROOT: workflowsRoot,
+      RIVET_WORKFLOW_RECORDINGS_ROOT: recordingsRoot,
+    });
+    try {
+      const roots = {
+        workflows: workflowsRoot,
+        appData: appDataRoot,
+        recordings: recordingsRoot,
+        runtimeLibraries: runtimeRoot,
+      };
+      const prepared = await prepareLegacyRestoreSource(roots, target);
+      const objects = await captureRestoreObjects(pool!, target);
+      assert.equal(
+        objects.some((object) => object.key === sentinel),
+        false,
+      );
+      await clearRestoreObjects(target, objects);
+      await clearRestoreTables(pool!);
+      const options = {
+        roots,
+        target,
+        encryptionKey: env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+        settings: prepared.settings,
+        sourceManifest: prepared.sourceManifest,
+      };
+      await importLegacyRestoreSource({ ...options, verifyOnly: false });
+      await importLegacyRestoreSource({ ...options, verifyOnly: true });
+      assert.equal((await pool!.query('SELECT value FROM unrelated_restore_sentinel')).rows[0]?.value, 'keep');
+      const kept = await s3.send(new GetObjectCommand({ Bucket: target.objectStorageBucket, Key: sentinel }));
+      assert.equal(await kept.Body!.transformToString(), 'keep outside Rivet ownership');
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      s3.destroy();
+      await restoreControl.unlock(owner);
+      await restoreControl.dispose();
+    }
+    console.log('Legacy restore: real import/verification, writer fencing and unrelated SQL/S3 preservation passed.');
+  }
   await assertVmMigrationTargetMayServe(pool!);
   const driftFile = path.join(workflowsRoot, 'host-edit-during-freeze.txt');
   await fs.writeFile(driftFile, 'unexpected host edit');
@@ -1100,7 +1306,331 @@ try {
       else process.env[key] = value;
     }
   }
+  {
+    const target = readWorkflowMigrationTargetConfig(env);
+    // Real HTTP upload + durable journal + child importer, with restart ownership simulated (no deployed services touched).
+    // The earlier negative fixture deliberately left a corrupt legacy marker; it is not a valid portable backup.
+    await fs.unlink(path.join(runtimeRoot, 'active-release'));
+    const versions = new S3Client(createManagedWorkflowS3ClientConfig(target));
+    await versions.send(
+      new PutBucketVersioningCommand({
+        Bucket: target.objectStorageBucket,
+        VersioningConfiguration: { Status: 'Enabled' },
+      }),
+    );
+    const inventory = await captureRestoreObjects(pool!, target);
+    const referenced = inventory.find((object) => !object.key.startsWith('runtime-libraries/'))!;
+    assert.ok(referenced);
+    assert.equal(
+      inventory.some((object) => object.key.startsWith('runtime-libraries/')),
+      false,
+    );
+    const runtimeRow = (
+      await pool!.query(
+        "SELECT r.artifact_blob_key FROM runtime_library_releases r JOIN runtime_library_activation a ON a.active_release_id=r.release_id WHERE a.slot='default'",
+      )
+    ).rows[0];
+    const runtimeKey = 'runtime-libraries/' + runtimeRow.artifact_blob_key;
+    const runtimeExisting = await versions.send(
+      new GetObjectCommand({ Bucket: target.objectStorageBucket, Key: runtimeKey }),
+    );
+    const runtimeArtifact = await runtimeExisting.Body!.transformToByteArray();
+    const runtimeReference = { key: runtimeKey, versionId: runtimeExisting.VersionId };
+    const existing = await versions.send(
+      new GetObjectCommand({ Bucket: target.objectStorageBucket, Key: referenced.key }),
+    );
+    const artifact = await existing.Body!.transformToByteArray();
+    const historic = await versions.send(
+      new PutObjectCommand({ Bucket: target.objectStorageBucket, Key: referenced.key, Body: artifact }),
+    );
+    const current = await versions.send(
+      new PutObjectCommand({ Bucket: target.objectStorageBucket, Key: referenced.key, Body: artifact }),
+    );
+    const restoreRoot = path.join(root, 'restore-storage');
+    const backupControl = path.join(root, 'portable-backup');
+    await fs.mkdir(restoreRoot);
+    await fs.mkdir(backupControl);
+    const source = {
+      workflows: workflowsRoot,
+      appData: appDataRoot,
+      recordings: recordingsRoot,
+      runtimeLibraries: runtimeRoot,
+    };
+    const createdAt = new Date().toISOString();
+    const backupId = randomUUID();
+    await createBrowserBackupArchive({
+      control: backupControl,
+      source,
+      assertFrozen: async () => {},
+      state: {
+        id: backupId,
+        revision: 1,
+        pausedAt: createdAt,
+        phase: 'creating',
+        archiveHash: null,
+        bytes: 0,
+        createdAt,
+        sourceFingerprint: await fingerprintVmMigrationSource(source),
+      },
+    });
+    const archive = path.join(browserBackupDirectory(backupControl, backupId), 'backup.tar.gz');
+    const scopedEnv = {
+      RIVET_LEGACY_RESTORE_ROOT: restoreRoot,
+      RIVET_LEGACY_RESTORE_INSTALLATION: `fixture:${path.basename(root)}`,
+      RIVET_APP_SETTINGS_ENCRYPTION_KEY: env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+      RIVET_KEY: 'restore-http-test',
+      RIVET_SERVER_UI_AUTH_MODE: 'key',
+      RIVET_APP_DATA_ROOT: appDataRoot,
+      RIVET_WORKFLOWS_ROOT: workflowsRoot,
+      RIVET_WORKFLOW_RECORDINGS_ROOT: recordingsRoot,
+    };
+    const before = Object.fromEntries(Object.keys(scopedEnv).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, scopedEnv);
+    const coordinator = new LegacyRestoreControl(
+      getManagedDbPoolConfig(target),
+      env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+    );
+    let drains = 0;
+    let restarts = 0;
+    const createService = () =>
+      new LegacyRestoreService(coordinator, target, restoreRoot, {
+        drain: async () => {
+          drains++;
+        },
+        restart: async () => {
+          restarts++;
+        },
+      });
+    let service = createService();
+    const app = express();
+    app.use('/api/legacy-restore', legacyRestoreRouter);
+    app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      if (!(error as { status?: number }).status) console.error('Restore fixture HTTP failure:', error);
+      res.status((error as { status?: number }).status ?? 500).json({ error: 'Restore request failed.' });
+    });
+    const http = createServer(app);
+    http.listen(0, '127.0.0.1');
+    await once(http, 'listening');
+    const url = `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}/api/legacy-restore`;
+    const headers = {
+      'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+      cookie: `rivet_ui_token=${getExpectedUiSessionToken()}`,
+      'X-Rivet-Migration-Intent': '1',
+    };
+    const waitPhase = async (phase: string) => {
+      const deadline = Date.now() + 120000;
+      while (true) {
+        const operation = (await service.status()).operation;
+        if (operation?.phase === phase) return operation;
+        if (operation?.phase === 'failed') throw new Error(operation.message);
+        if (Date.now() > deadline) throw new Error(`Restore did not reach ${phase}`);
+        await delay(100);
+      }
+    };
+    try {
+      const prepared = await prepareLegacyRestoreSource(source, target);
+      installRestoreSettings(prepared.settings, randomUUID());
+      setLegacyRestoreService(service);
+      assert.equal((await fetch(url)).status, 403, 'anonymous restore must be denied');
+      const preliminary = await fetch(url + '/upload', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/gzip' },
+        body: createReadStream(archive) as unknown as BodyInit,
+        duplex: 'half',
+      } as RequestInit);
+      assert.equal(preliminary.status, 202);
+      const validation = (await preliminary.json()).operation;
+      const stopValidation = await fetch(url + '/cancel', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: validation.id }),
+      });
+      assert.equal(stopValidation.status, 202);
+      await stopValidation.body?.cancel();
+      assert.equal(drains, 0);
+      assert.equal(restarts, 0);
+      assert.equal((await fs.readdir(restoreRoot)).length, 0);
+      const untouched = await versions.send(
+        new GetObjectCommand({ Bucket: target.objectStorageBucket, Key: referenced.key, VersionId: current.VersionId }),
+      );
+      assert.deepEqual(
+        await untouched.Body!.transformToByteArray(),
+        artifact,
+        'cancelling validation cannot delete destination objects',
+      );
+      const uploaded = await fetch(url + '/upload', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/gzip' },
+        body: createReadStream(archive) as unknown as BodyInit,
+        duplex: 'half',
+      } as RequestInit);
+      assert.equal(uploaded.status, 202);
+      await uploaded.body?.cancel();
+      const ready = await waitPhase('awaiting-confirmation');
+      assert.equal(ready.projects, 3);
+      assert.equal(ready.recordings, 1);
+      const invalid = await fetch(url + '/start', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(invalid.status, 400);
+      await invalid.body?.cancel();
+      assert.equal(drains, 0);
+      // Pause a real permission query so shutdown lands after lock admission but before commit admission.
+      let probed!: () => void;
+      const probing = new Promise<void>((resolve) => {
+        probed = resolve;
+      });
+      let resumeProbe!: () => void;
+      const probe = new Promise<void>((resolve) => {
+        resumeProbe = resolve;
+      });
+      const originalQuery = coordinator.pool.query.bind(coordinator.pool);
+      const delayedQuery = mock.method(coordinator.pool, 'query', async (sql: string, values?: unknown[]) => {
+        if (sql.startsWith('SELECT tablename FROM pg_catalog.pg_tables')) {
+          probed();
+          await probe;
+        }
+        return originalQuery(sql, values);
+      });
+      try {
+        const rejectedStart = assert.rejects(
+          service.start(ready.id, ready.archiveDigest!, 'RESTORE LEGACY BACKUP'),
+          /stopping/,
+        );
+        await probing;
+        await service.dispose();
+        resumeProbe();
+        await rejectedStart;
+        assert.equal((await coordinator.read())?.phase, 'awaiting-confirmation');
+        assert.equal(drains, 0);
+      } finally {
+        resumeProbe();
+        delayedQuery.mock.restore();
+      }
+      service = createService();
+      setLegacyRestoreService(service);
+      const accepted = await fetch(url + '/start', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: ready.id,
+          archiveDigest: ready.archiveDigest,
+          confirmation: 'RESTORE LEGACY BACKUP',
+        }),
+      });
+      assert.equal(accepted.status, 202);
+      await accepted.body?.cancel();
+      await waitPhase('restarting');
+      const restartDeadline = Date.now() + 10000;
+      while (!restarts) {
+        if (Date.now() > restartDeadline) throw new Error('Restore restart was not requested');
+        await delay(50);
+      }
+      assert.equal(drains, 1);
+      assert.equal(restarts, 1);
+      await service.dispose();
+      service = createService(); // The supervisor's acknowledged restart installs a new warmup owner.
+      setLegacyRestoreService(service);
+      await service.complete();
+      assert.equal((await service.status()).operation?.phase, 'completed');
+      assert.equal((await fs.readdir(restoreRoot)).length, 0);
+      await assert.rejects(coordinator.payload(ready.id), /unavailable/);
+      assert.equal((await pool!.query('SELECT value FROM unrelated_restore_sentinel')).rows[0]?.value, 'keep');
+      const retainedRuntime = await versions.send(
+        new GetObjectCommand({
+          Bucket: target.objectStorageBucket,
+          Key: runtimeReference.key,
+          ...(runtimeReference.versionId ? { VersionId: runtimeReference.versionId } : {}),
+        }),
+      );
+      assert.deepEqual(await retainedRuntime.Body!.transformToByteArray(), runtimeArtifact);
+      const retained = await versions.send(
+        new GetObjectCommand({
+          Bucket: target.objectStorageBucket,
+          Key: referenced.key,
+          VersionId: historic.VersionId,
+        }),
+      );
+      assert.deepEqual(
+        await retained.Body!.transformToByteArray(),
+        artifact,
+        'older unproven S3 versions must remain untouched',
+      );
+      await assert.rejects(
+        versions.send(
+          new GetObjectCommand({
+            Bucket: target.objectStorageBucket,
+            Key: referenced.key,
+            VersionId: current.VersionId,
+          }),
+        ),
+        (error) => (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404,
+        'only the captured current version may be deleted',
+      );
+      await service.dispose();
+      service = createService(); // Completion's restart installs a normal serving owner.
+      setLegacyRestoreService(service);
+      setLegacyRestorePaused(false);
+      const rejected = await fetch(url + '/upload', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/gzip' },
+        body: 'invalid archive',
+      });
+      assert.equal(rejected.status, 202);
+      await rejected.body?.cancel();
+      const failed = await waitPhase('failed');
+      assert.equal(failed.destructive, false);
+      assert.equal(
+        await coordinator.readEpoch(),
+        ready.id,
+        'a later invalid upload must not erase the restored generation',
+      );
+      await delay(500);
+      assert.equal(restarts, 2, 'invalid backup validation must not restart the serving installation');
+      const cancelled = await fetch(url + '/cancel', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: failed.id }),
+      });
+      assert.equal(cancelled.status, 202);
+      await cancelled.body?.cancel();
+      assert.equal((await fs.readdir(restoreRoot)).length, 0);
+      console.log(
+        'Legacy restore: signed HTTP upload, validation, confirmation, child copy/verify and cleanup passed.',
+      );
+    } finally {
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+      await service.dispose();
+      await coordinator.dispose();
+      versions.destroy();
+      setLegacyRestorePaused(false);
+      await configureAppSettingsBackendForTests(null);
+      for (const [key, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    const { verifySupervisedLegacyRestore } = await import(
+      pathToFileURL(path.join(repoRoot, 'packages/studio-server-api/src/tests/helpers/supervised-legacy-restore.mjs'))
+        .href
+    );
+    await verifySupervisedLegacyRestore({
+      repoRoot,
+      root,
+      target,
+      archive,
+      secret: env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+      installation: `fixture:${path.basename(root)}`,
+    });
+  }
+} catch (error) {
+  console.error('Managed fixture primary failure:', error);
+  throw error;
 } finally {
+  await resetWorkflowRecordingDatabaseForTests();
   await pool?.end().catch(() => undefined);
   for (const id of owned.reverse()) {
     try {

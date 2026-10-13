@@ -18,21 +18,17 @@ export let RIVET_LATEST_WORKFLOWS_BASE_PATH = normalizeBasePath(
   '/workflows-latest',
 );
 export let RIVET_WEB_APPS_BASE_PATH = normalizeBasePathFromAliases(
-  [
-    viteEnv?.RIVET_PUBLISHED_APPS_BASE_PATH,
-    viteEnv?.RIVET_WEB_APPS_BASE_PATH,
-  ],
+  [viteEnv?.RIVET_PUBLISHED_APPS_BASE_PATH, viteEnv?.RIVET_WEB_APPS_BASE_PATH],
   '/apps',
 );
 export let RIVET_LATEST_WEB_APPS_BASE_PATH = normalizeBasePathFromAliases(
-  [
-    viteEnv?.RIVET_LATEST_APPS_BASE_PATH,
-    viteEnv?.RIVET_LATEST_WEB_APPS_BASE_PATH,
-  ],
+  [viteEnv?.RIVET_LATEST_APPS_BASE_PATH, viteEnv?.RIVET_LATEST_WEB_APPS_BASE_PATH],
   '/apps-latest',
 );
 
 type HostedRuntimeConfig = {
+  legacyRestoreEpoch?: unknown;
+  legacyRestoreMaintenance?: unknown;
   executorWsUrl?: unknown;
   remoteDebuggerDefaultWs?: unknown;
   publishedWorkflowsBasePath?: unknown;
@@ -76,12 +72,14 @@ export function normalizeRuntimeWebSocketUrl(value: string): string {
 export function normalizeHostedRuntimeConfig(config: HostedRuntimeConfig): HostedRuntimeConfig {
   return {
     ...config,
-    executorWsUrl: typeof config.executorWsUrl === 'string'
-      ? normalizeRuntimeWebSocketUrl(config.executorWsUrl)
-      : config.executorWsUrl,
-    remoteDebuggerDefaultWs: typeof config.remoteDebuggerDefaultWs === 'string'
-      ? normalizeRuntimeWebSocketUrl(config.remoteDebuggerDefaultWs)
-      : config.remoteDebuggerDefaultWs,
+    executorWsUrl:
+      typeof config.executorWsUrl === 'string'
+        ? normalizeRuntimeWebSocketUrl(config.executorWsUrl)
+        : config.executorWsUrl,
+    remoteDebuggerDefaultWs:
+      typeof config.remoteDebuggerDefaultWs === 'string'
+        ? normalizeRuntimeWebSocketUrl(config.remoteDebuggerDefaultWs)
+        : config.remoteDebuggerDefaultWs,
   };
 }
 
@@ -111,7 +109,7 @@ export function applyHostedRuntimeConfig(config: HostedRuntimeConfig): void {
   );
 }
 
-export async function loadHostedRuntimeConfig(): Promise<void> {
+export async function loadHostedRuntimeConfig(): Promise<HostedRuntimeConfig | undefined> {
   if (typeof fetch === 'undefined') {
     return;
   }
@@ -121,13 +119,12 @@ export async function loadHostedRuntimeConfig(): Promise<void> {
     throw new Error(`Failed to load hosted runtime config: ${response.status}`);
   }
 
-  applyHostedRuntimeConfig(await response.json() as HostedRuntimeConfig);
+  const config = (await response.json()) as HostedRuntimeConfig;
+  applyHostedRuntimeConfig(config);
+  return config;
 }
 
-export function logHostedDebug(
-  method: 'log' | 'info' | 'warn' | 'error' | 'debug',
-  ...args: unknown[]
-) {
+export function logHostedDebug(method: 'log' | 'info' | 'warn' | 'error' | 'debug', ...args: unknown[]) {
   if (!RIVET_DEBUG_LOGS) {
     return;
   }

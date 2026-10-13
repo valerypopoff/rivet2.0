@@ -8,127 +8,155 @@ sidebar_label: Deploy Studio Server
 
 Rivet Studio Server runs the editor in your browser and lets you manage projects, publish workflow endpoints, and review run recordings on your own host.
 
-## Before you start
+## Restore a legacy backup
 
-Use a host with Git, Node.js 24 or newer, Corepack (for the Yarn version pinned by the repository), Docker, and the Docker Compose plugin. Docker must be running and accessible to the account that starts the server. The host needs space for the container images and a writable folder for workflows, recordings, and runtime libraries; it also needs access to pull the published images from GHCR. Make port 8080 available, or choose another port in `.env`.
+If a fully uploaded backup fails validation because you edited it, **Proceed
+anyway** lets you bypass its original integrity checks. This is dangerous: removed
+data will not be restored. Removing recordings, including their whole folder, is
+supported this way. You must still confirm replacement after preparation. Unsafe
+archives, invalid data, missing required roots and installation/storage safety
+checks cannot be bypassed. The original backup is recommended.
 
-## Start with Docker Compose
+On a restore-capable managed PostgreSQL/S3 deployment, open **Settings → Storage →
+Restore legacy backup** and select the original `.tar.gz` backup downloaded before
+the legacy-to-SQLite upgrade. Review its date and contents, then type
+`RESTORE LEGACY BACKUP` to confirm destructive replacement.
 
-From a checkout of the [Rivet 2 repository](https://github.com/valerypopoff/rivet2.0), run:
+Rivet validates the archive before deleting data, pauses application work, imports
+and verifies the backup, and restarts automatically. Workflows, published endpoint
+paths/history, recordings and supported server settings are restored, including
+environment variables entered in the UI and their Browser permissions. Current
+database/S3 connections, deployment secrets and administrator access remain
+unchanged. If the UI uses OAuth, its shared OAuth settings are also kept; with
+key-based UI login, web-app OAuth settings are restored from the backup.
+Imported schedules stay disabled. Endpoint URLs use the new host.
+Once normal service resumes, restored retention policies apply to historical data
+using its original timestamps; restoration does not renew old recordings' age.
 
-```bash
-corepack enable
-yarn install --immutable
-cp deploy/studio-server/.env.example .env
-```
+This is not a merge and does not back up current destination data. Only registered
+application tables and verified referenced artifacts are removed; unrelated objects
+and unknown historical versions remain untouched. Runtime-library archives are
+retained because another installation could share them; the restored server still
+uses only the backup's library catalog. Native modules and executable runtime binaries
+cannot be certified from this legacy format and stop validation before deletion.
 
-Edit `.env` before starting. Set `RIVET_ARTIFACTS_HOST_PATH` to a writable host folder that you will keep between upgrades. Set `RIVET_PORT` if port 8080 is unavailable. Configure the UI authentication mode and `RIVET_KEY` for access to the server; do not expose an unprotected editor to the public internet. The example intentionally contains only these starting settings. Internal service ports and image names are supplied by Docker Compose; storage and endpoint policies are configured in the editor's App Settings.
+You can close the browser and reopen the normal Rivet page; during maintenance it
+automatically shows restore progress and recovery. The dedicated
+`/?restore-legacy-backup` link also works. After deletion starts, errors keep Rivet in maintenance
+and offer **Retry restore**; do not manually unblock or clear storage. The installation
+must run the restore-capable images and have the required scratch storage and
+database/object permissions. No per-restore shell commands are required.
+Restore storage must fit the upload, extracted data and runtime-library archive;
+an insufficient-space validation message means the dedicated storage needs to be
+enlarged before uploading again. Large backups also need adequate container memory.
+You can cancel validation or dismiss a non-destructive failure. Once you confirm
+replacement, it cannot be cancelled.
 
-In **App Settings → Storage**, **Local folders** keeps project data on the VM. **Object storage + PostgreSQL** is disabled for local installations: complete the files-to-SQLite upgrade first. Switching storage is not a data transfer. A later SQLite-to-S3/PostgreSQL migration still requires a separate verified migration path, which is not available yet. Existing managed installations can continue configuring their database and object storage, but cannot switch blindly to Local folders either; fresh managed deployments use deployment configuration.
+## Upload a project bundle
 
-```bash
-yarn studio-server:prod
-```
+Right-click the workflow library or a destination folder and choose **Upload
+bundle**, beside **Upload project**. Select an extracted bundle folder or its ZIP
+archive containing `rivet-bundle.json`. Bundle contents must fit within 64 MiB.
 
-The command pulls the published Studio Server images, starts the Compose stack, and waits for it to become healthy. With the starting configuration, open `http://localhost:8080` on the host (or use your chosen port). Do not expose this HTTP-only setup directly to the internet.
+Rivet imports the projects and their datasets together into a new folder. Existing
+projects are not overwritten. You can then move or rename any imported project;
+references within the bundle continue to work. Imported projects are unpublished,
+and their Subgraphs use the imported saved-latest drafts. Publish endpoints as
+needed afterward. Plugin installations, credentials and server settings are not
+included in project bundles.
+Disabled nodes, unused library templates and saved variants can retain targets
+outside the exported bundle. Supply or select those targets before activating
+that configuration; imported internal targets are remapped automatically.
 
-### Use HTTPS on a single VM
+If an old bundle contains several versions of the same project, download it again
+with one bundle-wide version choice before uploading. If the upload loses its
+connection, refresh the tree before retrying: it may already have completed, and
+uploading again creates another folder.
 
-For a VM deployment, Rivet's Docker Compose stack can run its own nginx HTTPS gateway. You do not need to write a site configuration for nginx on the VM. Arrange DNS for your public hostname and provide an existing TLS certificate and private key, then add these values to `.env` **before** starting the server:
+## Installation options
 
-```dotenv
-RIVET_PROXY_PUBLIC_HOST=rivet.example.com
-RIVET_PROXY_INTERNAL_HOST=rivet-1.internal.example.com
-RIVET_PROXY_TLS_CERT_HOST_PATH=/absolute/path/to/cert.pem
-RIVET_PROXY_TLS_KEY_HOST_PATH=/absolute/path/to/key.pem
-RIVET_PORT=80
-RIVET_HTTPS_PORT=443
-```
+Rivet Server uses PostgreSQL and S3-compatible object storage. Docker Compose or
+Kubernetes can deploy the same application; Kubernetes is not required.
+The desktop editor and standalone graph runtimes do not require Kubernetes.
 
-Replace the existing `RIVET_PORT=8080` line in `.env`; do not leave two `RIVET_PORT` entries. The certificate and key paths are **host** paths. The key must be readable by the proxy container's user (UID 10001) without making it world-readable. Ports 80 and 443 must be available on the VM. If another web server currently owns them, follow the [single-VM cutover and verification steps](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md#single-vm-https) before stopping it.
+On one VM, use local-storage with PostgreSQL and MinIO running in private Docker
+containers. For clustered production, use the same application chart
+with external PostgreSQL and S3-compatible services. Single-machine installation
+does not provide high availability: keep recoverable backups off the VM.
 
-Run `yarn studio-server:prod` to pull and start the TLS-enabled stack. The public HTTP address redirects to `https://rivet.example.com/`. Rivet still needs the correct DNS, certificate, key permissions, and network rules; bundling nginx does not provide those automatically. The internal hostname stays on HTTP and is **not** made private merely by its name: restrict access at the VM/network boundary before using it as an internal address. Before exposing the editor, enable its UI gate (`RIVET_SERVER_UI_AUTH_MODE=key` or configured OAuth); TLS does not replace the separate endpoint access controls.
+With Docker/Compose running, `yarn studio-server:dev:local-storage`
+builds the server, provisions PostgreSQL/MinIO and starts Rivet automatically,
+without starting Kubernetes. It adds missing local credentials to private `.env`
+once, preserving the existing file; by default use its `RIVET_KEY` to sign in at the printed local address.
+The database and object-store containers have private networking and durable
+volumes. Do not replace the credential file while keeping those volumes.
+Local-storage credentials are shared across tiers:
+`RIVET_LOCAL_POSTGRES_PASSWORD`, `RIVET_LOCAL_S3_ACCESS_KEY_ID` and
+`RIVET_LOCAL_S3_SECRET_ACCESS_KEY`. Each tier still has separate containers and
+data volumes. Older tier-prefixed values are preserved on upgrade when they agree;
+conflicting old passwords require explicit configuration, not automatic replacement.
 
-In Kubernetes, this VM TLS configuration does not apply. The cluster operator supplies the external gateway, hostname, and TLS termination; Rivet's production chart exposes HTTP services to that gateway rather than running the VM nginx container.
+For the six `dev|staging|prod:local-storage|external-storage` commands, configure the same `.env` using
+`deploy/studio-server/.env.example`, then use
+`yarn studio-server:prod:external-storage -- --manifest <promoted-manifest> --confirm rivet-prod-external`.
+External-storage never provisions local substitutes. Production local-storage
+has the same promoted-release safety gates. Public TLS/routing and
+backups still require deployment configuration.
 
-For existing installations, keep the same `.env`, artifact folder, and Docker volumes when updating. See the [Studio Server deployment guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md) for upgrade precautions, troubleshooting commands, and the custom-image and Kubernetes options.
+Default browser ports are dev **8080**, staging **8082**, and production **8083**;
+set shared `RIVET_PORT` to override the browser port for any of the six commands.
+Tier-specific port variables are no longer used. Two installations cannot use
+the same host port simultaneously.
+The Docker listener is loopback-only. Stop without deleting data with, for example,
+`yarn studio-server:dev:local-storage -- --stop`. Staging/production require their
+installation confirmation when stopping as well as starting.
 
-### Trial a verified staging release
+If startup fails after some application services start, Rivet attempts to drain
+them while keeping storage available. It does not reset data or automatically
+roll back a migrated schema. Follow the supported stack guide to recover the same
+installation; do not delete its private deployment state or replace its keys.
 
-For an existing VM, wait for the staging commit's **Build Images** workflow to succeed, use a clean checkout of that `staging` commit, and run `yarn studio-server:staging`. The launcher checks that staging image revisions match the checkout, pins their immutable digests, and compares data mounts/volumes with the existing API container before recreation. A mismatch stops deployment; investigate it rather than starting against an empty replacement data directory. This uses the existing stack and data, not an isolated test copy, and does not migrate storage. Keep a consistent backup and use an agreed maintenance window. See the [staging VM procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/development.md#deploying-a-verified-staging-build-to-a-vm).
+All six commands deploy the same Rivet application. Local-storage ignores external
+connection settings and uses private PostgreSQL/MinIO; external-storage uses
+only the selected tier's external connections. Settings are prefixed by
+`RIVET_DEV_`, `RIVET_STAGING_` or `RIVET_PROD_`, except shared local-storage credentials,
+browser-port and UI-auth selection. You do not need to edit a storage-mode switch or swap environment files.
 
-### Upgrade local metadata to SQLite
+Set `RIVET_SERVER_UI_AUTH_MODE=key` (default) or `oauth` in the shared `.env`.
+For a fresh installation, start with key mode, configure **Settings → OAuth**
+and the administrator-email allowlist in **Settings → Server UI access**, then
+select `oauth` and restart. OAuth without complete settings or an allowed email
+denies access; it does not fall back to key login. Keep `RIVET_KEY` in either mode
+for internal authentication. Development-auth bypass flags are not forwarded.
 
-New single-host installations start with SQLite automatically. Project and
-recording metadata, App Settings and operational data go into SQLite; large
-project, dataset, recording and runtime-library payloads remain local files.
-There is nothing to migrate and no **Local storage upgrade** tab or reminder.
-Keep the persistent data/control volumes and back them up together.
+The [supported stack guide](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/server-stack.md)
+covers Docker startup, optional Kubernetes deployment, private `.env` credentials,
+promoted release manifests, installation and upgrades. Release tiers retain schema migration, release identity
+and recovery checks. Configure a TLS gateway before exposing the server.
 
-The following steps apply only to older installations with file-backed metadata.
+**Settings → Storage** shows PostgreSQL/S3 connections read-only, with secrets
+hidden. There is no Local folders option: local-storage uses private PostgreSQL
+and MinIO; external-storage uses the services you provide. The panel explains how
+to configure the selected tier's connections in `.env` and start its
+`external-storage` command. Starting another deployment does not move existing
+data—keep the original data and keys until a supported transfer is verified.
+The legacy Migration and Local storage upgrade tabs are not shown on managed
+deployments. **Restore legacy backup** remains available for original v1 legacy
+archives; it is not a general PostgreSQL/S3 backup restore.
+Environment variables entered in Rivet's Settings remain supported and are
+restored from compatible legacy backups.
 
-The operator-only **App Settings → Local storage upgrade** workflow keeps project, snapshot and recording payloads as local artifact files while moving their authoritative metadata and App Settings to SQLite. It is a separate operation from S3/PostgreSQL migration; changing the Storage selector does not perform it.
+### Move an existing installation
 
-Recording and replay artifacts retain their existing compression during the
-upgrade: Rivet does not create expanded recording files on disk. Integrity checks
-and playback decode bounded payloads in memory. New local recordings honor the
-server's compression setting and are compressed when that saves space. The upgrade
-still needs free space for a separate candidate, metadata and verified-backup
-scratch; the originals remain intact. Use current API
-images and backup tools after upgrading—older catalog-format-2 readers cannot read
-the new compressed recording format.
+Do not replace a running file/SQLite installation with the new images in place.
+Export or transfer data with its previous working release first; keep old data
+and encryption keys until the new server is verified. The UI restore above
+accepts the original version-1 legacy backup, not arbitrary SQLite snapshots.
+For other sources use the
+[verified migration procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/vm-to-managed-migration.md).
 
-On the updated single-host Compose stack, the normal migration can be completed from the UI:
-
-For signed-in administrators using local storage, the migration suggestion returns
-on every page reload until migration is complete. **Postpone** only dismisses it for
-the current page. Once started, it offers continuation/recovery instead. After
-SQLite is live and the final restart is complete, it stops appearing. Managed
-S3/PostgreSQL deployments never receive this local migration suggestion.
-
-1. If offered, choose **Prepare server for migration**. Rivet prepares persistent control storage and restarts both backend processes. New local settings are unencrypted: no encryption key, console commands or migration entries in `.env` are needed.
-2. Choose **Pause writes and create verified backup**. Rivet checks capacity, stops new changes, waits for active work and creates a backup of the four original data folders. It restores the actual archive into separate scratch storage and checks it. If active work is still draining, wait and choose **Create verified backup** when the source is quiet.
-3. Use **Download verified backup**. Wait for the download to finish, save it in a protected location outside the VM, confirm that check, then **Copy and verify**. You do not need to type a fingerprint; manual backup evidence is an advanced alternative. There is no key download or key-backup checkbox on a new server.
-4. Choose **Activate SQLite while paused**. Rivet restarts both backend processes, reconnects and validates automatically. Writes remain paused. If validation fails, retry it or choose **Return to legacy while paused**.
-5. Review successful validation, acknowledge that resuming closes one-click rollback, and **Resume writes**. Rivet performs the final restart automatically. Completion shows SQLite live with no pending restart.
-
-Source inspection and backup preparation also run in the background on updated
-servers. The panel shows the current stage and restores progress/results when
-reopened; closing it does not cancel an accepted pause-and-backup sequence. A lost
-connection does not mean the operation failed, so check current status before
-retrying. After a backend restart, interrupted preparation is reported explicitly
-and needs a new operator attempt. Update both API and web images to use this flow.
-If a fingerprint read is retried by another operator or its preparation status
-becomes unreadable, old browser evidence is cleared. Review the current result
-and certify the backup again; reconnecting never checks those confirmations for you.
-
-**Copy and verify** starts a background job. Its status shows preparation (capacity, source fingerprint and backup verification) before conversion begins; accepting the request does not mean the copy passed. You can reload or reopen Settings to check progress. If the connection drops, check current status before retrying. A failed copy keeps the original files selected and writes paused, and shows a specific reason and affected project when available. Download the diagnostic report; do not delete source data or bypass a capacity/integrity refusal. Older failed jobs may only have a generic reason.
-
-The archive and SQLite settings contain private settings and credentials in plaintext; do not share them publicly. Reloading the page does not interrupt backup creation, but restarting the backend does. Project and published-version downloads remain available while migration is paused; edits and runs remain blocked. Custom launchers without UI preparation/restart support and damaged installations may still need the protected administrative recovery procedure; the wizard never resets unknown control storage.
-
-On the supported updated Compose stack, you can omit `RIVET_LOCAL_METADATA_UPGRADE_ENABLED`, `RIVET_LOCAL_METADATA_CONTROL_ROOT` and `RIVET_LOCAL_METADATA_ENCRYPTION_KEY` from `.env`. Exception: an older manually configured encrypted SQLite installation must retain its original key until conversion finishes after writes resume. UI-generated original keys are retained automatically for that compatibility step. Custom control roots must boot the updated launcher once with their original root to remember it. Never delete persistent volumes or historical backup keys to remove environment configuration.
-
-The browser backup is for the original legacy data before SQLite activation. A same-server test restore cannot prove recovery after VM/disk loss, so keep the independent restored-copy rehearsal below. After SQLite resumes writes, use the coordinated full backup procedure that also includes local-metadata control storage; the pre-upgrade download does not contain subsequent SQLite changes.
-
-The browser S3/PostgreSQL migration tool below supports both legacy file metadata and a validated live SQLite generation. After the upgrade it reads the selected SQLite data, never retained old files. SQLite migration skips online pre-copy: back up the selected generation/control root, test the destination, enter maintenance, wait for active work to drain, then copy and verify. The [migration runbook](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/vm-to-managed-migration.md) also provides an offline operator adapter.
-
-Do not activate this on a production server before an isolated restored copy of its data has passed conversion, restart, controlled writes and recovery. Conversion processes bounded bundles rather than loading the whole installation into memory. An oversized individual project/history or recording is refused; a multi-gigabyte collection must still pass measured RAM/disk checks on its actual data. Keep serving from the existing files until the installation is within a tested capacity envelope. The [local upgrade runbook](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-upgrade.md) documents configuration, backup and recovery requirements.
-
-Before writes resume, a failed paused activation can return to the intact old files. After SQLite accepts new writes, those files are stale: recovery requires a coordinated SQLite-plus-artifact backup, not switching back to the old mode. The [backup/restore procedure](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/local-metadata-backup-rehearsal.md) provides separate legacy and post-upgrade formats; the latter includes persistent control storage and the selected generation. Original keys are needed only for historical encrypted backups, not new plaintext settings. On older deployments with a separate executor container, stop both API and executor before taking a consistent filesystem backup. Restoration is tested on a fresh isolated stack before any production routing change.
-
-### Move an existing VM to managed storage
-
-On a supervised single-host server using local artifacts with legacy metadata or a validated live SQLite generation, **App Settings → Migration** is available to signed-in key or OAuth operators without a migration-enable environment variable. The former `RIVET_VM_MIGRATION_ENABLED` setting is ignored. The tool is unavailable with an ungated Server UI or an unsupported source; Settings explains the source restriction. Use **Inspect source** to review the project, publication, recording, and settings counts and local-file or Code-node portability warnings. Enter and test a separate managed PostgreSQL database and S3-compatible bucket, make a recoverable backup of the source (including the selected generation and control root for SQLite), and confirm the destination pods are stopped. Legacy sources use **Pre-copy content** while the VM is live to stage matching snapshots and completed recording artifacts in S3; SQLite sources skip this step. Then enter maintenance mode. Rivet pauses new saves and runs and waits for existing work to finish. Once it reports that the source is quiet, start **Copy and verify all data**. The browser shows item receipts and verification status; you can reopen the tab after a refresh. Destination APIs cannot start against an incomplete migration; exact verification opens that startup gate. Keep the VM paused while you privately rehearse the Kubernetes deployment on an isolated clone of the destination; test runs can write recordings and must not change the copy reserved for cutover. Complete **Deployment review and final comparison**, then coordinate the traffic switch with DevOps. Neither step changes the VM's Storage setting or redirects traffic automatically. If you decide to resume VM writes, first stop the destination pods and re-enter its credentials: Rivet closes the destination startup gate before lifting maintenance. See the [migration runbook](https://github.com/valerypopoff/rivet2.0/blob/main/developer-docs/studio-server/vm-to-managed-migration.md) before a production move.
-
-Test the S3 and PostgreSQL connections separately; both must pass before copying (and before legacy pre-copy). Destination fields are locked while a test or migration job runs. The verified result lists the compared domains and their item counts. It checks stored content and route resolution, but does not execute your production graphs; rehearse those with controlled inputs before moving traffic. Final review runs in the background, records your deployment checks and repeats the exact comparison; watch its status until completion. It is not a guarantee about external dependencies or a substitute for a rollback plan.
-
-## Develop through a VS Code tunnel
-
-For source development on your own machine, use `yarn studio-server:dev:tunnel` instead of `yarn studio-server:dev` when accessing the app through a tunnel. Forward only the proxy port printed by the launcher and keep both tunnel sign-in and Rivet's UI authentication enabled. Backend edits retain the normal API/executor watchers; frontend edits trigger a complete bundle rebuild rather than thousands of source-module requests.
-
-The first launch waits for the bundle. Later successful builds refresh only a clean, idle workspace with confirmed browser recovery; unsaved edits or active work leave an update notice with **Refresh when safe**. Save your projects and finish active work first. Failed builds keep the last working frontend available; inspect `yarn studio-server:dev:docker:logs`. A rebuild is slower and needs more memory than Vite hot reload, so this is not a builder for a small production VM. An actual tunnel outage or expired sign-in still needs your attention; **Retry loading** reloads the failed document without clearing recovery records.
-
-Return to hot reload with `yarn studio-server:dev`. Both commands use the same development stack and data mounts, not parallel stacks or a staging release. Save browser edits before deliberately changing modes. See the [development guide](https://github.com/valerypopoff/rivet2.0/blob/main/deploy/studio-server/README.md#development) for operational details.
+Old file/SQLite Compose, bare-host and tunnel server launch commands are retired. Existing
+running containers are not stopped or deleted by this change.
 
 ## Schedule useful work
 

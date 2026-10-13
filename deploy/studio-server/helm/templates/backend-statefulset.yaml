@@ -167,7 +167,26 @@ spec:
           resources:
 {{ toYaml .Values.resources.backend | nindent 12 }}
         {{- end }}
+        {{- if eq .Values.deploymentProfile "single-machine" }}
+        {{- if gt (int .Values.replicaCount.web) 0 }}
+{{ include "rivet.containers.web" . | nindent 8 }}
+        {{- end }}
+        {{- if gt (int .Values.replicaCount.proxy) 0 }}
+{{ include "rivet.containers.proxy" . | nindent 8 }}
+        {{- end }}
+        {{- if gt (int .Values.replicaCount.execution) 0 }}
+{{ include "rivet.containers.execution" . | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.hostedEvaluations.enabled (gt (int .Values.replicaCount.evaluation) 0) }}
+{{ include "rivet.containers.evaluation" . | nindent 8 }}
+        {{- end }}
+        {{- end }}
       volumes:
+        {{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+        - name: legacy-restore
+          persistentVolumeClaim:
+            claimName: {{ include "rivet.fullname" . }}-legacy-restore
+        {{- end }}
         - name: project-bundles
           emptyDir:
             sizeLimit: {{ .Values.writableVolumeLimits.projectBundles }}

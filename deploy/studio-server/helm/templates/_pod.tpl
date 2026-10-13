@@ -75,6 +75,35 @@ securityContext:
 {{- include "rivet.pod.tmpVolumeMount" . }}
 {{- end -}}
 
+{{/* Co-located API roles must not write one another's file projections/caches. */}}
+{{- define "rivet.pod.roleVolumeMounts" -}}
+{{- $root := .root -}}
+{{- $role := .role -}}
+{{- range $mount := list (dict "name" "workspace" "path" "/workspace") (dict "name" "workflows" "path" "/workflows") (dict "name" "app-data" "path" "/data/rivet-app") (dict "name" "runtime-libraries" "path" "/data/runtime-libraries") }}
+- name: {{ $mount.name }}
+  mountPath: {{ $mount.path }}
+  {{- if eq $root.Values.deploymentProfile "single-machine" }}
+  subPath: {{ $role }}
+  {{- end }}
+{{- end }}
+{{ include "rivet.pod.roleTmpVolumeMount" . }}
+{{- end -}}
+
+{{- define "rivet.pod.roleTmpVolumeMount" -}}
+{{- if .root.Values.tmpVolume.enabled }}
+- name: {{ .root.Values.tmpVolume.name }}
+  mountPath: {{ .root.Values.tmpVolume.path }}
+  {{- if eq .root.Values.deploymentProfile "single-machine" }}
+  subPath: {{ .role }}
+  {{- end }}
+- name: node-tmp
+  mountPath: /tmp
+  {{- if eq .root.Values.deploymentProfile "single-machine" }}
+  subPath: {{ .role }}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "rivet.pod.executorVolumeMounts" -}}
 # The executor keeps the Rivet desktop-app storage layout on purpose.
 # Do not unify this mount path with the API app-data mount.
@@ -89,6 +118,10 @@ securityContext:
 
 {{- define "rivet.pod.backendVolumeMounts" -}}
 {{- include "rivet.pod.apiVolumeMounts" . }}
+{{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+- name: legacy-restore
+  mountPath: /data/rivet-restore
+{{- end }}
 - name: app-data
   mountPath: /home/rivet/.local/share/com.valerypopoff.rivet2
 {{- end -}}

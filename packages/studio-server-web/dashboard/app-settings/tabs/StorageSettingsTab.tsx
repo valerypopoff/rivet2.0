@@ -1,262 +1,109 @@
 import TextField from '@atlaskit/textfield';
-
-import { ModeButton, ModeGroup } from '../SettingsControls';
-import type { DeploymentStorageSettingsForm } from '../model';
+import { LegacyRestorePanel } from './LegacyRestorePanel';
 import type { useDeploymentStorageForm } from '../useDeploymentStorageForm';
+
+function StorageField({ label, value, hidden = false }: { label: string; value: string; hidden?: boolean }) {
+  return (
+    <label className="app-settings-field">
+      <span className="app-settings-field-label">{label}</span>
+      <TextField aria-label={label} value={hidden ? '' : value} isReadOnly placeholder={hidden ? value : undefined} />
+    </label>
+  );
+}
 
 export function StorageSettingsTab({ storage }: { storage: ReturnType<typeof useDeploymentStorageForm> }) {
   const form = storage.form;
-  const update = <K extends keyof DeploymentStorageSettingsForm>(key: K, value: DeploymentStorageSettingsForm[K]) => {
-    storage.setForm((current) => ({ ...current, [key]: value }));
-    storage.clearFeedback();
-  };
-
   return (
     <div className="project-settings-tab-panel app-settings-storage-panel" role="tabpanel">
-      {form.deploymentManaged ? (
-        <p className="app-settings-field-help">
-          Kubernetes deployment storage is managed by the operator. These settings are read-only here; changing the
-          storage location requires a coordinated migration and rollout.
+      <section className="app-settings-section" aria-label="Storage configuration">
+        <p>
+          <strong>S3-compatible object storage + PostgreSQL</strong>
         </p>
-      ) : null}
-      <section className="app-settings-section" aria-label="Project artifact storage">
-        <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
-          <div className="app-settings-field">
-            <span className="app-settings-field-label">Project artifact storage</span>
-            <ModeGroup label="Storage backend" wide>
-              <ModeButton
-                active={form.storageMode === 'filesystem'}
-                disabled={
-                  storage.controlsDisabled ||
-                  (form.storageMode !== 'filesystem' && !!form.storageModeChangeBlockedReason)
-                }
-                onClick={() => update('storageMode', 'filesystem')}
-              >
-                Local folders
-              </ModeButton>
-              <ModeButton
-                active={form.storageMode === 'managed'}
-                disabled={
-                  storage.controlsDisabled || (form.storageMode !== 'managed' && !!form.storageModeChangeBlockedReason)
-                }
-                onClick={() => update('storageMode', 'managed')}
-              >
-                Object storage + PostgreSQL
-              </ModeButton>
-            </ModeGroup>
-            {form.storageModeChangeBlockedReason ? (
-              <span className="app-settings-field-help" role="note">
-                {form.storageModeChangeBlockedReason}
-              </span>
-            ) : null}
-            <span className="app-settings-field-help">
-              {form.storageMode === 'filesystem'
-                ? 'Saved projects, recordings, published snapshots, and runtime libraries use the mounted local folders.'
-                : 'Saved projects, recordings, published snapshots, and runtime-library artifacts use S3-compatible object storage; PostgreSQL stores metadata. Changing storage mode does not migrate existing data.'}
-            </span>
-          </div>
-
-          {form.storageMode === 'filesystem' ? (
-            <label className="app-settings-field">
-              <span className="app-settings-field-label">Host artifacts folder</span>
-              <TextField
-                aria-label="Host artifacts folder"
-                value={form.artifactsHostPath}
-                isReadOnly
-                placeholder="../"
+        <p className="app-settings-field-help">
+          Projects, recordings, published snapshots and runtime-library artifacts use S3-compatible storage. PostgreSQL
+          stores metadata and server settings. Both services can be local or external. Connections and credentials are
+          set before startup and are read-only here.
+        </p>
+        {storage.error ? <p role="alert">{storage.error}</p> : null}
+        {!storage.loaded && storage.error ? null : !storage.loaded ? (
+          <p role="status">Loading storage configuration…</p>
+        ) : form.storageMode !== 'managed' ? (
+          <p role="note">
+            This installation reports a legacy storage configuration. Keep its data and keys, and use the matching
+            previous release to export or migrate it. Current deployment commands use PostgreSQL and S3.
+          </p>
+        ) : (
+          <>
+            <div className="app-settings-field-grid">
+              <StorageField label="Object storage bucket" value={form.objectStorageBucket} />
+              <StorageField
+                label="Object storage endpoint"
+                value={form.objectStorageEndpoint || 'AWS S3 regional endpoint'}
               />
-              <span className="app-settings-field-help">
-                This is set before startup by the Docker/Kubernetes launcher, for example with
-                RIVET_ARTIFACTS_HOST_PATH. The running app shows it for reference only because changing it here cannot
-                remount host folders.
-              </span>
-            </label>
-          ) : (
-            <>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Object storage bucket</span>
-                <TextField
-                  aria-label="Object storage bucket"
-                  value={form.objectStorageBucket}
-                  isDisabled={storage.controlsDisabled}
-                  onChange={(event) => update('objectStorageBucket', event.currentTarget.value)}
-                />
-              </label>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Object storage endpoint</span>
-                <TextField
-                  aria-label="Object storage endpoint"
-                  value={form.objectStorageEndpoint}
-                  isDisabled={storage.controlsDisabled}
-                  placeholder="https://s3.example.com (blank for AWS)"
-                  onChange={(event) => update('objectStorageEndpoint', event.currentTarget.value)}
-                />
-              </label>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Object storage region</span>
-                <TextField
-                  aria-label="Object storage region"
-                  value={form.objectStorageRegion}
-                  isDisabled={storage.controlsDisabled}
-                  onChange={(event) => update('objectStorageRegion', event.currentTarget.value)}
-                />
-              </label>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Workflow object prefix</span>
-                <TextField
-                  aria-label="Workflow object prefix"
-                  value={form.objectStoragePrefix}
-                  isDisabled={storage.controlsDisabled}
-                  onChange={(event) => update('objectStoragePrefix', event.currentTarget.value)}
-                />
-                <span className="app-settings-field-help">
-                  Changing this on an existing installation does not move objects. Migrate data before switching
-                  prefixes.
-                </span>
-              </label>
-              <div className="app-settings-field">
-                <span className="app-settings-field-label">S3 address style</span>
-                <ModeGroup label="S3 address style">
-                  <ModeButton
-                    active={!form.objectStorageForcePathStyle}
-                    disabled={storage.controlsDisabled}
-                    onClick={() => update('objectStorageForcePathStyle', false)}
-                  >
-                    Virtual host
-                  </ModeButton>
-                  <ModeButton
-                    active={form.objectStorageForcePathStyle}
-                    disabled={storage.controlsDisabled}
-                    onClick={() => update('objectStorageForcePathStyle', true)}
-                  >
-                    Path style
-                  </ModeButton>
-                </ModeGroup>
-              </div>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Object storage access key ID</span>
-                <TextField
-                  aria-label="Object storage access key ID"
-                  value={form.storageAccessKeyId}
-                  isDisabled={storage.controlsDisabled}
-                  placeholder="access-key-id"
-                  onChange={(event) => update('storageAccessKeyId', event.currentTarget.value)}
-                />
-              </label>
-              <label className="app-settings-field">
-                <span className="app-settings-field-label">Object storage secret access key</span>
-                <TextField
-                  aria-label="Object storage secret access key"
-                  type="password"
-                  value={form.storageAccessKey}
-                  isDisabled={storage.controlsDisabled}
-                  placeholder={
-                    form.storageAccessKeyConfigured ? 'Already saved; leave blank to keep it' : 'secret-access-key'
-                  }
-                  onChange={(event) => update('storageAccessKey', event.currentTarget.value)}
-                />
-                <span className="app-settings-field-help">
-                  {form.storageAccessKeyConfigured
-                    ? 'A secret access key is saved. Enter a new value only when rotating it.'
-                    : 'Required before managed object storage can be enabled.'}
-                </span>
-              </label>
-            </>
-          )}
-        </div>
-      </section>
-
-      {form.storageMode === 'managed' ? (
-        <section className="app-settings-section" aria-label="Metadata database">
-          <div className="app-settings-field-grid" aria-busy={storage.controlsDisabled}>
-            <div className="app-settings-field">
-              <span className="app-settings-field-label">Metadata database</span>
-              <ModeGroup label="Database backend" wide>
-                <ModeButton
-                  active={form.databaseMode === 'local-docker'}
-                  disabled={storage.controlsDisabled}
-                  onClick={() => {
-                    storage.setForm((current) => ({
-                      ...current,
-                      databaseMode: 'local-docker',
-                      databaseSslMode: 'disable',
-                    }));
-                    storage.clearFeedback();
-                  }}
-                >
-                  Local Docker Postgres
-                </ModeButton>
-                <ModeButton
-                  active={form.databaseMode === 'managed'}
-                  disabled={storage.controlsDisabled}
-                  onClick={() => {
-                    storage.setForm((current) => ({ ...current, databaseMode: 'managed', databaseSslMode: 'require' }));
-                    storage.clearFeedback();
-                  }}
-                >
-                  Managed Postgres
-                </ModeButton>
-              </ModeGroup>
-              <span className="app-settings-field-help">
-                {form.databaseMode === 'local-docker'
-                  ? 'Use the optional Compose Postgres service for local managed-storage rehearsals. It must already be running before object storage mode can apply.'
-                  : 'Use an external PostgreSQL cluster for managed metadata.'}
-              </span>
+              <StorageField label="Object storage region" value={form.objectStorageRegion} />
+              <StorageField label="Workflow object prefix" value={form.objectStoragePrefix} />
+              <StorageField
+                label="S3 address style"
+                value={form.objectStorageForcePathStyle ? 'Path style' : 'Virtual host'}
+              />
+              <StorageField label="Object storage access key ID" value={form.storageAccessKeyId} />
+              <StorageField
+                label="Object storage secret access key"
+                hidden
+                value={form.storageAccessKeyConfigured ? 'Configured (hidden)' : 'Not configured'}
+              />
+              <StorageField
+                label="PostgreSQL connection string"
+                hidden
+                value={form.databaseConnectionStringConfigured ? 'Configured (hidden)' : 'Not configured'}
+              />
+              <StorageField
+                label="PostgreSQL SSL"
+                value={
+                  form.databaseSslMode === 'verify-full'
+                    ? 'Verify full'
+                    : form.databaseSslMode === 'require'
+                      ? 'Require'
+                      : 'Disabled'
+                }
+              />
             </div>
-
-            {form.databaseMode === 'managed' ? (
-              <>
-                <label className="app-settings-field">
-                  <span className="app-settings-field-label">PostgreSQL connection string</span>
-                  <TextField
-                    aria-label="PostgreSQL connection string"
-                    type="password"
-                    value={form.databaseConnectionString}
-                    isDisabled={storage.controlsDisabled}
-                    placeholder={
-                      form.databaseConnectionStringConfigured
-                        ? 'Already saved; leave blank to keep it'
-                        : 'postgresql://user:password@host:5432/database'
-                    }
-                    onChange={(event) => update('databaseConnectionString', event.currentTarget.value)}
-                  />
-                  <span className="app-settings-field-help">
-                    {form.databaseConnectionStringConfigured
-                      ? 'A connection string is saved. Enter a new value only when rotating it.'
-                      : 'Required before object storage mode can use a managed PostgreSQL cluster.'}
-                  </span>
-                </label>
-                <div className="app-settings-field">
-                  <span className="app-settings-field-label">PostgreSQL SSL</span>
-                  <ModeGroup label="PostgreSQL SSL mode">
-                    <ModeButton
-                      active={form.databaseSslMode === 'require'}
-                      disabled={storage.controlsDisabled}
-                      onClick={() => update('databaseSslMode', 'require')}
-                    >
-                      Require
-                    </ModeButton>
-                    <ModeButton
-                      active={form.databaseSslMode === 'verify-full'}
-                      disabled={storage.controlsDisabled}
-                      onClick={() => update('databaseSslMode', 'verify-full')}
-                    >
-                      Verify full
-                    </ModeButton>
-                    <ModeButton
-                      active={form.databaseSslMode === 'disable'}
-                      disabled={storage.controlsDisabled}
-                      onClick={() => update('databaseSslMode', 'disable')}
-                    >
-                      Disable
-                    </ModeButton>
-                  </ModeGroup>
-                </div>
-              </>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
+            <p className="app-settings-field-help">Secret values are never returned to this page.</p>
+          </>
+        )}
+      </section>
+      <section className="app-settings-section" aria-label="Choose local or external storage">
+        <h3>Local or external storage</h3>
+        <p>
+          <code>local-storage</code> starts private PostgreSQL and MinIO automatically.
+          <code> external-storage</code> connects to PostgreSQL and S3-compatible services you provide. Choose the mode
+          when starting Rivet, not in this panel.
+        </p>
+        <h3>How to use external storage</h3>
+        <ol>
+          <li>
+            Create a dedicated PostgreSQL database and an S3 bucket. Set the selected tier’s
+            <code> RIVET_DEV_</code>, <code>RIVET_STAGING_</code> or <code>RIVET_PROD_</code> database and S3 connection
+            values in the shared <code>.env</code>. Use <code>deploy/studio-server/.env.example</code> as the reference.
+          </li>
+          <li>
+            Stop the current local deployment with its launcher’s <code>--stop</code> option. Keep its data and
+            encryption keys.
+          </li>
+          <li>
+            Start the external deployment, for example <code>yarn studio-server:dev:external-storage</code>. Staging and
+            production also require the matching release manifest and installation confirmation. Leave the default
+            installation names in place, or use a distinct name for the external installation.
+          </li>
+        </ol>
+        <p role="note">
+          Starting an external deployment does not move existing data. Keep the local installation until a supported
+          transfer is complete and verified. Restore legacy backup below accepts original v1 legacy archives; it is not
+          a PostgreSQL/S3 backup or a general local-to-external transfer. Changing connections for an existing
+          installation requires a coordinated operator procedure.
+        </p>
+      </section>
+      {storage.loaded && form.deploymentManaged && form.storageMode === 'managed' && <LegacyRestorePanel />}
     </div>
   );
 }

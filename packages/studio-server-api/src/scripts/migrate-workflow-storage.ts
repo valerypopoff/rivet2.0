@@ -1,4 +1,7 @@
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { assertPortableRuntimeTree } from '../legacy-restore/native-runtime.js';
+import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -30,8 +33,13 @@ import { initializeFilesystemProjectTransactions } from '../routes/workflows/fil
 import { syncDirectory, writeDurableExclusive } from '../routes/workflows/filesystem-transaction-primitives.js';
 import type { VmMigrationVerificationReport } from '../vm-migration-service.js';
 import { collectSourceAppSettings, migrateAppSettings } from './migrate-app-settings.js';
-import { migrateOperationalSqlite } from './migrate-operational-sqlite.js';
-import { migrateRuntimeLibraries } from './migrate-runtime-libraries.js';
+import { migrateOperationalSqlite, validateOperationalMigrationSource } from './migrate-operational-sqlite.js';
+import {
+  migrateRuntimeLibraries,
+  readSourceManifest,
+  validateRuntimeLibraryDirectory,
+  assertRuntimeLibraryArchiveSpace,
+} from './migrate-runtime-libraries.js';
 import { createPrecopyAwareMigrationBlobStore, precopyMigrationTexts } from './migration-precopy.js';
 import { fingerprintVmMigrationSourceParts, readVmMigrationSourceParts } from './vm-migration-source-manifest.js';
 import { recordMigrationProgress } from './migration-progress.js';
@@ -78,8 +86,6 @@ function loadNearestEnvFile(startDir: string): void {
     currentDir = parentDir;
   }
 }
-
-loadNearestEnvFile(process.cwd());
 
 function getSourceRoot(): string {
   const cliSourceRoot = process.argv.find((arg) => arg.startsWith('--source-root='))?.slice('--source-root='.length);
@@ -555,7 +561,104 @@ async function verifyMigration(
   return summary;
 }
 
+export type LegacyRestoreRoots = { workflows: string; recordings: string; appData: string; runtimeLibraries: string };
+
+/** Complete non-mutating source preflight, shared by UI restore and its worker. */
+export async function prepareLegacyRestoreSource(roots: LegacyRestoreRoots, target: ManagedWorkflowStorageConfig) {
+  enableWorkflowRecordingMigrationCopyMode();
+  const workflows = await collectSourceWorkflows(roots.workflows);
+  const recordings = await validateSourceRecordingBundles(roots.recordings);
+  const settings = await collectSourceAppSettings(roots.appData, target);
+  await validateOperationalMigrationSource(roots.appData);
+  const manifest = await readSourceManifest(roots.runtimeLibraries);
+  if (Object.keys(manifest.packages).length) {
+    await assertPortableRuntimeTree(path.join(roots.runtimeLibraries, 'current'));
+    await validateRuntimeLibraryDirectory(path.join(roots.runtimeLibraries, 'current'));
+    await assertRuntimeLibraryArchiveSpace(
+      path.join(roots.runtimeLibraries, 'current'),
+      path.dirname(roots.runtimeLibraries),
+    );
+  }
+  return {
+    projects: workflows.length,
+    recordings,
+    runtimePackages: Object.keys(manifest.packages).length,
+    settings,
+    sourceManifest: fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)),
+  };
+}
+
+/** Restore uses the same per-domain importer and exact verifier, not an alternate graph/settings parser. */
+export async function importLegacyRestoreSource(options: {
+  roots: LegacyRestoreRoots;
+  target: ManagedWorkflowStorageConfig;
+  encryptionKey: string;
+  settings: readonly import('./migrate-app-settings.js').SettingsRow[];
+  sourceManifest: string;
+  verifyOnly: boolean;
+}) {
+  const { roots, target, verifyOnly } = options;
+  enableWorkflowRecordingMigrationCopyMode();
+  if (fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)) !== options.sourceManifest)
+    throw new Error('Prepared restore source changed.');
+  // UI restore replaces data in an initialized installation. Only the deployment
+  // migration Job may migrate its schema; serving pods must verify it instead.
+  const backend = new ManagedWorkflowBackend(target, undefined, { migrationMode: verifyOnly ? 'verify' : 'restore' });
+  const gatePool = new Pool(getManagedDbPoolConfig(target));
+  const releaseGate = await acquireVmMigrationImporterLock(gatePool);
+  const sourceIdentity = migrationSourceIdentity([
+    roots.workflows,
+    roots.appData,
+    roots.recordings,
+    roots.runtimeLibraries,
+  ]);
+  const targetIdentity = migrationTargetIdentity(target);
+  try {
+    if (!verifyOnly) {
+      await beginVmMigrationTarget(gatePool, sourceIdentity, targetIdentity);
+      await bindVmMigrationSourceManifest(gatePool, sourceIdentity, targetIdentity, options.sourceManifest);
+    }
+    await backend.initialize();
+    if (!verifyOnly) {
+      await importSourceFolders(roots.workflows, backend);
+      const projects = await importSourceWorkflows(await collectSourceWorkflows(roots.workflows), backend);
+      await importSourceRecordings(roots.workflows, backend, projects);
+    }
+    const summary = await verifyMigration(roots.workflows, backend);
+    await migrateOperationalSqlite({ sourceAppDataRoot: roots.appData, target, verifyOnly });
+    await migrateRuntimeLibraries({
+      sourceRoot: roots.runtimeLibraries,
+      target,
+      verifyOnly,
+      platformValidated: true,
+      artifactTemporaryDirectory: path.dirname(roots.runtimeLibraries),
+    });
+    await migrateAppSettings({
+      sourceRoot: roots.appData,
+      target,
+      encryptionKey: options.encryptionKey,
+      verifyOnly,
+      preparedRows: options.settings,
+    });
+    if (fingerprintVmMigrationSourceParts(await readVmMigrationSourceParts(roots)) !== options.sourceManifest)
+      throw new Error('Restore source changed during import.');
+    if (verifyOnly) await verifyVmMigrationTargetGate(gatePool, sourceIdentity, targetIdentity);
+    return summary;
+  } finally {
+    try {
+      await backend.dispose();
+    } finally {
+      try {
+        await releaseGate();
+      } finally {
+        await gatePool.end();
+      }
+    }
+  }
+}
+
 async function main() {
+  loadNearestEnvFile(process.cwd());
   const command = process.argv[2];
   if (command !== 'precopy' && command !== 'migrate' && command !== 'verify' && command !== 'freeze-source') {
     throw new Error('Expected migration command: freeze-source, precopy, migrate or verify.');
@@ -850,31 +953,32 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const databasePassword = (() => {
-    try {
-      return new URL(process.env.RIVET_MIGRATION_TARGET_DATABASE_URL ?? '').password;
-    } catch {
-      return '';
-    }
-  })();
-  const decodedDatabasePassword = (() => {
-    try {
-      return decodeURIComponent(databasePassword);
-    } catch {
-      return databasePassword;
-    }
-  })();
-  const secrets = [
-    process.env.RIVET_MIGRATION_TARGET_DATABASE_URL,
-    databasePassword,
-    decodedDatabasePassword,
-    process.env.RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID,
-    process.env.RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY,
-    process.env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
-  ].filter((secret): secret is string => Boolean(secret));
-  const redacted = secrets.reduce((value, secret) => value.replaceAll(secret, '[redacted]'), message);
-  console.error(`[workflow-storage] Migration failed: ${redacted}`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const databasePassword = (() => {
+      try {
+        return new URL(process.env.RIVET_MIGRATION_TARGET_DATABASE_URL ?? '').password;
+      } catch {
+        return '';
+      }
+    })();
+    const decodedDatabasePassword = (() => {
+      try {
+        return decodeURIComponent(databasePassword);
+      } catch {
+        return databasePassword;
+      }
+    })();
+    const secrets = [
+      process.env.RIVET_MIGRATION_TARGET_DATABASE_URL,
+      databasePassword,
+      decodedDatabasePassword,
+      process.env.RIVET_MIGRATION_TARGET_S3_ACCESS_KEY_ID,
+      process.env.RIVET_MIGRATION_TARGET_S3_SECRET_ACCESS_KEY,
+      process.env.RIVET_MIGRATION_TARGET_SETTINGS_ENCRYPTION_KEY,
+    ].filter((secret): secret is string => Boolean(secret));
+    const redacted = secrets.reduce((value, secret) => value.replaceAll(secret, '[redacted]'), message);
+    console.error(`[workflow-storage] Migration failed: ${redacted}`);
+    process.exit(1);
+  });

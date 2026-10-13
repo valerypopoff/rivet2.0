@@ -1,5 +1,4 @@
 import type {
-  DeploymentDatabaseMode,
   DeploymentDatabaseSslMode,
   DeploymentStorageMode,
   DeploymentStorageSettings,
@@ -89,10 +88,7 @@ export type WebAppAuthSettingsForm = {
 
 export type DeploymentStorageSettingsForm = {
   storageMode: DeploymentStorageMode;
-  artifactsHostPath: string;
-  databaseMode: DeploymentDatabaseMode;
   databaseSslMode: DeploymentDatabaseSslMode;
-  databaseConnectionString: string;
   databaseConnectionStringConfigured: boolean;
   objectStorageBucket: string;
   objectStorageEndpoint: string;
@@ -100,9 +96,7 @@ export type DeploymentStorageSettingsForm = {
   objectStoragePrefix: string;
   objectStorageForcePathStyle: boolean;
   deploymentManaged: boolean;
-  storageModeChangeBlockedReason: string | null;
   storageAccessKeyId: string;
-  storageAccessKey: string;
   storageAccessKeyConfigured: boolean;
 };
 
@@ -176,10 +170,7 @@ export function createWebAppAuthForm(settings: WebAppAuthSettings): WebAppAuthSe
 export function createDeploymentStorageForm(settings: DeploymentStorageSettings): DeploymentStorageSettingsForm {
   return {
     storageMode: settings.storageMode,
-    artifactsHostPath: settings.artifactsHostPath,
-    databaseMode: settings.databaseMode,
     databaseSslMode: settings.databaseSslMode,
-    databaseConnectionString: '',
     databaseConnectionStringConfigured: settings.databaseConnectionStringConfigured,
     objectStorageBucket: settings.objectStorageBucket ?? '',
     objectStorageEndpoint: settings.objectStorageEndpoint ?? '',
@@ -187,14 +178,7 @@ export function createDeploymentStorageForm(settings: DeploymentStorageSettings)
     objectStoragePrefix: settings.objectStoragePrefix ?? 'workflows/',
     objectStorageForcePathStyle: settings.objectStorageForcePathStyle ?? false,
     deploymentManaged: settings.deploymentManaged ?? false,
-    storageModeChangeBlockedReason:
-      settings.storageModeChangeBlockedReason !== undefined
-        ? settings.storageModeChangeBlockedReason
-        : settings.storageMode === 'filesystem'
-          ? 'Complete the local files-to-SQLite migration in the "Local storage upgrade" tab before switching to S3 + PostgreSQL.'
-          : 'Changing from S3 + PostgreSQL to local storage requires a separate verified operator migration.',
     storageAccessKeyId: settings.storageAccessKeyId,
-    storageAccessKey: '',
     storageAccessKeyConfigured: settings.storageAccessKeyConfigured,
   };
 }

@@ -4,6 +4,8 @@ import type { Pool } from 'pg';
 
 import { createManagedWorkflowQueries } from '../routes/workflows/managed/db.js';
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from '../routes/workflows/managed/schema.js';
+import { createManagedWorkflowContext } from '../routes/workflows/managed/context.js';
+import type { ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
 
 function createExecutionLookupRow() {
   return {
@@ -245,4 +247,64 @@ test('managed latest web app execution lookup uses the published web app slug an
   assert.match(normalizedSql, /JOIN workflow_revisions r ON r\.revision_id = w\.current_draft_revision_id/);
   assert.match(normalizedSql, /app\.allowed_emails/);
   assert.match(normalizedSql, /WHERE app\.slug_lookup_name = \$1$/);
+});
+
+test('UI restore verifies the installed schema and bucket without Kubernetes migration permissions', async (t) => {
+  const names = ['KUBERNETES_SERVICE_HOST', 'RIVET_SCHEMA_MIGRATION_RELEASE', 'RIVET_MANAGED_WORKFLOW_SCHEMA_MODE'];
+  const previous = names.map((name) => process.env[name]);
+  process.env.KUBERNETES_SERVICE_HOST = '127.0.0.1';
+  delete process.env.RIVET_SCHEMA_MIGRATION_RELEASE;
+  process.env.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE = 'migrate';
+  t.after(() =>
+    names.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name];
+      else process.env[name] = previous[index];
+    }),
+  );
+  for (const migrationMode of ['restore', 'copy'] as const) {
+    let bucketChecks = 0;
+    let bucketCreates = 0;
+    let schemaChecks = 0;
+    const blob = {
+      checkHealth: async () => {
+        bucketChecks++;
+      },
+      initialize: async () => {
+        bucketCreates++;
+      },
+    } as ManagedWorkflowBlobStore;
+    const context = createManagedWorkflowContext(
+      {
+        databaseMode: 'managed',
+        databaseUrl: `postgresql://fixture@127.0.0.1:1/restore_${migrationMode}`,
+        databaseSslMode: 'disable',
+        objectStorageBucket: 'fixture',
+        objectStorageRegion: 'us-east-1',
+        objectStorageEndpoint: 'http://127.0.0.1:1',
+        objectStoragePrefix: 'workflows/',
+        objectStorageAccessKeyId: 'fixture',
+        objectStorageSecretAccessKey: 'fixture',
+        objectStorageForcePathStyle: true,
+      },
+      blob,
+      { migrationMode },
+    );
+    t.mock.method(context.pool, 'connect', async () => {
+      schemaChecks++;
+      throw new Error('schema verification reached');
+    });
+    try {
+      await assert.rejects(
+        context.initialize(),
+        migrationMode === 'restore'
+          ? /schema verification reached/
+          : /Kubernetes schema migration requires its release identity/,
+      );
+      assert.equal(bucketChecks, migrationMode === 'restore' ? 1 : 0);
+      assert.equal(bucketCreates, migrationMode === 'restore' ? 0 : 1);
+      assert.equal(schemaChecks, migrationMode === 'restore' ? 1 : 0);
+    } finally {
+      await context.dispose();
+    }
+  }
 });

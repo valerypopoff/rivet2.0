@@ -1,0 +1,47 @@
+# Same API roles, schema Job, storage and release gates; no availability claim.
+# Dependencies are owned by the single-machine launcher, not this Helm release.
+deploymentProfile: single-machine
+service:
+  api:
+    targetPort: 8081
+  execution:
+    targetPort: 8082
+  evaluation:
+    targetPort: 8083
+gateway:
+  mode: embedded
+ingress:
+  enabled: false
+vault:
+  enabled: false
+replicaCount:
+  proxy: 1
+  web: 1
+  backend: 1
+  execution: 1
+  evaluation: 1
+autoscaling:
+  proxy:
+    enabled: false
+  execution:
+    enabled: false
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 4
+  retryAfterSeconds: 1
+hostedEvaluations:
+  enabled: true
+  workerConcurrency: 1
+  maxJobsPerRun: 2000
+  maxOutstandingJobs: 10000
+  # One machine cannot isolate batch work by node; the operator can add a
+  # lower-priority class later. This is not the multi-node production profile.
+legacyRestore:
+  enabled: true
+resourceLimitAcknowledgements:
+  proxy:
+    memory: 'Single-machine proxy memory cap awaits representative installation measurements.'
+    ephemeralStorage: 'Single-machine proxy scratch cap awaits representative installation measurements.'
+  evaluation:
+    memory: 'Single-machine Evaluation memory cap awaits representative graph measurements; concurrency is one.'
+    ephemeralStorage: 'Single-machine Evaluation scratch cap awaits representative graph measurements.'

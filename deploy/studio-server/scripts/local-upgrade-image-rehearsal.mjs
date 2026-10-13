@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { legacyServingFixtureEntrypoint } from './lib/legacy-serving-fixture.mjs';
 import {
   assertFreshRehearsalResources,
   assertOwnedRehearsalCompose,
@@ -729,6 +730,12 @@ async function main() {
     no_proxy: '',
   };
   const volumes = [
+    {
+      type: 'bind',
+      source: path.join(directory, 'legacy-api-entrypoint.sh'),
+      target: '/opt/rivet/api-entrypoint.sh',
+      read_only: true,
+    },
     { type: 'volume', source: 'fixture_workflows', target: '/workflows' },
     { type: 'volume', source: 'fixture_recordings', target: '/workflow-recordings' },
     { type: 'volume', source: 'fixture_libraries', target: '/data/runtime-libraries' },
@@ -785,6 +792,13 @@ async function main() {
   await fs.copyFile(
     path.join(root, 'deploy/studio-server/scripts/local-upgrade-fixture-registry.mjs'),
     config.registryScript,
+  );
+  await fs.writeFile(
+    path.join(directory, 'legacy-api-entrypoint.sh'),
+    legacyServingFixtureEntrypoint(
+      await fs.readFile(path.join(root, 'deploy/studio-server/images/api/entrypoint.sh'), 'utf8'),
+    ),
+    { mode: 0o755 },
   );
   await stageLocalUpgradeRehearsalTools(directory);
   await fs.writeFile(file, JSON.stringify(config), { mode: 0o600 });

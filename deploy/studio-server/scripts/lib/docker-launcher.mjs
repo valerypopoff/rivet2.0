@@ -102,10 +102,10 @@ export function assertValidPort(value, fallback) {
 }
 
 export function ensurePortAvailable(port, options) {
-  const { envFileLabel, label } = options;
+  const { envFileLabel, label, portVariable = 'RIVET_PORT' } = options;
   const busyError = () =>
     new Error(
-      `[${label}] Host port ${port} is already in use. Set RIVET_PORT in ${envFileLabel} to a free port, or stop the process currently listening on ${port}.`,
+      `[${label}] Host port ${port} is already in use. Set ${portVariable} in ${envFileLabel} to a free port, or stop the process currently listening on ${port}.`,
     );
   const probePrivilegedPort =
     options.probePrivilegedPort ??
@@ -149,7 +149,7 @@ export function ensurePortAvailable(port, options) {
       });
     });
 
-    server.listen(port, '0.0.0.0');
+    server.listen(port, options.host ?? '0.0.0.0');
   });
 }
 

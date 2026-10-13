@@ -45,6 +45,7 @@ export const WorkflowLibraryContextMenus: FC<{
           onCreateFolder={() => void handleCreateFolderFromContextMenu()}
           onCreateProject={() => void handleCreateProjectFromContextMenu()}
           onUploadProject={() => void handleUploadProjectFromFolder()}
+          onUploadBundle={controller.handleUploadBundleFromFolder}
           onDelete={() => void handleDeleteFolderFromContextMenu()}
         />
       ) : null}

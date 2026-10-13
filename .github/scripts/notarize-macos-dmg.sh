@@ -45,4 +45,4 @@ xcrun notarytool submit "$dmg_path" \
   --key-id "$APPLE_API_KEY" \
   --issuer "$APPLE_API_ISSUER" \
   --wait
-xcrun stapler staple "$dmg_path"
+node .github/scripts/staple-macos-dmg.mjs "$dmg_path"

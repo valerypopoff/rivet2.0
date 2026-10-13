@@ -1,4 +1,31 @@
 {{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- if not (has .Values.deploymentProfile (list "cluster" "single-machine")) -}}
+{{- fail "deploymentProfile must be cluster or single-machine" -}}
+{{- end -}}
+{{- if eq .Values.deploymentProfile "single-machine" -}}
+{{- if or .Values.compatibility.legacyStartupSettingsFiles .Values.vault.enabled (ne .Values.gateway.mode "embedded") -}}
+{{- fail "single-machine requires current images, direct Secrets and the embedded gateway" -}}
+{{- end -}}
+{{- $ports := list -}}
+{{- range $role := list "proxy" "web" "api" "execution" "evaluation" "executor" "backendHealth" -}}
+{{- $port := toString (index $.Values.service $role "targetPort") -}}
+{{- if has $port $ports -}}
+{{- fail "single-machine application containers require distinct target ports" -}}
+{{- end -}}
+{{- $ports = append $ports $port -}}
+{{- end -}}
+{{- range $component := list "proxy" "web" "backend" "execution" -}}
+{{- if index $.Values.autoscaling $component "enabled" -}}
+{{- fail "single-machine deployment cannot enable autoscaling" -}}
+{{- end -}}
+{{- if gt (int (index $.Values.replicaCount $component)) 1 -}}
+{{- fail "single-machine deployment permits at most one replica per application role" -}}
+{{- end -}}
+{{- end -}}
+{{- if or (gt (int .Values.replicaCount.evaluation) 1) (gt (int .Values.hostedEvaluations.workerConcurrency) 1) -}}
+{{- fail "single-machine Evaluation capacity is limited to one worker and one concurrent trial" -}}
+{{- end -}}
+{{- end -}}
 {{- if not (kindIs "bool" .Values.workflowSchema.maintenanceValidation) -}}
 {{- fail "workflowSchema.maintenanceValidation must be a boolean" -}}
 {{- end -}}
@@ -14,6 +41,17 @@
 {{- fail "maintenance validation requires traffic and Evaluation replicas zero and autoscaling disabled" -}}
 {{- end -}}
 {{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- if not (kindIs "bool" .Values.legacyRestore.enabled) -}}
+{{- fail "legacyRestore.enabled must be a boolean" -}}
+{{- end -}}
+{{- if and .Values.legacyRestore.enabled (or (not (regexMatch $kubernetesQuantityPattern .Values.legacyRestore.size)) (regexMatch $zeroKubernetesQuantityPattern .Values.legacyRestore.size)) -}}
+{{- fail "legacyRestore.size must be a positive Kubernetes storage quantity" -}}
+{{- end -}}
+{{- range $key := list "RIVET_LEGACY_RESTORE_ENABLED" "RIVET_LEGACY_RESTORE_ROOT" "RIVET_LEGACY_RESTORE_INSTALLATION" "RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN" "RIVET_LEGACY_RESTORE_EXECUTION_READY_URL" "RIVET_LEGACY_RESTORE_EVALUATION_READY_URL" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is chart-owned; configure legacyRestore instead" $key) -}}
+{{- end -}}
+{{- end -}}
 
 {{- if not (has .Values.gateway.mode (list "external" "embedded")) -}}
 {{- fail "gateway.mode must be external or embedded" -}}
@@ -170,7 +208,7 @@
 {{- if and .Values.hostedEvaluations.enabled (not .Values.workflowSchema.maintenanceValidation) (lt (int .Values.replicaCount.evaluation) 1) -}}
 {{- fail "hostedEvaluations.enabled requires replicaCount.evaluation >= 1" -}}
 {{- end -}}
-{{- if and .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
+{{- if and (eq .Values.deploymentProfile "cluster") .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
 {{- fail "production hostedEvaluations require scheduling.nodeSelector or a lower-priority scheduling.priorityClassName so batch pods cannot consume reserved public capacity" -}}
 {{- end -}}
 
@@ -487,8 +525,13 @@
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
 {{- $apiPods := add $backendReplicas $executionReplicas $evaluationReplicas -}}
 {{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
+{{- $restoreConnections := 0 -}}
+{{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) -}}
+{{- $restoreConnections = add (mul $apiPods 2) 3 -}}
+{{- $requiredPostgresConnections = add $requiredPostgresConnections $restoreConnections -}}
+{{- end -}}
 {{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
-{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN)%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $evaluationCapacityDetail $postgresMaxConnections) -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN) + %d restore%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $restoreConnections $evaluationCapacityDetail $postgresMaxConnections) -}}
 {{- end -}}
 
 {{- range $key := list "RIVET_MANAGED_MAINTENANCE_ENABLED" "RIVET_MANAGED_MAINTENANCE_INTERVAL_MS" "RIVET_MANAGED_MAINTENANCE_LEASE_MS" "RIVET_MANAGED_MAINTENANCE_BATCH_SIZE" -}}

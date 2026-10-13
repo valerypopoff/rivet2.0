@@ -1,5 +1,177 @@
 # Architecture
 
+## Supported serving stack
+
+New server deployments use PostgreSQL and S3-compatible storage. Docker Compose
+and Kubernetes are deployment choices around the same application.
+See [Supported Server Stack](./server-stack.md) for entry points, profiles and
+migration boundaries. File/SQLite paths below are historical migration/fixture
+internals, not alternative deployments. Desktop/standalone runtimes are unchanged.
+
+Container deployments retain the same control, execution and Evaluation roles;
+they do not revive a combined API profile or require knowledge of replica count.
+The local-storage launcher starts private PostgreSQL/MinIO services. External
+storage is operator-provided. The managed serving contract requires verify-only
+processes and shared stores, not a Kubernetes environment marker.
+Startup credentials and release orchestration are described in
+[Supported Server Stack](./server-stack.md#ownership-startup-and-recovery).
+
+## Managed legacy backup restore
+
+`legacy-restore/service.ts` is the singleton control-backend owner for the UI's
+destructive legacy restore. It runs archive/import work in a fixed child worker,
+reusing the per-domain services exported by `migrate-workflow-storage.ts`; the
+offline CLI retains its empty-destination contract. There is no new controller
+deployment, Kubernetes Job, bucket sweep, or database swap.
+
+The importer's explicit backend `restore` mode verifies the initialized workflow
+schema and destination bucket before copying data, with background tasks disabled.
+It must not use the fresh-target CLI `copy` mode: that can migrate schema and is
+not authorized from a serving container. The deployment migration task (Compose
+one-shot service or Kubernetes Job) remains the sole schema owner; restore requires
+neither its identity nor Kubernetes permissions. The real local-cluster browser fixture and supervised
+managed regression exercise this distinction.
+
+`rivet_restore_control` stores the deployment binding, safe public journal and
+encrypted recovery snapshot outside the application's reset tables. The private
+schema and deployment binding initialize in one transaction on first install;
+complete existing control tables require only ownership validation.
+The deployment migrator holds that same restore coordinator across the ownership
+preflight, workflow DDL and initial binding; an unfinished restore blocks upgrade.
+This closes the first-install check/commit race without a second coordination
+system or changing normal read-only schema verification.
+Serving APIs and the editor executor hold shared PostgreSQL session leases; the restore worker
+requires exclusive ownership after drain. Maintenance is checked before settings
+seeding, blocks ordinary routes, suppresses background jobs during validation
+restart, and retains the administrator's authentication/settings snapshot for
+control-only recovery. The existing supervisor receives a loopback/token-only
+managed restart action. Lost browser connections do not own accepted work.
+Running API workloads receive the same chart-owned storage bootstrap as the
+migration Job, with their actual profile passed to the restore declaration.
+The enable/installation values must reach every serving role; control alone gets
+scratch and configured-consumer readiness URLs. Job-only environment rendering
+cannot enable the feature or provide distributed writer fencing.
+
+Deletion uses a closed table registry, rejects external foreign keys/custom
+triggers/RLS/inheritance, takes table locks and truncates with RESTRICT. Workflow-object
+deletion captures exact references whose resource identities match their owning
+rows, constrains them to the effective workflow namespace and binds their
+ETag/current version. Unversioned deletion is conditional; unrelated objects,
+unreferenced objects and unproven historical versions are not swept.
+Runtime-library archives are always retained: their bucket-global fixed prefix
+and content-derived migration IDs do not establish exclusive ownership. Their
+catalog is still replaced, and the existing importer selects/verifies the backed-up
+release. This rule also applies to inventories saved by earlier restore attempts.
+New deletion inventories query only workflow artifacts; missing or protected
+retained runtime archives cannot veto an otherwise valid replacement.
+The installation
+binding is the chart's namespace/release identity; sharing one application catalog
+between independent Rivet installations is unsupported.
+
+Current deployment-storage settings are an explicit preservation exception. Shared
+OAuth settings are kept only when they provide the current administrator's UI
+login; with key-based UI access, the source web-app OAuth settings are restored.
+Ordinary settings, including UI environment values and
+Browser-access flags, use the source import descriptors. Source archive hashes
+are checked before normalization/import; native modules and ELF/PE/Mach-O runtime
+binaries are rejected because this legacy format cannot certify platform or ABI
+compatibility. Interrupted validation verifies the uploaded digest and rebuilds
+only its UUID-owned extraction directory. The service owns its worker process,
+terminates it during shutdown and resumes from the durable checkpoint on restart.
+Validation cancellation waits for that worker to exit before cleaning scratch or
+settling the request. Replacement cannot be cancelled after it is accepted.
+The journal can advertise confirmation just before its validator exits; confirmation
+waits for that owned task and then rechecks admission under the coordinator.
+Validation cancellation also covers this handoff, without treating accepted
+replacement work as cancellable.
+Confirmation and retry recheck lifecycle admission after asynchronous preparation,
+immediately before committing their checkpoint, not just when acquiring a lock.
+Shutdown also owns an in-progress upload: abort its stream, persist the
+non-destructive failure and release its coordinator before closing the control
+store. Recheck admission after asynchronous lock acquisition. Failed advisory-lock
+queries discard their connection rather than returning a possibly locked session
+to the pool; worker deadlines use the same graceful/forced termination path as
+shutdown. Table clearing likewise discards a connection if rollback cannot be
+acknowledged, while preserving the original operation error. Legacy layout
+normalization makes both private rename-parent directories
+owner-writable, without changing the original backup's modes.
+Terminal recovery retries encrypted-snapshot erasure without reclassifying a
+verified restore as failed. A lost final restart acknowledgement closes the
+current generation for normal supervisor recovery instead of requiring a
+checkpoint that has already been erased.
+Task-failure handling is bound to its original operation ID and cannot overwrite
+completed, cancelled or ready-to-confirm checkpoints left by another owner.
+Finalization coalesces per service and holds the coordinator while checking the
+checkpoint, removing owned scratch and committing completion. Shutdown waits for
+accepted finalization; the supervisor acknowledgement is bounded and the lock is
+released before requesting restart.
+After a restart acknowledgement, that service stops admission and progress
+reconciliation until process replacement. It must not resend restart from the
+next status poll or reclassify the supervisor's closing listener as a failed
+restore. Warmup and normal serving each construct a fresh owner.
+Permission preflight checks every required SQL privilege and conditionally deletes
+fresh, restore-owned S3 probes in both artifact namespaces; Object Lock-protected
+deletion candidates block replacement. Runtime preflight shares the importer's directory
+validator without creating another full library-archive buffer.
+It also checks conservative runtime tar/PAX scratch capacity before acceptance
+and immediately before deletion. Intermediate runtime tars use the UUID-owned
+restore PVC scratch, not the pod's bounded `/tmp`; the underlying importer still
+buffers the artifact and therefore retains its existing memory tradeoff.
+Document-scoped workspace epochs reject writes from older browser tabs after a
+restore. Polling cannot overwrite a newer UI action response. Confirmation shows
+source and destination counts, and ordinary validation failures do not restart or
+interrupt the serving installation.
+The panel addresses the single `/api/legacy-restore` router prefix. Browser mocks
+must match that exact path boundary, not arbitrary suffixes that conceal duplicated
+API prefixes. Uncached runtime config advertises maintenance so opening the normal
+UI automatically selects the standalone recovery panel, including after a lost
+start acknowledgement; progress polling can also redirect an already open panel.
+Status reads have a ten-second deadline and resume sequential polling on timeout.
+Small control requests have a one-minute deadline; a timed-out acknowledgement
+is treated as potentially accepted and is never automatically resent. Uploads
+retain their separate one-hour server receive window.
+Only the verified extraction may normalize an unambiguous legacy runtime release
+layout; the offline importer retains its strict source-freeze contract. A
+replacement worker waits for the predecessor's coordinator lock, then rechecks
+the checkpoint; it cannot overwrite a still-running owner's terminal state.
+The existing server poll also reconciles idle service ownership: if a predecessor
+outlives the replacement worker's lock wait, its eventual restart checkpoint is
+still adopted. A non-destructive failure after serving resources were drained
+restarts the original generation instead of leaving a permanently fenced UI.
+Warmup retains its separate verification/completion owner; polling cannot restart
+it prematurely. No additional timer or job runner is introduced.
+Only terminal non-blocking checkpoints trigger serving recovery; uploading,
+validation and waiting for confirmation are not evidence that serving was drained.
+The installed workspace epoch is committed atomically with destructive
+checkpoints and survives later cancelled/invalid uploads. Ordinary request bodies
+keep their two-minute receive deadline while authenticated backup streaming has
+a one-hour deadline. Read-only/SSE observers do not own durable work; drain counts
+mutating HTTP requests plus the existing execution/storage owners instead.
+Replicas retain a fenced, probe-responsive standby during long restores rather
+than crash-looping. Warmup success requires healthy stores and an explicit warmup
+marker, not a standby's maintenance probe response.
+No production graph is run by restore verification.
+An executor's lost serving-lease connection is fatal, not a graceful-drain
+acknowledgement: it must not keep writing after PostgreSQL has released its lock.
+Polling responses arriving after participant disposal do not trigger restarts or
+other lifecycle actions, and its owned lease listener is removed after drain.
+After releasing its lease, the editor stays paused through restart/completion
+checkpoints until the co-located API requests the supervisor-owned restart. A
+self-signal could race that request and look like an unexpected executor crash.
+
+Regression owners: `legacy-restore.test.ts`, the real PostgreSQL/MinIO migration
+fixture (including signed HTTP upload and the real child worker), the supervisor
+maintenance/warmup/restart tests and headless `legacy-restore.spec.ts`. Live Kubernetes
+and provider-specific Object Lock/conditional-deletion qualification remain separate
+release evidence; mocked browser checks do not establish those guarantees.
+The managed fixture additionally starts compiled APIs, the actual bundled editor
+executor and the real supervisor, with independently restarted execution and
+Evaluation peers. It requires automatic completion, healthy normal generations,
+restored runtime caches and private UI environment visibility, then exercises a
+test-owned empty endpoint while checking its restored internal-only access policy.
+`test:legacy-restore-managed` is a focused entry to that same fixture and ownership
+test; the default `test:migration-managed` keeps the full migration negative cases.
+
 ## OpenRouter LLM execution
 
 LLM Chat and LLM Profile share Core's first-class OpenRouter adapter across hosted
@@ -788,8 +960,8 @@ The focused browser/owner checks are listed in
 - `Upload project` opens a browser file picker, uploads a chosen `.rivet-project` into the target folder, refreshes the tree, and leaves selection, open tabs, and folder expansion unchanged.
 - Project Settings shows `Last published at ...` next to the `Published` or `Unpublished changes` workflow status badge. `Unpublished` shows `Workflow is not published as endpoint.` beside the status badge instead, using the same secondary status-text size and vertical alignment as the timestamp. The timestamp comes from stored publication metadata, with a fallback for older already-published projects that predate the explicit field. Its compact, content-width `Endpoint` / `Web apps` section switcher sits in the modal header below the project name instead of consuming a full content row. The `Endpoint` tab uses the same compact prefixed endpoint-path control style as web apps, with no extra visible field label and with `Publish`/`Update` and `Unpublish` actions attached to the row. Workflow endpoint help describes the saved published slug until the user clicks `Publish` or `Update`, so editing the field alone does not imply that the live URL changed. Endpoint and web-app slug validation errors render directly under their slug controls before any URL/help copy. The history modal lists every successful publish for the project and lets users star, add comment labels, download, preview, or restore the selected stored snapshot. Project Settings is split into `Endpoint` and `Web apps` tabs, with the guarded `Delete project` action in a separated lower section that remains visible across both tabs; it is enabled only after both the workflow endpoint and all web apps are unpublished. On the `Endpoint` tab only, that lower section also shows `Published version history` as a visible secondary button. The `Web apps` tab lists `Project.uiGraphs`, shows each app row's colored publication status pill before the app name, lets each app use its own `/apps/<slug>` URL, renders that path as a link against the current Rivet server origin, and only shows the companion `/apps-latest/<slug>` latest-draft link while the row is in `Unpublished changes` and still exists in the current draft. Each web app can publish, update, or unpublish independently without requiring or changing the workflow endpoint publication. A published web app's `Update` action is disabled until its slug draft differs from the currently published slug or the row reports `Unpublished changes`. Projects with no web apps and projects with unpublished-only web apps get explicit empty-state text before any available rows. Published apps whose UI graph was removed from the current draft remain visible there only for unpublish cleanup. When web-app OAuth mode is active, each published app row also has an allowed-email list; saving that access list updates wrapper publication metadata only and does not republish the app or mutate project YAML.
 - `Run recordings` is likewise controller-driven: `useRunRecordingsController.ts` owns workflow loading, status/input filtering, keyset continuation paging, retained modal state, and delete flow, while `RecordingWorkflowSelect.tsx` and `RecordingRunsTable.tsx` render the focused UI slices. Input-filtered pages use an opaque continuation bound to the workflow/filter tuple: only the true initial request makes the one-record newest probe, and continuation responses fill their page within a bounded scheduling budget. Results append while the controller continues searching without rebuilding its deduplication set, and `RecordingRunsTable.tsx` virtualizes those appended cards without resetting measurements for unchanged rows. The controller exposes search progress as server-reported analyzed candidates over the selected status scope's already-loaded recording total; the progress bar needs neither a new count request nor an artifact read, reaches 100% only when the cursor exhausts the search, and preserves its last value after a manual stop. Workflow summaries and ordinary run pages use metadata indexes and omit unused project statistics; compressed recording/replay payloads remain lazy until replay or input-filter scanning needs them. A recording's ordinary parent `nodeExcluded` events, including a Watch branch that exhausts without reaching Stop, replay through the same editor data-flow reducer and retain the recorded **Not ran** state in inline and fullscreen output. Filesystem bundle drift checks run at startup or as throttled background work rather than blocking list requests. The history includes workflow endpoint runs and web-app action graph runs; web-app rows use their route path, such as `/apps/<slug>` or `/apps-latest/<slug>`, as the historical endpoint-at-execution label. Opening a recording hides the modal without flushing that controller state; the explicit modal close button is the reset boundary. The editor opens each virtual replay tab with the active Browser/Node selection instead of the default. Replay and published-version-preview tabs are detached from the workflow tree, so tree synchronization never treats their deliberate absence from it as a remote deletion. Recording mode is bound to both that replay project's ID and its exact virtual path, so its yellow frame, playback controls, and disabled executor status never leak into another open document, even if an old replay artifact reused an ID.
-- `Settings` in the workflow-library bottom action stack opens the wrapper-owned app settings modal. `AppSettingsModal.tsx` is a composition shell: each settings domain owns its form state, normalization, scoped save draft, and post-save behavior in `packages/studio-server-web/dashboard/app-settings/`, while `useSettingsFormResource.ts` provides the shared load/revision/save/conflict lifecycle. This prevents one tab from resetting or saving another tab's unsaved values. The modal uses a macOS-style left vertical tab rail so the many operator settings remain scannable without pushing the active form downward; taller settings panels let the modal grow up to the viewport first, then only the right-side panel scrolls while the tab rail stays fixed. App Settings tab panels do not repeat the active tab name as a heading, and save/error feedback appears in the action row beside the buttons. The `General` tab surfaces app identity and owns the `Trusted hosts` list for exact hostnames that bypass all built-in browser/public-route gates. The `Shell execution` tab sets the timeout and captured-output caps for allowed editor-side server commands, such as Git history and revision comparison; it does not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints. The `Server UI access` tab documents that the editor/dashboard gate mode is selected by deployment env through `RIVET_SERVER_UI_AUTH_MODE`, while storing the OAuth admin-email allowlist in app data. The `Storage` tab stores the workflow/runtime-library storage mode, filesystem artifacts host path, managed database settings, and managed object-storage credentials in app data; saved values win over deployment env defaults after the API/executor processes restart or Kubernetes pods roll out, and secrets are not returned to the browser. The `Workflow endpoints` tab owns published/latest workflow endpoint route slugs plus the default-on bearer-token requirement for public workflow endpoint calls. The `Web apps` tab owns web-app route slugs and browser auth mode: its `Routes` section stores the published/latest app top-level URL slugs in app data, and its `Auth` section stores only whether app visitors use `Key`, `OAuth`, or `No gate`. The `OAuth` tab owns the shared provider, dummy-login, and session settings in app data instead of reading the old OAuth env vars. The workflow and web-app route tabs write the shared `settings/public-routes.json` contract and wait for `/api/config` to reflect changes before showing success. The `Run recordings` tab stores recording queue depth, per-endpoint run history length, and age retention in app data instead of reading the old recordings limit env vars. The `Runtime libraries` tab installs, removes, cancels, and observes Code-node packages through the existing runtime-library job APIs. The `Node executor proxy` tab stores runtime `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values in app data so both hosted editor Node execution and API/headless endpoint execution can use an outbound proxy without reading those values from `.env`; the same tab also stores optional websocket URL overrides for the hosted Node executor and default Remote Debugger, while blank values keep the normal host-derived `/ws/executor/internal` and `/ws/latest-debugger` defaults. The `Docker` tab is explicitly launcher-only and has no Kubernetes runtime effect.
-- `Migration` is a distinct single-host Settings tab, not part of the active Storage form. Its operator-authenticated API tests an explicit managed PostgreSQL/S3 destination, persists a source maintenance marker outside the settings domain, blocks new data requests and WebSocket upgrades, waits for admitted HTTP/editor/web-app work and recording/library jobs to settle, then spawns the retryable filesystem-to-managed importer and an independent verify pass. The editor executor puts a per-run lease in the same app-data mount before checking the marker so a run cannot slip across the pause boundary. The durable status record has no target credentials and an interrupted run requires re-entry; a verified copy does not switch active storage or redirect Kubernetes traffic. Resuming VM writes after a final copy requires re-entered destination credentials and closes its startup gate first, including after a verify-child crash. See [VM to managed migration](vm-to-managed-migration.md).
+- `Settings` in the workflow-library bottom action stack opens the wrapper-owned app settings modal. `AppSettingsModal.tsx` is a composition shell: each settings domain owns its form state, normalization, scoped save draft, and post-save behavior in `packages/studio-server-web/dashboard/app-settings/`, while `useSettingsFormResource.ts` provides the shared load/revision/save/conflict lifecycle. This prevents one tab from resetting or saving another tab's unsaved values. The modal uses a macOS-style left vertical tab rail so the many operator settings remain scannable without pushing the active form downward; taller settings panels let the modal grow up to the viewport first, then only the right-side panel scrolls while the tab rail stays fixed. App Settings tab panels do not repeat the active tab name as a heading, and save/error feedback appears in the action row beside the buttons. The `General` tab surfaces app identity and owns the `Trusted hosts` list for exact hostnames that bypass all built-in browser/public-route gates. The `Shell execution` tab sets the timeout and captured-output caps for allowed editor-side server commands, such as Git history and revision comparison; it does not limit workflows, web apps, LLM calls, HTTP Call nodes, or endpoints. The `Server UI access` tab documents that the editor/dashboard gate mode is selected by deployment env through `RIVET_SERVER_UI_AUTH_MODE`, while storing the OAuth admin-email allowlist in app data. The `Storage` tab is a read-only PostgreSQL/S3 deployment summary, with secret configured flags rather than editable passwords or connection strings. It offers no filesystem/database selectors or Save action. Both local-storage and external-storage use the same managed stack; the panel explains how to set the selected tier's `.env` connections and start a separate external installation without claiming an automatic data transfer. Original v1 legacy restore remains available beneath that summary. The `Workflow endpoints` tab owns published/latest workflow endpoint route slugs plus the default-on bearer-token requirement for public workflow endpoint calls. The `Web apps` tab owns web-app route slugs and browser auth mode: its `Routes` section stores the published/latest app top-level URL slugs in app data, and its `Auth` section stores only whether app visitors use `Key`, `OAuth`, or `No gate`. The `OAuth` tab owns the shared provider, dummy-login, and session settings in app data instead of reading the old OAuth env vars. The workflow and web-app route tabs write the shared `settings/public-routes.json` contract and wait for `/api/config` to reflect changes before showing success. The `Run recordings` tab stores recording queue depth, per-endpoint run history length, and age retention in app data instead of reading the old recordings limit env vars. The `Runtime libraries` tab installs, removes, cancels, and observes Code-node packages through the existing runtime-library job APIs. The `Node executor proxy` tab stores runtime `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values in app data so both hosted editor Node execution and API/headless endpoint execution can use an outbound proxy without reading those values from `.env`; the same tab also stores optional websocket URL overrides for the hosted Node executor and default Remote Debugger, while blank values keep the normal host-derived `/ws/executor/internal` and `/ws/latest-debugger` defaults. The `Docker` tab is explicitly launcher-only and has no Kubernetes runtime effect.
+- `Migration` is retained only for authenticated eligible legacy-source installations and is hidden on managed Docker/Kubernetes deployments; it is not a local-managed-to-external transfer tool. Its operator-authenticated API tests an explicit managed PostgreSQL/S3 destination, persists a source maintenance marker outside the settings domain, blocks new data requests and WebSocket upgrades, waits for admitted HTTP/editor/web-app work and recording/library jobs to settle, then spawns the retryable filesystem-to-managed importer and an independent verify pass. The editor executor puts a per-run lease in the same app-data mount before checking the marker so a run cannot slip across the pause boundary. The durable status record has no target credentials and an interrupted run requires re-entry; a verified copy does not switch active storage or redirect Kubernetes traffic. Resuming VM writes after a final copy requires re-entered destination credentials and closes its startup gate first, including after a verify-child crash. See [VM to managed migration](vm-to-managed-migration.md).
 - `Runtime libraries` keeps `useRuntimeLibrariesState.ts` as the public controller. SSE framing, log merging, and job status patching live in `runtimeLibrariesJobStream.ts`, while the settings-tab panels stay largely presentational.
 - in `filesystem` mode, that tab treats install/remove logs and terminal status as session-local UI state: once the user leaves the tab after a finished job, reopening it falls back to the installed libraries list unless another job is still actively running. `managed` mode keeps its persisted job-state behavior.
 - Browser picker filtering for Rivet's custom file extensions is not fully reliable across browsers, so the dashboard validates the selected filename after picking and the API validates it again before writing anything.
@@ -836,6 +1008,7 @@ neither requires manual rewiring for an ordinary rename of the same node.
 Cross-project Subgraph replay persistence is part of the child node's completion boundary for hosted Browser and Node editor runs: the caller does not report a terminal result until the child upload completes. This prevents closing a tab immediately after completion from discarding its called-project replay. Those local uploads have a 60-second deadline so a stalled API cannot hold graph completion indefinitely. API-hosted runs only enqueue onto the existing drained persistence queue, without waiting for storage I/O. Persistence errors remain best-effort and do not change graph outputs. Re-selecting the same target in the canvas must still apply an updated authored boundary; compare the complete node data, not just project, graph, and version IDs.
 
 - Workflow library management, publication, execution, and recordings live in `packages/studio-server-api/src/routes/workflows/`.
+- Bundle upload reuses Core manifest/dependency validation through `project-bundle-import.ts`; the managed `bundle-import.ts` owns atomic folder/group creation and reference-aware artifact cleanup. The dashboard's `projectBundleUpload.ts` owns bounded ZIP/directory reading, not storage mutation. Fresh project identities and remapped Subgraph/dataset ownership let imported projects move independently. See [project bundles](project-bundles.md) for limits, failure recovery and verification.
 - Hosted cross-project Subgraphs use a dedicated target identity (`project metadata ID` plus `latest` or `published`), not a legacy Project Reference. The browser picker reads the workflow tree and an authenticated boundary-only preview that omits Graph Input defaults; execution resolves the exact saved or published artifact and its dataset sidecar through the active filesystem or managed backend. The Node editor executor uses an authenticated internal API fetch; browser and API-hosted runs use the same Core loader seam. A root run resolves each target once, shares the result with nested child processors, and bypasses reusable execution plans when a target pointer may change. The child processor retains normal graph-output streaming and shares the caller's run-global/stored-value state, while separate project-scoped recording events produce a replay under the called project's ID. Hosted browser/Node editor runs upload that replay only when local execution recording is enabled; API endpoint/web-app runs do not allocate child recorders while server recording is disabled and otherwise apply the server's partial-output/trace policy. The central recording persistence boundary enforces the dataset snapshot setting for all surfaces, including editor uploads and called-project runs. The recording list labels these entries as Subgraph runs and shows the called graph rather than calling it an endpoint. Keep the execution target and recording owner based on immutable project ID, not a stale tree path; reject duplicate filesystem IDs instead of choosing an arbitrary file. An unsupported desktop host shows the target as non-editable and cannot execute it.
 - The hosted Node editor enters through `studio-server-executor`, injects the Subgraph loader/recording callbacks into the app executor's `createProcessor` options, and then passes through the Node API's `createNodeProcessContext` to Core. Keep all three seams in sync: an option accepted by `createProcessor` but omitted from the Node process context makes a hosted Node run incorrectly report that Studio Server is unsupported. `packages/node/test/api.test.ts` exercises a real cross-project call through that Node entry point and verifies both target resolution and child-run attribution.
 - The target preloader rejects missing graphs and cross-project dependency cycles before execution. A saved boundary is a wire contract: stable Graph Input/Output node IDs identify renamed ports, while the saved caller `portId` remains the connection key and the current target `id` supplies its label and runtime key. Input boundaries now record the node ID; old saved inputs without it can match only by their unchanged name, and an already-renamed legacy input must be reselected rather than guessed. Removed nodes, type changes, and caller-port collisions still produce a warning and runtime error until the author reviews and reselects. Runtime mapping must cover authored defaults, connected values, output selection/pruning, named partials, and streamed inputs as well as final outputs. Recording readers in both backends must preserve the `subgraph_project` surface; losing it would incorrectly classify child runs as endpoint statistics. Child recordings retain the caller's correlation key when present, allowing parent/child evidence to be matched across project recording lists. The Project Settings publication snapshot includes dynamic Saved-latest Subgraph dependencies, so the warning corresponds to the same draft revision the user reviews before publishing.
@@ -948,9 +1121,11 @@ The saved `Settings` -> `Storage` mode decides which paths are authoritative:
   - Kubernetes app settings are encrypted PostgreSQL state shared through the typed repository; execution-plane `RIVET_APP_DATA_ROOT` is only a pod-local compatibility/cache area and never a distributed source of truth
   - package-plugin registration is not currently part of the API-hosted published execution contract, so the execution plane does not assume persistent plugin state
 
-## Supported compatibility matrix
+## Historical compatibility matrix
 
-Outside Kubernetes, the app still supports two non-cluster compatibility shapes:
+The retained migration and compatibility fixtures exercise the older shapes
+below. These are not supported entry points for new deployments; current Docker
+and Kubernetes serving use managed stores and separate role profiles.
 
 | Shape                                        | Status                                                                        | Notes                                                                                                                 |
 | -------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -978,6 +1153,8 @@ Interpretation rules:
 - In any nginx/proxy-fronted deployment such as Docker or Kubernetes, `RIVET_KEY` must always be present on both `proxy` and `api` even if the server UI gate or public workflow bearer checks are disabled, because `/api/*`, `/ui-auth`, and `/ws/latest-debugger` still rely on the trusted proxy header derived from that key.
 - Workflow endpoint bearer-token checks are configured in `Settings` -> `Workflow endpoints` -> `Access control`, are enabled by default, and are not read from `.env`.
 - `RIVET_SERVER_UI_AUTH_MODE` controls dashboard/editor access from deployment env: `none`, `key`, or `oauth`. If it is unset, legacy `RIVET_REQUIRE_UI_GATE_KEY=true` still maps to key mode. OAuth mode uses the provider settings saved in `Settings` -> `OAuth` and the `Server UI admin emails` saved in `Settings` -> `Server UI access`; empty admin lists deny all OAuth users. Bootstrap with `none` or `key`, save the shared OAuth settings and admin allowlist once, then switch this env mode to `oauth`.
+- The six supported Docker launchers expose only `key` (default) and `oauth` through the shared dotenv; `none` and invalid values are rejected before startup. Their shared `RIVET_PORT` overrides the tier-default loopback browser port without changing internal service ports or storage identity. Auth-mode changes also preserve installation identity, enabling key bootstrap followed by OAuth. Tier-specific port variables and development-auth bypass flags are not forwarded. See [Supported Server Stack](server-stack.md) for bootstrap and restart obligations.
+- Local Docker storage credentials are shared `RIVET_LOCAL_*` inputs, independent of deployment tier. Resource ownership remains project/stage-scoped. Startup preserves agreeing legacy tier-prefixed credentials when initializing the shared names; ambiguous legacy values require explicit selection, and storage-identity checks continue to prohibit silent credential changes against retained volumes.
 - `RIVET_CORS_ALLOWED_ORIGINS` is an optional comma-separated list of external browser origins that may receive credentialed CORS responses. Same-origin browser requests are allowed automatically; leave this empty unless a known browser app needs direct API/workflow access.
 - Web-app auth mode and OAuth provider settings are not read from `.env`. Configure the mode in `Settings` -> `Web apps` -> `Auth`, configure the shared provider/session settings in `Settings` -> `OAuth`, and configure server UI admin emails in `Settings` -> `Server UI access`; the API stores them through the active settings repository and applies them to the active published/latest web-app route families and, when `RIVET_SERVER_UI_AUTH_MODE=oauth`, to the server UI gate. The supported web-app modes are `Key`, `OAuth`, and `No gate`. OAuth web apps are fail-closed when their allowed-email list is empty. Legacy `RIVET_WEB_APPS_AUTH_MODE`, `OAUTH_*`, and retired `RIVET_SERVER_UI_OAUTH_*` env values are ignored.
 - `Settings` -> `General` -> `Trusted hosts` lists exact hostnames that bypass server UI auth, bypass web-app auth in any web-app auth mode, and also bypass public workflow bearer auth. The legacy `RIVET_UI_TOKEN_FREE_HOSTS` env var is rejected by Docker launchers and ignored by runtime services.
@@ -986,6 +1163,13 @@ Interpretation rules:
 - App Settings -> `Workflow endpoints` controls nginx `proxy_read_timeout` and `proxy_send_timeout` for `/api/*`, `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH}`, `${RIVET_PUBLISHED_APPS_BASE_PATH}`, `${RIVET_LATEST_WORKFLOWS_BASE_PATH}`, and `${RIVET_LATEST_APPS_BASE_PATH}`. The setting is saved in seconds, defaults to `180`, and reaches the proxy through the local file watcher or Kubernetes's authenticated non-secret settings projection; saved changes rewrite a generated timeout include, validate the full nginx config, and reload nginx without a stack restart. Websocket routes keep their separate long-lived timeouts. App Settings -> `Web apps` separately controls the maximum JSON data that a web-app button action can send, stored in bytes in the same typed domain and defaulting to `100 MiB`; the proxy applies it as `client_max_body_size` only to the published/latest web-app route families, while the API applies the same bound before routing an action.
 
 ### Storage and runtime libraries
+
+Current managed deployments seed connection settings from deployment `.env` or
+Helm values, then load their encrypted PostgreSQL settings. The Storage tab is
+read-only for the replicated serving contract in both Docker and Kubernetes;
+UI restore replaces application data, not infrastructure connections. The local
+launcher provisions PostgreSQL/MinIO automatically without exposing their ports.
+The file/SQLite activation details below apply only to historical migration sources.
 
 - Configure the existing storage/database through `Settings` -> `Storage`. Local installations cannot activate `Object storage + PostgreSQL` with a selector: the UI explains the files-to-SQLite prerequisite and the API enforces it. Selected SQLite also rejects a blind managed switch: use the authenticated Migration tab or the offline, verified native transfer described in `vm-to-managed-migration.md`. The metadata database controls appear for existing managed deployments; saved managed credentials remain inactive in local mode. Both backends belong to one typed deployment-storage domain. Legacy single-host mode persists it in private `settings/deployment-storage.json`, selected SQLite in its settings domain, and Kubernetes in encrypted PostgreSQL. Managed storage holds workflow files, recordings, published snapshots and runtime-library artifacts in object storage; PostgreSQL stores metadata. The public API returns only `...Configured` booleans for secrets and a read-only activation-block reason.
 - `Local Docker Postgres` is a local rehearsal option for managed metadata only. It uses the optional Compose Postgres default connection, but object storage remains controlled by the separate project artifact storage fields. Make sure the managed-services Compose profile is running before restarting into object-storage mode.
@@ -1029,12 +1213,22 @@ These retention limits have the same meaning in both storage modes. The per-endp
 
 ## Dev and production modes
 
+The supported launchers all run the same managed control, execution and
+Evaluation roles. Docker is the default local orchestrator, not a distinct
+application storage mode. The earlier filesystem/combined-profile descriptions
+in this guide describe migration sources and compatibility fixtures only.
+
 | Mode                       | Entry command                            | Browser entry                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | -------------------------- | ---------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local direct-process       | `yarn studio-server:dev:local`           | `http://localhost:5174`            | Runs API, web, and executor directly. Good for process-level work, but it does not recreate nginx's trusted-proxy wiring, so browser-driven `/api/*`, `/ui-auth`, and `/ws/latest-debugger` behavior is not representative there.                                                                                                                                                                                                                                                                                    |
-| Docker dev                 | `yarn studio-server:dev`                 | `http://localhost:8080` by default | Closest to production while using bind mounts and live web, API, and Node-executor rebuilds. The executor watcher replaces its child process after successful transitive source rebuilds, so Core execution changes require no stack restart. The proxy port can be overridden with `RIVET_PORT`; diagnostic API/Postgres/MinIO host ports bind to `127.0.0.1` by default through `RIVET_LOCAL_BIND_HOST`.                                                                                                           |
-| Local Kubernetes rehearsal | `yarn studio-server:dev:kubernetes-test` | `http://127.0.0.1:8080` by default | Builds local images, deploys the real Helm chart against the local Kubernetes cluster, keeps `web=1`, keeps `backend=1`, scales `proxy` and `execution`, and port-forwards the proxy service for browser testing. This is the closest local rehearsal of the supported Kubernetes topology.                                                                                                                                                                                                                          |
-| Production-style Docker    | `yarn studio-server:prod`                | `http://localhost:8080` by default | Pulls and force-recreates the prebuilt `rivet2.0-studio-server/*` images. Use `yarn studio-server:prod:restart` to recreate from already-local images after `.env` changes, or `yarn studio-server:prod:custom` to build from the current monorepo commit. Optional VM TLS settings enable public HTTPS and HTTP redirect inside the Docker proxy, without a host nginx site; see [development.md](development.md#single-vm-https-without-host-nginx). The executor websocket stays pinned to internal port `21889`. |
+| Docker dev | `yarn studio-server:dev:local-storage` or `yarn studio-server:dev:external-storage` | Loopback port 8080 by default | Builds the current checkout. Local storage provisions private PostgreSQL/MinIO; external storage uses the deployment values from the same `.env`. |
+| Docker staging | `yarn studio-server:staging:local-storage` or `yarn studio-server:staging:external-storage` | Loopback port 8082 by default | Uses an immutable candidate/promoted release and a clean matching checkout. |
+| Docker production | `yarn studio-server:prod:local-storage` or `yarn studio-server:prod:external-storage` | Loopback port 8083 by default | Requires a promoted release, verified predecessor and explicit production confirmation. A trusted external gateway owns public HTTPS. |
+| Explicit Kubernetes rehearsal | `yarn studio-server:dev:kubernetes-test` | Port-forwarded loopback entry | Deploys the same managed roles through the Helm chart against isolated local PostgreSQL/MinIO. It is not implicitly started by the Docker commands. |
+
+Tier-specific `DEV_`, `STAGING_` and `PROD_` values select connections and ports
+without changing application behavior. Legacy production/direct-process aliases
+are retired rather than silently redirecting to another deployment. See
+[Supported Server Stack](server-stack.md) for flags, receipts, shutdown and recovery.
 
 The API now depends on Node's built-in `node:sqlite`, so host-based API execution requires Node 24+.
 

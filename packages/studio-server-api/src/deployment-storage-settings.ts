@@ -337,7 +337,10 @@ function toPublicSettings(settings: DeploymentStorageRuntimeSettings): Deploymen
     objectStoragePrefix: settings.objectStoragePrefix,
     objectStorageForcePathStyle: settings.objectStorageForcePathStyle,
     deploymentManaged: process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated',
-    storageModeChangeBlockedReason: storageModeChangeBlockedReason(settings),
+    storageModeChangeBlockedReason:
+      process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated'
+        ? 'Storage settings are managed by the deployment and read-only. Choose local-storage or external-storage when starting Rivet; this does not transfer existing data.'
+        : storageModeChangeBlockedReason(settings),
     storageAccessKeyId: settings.storageAccessKeyId,
     storageAccessKeyConfigured: Boolean(settings.storageAccessKey),
     updatedAt: settings.updatedAt,
@@ -361,7 +364,7 @@ export const deploymentStorageSettingsRepository = new VersionedSettingsReposito
     if (process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated') return undefined;
     if (process.env.RIVET_DEPLOYMENT_STORAGE_SEED_MISSING !== '1') {
       throw new Error(
-        'The authoritative deployment-storage settings row is missing. Run the Kubernetes migration Job before serving.',
+        'The authoritative deployment-storage settings row is missing. Run the deployment migration task before serving.',
       );
     }
     return readDeploymentStorageBootstrapSettings();
@@ -409,7 +412,7 @@ export function assertKubernetesStorageModes(
 ): void {
   if (settings.storageMode !== 'managed' || settings.databaseMode !== 'managed') {
     throw new Error(
-      'Kubernetes requires managed workflow storage and managed PostgreSQL, but the authoritative settings row selects another mode. Refusing to start a pod with ephemeral local storage.',
+      'Rivet Server requires S3-compatible storage and PostgreSQL, but the authoritative settings row selects another mode. Refusing to start with ephemeral local storage.',
     );
   }
 }
@@ -424,7 +427,7 @@ export async function writeDeploymentStorageSettings(
 ): Promise<DeploymentStorageSettings> {
   if (process.env.RIVET_DEPLOYMENT_TOPOLOGY === 'replicated') {
     throw badRequest(
-      'Kubernetes deployment storage is managed by the deployment. Change it through a coordinated operator migration and rollout, not App Settings.',
+      'Storage connections and credentials are managed by the deployment and read-only. Configure local-storage or external-storage before startup; changing an existing installation requires a coordinated operator procedure, not App Settings.',
     );
   }
   const saved = await deploymentStorageSettingsRepository.update((previous) => {

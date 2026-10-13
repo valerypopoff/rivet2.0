@@ -512,11 +512,21 @@ test('replicated deployment refuses storage writes even when invoked directly', 
     const previous = process.env.RIVET_DEPLOYMENT_TOPOLOGY;
     process.env.RIVET_DEPLOYMENT_TOPOLOGY = 'replicated';
     try {
-      assert.equal((await deploymentStorageSettings.readDeploymentStorageSettings()).deploymentManaged, true);
+      const settings = await deploymentStorageSettings.readDeploymentStorageSettings();
+      assert.equal(settings.deploymentManaged, true);
+      assert.match(settings.storageModeChangeBlockedReason!, /read-only/);
+      assert.doesNotMatch(settings.storageModeChangeBlockedReason!, /Kubernetes|SQLite|local storage requires/);
       await assert.rejects(
         deploymentStorageSettings.writeDeploymentStorageSettings({ storageMode: 'filesystem' }),
         /managed by the deployment/,
       );
+      for (const draft of [
+        { storageAccessKeyId: 'replacement', storageAccessKey: 'replacement-secret' },
+        { databaseConnectionString: 'postgresql://replacement:private@db.example/rivet' },
+      ]) {
+        await assert.rejects(deploymentStorageSettings.writeDeploymentStorageSettings(draft), /read-only/);
+      }
+      assert.deepEqual(await deploymentStorageSettings.readDeploymentStorageSettings(), settings);
     } finally {
       if (previous === undefined) delete process.env.RIVET_DEPLOYMENT_TOPOLOGY;
       else process.env.RIVET_DEPLOYMENT_TOPOLOGY = previous;

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseEnvFile } from './env.mjs';
+import { vmProcessEnvironment } from './server-launch-mode.mjs';
 
 export function developmentFrontendEnv(mode = 'live') {
   if (!['live', 'tunnel'].includes(mode)) throw new Error('Frontend mode must be live or tunnel.');
@@ -20,6 +21,14 @@ export function loadDevEnv(rootDir) {
   const envPath = envCandidates.find((candidate) => fs.existsSync(candidate)) ?? envCandidates[0];
   const hasEnvFile = fs.existsSync(envPath);
   const fileEnv = parseEnvFile(envPath);
+  if (process.env.RIVET_SERVER_LAUNCH_MODE === 'vm') {
+    return {
+      envPath,
+      hasEnvFile,
+      fileEnv,
+      mergedEnv: { ...vmProcessEnvironment(process.env, fileEnv), RIVET_ENV_FILE: envPath },
+    };
+  }
   const mergedEnv = {
     ...process.env,
     ...fileEnv,

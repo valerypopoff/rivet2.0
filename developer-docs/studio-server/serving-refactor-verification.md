@@ -4,6 +4,15 @@ This is the implementation checklist for the refined SQLite isolation, immutable
 execution-definition reuse and short-transaction/Evaluation projection plan.
 Correctness tests are not evidence of a production VM speedup.
 
+The shared classifier-health contract waits for the store's actual recovery
+decision rather than assuming PostgreSQL's clock advances in step with a local
+sleep. After the reported suspension duration, concurrent begin batches may be
+repeated only while every response remains denied/open, with a fixed ten-second
+deadline. The unchanged assertions still require exactly one recovery owner,
+lease renewal and stale-result fencing. This prevents virtualized-clock timing
+from aborting managed-storage qualification before its bundle checks; it does not
+retry uncertain writes or change production suspension policy.
+
 ## Maintainability follow-up (2026-10-11)
 
 CI follow-up caught two integration gaps missed by the selected local test run:

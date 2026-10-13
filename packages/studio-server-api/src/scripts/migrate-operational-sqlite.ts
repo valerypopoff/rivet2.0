@@ -277,6 +277,12 @@ async function copyAndVerify(
 }
 
 /** Import exact SQLite operational state after workflow identities exist in PostgreSQL. */
+export async function validateOperationalMigrationSource(sourceAppDataRoot: string): Promise<void> {
+  await readSourceRows(path.join(sourceAppDataRoot, 'evaluation-runs.sqlite'), evaluationTables);
+  await readSourceRows(path.join(sourceAppDataRoot, 'llm-profile-health.sqlite'), [healthTable]);
+  await readSourceRows(path.join(sourceAppDataRoot, 'scheduled-runs.sqlite'), scheduleTables);
+}
+
 export async function migrateOperationalSqlite(options: {
   sourceAppDataRoot: string;
   target: ManagedWorkflowStorageConfig;

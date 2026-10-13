@@ -23,7 +23,6 @@ deployment_runtime_libraries_job_worker_enabled="${RIVET_RUNTIME_LIBRARIES_JOB_W
 deployment_runner_slot_id="${RIVET_RUNNER_SLOT_ID:-}"
 deployment_api_port="${PORT:-}"
 load_optional_dotenv_preserving_deployment_storage /vault/dotenv
-append_proxy_bootstrap_node_options
 
 # Kubernetes sets this deployment-owned policy separately from user/Vault env.
 # Apply it after dotenv loading so API replicas remain verify-only even if a
@@ -70,4 +69,6 @@ export RIVET_APP_DATA_ROOT="${RIVET_APP_DATA_ROOT:-/data/rivet-app}"
 export RIVET_RUNTIME_LIBRARIES_ROOT="${RIVET_RUNTIME_LIBRARIES_ROOT:-/data/runtime-libraries}"
 export RIVET_RUNTIME_PROCESS_ROLE="${RIVET_RUNTIME_PROCESS_ROLE:-api}"
 
-exec node /app/packages/studio-server-api/dist/studio-server-api/src/server.js
+NODE_OPTIONS= node --input-type=module -e 'import { assertServerDeploymentContract } from "/app/packages/studio-server-api/dist/studio-server-api/src/server-deployment-contract.js"; assertServerDeploymentContract();'
+append_proxy_bootstrap_node_options
+exec node /app/packages/studio-server-api/dist/studio-server-api/src/serve.js

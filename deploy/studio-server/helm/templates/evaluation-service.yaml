@@ -10,10 +10,14 @@ metadata:
     app.kubernetes.io/component: evaluation
 spec:
   type: ClusterIP
+  {{- if eq .Values.deploymentProfile "single-machine" }}
+  # Role startup/restore probes must remain reachable while peers warm up.
+  publishNotReadyAddresses: true
+  {{- end }}
   selector:
-    {{- include "rivet.componentLabels" (dict "root" . "component" "evaluation") | nindent 4 }}
+    {{- include "rivet.serviceSelector" (dict "root" . "component" "evaluation") | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.evaluation.port }}
-      targetPort: api-http
+      targetPort: evaluation-http
 {{- end }}

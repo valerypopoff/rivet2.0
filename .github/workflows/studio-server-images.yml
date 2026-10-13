@@ -83,7 +83,9 @@ jobs:
     name: Classify image release
     runs-on: ubuntu-latest
     outputs:
-      require_kind: ${{ steps.classify.outputs.full_kubernetes == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
+      # Docker and Kubernetes share the managed serving contract. Retain full
+      # cluster qualification for every release; legacy fixtures are not that proof.
+      require_kind: 'true'
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

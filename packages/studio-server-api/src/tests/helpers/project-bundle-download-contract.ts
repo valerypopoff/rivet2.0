@@ -10,6 +10,7 @@ import {
   SubGraphNodeImpl,
   getGraphBoundary,
   loadProjectBundle,
+  deserializeDatasets,
   serializeDatasets,
   serializeProject,
   type DatasetId,
@@ -27,6 +28,7 @@ export async function verifyProjectBundleDownload(options: {
   workflowsBaseUrl: string;
   projectsBaseUrl: string;
   headers: Record<string, string>;
+  verifyImport?: boolean;
 }) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bundle-backend-download-'));
   const request = async <T>(url: string, body?: unknown): Promise<T> => {
@@ -197,6 +199,88 @@ export async function verifyProjectBundleDownload(options: {
             assert.deepEqual((await runner.run()).result?.value, { id: 'row', data: [expected] });
           } finally {
             runner.dispose();
+          }
+        }
+        if (options.verifyImport && versionPolicy === 'latest') {
+          const files = [
+            {
+              path: 'rivet-bundle.json',
+              contents: await fs.readFile(path.join(extracted, 'rivet-bundle.json'), 'utf8'),
+            },
+          ];
+          for (const artifact of bundle.manifest.artifacts)
+            for (const descriptor of [artifact.project, artifact.datasets])
+              if (descriptor)
+                files.push({
+                  path: descriptor.path,
+                  contents: await fs.readFile(path.join(extracted, descriptor.path), 'utf8'),
+                });
+          const importedResponse = await fetch(`${options.workflowsBaseUrl}/project-bundles/import`, {
+            method: 'POST',
+            headers: { ...options.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+            body: JSON.stringify({ folderRelativePath: '', files }),
+            signal: AbortSignal.timeout(30_000),
+          });
+          assert.equal(importedResponse.status, 201, await importedResponse.clone().text());
+          const imported = (await importedResponse.json()) as {
+            folder: { relativePath: string };
+            projects: WorkflowProjectItem[];
+            rootProjectId: string;
+          };
+          assert.equal(imported.projects.length, bundle.manifest.artifacts.length);
+          const importedRoot = imported.projects.find((p) => p.projectMetadataId === imported.rootProjectId)!;
+          assert.ok(importedRoot);
+          const childMember = imported.projects.find((p) => p.projectMetadataId !== imported.rootProjectId)!;
+          const destination = await request<{ folder: { relativePath: string } }>(
+            `${options.workflowsBaseUrl}/folders`,
+            {
+              name: `Moved bundle ${imported.rootProjectId.slice(0, 8)}`,
+              parentRelativePath: '',
+            },
+          );
+          const moved = await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/move`, {
+            itemType: 'project',
+            sourceRelativePath: childMember.relativePath,
+            destinationFolderRelativePath: destination.folder.relativePath,
+          });
+          assert.equal(moved.project.projectMetadataId, childMember.projectMetadataId);
+          assert.equal(importedRoot.settings.status, 'unpublished');
+          const endpoint = `imported-bundle-${imported.rootProjectId.slice(0, 8)}`;
+          await publish(importedRoot, endpoint);
+          const executed = await request<{ result: { value: unknown } }>(
+            `${options.workflowsBaseUrl.replace('/api/workflows', '/internal/workflows-latest')}/${endpoint}`,
+            {},
+          );
+          assert.deepEqual(executed.result.value, { id: 'row', data: ['child-latest'] });
+          const saved = await request<{ contents: string; datasetsContents: string }>(
+            `${options.projectsBaseUrl}/load`,
+            { path: importedRoot.absolutePath },
+          );
+          assert.equal(deserializeDatasets(saved.datasetsContents)[0]!.meta.projectId, imported.rootProjectId);
+          assert.deepEqual(
+            deserializeDatasets(saved.datasetsContents)[0]!.data,
+            deserializeDatasets(rootLatestData)[0]!.data,
+          );
+          // Execution persists asynchronously. Remove only this import's evidence,
+          // leaving subsequent recording contracts with their original empty baseline.
+          const recordingIds = new Set<string>();
+          const recordingDeadline = Date.now() + 10_000;
+          while (recordingIds.size < 2 && Date.now() < recordingDeadline) {
+            for (const project of imported.projects) {
+              const page = await request<{ runs: { id: string }[] }>(
+                `${options.workflowsBaseUrl}/recordings/workflows/${project.projectMetadataId}/runs?includeSubgraphRuns=true&pageSize=100`,
+              );
+              for (const run of page.runs) recordingIds.add(run.id);
+            }
+            if (recordingIds.size < 2) await delay(10);
+          }
+          assert.equal(recordingIds.size, 2, 'root and called-project evidence persisted');
+          for (const id of recordingIds) {
+            const deleted = await fetch(`${options.workflowsBaseUrl}/recordings/${id}`, {
+              method: 'DELETE',
+              headers: options.headers,
+            });
+            assert.equal(deleted.status, 200, await deleted.text());
           }
         }
       } finally {

@@ -1,5 +1,28 @@
 # Development
 
+The supported server development command is `yarn studio-server:dev:local-storage`
+(Docker Compose with PostgreSQL/MinIO; Kubernetes is not required). Start with
+[Supported Server Stack](./server-stack.md). Compose/bare-host material below is
+retained for historical migration and isolated compatibility fixtures, not new
+server deployments.
+
+The six `dev|staging|prod` × `local-storage|external-storage` commands share
+`container-server.mjs` and one normalized Compose model. Development builds source;
+staging consumes immutable candidates; both production choices require promoted
+release evidence and exact installation confirmation. The same managed API roles,
+SQL/S3, schema tools and restore coordinator run in Docker and Kubernetes.
+Explicit Kubernetes rehearsal/release commands retain their own reader guards.
+After chart or
+launcher changes run `studio-server:verify:kubernetes` and, for one-pod/restore
+changes, the opted-in `local-kubernetes-restore.spec.ts` headless UI check against
+a disposable owned namespace. Never aim that destructive fixture at user data.
+
+All six commands read `.env`. Tier prefixes are `RIVET_DEV_`, `RIVET_STAGING_`,
+`RIVET_PROD_`; local stores never consume external credentials. Do not pass the
+raw shared file as a serving container env_file, introduce a Kubernetes-only
+serving guard, or add another migration/importer implementation. The existing
+Kubernetes-specific environment projection remains confined to explicit rehearsals.
+
 ## Extending the shared editor after the ownership refactor
 
 Hosted editor execution and Evaluation workspace behavior use the app-owned
@@ -1200,7 +1223,7 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.25.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.26.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
 
 These private package versions are release metadata, not npm publication or
@@ -1550,6 +1573,15 @@ Current behavior:
   - `RIVET_K8S_STORAGE_REGION` is always required; the signing region is never inferred from a storage URL. With a dotted virtual-host bucket, also set `RIVET_K8S_STORAGE_BUCKET` explicitly.
   - `RIVET_K8S_STORAGE_ACCESS_KEY_ID`
   - `RIVET_K8S_STORAGE_ACCESS_KEY`
+- opt-in `RIVET_K8S_LOCAL_MANAGED_SERVICES=true` provisions isolated PostgreSQL and
+  MinIO with persistent claims before installing Rivet. Use the checked-in
+  `.env.kubernetes-local.example` through `RIVET_ENV_FILE`; see the
+  [local restore rehearsal procedure](kubernetes.md#local-postgresqlminio-and-ui-backup-restoration).
+  The managed-storage implementation is unchanged. Local mode requires key UI
+  authentication and refuses conflicting external URLs or unowned resources.
+- local `down` retains dependency data/Secrets; `recreate` explicitly erases only
+  owned local dependencies. Neither command deletes a namespace. The default
+  external-service mode still does not create or erase PostgreSQL/S3 resources.
 - it starts a local `kubectl port-forward` for the proxy service so the app is available on `http://127.0.0.1:${RIVET_K8S_PROXY_PORT:-RIVET_PORT:-8080}`
 - the proxy startup normalizes `RIVET_PROXY_RESOLVER` so Kubernetes DNS service hostnames resolve to the IPs nginx expects
 
@@ -1564,7 +1596,7 @@ Operational notes:
   - a new `execution` pod is only another execution-plane API pod
   - a new `proxy` pod is only another nginx proxy pod
 - for endpoint-heavy load, `execution` is the primary scale target and `proxy` is the secondary ingress tier
-- it is intentionally opinionated toward external managed Postgres plus external S3 or S3-compatible storage
+- it defaults to external managed Postgres plus external S3 or S3-compatible storage; the opt-in local profile provisions disposable equivalents
 - it does not replace the production chart or create a second deployment contract; it is a local wrapper around the same chart the real deployment should use
 - by default it prefers:
   - the explicit `RIVET_K8S_CONTEXT`, if set
@@ -1592,21 +1624,19 @@ Operational notes:
 
 ### Self-contained Minikube rehearsal
 
-For a local machine that does not already have a safe Postgres and
-S3-compatible endpoint, use the repository's disposable dependency manifest.
-It creates a dedicated namespace with one Postgres instance, one MinIO
-instance, and two 2 GiB local claims. It does not contact production services
-and its credentials are intentionally public development-only values.
+Use the opt-in `.env` profile to provision isolated PostgreSQL and MinIO before
+Rivet starts. The launcher renders dependency resources from the same configuration
+used for Rivet's connections; the old manually applied dependency manifest was
+retired to avoid a second credential/namespace owner. Existing manually provisioned
+namespaces are not adopted: select a new namespace/profile for automatic provisioning.
 
 From PowerShell:
 
 ```powershell
-minikube start -p rivet-local --driver=docker --cpus=4 --memory=8192
-Copy-Item deploy/studio-server/.env.kubernetes-local.example .env.local
-kubectl --context rivet-local apply -f deploy/studio-server/kubernetes-test/local-dependencies.yaml
-kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-postgres --timeout=180s
-kubectl --context rivet-local -n rivet-local rollout status deployment/rivet-local-minio --timeout=180s
-$env:RIVET_ENV_FILE = '.env.local'
+Copy-Item deploy/studio-server/.env.kubernetes-local.example .env.kubernetes-local
+# Edit the local credentials before the first startup.
+$env:RIVET_ENV_FILE = '.env.kubernetes-local'
+yarn studio-server:setup:k8s-tools
 yarn studio-server:dev:kubernetes-test
 ```
 
@@ -1615,17 +1645,18 @@ The launcher's proxy port-forward exposes the editor at
 `yarn studio-server:dev:kubernetes-test:ps`, or stream their logs with
 `yarn studio-server:dev:kubernetes-test:logs`.
 
-To remove the entire rehearsal—including its database and object-storage
-contents—run:
+`down` stops the rehearsal while retaining PostgreSQL/MinIO PVCs and Secrets;
+`up` resumes it. To explicitly erase the local database/object data and rebuild:
 
 ```powershell
-$env:RIVET_ENV_FILE = '.env.local'
-yarn studio-server:dev:kubernetes-test:down
-minikube delete -p rivet-local
+$env:RIVET_ENV_FILE = '.env.kubernetes-local'
+yarn studio-server:dev:kubernetes-test:recreate
 ```
 
-Do not use `:down` against a namespace that contains any work you intend to
-keep: the local launcher deliberately deletes its namespace.
+Neither command deletes a namespace or cluster. Sign in with the `.env` Rivet key
+and use the normal Storage restore panel; see the
+[complete local restore rehearsal](kubernetes.md#local-postgresqlminio-and-ui-backup-restoration)
+for volume capacity, ownership, credential preservation and cloud-test limitations.
 
 For the operator-facing chart contract and handoff checklist, see:
 

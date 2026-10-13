@@ -1,3 +1,19 @@
+import { createHash } from 'node:crypto';
+
+export function localStorageFingerprint(config) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        endpoint: config.objectStorage.endpoint,
+        bucket: config.objectStorage.bucket,
+        region: config.objectStorage.region,
+        prefix: config.objectStorage.prefix,
+        forcePathStyle: config.objectStorage.forcePathStyle,
+      }),
+    )
+    .digest('hex');
+}
+
 function readEnv(env, name) {
   const value = String(env[name] ?? '').trim();
   return value ? value : undefined;
@@ -139,32 +155,132 @@ function yamlBoolean(value) {
   return value ? 'true' : 'false';
 }
 
-export function buildKubernetesLauncherConfig(env) {
+export function buildKubernetesLauncherConfig(env, { singleMachine = false } = {}) {
   const launcherName = 'dev-kubernetes';
+  const deploymentProfile = singleMachine
+    ? 'single-machine'
+    : readEnv(env, 'RIVET_K8S_DEPLOYMENT_PROFILE') ?? 'cluster';
+  if (!['cluster', 'single-machine'].includes(deploymentProfile))
+    throw new Error('RIVET_K8S_DEPLOYMENT_PROFILE must be cluster or single-machine.');
+  const localManaged = parseBoolean(readEnv(env, 'RIVET_K8S_LOCAL_MANAGED_SERVICES'), false);
+  const namespace = readEnv(env, 'RIVET_K8S_NAMESPACE') ?? (localManaged ? 'rivet-restore-local' : 'rivet-local');
+  const release = readEnv(env, 'RIVET_K8S_RELEASE') ?? 'rivet-local';
+  for (const [name, value] of [
+    ['namespace', namespace],
+    ['release', release],
+  ]) {
+    if (localManaged && (!/^[a-z](?:[a-z0-9-]*[a-z0-9])?$/.test(value) || value.length > 40)) {
+      throw new Error(`[${launcherName}] ${name} must be a lowercase DNS label of 1-40 characters.`);
+    }
+  }
   const storageUrl = readEnv(env, 'RIVET_K8S_STORAGE_URL');
   const explicitBucket = readEnv(env, 'RIVET_K8S_STORAGE_BUCKET');
   const parsedStorageUrl = storageUrl ? parseManagedStorageUrl(storageUrl, explicitBucket) : null;
   const imageTag = readEnv(env, 'RIVET_K8S_IMAGE_TAG') ?? 'dev';
   const context = readEnv(env, 'RIVET_K8S_CONTEXT') ?? 'docker-desktop';
   const localClusterProvider = inferLocalClusterProvider(context, readEnv(env, 'RIVET_K8S_CLUSTER_PROVIDER'));
+  const clusterDomain = readEnv(env, 'RIVET_K8S_CLUSTER_DOMAIN') ?? 'cluster.local';
+  const localServices = localManaged
+    ? {
+        postgresName: `${release}-postgres`,
+        minioName: `${release}-minio`,
+        database: readEnv(env, 'RIVET_K8S_LOCAL_POSTGRES_DATABASE') ?? 'rivet',
+        username: readEnv(env, 'RIVET_K8S_LOCAL_POSTGRES_USER') ?? 'rivet',
+        password: requireEnv(env, 'RIVET_K8S_LOCAL_POSTGRES_PASSWORD', launcherName),
+        postgresSize: readEnv(env, 'RIVET_K8S_LOCAL_POSTGRES_SIZE') ?? '8Gi',
+        minioSize: readEnv(env, 'RIVET_K8S_LOCAL_MINIO_SIZE') ?? '16Gi',
+        storageClassName: readEnv(env, 'RIVET_K8S_LOCAL_STORAGE_CLASS') ?? '',
+      }
+    : null;
+  let localConnectionString;
+  let localEndpoint;
+  if (localServices) {
+    if (
+      ![...(singleMachine ? ['k3s'] : []), 'minikube', 'docker-desktop'].includes(localClusterProvider) ||
+      (localClusterProvider === 'docker-desktop' && context !== 'docker-desktop')
+    ) {
+      throw new Error(
+        'Local managed services require Docker Desktop or a Minikube profile; refusing a remote context.',
+      );
+    }
+    if (localClusterProvider === 'minikube' && (readEnv(env, 'RIVET_K8S_MINIKUBE_PROFILE') ?? context) !== context) {
+      throw new Error('Local managed services require matching Minikube profile and Kubernetes context.');
+    }
+    if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(clusterDomain)) throw new Error('Invalid local cluster DNS domain.');
+    for (const value of [localServices.database, localServices.username]) {
+      if (!/^[a-z][a-z0-9_]{0,62}$/.test(value))
+        throw new Error('Local PostgreSQL database/user must be lowercase identifiers.');
+    }
+    for (const value of [localServices.postgresSize, localServices.minioSize]) {
+      if (!/^[1-9][0-9]*(Mi|Gi|Ti)$/.test(value))
+        throw new Error('Local volume sizes must be positive Mi/Gi/Ti quantities.');
+    }
+    localConnectionString = `postgresql://${encodeURIComponent(localServices.username)}:${encodeURIComponent(localServices.password)}@${localServices.postgresName}.${namespace}.svc.${clusterDomain}:5432/${localServices.database}?sslmode=disable`;
+    localEndpoint = `http://${localServices.minioName}.${namespace}.svc.${clusterDomain}:9000`;
+    const suppliedDatabase = readEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING');
+    const suppliedEndpoint = readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint;
+    if (
+      (suppliedDatabase && suppliedDatabase !== localConnectionString) ||
+      (suppliedEndpoint && suppliedEndpoint !== localEndpoint)
+    ) {
+      throw new Error(
+        'Local managed services cannot use external database/object-storage URLs. Remove conflicting .env values.',
+      );
+    }
+    if (
+      (readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') && readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') !== 'disable') ||
+      !parseBoolean(readEnv(env, 'RIVET_K8S_STORAGE_FORCE_PATH_STYLE'), true)
+    ) {
+      throw new Error('Local PostgreSQL uses SSL mode disable; local MinIO requires path-style addressing.');
+    }
+    if ((readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ?? 'key') !== 'key') {
+      throw new Error('The local restore rehearsal requires key UI authentication.');
+    }
+    if (
+      requireEnv(env, 'RIVET_KEY', launcherName).length < 32 ||
+      requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName).length < 3 ||
+      requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY', launcherName).length < 8
+    ) {
+      throw new Error(
+        'Local rehearsal requires a 32+ character Rivet key and valid MinIO credentials (3+ / 8+ characters).',
+      );
+    }
+    const secretNames = [
+      'RIVET_K8S_AUTH_SECRET_NAME',
+      'RIVET_K8S_POSTGRES_SECRET_NAME',
+      'RIVET_K8S_OBJECT_STORAGE_SECRET_NAME',
+    ].map((name, index) => readEnv(env, name) ?? ['rivet-auth', 'rivet-postgres-conn', 'rivet-object-storage'][index]);
+    if (
+      new Set(secretNames).size !== 3 ||
+      secretNames.some((name) => !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(name))
+    ) {
+      throw new Error('Local authentication, PostgreSQL and object-storage secrets need distinct valid names.');
+    }
+  }
 
-  return {
-    release: readEnv(env, 'RIVET_K8S_RELEASE') ?? 'rivet-local',
-    namespace: readEnv(env, 'RIVET_K8S_NAMESPACE') ?? 'rivet-local',
+  const config = {
+    singleMachine,
+    deploymentProfile,
+    release,
+    namespace,
+    localServices,
     context,
     localClusterProvider,
     minikubeProfile:
       localClusterProvider === 'minikube' ? readEnv(env, 'RIVET_K8S_MINIKUBE_PROFILE') ?? context : undefined,
-    clusterDomain: readEnv(env, 'RIVET_K8S_CLUSTER_DOMAIN') ?? 'cluster.local',
+    clusterDomain,
     localPort: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_PORT') ?? readEnv(env, 'RIVET_PORT'), 8080),
     loadLocalImages: parseBoolean(
       readEnv(env, 'RIVET_K8S_LOAD_LOCAL_IMAGES'),
       localClusterProvider === 'docker-desktop' || localClusterProvider === 'minikube',
     ),
     replicas: {
-      proxy: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_REPLICAS'), 2),
+      proxy: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_REPLICAS'), deploymentProfile === 'single-machine' ? 1 : 2),
       web: parsePositiveInt(readEnv(env, 'RIVET_K8S_WEB_REPLICAS'), 1),
-      execution: parsePositiveInt(readEnv(env, 'RIVET_K8S_EXECUTION_REPLICAS'), 2),
+      execution: parsePositiveInt(
+        readEnv(env, 'RIVET_K8S_EXECUTION_REPLICAS'),
+        deploymentProfile === 'single-machine' ? 1 : 2,
+      ),
     },
     images: {
       proxy: parseImageConfig(env, 'RIVET_K8S_PROXY_IMAGE', 'rivet-local/proxy', imageTag),
@@ -178,18 +294,19 @@ export function buildKubernetesLauncherConfig(env) {
       objectStorageName: readEnv(env, 'RIVET_K8S_OBJECT_STORAGE_SECRET_NAME') ?? 'rivet-object-storage',
     },
     sharedKey: requireEnv(env, 'RIVET_KEY', launcherName),
-    databaseConnectionString: requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
-    databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? 'require',
+    databaseConnectionString:
+      localConnectionString ?? requireEnv(env, 'RIVET_K8S_DATABASE_CONNECTION_STRING', launcherName),
+    databaseSslMode: readEnv(env, 'RIVET_K8S_DATABASE_SSL_MODE') ?? (localManaged ? 'disable' : 'require'),
     objectStorage: {
       bucket: explicitBucket ?? parsedStorageUrl?.bucket ?? requireEnv(env, 'RIVET_K8S_STORAGE_BUCKET', launcherName),
       region: requireEnv(env, 'RIVET_K8S_STORAGE_REGION', launcherName),
-      endpoint: readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
+      endpoint: localEndpoint ?? readEnv(env, 'RIVET_K8S_STORAGE_ENDPOINT') ?? parsedStorageUrl?.endpoint ?? '',
       accessKeyId: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY_ID', launcherName),
       secretAccessKey: requireEnv(env, 'RIVET_K8S_STORAGE_ACCESS_KEY', launcherName),
       prefix: (readEnv(env, 'RIVET_K8S_STORAGE_PREFIX') ?? 'workflows/').replace(/^\/+/, ''),
       forcePathStyle: parseBoolean(
         readEnv(env, 'RIVET_K8S_STORAGE_FORCE_PATH_STYLE'),
-        parsedStorageUrl?.forcePathStyle ?? false,
+        localManaged || (parsedStorageUrl?.forcePathStyle ?? false),
       ),
     },
     routeConfig: {
@@ -206,18 +323,44 @@ export function buildKubernetesLauncherConfig(env) {
       corsAllowedOrigins: readEnv(env, 'RIVET_CORS_ALLOWED_ORIGINS') ?? '',
       serverUiAuthMode:
         readEnv(env, 'RIVET_SERVER_UI_AUTH_MODE') ??
-        (parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
-      requireUiGateKey: parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
+        (localManaged || parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false) ? 'key' : 'none'),
+      requireUiGateKey: localManaged || parseBoolean(readEnv(env, 'RIVET_REQUIRE_UI_GATE_KEY'), false),
       trustIncomingForwardedHeaders: parseBoolean(readEnv(env, 'RIVET_TRUST_INCOMING_FORWARDED_HEADERS'), false),
       trustedForwardingProxies: readEnv(env, 'RIVET_TRUSTED_FORWARDING_PROXIES') ?? '',
       enableDevelopmentAuth: readEnv(env, 'RIVET_ENABLE_DEVELOPMENT_AUTH') === 'true',
       developmentAuthClients: readEnv(env, 'RIVET_DEVELOPMENT_AUTH_CLIENTS') ?? '',
     },
   };
+  if (deploymentProfile === 'single-machine' && Object.values(config.replicas).some((count) => count > 1)) {
+    throw new Error('The single-machine profile requires exactly one replica per application role.');
+  }
+  return config;
 }
 
 export function renderKubernetesLauncherValuesYaml(config) {
   return [
+    `deploymentProfile: ${yamlString(config.deploymentProfile ?? 'cluster')}`,
+    ...(config.deploymentProfile === 'single-machine'
+      ? [
+          'gateway:',
+          '  mode: embedded',
+          'service:',
+          '  api:',
+          '    targetPort: 8081',
+          '  execution:',
+          '    targetPort: 8082',
+          '  evaluation:',
+          '    targetPort: 8083',
+          'hostedEvaluations:',
+          '  enabled: true',
+          '  workerConcurrency: 1',
+        ]
+      : []),
+    'legacyRestore:',
+    '  enabled: true',
+    ...(config.localServices?.storageClassName
+      ? [`  storageClassName: ${yamlString(config.localServices.storageClassName)}`]
+      : []),
     'images:',
     '  proxy:',
     `    repository: ${yamlString(config.images.proxy.repository)}`,
@@ -236,6 +379,7 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  proxy: ${config.replicas.proxy}`,
     `  web: ${config.replicas.web}`,
     '  backend: 1',
+    ...(config.deploymentProfile === 'single-machine' ? ['  evaluation: 1'] : []),
     `  execution: ${config.replicas.execution}`,
     'autoscaling:',
     '  proxy:',
@@ -261,6 +405,8 @@ export function renderKubernetesLauncherValuesYaml(config) {
     `  connectionStringSecretName: ${yamlString(config.secrets.postgresName)}`,
     '  connectionStringSecretKey: "connectionString"',
     `  sslMode: ${yamlString(config.databaseSslMode)}`,
+    // Keep the advertised capacity consistent with the local server's configuration.
+    ...(config.localServices ? ['  maxConnections: 200'] : []),
     'objectStorage:',
     `  endpoint: ${yamlString(config.objectStorage.endpoint)}`,
     `  bucket: ${yamlString(config.objectStorage.bucket)}`,
@@ -290,6 +436,9 @@ export function renderKubernetesLauncherValuesYaml(config) {
 }
 
 export function renderKubernetesLauncherSecretManifest(config) {
+  const ownership = config.localServices
+    ? ['  labels:', `    rivet.dev/local-launcher-owner: ${yamlString(config.release)}`]
+    : [];
   return [
     'apiVersion: v1',
     'kind: Namespace',
@@ -301,6 +450,7 @@ export function renderKubernetesLauncherSecretManifest(config) {
     'metadata:',
     `  name: ${config.secrets.authName}`,
     `  namespace: ${config.namespace}`,
+    ...ownership,
     'type: Opaque',
     'stringData:',
     `  RIVET_KEY: ${yamlString(config.sharedKey)}`,
@@ -310,19 +460,29 @@ export function renderKubernetesLauncherSecretManifest(config) {
     'metadata:',
     `  name: ${config.secrets.postgresName}`,
     `  namespace: ${config.namespace}`,
+    ...ownership,
     'type: Opaque',
     'stringData:',
     `  connectionString: ${yamlString(config.databaseConnectionString)}`,
+    ...(config.localServices
+      ? [
+          `  password: ${yamlString(config.localServices.password)}`,
+          `  username: ${yamlString(config.localServices.username)}`,
+          `  database: ${yamlString(config.localServices.database)}`,
+        ]
+      : []),
     '---',
     'apiVersion: v1',
     'kind: Secret',
     'metadata:',
     `  name: ${config.secrets.objectStorageName}`,
     `  namespace: ${config.namespace}`,
+    ...ownership,
     'type: Opaque',
     'stringData:',
     `  accessKeyId: ${yamlString(config.objectStorage.accessKeyId)}`,
     `  secretAccessKey: ${yamlString(config.objectStorage.secretAccessKey)}`,
+    ...(config.localServices ? [`  localStorageFingerprint: ${yamlString(localStorageFingerprint(config))}`] : []),
     '',
   ].join('\n');
 }

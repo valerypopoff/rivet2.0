@@ -2,6 +2,9 @@ imagePullSecrets: []
 
 clusterDomain: cluster.local
 
+# One application/storage contract; this controls capacity, not backend choice.
+deploymentProfile: cluster
+
 # External is the Kubernetes default: DevOps supplies the HTTP gateway/Ingress.
 # Embedded preserves the older in-chart nginx gateway for existing releases and
 # local test clusters only.
@@ -365,6 +368,12 @@ appSettings:
 compatibility:
   # Set only by the verified forward-rollback command for predecessor images.
   legacyStartupSettingsFiles: false
+
+# Durable upload/extraction scratch for the single control backend; not a new controller or Job.
+legacyRestore:
+  enabled: true
+  size: 64Gi
+  storageClassName: ''
 
 tmpVolume:
   enabled: true

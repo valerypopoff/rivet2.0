@@ -323,6 +323,7 @@ test('folder context menu creates a nested folder inside the selected folder', a
     'New folder',
     'New project',
     'Upload project',
+    'Upload bundle',
     'Delete folder',
   ]);
   page.once('dialog', (dialog) => {

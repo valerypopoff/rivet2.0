@@ -1,4 +1,7 @@
 import type { WorkflowRecordingPageQuery } from '../data-backend.js';
+import type { PreparedProjectBundleImport } from '../project-bundle-import.js';
+import { importManagedProjectBundle } from './bundle-import.js';
+import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 import type {
   WorkflowFolderItem,
   WorkflowEndpointAccess,
@@ -75,9 +78,9 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   constructor(
     config: ManagedWorkflowStorageConfig,
     blobStore?: ManagedWorkflowBlobStore,
-    options?: { migrationMode?: 'copy' | 'verify' },
+    options?: { migrationMode?: 'copy' | 'verify' | 'restore' },
   ) {
-    this.#runBackgroundTasks = options?.migrationMode === undefined;
+    this.#runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
     this.#context = createManagedWorkflowContext(config, blobStore, options);
     this.#executionService = new ManagedWorkflowExecutionService({
       context: this.#context,
@@ -149,6 +152,11 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
 
   async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {
     return this.#catalog.getTree();
+  }
+
+  async importProjectBundle(parent: string, bundle: PreparedProjectBundleImport) {
+    await this.initialize();
+    return importManagedProjectBundle(this.#context, parent, bundle);
   }
 
   async listProjectPathsForHostedIo(): Promise<string[]> {
