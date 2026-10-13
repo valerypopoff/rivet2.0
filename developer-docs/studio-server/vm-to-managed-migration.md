@@ -200,6 +200,14 @@ the restore-specific limit. `verify-vm-nginx-tls.mjs` streams 101 MiB through bo
 listeners and checks authentication, internal-route isolation and size rejection.
 The restore panel uses the shared response parser so outer HTML gateway failures
 show their HTTP status and safe guidance, not raw HTML or a JSON-parser exception.
+Receive deadlines are installed before Express dispatch: mounted routers rewrite
+`req.url`, so classifying the upload after dispatch incorrectly applied the ordinary
+two-minute body deadline to a slow archive upload. Restore-enabled servers allow
+one hour for `POST /api/legacy-restore/upload` (including query strings); ordinary
+bodies retain their two-minute deadline. The API error handler does not write a
+second response after a deadline has already sent HTTP 408. The real HTTP/Express
+regression in `legacy-restore-receive-deadline.test.ts` exercises this listener order,
+slow uploads and non-upload method/path exclusions in the normal API test lane.
 Runtime-library import and verification create their intermediate tar in that
 owned restore scratch, not the pod's separate 1 GiB `/tmp`. Capacity must cover
 the compressed upload, extracted roots and intermediate runtime tar together.

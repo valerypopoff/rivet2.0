@@ -24,6 +24,7 @@ import { enterVmMigrationMaintenance, leaveVmMigrationMaintenance } from '../vm-
 import { LocalMetadataTransitionJournal } from '../local-metadata/transition-journal.js';
 import { createProxySettingsSnapshot } from '../proxy-settings-snapshot.js';
 import { setLegacyRestorePaused, setLegacyRestoreWarmup } from '../legacy-restore/service.js';
+import { configureRequestReceiveDeadlines } from '../legacy-restore/receive-deadline.js';
 
 // test-style: fixture-read: Only the test-owned temporary SQLite journal is read to verify recovery requests leave its bytes unchanged.
 
@@ -179,6 +180,36 @@ function trustedProxyHeaders(): Record<string, string> {
     'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
   };
 }
+
+test('a timed-out body keeps its original 408 without a second API error response', async (t) => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    configureRequestReceiveDeadlines(server.server, true, 50);
+    const loggedErrors: unknown[][] = [];
+    t.mock.method(console, 'error', (...args: unknown[]) => { loggedErrors.push(args); });
+    try {
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const req = http.request(`${server.baseUrl}/api/projects/save`, {
+          method: 'POST',
+          headers: { ...trustedProxyHeaders(), 'content-type': 'application/json', 'content-length': '4' },
+          signal: AbortSignal.timeout(5_000),
+        }, (res) => {
+          res.on('error', reject);
+          res.on('end', () => { req.destroy(); resolve(res.statusCode); });
+          res.resume();
+        });
+        req.on('error', reject);
+        req.write('{"'); // Leave the declared body incomplete until its deadline.
+      });
+      assert.equal(status, 408);
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      assert.deepEqual(loggedErrors, [], 'A body-reader rejection after 408 must not write or log a second error.');
+      const health = await fetch(`${server.baseUrl}/healthz`, { headers: { connection: 'close' } });
+      assert.equal(health.status, 200);
+      await health.arrayBuffer();
+    } finally { await server.close(); }
+  });
+});
 
 test('Phase 4 route exposure matrix stays stable across API runtime profiles', () => {
   assert.deepEqual(getApiRouteExposureMatrix('control'), [
