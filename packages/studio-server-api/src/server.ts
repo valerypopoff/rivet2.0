@@ -53,6 +53,7 @@ import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from
 import { getManagedDbPoolConfig } from './routes/workflows/managed/db.js';
 import { assertVmMigrationTargetMayServe } from './vm-migration-target-gate.js';
 import { LegacyRestoreControl, acquireRestoreServingLease, restoreBlocksServing } from './legacy-restore/control.js';
+import { requestRestoreEndpoint } from './legacy-restore/internal-http.js';
 import {
   LegacyRestoreService,
   setLegacyRestoreService,
@@ -219,13 +220,10 @@ const resources = new ServerResourceLifecycle([
 async function requestRestoreRestart(): Promise<void> {
   const token = process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN;
   if (!token) throw new Error('The managed restore restart capability is unavailable.');
-  const response = await fetch(`http://127.0.0.1:${process.env.RIVET_BACKEND_HEALTH_PORT}/legacy-restore/restart`, {
-    method: 'POST',
-    headers: { 'x-rivet-supervisor-token': token },
-    signal: AbortSignal.timeout(5000),
-    redirect: 'error',
-  });
-  await response.body?.cancel();
+  const response = await requestRestoreEndpoint(
+    `http://127.0.0.1:${process.env.RIVET_BACKEND_HEALTH_PORT}/legacy-restore/restart`,
+    { supervisorToken: token, timeoutMs: 5000 },
+  );
   if (response.status !== 202) throw new Error('Supervisor refused restore restart.');
 }
 
@@ -559,15 +557,8 @@ async function startServer(): Promise<void> {
       const deadline = Date.now() + 300000;
       for (const { url, warmup } of urls) {
         while (true) {
-          const ready = await fetch(url, { signal: AbortSignal.timeout(3000), redirect: 'error' })
-            .then(async (response) => {
-              if (warmup) {
-                const body = await response.json().catch(() => null);
-                return response.status === 200 && body?.restoreWarmup === true;
-              }
-              await response.body?.cancel();
-              return response.status === 200;
-            })
+          const ready = await requestRestoreEndpoint(url)
+            .then((response) => response.status === 200 && (!warmup || response.restoreWarmup))
             .catch(() => false);
           if (ready) break;
           if (Date.now() > deadline)

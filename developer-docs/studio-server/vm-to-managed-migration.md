@@ -157,6 +157,16 @@ After deletion begins, failed operations remain in maintenance and expose
 **Retry restore**. There is no automatic backup or merge of the current
 destination. A failed/interrupted upload is cancelled and uploaded again.
 
+Restore readiness probes and the authenticated supervisor restart request use
+direct Node HTTP(S), not the process-wide outbound fetch/proxy dispatcher. A
+restored proxy may be unreachable here, and its `noProxy` list need not contain
+the destination's execution/Evaluation service names. Those user settings remain
+unchanged for actual outbound calls. Coordination retains its deadlines (including
+body reads), bounded 16 KiB replies, normal TLS validation and no-redirect behavior;
+warmup requires HTTP 200 and a literal `restoreWarmup: true`, never standby readiness
+alone. Retry from a verified `restarting` checkpoint warms consumers again without
+clearing or importing application data a second time.
+
 Only referenced installation-owned objects and registered application tables are
 cleared. Unknown objects, unrelated tables and unproven historical S3 versions
 remain untouched. Runtime-library archives are also retained because their fixed
@@ -213,6 +223,12 @@ It uses the same disposable source/managed services and supervised restore test;
 the full migration command remains the CI compatibility gate. Failure diagnostics
 log the phase and fixed local failure categories, never arbitrary provider error
 details or archive paths.
+The fixture preserves an unreachable saved proxy, exempts only `127.0.0.1`, and
+addresses peer probes by `localhost` (outside that exception). Both original and
+edited-backup rounds must complete automatically and retain the exact proxy
+settings. `legacy-restore-internal-http.test.ts` additionally covers stalled and
+truncated bodies, oversized replies, malformed JSON, redirects and non-warmup
+responses, without changing the outbound dispatcher.
 
 Use an isolated actual-data rehearsal before a production restore. Unit/HTTP
 fixtures and a successful synthetic import do not certify arbitrary Code nodes,

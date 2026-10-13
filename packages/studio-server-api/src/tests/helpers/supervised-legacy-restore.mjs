@@ -93,8 +93,10 @@ export async function verifySupervisedLegacyRestore({
     RIVET_SCHEMA_MIGRATION_RELEASE: '',
     RIVET_LEGACY_RESTORE_INSTALLATION: installation,
     RIVET_LEGACY_RESTORE_ROOT: restoreRoot,
-    RIVET_LEGACY_RESTORE_EXECUTION_READY_URL: `http://127.0.0.1:${executionPort}/readyz`,
-    RIVET_LEGACY_RESTORE_EVALUATION_READY_URL: `http://127.0.0.1:${evaluationPort}/readyz`,
+    // Not covered by the backup's literal 127.0.0.1 noProxy exception.
+    // Stand in for Compose/cluster service hostnames without requiring custom DNS.
+    RIVET_LEGACY_RESTORE_EXECUTION_READY_URL: `http://localhost:${executionPort}/readyz`,
+    RIVET_LEGACY_RESTORE_EVALUATION_READY_URL: `http://localhost:${evaluationPort}/readyz`,
     RIVET_BACKEND_API_PORT: String(apiPort),
     RIVET_BACKEND_EXECUTOR_PORT: String(executorPort),
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
@@ -299,6 +301,10 @@ export async function verifySupervisedLegacyRestore({
     const config = await request(`${base}/api/config`, { headers }).then((res) => res.json());
     assert.equal(config.legacyRestoreEpoch, acceptedId);
     assert.equal(config.legacyRestoreMaintenance, false);
+    const proxy = await request(`${base}/api/app-settings/node-executor-proxy`, { headers }).then((res) => res.json());
+    assert.equal(proxy.httpProxy, 'http://127.0.0.1:9');
+    assert.equal(proxy.httpsProxy, 'http://127.0.0.1:9');
+    assert.equal(proxy.noProxy, '127.0.0.1', 'restore must not rewrite outbound proxy policy to repair coordination');
     const environment = await request(`${base}/api/workflows/execution-environment`, {
       headers: {
         ...headers,
