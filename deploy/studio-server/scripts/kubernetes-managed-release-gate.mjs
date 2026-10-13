@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -25,6 +25,14 @@ const requireFromApi = createRequire(path.join(rootDir, 'packages', 'studio-serv
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isReadyPod(pod) {
+  return (
+    !pod.metadata?.deletionTimestamp &&
+    pod.status?.phase === 'Running' &&
+    pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True')
+  );
 }
 
 function randomSecret() {
@@ -622,7 +630,7 @@ async function findFreePort() {
   });
 }
 
-class ManagedReleaseGate {
+export class ManagedReleaseGate {
   constructor(config, kubectlBin, helmBin) {
     this.config = config;
     this.kubectlBin = kubectlBin;
@@ -943,8 +951,9 @@ class ManagedReleaseGate {
         const response = await fetch(`${baseUrl}/readyz`, {
           signal: AbortSignal.timeout(3_000),
         });
-        if (!response.ok) throw new Error(`/readyz returned ${response.status}`);
-        return response;
+        const snapshot = await response.json();
+        if (!response.ok || snapshot.ok !== true || snapshot.state !== 'ready')
+          throw new Error(`/readyz did not report a ready runtime (HTTP ${response.status})`);
       },
       60_000,
     );
@@ -1087,6 +1096,7 @@ class ManagedReleaseGate {
     );
 
     let replayRecordingId;
+    let replayProjectDigest;
     await waitFor(
       'recordings and statistics',
       async () => {
@@ -1105,8 +1115,14 @@ class ManagedReleaseGate {
           `${baseUrl}/api/workflows/recordings/${encodeURIComponent(candidateReplayRecordingId)}/replay-project`,
           { signal: AbortSignal.timeout(30_000) },
         );
-        if (!replay.ok) throw new Error(`recording replay returned ${replay.status}`);
+        if (!replay.ok) {
+          await replay.body?.cancel();
+          throw new Error(`recording replay returned ${replay.status}`);
+        }
+        const replayContents = await replay.text();
+        if (!replayContents) throw new Error('recording replay returned an empty project');
         replayRecordingId = candidateReplayRecordingId;
+        replayProjectDigest = createHash('sha256').update(replayContents).digest('hex');
         const targets = await requestJson(baseUrl, '/api/workflows/run-statistics/targets?surface=web_app');
         if (!targets.targets?.some((entry) => entry.target?.workflowId === workflow.workflowId))
           throw new Error('statistics catalog did not contain the web-app action');
@@ -1114,7 +1130,7 @@ class ManagedReleaseGate {
       90_000,
     );
     if (typeof replayRecordingId !== 'string') throw new Error('recording replay identity did not converge');
-    return { environmentVariableId, publishedRevision, relativePath, replayRecordingId };
+    return { environmentVariableId, publishedRevision, relativePath, replayRecordingId, replayProjectDigest };
   }
 
   async verifyManagedPublicationConflict(baseUrl, relativePath) {
@@ -1341,10 +1357,63 @@ class ManagedReleaseGate {
         const response = await fetch(`${baseUrl}/readyz`, {
           signal: AbortSignal.timeout(5_000),
         });
-        if (!response.ok) throw new Error(`/readyz returned ${response.status}`);
-        return response;
+        const snapshot = await response.json();
+        if (!response.ok || snapshot.ok !== true || snapshot.state !== 'ready')
+          throw new Error(`/readyz did not report a ready runtime (HTTP ${response.status})`);
       },
       timeoutMs,
+    );
+  }
+
+  async readBackendResponse(route) {
+    // Service readiness removes this pod from routing during the intended
+    // outage. Probe its API over loopback, without depending on Service endpoints.
+    const result = await this.kubectl(
+      [
+        'exec',
+        '-n',
+        this.config.namespace,
+        `statefulset/${this.config.release}-backend`,
+        '-c',
+        'backend',
+        '--request-timeout=10s',
+        '--pod-running-timeout=10s',
+        '--',
+        'node',
+        '--input-type=module',
+        '-e',
+        [
+          'import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from "./dist/studio-server-api/src/auth.js";',
+          'const response = await fetch(new URL(process.argv[1], `http://127.0.0.1:${process.env.RIVET_BACKEND_API_PORT}`), {',
+          'signal: AbortSignal.timeout(5000),',
+          'headers: { "X-Rivet-Proxy-Auth": getExpectedProxyAuthToken(), Cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` }',
+          '}); console.log(JSON.stringify({ status: response.status, body: await response.text() }));',
+        ].join('\n'),
+        '--',
+        route,
+      ],
+      { capture: true },
+    );
+    return JSON.parse(result.stdout);
+  }
+
+  async waitForStorageUnavailable(description) {
+    await waitFor(
+      description,
+      async () => {
+        const response = await this.readBackendResponse('/readyz');
+        const snapshot = JSON.parse(response.body);
+        if (
+          response.status !== 503 ||
+          snapshot.ok !== false ||
+          snapshot.code !== 'dependency_unavailable' ||
+          !Array.isArray(snapshot.checks) ||
+          !snapshot.checks.some((check) => check.ok === false && check.code === 'workflow_storage_unavailable')
+        ) {
+          throw new Error(`/readyz did not confirm workflow-storage failure (HTTP ${response.status})`);
+        }
+      },
+      60_000,
     );
   }
 
@@ -1422,22 +1491,12 @@ class ManagedReleaseGate {
   async verifyManagedDependencyRecovery(baseUrl, state) {
     await this.setDependencyReplicas('minio', 0);
     try {
-      await waitFor(
-        'object-storage readiness failure',
-        async () => {
-          const response = await fetch(`${baseUrl}/readyz`, {
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (response.ok) throw new Error('expected the managed runtime to become unready');
-          return response;
-        },
-        60_000,
+      await this.waitForStorageUnavailable('object-storage readiness failure');
+      const unavailableReplay = await this.readBackendResponse(
+        `/api/workflows/recordings/${encodeURIComponent(state.replayRecordingId)}/replay-project`,
       );
-      const unavailableReplay = await fetch(
-        `${baseUrl}/api/workflows/recordings/${encodeURIComponent(state.replayRecordingId)}/replay-project`,
-        { signal: AbortSignal.timeout(10_000) },
-      );
-      if (unavailableReplay.ok) throw new Error('Object-storage outage still served a recording replay');
+      if (unavailableReplay.status !== 500 && unavailableReplay.status !== 503)
+        throw new Error(`Object-storage outage did not produce a replay storage failure: ${unavailableReplay.status}`);
     } finally {
       await this.setDependencyReplicas('minio', 1);
       await this.waitForDependency('MinIO recovery', 'app=release-gate-minio', [
@@ -1450,26 +1509,28 @@ class ManagedReleaseGate {
       ]);
     }
     await this.waitForReady(baseUrl, 'object-storage readiness recovery');
-    const recoveredReplay = await fetch(
-      `${baseUrl}/api/workflows/recordings/${encodeURIComponent(state.replayRecordingId)}/replay-project`,
-      { signal: AbortSignal.timeout(30_000) },
+    await waitFor(
+      'recording replay recovery after object storage returned',
+      async () => {
+        const recoveredReplay = await fetch(
+          `${baseUrl}/api/workflows/recordings/${encodeURIComponent(state.replayRecordingId)}/replay-project`,
+          { signal: AbortSignal.timeout(5_000) },
+        );
+        if (!recoveredReplay.ok) {
+          await recoveredReplay.body?.cancel();
+          throw new Error(`Recording replay did not recover after object storage returned: ${recoveredReplay.status}`);
+        }
+        const digest = createHash('sha256')
+          .update(await recoveredReplay.text())
+          .digest('hex');
+        if (digest !== state.replayProjectDigest) throw new Error('Recovered recording replay project changed');
+      },
+      90_000,
     );
-    if (!recoveredReplay.ok)
-      throw new Error(`Recording replay did not recover after object storage returned: ${recoveredReplay.status}`);
 
     await this.setDependencyReplicas('postgres', 0);
     try {
-      await waitFor(
-        'PostgreSQL readiness failure',
-        async () => {
-          const response = await fetch(`${baseUrl}/readyz`, {
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (response.ok) throw new Error('expected the managed runtime to become unready');
-          return response;
-        },
-        60_000,
-      );
+      await this.waitForStorageUnavailable('PostgreSQL readiness failure');
     } finally {
       await this.setDependencyReplicas('postgres', 1);
       await this.waitForDependency('PostgreSQL recovery', 'app=release-gate-postgres', [
@@ -1565,12 +1626,7 @@ class ManagedReleaseGate {
           { capture: true },
         );
         const readyPods =
-          JSON.parse(result.stdout).items?.filter(
-            (pod) =>
-              pod.metadata?.name !== ownerPod &&
-              pod.status?.phase === 'Running' &&
-              pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True'),
-          ) ?? [];
+          JSON.parse(result.stdout).items?.filter((pod) => pod.metadata?.name !== ownerPod && isReadyPod(pod)) ?? [];
         if (readyPods.length < 2) throw new Error('execution replacement is not ready on both replicas yet');
         return readyPods;
       },
@@ -1613,7 +1669,9 @@ class ManagedReleaseGate {
     const podResult = await this.kubectl(['get', 'pods', '-n', this.config.namespace, '-l', selector, '-o', 'json'], {
       capture: true,
     });
-    const pod = JSON.parse(podResult.stdout).items?.[0];
+    const originalPods = JSON.parse(podResult.stdout).items ?? [];
+    const originalUids = new Set(originalPods.map((pod) => pod.metadata?.uid));
+    const pod = originalPods.find(isReadyPod);
     const podName = pod?.metadata?.name;
     const podUid = pod?.metadata?.uid;
     if (typeof podName !== 'string' || typeof podUid !== 'string')
@@ -1632,27 +1690,16 @@ class ManagedReleaseGate {
           capture: true,
         });
         const replacement = JSON.parse(result.stdout).items?.find(
-          (item) =>
-            item.metadata?.uid !== podUid &&
-            item.status?.phase === 'Running' &&
-            item.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True'),
+          (item) => typeof item.metadata?.uid === 'string' && !originalUids.has(item.metadata.uid) && isReadyPod(item),
         );
         if (!replacement) throw new Error(`a ready replacement for ${podName} is not available yet`);
         return replacement;
       },
       300_000,
     );
-    await waitFor(
-      `${component} proxy recovery`,
-      async () => {
-        const response = await fetch(`${baseUrl}/readyz`, {
-          signal: AbortSignal.timeout(5_000),
-        });
-        if (!response.ok) throw new Error(`/readyz returned ${response.status}`);
-        return response;
-      },
-      90_000,
-    );
+    // This checks control-plane routing only. The workflow probe below must
+    // separately prove execution on the new pod, not an existing sibling.
+    await this.waitForReady(baseUrl, `${component} replacement control-plane recovery`);
     const replacementName = replacement.metadata?.name;
     if (typeof replacementName !== 'string') throw new Error(`Replacement ${component} pod has no name`);
     return replacementName;
@@ -1686,10 +1733,26 @@ class ManagedReleaseGate {
       },
       90_000,
     );
-    const app = await fetch(`${baseUrl}/apps/release-gate-web-app`, {
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!app.ok) throw new Error(`Web app did not survive execution replacement: ${app.status}`);
+    // Pod readiness and one successful workflow request do not certify every
+    // Service connection during endpoint turnover. This GET is safe to retry;
+    // action submissions must retain their separate execution/identity checks.
+    await waitFor(
+      'published web-app recovery after execution replacement',
+      async () => {
+        const app = await fetch(`${baseUrl}/apps/release-gate-web-app`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!app.ok) {
+          await app.body?.cancel();
+          throw new Error(`Web app did not survive execution replacement: ${app.status}`);
+        }
+        const html = await app.text();
+        if (!html.includes('Managed release gate app')) throw new Error('Replacement web app returned unexpected HTML');
+        if (extractWebAppRevisionKey(html) !== state.publishedRevision)
+          throw new Error('Replacement web app did not retain its published revision');
+      },
+      90_000,
+    );
   }
 
   async disruptionChecks() {
@@ -1722,10 +1785,7 @@ class ManagedReleaseGate {
     );
     const executionPods =
       JSON.parse(executionPodsResult.stdout).items?.filter(
-        (pod) =>
-          typeof pod.spec?.nodeName === 'string' &&
-          pod.status?.phase === 'Running' &&
-          pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True'),
+        (pod) => typeof pod.spec?.nodeName === 'string' && isReadyPod(pod),
       ) ?? [];
     const executionPodsByNode = new Map();
     for (const pod of executionPods) {
@@ -1822,4 +1882,5 @@ async function main() {
   }
 }
 
-await main();
+// Importing the runner for behavioral tests must never create or delete a cluster namespace.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

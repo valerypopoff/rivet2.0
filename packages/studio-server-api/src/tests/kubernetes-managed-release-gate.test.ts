@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { execFile, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 import {
   buildManagedReleaseGateConfig,
@@ -14,7 +19,394 @@ import { buildManagedProviderGateConfig } from '../../../../deploy/studio-server
 import { summarizePodStartupState } from '../../../../deploy/studio-server/scripts/lib/kubernetes-workload-diagnostics.mjs';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
+const { ManagedReleaseGate } = await import(
+  pathToFileURL(path.join(rootDir, 'deploy/studio-server/scripts/kubernetes-managed-release-gate.mjs')).href
+);
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
+
+const recoveredAppHtml =
+  '<main data-rivet-web-app-config="{&quot;revisionKey&quot;:&quot;published-fixture&quot;}">Managed release gate app</main>';
+
+function replacementGate() {
+  const gate = new ManagedReleaseGate({}, 'unused-kubectl', 'unused-helm');
+  const replacements: string[] = [];
+  let workflowCalls = 0;
+  gate.replaceWorkload = async (_baseUrl: string, component: string) => {
+    replacements.push(component);
+    return `${component}-replacement`;
+  };
+  gate.requestWorkflow = async () => {
+    workflowCalls++;
+    return { hostname: 'execution-replacement', environmentValue: 'managed-persistence' };
+  };
+  return { gate, replacements, workflowCalls: () => workflowCalls };
+}
+
+test('managed release gate CLI still runs and rejects missing context before touching a cluster', () => {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(rootDir, 'deploy/studio-server/scripts/kubernetes-managed-release-gate.mjs'), 'smoke'],
+    {
+      env: { ...process.env, RIVET_K8S_RELEASE_GATE_CONTEXT: '', RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: '' },
+      encoding: 'utf8',
+      timeout: 10_000,
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, 'the CLI entrypoint must not become a silent successful no-op');
+  assert.match(result.stderr, /RIVET_K8S_RELEASE_GATE_CONTEXT is required/);
+});
+
+test('replacement web-app probe recovers from Service connection failures without replaying an action', async (t) => {
+  const { gate, replacements, workflowCalls } = replacementGate();
+  let appCalls = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.equal(options.method, undefined, 'only read-only requests may be retried by the recovery probe');
+    if (url.includes('/api/app-settings/')) return Response.json({ value: 'managed-persistence' });
+    assert.equal(url, 'http://fixture/apps/release-gate-web-app');
+    if (++appCalls === 1) throw new TypeError('fetch failed during endpoint turnover');
+    if (appCalls === 2) return new Response('gateway failure', { status: 502 });
+    if (appCalls === 3) return new Response('not ready', { status: 503 });
+    return new Response(recoveredAppHtml);
+  });
+  await gate.verifyAfterReplacement('http://fixture', {
+    environmentVariableId: 'saved-variable',
+    publishedRevision: 'published-fixture',
+  });
+  assert.deepEqual(replacements, ['backend', 'execution']);
+  assert.equal(workflowCalls(), 1);
+  assert.equal(appCalls, 4);
+});
+
+for (const [label, response, failure] of [
+  ['persistent gateway failure', () => new Response('bad gateway', { status: 502 }), /replacement: 502/],
+  ['wrong app HTML', () => new Response('<main>Login page</main>'), /unexpected HTML/],
+  [
+    'wrong publication revision',
+    () => new Response(recoveredAppHtml.replace('published-fixture', 'wrong-revision')),
+    /did not retain its published revision/,
+  ],
+] as const) {
+  test(`replacement web-app recovery remains bounded and rejects ${label}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { gate, workflowCalls } = replacementGate();
+    let appCalls = 0;
+    t.mock.method(globalThis, 'fetch', async (url: string) => {
+      if (url.includes('/api/app-settings/')) return Response.json({ value: 'managed-persistence' });
+      appCalls++;
+      return response();
+    });
+    const outcome = assert.rejects(
+      gate.verifyAfterReplacement('http://fixture', {
+        environmentVariableId: 'saved-variable',
+        publishedRevision: 'published-fixture',
+      }),
+      (error: Error) => {
+        assert.match(error.message, /Timed out waiting for published web-app recovery after execution replacement/);
+        assert.match(error.message, failure);
+        return true;
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(appCalls, 1);
+    t.mock.timers.tick(90_000);
+    await outcome;
+    assert.equal(workflowCalls(), 1);
+    assert.equal(appCalls, 1, 'no request may be sent after the recovery window expires');
+  });
+}
+
+const readyHealth = { ok: true, state: 'ready', checks: [] };
+const storageUnavailableHealth = {
+  ok: false,
+  state: 'ready',
+  code: 'dependency_unavailable',
+  checks: [{ ok: false, code: 'workflow_storage_unavailable' }],
+};
+
+test('outage diagnostics read the owned backend API directly even when Service routing is unavailable', async (t) => {
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, '/readyz');
+    assert.equal(
+      req.headers['x-rivet-proxy-auth'],
+      createHash('sha256').update('fixture-key:proxy-auth').digest('hex'),
+    );
+    assert.equal(
+      req.headers.cookie,
+      `rivet_ui_token=${createHash('sha256').update('fixture-key:ui-session').digest('hex')}`,
+    );
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(storageUnavailableHealth));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const gate = new ManagedReleaseGate({ namespace: 'fixture-owned', release: 'fixture' }, 'unused', 'unused');
+  gate.kubectl = async (args: string[], options: { capture: boolean }) => {
+    assert.deepEqual(args.slice(0, 9), [
+      'exec',
+      '-n',
+      'fixture-owned',
+      'statefulset/fixture-backend',
+      '-c',
+      'backend',
+      '--request-timeout=10s',
+      '--pod-running-timeout=10s',
+      '--',
+    ]);
+    assert.equal(args[9], 'node');
+    assert.equal(options.capture, true);
+    return promisify(execFile)(process.execPath, args.slice(10), {
+      cwd: path.join(rootDir, 'packages/studio-server-api'),
+      env: { ...process.env, RIVET_BACKEND_API_PORT: String(address.port), RIVET_KEY: 'fixture-key' },
+      timeout: 10_000,
+      windowsHide: true,
+    });
+  };
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('Service has no ready endpoints');
+  });
+  try {
+    const result = await gate.readBackendResponse('/readyz');
+    assert.equal(result.status, 503);
+    assert.deepEqual(JSON.parse(result.body), storageUnavailableHealth);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+function readyPod(name: string, uid: string, terminating = false) {
+  return {
+    metadata: { name, uid, ...(terminating ? { deletionTimestamp: '2026-10-13T00:00:00Z' } : {}) },
+    status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] },
+  };
+}
+
+for (const component of ['backend', 'execution']) {
+  test(`${component} replacement requires a new UID, not an existing or terminating sibling`, async (t) => {
+    const gate = new ManagedReleaseGate({ release: 'fixture', namespace: 'fixture-owned' }, 'unused', 'unused');
+    const commands: string[][] = [];
+    let lists = 0;
+    gate.kubectl = async (args: string[]) => {
+      commands.push(args);
+      if (args[0] !== 'get') return { stdout: '' };
+      lists++;
+      return {
+        stdout: JSON.stringify({
+          items:
+            lists === 1
+              ? [
+                  readyPod('terminating-old', 'terminating-old', true),
+                  readyPod('original', 'old'),
+                  readyPod('sibling', 'sibling'),
+                ]
+              : lists === 2
+                ? [readyPod('sibling', 'sibling'), readyPod('terminating-new', 'new-terminating', true)]
+                : [readyPod('sibling', 'sibling'), readyPod(component === 'backend' ? 'original' : 'new-pod', 'new')],
+        }),
+      };
+    };
+    let healthResponse: Response | undefined;
+    t.mock.method(globalThis, 'fetch', async (url: string) => {
+      assert.equal(url, 'http://fixture/readyz');
+      healthResponse = Response.json(readyHealth);
+      return healthResponse;
+    });
+    assert.equal(
+      await gate.replaceWorkload('http://fixture', component),
+      component === 'backend' ? 'original' : 'new-pod',
+    );
+    assert.equal(lists, 3);
+    assert.deepEqual(
+      commands.find((args) => args[0] === 'delete'),
+      ['delete', 'pod', '-n', 'fixture-owned', 'original', '--wait=false'],
+    );
+    assert.equal(healthResponse?.bodyUsed, true);
+  });
+}
+
+test('a workload with only terminating pods is not deleted again', async () => {
+  const gate = new ManagedReleaseGate({ release: 'fixture', namespace: 'fixture-owned' }, 'unused', 'unused');
+  let calls = 0;
+  gate.kubectl = async () => {
+    calls++;
+    return { stdout: JSON.stringify({ items: [readyPod('terminating', 'old', true)] }) };
+  };
+  await assert.rejects(gate.replaceWorkload('http://fixture', 'execution'), /No execution pod was available/);
+  assert.equal(calls, 1);
+});
+
+test('readiness recovery consumes responses and rejects a 200 maintenance or non-ready response', async (t) => {
+  const gate = new ManagedReleaseGate({}, 'unused', 'unused');
+  const responses = [
+    new Response('bad gateway', { status: 502 }),
+    Response.json({ ok: true, restoreMaintenance: true }),
+    Response.json({ ok: true, state: 'starting' }),
+    Response.json(readyHealth),
+  ];
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => responses[calls++]);
+  await gate.waitForReady('http://fixture', 'test recovery');
+  assert.equal(calls, 4);
+  assert.ok(responses.every((response) => response.bodyUsed));
+});
+
+for (const [label, response] of [
+  ['proxy error', () => new Response('bad gateway', { status: 502 })],
+  ['authentication error', () => Response.json({ error: 'unauthorized' }, { status: 401 })],
+  [
+    'stale health check',
+    () => Response.json({ ...storageUnavailableHealth, code: 'health_check_stale' }, { status: 503 }),
+  ],
+  [
+    'unrelated failed dependency',
+    () =>
+      Response.json(
+        { ...storageUnavailableHealth, checks: [{ ok: false, code: 'web_app_gateway_unavailable' }] },
+        { status: 503 },
+      ),
+  ],
+] as const) {
+  test(`storage outage cannot be certified by ${label}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const gate = new ManagedReleaseGate({}, 'unused', 'unused');
+    const actualResponse = response();
+    gate.readBackendResponse = async (route: string) => {
+      assert.equal(route, '/readyz');
+      return { status: actualResponse.status, body: await actualResponse.text() };
+    };
+    const outcome = assert.rejects(
+      gate.waitForStorageUnavailable('storage outage'),
+      /Timed out waiting for storage outage/,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(actualResponse.bodyUsed, true);
+    t.mock.timers.tick(60_000);
+    await outcome;
+  });
+}
+
+function dependencyGate() {
+  const gate = new ManagedReleaseGate({}, 'unused', 'unused');
+  const replicas: Array<[string, number]> = [];
+  let environmentChecks = 0;
+  gate.setDependencyReplicas = async (component: string, count: number) => {
+    replicas.push([component, count]);
+  };
+  gate.waitForDependency = async () => {};
+  gate.readBackendResponse = async (route: string) => ({
+    status: route === '/readyz' ? 503 : 500,
+    body: route === '/readyz' ? JSON.stringify(storageUnavailableHealth) : 'storage unavailable',
+  });
+  gate.assertPersistedEnvironment = async () => {
+    environmentChecks++;
+  };
+  return { gate, replicas, environmentChecks: () => environmentChecks };
+}
+
+const replayContents = 'retained fixture project';
+const replayState = {
+  replayRecordingId: 'retained-recording',
+  replayProjectDigest: createHash('sha256').update(replayContents).digest('hex'),
+};
+
+test('dependency recovery restores both stores and verifies replay bytes after transient routing failure', async (t) => {
+  const { gate, replicas, environmentChecks } = dependencyGate();
+  const responses: Response[] = [];
+  let replayCalls = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.equal(options.method, undefined);
+    const [, count] = replicas.at(-1)!;
+    const response = url.endsWith('/readyz')
+      ? Response.json(count === 0 ? storageUnavailableHealth : readyHealth, { status: count === 0 ? 503 : 200 })
+      : ++replayCalls === 1
+        ? new Response('endpoint turnover', { status: 502 })
+        : new Response(replayContents);
+    responses.push(response);
+    return response;
+  });
+  await gate.verifyManagedDependencyRecovery('http://fixture', replayState);
+  assert.deepEqual(replicas, [
+    ['minio', 0],
+    ['minio', 1],
+    ['postgres', 0],
+    ['postgres', 1],
+  ]);
+  assert.equal(replayCalls, 2);
+  assert.equal(environmentChecks(), 1);
+  assert.ok(responses.every((response) => response.bodyUsed));
+});
+
+test('changed replay data cannot certify recovery and does not start another dependency outage', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  const { gate, replicas, environmentChecks } = dependencyGate();
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    const down = replicas.at(-1)?.[1] === 0;
+    if (url.endsWith('/readyz'))
+      return Response.json(down ? storageUnavailableHealth : readyHealth, { status: down ? 503 : 200 });
+    return new Response(down ? 'storage failure' : 'different project', { status: down ? 500 : 200 });
+  });
+  const outcome = assert.rejects(
+    gate.verifyManagedDependencyRecovery('http://fixture', replayState),
+    /Recovered recording replay project changed/,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(90_000);
+  await outcome;
+  assert.deepEqual(replicas, [
+    ['minio', 0],
+    ['minio', 1],
+  ]);
+  assert.equal(environmentChecks(), 0);
+});
+
+test('a missing replay during an outage fails and still restores MinIO', async (t) => {
+  const { gate, replicas } = dependencyGate();
+  gate.readBackendResponse = async (route: string) =>
+    route === '/readyz'
+      ? { status: 503, body: JSON.stringify(storageUnavailableHealth) }
+      : { status: 404, body: 'not found' };
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('outage classification must not depend on Service routing');
+  });
+  await assert.rejects(
+    gate.verifyManagedDependencyRecovery('http://fixture', replayState),
+    /replay storage failure: 404/,
+  );
+  assert.deepEqual(replicas, [
+    ['minio', 0],
+    ['minio', 1],
+  ]);
+});
+
+test('a failed PostgreSQL outage assertion still restores PostgreSQL', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  const { gate, replicas, environmentChecks } = dependencyGate();
+  gate.readBackendResponse = async (route: string) => {
+    if (replicas.at(-1)?.[0] === 'postgres') return { status: 200, body: JSON.stringify(readyHealth) };
+    return {
+      status: route === '/readyz' ? 503 : 500,
+      body: route === '/readyz' ? JSON.stringify(storageUnavailableHealth) : 'storage unavailable',
+    };
+  };
+  t.mock.method(globalThis, 'fetch', async (url: string) =>
+    url.endsWith('/readyz') ? Response.json(readyHealth) : new Response(replayContents),
+  );
+  const outcome = assert.rejects(
+    gate.verifyManagedDependencyRecovery('http://fixture', replayState),
+    /Timed out waiting for PostgreSQL readiness failure/,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(60_000);
+  await outcome;
+  assert.deepEqual(replicas, [
+    ['minio', 0],
+    ['minio', 1],
+    ['postgres', 0],
+    ['postgres', 1],
+  ]);
+  assert.equal(environmentChecks(), 0);
+});
 
 function createEnvironment(overrides = {}) {
   return {

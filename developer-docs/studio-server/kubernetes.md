@@ -535,6 +535,44 @@ downstream of the missing API. Keep the storage-before-sync order when changing
 startup orchestration.
 After an execution-node drain, the release gate retries the public workflow probe for a bounded 90-second recovery window. A connection that was already attached to the evicted pod may close once during endpoint turnover; the gate still fails if the public route does not recover within the window.
 
+After execution-pod replacement, the read-only published web-app GET also has
+a bounded 90-second recovery window, with five-second request deadlines. Pod
+readiness and one successful workflow request do not guarantee every subsequent
+Service connection has converged. A connection-refused 502 at this boundary is
+not itself evidence of lost publication data. Recovery must return the expected
+app HTML and the original published action revision, not merely HTTP 200 or a
+login/error page; persistent failure still blocks image promotion. No web-app
+action POST is retried by this HTML recovery check. Behavioral tests import the
+runner without starting its CLI and exercise connection loss, 502/503 recovery,
+deadline expiry, wrong HTML and revision drift. A subprocess check also proves
+direct CLI invocation still executes and rejects a missing context before any
+cluster work; importability must never turn the mandatory gate into a no-op.
+
+Replacement selection excludes terminating pods and every UID present before
+deletion: an already-ready sibling cannot stand in for the new execution pod.
+StatefulSet replacements may retain their name, but must have a new UID. The
+`/readyz` probe certifies control-plane routing only; a separate workflow request
+must report the new execution pod's hostname and the retained environment value.
+
+Disruption-mode storage outage checks require the runtime's HTTP 503
+`dependency_unavailable` response with a failed `workflow_storage_unavailable`
+check. Proxy errors, authentication failures, stale health checks and unrelated
+dependency failures cannot certify the intended outage. Replay failure must be a
+server/storage error, not a missing or unauthorized recording. These outage
+diagnostics use `kubectl exec` in the owned backend container to probe its API
+over loopback: Kubernetes may remove an unready pod from Service routing, making
+a proxy 502 insufficient to classify the failure. The diagnostic uses the API's
+existing proxy/session token helpers inside the container, without exporting the
+installation key or duplicating authentication rules. Recovery probes still use
+the public proxy path. After MinIO returns, a bounded read-only replay probe
+consumes the artifact and compares its SHA-256 digest with the bytes captured
+before disruption; HTTP 200 alone is not proof of retained data. Readiness
+responses are consumed, and unsuccessful public replay responses are canceled,
+so repeated probes do not retain idle response streams.
+Behavioral tests cover sibling/terminating-pod rejection, StatefulSet name reuse,
+health failure classification, transient replay recovery, changed replay data and
+dependency restoration on assertion failure.
+
 For a deliberate local run, first create the disposable Kind topology and then provide the exact candidate image repositories and digests. The runner will refuse to run unless both context variables exactly match the active context; it also deletes only a namespace carrying its own ownership label.
 
 ```bash
