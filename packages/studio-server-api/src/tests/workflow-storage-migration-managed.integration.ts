@@ -321,6 +321,18 @@ fixture: try {
     await fs.mkdir(directory, { recursive: true });
   }
   await fs.mkdir(path.join(appDataRoot, 'settings'));
+  // The source proxy is unreachable in the destination. Only literal loopback
+  // is exempted; consumer health hostnames must not inherit outbound routing.
+  await fs.writeFile(
+    path.join(appDataRoot, 'settings', 'node-executor-proxy.json'),
+    JSON.stringify({
+      version: 1,
+      httpProxy: 'http://127.0.0.1:9',
+      httpsProxy: 'http://127.0.0.1:9',
+      noProxy: '127.0.0.1',
+      updatedAt: '2026-09-26T12:00:00.000Z',
+    }),
+  );
   await fs.writeFile(
     path.join(appDataRoot, 'settings', 'environment-variables.json'),
     JSON.stringify({
