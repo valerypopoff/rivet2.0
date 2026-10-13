@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { buildManagedProviderGateConfig, imageReference } from './lib/kubernetes-managed-provider-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
+import { assertRuntimeReadiness } from './lib/kubernetes-runtime-readiness.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const runnerName = 'kubernetes-managed-provider-gate';
@@ -92,7 +93,7 @@ function canonicalJson(text, description) {
   }
 }
 
-class ManagedProviderGate {
+export class ManagedProviderGate {
   constructor(config, kubectlBin, helmBin) {
     this.config = config;
     this.kubectlBin = kubectlBin;
@@ -334,18 +335,8 @@ class ManagedProviderGate {
   }
 
   async assertPublicHealth() {
-    const { text } = await this.request('/readyz', { expectedStatus: 200 });
-    if (this.config.gatewayMode === 'external') {
-      let health;
-      try {
-        health = JSON.parse(text);
-      } catch {
-        throw new Error(`[${runnerName}] external gateway /readyz did not return API readiness JSON`);
-      }
-      if (health?.ok !== true || health?.state !== 'ready') {
-        throw new Error(`[${runnerName}] external gateway /readyz did not report API readiness`);
-      }
-    }
+    const { response, text } = await this.request('/readyz', { expectedStatus: 200 });
+    assertRuntimeReadiness({ status: response.status, body: text });
   }
 
   async seedAppSettingsBaseline() {
@@ -422,8 +413,9 @@ class ManagedProviderGate {
               headers: this.config.requestHeaders,
               signal: AbortSignal.timeout(10_000),
             });
-            if (response.ok) throw new Error('expected the staging runtime to become unready');
-            return response;
+            await response.body?.cancel();
+            if (![502, 503, 504].includes(response.status))
+              throw new Error(`expected runtime/gateway unavailability, received HTTP ${response.status}`);
           },
           90_000,
         );
@@ -569,4 +561,5 @@ async function main() {
   }
 }
 
-await main();
+// Importing the owner for behavioral tests must not mutate a staging release.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

@@ -9,6 +9,27 @@ const handleRequest = async (req, res) => {
     res.writeHead(403).end();
     return;
   }
+  if (['/readyz', '/livez', '/healthz'].includes(url.pathname)) {
+    if (role !== 'api') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<!doctype html><title>Frontend fallback, not runtime readiness</title>');
+      return;
+    }
+    const unavailable = url.pathname === '/readyz' && url.searchParams.get('unready') === '1';
+    res.writeHead(unavailable ? 503 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(
+      JSON.stringify({
+        identity,
+        ok: !unavailable,
+        state: 'ready',
+        profile: 'control',
+        ...(unavailable
+          ? { code: 'dependency_unavailable', checks: [{ ok: false, code: 'workflow_storage_unavailable' }] }
+          : { checks: [] }),
+      }),
+    );
+    return;
+  }
   if (url.pathname === '/ui-auth/check') {
     res.writeHead(req.headers.cookie === 'fixture-auth=yes' ? 204 : 401).end();
     return;

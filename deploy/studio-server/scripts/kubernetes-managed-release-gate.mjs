@@ -15,6 +15,7 @@ import {
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
 import { summarizePodStartupState } from './lib/kubernetes-workload-diagnostics.mjs';
+import { assertRuntimeReadiness } from './lib/kubernetes-runtime-readiness.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const mode = process.argv[2] ?? 'smoke';
@@ -33,6 +34,14 @@ function isReadyPod(pod) {
     pod.status?.phase === 'Running' &&
     pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True')
   );
+}
+
+async function assertRuntimeReady(response) {
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`/readyz returned HTTP ${response.status}`);
+  }
+  assertRuntimeReadiness({ status: response.status, body: await response.text() });
 }
 
 function randomSecret() {
@@ -951,9 +960,7 @@ export class ManagedReleaseGate {
         const response = await fetch(`${baseUrl}/readyz`, {
           signal: AbortSignal.timeout(3_000),
         });
-        const snapshot = await response.json();
-        if (!response.ok || snapshot.ok !== true || snapshot.state !== 'ready')
-          throw new Error(`/readyz did not report a ready runtime (HTTP ${response.status})`);
+        await assertRuntimeReady(response);
       },
       60_000,
     );
@@ -1357,9 +1364,7 @@ export class ManagedReleaseGate {
         const response = await fetch(`${baseUrl}/readyz`, {
           signal: AbortSignal.timeout(5_000),
         });
-        const snapshot = await response.json();
-        if (!response.ok || snapshot.ok !== true || snapshot.state !== 'ready')
-          throw new Error(`/readyz did not report a ready runtime (HTTP ${response.status})`);
+        await assertRuntimeReady(response);
       },
       timeoutMs,
     );

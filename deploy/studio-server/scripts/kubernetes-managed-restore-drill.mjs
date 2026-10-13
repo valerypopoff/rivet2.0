@@ -16,6 +16,7 @@ import {
   createProductionHelmValues,
 } from './lib/studio-server-release-manifest.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { assertRuntimeReadiness } from './lib/kubernetes-runtime-readiness.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const runnerName = 'kubernetes-managed-restore-drill';
@@ -219,7 +220,7 @@ function redactConfig(config) {
   };
 }
 
-class ManagedRestoreDrill {
+export class ManagedRestoreDrill {
   constructor(config, { kubectlBin, helmBin }) {
     this.config = config;
     this.kubectlBin = kubectlBin;
@@ -393,13 +394,15 @@ class ManagedRestoreDrill {
     if (response.status !== probe.expectedStatus) {
       throw new Error(`[${runnerName}] ${name} probe returned ${response.status}, expected ${probe.expectedStatus}`);
     }
-    if (!text.includes(probe.contains)) {
+    if (probe.contains && !text.includes(probe.contains)) {
       throw new Error(`[${runnerName}] ${name} probe did not include its required non-secret marker`);
     }
+    return { status: response.status, body: text };
   }
 
   async verifyDurableSurfaces() {
-    await this.request('readiness', { path: '/readyz', method: 'GET', expectedStatus: 200, contains: 'ready' });
+    const readiness = await this.request('readiness', { path: '/readyz', method: 'GET', expectedStatus: 200 });
+    assertRuntimeReadiness(readiness);
     for (const [name, probe] of Object.entries(this.config.probes)) await this.request(name, probe);
   }
 

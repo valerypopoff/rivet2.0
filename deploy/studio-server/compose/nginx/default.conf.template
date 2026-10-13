@@ -48,6 +48,22 @@ server {
     location = /internal { return 404; }
     location ^~ /internal/ { return 404; }
 
+    # Runtime health belongs to the control API, never the SPA or UI login gate.
+    # Match only these public, read-only API probe paths.
+    location ~ ^/(healthz|livez|readyz)$ {
+        # Return 405 directly; inherited 401/403 handlers render the UI login page.
+        if ($request_method !~ ^(GET|HEAD)$) {
+            add_header Allow "GET, HEAD" always;
+            return 405;
+        }
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
+        proxy_set_header Host $rivet_request_host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+
     # Static frontend assets
     location / {
         auth_request /__rivet_ui_auth_check;

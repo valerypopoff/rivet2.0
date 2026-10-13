@@ -1,3 +1,8 @@
+export class ManagedRestoreDrill {
+  constructor(config: unknown, tools: { kubectlBin: string; helmBin: string });
+  verifyDurableSurfaces(): Promise<void>;
+}
+
 export function parseRestoreDriverJsonMarker(logs: string, marker: string, description: string): unknown;
 export function assertRestoreDriverManifest(
   resources: unknown,

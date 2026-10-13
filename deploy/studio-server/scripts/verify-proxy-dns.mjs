@@ -208,7 +208,8 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
       '12s',
       '--health-retries',
       '2',
-      'nginx:alpine',
+      // Match the production proxy Dockerfile, not the floating compatibility base.
+      variant === 'image' ? 'nginx:1.27-alpine' : 'nginx:alpine',
       '-c',
       '/fixture/nginx.conf',
       '-g',
@@ -226,6 +227,64 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     const health = () => JSON.parse(docker('inspect', proxy))[0].State.Health.Status;
     await until(`${variant} startup`, async () => (await request('/')).status === 200 && health() === 'healthy');
     assert.equal(await (await request('/', { headers: {} })).text(), 'Fixture login');
+    // A frontend fallback or login page must never certify API readiness.
+    // Exercise public health routes without an operator session through real nginx.
+    for (const route of ['/readyz', '/livez', '/healthz']) {
+      const response = await request(route, { headers: {} });
+      const body = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(
+        response.headers.get('content-type') ?? '',
+        /application\/json/,
+        `${variant} ${route} must reach the API, not the UI`,
+      );
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(JSON.parse(body), {
+        identity: 'api-1',
+        ok: true,
+        state: 'ready',
+        profile: 'control',
+        checks: [],
+      });
+      const head = await request(route, { method: 'HEAD', headers: {} });
+      assert.equal(head.status, 200, `${variant} ${route} must support bodyless HEAD probes`);
+      assert.equal(head.headers.get('cache-control'), 'no-store');
+      assert.equal(await head.text(), '');
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+        const blocked = await request(route, { method, headers: {}, body: 'must not reach the API' });
+        await blocked.body?.cancel();
+        assert.equal(blocked.status, 405, `${variant} ${route} must reject ${method} before forwarding`);
+        assert.equal(blocked.headers.get('allow'), 'GET, HEAD');
+      }
+    }
+    const unready = await request('/readyz?unready=1', { headers: {} });
+    assert.equal(unready.status, 503, `${variant} must preserve API readiness failure`);
+    assert.equal(unready.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await unready.json(), {
+      identity: 'api-1',
+      ok: false,
+      state: 'ready',
+      profile: 'control',
+      code: 'dependency_unavailable',
+      checks: [{ ok: false, code: 'workflow_storage_unavailable' }],
+    });
+    const unreadyHead = await request('/readyz?unready=1', { method: 'HEAD', headers: {} });
+    assert.equal(unreadyHead.status, 503);
+    assert.equal(await unreadyHead.text(), '');
+    const anonymousApi = await request('/api/echo', { headers: {} });
+    assert.equal(anonymousApi.status, 200);
+    assert.equal(
+      await anonymousApi.text(),
+      'Fixture login',
+      `${variant} public health routes must not bypass operator API authentication`,
+    );
+    for (const route of ['/readyz-extra', '/readyz/nested']) {
+      assert.equal(
+        (await (await request(route)).json()).identity,
+        'web-1',
+        `${variant} must not broaden health routing`,
+      );
+    }
     // Exercise actual nginx forwarding, not template text. Operator Origin
     // checks need the exact browser authority, including ports and IPv6.
     for (const authority of ['localhost:8081', '[::1]:8081', 'example.test']) {
@@ -309,12 +368,21 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     }
     remove(api);
     await until(`${variant} API outage health`, () => health() === 'unhealthy');
+    // Allow nginx's five-second upstream connect deadline to produce its error
+    // response instead of aborting the client at the fixture's normal 2.5 seconds.
+    const unavailableReady = await request('/readyz', { headers: {}, signal: AbortSignal.timeout(7_500) });
+    await unavailableReady.body?.cancel();
+    assert.ok(
+      [502, 504].includes(unavailableReady.status),
+      `${variant} must not serve SPA success while the API is down`,
+    );
     api = startMock('api', 2, 210);
     await until(
       `${variant} API address recovery`,
       async () => (await (await request('/api/echo')).json()).identity === 'api-2',
     );
     await until(`${variant} API health recovery`, () => health() === 'healthy');
+    assert.equal((await (await request('/readyz', { headers: {} })).json()).identity, 'api-2');
     // Warm the web cache immediately before replacing that address too.
     assert.equal((await (await request('/')).json()).identity, 'web-1');
     remove(web);
