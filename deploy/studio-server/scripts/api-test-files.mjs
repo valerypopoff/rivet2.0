@@ -44,6 +44,7 @@ export const defaultApiTestFiles = [
   'src/tests/immutable-local-artifact-store.test.ts',
   'src/tests/latest-workflow-remote-debugger.test.ts',
   'src/tests/legacy-restore-internal-http.test.ts',
+  'src/tests/legacy-restore-receive-deadline.test.ts',
   'src/tests/legacy-restore.test.ts',
   'src/tests/llm-profile-health.test.ts',
   'src/tests/local-bounded-copy.test.ts',

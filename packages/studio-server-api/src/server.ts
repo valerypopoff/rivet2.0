@@ -4,7 +4,7 @@ import { initializeScheduledRuns, stopScheduledRuns } from './scheduled-runs/run
 import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
-import { retainOrdinaryReceiveDeadline, RESTORE_UPLOAD_RECEIVE_TIMEOUT_MS } from './legacy-restore/receive-deadline.js';
+import { configureRequestReceiveDeadlines } from './legacy-restore/receive-deadline.js';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
 import {
@@ -124,8 +124,7 @@ const server = createServer(app);
 // JSON body. It does not limit graph execution after the body has arrived.
 // Keep it below the normal proxy request timeout so a slow client cannot keep
 // an admitted parser reservation indefinitely.
-server.requestTimeout = process.env.RIVET_LEGACY_RESTORE_ENABLED === '1' ? RESTORE_UPLOAD_RECEIVE_TIMEOUT_MS : 120_000;
-if (process.env.RIVET_LEGACY_RESTORE_ENABLED === '1') server.on('request', retainOrdinaryReceiveDeadline);
+configureRequestReceiveDeadlines(server, process.env.RIVET_LEGACY_RESTORE_ENABLED === '1');
 
 if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive()) {
   initializeLatestWorkflowRemoteDebugger(server);

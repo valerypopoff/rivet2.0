@@ -20,11 +20,29 @@ bucket, public gateway or TLS certificate is provisioned.
 - An existing installation-owned PostgreSQL database with migration/runtime
   privileges, provider TLS, and cluster network access. URL-encode reserved
   characters in username/password components.
+  The migration account also needs `CREATE` on that database: legacy restore
+  initializes the separate `rivet_restore_control` schema during the migration
+  hook. Existing permissions on `public` tables alone are insufficient. Before
+  a maintenance cutover, check
+  `SELECT has_database_privilege(current_user, current_database(), 'CREATE');`
+  through the intended database connection. If it is false, the database owner
+  must grant that privilege only on the installation-owned database. Do not make
+  the serving account an instance administrator or reset shared credentials.
 - An existing private bucket, actual region/endpoint, and scoped object
   read/write/list/delete credentials. Prefer a dedicated bucket: workflow and
   fixed `runtime-libraries/` roots must not be shared across installations.
 - Dynamic PVC provisioning for restore scratch; set `legacyRestore.storageClassName`
   if there is no default class. Size for upload, extraction and import scratch.
+  Check the selected class's disk type and provider quota before taking serving
+  workloads offline. On GKE, a `pd-balanced` class can consume the regional SSD
+  quota even when its name contains `standard`. An existing `pd-standard` class
+  is an alternative for restore scratch when that separate quota has capacity,
+  with slower upload/extraction I/O; workflow and settings storage remain remote.
+  Never delete unrelated disks to make room. Changing an immutable class on a
+  newly created claim requires a guarded retry; replace only a verified unbound,
+  empty installation-owned claim after the previous runner has stopped, using
+  resource identity/version preconditions. Preserve bound claims and cutover
+  recovery evidence.
 - Metrics-server if execution autoscaling remains enabled. Set database capacity
   to actual provider limits and tune pools/replica bounds together.
 - The [external gateway contract](./kubernetes.md#external-gateway-contract), TLS,

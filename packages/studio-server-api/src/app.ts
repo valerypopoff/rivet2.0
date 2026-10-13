@@ -446,6 +446,12 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   });
 
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    // A receive deadline may already have sent 408 before a body reader rejects.
+    // Let an ended response flush; abort a partial response without writing twice.
+    if (res.headersSent) {
+      if (!res.writableEnded) res.destroy();
+      return;
+    }
     const response = getApiErrorResponse(err);
     if (response.status >= 500) {
       if (
