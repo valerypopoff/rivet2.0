@@ -62,6 +62,7 @@ export const defaultApiTestFiles = [
   'src/tests/local-upgrade-runtime.test.ts',
   'src/tests/local-workflow-catalog.test.ts',
   'src/tests/managed-artifact-descriptor.test.ts',
+  'src/tests/managed-artifact-transport.test.ts',
   'src/tests/managed-catalog.test.ts',
   'src/tests/managed-code-runner.test.ts',
   'src/tests/managed-endpoint-sync.test.ts',

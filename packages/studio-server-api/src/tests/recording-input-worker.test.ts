@@ -111,6 +111,68 @@ test('compiled input worker rejects corrupt gzip and remains usable', async () =
   }
 });
 
+test('compiled input worker enforces managed decoded sizes without weakening legacy source compatibility', async () => {
+  const extractor = new WorkflowRecordingInputExtractor(() => new Worker(workerUrl));
+  const decodedBytes = Buffer.byteLength(JSON.stringify({ recording: { events: [] } }));
+  const bytes = gzipSync(JSON.stringify({ recording: { events: [] } }));
+  try {
+    assert.deepEqual(await extractor.extract({ ...source, bytes, decodedBytes }), { exists: false, value: undefined });
+    for (const invalidSize of [decodedBytes - 1, decodedBytes + 1, -1, NaN]) {
+      await assert.rejects(extractor.extract({ ...source, bytes, decodedBytes: invalidSize }));
+      assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
+    }
+    await assert.rejects(
+      extractor.extract({ ...source, bytes: gzipSync(''), decodedBytes: 0 }),
+      /Malformed recording artifact/,
+    );
+    await assert.rejects(
+      extractor.extract({ kind: 'artifact', encoding: 'identity', bytes: Buffer.from('x'), decodedBytes: 0 }),
+      /decoded size/,
+    );
+  } finally {
+    extractor.dispose();
+  }
+});
+
+test('compiled input worker rejects invalid UTF-8 rather than caching a non-match', async () => {
+  const extractor = new WorkflowRecordingInputExtractor(() => new Worker(workerUrl));
+  const invalidText = Buffer.concat([
+    Buffer.from('{"recording":{"events":[]},"unused":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}'),
+  ]);
+  try {
+    for (const encoding of ['identity', 'gzip'] as const) {
+      const bytes = encoding === 'gzip' ? gzipSync(invalidText) : invalidText;
+      await assert.rejects(extractor.extract({ kind: 'artifact', encoding, bytes }), /encoded data|encoding|UTF-8/i);
+      assert.deepEqual(await extractor.extract(source), { exists: true, value: 'needle' });
+      const unicode = JSON.stringify({
+        recording: { events: [{ type: 'start', data: { inputs: { input: { value: '🦊 café' } } } }] },
+      });
+      assert.deepEqual(
+        await extractor.extract({
+          kind: 'artifact',
+          encoding,
+          bytes: encoding === 'gzip' ? gzipSync(unicode) : Buffer.from(unicode),
+          decodedBytes: Buffer.byteLength(unicode),
+        }),
+        { exists: true, value: '🦊 café' },
+      );
+    }
+    // Strict decoding must not silently change the previous BOM parsing policy.
+    await assert.rejects(
+      extractor.extract({
+        kind: 'artifact',
+        encoding: 'identity',
+        bytes: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"recording":{"events":[]}}')]),
+      }),
+      /Malformed recording artifact/,
+    );
+  } finally {
+    extractor.dispose();
+  }
+});
+
 test('compiled extraction never detaches or transfers unrelated provider bytes', async () => {
   const extractor = new WorkflowRecordingInputExtractor(() => new Worker(workerUrl));
   const backing = Buffer.concat([Buffer.from('prefix'), source.bytes, Buffer.from('suffix')]);

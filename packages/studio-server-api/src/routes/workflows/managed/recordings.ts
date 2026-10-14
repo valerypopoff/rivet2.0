@@ -222,18 +222,20 @@ async function filterManagedRecordingRowsByInput(
     (row, readSignal) =>
       workflowRecordingInputCache.getOrLoad(
         getManagedRecordingInputCacheKey(blobStore, row.recording_blob_key),
-        async (cacheSignal) => ({
-          kind: 'artifact' as const,
-          bytes: blobStore.getBytes
-            ? await blobStore.getBytes(row.recording_blob_key, { signal: cacheSignal })
-            : // Compatibility for a third-party store compiled against the prior
-              // text-only interface. Built-in stores always provide bytes; this
-              // fallback retains cancellation and never changes match semantics.
-              Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
-          encoding: blobStore.getBytes
-            ? parseManagedArtifactDescriptor(row.recording_blob_key)?.encoding ?? 'identity'
-            : 'identity',
-        }),
+        async (cacheSignal) => {
+          const descriptor = blobStore.getBytes ? parseManagedArtifactDescriptor(row.recording_blob_key) : null;
+          return {
+            kind: 'artifact' as const,
+            bytes: blobStore.getBytes
+              ? await blobStore.getBytes(row.recording_blob_key, { signal: cacheSignal })
+              : // Compatibility for a third-party store compiled against the prior
+                // text-only interface. Built-in stores always provide bytes; this
+                // fallback retains cancellation and never changes match semantics.
+                Buffer.from(await blobStore.getText(row.recording_blob_key, { signal: cacheSignal }), 'utf8'),
+            encoding: descriptor?.encoding ?? 'identity',
+            ...(descriptor ? { decodedBytes: descriptor.decodedBytes } : {}),
+          };
+        },
         readSignal,
         Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
       ),

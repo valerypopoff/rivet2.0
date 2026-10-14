@@ -11,6 +11,8 @@ import type {
   ManagedWorkflowMaintenanceTask,
 } from '../routes/workflows/managed/maintenance.js';
 import type { RecordingInsertRowData, RecordingRow, TransactionHooks } from '../routes/workflows/managed/types.js';
+import { prepareManagedTextArtifact } from '../routes/workflows/managed/artifact-descriptor.js';
+import { workflowRecordingInputCache } from '../routes/workflows/recording-input-cache.js';
 
 function createRecordingRow(
   recordingId: string,
@@ -481,6 +483,61 @@ test('managed input filtering reads a bounded newest-first window and returns a 
   );
   assert.equal(sparse.hasMore, false);
   assert.equal(queryCalls.length - previousQueries, 2);
+});
+
+test('managed input search supplies descriptor bounds only for encoded byte readers', async (t) => {
+  const text = JSON.stringify({ recording: { events: [] } });
+  const artifact = await prepareManagedTextArtifact('workflow/recordings/bounded/recording', text, true);
+  const row = createRecordingRow('descriptor-input', 'endpoint', '2026-08-04T12:00:00.000Z');
+  row.recording_blob_key = artifact.descriptor.key;
+  row.recording_compressed_bytes = artifact.descriptor.storedBytes;
+  row.recording_uncompressed_bytes = artifact.descriptor.decodedBytes;
+  for (const byteReader of [true, false]) {
+    t.mock.method(
+      workflowRecordingInputCache,
+      'getOrLoad',
+      async (_key: string, load: Parameters<typeof workflowRecordingInputCache.getOrLoad>[1]) => {
+        const source = await load(new AbortController().signal);
+        assert.deepEqual(
+          source,
+          byteReader
+            ? {
+                kind: 'artifact',
+                bytes: artifact.bytes,
+                encoding: 'gzip',
+                decodedBytes: artifact.descriptor.decodedBytes,
+              }
+            : { kind: 'artifact', bytes: Buffer.from(text), encoding: 'identity' },
+        );
+        return { exists: true, value: 'needle' };
+      },
+    );
+    const context = {
+      pool: {},
+      initialize: async () => {},
+      revisions: {},
+      db: {
+        queryOne: async () => null,
+        queryRows: async (_pool: unknown, _sql: string, parameters: unknown[]) =>
+          Number(parameters[2]) === 0 ? [row] : [],
+      },
+      blobStore: {
+        getText: async () => text,
+        ...(byteReader ? { getBytes: async () => artifact.bytes } : {}),
+      },
+      mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: unknown) => String(value) },
+    } as unknown as ManagedWorkflowContext;
+    const service = createManagedWorkflowRecordingService({ context });
+    const page = await service.listWorkflowRecordingRunsPage('workflow-a', 1, 20, 'all', {
+      path: '$',
+      operator: '==' as const,
+      value: 'needle',
+    });
+    assert.deepEqual(
+      page.runs.map((run) => run.id),
+      [row.recording_id],
+    );
+  }
 });
 
 test('managed startup cleanup queues only the bounded claimed recording batch', async () => {

@@ -21,7 +21,7 @@ import { verifyHostedEvaluationProjectionContract } from './helpers/hosted-evalu
 import { verifyWorkflowPublicationContract } from './helpers/workflow-publication-contract.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
-import { serializeProject } from '@valerypopoff/rivet2-node';
+import { deserializeProject, serializeProject } from '@valerypopoff/rivet2-node';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 
 // This command creates its own services. It never accepts a deployment URL.
@@ -425,6 +425,39 @@ try {
     const recordedRun = newRuns[0]!;
     assert.equal(recordedRun.status, index === 1 ? 'failed' : 'succeeded', JSON.stringify(page.runs));
     recordedRunIds.add(recordedRun.id);
+    // Exercise the same API reads used by the recordings modal, not only the
+    // internal replay command. Gzip stays an object-storage transport detail.
+    const artifactBase: string = `${api.baseUrl}/api/workflows/recordings/${encodeURIComponent(recordedRun.id)}`;
+    const artifactHeaders = {
+      'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex'),
+    };
+    const recordingResponse: Response = await fetch(`${artifactBase}/recording`, {
+      headers: artifactHeaders,
+      signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(recordingResponse.status, 200, await recordingResponse.clone().text());
+    const recordingPayload = JSON.parse(await recordingResponse.text());
+    assert.ok(recordingPayload.recording.events.length > 0);
+    const projectResponse: Response = await fetch(`${artifactBase}/replay-project`, {
+      headers: artifactHeaders,
+      signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(projectResponse.status, 200, await projectResponse.clone().text());
+    const [replayProject] = deserializeProject(await projectResponse.text());
+    assert.ok(Object.keys(replayProject.graphs).length > 0);
+    const searchUrl = new URL(`${api.baseUrl}/api/workflows/recordings/runs`);
+    searchUrl.search = new URLSearchParams({ inputPath: '$', inputOperator: '==', inputValue: value }).toString();
+    const searchResponse: Response = await fetch(searchUrl, {
+      headers: artifactHeaders,
+      signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(searchResponse.status, 200, await searchResponse.clone().text());
+    const filtered = (await searchResponse.json()) as { runs: Array<{ id: string }> };
+    assert.deepEqual(
+      filtered.runs.map((run) => run.id),
+      [recordedRun.id],
+      'input search reads the same compressed artifact',
+    );
     assert.equal((await api.command<{ active: number }>('snapshot')).active, 0);
     const replays: Array<{ tails: unknown[] }> = await api.command('replay');
     assert.equal(replays.length, index + 1);
