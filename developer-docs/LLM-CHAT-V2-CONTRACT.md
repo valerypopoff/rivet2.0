@@ -213,7 +213,7 @@ logical-round page, successful graph output, editor-cache entry, or tool call.
 
 `temperature.ts` is the shared empty-value boundary for Inline LLM Chat, LLM Profile and SDK arguments. Undefined, null and historical NaN become unset; finite zero and fractional values remain explicit, while other invalid types/non-finite values fail. Numeric editors allow an empty Temperature and retain fractional steps. The generated SDK request omits unset temperature; raw Extra provider options remain an intentional final override. Serialization/migration and card bodies use the same unset policy, avoiding a JSON-recovered `Temperature: null` display. See `temperature.test.ts` and the `llm-temperature.spec.ts` observer.
 
-`nodeRunFailure.ts` owns the common LLM Chat/Classifier Evaluate catch boundary. Missing legacy `errorOnNon200` keeps throw behavior; `catchRequestFailed` defaults off. Failure ports exist when catching is enabled or fail-on-status is explicitly disabled. On success they emit `runFailed: false` and excluded `runError`. On a caught failure, normal outputs are excluded and `runFailed: true` plus readable `runError` are returned; LLM Chat can preserve enabled request/response bodies, attempts and profile-summary evidence, not partial answers or fabricated Usage. Disabling fail-on-status catches rejected HTTP statuses only; Catch all failures covers execution/configuration/tool failures inside the node. An aborted root signal always propagates cancellation. Retry and profile fallback settle before the final boundary; downstream node failures are outside it. Split runs use ordinary per-item output aggregation. Core coverage lives in `RunFailureNodes.test.ts`, `LLMChatV2Node.test.ts` and `SplitRunProcessor.test.ts`; hosted coverage is `model-error-behavior.spec.ts`.
+`nodeRunFailure.ts` owns the common LLM Chat/Classifier Evaluate catch boundary. Missing legacy `errorOnNon200` keeps throw behavior; `catchRequestFailed` defaults off. Failure ports exist when catching is enabled or fail-on-status is explicitly disabled. On success they emit `runFailed: false` and excluded `runError`. On a caught failure, normal outputs are excluded and `runFailed: true` plus readable `runError` are returned; LLM Chat can preserve enabled request/response bodies, attempts and profile-summary evidence, not partial answers or fabricated Usage. Disabling fail-on-status catches rejected HTTP statuses only; Catch all exceptions covers execution/configuration/tool failures inside the node. An aborted root signal always propagates cancellation. Retry and profile fallback settle before the final boundary; downstream node failures are outside it. Split runs use ordinary per-item output aggregation. Core coverage lives in `RunFailureNodes.test.ts`, `LLMChatV2Node.test.ts` and `SplitRunProcessor.test.ts`; hosted coverage is `model-error-behavior.spec.ts`.
 
 ## Inline and profile configuration
 
@@ -309,7 +309,7 @@ failure throws under the default policy, or becomes explicit Run failed/Run erro
 outputs when caught by the node failure policy above. It cannot trigger tool
 continuation or pass a partial answer as a successful response.
 
-`Output LLM attempts` (`outputLLMAttempts`) adds `LLM Attempts`
+`LLM attempts` (`outputLLMAttempts`) adds `LLM Attempts`
 (`llmAttempts`, `object[]`) in both Inline and From profile modes. It is one
 chronological, developer-visible record per profile configuration, physical
 provider request, or JSON-schema response-validation attempt. Each record holds
@@ -352,7 +352,7 @@ The row reserves the switcher's intrinsic width and one standard control
 height regardless of whether the Inline-only action is present: switching mode
 must neither clip the trailing option padding nor move the following section.
 
-**Output reasoning** is invocation-owned because it controls whether that LLM
+**Reasoning** is invocation-owned because it controls whether that LLM
 Chat exposes a `Reasoning` output; it always appears in the Chat node's
 **Outputs** section. LLM Profile's **Reasoning** section contains only
 provider-specific inference controls. It is omitted for Custom providers, which
@@ -410,11 +410,12 @@ settings remain fallbacks rather than substitutes for a named handler graph.
 ### Invocation output and error controls
 
 `Response Tokens` is retired from LLM Chat V2. `Usage` is the complete token and
-cost observation surface and is emitted only when `Output usage details` is on.
+cost observation surface and is emitted only when `Usage details` is on.
 
-The **Outputs** group owns `Output LLM attempts` (`outputLLMAttempts`),
-`Output request body` (`outputRequestBody`), `Output response body`
-(`outputResponseBody`), reasoning, usage, and streaming. **Error behavior**
+The **Outputs** group uses concise labels without a repeated "Output" prefix:
+`Reasoning`, `Usage details`, `LLM attempts` (`outputLLMAttempts`),
+`Request body` (`outputRequestBody`), `Response body`
+(`outputResponseBody`). Stored setting keys and output port contracts are unchanged. **Error behavior**
 owns retry controls. `LLM Attempts` is the sole retry/fallback debugging
 surface; `Response Status` and `Response Error` are retired and are no longer
 node ports. Request body exposes the provider request payload but not transport
@@ -576,7 +577,7 @@ paths and should not be used as the primary target for new provider refactors.
   baseline text-token estimate: cached-token discounts/writes, long-context
   premiums, and provider-tool fees are intentionally not inferred from the
   incomplete cross-provider billing metadata.
-- When **Output usage details** is enabled, LLM Chat aggregates every physical
+- When **Usage details** is enabled, LLM Chat aggregates every physical
   provider call made by that node invocation: retries, abandoned fallback
   profiles, and every auto-continuation model round. Its token fields sum only
   safe provider-reported values; when a provider omits a physical call's total,

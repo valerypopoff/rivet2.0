@@ -535,6 +535,43 @@ test('running workflow blocks bundle refresh without aborting execution', async 
   await expect(editor.locator('.run-button.running')).toHaveCount(0);
 });
 
+test('a Browser run in an inactive project blocks refresh without being cancelled', async ({ page }) => {
+  await prepare(page);
+  await seedProjects(page, true);
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      'recoil-persist',
+      JSON.stringify({
+        defaultExecutor: 'browser',
+        recordExecutions: false,
+      }),
+    ),
+  );
+  await page.goto('/');
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: 'A' }).dblclick();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.node[data-nodeid="delay"]')).toBeVisible({ timeout: 120_000 });
+  await waitForCheckpointedEditor(page);
+  await editor.locator('.run-button button').first().click();
+  await expect(editor.locator('.run-button.running')).toBeVisible();
+  await page.locator('.project-row', { hasText: 'B' }).dblclick();
+  await expect(editor.locator('.projects-container .project').filter({ hasText: 'B' })).toHaveClass(/active/);
+  await expect(editor.locator('.run-button.running')).toHaveCount(0);
+  const generation = await page.locator('meta[name="rivet-dev-generation"]').getAttribute('content');
+  await page.evaluate(() => (window as any).__sendDevelopmentBuild('ready', crypto.randomUUID()));
+  await expect(
+    page.getByText('Frontend update ready. Save changes and finish running work before refreshing.'),
+  ).toBeVisible();
+  await expect(page.locator('meta[name="rivet-dev-generation"]')).toHaveAttribute('content', generation!);
+  await expect(editor.locator('html')).not.toHaveAttribute('inert', '');
+  // Returning to A proves that refresh did not silently kill its Browser run.
+  await editor.locator('.projects-container .project').filter({ hasText: 'A' }).click();
+  await expect(editor.locator('.run-button.running')).toBeVisible();
+  await editor.locator('.run-button.running button').first().click();
+  await expect(editor.locator('.run-button.running')).toHaveCount(0);
+});
+
 test('backend outage preserves dirty edits; retry save permits safe bundle refresh', async ({ page }) => {
   await prepare(page);
   await seedProjects(page);

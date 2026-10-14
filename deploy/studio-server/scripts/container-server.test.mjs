@@ -29,7 +29,12 @@ import {
   startContainerInstallation,
   stopContainerInstallation,
 } from './lib/container-server-lifecycle.mjs';
-import { containerStartupMessage, parseContainerArgs } from './container-server.mjs';
+import {
+  containerDevelopmentBuildArgs,
+  containerStartupMessage,
+  ensureContainerDevelopmentMountPoints,
+  parseContainerArgs,
+} from './container-server.mjs';
 
 const images = { api: 'test/api:source', web: 'test/web:source', proxy: 'test/proxy:source' };
 function environment(stage) {
@@ -46,6 +51,108 @@ function environment(stage) {
     [p + 'STORAGE_ACCESS_KEY']: 'external-secret',
   };
 }
+
+test('only development uses source-bound watched bundles; managed storage and auth are unchanged', () => {
+  const sourceRoot = path.resolve('fixture checkout with spaces');
+  for (const storage of ['local-storage', 'external-storage']) {
+    for (const stage of ['dev', 'staging', 'prod']) {
+      const config = containerServerConfig(environment(stage), stage, storage);
+      const model = createManagedCompose(config, images, { sourceRoot });
+      const web = model.services.web;
+      assert.equal(web.read_only, true);
+      assert.equal(model.services.proxy.environment.RIVET_KEY, config.key);
+      assert.deepEqual(model.services.proxy.ports, [`127.0.0.1:${config.port}:8080`]);
+      assert.equal(model.services.proxy.environment.RIVET_WEB_UPSTREAM_PORT, stage === 'dev' ? '5174' : '3000');
+      if (stage !== 'dev') {
+        assert.equal(web.volumes, undefined);
+        assert.equal(model.volumes['web-development'], undefined);
+        continue;
+      }
+      assert.equal(web.init, true);
+      assert.equal(web.healthcheck.start_period, '900s');
+      assert.ok(
+        web.tmpfs.includes('/app/packages/studio-server-web/node_modules:rw,nosuid,size=512m,uid=10001,gid=10001'),
+      );
+      assert.match(web.healthcheck.test.at(-1), /5174\/readyz/);
+      const sources = web.volumes.filter((mount) => mount.type === 'bind');
+      for (const mount of sources) {
+        assert.equal(mount.read_only, true);
+        assert.equal(mount.bind.create_host_path, false);
+        assert.ok(mount.source.startsWith(sourceRoot + path.sep));
+        assert.ok(!/\.env|node_modules|\.git|\.data/.test(mount.target));
+        assert.equal(mount.target, '/app/' + path.relative(sourceRoot, mount.source).split(path.sep).join('/'));
+      }
+      for (const required of ['packages/app/src', 'packages/core/src', 'packages/studio-server-web'])
+        assert.ok(sources.some((mount) => mount.target === `/app/${required}`));
+      assert.deepEqual(model.volumes['web-development'].labels, {
+        'rivet.dev/container-installation': config.project,
+        'rivet.dev/storage-identity': containerStorageIdentity(config),
+      });
+      assert.equal(web.ports, undefined);
+      assert.ok(
+        !web.volumes.some((mount) => mount.type === 'volume'),
+        'Development must not orphan anonymous dependency volumes',
+      );
+    }
+  }
+});
+
+test('development builds select the watched web target but not an API or proxy target', () => {
+  assert.deepEqual(containerDevelopmentBuildArgs('web', images.web), [
+    'build',
+    '-f',
+    'deploy/studio-server/images/web/Dockerfile',
+    '--target',
+    'development',
+    '-t',
+    images.web,
+    '.',
+  ]);
+  for (const name of ['api', 'proxy'])
+    assert.ok(!containerDevelopmentBuildArgs(name, images[name]).includes('--target'));
+});
+
+test('every bound development input exists in the checkout', () => {
+  const config = containerServerConfig(environment('dev'), 'dev', 'local-storage');
+  for (const mount of createManagedCompose(config, images).services.web.volumes) {
+    if (mount.type === 'bind') assert.ok(fs.existsSync(mount.source), `Missing source input: ${mount.source}`);
+  }
+});
+
+test('development dependency mountpoint preparation supports PnP and preserves existing files', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-web-mountpoint-'));
+  try {
+    ensureContainerDevelopmentMountPoints(root);
+    const directory = path.join(root, 'packages/studio-server-web/node_modules');
+    assert.deepEqual(fs.readdirSync(directory), []);
+    fs.writeFileSync(path.join(directory, 'host-marker'), 'retained');
+    ensureContainerDevelopmentMountPoints(root);
+    assert.equal(fs.readFileSync(path.join(directory, 'host-marker'), 'utf8'), 'retained');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('only development extends application readiness for the first watched compilation', async () => {
+  for (const stage of ['dev', 'staging', 'prod']) {
+    const calls = [];
+    await startContainerInstallation(
+      { stage, local: false },
+      async (args) => {
+        calls.push(args);
+        return {};
+      },
+      async () => {},
+    );
+    const start = calls.find((args) => args[0] === 'up');
+    assert.equal(start[start.indexOf('--wait-timeout') + 1], stage === 'dev' ? '1200' : '300');
+    assert.equal(start.includes('--renew-anon-volumes'), false);
+    assert.equal(
+      containerStartupMessage({ stage, port: 8081 }).includes('source watching is enabled'),
+      stage === 'dev',
+    );
+  }
+});
 
 test('the shared dotenv example declares the complete current launcher input contract without retired assignments', () => {
   const example = fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8');

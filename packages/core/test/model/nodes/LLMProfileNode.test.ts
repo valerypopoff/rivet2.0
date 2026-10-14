@@ -623,10 +623,7 @@ describe('LLMProfileNodeImpl', () => {
       {} as any,
     );
     const outputsGroup = chatEditors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
-    assert.equal(
-      outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
-      'Output reasoning',
-    );
+    assert.equal(outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Reasoning');
   });
 
   it('keeps inline LLM Chat behavior unchanged and replaces only inference configuration in profile mode', async () => {

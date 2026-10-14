@@ -135,7 +135,7 @@ for (const type of ['llm', 'classifier'] as const) {
     }
   }
 
-  test(`${type}: preparation failures require Catch all failures`, async () => {
+  test(`${type}: preparation failures require Catch all exceptions`, async () => {
     const invalid = type === 'llm' ? { configurationMode: 'profile' as const } : { provider: 'missing' };
     await assert.rejects(make({ ...invalid, errorOnNon200: false }).process(inputs, context()));
     const outputs = await make({ ...invalid, catchRequestFailed: true }).process(inputs, context());
@@ -166,7 +166,7 @@ for (const type of ['llm', 'classifier'] as const) {
     assert.equal(get(outputs, 'runFailed')?.value, false);
   });
 
-  test(`${type}: cancellation escapes Catch all failures`, async () => {
+  test(`${type}: cancellation escapes Catch all exceptions`, async () => {
     const controller = new AbortController();
     globalThis.fetch = async () => {
       controller.abort();
@@ -189,7 +189,7 @@ for (const type of ['llm', 'classifier'] as const) {
     );
   });
 
-  test(`${type}: malformed successful responses require Catch all failures`, async () => {
+  test(`${type}: malformed successful responses require Catch all exceptions`, async () => {
     globalThis.fetch = async () =>
       new Response('not JSON', { status: 200, headers: { 'content-type': 'application/json' } });
     await assert.rejects(make({ errorOnNon200: false }).process(inputs, context()));
@@ -305,7 +305,7 @@ test('LLM successful editor cache hits retain truthful failure outputs', async (
   assert.equal(get(outputs, 'runError')?.type, 'control-flow-excluded');
 });
 
-test('LLM profile fallback finishes before Catch all failures handles the terminal result', async () => {
+test('LLM profile fallback finishes before Catch all exceptions handles the terminal result', async () => {
   const ctx = context();
   const profiles = await Promise.all(
     ['first', 'second'].map(async (name) => {
@@ -377,7 +377,7 @@ test('caught error text preserves foreign-realm stacks and nested causes', () =>
   assert.match(formatCaughtRunError(error), /Error: Foreign failure.*Caused by:.*TypeError: Foreign cause/s);
 });
 
-test('Catch all failures safely handles non-Error thrown values without confusing provider abort with cancellation', () => {
+test('Catch all exceptions safely handles non-Error thrown values without confusing provider abort with cancellation', () => {
   const signal = new AbortController().signal;
   const record = Object.assign(Object.create(null), { message: 'Rejected' });
   assert.equal(shouldCatchRunFailure({ catchRequestFailed: true }, record, signal), true);

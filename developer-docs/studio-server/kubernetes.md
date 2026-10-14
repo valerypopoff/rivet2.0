@@ -9,6 +9,16 @@ never change the current kubeconfig context.
 For a complete external PostgreSQL/S3 values example and first-install Secret
 commands, see [External storage deployment handoff](./external-storage-deployment.md).
 
+Development frontend watching is confined to the Docker dev launcher, which
+explicitly selects the web Dockerfile's `development` target. The Kubernetes
+release command and image CI use the default final target: static assets on
+port 3000, no source mounts, compiler processes or development environment flags.
+Keep the default image target and chart ports unchanged when extending dev tooling.
+Verify this boundary with `studio-server:verify:kubernetes` and a default-target
+web-image build/smoke, not a production-cluster restart. The release helper still
+requires a clean tracked checkout matching the promoted source/chart/schema
+identity; local dev changes must be committed and promoted before deployment.
+
 Open managed-mode risks and recommended remediation work are tracked in
 [`kubernetes-managed-mode.md`](./audits/kubernetes-managed-mode.md).
 

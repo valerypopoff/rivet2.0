@@ -530,14 +530,18 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
     ['requestBody', 'responseBody'],
   );
   assert.equal(outputsGroup.editors[0]?.dataKey, 'outputUsage');
-  assert.equal(outputsGroup.editors[0]?.label, 'Output usage details');
+  assert.equal(outputsGroup.editors[0]?.label, 'Usage details');
+  assert.deepEqual(
+    outputsGroup.editors.map((editor: any) => editor.label),
+    ['Usage details', 'Request body', 'Response body', 'Classifier attempts', 'Classifier profile summary'],
+  );
   assert.equal(
     outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
-    'Output request body',
+    'Request body',
   );
   assert.equal(
     outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
-    'Output response body',
+    'Response body',
   );
 });
 
@@ -546,6 +550,8 @@ test('Classifier Evaluate mirrors LLM Chat Error behavior settings and its node-
   const errorGroup = instance.getEditors().at(-1) as any;
 
   assert.equal(errorGroup.label, 'Error behavior');
+  assert.equal(errorGroup.editors[0]?.label, 'Throw exception on non-2XX status code');
+  assert.equal(errorGroup.editors[1]?.label, 'Catch all exceptions');
   assert.deepEqual(
     errorGroup.editors.map((editor: any) => editor.dataKey),
     ['errorOnNon200', 'catchRequestFailed', 'retryOnNon200', 'retryOnNon200RepeatTimes', 'retryOnNon200CooldownMs'],

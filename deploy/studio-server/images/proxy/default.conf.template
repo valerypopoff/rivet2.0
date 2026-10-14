@@ -82,6 +82,20 @@ server {
         proxy_read_timeout 5s;
     }
 
+    # Development refresh is same-origin and uses the normal UI gate. Production
+    # web images emit no development events; no source server or unauthenticated
+    # port exists.
+    location = /__rivet_dev/events {
+        auth_request /__rivet_ui_auth_check;
+        proxy_pass $web_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $rivet_request_host;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+    }
+
     location / {
         auth_request /__rivet_ui_auth_check;
 

@@ -114,6 +114,22 @@ test('createAddedNode applies configured default colors to supported node types'
   assert.deepEqual(setStoredValueNode.visualData.color, { bg: 'var(--node-color-7)', border: 'transparent' });
   assert.deepEqual(subGraphNode.visualData.color, { bg: 'var(--node-color-2)', border: 'transparent' });
   assert.deepEqual(llmChatNode.visualData.color, { bg: 'var(--node-color-6)', border: 'transparent' });
+  const classifierNode = createAddedNode({
+    nodeType: 'classifierEvaluate',
+    position: { x: 120, y: 230 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: true,
+  });
+  assert.deepEqual(classifierNode.visualData.color, llmChatNode.visualData.color);
+  const uncoloredClassifierNode = createAddedNode({
+    nodeType: 'classifierEvaluate',
+    position: { x: 120, y: 230 },
+    registry,
+    referencedProjects: {},
+    applyDefaultColor: false,
+  });
+  assert.equal(uncoloredClassifierNode.visualData.color, undefined);
   assert.deepEqual(textNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
   assert.deepEqual(promptNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });
   assert.deepEqual(objectNode.visualData.color, { bg: 'var(--node-color-4)', border: 'transparent' });

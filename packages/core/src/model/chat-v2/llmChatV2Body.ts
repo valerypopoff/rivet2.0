@@ -262,7 +262,7 @@ function getErrorBodyFields(data: LLMChatV2NodeData): LLMChatV2BodyField[] {
   const cooldownMs = data.retryOnNon200CooldownMs ?? DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS;
   return [
     ...(data.errorOnNon200 !== false ? [{ label: 'Throw on non-2XX', value: 'Enabled' }] : []),
-    ...(data.catchRequestFailed ? [{ label: 'Catch all failures', value: 'Enabled' }] : []),
+    ...(data.catchRequestFailed ? [{ label: 'Catch all exceptions', value: 'Enabled' }] : []),
     ...(data.retryOnNon200
       ? [
           { label: 'Retry on non-200', value: 'Enabled' },
