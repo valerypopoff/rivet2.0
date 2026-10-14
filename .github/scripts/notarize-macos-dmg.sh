@@ -27,12 +27,16 @@ if [[ ! -d "$bundle_dir" ]]; then
   exit 1
 fi
 
-dmg_path="$(find "$bundle_dir" -type f -name '*.dmg' -print -quit)"
+dmg_paths=()
+while IFS= read -r -d '' candidate; do
+  dmg_paths+=("$candidate")
+done < <(find "$bundle_dir" -type f -name '*.dmg' -print0)
 
-if [[ -z "$dmg_path" ]]; then
-  printf 'No .dmg bundle found under %s\n' "$bundle_dir" >&2
+if (( ${#dmg_paths[@]} != 1 )); then
+  printf 'Expected exactly one .dmg bundle under %s; found %d\n' "$bundle_dir" "${#dmg_paths[@]}" >&2
   exit 1
 fi
+dmg_path="${dmg_paths[0]}"
 
 codesign_args=(--force --timestamp --sign "$APPLE_SIGNING_IDENTITY")
 if [[ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]]; then
