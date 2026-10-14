@@ -32,7 +32,17 @@ two installations cannot bind the same host port simultaneously. Host volumes re
 does not provide Kubernetes PVC/ephemeral-storage quota enforcement or HA.
 
 Development builds the checkout's API, web and proxy images with unique source
-tags. It serves built assets, not the historical Vite/tunnel hot-reload stack.
+tags. Both dev storage choices now serve watched, immutable frontend bundles
+using the existing guarded development-refresh owner. Source changes in the
+hosted web, editor, browser-side Core, shared types and evaluations rebuild automatically;
+the browser refreshes once unsaved edits, active work and dialogs permit it.
+Build failures retain the last working bundle. This is rebuild-and-refresh,
+not React component-state-preserving HMR, and large frontend builds take time.
+Refresh admission includes Browser runs in inactive project snapshots, not just
+the currently visible run flag. The active project's cached snapshot is excluded
+because its live atom is authoritative and the cached copy may be stale.
+The same authenticated, same-origin event stream works directly and through
+an independently configured tunnel; no separate browser WebSocket origin is needed.
 Staging requires immutable candidate/promoted image evidence and a matching
 clean checkout. Both production storage choices require a promoted immutable
 manifest, matching clean source/chart/schema policy, installation confirmation
@@ -49,6 +59,56 @@ target; use the six concrete commands or the explicit Kubernetes release command
 The old Docker cleanup command remains for existing installations:
 `studio-server:dev:docker:down`. It does not migrate their data.
 Explicit Kubernetes rehearsal/release commands remain supported.
+
+### Development watch ownership
+
+The web Dockerfile's `development` target retains Linux-installed dependencies
+and uses `dev/tunnel.mjs` (the name is historical; a tunnel is not required).
+The normalized Compose model binds only selected frontend source/config paths
+read-only, never the checkout root, root `.env`, host `node_modules` or runtime data.
+New files inside bound source directories, including the web entry/config files,
+are watched. Directory mounts also observe atomic-save replacement (file-only
+binds can retain old inodes). A 512 MiB tmpfs masks the hosted web's host
+`node_modules` and receives a fresh copy of the image's Linux dependencies at
+startup. Monaco/Vite scratch stays there too. This avoids stale dependency caches
+and orphaned anonymous volumes on recreation. Durable application/storage volumes
+remain named and unchanged. On PnP checkouts the launcher creates only an empty ignored
+web `node_modules` mountpoint if absent; it never installs or changes host modules.
+Output, Vite/Monaco scratch and
+generation caches remain container-owned; the bounded generation store preserves
+assets used by open tabs. The first compile has a 15-minute health grace period
+and a 20-minute dev-only startup budget. Inspect `docker compose` web logs if it
+fails; never weaken the production readiness check to accommodate development.
+
+`/__rivet_dev/events` uses the existing UI authentication gate and an unbuffered stream;
+only the loopback proxy port is exposed. Static staging/production web images
+have no development server. Kubernetes uses those unchanged release images.
+Start the dev command once after updating from a static-image installation.
+Reload existing browser tabs once to load the development-refresh client.
+Subsequent frontend source edits need no command rerun. Dependency/lockfile,
+workspace manifests/TypeScript build configuration,
+development tooling, container/proxy, `.env`, API and executor changes still need the dev command
+rerun: frontend watch does not pretend to hot-replace server processes or their
+accepted work. PostgreSQL/MinIO volumes are retained on that restart.
+
+Regression coverage lives in `container-server.test.mjs` (both storage choices,
+all stages, readonly source mounts, authentication/port preservation, build
+target and readiness budget) and the existing development generation/refresh
+tests. Use `studio-server:ui:observe tunnel-development.spec.ts` headlessly against
+a watched build for browser checkpoint, unsafe-refresh and pinned-asset coverage.
+`studio-server:verify:development:integration` builds the actual development
+target, copies the same source-mount inputs into a disposable fixture, checks
+CSS/TSX/Core rebuilds, compile-error retention and recovery, then runs those
+headless browser cases. It never reads `.env` or touches application containers
+or data volumes. Verification pins the built image identity and reuses the existing
+cleanup owner, so log/cleanup failures cannot hide the original test error or skip
+later cleanup. `verify-proxy-dns.mjs` also verifies that development events
+are gated and delivered without buffering through both proxy templates.
+
+For focused refresh-guard reviews, a prebuilt development image followed by
+`--browser-only` runs just initial compilation and browser cases; it explicitly
+does not claim source-edit/error-recovery coverage. The default command remains
+the complete source-watch verification.
 
 ## Shared dotenv settings
 

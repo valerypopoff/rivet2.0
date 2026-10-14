@@ -731,6 +731,13 @@ then `yarn studio-server:ui:observe http-call-failure-headers.spec.ts` with
 
 ## Tunnel-friendly development
 
+The supported `studio-server:dev:local-storage` and `:external-storage` commands
+now use this existing watched-bundle/guarded-refresh frontend automatically.
+They retain the current managed PostgreSQL/S3 topology, not the historical
+Compose stack described below. See [development watch ownership](server-stack.md#development-watch-ownership)
+for source-mount boundaries, startup budgets and changes requiring recreation.
+No tunnel launcher or additional frontend-mode variable is required.
+
 Use `yarn studio-server:dev:tunnel` when forwarding the browser port through a
 VS Code tunnel. Forward the same proxy port as ordinary dev (for example 8081),
 not the private API or frontend service ports. `yarn studio-server:dev` switches
@@ -1151,7 +1158,7 @@ must remain visible when status polling succeeds again.
 
 LLM Chat and Classifier Evaluate share the node-owned error boundary documented
 in [editor-bridge.md](./editor-bridge.md#model-node-error-behavior). The default
-still throws failures. Explicit Catch all failures returns scalar Run failed /
+still throws failures. Explicit Catch all exceptions returns scalar Run failed /
 Run error ports and excludes ordinary answer outputs. Disabling status throwing
 handles only typed non-2XX failures. Keep explicit graph cancellation uncaught,
 preserve retry and profile-fallback ordering, and do not cache caught failures or publish them

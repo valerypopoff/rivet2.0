@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { readManagedWorkflowSchemaReleaseContract } from './studio-server-release-manifest.mjs';
 
 export const containerStages = ['dev', 'staging', 'prod'];
@@ -204,7 +205,11 @@ export function serializeManagedCompose(model) {
   return JSON.stringify(model, null, 2).replace(/\$/g, () => '$$');
 }
 
-export function createManagedCompose(config, images, { offline = false, releaseDigest = '' } = {}) {
+export function createManagedCompose(
+  config,
+  images,
+  { offline = false, releaseDigest = '', sourceRoot = process.cwd() } = {},
+) {
   const { project, objectStorage: s, schema } = config;
   const labels = {
     'rivet.dev/container-installation': project,
@@ -364,6 +369,46 @@ export function createManagedCompose(config, images, { offline = false, releaseD
     tmpfs: temporary,
     healthcheck: health(3000, '/'),
   };
+  if (config.stage === 'dev') {
+    // Never mount the checkout root (.env, host dependencies, credentials and
+    // runtime data). Source-only mounts preserve image-owned Linux dependencies.
+    const sourcePaths = [
+      'package.json',
+      'yarn.lock',
+      'tsconfig.base.json',
+      ...['app', 'core', 'node', 'evaluations'].flatMap((name) => [
+        `packages/${name}/src`,
+        `packages/${name}/package.json`,
+        `packages/${name}/tsconfig.json`,
+      ]),
+      'packages/app/public',
+      'packages/app/graphs',
+      'packages/app/scripts',
+      'packages/studio-server-shared',
+      // Bind the directory, not individual entry/config/CSS files: editors
+      // commonly save by atomic rename, which leaves file binds on old inodes.
+      'packages/studio-server-web',
+    ];
+    services.web.init = true;
+    services.web.volumes = [
+      ...sourcePaths.map((source) => ({
+        type: 'bind',
+        source: path.resolve(sourceRoot, source),
+        target: `/app/${source}`,
+        read_only: true,
+        bind: { create_host_path: false },
+      })),
+      mount('web-development', '/home/rivet/.cache'),
+    ];
+    services.web.tmpfs = [
+      ...temporary,
+      '/app/artifacts:rw,nosuid,size=64m,uid=10001,gid=10001',
+      // Image-owned Linux dependencies and build-tool scratch share bounded,
+      // disposable memory. Never reuse stale modules or orphan anonymous volumes.
+      '/app/packages/studio-server-web/node_modules:rw,nosuid,size=512m,uid=10001,gid=10001',
+    ];
+    services.web.healthcheck = { ...health(5174), start_period: '900s' };
+  }
   services.proxy = {
     image: images.proxy,
     labels,
@@ -374,7 +419,7 @@ export function createManagedCompose(config, images, { offline = false, releaseD
     environment: {
       RIVET_KEY: config.key,
       RIVET_WEB_UPSTREAM_HOST: 'web',
-      RIVET_WEB_UPSTREAM_PORT: '3000',
+      RIVET_WEB_UPSTREAM_PORT: config.stage === 'dev' ? '5174' : '3000',
       RIVET_API_UPSTREAM_HOST: 'backend',
       RIVET_API_UPSTREAM_PORT: '8080',
       RIVET_EXECUTION_UPSTREAM_HOST: 'execution',

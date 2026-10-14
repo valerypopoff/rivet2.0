@@ -184,29 +184,29 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         editors: [
           {
             type: 'toggle',
-            label: 'Output usage details',
+            label: 'Usage details',
             dataKey: 'outputUsage',
             helperMessage:
               'Adds estimated totalCost to Usage only for recognized requested/returned models. Unknown pricing is omitted. Provider-specific premiums are not included.',
           },
           {
             type: 'toggle',
-            label: 'Output request body',
+            label: 'Request body',
             dataKey: 'outputRequestBody',
             helperMessage:
               'Adds the exact classifier request JSON body sent to the provider. It excludes authorization headers and Rivet-managed API keys.',
           },
           {
             type: 'toggle',
-            label: 'Output response body',
+            label: 'Response body',
             dataKey: 'outputResponseBody',
             helperMessage:
               'Shows the provider response, including rejected or invalid responses. Non-JSON responses appear as raw text. Captured content may contain sensitive input.',
           },
-          { type: 'toggle', label: 'Output classifier attempts', dataKey: 'outputClassifierAttempts' },
+          { type: 'toggle', label: 'Classifier attempts', dataKey: 'outputClassifierAttempts' },
           {
             type: 'toggle',
-            label: 'Output classifier profile summary',
+            label: 'Classifier profile summary',
             dataKey: 'outputClassifierProfileSummary',
             hideIf: (data) => data.configurationMode !== 'profile',
           },
@@ -234,15 +234,15 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         editors: [
           {
             type: 'toggle',
-            label: 'Fail on non-2XX status code',
+            label: 'Throw exception on non-2XX status code',
             dataKey: 'errorOnNon200',
             defaultValue: true,
             helperMessage:
-              'After retries, throw on a rejected HTTP request. When disabled, unavailable outputs are excluded. Run failed and Run error are available only when Catch all failures is enabled.',
+              'After retries, throw on a rejected HTTP request. When disabled, unavailable outputs are excluded. Run failed and Run error are available only when Catch all exceptions is enabled.',
           },
           {
             type: 'toggle',
-            label: 'Catch all failures',
+            label: 'Catch all exceptions',
             dataKey: 'catchRequestFailed',
             helperMessage:
               'Return any node execution failure through Run failed and Run error instead of stopping the graph. Explicit graph cancellation is never caught.',
@@ -677,7 +677,7 @@ export function getClassifierEvaluateBodySections(
       id: 'error-behavior',
       fields: [
         ...(data.errorOnNon200 !== false ? [{ label: 'Throw on non-2XX', value: 'Enabled' }] : []),
-        ...(data.catchRequestFailed ? [{ label: 'Catch all failures', value: 'Enabled' }] : []),
+        ...(data.catchRequestFailed ? [{ label: 'Catch all exceptions', value: 'Enabled' }] : []),
         ...(data.retryOnNon200
           ? [
               { label: 'Retry on non-200', value: 'Enabled' },

@@ -57,6 +57,20 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     const card = editor.locator('.node[data-nodeid="model"]');
     await expect(card).toBeVisible({ timeout: 120_000 });
     await card.locator('.edit-button').dispatchEvent('click');
+    const outputsHeading = editor.getByText('Outputs', { exact: true });
+    if (
+      (await outputsHeading.locator('xpath=ancestor::*[@aria-expanded][1]').getAttribute('aria-expanded')) === 'false'
+    )
+      await outputsHeading.click();
+    const outputControls = outputsHeading.locator('xpath=ancestor::div[@class="Collapsible"][1]');
+    const outputLabels =
+      type === 'llmChatV2'
+        ? ['Reasoning', 'Usage details', 'LLM attempts', 'Request body', 'Response body']
+        : ['Usage details', 'Request body', 'Response body', 'Classifier attempts'];
+    for (const label of outputLabels) {
+      await expect(outputControls.getByText(label, { exact: true })).toBeVisible();
+    }
+    await expect(outputControls.getByText(/^Output /)).toHaveCount(0);
     if (type === 'classifierEvaluate') {
       const modelSection = editor.getByRole('button', { name: 'Model', exact: true }).and(editor.locator('button'));
       const modelContent = modelSection
@@ -92,12 +106,22 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       await editor.getByRole('button', { name: 'Input port', exact: true }).click();
       await expect(keyName).toHaveCount(0);
       await expect(card.getByText('API Key', { exact: true })).toBeVisible();
-      await editor.getByRole('button', { name: 'Configured key', exact: true }).click();
+      await editor.getByRole('button', { name: 'Automatic', exact: true }).click();
       await expect(keyName).toHaveValue('groupedApiKey');
       await expect(card.getByText('API Key', { exact: true })).toHaveCount(0);
     }
-    const throwToggle = editor.getByRole('checkbox', { name: /^Fail on non-2XX status code/ });
-    const catchToggle = editor.getByRole('checkbox', { name: /^Catch all failures/ });
+    await outputControls.getByText('Request body', { exact: true }).click();
+    await expect(editor.locator('input#outputRequestBody')).toBeChecked();
+    await expect(
+      card.locator('.port-label', { hasText: type === 'llmChatV2' ? /^LLM request body$/ : /^Request body$/ }),
+    ).toHaveCount(1);
+    await outputControls.getByText('Response body', { exact: true }).click();
+    await expect(editor.locator('input#outputResponseBody')).toBeChecked();
+    await expect(
+      card.locator('.port-label', { hasText: type === 'llmChatV2' ? /^LLM response body$/ : /^Response body$/ }),
+    ).toHaveCount(1);
+    const throwToggle = editor.getByRole('checkbox', { name: /^Throw exception on non-2XX status code/ });
+    const catchToggle = editor.getByRole('checkbox', { name: /^Catch all exceptions/ });
     const errorHeading = editor.getByText('Error behavior', { exact: true });
     await expect(errorHeading).toBeVisible();
     if (
@@ -110,18 +134,21 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     await expect(card).toContainText('Throw on non-2XX: Enabled');
     await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
 
-    await editor.getByText('Catch all failures', { exact: true }).click();
-    await expect(card).toContainText('Catch all failures: Enabled');
+    await editor.getByText('Catch all exceptions', { exact: true }).click();
+    await expect(card).toContainText('Catch all exceptions: Enabled');
     await expect(card.getByText('Run failed', { exact: true })).toBeVisible();
     await expect(card.getByText('Run error', { exact: true })).toBeVisible();
-    await editor.getByText('Fail on non-2XX status code', { exact: true }).click();
+    await editor.getByText('Throw exception on non-2XX status code', { exact: true }).click();
     await expect(card).not.toContainText('Throw on non-2XX:');
-    await editor.getByText('Catch all failures', { exact: true }).click();
-    await expect(card).not.toContainText('Catch all failures:');
-    await expect(card.getByText('Run failed', { exact: true })).toBeVisible();
-    await editor.getByText('Fail on non-2XX status code', { exact: true }).click();
+    await editor.getByText('Catch all exceptions', { exact: true }).click();
+    await expect(card).not.toContainText('Catch all exceptions:');
+    // Classifier failure ports are opt-in via Catch; LLM also exposes them when
+    // HTTP failures are suppressed. Preserve their existing runtime contracts.
+    if (type === 'classifierEvaluate') await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
+    else await expect(card.getByText('Run failed', { exact: true })).toBeVisible();
+    await editor.getByText('Throw exception on non-2XX status code', { exact: true }).click();
     await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
-    await editor.getByText('Catch all failures', { exact: true }).click();
+    await editor.getByText('Catch all exceptions', { exact: true }).click();
     await page.locator('.active-project-save-button').click();
     await expect.poll(() => saved.length).toBe(1);
     await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);
@@ -159,7 +186,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
                   transaction.oncomplete = () => {
                     database.close();
                     resolve(
-                      JSON.parse(read.result ?? '{}').nodeEditorGroupOpenState?.classifierEvaluate?.['group:Model:0'],
+                      JSON.parse(read.result ?? '{}').nodeEditorGroupOpenState?.classifierEvaluate?.['group:Model:1'],
                     );
                   };
                   transaction.onabort = () => {
@@ -175,7 +202,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     await page.reload();
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await expect(card).toContainText('Catch all failures: Enabled', { timeout: 120_000 });
+    await expect(card).toContainText('Catch all exceptions: Enabled', { timeout: 120_000 });
     await card.locator('.edit-button').dispatchEvent('click');
     if (type === 'classifierEvaluate') {
       const modelSection = editor.getByRole('button', { name: 'Model', exact: true }).and(editor.locator('button'));
@@ -185,7 +212,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       await expect(editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true })).toHaveValue(
         'groupedApiKey',
       );
-      await expect(editor.getByRole('button', { name: 'Configured key', exact: true })).toHaveAttribute(
+      await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute(
         'aria-pressed',
         'true',
       );

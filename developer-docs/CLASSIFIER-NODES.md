@@ -4,6 +4,15 @@ Classifier is a first-party Core node family, not a plugin. The canonical node t
 
 ## Built-in type and documentation integration
 
+Evaluate's **Outputs** settings use concise labels: **Usage details**, **Request
+body**, **Response body**, **Classifier attempts**, and **Classifier profile
+summary**. The section already communicates output intent; stored `output...`
+setting keys, visibility conditions and port IDs are unchanged. Newly added
+Classifier Evaluate nodes use the same header-only default palette color as LLM
+Chat (`--node-color-6`) through the shared node-creation color map. Saved node
+colors and the editor's default-color opt-out are preserved; this does not recolor
+existing projects.
+
 Adding a profile family must also update the global-variable codec, the complete
 coercion compatibility matrix, and the editor's node-documentation URL map.
 Scalar/array `classifier-config` ports remain incompatible with `llm-config`.
@@ -62,7 +71,7 @@ Evaluate keeps legacy Inline mode as the default. From profile hides inline conf
 
 `classifier/profileExecution.ts` runs classifier-specific fallback while reusing bounded health operations and atomic permits from the LLM reliability infrastructure. Transport/timeouts/408/429/5XX count once per failed candidate, not per physical retry. Non-cancellation response-body read failures are transport failures; invalid UTF-8/JSON is response parsing, while an invalid answer shape is response validation. Authentication, input/capability failures, malformed responses and cancellation finish permits as ignored. Suspension is opt-in and requires an injected `llmProfileHealthStore`; its absence disables durable suspension, not fallback. Health-service errors fail open with bounded diagnostics, and stale completions cannot resurrect cleared entries. Classifier keys use a separate namespace and `family: classifier`; legacy entries without a family are LLM. Provider/model/credential and project/source-node identity determine health; display-name/policy edits do not reset it.
 
-The non-2XX suppression switch applies only when all attempted candidates ended in HTTP rejection. Mixed configuration, transport, timeout or response-validation failures still throw unless Catch all failures is enabled. Classify terminal candidate errors rather than physical retries, and never infer the entire chain's failure category from its last diagnostic cause.
+The non-2XX suppression switch applies only when all attempted candidates ended in HTTP rejection. Mixed configuration, transport, timeout or response-validation failures still throw unless Catch all exceptions is enabled. Classify terminal candidate errors rather than physical retries, and never infer the entire chain's failure category from its last diagnostic cause.
 
 The overall deadline is checked after provider completion and after bounded health completion. A response cannot become successful node output merely because it arrived before a slow health update exhausted the chain budget. Provider health still describes the validated provider response, not the speed of the health service. Health-service failures remain fail-open and their attempt diagnostics use a fixed safe message rather than an injected service's potentially sensitive exception text. Fully suspended chains make no provider calls; concurrent expired suspensions admit only one recovery probe through the shared atomic permit.
 
@@ -72,7 +81,7 @@ The existing `llmProfileAttempt` event gains an optional family discriminator an
 
 Failed calls retain enabled request/response diagnostics through the existing
 `setFailureOutputs` terminal channel (including split invocations, debugger
-delivery and recordings), not graph-semantic partial results. Catch all failures
+delivery and recordings), not graph-semantic partial results. Catch all exceptions
 and HTTP-only suppression also retain this evidence, while Answers/Usage/Cost
 remain excluded. Provider callbacks are opt-in and separate from attempt events;
 disabled body diagnostics do not parse a second request representation or read
@@ -460,8 +469,8 @@ Noul uses paired `noulTrueCriteria` and `noulFalseCriteria` fields with independ
 The final **Error behavior** group mirrors LLM Chat's serialized fields and editor layout: `retryOnNon200`, `retryOnNon200RepeatTimes` (default `1`), and `retryOnNon200CooldownMs` (default `0`). Its opt-in policy retries other non-authentication, non-validation HTTP statuses after the requested fixed cooldown. It does not retry authentication (`401`/`403`), validation (`400`/`422`), insufficient-credit (`402`) or oversized-request (`413`) failures. These remain typed HTTP failures for ordinary catch controls and profile fallback, but do not count as provider outages. Cancel rejected bodies without including them in attempt diagnostics. Transport failures and `429`/`529` share an independent budget of two automatic retries; configured retries for other statuses do not replenish it. Mixed error sequences may exceed three requests, but both budgets remain bounded by one Evaluate timeout. Preserve the one serialized request payload across every retry.
 
 Classifier Evaluate exposes **Run failed** and **Run error** only when
-`catchRequestFailed` (**Catch all failures**) is explicitly enabled, independently
-of `errorOnNon200` (**Fail on non-2XX status code**). Disabling the HTTP-status
+`catchRequestFailed` (**Catch all exceptions**) is explicitly enabled, independently
+of `errorOnNon200` (**Throw exception on non-2XX status code**). Disabling the HTTP-status
 failure setting suppresses rejected HTTP requests after retries and excludes
 unavailable normal outputs through the standard node-exclusion helper; it does
 not create failure ports or format diagnostics that will be discarded. With Catch all
@@ -573,7 +582,7 @@ Adapters derive response-validation questions from the private detached preparat
 
 Required response fields must be own properties, including envelope fields, answer type/value/maps, and Usage counts. A prototype-provided value cannot stand in for an absent JSON field. `ClassifierResponseShape.test.ts` covers every required field with a local inherited-property fixture (without polluting the global prototype), and checks specific numeric-field diagnostics for both Choice and Score maps. This is structural validation only; it must not restore numerical range or consistency checks.
 
-The same test suite exercises trusted, non-normalized responses through the actual Evaluate node for all 32 combinations of failure controls and optional outputs, after a rate-limit retry and a successful non-200 2XX response. Malformed JSON, question mapping, Choice options, probability maps, Score legends and Usage types must still fail with either HTTP-status toggle setting; Catch all failures converts those failures into excluded normal outputs and Run error, while disabling it propagates the error. Malformed 2XX bodies must never enter the HTTP-status retry policy.
+The same test suite exercises trusted, non-normalized responses through the actual Evaluate node for all 32 combinations of failure controls and optional outputs, after a rate-limit retry and a successful non-200 2XX response. Malformed JSON, question mapping, Choice options, probability maps, Score legends and Usage types must still fail with either HTTP-status toggle setting; Catch all exceptions converts those failures into excluded normal outputs and Run error, while disabling it propagates the error. Malformed 2XX bodies must never enter the HTTP-status retry policy.
 
 ## Required verification
 

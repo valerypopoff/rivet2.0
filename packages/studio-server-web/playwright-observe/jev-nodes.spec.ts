@@ -621,14 +621,14 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   ) {
     await outputsHeading.click();
   }
-  await expect(editor.getByText('Output usage details', { exact: true })).toBeVisible();
-  await expect(editor.getByText('Output request body', { exact: true })).toBeVisible();
-  await expect(editor.getByText('Output response body', { exact: true })).toBeVisible();
-  await editor.getByText('Output usage details', { exact: true }).click();
+  await expect(editor.getByText('Usage details', { exact: true })).toBeVisible();
+  await expect(editor.getByText('Request body', { exact: true })).toBeVisible();
+  await expect(editor.getByText('Response body', { exact: true })).toBeVisible();
+  await editor.getByText('Usage details', { exact: true }).click();
   await expect(editor.locator('input#outputUsage')).toBeChecked();
-  await editor.getByText('Output request body', { exact: true }).click();
+  await editor.getByText('Request body', { exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Request body$/ })).toHaveCount(1);
-  await editor.getByText('Output response body', { exact: true }).click();
+  await editor.getByText('Response body', { exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Response body$/ })).toHaveCount(1);
   await expect(editor.getByText('Error behavior', { exact: true })).toBeVisible();
   const errorHeading = editor.getByText('Error behavior', { exact: true });
@@ -791,7 +791,9 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
   });
 
-test('Classifier failure ports follow Catch all failures independently of the HTTP status toggle', async ({ page }) => {
+test('Classifier failure ports follow Catch all exceptions independently of the HTTP status toggle', async ({
+  page,
+}) => {
   const editor = await openFixture(page);
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await evaluate.locator('button.edit-button').dispatchEvent('click');

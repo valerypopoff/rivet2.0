@@ -55,6 +55,12 @@ have started. Refresh never relies solely on the active-project dirty event.
 Production message types live in `packages/studio-server-shared/editor-bridge.ts`.
 The development-only refresh protocol is owned by `DevelopmentUpdates.tsx` and
 `useDevelopmentRefreshBridge.ts`, with browser tests exercising both sides.
+The same protocol now serves both supported dev storage commands. Its execution
+fence checks the active project's live run atom plus inactive project snapshots;
+switching tabs cannot conceal an ongoing Browser run. Ignore the active project's
+retained snapshot (it can be stale), and do not introduce a second run registry
+just for refresh admission. Unit and headless regression cases cover hidden runs
+and stale active snapshots alongside existing dirty-tab/checkpoint protections.
 It rejects active canvas gestures and focused inline inputs before setting inert,
 then rechecks live activity and checkpoint revisions before navigation.
 
@@ -185,25 +191,25 @@ No wrapper-specific provider adapter or TypeSafe plugin is needed. The shared
 question format, credential isolation and HTTP contract are documented in
 [Classifier nodes](../CLASSIFIER-NODES.md).
 
-LLM Chat and Classifier Evaluate expose `Fail on non-2XX status code` and
-`Catch all failures` in their Error behavior group. The node-owned fields are
+LLM Chat and Classifier Evaluate expose `Throw exception on non-2XX status code` and
+`Catch all exceptions` in their Error behavior group. The node-owned fields are
 `errorOnNon200` (default true, including older nodes without this field) and
 `catchRequestFailed` (default false). They are not LLM Profile fields.
 Retries and profile fallback run first; catching does not bypass either policy.
 
-When Catch all failures is enabled, or HTTP-status throwing is disabled, the
+When Catch all exceptions is enabled, or HTTP-status throwing is disabled, the
 canvas exposes scalar `Run failed` (`runFailed`, boolean) and `Run error`
 (`runError`, string) outputs. Success returns false and excludes Run error.
 A handled failure returns true and the complete error/cause chain, excluding
 normal response, answers, usage and tool-call outputs. Disabled status throwing
 handles only typed non-2XX errors; malformed responses, credentials and other
-errors still throw unless Catch all failures is enabled. A provider's rejected
+errors still throw unless Catch all exceptions is enabled. A provider's rejected
 response is not a usable generated answer, unlike an HTTP Call's raw body.
 LLM opt-in request/response/attempt diagnostics remain available on handled
 failures. Explicit graph cancellation escapes both controls, and caught errors
 do not publish a terminal `nodeError` checkpoint or enter the editor response cache.
 
-Catch all failures wraps the entire awaited node implementation: input and
+Catch all exceptions wraps the entire awaited node implementation: input and
 credential validation, provider configuration, transport and provider timeouts,
 response decoding/validation, LLM tool continuation, result projection and cache
 processing. Only an aborted caller signal proves graph cancellation; a provider
@@ -228,7 +234,7 @@ be reduced to an empty JSON object merely because `instanceof Error` is false.
 Cleanup is best-effort and cannot block the final failure or the next retry.
 Synchronous cleanup errors cannot mask the original HTTP status either.
 
-The body displays `Throw on non-2XX` and `Catch all failures` when enabled.
+The body displays `Throw on non-2XX` and `Catch all exceptions` when enabled.
 Valid 2XX provider results remain successful even when the status is not 200;
 the separately named Retry on non-200 policy retains its existing repeat rule.
 Split runs aggregate Run failed as boolean arrays. Mixed success/failure ports

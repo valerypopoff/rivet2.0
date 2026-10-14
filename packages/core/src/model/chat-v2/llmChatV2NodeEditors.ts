@@ -582,35 +582,35 @@ function getOutputEditors(): LLMChatV2EditorDefinition {
   return group('Outputs', [
     {
       type: 'toggle',
-      label: 'Output reasoning',
+      label: 'Reasoning',
       dataKey: 'outputReasoning',
       helperMessage:
         'Adds a Reasoning output when the provider/model exposes reasoning or thinking text through the Vercel AI SDK. Some providers only expose token counts or summaries.',
     },
     {
       type: 'toggle',
-      label: 'Output usage details',
+      label: 'Usage details',
       dataKey: 'outputUsage',
       helperMessage:
         'Adds a Usage output built from Vercel AI SDK usage metadata: prompt, completion, total, cached, reasoning tokens, and estimated cost when available.',
     },
     {
       type: 'toggle',
-      label: 'Output LLM attempts',
+      label: 'LLM attempts',
       dataKey: 'outputLLMAttempts',
       helperMessage:
         'Adds one chronological record for every profile configuration, provider request, and response-validation attempt. Records include provider, model, retry status, and provider error details when available.',
     },
     {
       type: 'toggle',
-      label: 'Output request body',
+      label: 'Request body',
       dataKey: 'outputRequestBody',
       helperMessage:
         'Adds an LLM request body output. It can contain prompts and non-secret provider options; it never includes authorization headers or API keys.',
     },
     {
       type: 'toggle',
-      label: 'Output response body',
+      label: 'Response body',
       dataKey: 'outputResponseBody',
       helperMessage:
         'Adds the complete LLM response body captured at the provider HTTP boundary. JSON responses are parsed for inspection; other responses remain text. Rivet does not redact or truncate captured content.',
@@ -653,7 +653,7 @@ function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
   return group('Error behavior', [
     {
       type: 'toggle',
-      label: 'Fail on non-2XX status code',
+      label: 'Throw exception on non-2XX status code',
       dataKey: 'errorOnNon200',
       defaultValue: true,
       helperMessage:
@@ -661,7 +661,7 @@ function getErrorBehaviorEditors(): LLMChatV2EditorDefinition {
     },
     {
       type: 'toggle',
-      label: 'Catch all failures',
+      label: 'Catch all exceptions',
       dataKey: 'catchRequestFailed',
       helperMessage:
         'Return any node execution failure through Run failed and Run error instead of stopping the graph. Explicit graph cancellation is never caught.',

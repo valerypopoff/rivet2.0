@@ -42,7 +42,7 @@ const handleRequest = async (req, res) => {
     res.writeHead(302, { Location: url.searchParams.get('to') }).end();
     return;
   }
-  if (url.pathname === '/api/workflows/tree/events') {
+  if (url.pathname === '/api/workflows/tree/events' || url.pathname === '/__rivet_dev/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(`data: ${identity}\n\n`);
     const timer = setTimeout(() => res.end(), 10000);

@@ -342,6 +342,14 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     const reader = stream.body.getReader();
     assert.match(new TextDecoder().decode((await reader.read()).value), /data: api-1/);
     await reader.cancel();
+    if (variant !== 'compose') {
+      const anonymousBuild = await request('/__rivet_dev/events', { headers: {} });
+      assert.equal(await anonymousBuild.text(), 'Fixture login', `${variant} development events require UI auth`);
+      const build = await request('/__rivet_dev/events', { signal: AbortSignal.timeout(3000) });
+      const buildReader = build.body.getReader();
+      assert.match(new TextDecoder().decode((await buildReader.read()).value), /data: web-1/);
+      await buildReader.cancel();
+    }
     for (const route of ['/ws/latest-debugger', '/ws/executor', '/ws/executor/internal']) {
       await new Promise((resolve, reject) => {
         const req = http.get(`${base}${route}`, {

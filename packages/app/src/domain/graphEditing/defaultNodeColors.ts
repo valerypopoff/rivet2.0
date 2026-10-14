@@ -11,6 +11,7 @@ const DEFAULT_NODE_COLORS_BY_TYPE: Partial<Record<string, NodeColor>> = {
   getStoredValue: createDefaultNodeColor(7),
   httpCall: createDefaultNodeColor(6),
   llmChatV2: createDefaultNodeColor(6),
+  classifierEvaluate: createDefaultNodeColor(6),
   object: createDefaultNodeColor(4),
   prompt: createDefaultNodeColor(4),
   setGlobal: createDefaultNodeColor(7),

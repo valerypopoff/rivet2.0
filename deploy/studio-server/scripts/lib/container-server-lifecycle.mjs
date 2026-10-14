@@ -109,7 +109,14 @@ export async function startContainerInstallation(
   const preparation = await compose(['run', '--rm', '--no-deps', 'migrate'], { acceptedExitCodes: [75] });
   const restoreRecovery = preparation?.exitCode === 75;
   try {
-    await compose(['up', '-d', '--wait', '--wait-timeout', '300', ...applicationServices]);
+    await compose([
+      'up',
+      '-d',
+      '--wait',
+      '--wait-timeout',
+      config.stage === 'dev' ? '1200' : '300',
+      ...applicationServices,
+    ]);
   } catch (startupError) {
     // A failed readiness wait may still have started healthy producers. Drain
     // the selected generation, keeping persistence alive and the pending receipt.

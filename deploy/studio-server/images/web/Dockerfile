@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:20-alpine
 
-FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS dependencies
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -50,6 +50,26 @@ COPY deploy ./deploy
 COPY tsconfig.base.json LICENSE README.md ./
 RUN YARN_NODE_LINKER=node-modules yarn build:hosted-web-deps
 
+# Development serves immutable watched bundles, not an unrestricted Vite source
+# server. Dependencies remain Linux-owned; only selected source paths are bound.
+FROM dependencies AS development
+RUN addgroup -g 10001 -S rivet && \
+    adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
+    mkdir -p /home/rivet/.cache /app/artifacts /opt/rivet && \
+    mv /app/packages/studio-server-web/node_modules /opt/rivet/web-node-modules && \
+    mkdir -p /app/packages/studio-server-web/node_modules && \
+    chown -R 10001:10001 /home/rivet /app/artifacts
+ENV HOME=/home/rivet
+ENV RIVET_DEV_FRONTEND_MODE=tunnel
+ENV RIVET_DEV_BUNDLE_ROOT=/home/rivet/.cache/bundles
+ENV HOSTED_VITE_CACHE_DIR=/home/rivet/.cache/vite
+ENV NODE_OPTIONS=--max-old-space-size=6144
+WORKDIR /app/packages/studio-server-web
+EXPOSE 5174
+USER 10001:10001
+CMD ["sh", "-ec", "cp -R /opt/rivet/web-node-modules/. ./node_modules/; exec node dev/tunnel.mjs"]
+
+FROM dependencies AS builder
 ARG VITE_RIVET_DEBUG_LOGS=false
 ARG RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows
 ARG RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest

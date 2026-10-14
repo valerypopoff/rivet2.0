@@ -1,7 +1,7 @@
 import { useStore } from 'jotai';
 import { useEffect } from 'react';
 import { useExecutorSessionRuntime } from '../../app/src/host';
-import { graphRunningState } from '../../app/src/state/dataFlow';
+import { graphRunningState, projectExecutionSnapshotsState } from '../../app/src/state/dataFlow';
 import { evaluationsRunningState } from '../../app/src/state/evaluations';
 import { draggingWireState, editingNodeState } from '../../app/src/state/graphBuilder';
 import { openingProjectTabsState } from '../../app/src/state/openingProjectTabs';
@@ -22,6 +22,7 @@ import { isValidBridgeOrigin } from '../../studio-server-shared/editor-bridge';
 import { hasDevelopmentCommands } from './developmentActivity';
 import {
   canRefreshDevelopmentWorkspace,
+  hasDevelopmentProjectRuns,
   getDevelopmentGeneration,
   type DevelopmentRefreshWindow,
 } from './developmentRefreshGuard';
@@ -50,7 +51,11 @@ export function useDevelopmentRefreshBridge(): void {
           Object.values(store.get(projectDataUnsavedChangesState)).some(Boolean) ||
           projects.openedProjectsSortedIds.some((id) => !baselines[id]),
         busy:
-          store.get(graphRunningState) ||
+          hasDevelopmentProjectRuns(
+            store.get(projectState).metadata.id,
+            store.get(graphRunningState),
+            store.get(projectExecutionSnapshotsState),
+          ) ||
           store.get(evaluationsRunningState) ||
           store.get(overlayOpenState) !== undefined ||
           store.get(editingNodeState) !== null ||

@@ -60,9 +60,13 @@ export function containerStartupMessage(config, { restoreRecovery = false } = {}
     config.uiAuthMode === 'oauth'
       ? 'Sign in using your configured OAuth provider. A fresh installation needs key-mode setup of the OAuth provider and administrator emails first.'
       : 'Sign in using the selected tier key or RIVET_KEY in your shared .env.';
+  const watching =
+    config.stage === 'dev'
+      ? ' Frontend source watching is enabled; successful builds refresh when unsaved edits and active work permit it.'
+      : '';
   return restoreRecovery
     ? `Rivet restore recovery: http://127.0.0.1:${config.port}/?restore-legacy-backup. ${login} The pending restore was retained. Finish or cancel it in the UI before deployment migration; no schema migration or settings seeding was run.`
-    : `Rivet started: http://127.0.0.1:${config.port}. ${login} Existing data was not imported or deleted.`;
+    : `Rivet started: http://127.0.0.1:${config.port}. ${login}${watching} Existing data was not imported or deleted.`;
 }
 
 function run(program, args, { capture = false, acceptedExitCodes = [], ...options } = {}) {
@@ -193,6 +197,7 @@ async function main() {
     const model = createManagedCompose(config, images, {
       offline: config.local || options['--offline'] === true,
       releaseDigest: digest,
+      sourceRoot: root,
     });
     if (options['--config']) {
       console.log(
@@ -217,11 +222,12 @@ async function main() {
       if (containers.length) await stopContainerInstallation(config, compose);
       return;
     }
+    if (stage === 'dev') ensureContainerDevelopmentMountPoints(root);
     writeContainerState(composePath, serializeManagedCompose(model));
     if (stage === 'dev') {
       for (const name of ['api', 'web', 'proxy'])
         await withLauncherProgress('container-server', `Building ${name}`, () =>
-          docker(['build', '-f', `deploy/studio-server/images/${name}/Dockerfile`, '-t', images[name], '.']),
+          docker(containerDevelopmentBuildArgs(name, images[name])),
         );
     } else
       for (const name of ['api', 'web', 'proxy'])
@@ -240,6 +246,22 @@ async function main() {
     fs.closeSync(lock);
     fs.unlinkSync(lockPath);
   }
+}
+export function containerDevelopmentBuildArgs(name, image) {
+  return [
+    'build',
+    '-f',
+    `deploy/studio-server/images/${name}/Dockerfile`,
+    ...(name === 'web' ? ['--target', 'development'] : []),
+    '-t',
+    image,
+    '.',
+  ];
+}
+export function ensureContainerDevelopmentMountPoints(root) {
+  // The nested dependency tmpfs needs a mountpoint in the readonly source bind.
+  // PnP checkouts may not have this directory; never install host dependencies.
+  fs.mkdirSync(path.join(root, 'packages/studio-server-web/node_modules'), { recursive: true });
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   main().catch((error) => {

@@ -24,9 +24,9 @@ async function openEmptyProject(page: Page, suffix: string): Promise<FrameLocato
   return editor;
 }
 
-async function addNode(editor: FrameLocator, nodeName: string): Promise<void> {
+async function addNode(editor: FrameLocator, nodeName: string, position = { x: 640, y: 420 }): Promise<void> {
   const canvas = editor.locator('.node-canvas');
-  await canvas.click({ button: 'right', position: { x: 640, y: 420 } });
+  await canvas.click({ button: 'right', position });
 
   const search = editor.getByPlaceholder('Type in node name...');
   await expect(search).toBeVisible();
@@ -45,6 +45,25 @@ async function expectOpenAiCredentialDefaults(editor: FrameLocator): Promise<voi
   await expect(programmaticName).toHaveValue('openAiApiKey');
   await expect(environmentVariableName).toHaveValue('OPENAI_API_KEY');
 }
+
+test('new Classifier Evaluate and LLM Chat nodes share the default header color', async ({ page }) => {
+  const editor = await openEmptyProject(page, 'default-model-colors');
+  await addNode(editor, 'Classifier Evaluate');
+  const classifier = editor.locator('.node', {
+    has: editor.locator('.node-title', { hasText: /^Classifier Evaluate$/ }),
+  });
+  await expect(classifier).toBeVisible();
+  expect(await classifier.evaluate((node) => (node as HTMLElement).style.getPropertyValue('--node-bg'))).toBe(
+    'var(--node-color-6)',
+  );
+  await page.keyboard.press('Escape');
+  await addNode(editor, 'LLM Chat', { x: 840, y: 200 });
+  const llm = editor.locator('.node', { has: editor.locator('.node-title', { hasText: /^LLM Chat$/ }) });
+  await expect(llm).toBeVisible();
+  expect(await llm.evaluate((node) => (node as HTMLElement).style.getPropertyValue('--node-bg'))).toBe(
+    await classifier.evaluate((node) => (node as HTMLElement).style.getPropertyValue('--node-bg')),
+  );
+});
 
 async function selectProvider(editor: FrameLocator, provider: string): Promise<void> {
   const providerInput = editor.getByRole('combobox', { name: 'Provider', exact: true });

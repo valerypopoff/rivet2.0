@@ -110,6 +110,7 @@
     "studio-server:dev:tunnel": "node deploy/studio-server/scripts/retired-server-launcher.mjs",
     "studio-server:verify:tunnel": "node --test packages/studio-server-web/dev/*.test.mjs && yarn workspace @valerypopoff/rivet-studio-server-web exec tsx --test tests/development-refresh.test.ts tests/tunnel-launcher.test.ts",
     "studio-server:verify:tunnel:integration": "node deploy/studio-server/scripts/verify-tunnel.integration.mjs",
+    "studio-server:verify:development:integration": "node deploy/studio-server/scripts/verify-container-development.integration.mjs",
     "studio-server:dev:docker": "node deploy/studio-server/scripts/retired-server-launcher.mjs",
     "studio-server:dev:docker:recreate": "node deploy/studio-server/scripts/retired-server-launcher.mjs",
     "studio-server:dev:docker:build": "node deploy/studio-server/scripts/retired-server-launcher.mjs",

@@ -693,7 +693,9 @@ describe('LLMChatV2NodeImpl', () => {
     ]);
     assert.equal(errorBehaviorGroup.label, 'Error behavior');
     assert.equal(errorBehaviorGroup.editors[0]?.dataKey, 'errorOnNon200');
+    assert.equal(errorBehaviorGroup.editors[0]?.label, 'Throw exception on non-2XX status code');
     assert.equal(errorBehaviorGroup.editors[1]?.dataKey, 'catchRequestFailed');
+    assert.equal(errorBehaviorGroup.editors[1]?.label, 'Catch all exceptions');
     assert.equal(errorBehaviorGroup.editors[2]?.dataKey, 'retryOnNon200');
     assert.equal(errorBehaviorGroup.editors[3]?.dataKey, 'retryOnNon200RepeatTimes');
     assert.equal(errorBehaviorGroup.editors[3]?.hideIf({ retryOnNon200: false }), true);
@@ -710,11 +712,11 @@ describe('LLMChatV2NodeImpl', () => {
     );
     assert.equal(
       outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
-      'Output request body',
+      'Request body',
     );
     assert.equal(
       outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputResponseBody')?.label,
-      'Output response body',
+      'Response body',
     );
     assert.equal(
       outputsGroup.editors.some((editor: any) => editor.dataKey === 'useAsGraphPartialOutput'),
@@ -1035,18 +1037,12 @@ describe('LLMChatV2NodeImpl', () => {
       'Each round may contain multiple parallel tool calls if not disallowed.',
     );
     assert.ok(!outputGroup.editors.some((editor: any) => editor.dataKey === 'useToolCalling'));
-    assert.equal(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'outputUsage')?.label,
-      'Output usage details',
-    );
+    assert.equal(outputGroup.editors.find((editor: any) => editor.dataKey === 'outputUsage')?.label, 'Usage details');
     assert.match(
       outputGroup.editors.find((editor: any) => editor.dataKey === 'outputUsage')?.helperMessage,
       /Vercel AI SDK usage metadata/,
     );
-    assert.equal(
-      outputGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
-      'Output reasoning',
-    );
+    assert.equal(outputGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label, 'Reasoning');
     assert.equal(
       responseSettingsGroup.editors.find((editor: any) => editor.dataKey === 'useAsGraphPartialOutput')?.label,
       'Stream response',
@@ -1158,7 +1154,7 @@ describe('LLMChatV2NodeImpl', () => {
     assert.ok(!googleGroup.editors.some((editor: any) => editor.dataKey === 'googleStructuredOutputs'));
   });
 
-  it('keeps Output reasoning in Outputs for Inline and From-profile configurations', async () => {
+  it('keeps concise output labels for Inline and From-profile configurations', async () => {
     const inlineCustomEditors = await createNode({ provider: 'custom' }).getEditors({});
     const profileEditors = await createNode({ configurationMode: 'profile' }).getEditors({});
 
@@ -1166,7 +1162,18 @@ describe('LLMChatV2NodeImpl', () => {
       const outputsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Outputs') as any;
       assert.equal(
         outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputReasoning')?.label,
-        'Output reasoning',
+        'Reasoning',
+      );
+      assert.deepEqual(
+        outputsGroup.editors.map((editor: any) => editor.label),
+        [
+          'Reasoning',
+          'Usage details',
+          'LLM attempts',
+          'Request body',
+          'Response body',
+          'Cache outputs (editor only) (legacy)',
+        ],
       );
     }
     assert.ok(!inlineCustomEditors.some((editor) => editor.type === 'group' && editor.label === 'Reasoning'));

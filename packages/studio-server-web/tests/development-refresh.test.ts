@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canRefreshDevelopmentWorkspace } from '../dashboard/developmentRefreshGuard';
+import { canRefreshDevelopmentWorkspace, hasDevelopmentProjectRuns } from '../dashboard/developmentRefreshGuard';
 import { beginDevelopmentCommand, hasDevelopmentCommands } from '../dashboard/developmentActivity';
 
 test('automatic refresh requires a clean, quiet, durably recoverable workspace', () => {
@@ -19,4 +19,13 @@ test('queued activity blocks refresh until all commands settle, with idempotent 
   assert.equal(hasDevelopmentCommands(), true);
   second();
   assert.equal(hasDevelopmentCommands(), false);
+});
+
+test('refresh blocks inactive project runs without trusting a stale active-project snapshot', () => {
+  assert.equal(hasDevelopmentProjectRuns('A', true, {}), true);
+  assert.equal(hasDevelopmentProjectRuns('B', false, { A: { graphRunning: true } }), true);
+  assert.equal(hasDevelopmentProjectRuns('B', false, { A: { graphRunning: false } }), false);
+  assert.equal(hasDevelopmentProjectRuns('A', false, { A: { graphRunning: true } }), false);
+  assert.equal(hasDevelopmentProjectRuns('A', false, { B: undefined }), false);
+  assert.equal(hasDevelopmentProjectRuns(undefined, false, { A: { graphRunning: true } }), true);
 });
