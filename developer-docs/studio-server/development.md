@@ -305,6 +305,37 @@ Verify the dashboard and editor paths with headless
 `yarn studio-server:ui:observe run-recordings-modal.spec.ts hosted-file-menu.spec.ts
 --grep "Any is first|shared Studio Server modal dimensions"`.
 
+## Hosted WebSocket origin ownership
+
+Automatic Node executor and latest-debugger URLs follow the browser's current
+host, port and scheme (`wss` on HTTPS, `ws` on HTTP). `/api/config` retains its
+absolute request-derived URLs for compatibility, with `executorWsUrlIsOverride`
+and `remoteDebuggerDefaultWsIsOverride` identifying saved overrides. Only an
+explicit `false` allows the hosted runtime-config normalizer to rebase an
+automatic URL onto the browser origin. Saved overrides and responses from older
+servers without these fields retain the existing same-host HTTPS upgrade policy;
+cross-host overrides are never silently rewritten. Empty debugger URLs remain
+disabled.
+
+This supports dev tunnels which rewrite `Host` to `localhost` or terminate TLS
+before the Rivet proxy. Do not enable trusted incoming forwarded headers merely
+to fix browser executor routing: those headers also affect authorization and
+OAuth URL construction, and remain a separate deployment trust decision. The
+browser normalization changes no API-side host/auth policy or websocket path.
+
+Verify with `hosted-runtime-config.test.ts`, API `app-settings.test.ts`, and
+headless `yarn studio-server:ui:observe hosted-executor-origin.spec.ts`.
+The browser fixture serves the real frontend at isolated origins and observes
+the upstream Node executor's actual websocket target. Its matrix covers direct
+HTTP with a custom port, direct Kubernetes HTTPS, Kubernetes TLS termination with
+an internal service host and a public HTTPS port, tunnel Host rewriting, explicit
+separate executor overrides (including path/query), and older server responses.
+It is enrolled in the production-bundle CI lane. API `api-profile.test.ts` verifies
+that control-plane config still preserves internal workflow URLs and requires
+authentication; Kubernetes/proxy contract tests and the read-only Helm
+lint/template verification protect the deployment boundaries. These checks do
+not deploy to a live cluster or replace full managed-release qualification.
+
 ## Shared modal sizing
 
 `packages/studio-server-web/modal-sizing.css` owns ordinary Studio Server modal

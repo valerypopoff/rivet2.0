@@ -30,7 +30,9 @@ type HostedRuntimeConfig = {
   legacyRestoreEpoch?: unknown;
   legacyRestoreMaintenance?: unknown;
   executorWsUrl?: unknown;
+  executorWsUrlIsOverride?: unknown;
   remoteDebuggerDefaultWs?: unknown;
+  remoteDebuggerDefaultWsIsOverride?: unknown;
   publishedWorkflowsBasePath?: unknown;
   latestWorkflowsBasePath?: unknown;
   publishedAppsBasePath?: unknown;
@@ -50,14 +52,23 @@ function getBrowserLocation(): BrowserLocation | undefined {
   return typeof window !== 'undefined' ? window.location : undefined;
 }
 
-export function normalizeRuntimeWebSocketUrl(value: string): string {
+export function normalizeRuntimeWebSocketUrl(value: string, useBrowserOrigin = false): string {
   const location = getBrowserLocation();
-  if (location?.protocol !== 'https:') {
+  if (!location || (!useBrowserOrigin && location.protocol !== 'https:')) {
     return value;
   }
 
   try {
     const url = new URL(value);
+    // Only automatic runtime defaults opt in. Proxies may replace Host and
+    // terminate TLS, but the browser still knows its reachable public origin.
+    if (useBrowserOrigin && (url.protocol === 'ws:' || url.protocol === 'wss:')) {
+      url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.host = location.host;
+      // Assigning URL.host without a port can retain the upstream port.
+      url.port = new URL(`${url.protocol}//${location.host}`).port;
+      return url.toString();
+    }
     if (url.protocol === 'ws:' && url.host === location.host) {
       url.protocol = 'wss:';
       return url.toString();
@@ -74,11 +85,14 @@ export function normalizeHostedRuntimeConfig(config: HostedRuntimeConfig): Hoste
     ...config,
     executorWsUrl:
       typeof config.executorWsUrl === 'string'
-        ? normalizeRuntimeWebSocketUrl(config.executorWsUrl)
+        ? normalizeRuntimeWebSocketUrl(config.executorWsUrl, config.executorWsUrlIsOverride === false)
         : config.executorWsUrl,
     remoteDebuggerDefaultWs:
       typeof config.remoteDebuggerDefaultWs === 'string'
-        ? normalizeRuntimeWebSocketUrl(config.remoteDebuggerDefaultWs)
+        ? normalizeRuntimeWebSocketUrl(
+            config.remoteDebuggerDefaultWs,
+            config.remoteDebuggerDefaultWsIsOverride === false,
+          )
         : config.remoteDebuggerDefaultWs,
   };
 }

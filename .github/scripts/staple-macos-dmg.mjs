@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const retryDelaysMs = [5_000, 15_000];
+// Apple CloudKit connection loss can outlast the initial short retries even
+// after notarization is accepted. Keep a bounded recovery window for that same ticket.
+const retryDelaysMs = [5_000, 15_000, 30_000, 60_000, 120_000];
 
 // Exit 68 alone also covers permanent failures. Retry only an explicit Apple
 // network error, not an absent/invalid ticket, signing failure or rejected submission.
@@ -38,7 +40,7 @@ export async function stapleMacDmgWithRetries(
     const delay = retryDelaysMs[attempt];
     if (!isTransientStaplerFailure(result) || delay === undefined) return result;
     warn(
-      `Apple ticket retrieval hit a transient network failure; retrying the same DMG in ${delay / 1000}s (attempt ${attempt + 2}/3).`,
+      `Apple ticket retrieval hit a transient network failure; retrying the same DMG in ${delay / 1000}s (attempt ${attempt + 2}/${retryDelaysMs.length + 1}).`,
     );
     await wait(delay);
   }

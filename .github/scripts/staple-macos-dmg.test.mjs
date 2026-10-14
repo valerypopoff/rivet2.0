@@ -66,12 +66,30 @@ test('a lost ticket connection retries the same accepted DMG without signing, su
   assert.equal(f.warnings.length, 1);
 });
 
-test('persistent network loss fails after three attempts, preserving the last native failure', async () => {
-  const f = fixture([networkLoss, networkLoss, networkLoss]);
-  assert.equal(await stapleMacDmgWithRetries('release.dmg', f.options), networkLoss);
-  assert.equal(f.commands.length, 3);
-  assert.deepEqual(f.waits, [5000, 15000]);
-  assert.equal(f.warnings.length, 2);
+test('ticket retrieval recovers after the three connection losses observed in CI', async () => {
+  const f = fixture([networkLoss, networkLoss, networkLoss, success]);
+  assert.equal(await stapleMacDmgWithRetries('release.dmg', f.options), success);
+  assert.deepEqual(f.commands, Array.from({ length: 4 }, () => ['xcrun', ['stapler', 'staple', 'release.dmg']]));
+  assert.deepEqual(f.waits, [5000, 15000, 30000]);
+  assert.match(f.warnings.at(-1), /attempt 4\/6/);
+});
+
+test('ticket retrieval can recover on the final bounded attempt', async () => {
+  const f = fixture([...Array(5).fill(networkLoss), success]);
+  assert.equal(await stapleMacDmgWithRetries('release.dmg', f.options), success);
+  assert.equal(f.commands.length, 6);
+  assert.deepEqual(f.waits, [5000, 15000, 30000, 60000, 120000]);
+});
+
+test('persistent network loss fails after six attempts, preserving the last native failure', async () => {
+  const finalFailure = { ...networkLoss, output: `${networkLoss.output}Final ticket retrieval failed.\n` };
+  const f = fixture([...Array(5).fill(networkLoss), finalFailure, success]);
+  assert.equal(await stapleMacDmgWithRetries('release.dmg', f.options), finalFailure);
+  assert.equal(f.commands.length, 6);
+  assert.deepEqual(f.waits, [5000, 15000, 30000, 60000, 120000]);
+  assert.equal(f.warnings.length, 5);
+  assert.equal(f.output.at(-1), finalFailure.output);
+  assert.match(f.warnings.at(-1), /attempt 6\/6/);
 });
 
 test('a permanent failure after a transient one stops immediately', async () => {

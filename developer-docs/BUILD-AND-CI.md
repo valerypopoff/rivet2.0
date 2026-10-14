@@ -1475,9 +1475,13 @@ DMG ticket retrieval has a separate, narrower retry boundary in
 Developer release run 38320930955 accepted the Intel DMG, then failed stapling
 with exit 68 and an Apple `NSURLErrorDomain` connection-loss error (-1005).
 The notarization script still signs and submits the DMG exactly once; only the
-subsequent ticket retrieval is retried against those same bytes. At most three
-stapler attempts run, separated by 5 and 15 seconds, with a two-minute timeout
-and bounded output per command. Retry requires both exit 68 and an explicit
+subsequent ticket retrieval is retried against those same bytes. Release run
+38545458841 exhausted the original three short attempts with the same -1005
+connection loss after acceptance. At most six stapler attempts now run, separated
+by 5, 15, 30, 60 and 120 seconds, with a two-minute timeout and bounded output per
+command (at most 15 minutes 50 seconds including all command timeouts). This
+extends only the ticket-retrieval recovery window, not signing or submission.
+Retry requires both exit 68 and an explicit
 Apple network timeout, connection failure/loss or offline error (-1001, -1004,
 -1005, -1009). Exit 68 alone, missing/invalid tickets, certificate trust errors,
 rejected submissions and all unknown failures remain failures. Exhaustion retains

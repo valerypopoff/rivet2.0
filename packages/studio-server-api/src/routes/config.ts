@@ -50,9 +50,11 @@ configRouter.get('/config', (req, res) => {
       : {}),
     hostedMode: true,
     executorWsUrl: executorUrlOverrides.executorWsUrl || `${publicWsOrigin}/ws/executor/internal`,
+    executorWsUrlIsOverride: Boolean(executorUrlOverrides.executorWsUrl),
     remoteDebuggerDefaultWs: isLatestWorkflowRemoteDebuggerEnabled()
       ? executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`
       : '',
+    remoteDebuggerDefaultWsIsOverride: Boolean(executorUrlOverrides.remoteDebuggerDefaultWs),
     apiBaseUrl: '/api',
     publishedWorkflowsBasePath: getPublishedWorkflowsBasePath(),
     latestWorkflowsBasePath: getLatestWorkflowsBasePath(),

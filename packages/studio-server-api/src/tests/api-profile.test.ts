@@ -655,12 +655,14 @@ test('control profile exposes control-plane routes and does not expose published
       assert.equal(configResponse.status, 200);
       const configPayload = (await configResponse.json()) as {
         executorWsUrl: string;
+        executorWsUrlIsOverride: boolean;
         publishedAppsBasePath: string;
         latestAppsBasePath: string;
         internalPublishedWorkflowsBaseUrl: string;
         internalLatestWorkflowsBaseUrl: string;
       };
       assert.equal(configPayload.executorWsUrl, 'wss://rivet.example.test/ws/executor/internal');
+      assert.equal(configPayload.executorWsUrlIsOverride, false);
       assert.equal(configPayload.publishedAppsBasePath, '/apps');
       assert.equal(configPayload.latestAppsBasePath, '/apps-latest');
       assert.equal(configPayload.internalPublishedWorkflowsBaseUrl, 'http://api/internal/workflows');
