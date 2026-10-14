@@ -152,6 +152,15 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
   });
   let holdPreview = false;
   let hideRootProject = false;
+  let holdRestartSummary = false;
+  let releaseRestartSummary!: () => void;
+  const restartSummaryGate = new Promise<void>((resolve) => {
+    releaseRestartSummary = resolve;
+  });
+  let receivedRestartSummary!: () => void;
+  const restartSummaryReceived = new Promise<void>((resolve) => {
+    receivedRestartSummary = resolve;
+  });
   try {
     const fixture = projectBundleFixture();
     await fs.writeFile(path.join(api.root, 'workflows', 'root.rivet-project'), fixture.root.projectContents);
@@ -172,65 +181,74 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
       loseRunResponse = true,
       loseRetryResponse = true,
       listUnavailable = false;
-    await page.route(
-      (url) => url.pathname.startsWith('/api/'),
-      async (route) => {
-        const url = new URL(route.request().url());
-        if (url.pathname === base || url.pathname.startsWith(base + '/')) {
-          if (listUnavailable && route.request().method() === 'GET')
-            return route.fulfill({ status: 503, json: { error: 'Fixture temporary outage' } });
-          const response = await route.fetch({
-            url: api.baseUrl + url.pathname + url.search,
-            headers: { ...route.request().headers(), ...headers },
-          });
-          if (url.pathname.endsWith('/preview') && holdPreview) await previewGate;
-          if (response.ok() && route.request().method() === 'POST' && url.pathname === base && loseCreateResponse) {
-            loseCreateResponse = false;
-            return route.abort('failed');
+    const installApiRoutes = async () => {
+      await page.route(
+        (url) => url.pathname.startsWith('/api/'),
+        async (route) => {
+          const url = new URL(route.request().url());
+          if (url.pathname === base || url.pathname.startsWith(base + '/')) {
+            if (listUnavailable && route.request().method() === 'GET')
+              return route.fulfill({ status: 503, json: { error: 'Fixture temporary outage' } });
+            const upstreamUrl = api.baseUrl + url.pathname + url.search;
+            if (holdRestartSummary && url.pathname === base + '/summary') {
+              holdRestartSummary = false;
+              receivedRestartSummary();
+              await restartSummaryGate;
+            }
+            const response = await route.fetch({
+              url: upstreamUrl,
+              headers: { ...route.request().headers(), ...headers },
+            });
+            if (url.pathname.endsWith('/preview') && holdPreview) await previewGate;
+            if (response.ok() && route.request().method() === 'POST' && url.pathname === base && loseCreateResponse) {
+              loseCreateResponse = false;
+              return route.abort('failed');
+            }
+            if (response.ok() && url.pathname.endsWith('/run') && loseRunResponse) {
+              loseRunResponse = false;
+              return route.abort('failed');
+            }
+            if (response.ok() && url.pathname.endsWith('/retry') && loseRetryResponse) {
+              loseRetryResponse = false;
+              return route.abort('failed');
+            }
+            return route.fulfill({ response });
           }
-          if (response.ok() && url.pathname.endsWith('/run') && loseRunResponse) {
-            loseRunResponse = false;
-            return route.abort('failed');
-          }
-          if (response.ok() && url.pathname.endsWith('/retry') && loseRetryResponse) {
-            loseRetryResponse = false;
-            return route.abort('failed');
-          }
-          return route.fulfill({ response });
-        }
-        if (url.pathname === '/api/workflows/tree')
-          return route.fulfill({
-            json: {
-              root: '/workflows',
-              folders: [],
-              projects: [
-                ...(hideRootProject ? [] : [project]),
-                {
-                  ...project,
-                  id: 'folder-project',
-                  projectMetadataId: 'folder-project-metadata',
-                  name: 'Scheduled fixture',
-                  relativePath: 'Useful/Nested/job.rivet-project',
-                },
-                {
-                  ...project,
-                  id: 'other-project',
-                  projectMetadataId: 'other-project-metadata',
-                  name: 'Other work',
-                  relativePath: 'Other/job.rivet-project',
-                },
-              ],
-              sync: { epoch: 'scheduled-fixture', revision: 0 },
-            },
-          });
-        if (url.pathname === '/api/app-settings/local-upgrade/status')
-          return route.fulfill({ json: { available: false } });
-        if (url.pathname === '/api/app-settings/local-upgrade/setup')
-          return route.fulfill({ json: { eligible: false } });
-        return route.fulfill({ status: 503, json: { error: 'No ambient fixture API allowed' } });
-      },
-    );
-    await mockHostedEditorBootstrap(page);
+          if (url.pathname === '/api/workflows/tree')
+            return route.fulfill({
+              json: {
+                root: '/workflows',
+                folders: [],
+                projects: [
+                  ...(hideRootProject ? [] : [project]),
+                  {
+                    ...project,
+                    id: 'folder-project',
+                    projectMetadataId: 'folder-project-metadata',
+                    name: 'Scheduled fixture',
+                    relativePath: 'Useful/Nested/job.rivet-project',
+                  },
+                  {
+                    ...project,
+                    id: 'other-project',
+                    projectMetadataId: 'other-project-metadata',
+                    name: 'Other work',
+                    relativePath: 'Other/job.rivet-project',
+                  },
+                ],
+                sync: { epoch: 'scheduled-fixture', revision: 0 },
+              },
+            });
+          if (url.pathname === '/api/app-settings/local-upgrade/status')
+            return route.fulfill({ json: { available: false } });
+          if (url.pathname === '/api/app-settings/local-upgrade/setup')
+            return route.fulfill({ json: { eligible: false } });
+          return route.fulfill({ status: 503, json: { error: 'No ambient fixture API allowed' } });
+        },
+      );
+      await mockHostedEditorBootstrap(page);
+    };
+    await installApiRoutes();
     await page.goto('/');
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
@@ -604,8 +622,20 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
           r.executionIdentity.correlationId === state.history[0]?.id,
       ),
     ).toBe(true);
+    holdRestartSummary = true;
     await modal.getByRole('button', { name: 'Close', exact: true }).click();
+    await withAsyncDeadline(restartSummaryReceived, 'summary poll before API restart');
+    // Stop dashboard timers, then settle every old-generation route before
+    // stopping its API. A poll started just before shutdown must not race it.
+    await page.goto('about:blank');
+    const routeDrain = page.unrouteAll({ behavior: 'wait' });
+    releaseRestartSummary();
+    await routeDrain;
     api = await api.restart();
+    await installApiRoutes();
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
     await page.getByRole('button', { name: 'Scheduled runs', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'Unpause', exact: true })).toBeVisible();
     expect((await read()).schedules).toHaveLength(1);
@@ -703,8 +733,19 @@ test('scheduled UI uses authenticated real API, survives lost acknowledgements a
     await page.screenshot({ path: test.info().outputPath('scheduled-runs.png') });
   } finally {
     releasePreview();
-    waiting.closeAllConnections();
-    await new Promise<void>((resolve, reject) => waiting.close((error) => (error ? reject(error) : resolve())));
-    await api.close();
+    releaseRestartSummary();
+    try {
+      if (!page.isClosed()) {
+        await page.goto('about:blank');
+        await page.unrouteAll({ behavior: 'wait' });
+      }
+    } finally {
+      try {
+        waiting.closeAllConnections();
+        await new Promise<void>((resolve, reject) => waiting.close((error) => (error ? reject(error) : resolve())));
+      } finally {
+        await api.close();
+      }
+    }
   }
 });

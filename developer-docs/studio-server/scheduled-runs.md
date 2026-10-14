@@ -314,6 +314,13 @@ uninvoked root/child recording is published.
 acknowledgements, retired-response races, definitive/uncertain HTTP errors and
 the client ledger's age/count limits with deterministic request fixtures.
 Also run affected first-start/copy/recording suites and both test-style guards.
+The browser fixture stops its dashboard timers by navigating to `about:blank`,
+then waits for pending route handlers before stopping its API on restart or final
+cleanup. Reinstall the isolated forwarding/bootstrap routes after restart. A
+controlled summary-request gate keeps an old-generation request pending during
+this transition, so regressions cannot depend on CI timing. Do not retry requests
+or suppress route errors to hide a fixture shutdown race; all existing mutation,
+recording and restart-persistence assertions remain required.
 Run checks that rebuild Core (including root `test:style`) before, not alongside,
 API/browser fixtures: replacing shared `dist` output during a fixture restart
 can produce a missing-module failure unrelated to the feature under test.
