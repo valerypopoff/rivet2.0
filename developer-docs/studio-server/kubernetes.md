@@ -1839,6 +1839,17 @@ Verified clients listed in `Settings` -> `General` -> `Trusted clients` bypass w
 
 If an ingress or gateway rewrites the upstream `Host` or terminates TLS before the Rivet proxy and the API must see the original public host/scheme, configure that ingress to strip any client-supplied `X-Forwarded-Host` / `X-Forwarded-Proto` headers and write its own trusted values, then set `env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "true"`. Leave it false for directly internet-facing proxies or untrusted ingress chains. The effective host/proto feed OAuth callback construction, same-origin web-app action checks, client trust, server UI cookie security, and `/api/config` browser URLs.
 
+Hosted browser Node executor and latest-debugger defaults are normalized to the
+editor page's current origin when `/api/config` marks them as automatic. Direct
+HTTPS ingress therefore keeps `wss` on the public hostname and port even if the
+TLS terminator exposes an HTTP/internal service origin upstream. Explicit saved
+WebSocket overrides keep their own authority, path and query. This browser-only
+normalization does not change the proxy's authenticated upgrade routes, pod
+services, internal workflow URLs, OAuth callback construction, cookie policy or
+forwarded-header trust. Keep the ingress trust configuration above correct for
+those other server-side policies; browser URL normalization is not a substitute.
+No new Helm value or environment variable is required for this behavior.
+
 If `fullnameOverride` is not set, replace `rivet-*` with the rendered object names from `kubectl get`.
 
 Common first-deploy failure patterns:

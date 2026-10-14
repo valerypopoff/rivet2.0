@@ -1432,7 +1432,7 @@ non-regular files fail closed. Local Tauri builds keep their ordinary frontend
 build hook. The Windows job produces MSI and
 NSIS installers; the macOS matrix produces, signs, notarizes, staples, and
 verifies separate Apple Silicon and Intel DMGs. The verifier requires exactly
-one DMG and one app bundle for each target before mounting it, requires the app
+one DMG before mounting it and exactly one app bundle inside it, requires the app
 executable and both bundled sidecars to be thin executables for the selected
 architecture with `lipo`, checks their signatures with `codesign`, starts the
 packaged Node executor, opens its local WebSocket, runs a minimal
@@ -1440,6 +1440,24 @@ Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
 `--version` command. The smoke graph uses an `any` Graph Output because the
 current Code node's whole-value output is intentionally an `any` DataValue; the
 assertion verifies both that type and the returned value.
+
+Notarization also requires exactly one DMG before signing or submitting anything;
+it must never pick an arbitrary first artifact that differs from verification's
+selection. Verification validates its target and artifact before allocating its
+temporary mountpoint, immediately registers cleanup, and preserves the original
+failure status. A failed detach leaves the mountpoint intact and fails an otherwise
+successful check; cleanup only removes an empty directory with `rmdir`, never
+recursively deletes mounted contents. Shell-level regression tests execute the
+real release scripts against isolated mock tools to cover command ordering,
+artifact ambiguity, validation/Gatekeeper failures and failed-detach safety.
+These six native POSIX-script contracts run on Linux/macOS; Windows runs the
+portable retry tests and explicitly skips the shell contracts because Git Bash
+fork behavior is not the release runtime. Verify the shell contracts from Windows
+in an isolated Linux container (no network or writable checkout is needed):
+
+```powershell
+docker run --rm --network none --mount "type=bind,source=$((Get-Location).Path),target=/repo,readonly" --workdir /repo node:22-bookworm node --test .github/scripts/staple-macos-dmg.test.mjs .github/scripts/build-macos-dmg.test.mjs .github/scripts/verify-macos-sidecars.test.mjs
+```
 
 The macOS matrix invokes [`.github/scripts/build-macos-dmg.mjs`](../.github/scripts/build-macos-dmg.mjs)
 because the Tauri v1 DMG helper can occasionally receive
@@ -1475,14 +1493,24 @@ DMG ticket retrieval has a separate, narrower retry boundary in
 Developer release run 38320930955 accepted the Intel DMG, then failed stapling
 with exit 68 and an Apple `NSURLErrorDomain` connection-loss error (-1005).
 The notarization script still signs and submits the DMG exactly once; only the
-subsequent ticket retrieval is retried against those same bytes. At most three
-stapler attempts run, separated by 5 and 15 seconds, with a two-minute timeout
-and bounded output per command. Retry requires both exit 68 and an explicit
+subsequent ticket retrieval is retried against those same bytes. Release run
+38545458841 exhausted the original three short attempts with the same -1005
+connection loss after acceptance. At most six stapler attempts now run, separated
+by 5, 15, 30, 60 and 120 seconds, with a two-minute timeout and bounded output per
+command (at most 15 minutes 50 seconds including all command timeouts). This
+extends only the ticket-retrieval recovery window, not signing or submission.
+Retry requires both exit 68 and an explicit
 Apple network timeout, connection failure/loss or offline error (-1001, -1004,
 -1005, -1009). Exit 68 alone, missing/invalid tickets, certificate trust errors,
 rejected submissions and all unknown failures remain failures. Exhaustion retains
-the final failure status. The following native signing/Gatekeeper/stapler validation
-step and publication prerequisites are unchanged; retry never skips verification
+the final failure status. Final verification's `stapler validate` can independently
+contact Apple and lose its connection even after successful stapling, signatures,
+sidecar checks and app Gatekeeper assessment. `verify-macos-dmg.sh` therefore uses
+the same helper with `--validate`, with the same six-attempt bound and classifier.
+Each retry remains validation-only: it does not staple, sign or submit again.
+Permanent validation errors and retry exhaustion still fail the step before the
+DMG Gatekeeper assessment and artifact publication. All native signature, sidecar,
+Gatekeeper and ticket checks remain mandatory; retry never skips verification
 or resubmits an uncertain notarization request. Behavioral regression tests are
 enrolled in `test:style`; actual ticket retrieval and final DMG acceptance still
 require the macOS release runners.

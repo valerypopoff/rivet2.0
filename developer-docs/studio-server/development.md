@@ -305,9 +305,40 @@ Verify the dashboard and editor paths with headless
 `yarn studio-server:ui:observe run-recordings-modal.spec.ts hosted-file-menu.spec.ts
 --grep "Any is first|shared Studio Server modal dimensions"`.
 
+## Hosted WebSocket origin ownership
+
+Automatic Node executor and latest-debugger URLs follow the browser's current
+host, port and scheme (`wss` on HTTPS, `ws` on HTTP). `/api/config` retains its
+absolute request-derived URLs for compatibility, with `executorWsUrlIsOverride`
+and `remoteDebuggerDefaultWsIsOverride` identifying saved overrides. Only an
+explicit `false` allows the hosted runtime-config normalizer to rebase an
+automatic URL onto the browser origin. Saved overrides and responses from older
+servers without these fields retain the existing same-host HTTPS upgrade policy;
+cross-host overrides are never silently rewritten. Empty debugger URLs remain
+disabled.
+
+This supports dev tunnels which rewrite `Host` to `localhost` or terminate TLS
+before the Rivet proxy. Do not enable trusted incoming forwarded headers merely
+to fix browser executor routing: those headers also affect authorization and
+OAuth URL construction, and remain a separate deployment trust decision. The
+browser normalization changes no API-side host/auth policy or websocket path.
+
+Verify with `hosted-runtime-config.test.ts`, API `app-settings.test.ts`, and
+headless `yarn studio-server:ui:observe hosted-executor-origin.spec.ts`.
+The browser fixture serves the real frontend at isolated origins and observes
+the upstream Node executor's actual websocket target. Its matrix covers direct
+HTTP with a custom port, direct Kubernetes HTTPS, Kubernetes TLS termination with
+an internal service host and a public HTTPS port, tunnel Host rewriting, explicit
+separate executor overrides (including path/query), and older server responses.
+It is enrolled in the production-bundle CI lane. API `api-profile.test.ts` verifies
+that control-plane config still preserves internal workflow URLs and requires
+authentication; Kubernetes/proxy contract tests and the read-only Helm
+lint/template verification protect the deployment boundaries. These checks do
+not deploy to a live cluster or replace full managed-release qualification.
+
 ## Shared modal sizing
 
-`packages/studio-server-web/modal-sizing.css` owns all Studio Server modal
+`packages/studio-server-web/modal-sizing.css` owns ordinary Studio Server modal
 dimensions, loaded by the dashboard stylesheet and the hosted editor stylesheet.
 Actual modal dialogs (`role="dialog"`, `aria-modal="true"`) use 960px width/max-width
 and 700px min-width; every dimension is capped to the owning viewport minus 32px
@@ -323,6 +354,13 @@ constraints in effect and can move the dialog off-center.
 Do not size arbitrary dialog parents: custom JSON/response-inspector modal
 backdrops must still fill the viewport. Responsive Run Activity drawers retain
 their own full-width drawer layout even when accessibility marks them modal.
+Edge-resizable fullscreen output also remains owned by `FullScreenModal`:
+the shared fixed-width and centering selectors exclude dialogs and positioners
+containing its existing `.fullscreen-modal-resize-handle` elements. Do not override
+their width, min/max width or left/right bounds with the 960px policy; doing so
+allows the pointer handlers to update saved state while leaving the visible shell
+stationary. The exemption follows the component's resize opt-in, not a node type
+or a hard-coded test ID, and does not affect ordinary dialogs or desktop styling.
 Hosted Settings and Project Settings navigation stacks above the content at
 editor viewport widths of 700px or less. This lives in `hosted-editor.css`,
 without changing standalone desktop styles or the shared outer dimensions.
@@ -335,6 +373,18 @@ and narrow viewports; embedded Settings/Project Settings retain their behavioral
 tests while checking the same contract and stacked narrow-screen settings layout.
 The CSS integration fixture also checks full-screen custom backdrops, outside-click
 dismissal and drawer exclusion. No Kubernetes rehearsal is needed.
+`fullscreen-output-search-paging.spec.ts` additionally drags both output-modal
+edges independently and checks retained bounds when switching from Text to Object
+output. It also checks the existing 360px minimum when resizing the owning viewport
+and full-width output below that minimum. `FullScreenModal` listens for viewport
+resize only while open and resizable; it normalizes displayed bounds without
+overwriting saved preferences, so widening the window restores the preferred size.
+Resize gestures accept only the primary pointer's main button and retain its
+pointer ID alongside the edge. Other pointers cannot move or settle that gesture.
+The browser regression covers ignored right-button drags, foreign-pointer moves
+and cancellation, lost capture, and closing/reopening during a drag, including
+restoration of the document's cursor and text-selection styles.
+It is enrolled in the same production-bundle CI browser lane.
 The small dashboard sizing scenario is also in the production-bundle CI browser
 lane, so the stylesheet must work without Vite development style injection.
 
@@ -390,6 +440,12 @@ directly when the ambient authenticated proxy is unavailable. No Kubernetes
 rehearsal is required for modal changes. Concurrency/clock correctness on managed
 storage also needs the real PostgreSQL integration check described in the feature
 document, rather than relying only on SQL mocks.
+The real-API browser fixture navigates to `about:blank` to stop dashboard polling
+and drains route handlers with `unrouteAll({ behavior: 'wait' })` before restarting
+or disposing its API. Restart reinstalls the isolated routes and bootstrap mocks
+before reopening the dashboard. A controlled summary-request gate exercises the
+old-generation request race; do not mask it with request retries or ignored route
+errors. Cleanup still closes both owned servers if browser-route draining fails.
 The standard web suite also includes `scheduled-run-api.test.ts` for malformed
 acknowledgements and overlapping retired-response races; the browser check verifies
 that accepted-action reconnection warnings disappear when the list recovers.

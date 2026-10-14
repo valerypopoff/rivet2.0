@@ -335,7 +335,9 @@ test('Executor URL override settings ignore environment values until saved', asy
       assert.equal(configResponse.status, 200);
       const config = await configResponse.json() as Record<string, unknown>;
       assert.equal(config.executorWsUrl, 'wss://derived.example.test/ws/executor/internal');
+      assert.equal(config.executorWsUrlIsOverride, false);
       assert.equal(config.remoteDebuggerDefaultWs, 'wss://derived.example.test/ws/latest-debugger');
+      assert.equal(config.remoteDebuggerDefaultWsIsOverride, false);
     } finally {
       await server?.close();
     }
@@ -394,7 +396,9 @@ test('Executor URL override settings API saves and config returns persisted over
       assert.equal(configResponse.status, 200);
       const config = await configResponse.json() as Record<string, unknown>;
       assert.equal(config.executorWsUrl, 'wss://override.example.test/ws/executor/internal');
+      assert.equal(config.executorWsUrlIsOverride, true);
       assert.equal(config.remoteDebuggerDefaultWs, 'wss://override.example.test/ws/latest-debugger');
+      assert.equal(config.remoteDebuggerDefaultWsIsOverride, true);
     } finally {
       await server?.close();
     }

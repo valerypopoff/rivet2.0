@@ -126,15 +126,27 @@ export const FullScreenModal: FC<FullScreenModalProps> = ({
   onHorizontalBoundsChange,
   testId,
 }) => {
-  const [activeResizeEdge, setActiveResizeEdge] = useState<HorizontalModalResizeEdge | null>(null);
+  const [activeResize, setActiveResize] = useState<{
+    edge: HorizontalModalResizeEdge;
+    pointerId: number;
+  } | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
   const isHorizontallyResizable = horizontalBounds != null && onHorizontalBoundsChange != null;
   const modalTestId = testId ?? (isHorizontallyResizable ? 'resizable-fullscreen-modal' : undefined);
+  useEffect(() => {
+    if (!isOpen || !isHorizontallyResizable) return;
+
+    const updateViewportWidth = () => setViewportWidth(getViewportWidth());
+    updateViewportWidth();
+    window.addEventListener('resize', updateViewportWidth);
+    return () => window.removeEventListener('resize', updateViewportWidth);
+  }, [isOpen, isHorizontallyResizable]);
   const normalizedHorizontalBounds = useMemo(
-    () => (horizontalBounds ? normalizeHorizontalModalBounds(horizontalBounds, getViewportWidth()) : undefined),
-    [horizontalBounds],
+    () => (horizontalBounds ? normalizeHorizontalModalBounds(horizontalBounds, viewportWidth) : undefined),
+    [horizontalBounds, viewportWidth],
   );
   useEffect(() => {
-    if (activeResizeEdge == null || typeof document === 'undefined') {
+    if (activeResize == null || typeof document === 'undefined') {
       return;
     }
 
@@ -147,17 +159,24 @@ export const FullScreenModal: FC<FullScreenModalProps> = ({
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
     };
-  }, [activeResizeEdge]);
+  }, [activeResize]);
 
   const handleResizePointerDown = (edge: HorizontalModalResizeEdge) => (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !event.isPrimary || activeResize != null) return;
+
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    setActiveResizeEdge(edge);
+    setActiveResize({ edge, pointerId: event.pointerId });
   };
 
   const handleResizePointerMove = (edge: HorizontalModalResizeEdge) => (event: PointerEvent<HTMLDivElement>) => {
-    if (activeResizeEdge !== edge || !horizontalBounds || !onHorizontalBoundsChange) {
+    if (
+      activeResize?.edge !== edge ||
+      activeResize.pointerId !== event.pointerId ||
+      !horizontalBounds ||
+      !onHorizontalBoundsChange
+    ) {
       return;
     }
 
@@ -174,9 +193,11 @@ export const FullScreenModal: FC<FullScreenModalProps> = ({
   };
 
   const handleResizePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+    if (activeResize?.pointerId !== event.pointerId) return;
+
     event.preventDefault();
     event.stopPropagation();
-    setActiveResizeEdge(null);
+    setActiveResize(null);
   };
 
   const resizeHandles =
@@ -186,7 +207,7 @@ export const FullScreenModal: FC<FullScreenModalProps> = ({
           aria-label="Resize fullscreen output modal from the left edge"
           aria-orientation="vertical"
           className={`fullscreen-modal-resize-handle fullscreen-modal-resize-handle-left${
-            activeResizeEdge === 'left' ? ' resizing' : ''
+            activeResize?.edge === 'left' ? ' resizing' : ''
           }`}
           onLostPointerCapture={handleResizePointerEnd}
           onPointerCancel={handleResizePointerEnd}
@@ -199,7 +220,7 @@ export const FullScreenModal: FC<FullScreenModalProps> = ({
           aria-label="Resize fullscreen output modal from the right edge"
           aria-orientation="vertical"
           className={`fullscreen-modal-resize-handle fullscreen-modal-resize-handle-right${
-            activeResizeEdge === 'right' ? ' resizing' : ''
+            activeResize?.edge === 'right' ? ' resizing' : ''
           }`}
           onLostPointerCapture={handleResizePointerEnd}
           onPointerCancel={handleResizePointerEnd}

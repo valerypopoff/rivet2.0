@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const retryDelaysMs = [5_000, 15_000];
+// Apple CloudKit connection loss can outlast the initial short retries even
+// after notarization is accepted. Keep a bounded recovery window for that same ticket.
+const retryDelaysMs = [5_000, 15_000, 30_000, 60_000, 120_000];
 
 // Exit 68 alone also covers permanent failures. Retry only an explicit Apple
 // network error, not an absent/invalid ticket, signing failure or rejected submission.
@@ -22,32 +24,40 @@ function runStapler(program, args) {
   });
 }
 
-/** Retry ticket retrieval against the same already-notarized DMG; never resubmit or rebuild it. */
-export async function stapleMacDmgWithRetries(
+/** Retry one stapler operation against the same DMG; never resubmit, rebuild or switch operations. */
+export async function runMacDmgStaplerWithRetries(
   dmgPath,
   {
+    action = 'staple',
     run = runStapler,
     wait = (ms) => new Promise((done) => setTimeout(done, ms)),
     warn = console.warn,
     write = (output) => process.stdout.write(output),
   } = {},
 ) {
+  if (action !== 'staple' && action !== 'validate') throw new Error(`Unsupported stapler action: ${action}`);
   for (let attempt = 0; ; attempt++) {
-    const result = await run('xcrun', ['stapler', 'staple', dmgPath]);
+    const result = await run('xcrun', ['stapler', action, dmgPath]);
     if (result.output) write(result.output);
     const delay = retryDelaysMs[attempt];
     if (!isTransientStaplerFailure(result) || delay === undefined) return result;
     warn(
-      `Apple ticket retrieval hit a transient network failure; retrying the same DMG in ${delay / 1000}s (attempt ${attempt + 2}/3).`,
+      `Apple ticket ${action} hit a transient network failure; retrying the same DMG in ${delay / 1000}s (attempt ${attempt + 2}/${retryDelaysMs.length + 1}).`,
     );
     await wait(delay);
   }
 }
 
+export function parseStaplerArgs(args) {
+  if (args.length === 1 && args[0] && !args[0].startsWith('--')) return { dmgPath: args[0], action: 'staple' };
+  if (args.length === 2 && args[0] === '--validate' && args[1] && !args[1].startsWith('--'))
+    return { dmgPath: args[1], action: 'validate' };
+  throw new Error('Usage: staple-macos-dmg.mjs [--validate] <already-notarized-dmg>');
+}
+
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.length !== 1 || !args[0]) throw new Error('Usage: staple-macos-dmg.mjs <already-notarized-dmg>');
-  const result = await stapleMacDmgWithRetries(args[0]);
+  const { dmgPath, action } = parseStaplerArgs(process.argv.slice(2));
+  const result = await runMacDmgStaplerWithRetries(dmgPath, { action });
   if (result.status !== 0) {
     if (result.error && !result.output) console.error(`Unable to run stapler: ${result.error.message}`);
     process.exitCode = Number.isInteger(result.status) && result.status > 0 && result.status <= 255 ? result.status : 1;
