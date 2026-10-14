@@ -94,11 +94,28 @@ type ManagedWorkflowObjectStorageConfig = Pick<
   | 'objectStorageSecretAccessKey'
 >;
 
+class StoredObjectHttpHandler extends NodeHttpHandler {
+  override handle(
+    request: Parameters<NodeHttpHandler['handle']>[0],
+    options?: Parameters<NodeHttpHandler['handle']>[1],
+  ): ReturnType<NodeHttpHandler['handle']> {
+    // The SDK serializes the operation in x-id. Other GETs (e.g. listings)
+    // return protocol XML, which must not opt into compressed responses.
+    if (request.method === 'GET' && request.query?.['x-id'] === 'GetObject') {
+      // Preserve stored bytes for size/hash verification before local decoding.
+      // Set this AFTER signing: GCS's frontend can append gzip(gfe), which
+      // invalidates signatures if Accept-Encoding is a signed header.
+      request.headers['accept-encoding'] = 'gzip';
+    }
+    return super.handle(request, options);
+  }
+}
+
 export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowObjectStorageConfig): S3ClientConfig {
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
-    requestHandler: new NodeHttpHandler(createManagedObjectStorageHttpHandlerOptions()),
+    requestHandler: new StoredObjectHttpHandler(createManagedObjectStorageHttpHandlerOptions()),
     credentials: {
       accessKeyId: config.objectStorageAccessKeyId,
       secretAccessKey: config.objectStorageSecretAccessKey,
@@ -195,7 +212,9 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
 
   async getText(key: string, options?: { signal?: AbortSignal }): Promise<string> {
     const bytes = await this.getBytes(key, options);
-    return decodeManagedArtifact(bytes, parseManagedArtifactDescriptor(key));
+    const text = await decodeManagedArtifact(bytes, parseManagedArtifactDescriptor(key));
+    options?.signal?.throwIfAborted();
+    return text;
   }
 
   async putArtifact(

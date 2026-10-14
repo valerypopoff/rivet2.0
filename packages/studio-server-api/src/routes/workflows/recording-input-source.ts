@@ -21,6 +21,8 @@ export type WorkflowRecordingInputSource =
       kind: 'artifact';
       bytes: Uint8Array;
       encoding: WorkflowRecordingBlobEncoding;
+      /** Authoritative decoded size when the storage format supplies one. */
+      decodedBytes?: number;
     };
 
 /**
@@ -52,9 +54,7 @@ export function extractWorkflowRecordingInputFromSourceWithTiming(source: Workfl
 } {
   const decodeStartedAt = performance.now();
   const serializedRecording =
-    source.kind === 'serialized'
-      ? source.serializedRecording
-      : decodeWorkflowRecordingArtifact(source.bytes, source.encoding);
+    source.kind === 'serialized' ? source.serializedRecording : decodeWorkflowRecordingArtifact(source);
   const decompressionMs = source.kind === 'serialized' ? 0 : performance.now() - decodeStartedAt;
   const parseStartedAt = performance.now();
   const input = extractWorkflowInputFromSerializedRecording(serializedRecording);
@@ -72,7 +72,16 @@ export function extractWorkflowRecordingInputFromSourceWithTiming(source: Workfl
   };
 }
 
-function decodeWorkflowRecordingArtifact(bytes: Uint8Array, encoding: WorkflowRecordingBlobEncoding): string {
+function decodeWorkflowRecordingArtifact(source: Extract<WorkflowRecordingInputSource, { kind: 'artifact' }>): string {
+  const { bytes, encoding, decodedBytes } = source;
+  if (decodedBytes !== undefined && (!Number.isSafeInteger(decodedBytes) || decodedBytes < 0))
+    throw new Error('Invalid recording artifact decoded size.');
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return (encoding === 'gzip' ? gunzipSync(buffer) : buffer).toString('utf8');
+  const decoded =
+    encoding === 'gzip'
+      ? gunzipSync(buffer, decodedBytes === undefined ? {} : { maxOutputLength: Math.max(1, decodedBytes) })
+      : buffer;
+  if (decodedBytes !== undefined && decoded.byteLength !== decodedBytes)
+    throw new Error('Recording artifact decoded size differs.');
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(decoded);
 }

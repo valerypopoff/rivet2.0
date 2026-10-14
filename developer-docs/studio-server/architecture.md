@@ -557,10 +557,70 @@ objects remain readable within that bound. Recording input-search workers receiv
 the descriptor's encoding. Payload uploads/reads have a five-minute absolute
 deadline in addition to transport timeouts. Reconciliation recognizes both key
 generations.
+
+Workflow object downloads request `Accept-Encoding: gzip` so S3-compatible
+providers return the original stored bytes, not a transcoded representation.
+Google Cloud Storage's XML API otherwise transparently expands objects uploaded
+with `Content-Encoding: gzip`, breaking stored-size/checksum verification and
+increasing download traffic. `StoredObjectHttpHandler` adds the negotiation header
+at the existing Node HTTP transport boundary **after** SDK authentication signing.
+It must remain unsigned: Google's frontend can append `gzip(gfe)` to that header.
+The SDK still signs all its normal authentication headers. This policy is confined
+to `GetObject` requests, identified by the pinned SDK's serialized `x-id` operation
+marker. Bucket listings must not negotiate gzip: their XML protocol responses
+are parsed directly by the SDK, not by the artifact decoder. Uploads, listings,
+HEADs and deletion requests are unchanged. Wire-level tests protect operation
+selection as well as signing when upgrading the SDK.
+The Node transport does not automatically decompress the response. Size/hash
+verification therefore precedes the existing bounded local decoding for playback,
+replay projects/datasets and recording-input extraction. Both restored and newly
+written recordings remain compressed at rest; no object rewrite, re-upload,
+database migration or repeat restore is needed. Identity and descriptor-free
+plain-text objects retain their existing read behavior. Runtime-library archives
+use a separate blob-store owner and do not set gzip content-encoding metadata;
+they are not changed by this fix.
+
+The managed input-search loader forwards the descriptor's `decodedBytes` along
+with encoded bytes to the extraction worker. Its gunzip operation enforces that
+bound and checks the exact decoded length before parsing; matching stored bytes
+alone cannot authorize a larger expansion. Artifact input extraction uses strict
+UTF-8 decoding (with legacy BOM handling preserved). Invalid text is an extraction
+failure, never a silently repaired input or cached non-match. Descriptor-free and
+third-party text-only sources retain their existing interface; no guessed size
+from catalog accounting is promoted to an integrity bound.
+
+Caller cancellation is checked again after local text decoding: a read canceled
+during asynchronous gunzip cannot return success. This does not interrupt a
+running bounded zlib job or add another worker/decoder owner.
+
+`managed-artifact-transport.test.ts` exercises actual signed SDK requests against
+an HTTP fixture that simulates GCS transcoding and frontend header modification.
+It is enrolled in the API test manifest.
+It reproduces the old failure, verifies signatures and exact stored bytes after
+the fix, and covers replay artifacts, identity/legacy reads, immutable-write
+verification, retries, corruption, truncation, chunked overflow and cancellation.
+The listing fixture gzip-encodes XML if requested, proving object negotiation does
+not break bucket listings. Cancellation waits for explicit body-arrival and socket
+closure signals rather than short polling deadlines; the test has an overall timeout.
+Compiled-worker regressions cover decoded-size mismatch/overflow, invalid UTF-8,
+empty gzip and recovery after failure. Managed service coverage verifies descriptor
+propagation without imposing encoded metadata on text-only providers.
+
+Real GCS verification must also compare
+descriptor size/hash and bounded decoding without logging payloads or credentials;
+MinIO alone does not reproduce Google's frontend behavior.
+
+See Google's [gzip transcoding contract](https://docs.cloud.google.com/storage/docs/transcoding)
+for the distinction between compressed storage and decompressed delivery.
+
 The managed async integration test validates descriptor-bearing keys with the
 shared artifact grammar and checks every SQL revision/recording reference against
-objects under the configured prefix. Logical filename assertions apply before the
-descriptor suffix, not to the end of the physical S3 key.
+objects under the configured prefix. It also retrieves each completed fixture run's
+recording and replay project through the authenticated HTTP routes used by the
+recordings modal and validates their decoded recording/project formats. An
+authenticated input search also matches each run's unique input through the
+managed encoded-byte/cache/worker path. Logical filename assertions apply before
+the descriptor suffix, not to the end of the physical S3 key.
 Precopy-aware migration stores forward descriptor uploads through the immutable
 boundary; legacy server-side text precopy remains only for descriptor-free writes.
 

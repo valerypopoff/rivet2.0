@@ -685,3 +685,42 @@ test('managed recording input cache keys are isolated by their storage owner', (
     getManagedRecordingInputCacheKey(secondStore, 'recordings/shared.json.gz'),
   );
 });
+
+test('invalid decoded-size and UTF-8 artifacts cannot populate the completed input cache', async () => {
+  const cache = new WorkflowRecordingInputCache();
+  const text = JSON.stringify({ recording: { events: [] } });
+  const invalidText = Buffer.concat([
+    Buffer.from('{"recording":{"events":[]},"unused":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}'),
+  ]);
+  const sources = [
+    {
+      kind: 'artifact' as const,
+      encoding: 'gzip' as const,
+      bytes: gzipSync(text),
+      decodedBytes: Buffer.byteLength(text) + 1,
+    },
+    { kind: 'artifact' as const, encoding: 'identity' as const, bytes: invalidText },
+  ];
+  for (const [index, source] of sources.entries()) {
+    let loads = 0;
+    const key = `invalid-input-${index}`;
+    const load = async () => {
+      loads++;
+      return source;
+    };
+    await assert.rejects(cache.getOrLoad(key, load));
+    await assert.rejects(cache.getOrLoad(key, load));
+    assert.equal(loads, 2);
+    assert.deepEqual(
+      await cache.getOrLoad(key, async () => ({
+        kind: 'artifact',
+        encoding: 'gzip',
+        bytes: gzipSync(text),
+        decodedBytes: Buffer.byteLength(text),
+      })),
+      { exists: false, value: undefined },
+    );
+  }
+});
