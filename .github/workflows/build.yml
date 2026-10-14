@@ -28,7 +28,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Compile workspace"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Build
         # The desktop frontend is a separate mandatory gate, not a prerequisite
         # for runtime tests that never consume its bundle.
@@ -85,7 +85,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Test ${{ matrix.label }}"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Download compiled dependencies
         uses: actions/download-artifact@v7
         with:
@@ -130,7 +130,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Test ${{ matrix.label }}"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Download compiled dependencies
         uses: actions/download-artifact@v7
         with:
@@ -156,7 +156,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Compile desktop frontend and CLI"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Download compiled dependencies
         uses: actions/download-artifact@v7
         with:
@@ -198,7 +198,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Lint ${{ matrix.label }}"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
 
       - name: Lint ${{ matrix.label }}
         run: yarn workspace ${{ matrix.workspace }} run lint
@@ -215,7 +215,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Static repository validation"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Verify fresh Yarn PnP dependency map
         run: yarn check:pnp:fresh
       - name: Docs typecheck
@@ -238,7 +238,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Audit JavaScript dependencies"
       - name: Install dependencies
-        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+        run: node scripts/ci/install-dependencies.mjs
       - name: Audit JavaScript dependencies
         run: yarn security:audit
       - name: Report timing

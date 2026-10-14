@@ -7,6 +7,125 @@ import { spawnSync } from 'node:child_process';
 import { desktopWebArtifact, verifyDesktopWebArtifact } from './desktop-web-artifact.mjs';
 import { nodeTestPrerequisites } from '../../packages/node/scripts/prepare-tests.mjs';
 import { assertImageDependencyLayout } from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
+import { installDependencies } from './install-dependencies.mjs';
+import { fileURLToPath } from 'node:url';
+
+test('CI install CLI preserves inherited environment, flags, live diagnostics and bounded exit behavior', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-install-'));
+  const launcher = fileURLToPath(new URL('./install-dependencies.mjs', import.meta.url));
+  try {
+    await fs.mkdir(path.join(root, '.yarn/releases'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, '.yarn/releases/yarn-4.17.1.cjs'),
+      `
+      const fs = require('node:fs');
+      require('node:assert/strict').deepEqual(process.argv.slice(2), ['install', '--immutable', '--immutable-cache']);
+      require('node:assert/strict').equal(process.env.RIVET_CI_INSTALL_FIXTURE, 'inherited');
+      const attempt = fs.existsSync('attempt') ? 2 : 1;
+      fs.writeFileSync('attempt', 'started');
+      console.log('fixture attempt ' + attempt);
+      if (process.env.FIXTURE_OUTCOME === 'recover' && attempt === 2) process.exit(0);
+      process.stdout.write('ERROR: Yarn is terminating due to an unexpected ');
+      setImmediate(() => {
+        console.log('empty event loop.');
+        process.exitCode = Number(process.env.FIXTURE_CODE);
+      });
+    `,
+    );
+    const env = { ...process.env, RIVET_CI_INSTALL_FIXTURE: 'inherited' };
+    delete env.NODE_TEST_CONTEXT;
+    for (const [outcome, code, expected] of [
+      ['recover', 42, 0],
+      ['repeat', 42, 42],
+      ['other', 1, 1],
+    ]) {
+      await fs.rm(path.join(root, 'attempt'), { force: true });
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: { ...env, FIXTURE_OUTCOME: outcome, FIXTURE_CODE: String(code) },
+      });
+      assert.equal(result.status, expected, result.stdout + result.stderr);
+      assert.match(result.stdout, /fixture attempt 1/);
+      assert.equal(result.stdout.includes('fixture attempt 2'), code === 42);
+      assert.equal(result.stderr.includes('Retrying the unchanged immutable install once'), code === 42);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('CI install retries only the exact Yarn incomplete-execution sentinel with unchanged checks', async () => {
+  const sentinel = {
+    code: 42,
+    signal: null,
+    output: 'ERROR: Yarn is terminating due to an unexpected empty event loop.',
+  };
+  for (const results of [
+    [sentinel, { code: 0, signal: null, output: 'Completed' }],
+    [sentinel, sentinel],
+    [sentinel, { code: 1, signal: null, output: 'YN0028: Lockfile would change' }],
+  ]) {
+    const calls = [];
+    const waits = [];
+    const logs = [];
+    const result = await installDependencies({
+      execute: async (args) => {
+        calls.push(args);
+        return results[calls.length - 1];
+      },
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+      log: (message) => {
+        logs.push(message);
+      },
+    });
+    assert.equal(result, results[1]);
+    assert.deepEqual(
+      calls,
+      Array(2).fill(['.yarn/releases/yarn-4.17.1.cjs', 'install', '--immutable', '--immutable-cache']),
+    );
+    assert.deepEqual(waits, [1000]);
+    assert.equal(logs.length, 1);
+  }
+});
+
+test('CI install fails immediately on validation, unknown exits, cancellation and spawn errors', async () => {
+  for (const result of [
+    { code: 0, signal: null, output: '' },
+    { code: 1, signal: null, output: 'YN0028: Lockfile would change' },
+    { code: 1, signal: null, output: 'YN0056: Cache entry required but missing' },
+    { code: 42, signal: null, output: 'Unrelated failure' },
+    { code: 1, signal: null, output: 'ERROR: Yarn is terminating due to an unexpected empty event loop.' },
+    { code: null, signal: 'SIGTERM', output: '' },
+    { code: 42, signal: 'SIGINT', output: 'ERROR: Yarn is terminating due to an unexpected empty event loop.' },
+  ]) {
+    let calls = 0;
+    assert.equal(
+      await installDependencies({
+        execute: async () => {
+          calls++;
+          return result;
+        },
+        wait: async () => {
+          assert.fail('Unexpected retry');
+        },
+      }),
+      result,
+    );
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(
+    installDependencies({
+      execute: async () => {
+        throw new Error('spawn failed');
+      },
+    }),
+    /spawn failed/,
+  );
+});
 
 test('image dependency layers require real inputs before installation and changing sources afterward', () => {
   const manifest = 'packages/fixture/package.json';

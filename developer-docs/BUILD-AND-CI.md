@@ -1014,6 +1014,18 @@ after checkout. The composite action installs Node `22.21.1` by default and
 restores only Yarn's generated `.yarn/install-state.gz` file with a key based
 on the OS, Node version, `yarn.lock`, and `.yarnrc.yml`.
 
+The Build workflow installs through `node scripts/ci/install-dependencies.mjs`.
+It runs the pinned Yarn binary with `--immutable --immutable-cache`, preserving
+the inherited environment and automatic pull-request hardened mode. Yarn 4.17.1
+can exit with its incomplete-execution sentinel (code 42 plus the exact
+"unexpected empty event loop" diagnostic) during hardened resolution, before
+tests start. Only that combination gets one retry after one second. Logs remain
+live; repeated sentinel failures, validation failures, unknown exits, spawn
+errors and cancellation still fail the job. No cache deletion, lockfile changes,
+disabled hardened mode or unconditional retry is involved. Regression coverage
+is enrolled in the existing `test:style` CI-performance suite. A successful retry
+is install recovery, not evidence that subsequent tests passed.
+
 The generated root PnP loader files (`.pnp.cjs` and `.pnp.loader.mjs`) are
 tracked source inputs, not cache outputs. Do not exclude them from clean-tree
 checks: if Yarn changes either file after dependency installation, commit the
