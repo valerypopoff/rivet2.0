@@ -853,7 +853,11 @@ try {
         await entered;
         process.env.RIVET_LOCAL_METADATA_BOOT_REVISION = String(revision + 1);
         release();
-        const failed = await waitFor((value) => value.preparation?.id === id && value.preparation.phase === 'failed');
+        // The durable result can be visible before the worker finishes cleanup.
+        // Keep its authority unchanged until ownership is released, just as the UI does.
+        const failed = await waitFor(
+          (value) => value.preparation?.id === id && value.preparation.phase === 'failed' && !value.operation,
+        );
         assert.equal(failed.preparation.fingerprint, undefined);
         if (kind === 'inspect') assert.equal(failed.preparation.inventory, undefined);
         assert.deepEqual(failed.maintenance, before.maintenance);

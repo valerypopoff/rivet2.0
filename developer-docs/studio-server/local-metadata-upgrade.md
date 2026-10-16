@@ -170,6 +170,12 @@ Unhandled storage-operator API failures, including inspection failures before a 
 liveness; `operator-service.ts` owns revision, authority and drain checks. Shared
 request/result types live in `studio-server-shared/local-upgrade-types.ts`; the
 progress record does not replace the transition journal or backup certificates.
+Publishing a terminal preparation record does not release its worker's admission
+ownership: durable-file cleanup may still be settling. The existing `operation`
+signal keeps UI actions locked until that owner exits. Runtime tests must wait
+for both the expected terminal phase and no active operation before changing
+authority or submitting a new request. A controlled cleanup regression verifies
+that another request still receives 409 while a failed result is already visible.
 
 The current dashboard starts source inspection, pause/drain, frozen fingerprint
 reads and backup preflight through authenticated, same-origin
