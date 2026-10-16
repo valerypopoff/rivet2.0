@@ -1,7 +1,69 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HaReleaseGate } from './kubernetes-ha-release-gate.mjs';
+import { HaReleaseGate, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
 import { parseAllDocuments } from 'yaml';
+import { fileURLToPath } from 'node:url';
+import {
+  createStudioServerReleaseManifest,
+  promoteStudioServerReleaseManifest,
+} from './lib/studio-server-release-manifest.mjs';
+
+const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+function certificationFixture(predecessorRelease = null) {
+  const images = Object.fromEntries(
+    ['proxy', 'web', 'api', 'executor'].map((key, index) => [
+      key,
+      { repository: `example.test/rivet/${key}`, digest: `sha256:${String(index + 1).repeat(64)}` },
+    ]),
+  );
+  const sourceSha = 'a'.repeat(40);
+  const manifest = createStudioServerReleaseManifest({
+    rootDir,
+    source: { repository: 'valerypopoff/rivet2.0', ref: 'refs/heads/main', sha: sourceSha },
+    images,
+    candidateEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+    predecessorRelease,
+  });
+  return { manifest, options: { rootDir, sourceSha, images, previous: predecessorRelease } };
+}
+
+test('HA certification accepts exact candidates without treating them as deployable releases', () => {
+  const { manifest, options } = certificationFixture();
+  assert.equal(validateHaCertificationManifest(manifest, options).mode, 'bootstrap');
+  const reordered = Object.fromEntries(Object.entries(options.images).reverse());
+  assert.equal(validateHaCertificationManifest(manifest, { ...options, images: reordered }).mode, 'bootstrap');
+  const promoted = promoteStudioServerReleaseManifest(manifest, {
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  assert.throws(() => validateHaCertificationManifest(promoted, options), /requires a candidate/);
+});
+
+test('HA candidate preflight preserves source, chart, image and exact predecessor checks', () => {
+  const { manifest, options } = certificationFixture();
+  assert.throws(
+    () => validateHaCertificationManifest(manifest, { ...options, sourceSha: 'b'.repeat(40) }),
+    /current checkout/,
+  );
+  assert.throws(
+    () => validateHaCertificationManifest({
+      ...manifest, chart: { ...manifest.chart, contentDigest: `sha256:${'f'.repeat(64)}` },
+    }, options),
+    /current Helm chart/,
+  );
+  assert.throws(
+    () => validateHaCertificationManifest(manifest, {
+      ...options,
+      images: { ...options.images, api: { ...options.images.api, digest: `sha256:${'f'.repeat(64)}` } },
+    }),
+    /HA images must match/,
+  );
+  const previous = promoteStudioServerReleaseManifest(manifest, {
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  const next = certificationFixture(previous);
+  assert.equal(validateHaCertificationManifest(next.manifest, next.options).mode, 'bootstrap');
+  assert.throws(() => validateHaCertificationManifest(next.manifest, { ...next.options, previous: null }), /predecessor/);
+});
 
 test('disposable PostgreSQL really provides the HA fixture connection budget', async () => {
   const gate = new HaReleaseGate({ namespace: 'fixture' }, 'unused', 'unused');

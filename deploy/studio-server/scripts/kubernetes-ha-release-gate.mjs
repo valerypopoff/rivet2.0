@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
 import { ManagedReleaseGate, runManagedGateCommand as run } from './kubernetes-managed-release-gate.mjs';
 import {
@@ -23,6 +24,19 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
 const overlay = path.join(chart, 'overlays/managed-release-gate.yaml');
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Certification validates an unpromoted candidate before any fixture mutation.
+ * Deployment callers keep the identity helpers' promoted-only default. */
+export function validateHaCertificationManifest(manifest, { rootDir, sourceSha, images, previous = null }) {
+  const candidate = assertStudioServerReleaseManifest(manifest);
+  if (candidate.state !== 'candidate') throw Error('HA certification requires a candidate release manifest.');
+  assertReleaseManifestMatchesCurrentSource(candidate, sourceSha, { requirePromoted: false });
+  assertReleaseManifestMatchesCurrentChart(candidate, rootDir, { requirePromoted: false });
+  if (!isDeepStrictEqual(candidate.images, images)) throw Error('HA images must match the candidate manifest');
+  assertStudioServerReleasePredecessor(candidate, previous);
+  const mode = previous?.evidence?.ha && !isDeepStrictEqual(previous.images, candidate.images) ? 'mixed' : 'bootstrap';
+  return { candidate, mode };
+}
 
 /** Extends the real managed release fixture; never creates a second importer,
  * storage fixture or public execution engine. */
@@ -356,26 +370,21 @@ async function main() {
       await verifyHaReleaseRecovery(gate, baseUrl, rootDir);
       await gate.capture('ha-recovery-completed');
     } else if (process.argv[2] === 'certify') {
-      const candidate = assertStudioServerReleaseManifest(
-        JSON.parse(await fs.readFile(process.env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8')),
-      );
+      const manifest = JSON.parse(await fs.readFile(process.env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8'));
       const sha = (await run('git', ['rev-parse', 'HEAD'], { capture: true })).stdout.trim();
       await run('git', ['diff', '--quiet', 'HEAD', '--']);
-      assertReleaseManifestMatchesCurrentSource(candidate, sha);
-      assertReleaseManifestMatchesCurrentChart(candidate, rootDir);
-      if (JSON.stringify(candidate.images) !== JSON.stringify(config.images))
-        throw Error('HA images must match the candidate manifest');
       const previous = process.env.RIVET_HA_PREDECESSOR_MANIFEST
         ? assertStudioServerReleaseManifest(
             JSON.parse(await fs.readFile(process.env.RIVET_HA_PREDECESSOR_MANIFEST, 'utf8')),
             { requirePromoted: true },
           )
         : null;
-      assertStudioServerReleasePredecessor(candidate, previous);
-      const mode =
-        previous?.evidence?.ha && JSON.stringify(previous.images) !== JSON.stringify(candidate.images)
-          ? 'mixed'
-          : 'bootstrap';
+      const { candidate, mode } = validateHaCertificationManifest(manifest, {
+        rootDir,
+        sourceSha: sha,
+        images: config.images,
+        previous,
+      });
       const prepared = await gate.prepare(mode === 'mixed' ? previous.images : candidate.images);
       const report = await gate.roll(prepared.baseUrl);
       report.recovery = await verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir);

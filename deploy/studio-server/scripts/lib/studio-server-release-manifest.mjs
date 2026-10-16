@@ -327,8 +327,8 @@ export function assertStudioServerReleasePredecessor(candidateManifest, currentP
   return candidate;
 }
 
-export function assertReleaseManifestMatchesCurrentChart(manifest, rootDir) {
-  const release = assertStudioServerReleaseManifest(manifest, { requirePromoted: true });
+export function assertReleaseManifestMatchesCurrentChart(manifest, rootDir, { requirePromoted = true } = {}) {
+  const release = assertStudioServerReleaseManifest(manifest, { requirePromoted });
   const currentChart = readHelmChartIdentity(rootDir);
   if (
     release.chart.name !== currentChart.name ||
@@ -348,8 +348,8 @@ export function assertReleaseManifestMatchesCurrentChart(manifest, rootDir) {
  * resolves the checkout identity because this module deliberately has no Git
  * process dependency.
  */
-export function assertReleaseManifestMatchesCurrentSource(manifest, currentSourceSha) {
-  const release = assertStudioServerReleaseManifest(manifest, { requirePromoted: true });
+export function assertReleaseManifestMatchesCurrentSource(manifest, currentSourceSha, { requirePromoted = true } = {}) {
+  const release = assertStudioServerReleaseManifest(manifest, { requirePromoted });
   const checkoutSha = requiredString(currentSourceSha, 'current source SHA').toLowerCase();
   if (!sourceShaPattern.test(checkoutSha)) {
     throw new Error('[studio-server-release-manifest] current source SHA must be a 40-character Git commit');
