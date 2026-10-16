@@ -593,7 +593,7 @@ jobs:
               --reference "${IMAGE_NAMESPACE}/release-manifest:manifest-${digest#sha256:}" \
               --output "$RIVET_HA_PREDECESSOR_MANIFEST"
           fi
-          node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify
+          yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify
 
       - name: Upload HA Release Evidence
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4

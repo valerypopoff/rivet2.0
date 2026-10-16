@@ -82,6 +82,53 @@ test('preparation admission is bounded, exclusive, replayable and retained acros
   }
 });
 
+test('a visible failed preparation retains admission ownership until cleanup settles', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-cleanup-'));
+  const jobs = new LocalUpgradePreparationJobs(root);
+  let release!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const cleaning = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let hold = false;
+  const rm = fs.rm;
+  const mock = t.mock.method(fs, 'rm', async (...args: Parameters<typeof fs.rm>) => {
+    if (hold && path.dirname(String(args[0])) === root && path.basename(String(args[0])).endsWith('.tmp')) {
+      entered();
+      await cleanup;
+    }
+    return rm(...args);
+  });
+  const input = { id: randomUUID(), kind: 'inspect' as const, revision: 1 };
+  try {
+    await jobs.start(input, async () => {
+      hold = true;
+      throw new Error('fixture failure');
+    });
+    await cleaning;
+    assert.equal((await jobs.status())?.phase, 'failed');
+    assert.equal(jobs.running, true);
+    assert.equal(jobs.stage, 'inspect');
+    await assert.rejects(jobs.start({ ...input, id: randomUUID() }, async () => {}), /already running/);
+    hold = false;
+    release();
+    await jobs.settled();
+    assert.equal(jobs.running, false);
+    assert.equal(jobs.stage, null);
+    await jobs.start({ ...input, id: randomUUID() }, async () => {});
+    await jobs.settled();
+    assert.equal((await jobs.status())?.phase, 'ready');
+  } finally {
+    release();
+    await jobs.settled();
+    mock.mock.restore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('preparation status rereads completion instead of reporting an interrupted worker', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preparation-status-'));
   const jobs = new LocalUpgradePreparationJobs(root);

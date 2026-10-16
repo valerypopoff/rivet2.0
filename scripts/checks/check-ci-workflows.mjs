@@ -643,6 +643,11 @@ assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, 'kind-rivet-managed-rele
 assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, 'kind-rivet-managed-release');
 assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
 assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs certify/);
+assert.match(
+  haGate.run,
+  /^\s*yarn node deploy\/studio-server\/scripts\/kubernetes-ha-release-gate\.mjs certify\s*$/m,
+  'The HA gate imports workspace dependencies and must run with Yarn PnP resolution, not bare node.',
+);
 assert.doesNotMatch(haGate.run, /:production|allow-missing/);
 assert.equal(
   findStep(

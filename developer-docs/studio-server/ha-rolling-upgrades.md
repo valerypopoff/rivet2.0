@@ -432,9 +432,12 @@ would merely terminate kubectl's chosen pod and incorrectly look like a serving
 outage. The edge has no release workload labels, stores no application data and
 is removed with its disposable namespace. Normal deployment charts are unchanged.
 
-CI runs `kubernetes-ha-release-gate.mjs certify` with
+CI runs `yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
 `RIVET_HA_CANDIDATE_MANIFEST` and, when lineage exists,
-`RIVET_HA_PREDECESSOR_MANIFEST`. The candidate must match the clean tracked
+`RIVET_HA_PREDECESSOR_MANIFEST`. The Yarn Node wrapper is required for Plug'n'Play dependencies such as
+`yaml`; bare `node` fails before certification starts. CI policy checks enforce
+the wrapper, while the offline Kubernetes lane imports and tests the real gate.
+The candidate must match the clean tracked
 checkout, chart and exact configured image set before cluster mutation. Bootstrap
 uses a same-image template revision change to exercise retirement but cannot
 authorize a mixed-source rollout. The report producer verifies real readiness

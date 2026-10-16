@@ -853,7 +853,11 @@ try {
         await entered;
         process.env.RIVET_LOCAL_METADATA_BOOT_REVISION = String(revision + 1);
         release();
-        const failed = await waitFor((value) => value.preparation?.id === id && value.preparation.phase === 'failed');
+        // The durable result can be visible before the worker finishes cleanup.
+        // Keep its authority unchanged until ownership is released, just as the UI does.
+        const failed = await waitFor(
+          (value) => value.preparation?.id === id && value.preparation.phase === 'failed' && !value.operation,
+        );
         assert.equal(failed.preparation.fingerprint, undefined);
         if (kind === 'inspect') assert.equal(failed.preparation.inventory, undefined);
         assert.deepEqual(failed.maintenance, before.maintenance);
@@ -878,7 +882,7 @@ try {
       assert.equal((await request(input)).status, 202);
       assert.equal((await request({ ...input, id: randomUUID(), kind: 'pause' })).status, 409);
       release();
-      const ready = await waitFor((value) => value.preparation?.phase === 'ready');
+      const ready = await waitFor((value) => value.preparation?.phase === 'ready' && !value.operation);
       assert.ok(ready.preparation.inventory.capacity.fits);
       assert.equal(ready.maintenance, null);
       assert.equal((await request(input)).status, 202);
@@ -891,7 +895,7 @@ try {
         const refusedId = randomUUID();
         assert.equal((await request({ id: refusedId, kind: 'pause-backup', revision: input.revision })).status, 202);
         const refused = await waitFor(
-          (value) => value.preparation?.id === refusedId && value.preparation.phase === 'failed',
+          (value) => value.preparation?.id === refusedId && value.preparation.phase === 'failed' && !value.operation,
         );
         assert.equal(refused.preparation.inventory.capacity.fits, false);
         assert.equal(refused.maintenance, null, 'capacity refusal must precede pausing any writes');
@@ -928,7 +932,7 @@ try {
       await rejectStaleRead('fingerprint', input.revision);
       assert.equal((await request({ id: randomUUID(), kind: 'fingerprint', revision: input.revision })).status, 202);
       const fingerprint = await waitFor(
-        (value) => value.preparation.kind === 'fingerprint' && value.preparation.phase === 'ready',
+        (value) => value.preparation.kind === 'fingerprint' && value.preparation.phase === 'ready' && !value.operation,
       );
       assert.equal(fingerprint.preparation.fingerprint.pausedAt, fingerprint.maintenance.enteredAt);
       assert.equal(fingerprint.preparation.fingerprint.sourceFingerprint, backedUp.backup.sourceFingerprint);
