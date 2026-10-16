@@ -195,6 +195,10 @@ jobs:
           path: packages
       - name: Verify restored compiled workspace dependencies
         run: yarn check:compiled-workspace-exports
+      # The executor subprocess consumes compiled Core/Node exports restored above.
+      # Keep this runtime regression out of the source-only repository-contract job.
+      - name: Verify accepted executor retirement
+        run: yarn studio-server:verify:executor-retirement
       - name: Install Playwright Chromium
         run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
       - name: Run hosted editor regressions

@@ -109,9 +109,13 @@ instead of knowing Rivet's internal workspace order:
 These scripts intentionally do not build docs, tests, the desktop app, or the
 CLI unless that package is part of the named target.
 
-The production-cutover verification lane also runs the pod-local backend
-retirement coordinator, supervisor subprocess regressions and the real editor
-executor retirement test. The Node debugger lane tests admission racing async
+The source-only production-cutover verification lane runs the pod-local backend
+retirement coordinator and supervisor subprocess regressions. The build-backed
+Studio Server editor lane runs `studio-server:verify:executor-retirement` only
+after restoring and verifying same-commit Core/Node exports. The root server test
+command also runs it after the build. This real subprocess test must not run in
+the lightweight repository-contract lane, where compiled exports do not exist.
+The Node debugger lane tests admission racing async
 authorization and preserves authorization on accepted sockets while retiring.
 These tests do not deploy or restart a Kubernetes installation; a passing local
 retirement test is not a mixed-version zero-downtime upgrade certificate. See

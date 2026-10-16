@@ -285,6 +285,37 @@ assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
+const executorRetirement = findStep(
+  studioJobs['editor-regression'],
+  'Verify accepted executor retirement',
+  'Editor regressions',
+);
+const serverScripts = JSON.parse(read('package.json')).scripts;
+assert.equal(
+  serverScripts['studio-server:verify:executor-retirement'],
+  'tsx --test packages/app-executor/bin/executor.retirement.test.mts',
+);
+assert.doesNotMatch(
+  serverScripts['studio-server:verify:production-cutover'],
+  /executor\.retirement|verify:executor-retirement/,
+  'Source-only repository contracts must not import compiled runtime packages.',
+);
+assert.match(
+  serverScripts['studio-server:test'],
+  /studio-server:build && yarn studio-server:verify:executor-retirement/,
+);
+assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.ok(
+  studioJobs['editor-regression'].steps.indexOf(executorRetirement) >
+    studioJobs['editor-regression'].steps.indexOf(
+      findStep(
+        studioJobs['editor-regression'],
+        'Verify restored compiled workspace dependencies',
+        'Editor regressions',
+      ),
+    ),
+  'Real executor retirement requires verified same-commit Core/Node builds, not source-only contracts.',
+);
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);

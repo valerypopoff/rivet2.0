@@ -344,7 +344,8 @@ Additional protocol regressions live in `process-retirement.test.ts`,
 `backend-retirement.test.mjs`, `backend-supervisor.test.mjs`,
 `executor.retirement.test.mts`, `debugger.test.ts`, `legacy-restore.test.ts` and
 `project-bundle.test.ts`. The API manifest and production-cutover lane enroll the
-new explicit files. The real executor test holds asynchronous preparation, pauses
+new explicit files; real executor retirement runs in the build-backed editor lane
+after Core/Node artifacts are restored, not in source-only contracts. The real executor test holds asynchronous preparation, pauses
 an accepted graph, rejects another run, then supplies user input and resumes to
 the unchanged result before confirming drain. The supervisor subprocess test
 keeps accepted work alive beyond a deliberately short forced-shutdown grace.
