@@ -114,7 +114,7 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
   ];
   const profileArgs = singleMachineValuesPath
     ? ['-f', './deploy/studio-server/helm/overlays/single-machine.yaml', '-f', singleMachineValuesPath]
-    : [];
+    : ['-f', './deploy/studio-server/scripts/fixtures/kubernetes-environment.values.yaml'];
 
   await spawnProgram(helmBin, [
     'lint',
@@ -147,6 +147,9 @@ async function main() {
       '--test',
       'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
+      'deploy/studio-server/scripts/ha-release-evidence.test.mjs',
+      'deploy/studio-server/scripts/ha-release-gate.test.mjs',
+      'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',
       'deploy/studio-server/scripts/container-server.test.mjs',

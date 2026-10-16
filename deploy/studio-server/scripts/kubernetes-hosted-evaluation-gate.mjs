@@ -113,8 +113,8 @@ function readHostedEvaluationGateConfig(configFile) {
 }
 
 export function buildHostedEvaluationGateConfig({ rootDir: configuredRootDir, env = process.env } = {}) {
-  if (String(env.RIVET_K8S_EVALUATION_GATE_CONFIRM ?? '') !== 'disrupt-staging-evaluations') {
-    throw new Error('[' + runnerName + '] RIVET_K8S_EVALUATION_GATE_CONFIRM must equal disrupt-staging-evaluations');
+  if (String(env.RIVET_K8S_EVALUATION_GATE_CONFIRM ?? '') !== 'disrupt-staging-editor-backend') {
+    throw new Error('[' + runnerName + '] RIVET_K8S_EVALUATION_GATE_CONFIRM must equal disrupt-staging-editor-backend');
   }
   const provider = buildManagedProviderGateConfig({ rootDir: configuredRootDir, env });
   const hostedEvaluation = readHostedEvaluationGateConfig(provider.configFile);
@@ -265,6 +265,33 @@ export function createHostedEvaluationEvidence({
   };
 }
 
+/** The disruption gate is deliberately singleton-only; it must kill the shared
+ * editor owner, never select a published execution or HA maintenance pod. */
+export function sharedEvaluationWorkerPod(pods, release) {
+  if (pods.length !== 1) throw new Error('Shared Evaluation disruption requires exactly one backend replica.');
+  const pod = pods[0];
+  const labels = pod.metadata?.labels ?? {};
+  const backend = pod.spec?.containers?.find((container) => container.name === 'backend');
+  const env = new Map(backend?.env?.map((entry) => [entry.name, entry.value]));
+  if (
+    labels['app.kubernetes.io/instance'] !== release ||
+    labels['app.kubernetes.io/component'] !== 'backend' ||
+    !pod.metadata?.uid ||
+    !pod.metadata?.name ||
+    env.get('RIVET_API_PROFILE') !== 'control' ||
+    env.get('RIVET_HOSTED_EVALUATIONS_ENABLED') !== 'true' ||
+    env.get('RIVET_HA_MAINTENANCE') === '1'
+  )
+    throw new Error(
+      'Shared Evaluation disruption requires an identified editor backend with hosted Evaluations enabled.',
+    );
+  return { name: pod.metadata.name, uid: pod.metadata.uid };
+}
+
+export function isBackendRestartReadFailure(error) {
+  return [502, 503, 504].includes(error?.status) || error instanceof TypeError || error?.name === 'TimeoutError';
+}
+
 class HostedEvaluationGate {
   constructor(config, kubectlBin, helmBin) {
     this.config = config;
@@ -308,7 +335,9 @@ class HostedEvaluationGate {
   async requireSuccess(route, options) {
     const result = await this.request(route, options);
     if (result.status < 200 || result.status >= 300) {
-      throw new Error('[' + runnerName + '] control request failed with HTTP ' + result.status);
+      const error = new Error('[' + runnerName + '] control request failed with HTTP ' + result.status);
+      error.status = result.status;
+      throw error;
     }
     return result.value;
   }
@@ -326,9 +355,6 @@ class HostedEvaluationGate {
     if (!manifest.stdout.includes(imageReference(this.config.images.api))) {
       throw new Error('[' + runnerName + '] staging release does not use the configured immutable API digest');
     }
-    if (!/app\.kubernetes\.io\/component:\s*evaluation/u.test(manifest.stdout)) {
-      throw new Error('[' + runnerName + '] hostedEvaluations.enabled must be enabled in the staged release');
-    }
     const pods =
       parseJson(
         (
@@ -339,7 +365,7 @@ class HostedEvaluationGate {
               '-n',
               this.config.namespace,
               '-l',
-              'app.kubernetes.io/instance=' + this.config.release + ',app.kubernetes.io/component=evaluation',
+              'app.kubernetes.io/instance=' + this.config.release + ',app.kubernetes.io/component=backend',
               '-o',
               'json',
             ],
@@ -348,9 +374,7 @@ class HostedEvaluationGate {
         ).stdout,
         'evaluation pod list',
       ).items ?? [];
-    if (pods.length !== 1) {
-      throw new Error('[' + runnerName + '] disruption certificate requires exactly one evaluation worker replica');
-    }
+    sharedEvaluationWorkerPod(pods, this.config.release);
   }
 
   async submit(label, { trialDelayMs } = {}) {
@@ -384,10 +408,19 @@ class HostedEvaluationGate {
     }
   }
 
-  async waitFor(run, predicate, description) {
+  async waitFor(run, predicate, description, { allowBackendRestart = false } = {}) {
     const deadline = Date.now() + this.config.hostedEvaluation.waitSeconds * 1_000;
     while (Date.now() < deadline) {
-      const state = await this.state(run);
+      let state;
+      try {
+        state = await this.state(run);
+      } catch (error) {
+        // Only the read after deliberate backend loss may await its replacement.
+        // Never retry submissions, cancellation or retry-interrupted writes.
+        if (!allowBackendRestart || !isBackendRestartReadFailure(error)) throw error;
+        await sleep(1_000);
+        continue;
+      }
       if (predicate(state)) return state;
       await sleep(1_000);
     }
@@ -405,7 +438,7 @@ class HostedEvaluationGate {
               '-n',
               this.config.namespace,
               '-l',
-              'app.kubernetes.io/instance=' + this.config.release + ',app.kubernetes.io/component=evaluation',
+              'app.kubernetes.io/instance=' + this.config.release + ',app.kubernetes.io/component=backend',
               '-o',
               'json',
             ],
@@ -414,25 +447,24 @@ class HostedEvaluationGate {
         ).stdout,
         'evaluation pod list',
       ).items ?? [];
-    const podName = pods[0]?.metadata?.name;
-    if (typeof podName !== 'string' || !podName)
-      throw new Error('[' + runnerName + '] evaluation worker pod disappeared before disruption');
+    const worker = sharedEvaluationWorkerPod(pods, this.config.release);
     // A regular deletion can honor the pod grace period long enough for the
     // deliberately slow certificate trial to settle successfully. This runner
     // is already protected, requires exactly one Evaluation worker, and owns
     // only generated runs, so force the one selected worker loss we intend to
     // certify. The durable lease/fencing contract must then record
     // interruption rather than allowing an accidental successful completion.
-    await this.kubectl([
-      'delete',
-      'pod',
-      podName,
-      '-n',
-      this.config.namespace,
-      '--wait=false',
-      '--grace-period=0',
-      '--force',
-    ]);
+    await this.kubectl(
+      ['delete', '--raw', `/api/v1/namespaces/${this.config.namespace}/pods/${worker.name}`, '-f', '-'],
+      {
+        input: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'DeleteOptions',
+          gracePeriodSeconds: 0,
+          preconditions: { uid: worker.uid },
+        }),
+      },
+    );
   }
 
   async publicProbe() {
@@ -571,6 +603,7 @@ async function main() {
       interrupted,
       (state) => state.status === 'interrupted',
       'accepted worker interruption',
+      { allowBackendRestart: true },
     );
     const interruptedJobIds = interruptedState.jobs
       .filter((job) => job.status === 'interrupted')

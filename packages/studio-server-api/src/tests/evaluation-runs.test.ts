@@ -28,6 +28,7 @@ import {
   type RivetStudioEvaluationStore,
 } from "../evaluation-runs/store.js";
 import { PostgresRivetEvaluationStore } from "../evaluation-runs/managed-store.js";
+import { EVALUATION_LIBRARY_INVALIDATION_CHANNEL, evaluationLibrarySourceInstanceId } from '../evaluation-runs/library-invalidation.js';
 import {
   evaluationRecordingSchema,
   evaluationRunSchema,
@@ -2099,6 +2100,13 @@ class FakeManagedEvaluationPool {
     if (normalized.startsWith("select pg_advisory_xact_lock")) {
       return { rows: [], rowCount: 1 };
     }
+    if (normalized === 'select pg_notify($1, $2)') {
+      assert.equal(values[0], EVALUATION_LIBRARY_INVALIDATION_CHANNEL);
+      const event = JSON.parse(String(values[1]));
+      assert.equal(event.sourceInstanceId, evaluationLibrarySourceInstanceId);
+      assert.equal(event.revision, this.library?.revision);
+      return { rows: [], rowCount: 1 };
+    }
     if (normalized.startsWith('select status from evaluation_hosted_trial_jobs')) {
       const rows = (this.jobStatuses.get(this.key(values[0], values[1])) ?? []).map((status) => ({ status }));
       return { rows: rows as T[], rowCount: rows.length };
@@ -2270,6 +2278,17 @@ class FakeManagedEvaluationPool {
     };
   }
 }
+
+test('managed library invalidation is issued after mutation but before the transaction commits', async () => {
+  const pool = new FakeManagedEvaluationPool();
+  const store = new PostgresRivetEvaluationStore(pool as unknown as Pool);
+  await store.putLibrary(library());
+  const commands = pool.queries.map(q => q.trim().replace(/\s+/g, ' ').toLowerCase());
+  const write = commands.findIndex(q => q.startsWith('insert into evaluation_library'));
+  const notify = commands.indexOf('select pg_notify($1, $2)');
+  const commit = commands.indexOf('commit');
+  assert.ok(write >= 0 && write < notify && notify < commit);
+});
 
 test('generic managed Evaluation deletion protects scheduler-owned jobs and preserves neighboring runs', async () => {
   const pool = new FakeManagedEvaluationPool();

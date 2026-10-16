@@ -15,6 +15,102 @@ import { awaitPreparation } from '../scheduled-runs/cancellation.js';
 import { assertLocalOperationalSchema } from '../local-metadata/operational-schema.js';
 
 const initial = Date.parse('2026-01-01T00:00:00Z');
+
+test('scheduled-run retirement lets accepted work finish without claiming another run or closing its store', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-drain-'));
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let executions = 0;
+  let runSignal: AbortSignal | undefined;
+  const service = new ScheduledRunService(store, async (job, owner, signal) => {
+    executions++;
+    runSignal = signal;
+    assert.equal(await store.accept(job.occurrence.id, owner, { graphId: 'g' }), true);
+    await pending;
+    return { status: 'succeeded' };
+  });
+  t.after(async () => {
+    finish();
+    await service.stop(1000);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const schedule = await store.save(draft({ enabled: false }));
+  await store.runNow(schedule.id, schedule.revision);
+  await service.tick();
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = await store.save(draft({ enabled: false, projectId: 'project-b' }));
+  const queued = await store.runNow(second.id, second.revision);
+  let drained = false;
+  const drain = service.drainAcceptedWork().then(() => {
+    drained = true;
+  });
+  service.beginDrain();
+  await service.tick();
+  assert.equal(executions, 1);
+  assert.equal(runSignal?.aborted, false);
+  assert.equal(drained, false);
+  assert.equal((await store.list()).history.find((r) => r.id === queued.id)?.status, 'queued');
+  finish();
+  await drain;
+  assert.equal(runSignal?.aborted, false);
+  assert.equal(
+    (await store.list()).history.some((r) => r.status === 'succeeded'),
+    true,
+  );
+  await service.tick();
+  assert.equal(executions, 1);
+});
+
+test('scheduled retirement includes a claim acknowledged after the retirement request', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-claim-drain-'));
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);
+  const claim = store.tick.bind(store);
+  let releaseClaim!: () => void;
+  let releaseRun!: () => void;
+  const claimGate = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  const runGate = new Promise<void>((resolve) => {
+    releaseRun = resolve;
+  });
+  store.tick = async (...args) => {
+    await claimGate;
+    return claim(...args);
+  };
+  let calls = 0;
+  const service = new ScheduledRunService(store, async (job, owner, signal) => {
+    calls++;
+    assert.equal(signal.aborted, false);
+    await store.accept(job.occurrence.id, owner, { graphId: 'g' });
+    await runGate;
+    assert.equal(signal.aborted, false);
+    return { status: 'succeeded' };
+  });
+  t.after(async () => {
+    releaseClaim();
+    releaseRun();
+    await service.stop(1000);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const schedule = await store.save(draft({ enabled: false }));
+  await store.runNow(schedule.id, schedule.revision);
+  const polling = service.tick();
+  let drained = false;
+  const drain = service.drainAcceptedWork().then(() => {
+    drained = true;
+  });
+  assert.equal(drained, false);
+  releaseClaim();
+  await polling;
+  assert.equal(calls, 1);
+  assert.equal(drained, false);
+  releaseRun();
+  await drain;
+  assert.equal((await store.list()).history[0]?.status, 'succeeded');
+});
 test('the original three-table scheduler upgrades atomically without changing its schedules, history or binding', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-schema-'));
   const file = path.join(root, 's.sqlite');
@@ -333,7 +429,8 @@ test('request acknowledgements survive restart, completion and deletion without 
   assert.equal(a.id, b.id);
   const job = (await store.tick('worker'))!;
   await store.accept(job.occurrence.id, 'worker', { graphId: 'g' });
-  await store.finish(job.occurrence.id, 'worker', { status: 'failed' });
+  assert.equal(await store.finish(job.occurrence.id, 'worker', { status: 'failed' }), true);
+  assert.equal(await store.finish(job.occurrence.id, 'worker', { status: 'succeeded' }), false);
   const retry = await store.retry(a.id, retryKey);
   await store.cancel(retry.id);
   assert.equal((await store.retry(a.id, retryKey)).id, retry.id);
@@ -737,4 +834,69 @@ test('outcome commit failure cannot relabel successful execution or cause an aut
   await service.tick();
   assert.equal((await store.list()).history[0]?.status, 'interrupted');
   assert.equal(executions, 1);
+  await assert.rejects(service.drainAcceptedWork(), /persistence is unconfirmed/);
+});
+
+test('scheduled retirement retains the store and activity through an outstanding terminal heartbeat', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-retire-heartbeat-'));
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);
+  let finishRun!: () => void, finishHeartbeat!: (valid: boolean) => void;
+  const run = new Promise<void>((resolve) => {
+    finishRun = resolve;
+  });
+  const heartbeat = new Promise<boolean>((resolve) => {
+    finishHeartbeat = resolve;
+  });
+  const service = new ScheduledRunService(store, async () => {
+    await run;
+    return { status: 'succeeded' };
+  });
+  t.mock.method(store, 'heartbeat', () => heartbeat);
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const schedule = await store.save(draft({ enabled: false }));
+    await store.runNow(schedule.id, schedule.revision);
+    await service.tick();
+    t.mock.timers.tick(5000);
+    let drained = false;
+    const drain = service.drainAcceptedWork().then(() => {
+      drained = true;
+    });
+    finishRun();
+    while ((await store.list()).history[0]?.status !== 'succeeded')
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(drained, false);
+    assert.equal(service.activeCount, 1);
+    finishHeartbeat(true);
+    await drain;
+    assert.equal(service.activeCount, 0);
+  } finally {
+    finishRun();
+    finishHeartbeat(true);
+    await service.stop(0);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a lost scheduled ownership acknowledgement cannot report a successfully drained owner', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-retire-ownership-'));
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);
+  let executed = 0;
+  t.mock.method(store, 'finish', async () => false);
+  const service = new ScheduledRunService(store, async () => {
+    executed++;
+    return { status: 'succeeded' };
+  });
+  try {
+    const schedule = await store.save(draft({ enabled: false }));
+    await store.runNow(schedule.id, schedule.revision);
+    await service.tick();
+    await assert.rejects(service.drainAcceptedWork(), /persistence is unconfirmed/);
+    assert.equal(executed, 1);
+    assert.equal(service.activeCount, 0);
+    assert.equal((await store.list()).history[0]?.status, 'claimed');
+  } finally {
+    await service.stop(0);
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

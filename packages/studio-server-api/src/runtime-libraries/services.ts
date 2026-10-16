@@ -18,6 +18,13 @@ export class RuntimeLibraryServices {
     this.backend?.beginDrain?.();
   }
 
+  async drainAcceptedWork(): Promise<void> {
+    this.beginDrain();
+    if (!this.backend) return;
+    if (!this.backend.drainAcceptedWork) throw new Error('Runtime-library backend cannot confirm a graceful drain.');
+    await this.backend.drainAcceptedWork();
+  }
+
   dispose(): Promise<void> {
     if (this.closing) return this.closing;
     this.beginDrain();

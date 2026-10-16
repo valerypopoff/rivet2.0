@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { parseAllDocuments } from 'yaml';
+import { assertHaUpgradeEvidence } from './lib/ha-release-evidence.mjs';
+import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
+import { releaseOperationJournalName, journalForReleaseOperation } from './lib/release-operation-journal.mjs';
 import { parseEnvFile } from './lib/env.mjs';
 import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
 import { productionEnvironment, prepareProductionSecrets } from './lib/server-launch-mode.mjs';
@@ -47,6 +50,7 @@ const supportedOptions = new Set([
   '--single-machine',
   '--env-file',
   '--context',
+  '--resume-ha',
 ]);
 
 export function parseArgs(argv) {
@@ -420,6 +424,15 @@ async function main() {
       capture: true,
     });
     await writeArtifact(artifactsDir, 'rendered.yaml', rendered.stdout);
+    const renderedResources = parseAllDocuments(rendered.stdout).map(document => {
+      if (document.errors.length) throw document.errors[0];
+      return document.toJSON();
+    }).filter(Boolean);
+    const haRequested = renderedResources.some(resource => resource.kind === 'StatefulSet' &&
+      resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' && resource.spec.updateStrategy.type === 'OnDelete');
+    if (haRequested && rollbackManifestPath)
+      throw new Error('HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.');
+    if (haRequested) assertHaUpgradeEvidence(manifest, null);
 
     if (dryRun) {
       console.log(`[${runnerName}] Preflight passed. No cluster state was changed.`);
@@ -447,7 +460,7 @@ async function main() {
       : null;
     const kubectl = selectedKubectl;
     if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
-    const journalName = `${release.slice(0, 32)}-${createHash('sha256').update(release).digest('hex').slice(0, 8)}-cutover`;
+    const journalName = releaseOperationJournalName(release);
     const savedJournal = await run(
       kubectl,
       [
@@ -464,11 +477,15 @@ async function main() {
       { capture: true },
     );
     const journalResource = savedJournal.stdout.trim() ? JSON.parse(savedJournal.stdout) : null;
-    const pendingJournal = journalResource
+    const sharedJournal = journalResource
       ? { ...JSON.parse(journalResource.data.record), resourceVersion: journalResource.metadata.resourceVersion }
       : null;
-    assertCutoverJournal(pendingJournal, { release, namespace });
-    if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
+    const operationKind = haRequested && !options.has('--maintenance-cutover') && !options.has('--resume-cutover') ? 'ha' : 'cutover';
+    const pendingJournal = journalForReleaseOperation(sharedJournal, operationKind, { release, namespace });
+    if (operationKind === 'cutover') {
+      assertCutoverJournal(pendingJournal, { release, namespace });
+      if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
+    }
     const installedDigest = installed?.release?.production?.manifestDigest;
     const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
     if (
@@ -481,6 +498,12 @@ async function main() {
         'The installed release does not match the candidate or its certified predecessor. Refuse a stale or sibling rollout.',
       );
     const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
+    const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
+    if (options.has('--resume-ha') && (!haRollout || options.has('--resume-cutover')))
+      throw new Error('--resume-ha requires an installed HA release and cannot be combined with maintenance cutover.');
+    if (haRequested && !cutover) assertHaUpgradeEvidence(manifest, installed);
+    if (installed?.ha?.enabled && !haRequested && !cutover)
+      throw new Error('Disabling HA requires maintenance; ordinary Helm must not delete accepted owners.');
     if (exists && !installedDigest && !cutover)
       throw new Error(
         'The installed release identity is unknown. Use an explicitly owned maintenance cutover, not an unverified rolling rollout.',
@@ -493,16 +516,18 @@ async function main() {
       throw new Error('Maintenance cutover cannot be combined with forward rollback.');
     if (cutover && !exists)
       throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
-    if (localConfig) {
+    if (localConfig && !haRollout && !cutover) {
       await prepareSingleMachine(localConfig, (args, extra = {}) =>
         run(selectedKubectl, args, { capture: true, ...extra }),
       );
     }
-    if (productionConfig) {
+    if (productionConfig && !haRollout && !cutover) {
       await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
         run(selectedKubectl, args, { capture: true, ...extra }),
       );
     }
+    if (productionConfig && haRollout) await prepareProductionSecrets(productionConfig,
+      (args, extra = {}) => run(selectedKubectl, args, { capture: true, ...extra }), { verifyOnly: true });
     const upgrade = (extra = []) =>
       run(helmBin, [
         'upgrade',
@@ -520,7 +545,25 @@ async function main() {
         timeout,
       ]);
     try {
-      if (cutover) {
+      if (haRollout) {
+        const kube = (args, extra = {}) => run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+        const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');
+        const frozenPath = path.join(generatedValuesDir, 'ha-frozen-autoscalers.json');
+        const preserve = async (workloads) => {
+          // Helm must not scale down HPA-created owners before retirement.
+          await fs.writeFile(preservePath, JSON.stringify({ replicaCount: Object.fromEntries(workloads.filter(w => w.role !== 'maintenance').map(w => [w.role, w.replicas])) }));
+        };
+        await fs.writeFile(frozenPath, JSON.stringify({ autoscaling: { execution: { enabled: false }, backend: { enabled: false } } }));
+        await runHaKubernetesRollout({ kube, release, namespace, manifestDigest: candidateDigest, resources: renderedResources,
+          resumeToken: options.get('--resume-ha'), timeoutMs: Number.parseInt(timeout, 10) * (timeout.endsWith('h') ? 3600000 : timeout.endsWith('m') ? 60000 : 1000),
+          artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+          applyTemplates: async workloads => {
+            await preserve(workloads);
+            await upgrade(['--values', preservePath, '--values', frozenPath]);
+          },
+          restoreAutoscalers: async workloads => { await preserve(workloads); await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']); },
+        });
+      } else if (cutover) {
         const kube = async (args, extra = {}) =>
           run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
         const name = journalName;
@@ -547,7 +590,7 @@ async function main() {
           const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
           if (!result.stdout.trim()) return null;
           const resource = JSON.parse(result.stdout);
-          return { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion };
+          return journalForReleaseOperation({ ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion }, 'cutover', { release, namespace });
         };
         const saveJournal = async (record, resourceVersion) => {
           const { resourceVersion: _discard, ...data } = record;
@@ -567,7 +610,7 @@ async function main() {
           return { ...data, resourceVersion: saved.metadata.resourceVersion };
         };
         const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
-        await fs.writeFile(maintenancePath, JSON.stringify(maintenanceValidationValues), 'utf8');
+        await fs.writeFile(maintenancePath, JSON.stringify({ ...maintenanceValidationValues, ...(haRequested ? { ha: { enabled: false }, replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 } } : {}) }), 'utf8');
         await runManagedReleaseCutover({
           release,
           namespace,
@@ -575,7 +618,7 @@ async function main() {
           resumeToken: options.get('--resume-cutover'),
           inventory,
           readJournal,
-          createJournal: (record) => saveJournal(record),
+          createJournal: (record) => saveJournal(record, sharedJournal?.resourceVersion),
           replaceJournal: saveJournal,
           scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
           removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
@@ -592,7 +635,15 @@ async function main() {
               await new Promise((resolve) => setTimeout(resolve, 5000));
             }
           },
-          installValidation: () => upgrade(['--values', maintenancePath]),
+          installValidation: async () => {
+            // A cutover must own the shared CAS journal and stop old readers
+            // before its environment-file preparation can rotate Secrets.
+            if (localConfig) await prepareSingleMachine(localConfig, (args, extra = {}) =>
+              run(selectedKubectl, args, { capture: true, ...extra }));
+            if (productionConfig) await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
+              run(selectedKubectl, args, { capture: true, ...extra }));
+            await upgrade(['--values', maintenancePath]);
+          },
           validate: async () => {
             const pods = JSON.parse(
               (await kube(['get', 'pods', '-l', `${selector},app.kubernetes.io/component=backend`, '-o', 'json']))

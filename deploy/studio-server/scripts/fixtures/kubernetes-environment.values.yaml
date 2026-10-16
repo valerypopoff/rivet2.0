@@ -1,0 +1,15 @@
+# Offline Helm verification fixture ONLY. No services or credentials are real.
+# This file is never selected by a deployment launcher. Keep fixture identities
+# outside helm/ so shared production/test policy cannot supply them accidentally.
+vault:
+  enabled: false
+auth:
+  keySecretName: verification-auth
+postgres:
+  connectionStringSecretName: verification-postgres
+objectStorage:
+  bucket: verification-bucket
+  region: verification-region
+  endpoint: https://storage.example.invalid
+  accessKeySecretName: verification-object-storage
+  secretKeySecretName: verification-object-storage

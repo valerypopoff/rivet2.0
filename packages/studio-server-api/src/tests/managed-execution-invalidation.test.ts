@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {
+  EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+  evaluationLibrarySourceInstanceId,
+} from '../evaluation-runs/library-invalidation.js';
 
 import {
   ManagedWorkflowExecutionInvalidationController,
@@ -17,6 +21,8 @@ function createController(options: {
   cleared?: { count: number };
   policyInvalidated?: string[];
   allPoliciesInvalidated?: { count: number };
+  onExternalInvalidation?: () => void;
+  onEvaluationLibraryChanged?: (revision: number | null) => void;
 }) {
   const invalidated = options.invalidated ?? [];
   const cleared = options.cleared ?? { count: 0 };
@@ -39,6 +45,8 @@ function createController(options: {
     },
     now: options.now,
     createListener: options.createListener,
+    onExternalInvalidation: options.onExternalInvalidation,
+    onEvaluationLibraryChanged: options.onEvaluationLibraryChanged,
     scheduleReconnect: options.scheduleReconnect,
   });
 
@@ -66,6 +74,98 @@ test('workflow-level invalidation increments only the targeted workflow generati
   assert.equal(controller.captureWorkflowSnapshot('workflow-b').generation, 0);
   assert.deepEqual(invalidated, ['workflow-a']);
   assert.equal(cleared.count, 0);
+});
+
+test('catalog notifications refresh remote trees without evicting published execution caches or echoing local writes', async () => {
+  const listener = new FakeListener();
+  let external = 0;
+  const { controller, invalidated, cleared } = createController({
+    createListener: () => listener,
+    onExternalInvalidation: () => {
+      external++;
+    },
+  });
+  await controller.initialize();
+  const before = controller.captureResolveSnapshot();
+  let notification: { eventType: string; sourceInstanceId: string } | undefined;
+  await controller.queueCatalogInvalidation({
+    query: async (_sql: string, params: unknown[]) => {
+      notification = JSON.parse(String(params[1]));
+    },
+  } as never);
+  assert.equal(notification?.eventType, 'catalog-changed');
+  listener.emitNotification(notification);
+  assert.equal(external, 1);
+  listener.emitNotification({ ...notification, sourceInstanceId: 'other-owner' });
+  assert.equal(external, 2);
+  assert.deepEqual(controller.captureResolveSnapshot(), before);
+  assert.deepEqual(invalidated, []);
+  assert.equal(cleared.count, 0);
+  await controller.dispose();
+});
+
+test('cross-owner and recovered notifications refresh HA observers without a second listener or local echo', async () => {
+  const listener = new FakeListener();
+  let external = 0;
+  const { controller } = createController({
+    createListener: () => listener,
+    onExternalInvalidation: () => {
+      external++;
+    },
+  });
+  await controller.initialize();
+  assert.equal(external, 1);
+  controller.markWorkflowChanged('local');
+  assert.equal(external, 1);
+  listener.emitNotification({ eventType: 'workflow-changed', workflowId: 'remote', sourceInstanceId: 'other-owner' });
+  assert.equal(external, 2);
+  assert.equal(controller.captureWorkflowSnapshot('remote').generation, 1);
+  await controller.dispose();
+});
+
+test('evaluation edits share the listener, suppress local echoes and reset observers across a notification gap', async () => {
+  const listener = new FakeListener();
+  const revisions: Array<number | null> = [];
+  const { controller, invalidated } = createController({
+    createListener: () => listener,
+    onEvaluationLibraryChanged: (revision) => {
+      revisions.push(revision);
+    },
+    scheduleReconnect: () => ({}),
+  });
+  await controller.initialize();
+  assert.equal(listener.queries.filter((q) => q.text.startsWith('LISTEN ')).length, 2);
+  assert.deepEqual(revisions, [null]);
+  listener.emitNotification(
+    { revision: 4, sourceInstanceId: 'another-editor' },
+    EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+  );
+  listener.emitNotification(
+    { revision: 5, sourceInstanceId: evaluationLibrarySourceInstanceId },
+    EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+  );
+  listener.emitNotification(
+    { revision: -1, sourceInstanceId: 'another-editor' },
+    EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+  );
+  assert.deepEqual(revisions, [null, 4]);
+  assert.deepEqual(invalidated, []);
+  listener.emitError(new Error('notification connection lost'));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(revisions, [null, 4, null]);
+  await controller.dispose();
+});
+
+test('non-HA listeners do not allocate an evaluation subscription', async () => {
+  const listener = new FakeListener();
+  const { controller } = createController({ createListener: () => listener });
+  await controller.initialize();
+  assert.deepEqual(
+    listener.queries.map((q) => q.text),
+    [`LISTEN ${MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL}`],
+  );
+  await controller.dispose();
 });
 
 test('managed invalidation notifies targeted web-app policy listeners without forcing unrelated workflows', () => {
@@ -171,9 +271,11 @@ test('listener degradation disables pointer-cache health until a fresh listener 
   assert.equal(cleared.count >= 1, true);
   assert.ok(scheduledReconnect);
 
-  const reconnectTask: () => void = scheduledReconnect ?? (() => {
-    throw new Error('expected reconnect task to be scheduled');
-  });
+  const reconnectTask: () => void =
+    scheduledReconnect ??
+    (() => {
+      throw new Error('expected reconnect task to be scheduled');
+    });
   reconnectTask();
   assert.equal(controller.isPointerCacheHealthy(), false);
   await controller.initialize();

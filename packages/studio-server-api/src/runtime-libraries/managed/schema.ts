@@ -92,6 +92,11 @@ CREATE TABLE IF NOT EXISTS runtime_library_jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Acquire the strongest lock before indexes/ALTERs. A concurrent claim can
+-- otherwise hold RowShare while waiting to upgrade behind our index ShareLock,
+-- deadlocking when this transaction later upgrades to AccessExclusive.
+LOCK TABLE runtime_library_jobs IN ACCESS EXCLUSIVE MODE;
+
 CREATE UNIQUE INDEX IF NOT EXISTS runtime_library_jobs_single_active_idx
   ON runtime_library_jobs ((1))
   WHERE status IN ('queued', 'running', 'validating', 'activating');

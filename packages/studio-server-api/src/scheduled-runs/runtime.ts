@@ -21,11 +21,12 @@ import { settleBeforeDeadline } from '../shutdown-deadline.js';
 
 let service: ScheduledRunService | undefined;
 let stopping = false;
+let draining = false;
 let initialization: Promise<void> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let shutdown: Promise<void> | undefined;
 function deferInitialization() {
-  if (stopping || retryTimer) return;
+  if (stopping || draining || retryTimer) return;
   retryTimer = setTimeout(() => {
     retryTimer = undefined;
     void initializeScheduledRuns().catch(() => {
@@ -75,7 +76,7 @@ export function getScheduledRunService() {
   return service;
 }
 export async function initializeScheduledRuns() {
-  if (service || stopping) return;
+  if (service || stopping || draining) return;
   if (initialization) return initialization;
   const release = beginScheduledActivity();
   initialization = initializeStore().finally(() => {
@@ -153,7 +154,20 @@ async function initializeStore() {
     },
     maxConcurrent,
   );
-  service.start();
+  if (draining) service.beginDrain();
+  else service.start();
+}
+
+export function beginScheduledRunsDrain(): void {
+  draining = true;
+  clearTimeout(retryTimer);
+  retryTimer = undefined;
+  service?.beginDrain();
+}
+export async function drainScheduledRunsAcceptedWork(): Promise<void> {
+  beginScheduledRunsDrain();
+  await initialization;
+  await service?.drainAcceptedWork();
 }
 export function stopScheduledRuns(graceMs = 30_000): Promise<void> {
   return (shutdown ??= stopOnce(Date.now() + Math.max(0, graceMs)));

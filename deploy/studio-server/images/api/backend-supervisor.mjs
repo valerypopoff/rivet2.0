@@ -4,6 +4,13 @@ import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { chmod } from 'node:fs/promises';
+import {
+  createBackendRetirement,
+  createApiRetirementParticipant,
+  createExecutorRetirementParticipant,
+} from './backend-retirement.mjs';
 import { acquireLocalMetadataOwnerLease, assertLegacyLocalMetadataStartup } from './local-metadata-owner-lease.mjs';
 import {
   loadUiUpgradeEnvironment,
@@ -88,6 +95,17 @@ export async function startBackendSupervisor({
   const config = childEnvironments(env);
   const uiControl = (env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') === 'single-host';
   const controlToken = randomBytes(32).toString('hex');
+  const retirementEnabled = env.RIVET_ROLLING_RETIREMENT_PROTOCOL === '1';
+  const apiOnly = env.RIVET_HA_API_ONLY === '1';
+  const incarnation = randomUUID();
+  if (retirementEnabled) {
+    config.api.RIVET_ROLLING_RETIREMENT_PROTOCOL = '1';
+    config.api.RIVET_ROLLING_RETIREMENT_TOKEN = controlToken;
+    config.api.RIVET_PROCESS_INCARNATION = incarnation;
+    config.executor.RIVET_ROLLING_RETIREMENT_PROTOCOL = '1';
+    config.executor.RIVET_PROCESS_INCARNATION = incarnation;
+  }
+  delete config.executor.RIVET_ROLLING_RETIREMENT_TOKEN;
   const canPrepare = uiControl && uiPreparationAvailable(env);
   if (uiControl) {
     config.api.RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN = controlToken;
@@ -149,6 +167,8 @@ export async function startBackendSupervisor({
   let executorReady = false;
   let stopping = false;
   let finishing = false;
+  let retiring = false;
+  let retirementControl;
   let exitCode = 0;
   let requestedAction = null;
   let restoreMaintenance = false;
@@ -159,6 +179,24 @@ export async function startBackendSupervisor({
     finish = resolve;
   });
   const apiReadyUrl = `http://127.0.0.1:${config.apiPort}/readyz`;
+  const retirement = retirementEnabled
+    ? createBackendRetirement({
+        incarnation,
+        api: createApiRetirementParticipant(
+          `http://127.0.0.1:${config.apiPort}/internal/process-retirement`,
+          controlToken,
+        ),
+        executor: apiOnly ? (() => {
+          let operationId = null;
+          return { status: async () => ({ protocol: 1, incarnation, operationId, state: operationId ? 'drained' : 'serving' }),
+            begin: async (id) => { operationId = id; } };
+        })() : createExecutorRetirementParticipant(() => executor, incarnation),
+        available: () => !stopping && !apiDone && (apiOnly || (!executorDone && executorReady)) && !restoreMaintenance,
+        onRetiring: () => {
+          retiring = true;
+        },
+      })
+    : null;
 
   async function apiReady() {
     try {
@@ -224,9 +262,10 @@ export async function startBackendSupervisor({
     const healthy =
       request.url === '/livez'
         ? live && (!executorReady || (await executorListening()))
-        : live &&
+        : !retiring &&
+          live &&
           (await apiReady()) &&
-          ((restoreMaintenance && !restoreWarmup) || (executorReady && (await executorListening())));
+          (apiOnly || (restoreMaintenance && !restoreWarmup) || (executorReady && (await executorListening())));
     response.writeHead(healthy ? 200 : 503, { 'Cache-Control': 'no-store' }).end();
   });
   try {
@@ -234,7 +273,53 @@ export async function startBackendSupervisor({
       health.once('error', reject);
       health.listen(config.healthPort, '0.0.0.0', resolve);
     });
+    if (retirementEnabled && env.RIVET_ROLLING_RETIREMENT_SOCKET) {
+      const socketPath = env.RIVET_ROLLING_RETIREMENT_SOCKET;
+      if (path.dirname(socketPath) !== '/tmp' || !/^rivet-retirement[-a-z0-9]*\.sock$/.test(path.basename(socketPath)))
+        throw new Error('The retirement control socket must be pod-local /tmp scratch.');
+      retirementControl = createServer(async (request, response) => {
+        response.setHeader('Cache-Control', 'no-store');
+        if (request.headers.origin !== undefined || request.url !== '/retirement') {
+          response.writeHead(403).end();
+          return;
+        }
+        if (request.method === 'GET') {
+          response.writeHead(200).end(JSON.stringify(retirement.snapshot()));
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.writeHead(405).end();
+          return;
+        }
+        try {
+          const chunks = [];
+          let bytes = 0;
+          for await (const chunk of request) {
+            if ((bytes += chunk.length) > 1024) throw new Error('Retirement command too large.');
+            chunks.push(chunk);
+          }
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (body.protocol !== 1) throw new Error('Retirement protocol rejected.');
+          if (body.action !== undefined && !['withdraw', 'begin'].includes(body.action)) throw new Error('Retirement action rejected.');
+          const status = body.action === 'withdraw'
+            ? retirement.withdraw(body.operationId, body.incarnation)
+            : retirement.begin(body.operationId, body.incarnation);
+          response.writeHead(202).end(JSON.stringify(status));
+        } catch {
+          response.writeHead(409).end();
+        }
+      });
+      retirementControl.requestTimeout = 5000;
+      retirementControl.headersTimeout = 5000;
+      await new Promise((resolve, reject) => {
+        retirementControl.once('error', reject);
+        retirementControl.listen(socketPath, resolve);
+      });
+      await chmod(socketPath, 0o600);
+    }
   } catch (error) {
+    if (retirementControl?.listening) retirementControl.close();
+    health.close();
     localMetadataLease?.release();
     throw error;
   }
@@ -246,7 +331,16 @@ export async function startBackendSupervisor({
     signalSource.off('SIGINT', onSignal);
     signalSource.off('SIGTERM', onSignal);
     health.closeAllConnections();
-    health.close(() => {
+    const closed = (server) =>
+      new Promise((resolve) => {
+        if (!server?.listening) {
+          resolve();
+          return;
+        }
+        server.closeAllConnections();
+        server.close(resolve);
+      });
+    void Promise.all([closed(health), closed(retirementControl)]).then(() => {
       localMetadataLease?.release();
       finish(exitCode);
     });
@@ -313,6 +407,7 @@ export async function startBackendSupervisor({
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (stopping) return;
+    if (apiOnly) return;
     while (!stopping && restoreMaintenance && !restoreWarmup) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await apiReady();
@@ -341,6 +436,7 @@ export async function startBackendSupervisor({
     completed,
     stop,
     healthPort: config.healthPort,
+    retirement,
     get requestedAction() {
       return requestedAction;
     },

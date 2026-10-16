@@ -10,10 +10,96 @@ import {
   createHostedEvaluationEvidence,
   createHostedEvaluationFixtureContents,
   createHostedEvaluationSubmission,
+  sharedEvaluationWorkerPod,
+  isBackendRestartReadFailure,
 } from '../../../../deploy/studio-server/scripts/kubernetes-hosted-evaluation-gate.mjs';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const digest = (letter: string) => 'sha256:' + letter.repeat(64);
+
+test('planned editor replacement permits only temporary read unavailability', () => {
+  for (const error of [
+    { status: 502 },
+    { status: 503 },
+    { status: 504 },
+    new TypeError('fetch failed'),
+    new DOMException('Timed out', 'TimeoutError'),
+  ])
+    assert.equal(isBackendRestartReadFailure(error), true);
+  for (const error of [
+    undefined,
+    new Error('logic failure'),
+    { status: 401 },
+    { status: 403 },
+    { status: 404 },
+    { status: 409 },
+    { status: 500 },
+  ])
+    assert.equal(isBackendRestartReadFailure(error), false);
+});
+
+test('Evaluation disruption selects only the identified shared editor backend', () => {
+  const pod = {
+    metadata: {
+      name: 'rivet-backend-0',
+      uid: 'pod-uid',
+      labels: {
+        'app.kubernetes.io/instance': 'rivet',
+        'app.kubernetes.io/component': 'backend',
+      },
+    },
+    spec: {
+      containers: [
+        {
+          name: 'backend',
+          env: [
+            { name: 'RIVET_API_PROFILE', value: 'control' },
+            { name: 'RIVET_HOSTED_EVALUATIONS_ENABLED', value: 'true' },
+          ],
+        },
+      ],
+    },
+  };
+  assert.deepEqual(sharedEvaluationWorkerPod([pod], 'rivet'), { name: 'rivet-backend-0', uid: 'pod-uid' });
+  for (const pods of [
+    [],
+    [pod, pod],
+    [{ ...pod, metadata: { ...pod.metadata, uid: '' } }],
+    {
+      ...pod,
+      spec: {
+        containers: [
+          {
+            ...pod.spec.containers[0]!,
+            env: [...pod.spec.containers[0]!.env, { name: 'RIVET_HA_MAINTENANCE', value: '1' }],
+          },
+        ],
+      },
+    },
+  ].map((value) => (Array.isArray(value) ? value : [value]))) {
+    assert.throws(() => sharedEvaluationWorkerPod(pods, 'rivet'));
+  }
+  for (const component of ['execution', 'evaluation', 'maintenance']) {
+    assert.throws(() =>
+      sharedEvaluationWorkerPod(
+        [
+          {
+            ...pod,
+            metadata: {
+              ...pod.metadata,
+              labels: {
+                ...pod.metadata.labels,
+                'app.kubernetes.io/component': component,
+              },
+            },
+          },
+        ],
+        'rivet',
+      ),
+    );
+  }
+  assert.throws(() => sharedEvaluationWorkerPod([pod], 'another-release'));
+});
 
 function environment(configFile: string, valuesFile: string, overrides: NodeJS.ProcessEnv = {}) {
   return {
@@ -32,7 +118,7 @@ function environment(configFile: string, valuesFile: string, overrides: NodeJS.P
     RIVET_K8S_PROVIDER_GATE_EXECUTOR_IMAGE_DIGEST: digest('d'),
     RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: 'provider-gate',
     RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: 'provider-gate-token',
-    RIVET_K8S_EVALUATION_GATE_CONFIRM: 'disrupt-staging-evaluations',
+    RIVET_K8S_EVALUATION_GATE_CONFIRM: 'disrupt-staging-editor-backend',
     ...overrides,
   };
 }
@@ -71,7 +157,7 @@ test('hosted Evaluation gate is protected, bounded, and uses a valid isolated be
           rootDir,
           env: environment(configFile, valuesFile, { RIVET_K8S_EVALUATION_GATE_CONFIRM: 'yes' }),
         }),
-      /must equal disrupt-staging-evaluations/u,
+      /must equal disrupt-staging-editor-backend/u,
     );
 
     const submission = createHostedEvaluationSubmission({ runId: 'run-1', label: 'interruption' });

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-const components = new Set(['backend', 'api', 'executor', 'execution', 'evaluation', 'proxy', 'web']);
+const components = new Set(['backend', 'maintenance', 'api', 'executor', 'execution', 'evaluation', 'proxy', 'web']);
 const phases = new Set(['quiescing', 'quiesced', 'validating', 'resuming', 'complete']);
 const resourceName = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 function checkedInventory(resources) {

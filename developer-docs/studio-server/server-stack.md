@@ -220,8 +220,12 @@ Receipt/configuration reads also reject linked or non-file entries; only ENOENT
 means absent state. On POSIX, newly created state directories sync their parent
 before work can begin, not just their subsequently written files.
 
-The backend supervisor still owns control API and editor executor processes.
-Execution and Evaluation containers use the same API image with explicit roles.
+The backend supervisor owns control API and editor executor processes. Hosted
+Evaluations execute in that control API, sharing the backend container's CPU and
+memory budget with interactive editor runs. The separate execution container is
+reserved for published endpoints; no dedicated Evaluation container is started.
+Trial concurrency remains bounded (one per backend by default), and durable
+claims, cancellation, results and recording persistence keep their existing owner.
 PostgreSQL owns settings, metadata, leases and durable coordination; S3 owns
 artifacts. Replicas do not enumerate each other in normal serving. No serving
 container mounts the Docker socket, receives Kubernetes API credentials, or writes

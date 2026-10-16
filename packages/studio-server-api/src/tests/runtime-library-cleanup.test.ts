@@ -6,6 +6,7 @@ import test from 'node:test';
 import { seedDeploymentStorageSettings } from './helpers/seed-deployment-storage.js';
 import type { Pool } from 'pg';
 import { withArgv, withScopedEnv } from './helpers/runtime-library-harness.js';
+import { verifyRuntimeLibrarySchemaClaimConcurrency } from './helpers/runtime-library-schema-concurrency.js';
 
 const cleanup = await import('../runtime-libraries/managed/cleanup.js');
 const managedSchema = await import('../runtime-libraries/managed/schema.js');
@@ -262,6 +263,31 @@ test('managed runtime-library bootstrap accepts the authoritative settings snaps
   assert.equal(config.objectStorageRegion, 'provider-region-7');
   assert.equal(config.objectStorageForcePathStyle, true);
   assert.equal(config.databaseUrl, 'postgresql://user:pass@db.example.test/rivet');
+});
+
+test('the concurrency regression releases partially acquired clients when connection setup fails', async () => {
+  for (const failAfter of [1, 2]) {
+    const failure = new Error('connection unavailable'),
+      released: number[] = [];
+    let acquired = 0;
+    const pool = {
+      connect: async () => {
+        const index = acquired++;
+        if (index === failAfter) throw failure;
+        return {
+          query: async () => ({ rows: [] }),
+          release: () => {
+            released.push(index);
+          },
+        };
+      },
+    } as unknown as Pool;
+    await assert.rejects(verifyRuntimeLibrarySchemaClaimConcurrency(pool), failure);
+    assert.deepEqual(
+      released,
+      Array.from({ length: failAfter }, (_, i) => i),
+    );
+  }
 });
 
 test('managed runtime-library schema init serializes DDL behind an advisory lock', async () => {

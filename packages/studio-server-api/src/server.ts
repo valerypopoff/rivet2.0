@@ -1,27 +1,41 @@
 import 'dotenv/config';
 import { ServerResourceLifecycle, ServerStartupCancelledError } from './server-resource-lifecycle.js';
-import { initializeScheduledRuns, stopScheduledRuns } from './scheduled-runs/runtime.js';
+import {
+  initializeScheduledRuns,
+  stopScheduledRuns,
+  drainScheduledRunsAcceptedWork,
+  beginScheduledRunsDrain,
+} from './scheduled-runs/runtime.js';
+import { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
 import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
+import {
+  beginWorkflowStorageRetirement,
+  checkWorkflowStorageHealth,
+  drainWorkflowStorageAcceptedWork,
+  disposeWorkflowStorage,
+  initializeWorkflowStorage,
+  getHostedEvaluationCoordinator,
+} from './routes/workflows/storage-backend.js';
+import { installExecutorOwnerRouting, readOwnerRoutingConfig } from './ha-owner-routing.js';
+import { beginPassiveStreamRetirement, isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 import { configureRequestReceiveDeadlines } from './legacy-restore/receive-deadline.js';
 import { Pool } from 'pg';
 import { reconcileRuntimeLibraries } from './runtime-libraries/startup.js';
 import {
   beginRuntimeLibrariesDrain,
+  drainRuntimeLibrariesAcceptedWork,
   checkRuntimeLibrariesHealth,
   disposeRuntimeLibrariesBackend,
 } from './runtime-libraries/backend.js';
 import {
   disposeLatestWorkflowRemoteDebugger,
+  beginLatestWorkflowRemoteDebuggerDrain,
   initializeLatestWorkflowRemoteDebugger,
 } from './latestWorkflowRemoteDebugger.js';
 import { initializeWebAppActionWebSockets, type WebAppActionWebSocketRuntime } from './web-app-action-websocket.js';
-import {
-  checkWorkflowStorageHealth,
-  disposeWorkflowStorage,
-  initializeWorkflowStorage,
-} from './routes/workflows/storage-backend.js';
+import { getHostedEvaluationsCoordinatorConfig } from './hosted-evaluations-config.js';
 import { disposeWorkflowRecordingInputExtractor } from './routes/workflows/recording-input-extractor.js';
 import { getPublishedExecutionAdmission } from './published-execution-admission.js';
 import {
@@ -35,6 +49,8 @@ import {
   checkAppSettingsRepositoriesHealth,
   disposeAppSettingsRepositories,
   initializeAppSettingsRepositories,
+  captureRestoreSettings,
+  installRestoreSettings,
 } from './app-settings/settings-repository.js';
 import { getRuntimeHealthOptionsFromEnv, RuntimeHealthController, type RuntimeHealthCheck } from './runtime-health.js';
 import { configureStudioMetrics } from './metrics.js';
@@ -43,7 +59,6 @@ import {
   readDeploymentStorageRuntimeSettingsSync,
 } from './deployment-storage-settings.js';
 import { nodeExecutorProxySettingsRepository } from './node-executor-proxy-settings.js';
-import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 import { isReleaseMaintenanceActive } from './release-maintenance.js';
 import { initializeLocalMetadataServing, assertLocalMetadataWritesAllowed } from './local-metadata/runtime-control.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
@@ -63,7 +78,6 @@ import {
   getLegacyRestoreActiveRequests,
   setLegacyRestoreWorkspaceEpoch,
 } from './legacy-restore/service.js';
-import { captureRestoreSettings, installRestoreSettings } from './app-settings/settings-repository.js';
 import {
   getPostgresAppSettingsPoolConfigFromEnv,
   isPostgresAppSettingsBackendEnabled,
@@ -118,8 +132,60 @@ const runtimeHealth = new RuntimeHealthController(
   runtimeHealthChecks,
   getRuntimeHealthOptionsFromEnv(),
 );
-const app = createApiApp(apiRuntimeProfile, { health: runtimeHealth, metrics });
-const server = createServer(app);
+const requestWork = new AcceptedWork();
+const retirement =
+  process.env.RIVET_ROLLING_RETIREMENT_PROTOCOL === '1'
+    ? new ProcessRetirement(
+        process.env.RIVET_PROCESS_INCARNATION ?? '',
+        () => {
+          if (shuttingDown || resources.phase !== 'ready' || isLegacyRestorePaused())
+            throw new Error('This process cannot retire safely.');
+          requestWork.beginDrain();
+          beginPassiveStreamRetirement();
+          beginWorkflowStorageRetirement();
+          runtimeHealth.beginDrain();
+          beginLatestWorkflowRemoteDebuggerDrain();
+          resources.beginDrain();
+        },
+        async () => {
+          // Check the durable restore journal before fencing any of its dependencies.
+          await legacyRestoreService?.assertMayRetire();
+          // A disconnected HTTP response is not a completed save/upload/stream handler.
+          await requestWork.drain();
+          await legacyRestoreService?.assertMayRetire();
+          await Promise.all([
+            drainScheduledRunsAcceptedWork(),
+            drainRuntimeLibrariesAcceptedWork(),
+            projectBundleJobs.drainAcceptedWork(),
+            waitForActiveRuns(getActiveHttpExecutionCount, Infinity),
+            waitForActiveRuns(() => webAppActionWebSockets?.getActiveRunCount() ?? 0, Infinity),
+          ]);
+          // Stop background producers and flush recordings only after accepted runs finish.
+          await drainWorkflowStorageAcceptedWork();
+        },
+        () => server.closeIdleConnections(),
+      )
+    : undefined;
+const app = createApiApp(apiRuntimeProfile, {
+  health: runtimeHealth,
+  metrics,
+  requestWork,
+  ...(retirement ? { retirement: { owner: retirement, token: process.env.RIVET_ROLLING_RETIREMENT_TOKEN ?? '' } } : {}),
+});
+const server = createServer((req, res) => {
+  // Withdrawal keeps admission open while routing converges, but does not leave
+  // keep-alive connections pinned to an owner that is about to fence admission.
+  if (retirement?.isWithdrawing) res.setHeader('Connection', 'close');
+  res.once('finish', () => {
+    if (retirement?.isWithdrawing) server.closeIdleConnections();
+  });
+  app(req, res);
+});
+const ownerRouting = readOwnerRoutingConfig();
+const disposeOwnerRouting =
+  ownerRouting && isControlPlaneApiProfile(apiRuntimeProfile)
+    ? installExecutorOwnerRouting(server, ownerRouting)
+    : undefined;
 // This is the time allowed to receive the complete HTTP request, including a
 // JSON body. It does not limit graph execution after the body has arrived.
 // Keep it below the normal proxy request timeout so a slow client cannot keep
@@ -180,7 +246,11 @@ async function closeHttpServer(deadline: number): Promise<boolean> {
 }
 
 const resources = new ServerResourceLifecycle([
-  { name: 'scheduled-runs', dispose: () => stopScheduledRuns(0).then(() => undefined) },
+  {
+    name: 'scheduled-runs',
+    beginDrain: beginScheduledRunsDrain,
+    dispose: () => stopScheduledRuns(0).then(() => undefined),
+  },
   { name: 'recording-input-extractor', dispose: disposeWorkflowRecordingInputExtractor },
   {
     name: 'web-app-actions',
@@ -274,12 +344,17 @@ async function initializeRestoreRole(): Promise<boolean> {
         legacyRestoreService?.observe(operation);
         if (restoreBlocksServing(operation) && operation?.phase !== 'restarting') {
           setLegacyRestorePaused(true);
-          if (!isControlPlaneApiProfile(apiRuntimeProfile) && !restoreControlOnly)
+          if (
+            (!isControlPlaneApiProfile(apiRuntimeProfile) ||
+              (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1')) &&
+            !restoreControlOnly
+          )
             void shutdown('legacy restore').then(() => process.exit(0));
         } else if (
           ((operation?.phase === 'restarting' && restoreControlOnly) || !restoreBlocksServing(operation)) &&
           isLegacyRestorePaused() &&
-          !isControlPlaneApiProfile(apiRuntimeProfile)
+          (!isControlPlaneApiProfile(apiRuntimeProfile) ||
+            (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1'))
         ) {
           void shutdown('restore generation changed').then(() => process.exit(0));
         }
@@ -297,6 +372,7 @@ async function initializeRestoreRole(): Promise<boolean> {
 }
 
 async function configureRestoreService() {
+  if (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1') return;
   if (!legacyRestoreControl || !isControlPlaneApiProfile(apiRuntimeProfile)) return;
   if (!process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN) return;
   // Never adopt a UI-selected foreign namespace just because its database is reachable.
@@ -348,6 +424,8 @@ async function disposeResources(interrupt: boolean): Promise<void> {
   } catch (error) {
     console.error('[rivet-api] Resource disposal incomplete; ownership retained:', error);
     process.exitCode = 1;
+  } finally {
+    disposeOwnerRouting?.();
   }
 }
 
@@ -372,6 +450,8 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
 
   shuttingDown = true;
+  // Retirement has already settled editor owners; idle relays must not hold HTTP close open.
+  if (retirement?.snapshot().state === 'drained') disposeOwnerRouting?.();
   runtimeHealth.beginDrain();
   beginActiveHttpExecutionDrain();
   if (isPublishedExecutionApiProfile(apiRuntimeProfile)) {
@@ -386,6 +466,10 @@ async function shutdown(signal: string): Promise<void> {
   const shutdownGraceMs = readShutdownGraceMs();
   const deadline = Date.now() + shutdownGraceMs;
   const scheduledDrain = stopScheduledRuns(shutdownGraceMs);
+  const runtimeLibraryDrain = settleBeforeDeadline(drainRuntimeLibrariesAcceptedWork(), deadline).catch((error) => {
+    console.error('[runtime-libraries] Graceful drain could not be confirmed:', error);
+    process.exitCode = 1;
+  });
   console.log(`[rivet-api] Received ${signal}; draining for up to ${shutdownGraceMs}ms...`);
 
   if (startupPromise && !server.listening) {
@@ -400,6 +484,7 @@ async function shutdown(signal: string): Promise<void> {
     waitForActiveWebAppRuns(deadline),
     waitForActiveHttpExecutions(deadline),
     scheduledDrain,
+    runtimeLibraryDrain,
   ]);
 
   if (!webAppRunsCompleted) {
@@ -544,6 +629,12 @@ async function startServer(): Promise<void> {
       if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive() && !isLegacyRestorePaused())
         await initializeScheduledRuns();
       assertStartupActive();
+      if (!isLegacyRestorePaused() && getHostedEvaluationsCoordinatorConfig().workerEnabled) {
+        const coordinator = await getHostedEvaluationCoordinator();
+        assertStartupActive();
+        coordinator?.start();
+      }
+      assertStartupActive();
     });
     await configureRestoreService();
     if (isLegacyRestorePaused() && legacyRestoreService) {
@@ -571,6 +662,7 @@ async function startServer(): Promise<void> {
     if (
       legacyRestoreControl &&
       isControlPlaneApiProfile(apiRuntimeProfile) &&
+      (process.env.RIVET_HA_DEPLOYMENT !== '1' || process.env.RIVET_HA_MAINTENANCE === '1') &&
       isLegacyRestorePaused() &&
       !(error instanceof ServerStartupCancelledError)
     ) {

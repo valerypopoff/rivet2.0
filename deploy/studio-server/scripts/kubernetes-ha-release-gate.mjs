@@ -1,0 +1,399 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseAllDocuments } from 'yaml';
+import { ManagedReleaseGate, runManagedGateCommand as run } from './kubernetes-managed-release-gate.mjs';
+import {
+  buildManagedReleaseGateConfig,
+  renderManagedReleaseGateValues,
+} from './lib/kubernetes-managed-release-gate-config.mjs';
+import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
+import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import {
+  assertStudioServerReleaseManifest,
+  assertReleaseManifestMatchesCurrentChart,
+  assertReleaseManifestMatchesCurrentSource,
+  assertStudioServerReleasePredecessor,
+} from './lib/studio-server-release-manifest.mjs';
+import { createHaReleaseEvidence } from './lib/ha-release-evidence.mjs';
+import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const chart = path.join(rootDir, 'deploy/studio-server/helm');
+const overlay = path.join(chart, 'overlays/managed-release-gate.yaml');
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Extends the real managed release fixture; never creates a second importer,
+ * storage fixture or public execution engine. */
+export class HaReleaseGate extends ManagedReleaseGate {
+  async assertLocalContext() {
+    if (
+      !['rivet-ha-proof', 'kind-rivet-managed-release'].includes(this.config.context) ||
+      this.config.context !== this.config.allowedContext
+    )
+      throw new Error('HA gate is restricted to an explicitly allowed disposable local cluster.');
+    const disk = await fs.statfs(rootDir);
+    if (disk.bavail * disk.bsize < 20 * 1024 ** 3)
+      throw new Error('HA rehearsal requires at least 20 GiB free on the workspace drive before any cluster mutation.');
+    await this.kubectl(['cluster-info'], { capture: true });
+  }
+  values(images = this.config.images) {
+    const config = { ...this.config, images };
+    return {
+      ...renderManagedReleaseGateValues(config),
+      ha: { enabled: true, protocol: 1, peerLimit: 4 },
+      replicaCount: { backend: 2, execution: 2 },
+      hostedEvaluations: { enabled: true, workerConcurrency: 1 },
+      postgres: { ...renderManagedReleaseGateValues(config).postgres, maxConnections: 250 },
+      availability: { topologySpread: { whenUnsatisfiable: 'ScheduleAnyway' } },
+      legacyRestore: { enabled: true, size: '8Gi' },
+      resources: Object.fromEntries(
+        ['api', 'backend', 'execution', 'evaluation'].map((role) => [
+          role,
+          { requests: { cpu: '100m', memory: '256Mi' } },
+        ]),
+      ),
+    };
+  }
+  async apply(values, name = 'ha-values.json') {
+    const file = path.join(this.config.artifactsDir, name);
+    await fs.mkdir(this.config.artifactsDir, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(values));
+    await run(this.helmBin, [
+      '--kube-context',
+      this.config.context,
+      'upgrade',
+      '--install',
+      this.config.release,
+      chart,
+      '-n',
+      this.config.namespace,
+      '-f',
+      overlay,
+      '-f',
+      file,
+      '--wait',
+      '--wait-for-jobs',
+      '--timeout',
+      '600s',
+    ]);
+    return file;
+  }
+  async prepare(images = this.config.images) {
+    await this.assertLocalContext();
+    const existing = await this.kubectl(
+      ['get', 'namespace', this.config.namespace, '--ignore-not-found', '-o', 'name'],
+      { capture: true },
+    );
+    if (existing.stdout.trim())
+      throw Error(
+        'HA preparation requires a fresh disposable namespace. Existing accepted work and Secrets were not changed.',
+      );
+    await this.createNamespace();
+    await this.createRegistrySecret();
+    await this.installDependencies();
+    await this.apply(this.values(images));
+    const baseUrl = await this.openProxy();
+    const state = await this.exercisePersistence(baseUrl);
+    await this.artifact('ha-persisted-state.json', JSON.stringify(state, null, 2));
+    return { baseUrl, state };
+  }
+  async openProxy() {
+    // A kubectl Service forward is pinned to one chosen pod. Keep that test
+    // transport separate from chart-owned proxies so replacing a proxy really
+    // tests Service availability, not the lifetime of a port-forward subprocess.
+    const name = `${this.config.release}-ha-edge`;
+    const labels = { 'rivet-ha-test-edge': name };
+    const config =
+      'pid /tmp/nginx.pid; events {} http { client_body_temp_path /tmp/client; proxy_temp_path /tmp/proxy; fastcgi_temp_path /tmp/fastcgi; uwsgi_temp_path /tmp/uwsgi; scgi_temp_path /tmp/scgi; access_log off; error_log /dev/stderr; server { listen 8080; location / { proxy_pass http://' +
+      this.config.release +
+      '-proxy:80; proxy_http_version 1.1; proxy_set_header Host $http_host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 600s; } } }';
+    const resources = [
+      { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name }, data: { 'nginx.conf': config } },
+      {
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name, labels },
+        spec: {
+          containers: [
+            {
+              name: 'edge',
+              image: `${this.config.images.proxy.repository}@${this.config.images.proxy.digest}`,
+              imagePullPolicy: this.config.imagePullPolicy,
+              command: ['nginx', '-c', '/etc/ha-edge/nginx.conf', '-g', 'daemon off;'],
+              volumeMounts: [{ name: 'config', mountPath: '/etc/ha-edge', readOnly: true }],
+              readinessProbe: { tcpSocket: { port: 8080 } },
+              resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { memory: '64Mi' } },
+            },
+          ],
+          imagePullSecrets: [{ name: 'rivet-release-gate-registry' }],
+          volumes: [{ name: 'config', configMap: { name } }],
+        },
+      },
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name },
+        spec: { selector: labels, ports: [{ port: 80, targetPort: 8080 }] },
+      },
+    ];
+    // The test edge is never part of the release's rolling workload inventory.
+    const existing = await this.kubectl(
+      ['-n', this.config.namespace, 'get', 'pod', name, '--ignore-not-found', '-o', 'name'],
+      { capture: true },
+    );
+    if (!existing.stdout.trim())
+      await this.kubectl(['-n', this.config.namespace, 'apply', '-f', '-'], {
+        input: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: resources }),
+      });
+    await this.kubectl(['-n', this.config.namespace, 'wait', '--for=condition=Ready', `pod/${name}`, '--timeout=90s']);
+    return super.openProxy(`service/${name}`);
+  }
+  async loadWorkflowKey() {
+    const secret = JSON.parse(
+      (
+        await this.kubectl(['-n', this.config.namespace, 'get', 'secret', 'rivet-release-gate-auth', '-o', 'json'], {
+          capture: true,
+        })
+      ).stdout,
+    );
+    this.secrets = { rivetKey: Buffer.from(secret.data.RIVET_KEY, 'base64').toString('utf8') };
+  }
+  async roll(baseUrl, images = this.config.images) {
+    await this.loadWorkflowKey();
+    const values = {
+        ...this.values(images),
+        podAnnotations: {
+          backend: { 'rivet.dev/ha-proof-generation': 'candidate' },
+          execution: { 'rivet.dev/ha-proof-generation': 'candidate' },
+        },
+      },
+      file = path.join(this.config.artifactsDir, 'ha-candidate.json');
+    const before = JSON.parse(
+      (
+        await this.kubectl(
+          [
+            '-n',
+            this.config.namespace,
+            'get',
+            'pods',
+            '-l',
+            `app.kubernetes.io/instance=${this.config.release}`,
+            '-o',
+            'json',
+          ],
+          { capture: true },
+        )
+      ).stdout,
+    ).items;
+    await this.artifact('ha-original-pods.json', JSON.stringify(before, null, 2));
+    await fs.writeFile(file, JSON.stringify(values));
+    const rendered = await run(
+      this.helmBin,
+      [
+        '--kube-context',
+        this.config.context,
+        'template',
+        this.config.release,
+        chart,
+        '-n',
+        this.config.namespace,
+        '-f',
+        overlay,
+        '-f',
+        file,
+      ],
+      { capture: true },
+    );
+    const resources = parseAllDocuments(rendered.stdout)
+      .map((d) => {
+        if (d.errors.length) throw d.errors[0];
+        return d.toJSON();
+      })
+      .filter(Boolean);
+    const probes = new HaReleaseProbes(this, baseUrl, rootDir);
+    await probes.prepare();
+    let running = true,
+      samples = 0;
+    const failures = [],
+      readiness = [];
+    const readySampler = (async () => {
+      while (running) {
+        try {
+          const pods = JSON.parse(
+            (
+              await this.kubectl(
+                [
+                  '-n',
+                  this.config.namespace,
+                  'get',
+                  'pods',
+                  '-l',
+                  `app.kubernetes.io/instance=${this.config.release},app.kubernetes.io/component=backend`,
+                  '-o',
+                  'json',
+                ],
+                { capture: true },
+              )
+            ).stdout,
+          ).items;
+          const count = pods.filter(
+            (p) =>
+              !p.metadata.deletionTimestamp &&
+              p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
+          ).length;
+          readiness.push({ at: new Date().toISOString(), ready: count });
+          if (count < 2) failures.push(`Only ${count} ordinary backends ready`);
+        } catch (error) {
+          failures.push(`Readiness observation failed: ${error}`);
+        }
+        await pause(1000);
+      }
+    })();
+    const traffic = (async () => {
+      while (running) {
+        try {
+          const result = await this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
+            method: 'POST',
+            body: JSON.stringify({ input: `ha-sample-${samples}` }),
+            timeoutMs: 15_000,
+          });
+          if (!result) throw Error('Empty execution');
+          samples++;
+        } catch (error) {
+          failures.push(String(error));
+        }
+        await pause(25);
+      }
+    })();
+    let rollout, workloadReport;
+    try {
+      const kubectl = (args, extra = {}) =>
+        this.kubectl(['-n', this.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+      rollout = await runHaKubernetesRollout({
+        kube: kubectl,
+        release: this.config.release,
+        namespace: this.config.namespace,
+        manifestDigest: images.api.digest,
+        resources,
+        timeoutMs: 600_000,
+        artifact: (name, value) => this.artifact(name, value),
+        beforeRetirement: (pod) => probes.beforeRetirement(pod),
+        afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
+        applyTemplates: async (workloads) => {
+          await this.apply(
+            {
+              ...values,
+              replicaCount: Object.fromEntries(
+                workloads.filter((w) => w.role !== 'maintenance').map((w) => [w.role, w.replicas]),
+              ),
+              autoscaling: { execution: { enabled: false } },
+            },
+            'ha-rollout-values.json',
+          );
+        },
+        restoreAutoscalers: async () =>
+          this.apply(
+            { ...values, workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } } },
+            'ha-completed-values.json',
+          ),
+      });
+      workloadReport = await probes.finish();
+      while (samples < 100 && !failures.length) await pause(25);
+    } finally {
+      running = false;
+      await Promise.all([traffic, readySampler]);
+      await this.artifact('ha-traffic.json', JSON.stringify({ samples, failures, readiness }, null, 2));
+      await this.artifact('ha-workload-probes.json', JSON.stringify(probes.snapshot(), null, 2));
+    }
+    if (failures.length) throw new Error(`HA traffic had ${failures.length} failures: ${failures[0]}`);
+    const after = JSON.parse(
+      (
+        await this.kubectl(
+          [
+            '-n',
+            this.config.namespace,
+            'get',
+            'pods',
+            '-l',
+            `app.kubernetes.io/instance=${this.config.release}`,
+            '-o',
+            'json',
+          ],
+          { capture: true },
+        )
+      ).stdout,
+    ).items;
+    const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after };
+    await this.artifact('ha-report.json', JSON.stringify(report, null, 2));
+    return report;
+  }
+}
+
+async function main() {
+  const config = buildManagedReleaseGateConfig({ rootDir, mode: 'smoke' });
+  config.keepNamespace = true;
+  const gate = new HaReleaseGate(
+    config,
+    process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
+    resolveHelmBinOrThrow(rootDir),
+  );
+  let completed = false;
+  try {
+    if (process.argv[2] === 'prepare') {
+      await gate.prepare();
+      await gate.capture('ha-prepared');
+    } else if (process.argv[2] === 'roll') {
+      await gate.assertLocalContext();
+      const baseUrl = await gate.openProxy();
+      await gate.roll(baseUrl);
+      await gate.capture('ha-completed');
+    } else if (process.argv[2] === 'recovery') {
+      await gate.assertLocalContext();
+      await gate.loadWorkflowKey();
+      const baseUrl = await gate.openProxy();
+      await verifyHaReleaseRecovery(gate, baseUrl, rootDir);
+      await gate.capture('ha-recovery-completed');
+    } else if (process.argv[2] === 'certify') {
+      const candidate = assertStudioServerReleaseManifest(
+        JSON.parse(await fs.readFile(process.env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8')),
+      );
+      const sha = (await run('git', ['rev-parse', 'HEAD'], { capture: true })).stdout.trim();
+      await run('git', ['diff', '--quiet', 'HEAD', '--']);
+      assertReleaseManifestMatchesCurrentSource(candidate, sha);
+      assertReleaseManifestMatchesCurrentChart(candidate, rootDir);
+      if (JSON.stringify(candidate.images) !== JSON.stringify(config.images))
+        throw Error('HA images must match the candidate manifest');
+      const previous = process.env.RIVET_HA_PREDECESSOR_MANIFEST
+        ? assertStudioServerReleaseManifest(
+            JSON.parse(await fs.readFile(process.env.RIVET_HA_PREDECESSOR_MANIFEST, 'utf8')),
+            { requirePromoted: true },
+          )
+        : null;
+      assertStudioServerReleasePredecessor(candidate, previous);
+      const mode =
+        previous?.evidence?.ha && JSON.stringify(previous.images) !== JSON.stringify(candidate.images)
+          ? 'mixed'
+          : 'bootstrap';
+      const prepared = await gate.prepare(mode === 'mixed' ? previous.images : candidate.images);
+      const report = await gate.roll(prepared.baseUrl);
+      report.recovery = await verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir);
+      await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
+      const evidence = createHaReleaseEvidence(report, candidate, mode);
+      await gate.artifact('ha-evidence.json', JSON.stringify(evidence, null, 2));
+      await gate.capture('ha-certified');
+    } else
+      throw new Error(
+        'Choose prepare, roll, recovery or certify explicitly. Mixed certification requires exact manifests.',
+      );
+    completed = true;
+  } catch (error) {
+    await gate.capture('ha-failure').catch(() => {});
+    throw error;
+  } finally {
+    await gate.close();
+    if (completed) console.log('[ha-release-gate] Phase passed. Proof namespace retained for inspection.');
+  }
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

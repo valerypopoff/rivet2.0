@@ -6,8 +6,6 @@ service:
     targetPort: 8081
   execution:
     targetPort: 8082
-  evaluation:
-    targetPort: 8083
 gateway:
   mode: embedded
 ingress:
@@ -19,7 +17,6 @@ replicaCount:
   web: 1
   backend: 1
   execution: 1
-  evaluation: 1
 autoscaling:
   proxy:
     enabled: false
@@ -34,14 +31,10 @@ hostedEvaluations:
   workerConcurrency: 1
   maxJobsPerRun: 2000
   maxOutstandingJobs: 10000
-  # One machine cannot isolate batch work by node; the operator can add a
-  # lower-priority class later. This is not the multi-node production profile.
+  # Trials share the editor backend; they do not create another role container.
 legacyRestore:
   enabled: true
 resourceLimitAcknowledgements:
   proxy:
     memory: 'Single-machine proxy memory cap awaits representative installation measurements.'
     ephemeralStorage: 'Single-machine proxy scratch cap awaits representative installation measurements.'
-  evaluation:
-    memory: 'Single-machine Evaluation memory cap awaits representative graph measurements; concurrency is one.'
-    ephemeralStorage: 'Single-machine Evaluation scratch cap awaits representative graph measurements.'

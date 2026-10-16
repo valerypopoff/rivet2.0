@@ -9,6 +9,7 @@ import {
 } from '../../app/src/host';
 import { EditorMessageBridge, type SavedProjectSignal } from './EditorMessageBridge';
 import { RIVET_EXECUTOR_WS_URL } from '../../studio-server-shared/hosted-env';
+import { fetchHostedConfig } from './workflowApi';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import { hostedRivetProviders } from './hostedRivetProviders';
 import { useReconcileHostedProjectTitleAfterSave } from './useReconcileHostedProjectTitleAfterSave';
@@ -39,6 +40,11 @@ const HOSTED_RIVET_UI = {
 } satisfies RivetAppHostUiConfig;
 
 export const HostedEditorApp: FC = () => {
+  const resolveInternalHostedExecutorUrl = useCallback(async () => {
+    const config = await fetchHostedConfig({ signal: AbortSignal.timeout(10_000) });
+    if (config.executorWsUrlIsOverride !== false || !config.executorWsUrl) throw new Error('Automatic executor owner discovery unavailable.');
+    return config.executorWsUrl;
+  }, []);
   const [workspaceHost, setWorkspaceHost] = useState<RivetWorkspaceHost | null>(null);
   const [savedProjectSignal, setSavedProjectSignal] = useState<SavedProjectSignal | null>(null);
   const reconcileHostedProjectTitleAfterSave = useReconcileHostedProjectTitleAfterSave(workspaceHost);
@@ -93,7 +99,7 @@ export const HostedEditorApp: FC = () => {
 
   return (
     <RivetAppHost
-      executor={{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL }}
+      executor={{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL, resolveInternalHostedExecutorUrl }}
       providers={hostedRivetProviders}
       ui={HOSTED_RIVET_UI}
       onActiveProjectChanged={handleActiveProjectChanged}

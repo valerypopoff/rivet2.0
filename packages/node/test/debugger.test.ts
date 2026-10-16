@@ -35,6 +35,69 @@ import { makeThrowingCodeProject } from './runtimeSpeedFixtures.js';
 import { stringifyDebuggerPayloadForTransport } from '../src/debuggerPayloadSanitizer.js';
 
 describe('debugger client authorization', () => {
+  it('retirement fences new connections without revoking accepted sockets or weakening fresh authorization', async () => {
+    let accepting = true,
+      authorized = true;
+    const debuggerServer = startDebuggerServer({
+      port: 0,
+      host: '127.0.0.1',
+      isAcceptingConnections: () => accepting,
+      authorizeClient: async () => authorized,
+    });
+    const server = debuggerServer.webSocketServer;
+    await once(server, 'listening');
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    try {
+      await once(client, 'open');
+      accepting = false;
+      const denied = new WebSocket(`ws://127.0.0.1:${port}`);
+      const [error] = await once(denied, 'error');
+      assert.match(error.message, /403/);
+      await wait(5100); // One fresh authorization interval, not merely the initial handshake.
+      assert.equal(client.readyState, WebSocket.OPEN);
+      authorized = false;
+      await once(client, 'close', { signal: AbortSignal.timeout(10_000) });
+    } finally {
+      client.terminate();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('an authorization pending when retirement starts cannot admit a late socket', async () => {
+    let accepting = true;
+    let resolve!: (allowed: boolean) => void;
+    let entered!: () => void;
+    const authorizing = new Promise<void>((done) => {
+      entered = done;
+    });
+    const debuggerServer = startDebuggerServer({
+      port: 0,
+      host: '127.0.0.1',
+      isAcceptingConnections: () => accepting,
+      authorizeClient: () => {
+        entered();
+        return new Promise<boolean>((done) => {
+          resolve = done;
+        });
+      },
+    });
+    const server = debuggerServer.webSocketServer;
+    await once(server, 'listening');
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    const client = new WebSocket(`ws://127.0.0.1:${port}`);
+    const rejected = once(client, 'error');
+    try {
+      await authorizing;
+      accepting = false;
+      resolve(true);
+      const [error] = await rejected;
+      assert.match(error.message, /403/);
+    } finally {
+      client.terminate();
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  });
   it('rejects unauthorized upgrades and closes an authorized socket after policy revocation', async () => {
     let allowed = false;
     const debuggerServer = startDebuggerServer({ port: 0, host: '127.0.0.1', authorizeClient: async () => allowed });
@@ -1641,7 +1704,10 @@ describe('startDebuggerServer broadcast', () => {
     });
     assert.deepEqual(getState(socketA as unknown as WebSocket).settings, settingsA);
     assert.deepEqual(getState(socketB as unknown as WebSocket).settings, settingsB);
-    assert.equal(getState(socketA as unknown as WebSocket).uploadedProject?.plugins?.some((plugin) => plugin.id === 'typesafe'), false);
+    assert.equal(
+      getState(socketA as unknown as WebSocket).uploadedProject?.plugins?.some((plugin) => plugin.id === 'typesafe'),
+      false,
+    );
     assert.equal(
       getState(socketA as unknown as WebSocket).uploadedProject?.graphs[projectA.metadata.mainGraphId]?.nodes[0]?.type,
       'classifierQuestion',

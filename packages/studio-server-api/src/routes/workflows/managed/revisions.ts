@@ -63,6 +63,9 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
     queueWorkflowInvalidation: options.context.executionInvalidationController.queueWorkflowInvalidation.bind(
       options.context.executionInvalidationController,
     ),
+    queueCatalogInvalidation: options.context.executionInvalidationController.queueCatalogInvalidation.bind(
+      options.context.executionInvalidationController,
+    ),
   };
 
   const shouldInvalidateExecutionCacheAfterDraftChange = async (
@@ -290,7 +293,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
 
                 if (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow)) {
                   await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-                }
+                } else await deps.queueCatalogInvalidation(client);
               }
 
               return {
@@ -370,7 +373,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
 
           if (!created && (await shouldInvalidateExecutionCacheAfterDraftChange(client, workflow))) {
             await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-          }
+          } else await deps.queueCatalogInvalidation(client);
 
           return {
             path: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
@@ -652,7 +655,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
 
         if (publishedEndpointName || importedWebAppRows.length > 0) {
           await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-        }
+        } else await deps.queueCatalogInvalidation(client);
 
         return deps.mapWorkflowRowToProjectItem(workflow);
       });

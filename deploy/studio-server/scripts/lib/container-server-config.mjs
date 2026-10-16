@@ -301,7 +301,7 @@ export function createManagedCompose(
     ],
     healthcheck: health(8080),
   });
-  const services = { backend: api('control'), execution: api('execution'), evaluation: api('evaluation') };
+  const services = { backend: api('control'), execution: api('execution') };
   Object.assign(services.backend, {
     entrypoint: ['node', '/opt/rivet/backend-supervisor.mjs'],
     healthcheck: health(21890),
@@ -314,7 +314,6 @@ export function createManagedCompose(
       RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL: 'http://execution:8080/internal/workflows',
       RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL: 'http://backend:8080/internal/workflows-latest',
       RIVET_LEGACY_RESTORE_EXECUTION_READY_URL: 'http://execution:8080/readyz',
-      RIVET_LEGACY_RESTORE_EVALUATION_READY_URL: 'http://evaluation:8080/readyz',
       RIVET_LEGACY_RESTORE_ROOT: '/data/rivet-restore',
       RIVET_PROJECT_BUNDLE_SCRATCH_ROOT: '/data/project-bundles',
       RIVET_MANAGED_MAINTENANCE_ENABLED: 'true',

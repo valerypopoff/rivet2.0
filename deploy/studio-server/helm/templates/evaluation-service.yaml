@@ -1,4 +1,4 @@
-{{- if .Values.hostedEvaluations.enabled }}
+{{- if and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled }}
 # Internal-only Service for health/metrics discovery. Neither the external
 # gateway nor the embedded proxy routes product-facing workflow traffic here.
 apiVersion: v1

@@ -44,80 +44,95 @@ test('shutdown also terminates a child registered after the initial process fenc
   registry.clear();
 });
 
-test('managed worker drain settles an accepted job and in-flight heartbeat before storage closes', async (t) => {
-  t.mock.timers.enable({ apis: ['setInterval'] });
-  let stopped = false;
-  let releaseJob!: () => void;
-  let releaseHeartbeat!: () => void;
-  let entered = false;
-  let touches = 0;
-  let claims = 0;
-  const jobGate = new Promise<void>((resolve) => {
-    releaseJob = resolve;
-  });
-  const heartbeatGate = new Promise<void>((resolve) => {
-    releaseHeartbeat = resolve;
-  });
-  const pool = {
-    async query() {
-      return { rows: [] };
-    },
-    async connect() {
-      return {
-        async query(sql: string) {
-          if (sql.includes('WITH next_job')) {
-            claims++;
-            return { rows: [createJob()] };
-          }
-          return { rows: [] };
+for (const mode of ['retirement', 'shutdown'] as const) {
+  test(`managed worker ${mode} settles accepted work and outstanding heartbeats before storage closes`, async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    let stopped = false;
+    let releaseJob!: () => void;
+    let releaseHeartbeat!: () => void;
+    let entered = false;
+    let touches = 0;
+    let claims = 0;
+    const jobGate = new Promise<void>((resolve) => {
+      releaseJob = resolve;
+    });
+    const heartbeatGate = new Promise<void>((resolve) => {
+      releaseHeartbeat = resolve;
+    });
+    const pool = {
+      async query() {
+        return { rows: [] };
+      },
+      async connect() {
+        return {
+          async query(sql: string) {
+            if (sql.includes('WITH next_job')) {
+              claims++;
+              return { rows: [createJob()] };
+            }
+            return { rows: [] };
+          },
+          release() {},
+        };
+      },
+    };
+    const worker = createManagedRuntimeLibrariesJobWorker({
+      context: { pool, instanceId: 'worker-1' } as unknown as ManagedRuntimeLibrariesContext,
+      isStopped: () => stopped,
+      syncForLocalUse: async () => {},
+      getProcessManagedSync: () => async () => {},
+      jobStore: {
+        appendJobLog: async () => {},
+        failJob: async () => false,
+        async touchJob() {
+          touches++;
+          await heartbeatGate;
         },
-        release() {},
-      };
-    },
-  };
-  const worker = createManagedRuntimeLibrariesJobWorker({
-    context: { pool, instanceId: 'worker-1' } as unknown as ManagedRuntimeLibrariesContext,
-    isStopped: () => stopped,
-    syncForLocalUse: async () => {},
-    getProcessManagedSync: () => async () => {},
-    jobStore: {
-      appendJobLog: async () => {},
-      failJob: async () => false,
-      async touchJob() {
-        touches++;
-        await heartbeatGate;
       },
-    },
-    artifactActivation: {
-      async processJob() {
-        entered = true;
-        await jobGate;
-        return 'succeeded';
+      artifactActivation: {
+        async processJob() {
+          entered = true;
+          await jobGate;
+          return 'succeeded';
+        },
       },
-    },
+    });
+    worker.startWorkerLoop();
+    worker.startWorkerLoop();
+    await setImmediate();
+    assert.equal(entered, true);
+    t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 3);
+    await setImmediate();
+    assert.equal(touches, 1, 'heartbeat writes are single-flight');
+    if (mode === 'retirement') {
+      worker.beginDrain();
+      worker.beginDrain();
+    } else stopped = true;
+    let drained = false;
+    const drain = (mode === 'retirement' ? worker.drainAcceptedWork() : worker.drain()).then(() => {
+      drained = true;
+    });
+    if (mode === 'retirement') {
+      releaseHeartbeat();
+      await setImmediate();
+      t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS);
+      await setImmediate();
+      assert.equal(touches, 2, 'retirement keeps the accepted job lease alive');
+      assert.equal(drained, false, 'an active job prevents retirement completion');
+    }
+    releaseJob();
+    await setImmediate();
+    if (mode === 'shutdown') {
+      assert.equal(drained, false, 'the outcome still owns its outstanding heartbeat');
+      releaseHeartbeat();
+    }
+    await drain;
+    worker.startWorkerLoop();
+    t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 2);
+    assert.equal(claims, 1);
+    assert.equal(touches, mode === 'retirement' ? 2 : 1);
   });
-  worker.startWorkerLoop();
-  worker.startWorkerLoop();
-  await setImmediate();
-  assert.equal(entered, true);
-  t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 3);
-  await setImmediate();
-  assert.equal(touches, 1, 'heartbeat writes are single-flight');
-  stopped = true;
-  let drained = false;
-  const drain = worker.drain().then(() => {
-    drained = true;
-  });
-  releaseJob();
-  await setImmediate();
-  assert.equal(drained, false, 'the outcome still owns its outstanding heartbeat');
-  releaseHeartbeat();
-  await drain;
-  worker.startWorkerLoop();
-  t.mock.timers.tick(JOB_HEARTBEAT_INTERVAL_MS * 2);
-  assert.equal(claims, 1);
-  assert.equal(touches, 1);
-});
+}
 
 function createJob(status: RuntimeLibraryJobRow['status'] = 'running'): RuntimeLibraryJobRow {
   return {
@@ -339,6 +354,72 @@ test('an unavailable outcome resolver leaves the active job and uploaded artifac
   assert.equal(fixture.state.failedJobCalls, 0);
   assert.equal(fixture.state.release, null);
   assert.equal(fixture.state.uploadedKeys.length, 1);
+});
+
+test('worker retirement cannot acknowledge an unresolved activation even after its process settles', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  let worker!: ReturnType<typeof createManagedRuntimeLibrariesJobWorker>;
+  let processed = 0;
+  const job = createJob();
+  const client = {
+    async query(sql: string) {
+      return queryResult(sql.includes('WITH next_job') ? [job] : []);
+    },
+    release() {},
+  };
+  worker = createManagedRuntimeLibrariesJobWorker({
+    context: {
+      instanceId: 'retirement-fixture',
+      pool: { query: async () => queryResult(), connect: async () => client },
+    } as never,
+    isStopped: () => false,
+    getProcessManagedSync: () => async () => {},
+    syncForLocalUse: async () => {},
+    jobStore: { appendJobLog: async () => {}, failJob: async () => false, touchJob: async () => {} },
+    artifactActivation: {
+      processJob: async () => {
+        processed++;
+        worker.beginDrain();
+        return 'unresolved';
+      },
+    },
+  });
+  worker.startWorkerLoop();
+  await assert.rejects(worker.drainAcceptedWork(), /outcome is unconfirmed/);
+  assert.equal(processed, 1);
+  // The established forced-disposal path still settles the process without inventing/retrying an outcome.
+  await worker.drain();
+});
+
+test('lost runtime-library claim and failed rollback discard the connection and block retirement', async () => {
+  let worker!: ReturnType<typeof createManagedRuntimeLibrariesJobWorker>;
+  const rollbackError = new Error('Fixture rollback failure');
+  let discarded: Error | undefined;
+  const client = {
+    async query(sql: string) {
+      if (sql === 'COMMIT') throw new Error('Fixture lost claim acknowledgement');
+      if (sql === 'ROLLBACK') throw rollbackError;
+      return queryResult();
+    },
+    release(error?: Error) {
+      discarded = error;
+      worker.beginDrain();
+    },
+  };
+  worker = createManagedRuntimeLibrariesJobWorker({
+    context: {
+      instanceId: 'claim-fixture',
+      pool: { query: async () => queryResult(), connect: async () => client },
+    } as never,
+    isStopped: () => false,
+    getProcessManagedSync: () => async () => {},
+    syncForLocalUse: async () => {},
+    jobStore: { appendJobLog: async () => {}, failJob: async () => false, touchJob: async () => {} },
+    artifactActivation: { processJob: async () => assert.fail('An unknown claim must not invoke installation.') },
+  });
+  worker.startWorkerLoop();
+  await assert.rejects(worker.drainAcceptedWork(), /ownership is unconfirmed/);
+  assert.equal(discarded, rollbackError);
 });
 
 test('late failure handling cannot overwrite a successful managed runtime-library job', async () => {

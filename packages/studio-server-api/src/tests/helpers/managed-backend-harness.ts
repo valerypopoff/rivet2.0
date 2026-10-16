@@ -43,9 +43,9 @@ export class FakeListener {
     this.endHandler = null;
   }
 
-  emitNotification(payload: unknown): void {
+  emitNotification(payload: unknown, channel = MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL): void {
     this.notificationHandler?.({
-      channel: MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL,
+      channel,
       payload: JSON.stringify(payload),
     });
   }

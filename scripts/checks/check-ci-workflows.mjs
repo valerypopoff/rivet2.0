@@ -603,6 +603,28 @@ assert.doesNotMatch(
   /api:latest/,
   'A mutable API alias must not authorize predecessor compatibility.',
 );
+const haGate = findStep(
+  imageJobs['managed-kubernetes-release-gate'],
+  'Run HA Kubernetes Gate',
+  'Managed Kubernetes release gate',
+);
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, 'kind-rivet-managed-release');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, 'kind-rivet-managed-release');
+assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
+assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs certify/);
+assert.doesNotMatch(haGate.run, /:production|allow-missing/);
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-release-gate'],
+    'Upload HA Release Evidence',
+    'Managed Kubernetes release gate',
+  ).with['if-no-files-found'],
+  'error',
+);
+assert.match(
+  findStep(imageJobs['promote-images'], 'Attest promoted release manifest', 'Image promotion job').run,
+  /--ha-evidence artifacts\/studio-server-ha-evidence\/ha-evidence\.json/,
+);
 const promotionSteps = imageJobs['promote-images'].steps.map((step) => step.name);
 assert.ok(
   promotionSteps.indexOf('Attest promoted release manifest') <
@@ -810,8 +832,8 @@ for (const jobName of [
 }
 assert.equal(
   imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_GATE_CONFIRM,
-  'disrupt-staging-evaluations',
-  'The hosted-Evaluation certificate must supply its exact disruption acknowledgement.',
+  'disrupt-staging-editor-backend',
+  'The co-located hosted-Evaluation certificate must explicitly acknowledge editor-backend disruption.',
 );
 assert.match(
   String(imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM),

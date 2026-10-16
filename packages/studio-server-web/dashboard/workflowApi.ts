@@ -199,9 +199,10 @@ export function openWorkflowTreeEventStream(options: {
   return source;
 }
 
-export async function fetchHostedConfig(): Promise<Partial<HostedRouteConfig>> {
+export async function fetchHostedConfig(options: { signal?: AbortSignal } = {}): Promise<Partial<HostedRouteConfig>> {
   const response = await fetch(`${API}/config`, {
     cache: 'no-store',
+    signal: options.signal,
   });
   const config = await hostedConfigJsonResponse<Partial<HostedRouteConfig>>(response);
   const normalizedConfig = normalizeHostedRuntimeConfig(config) as Partial<HostedRouteConfig>;

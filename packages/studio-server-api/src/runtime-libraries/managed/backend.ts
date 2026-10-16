@@ -29,6 +29,7 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   #initializePromise: Promise<void> | null = null;
   #disposePromise: Promise<void> | null = null;
   #stopped = false;
+  #draining = false;
 
   constructor(blobStore?: RuntimeLibrariesBlobStore) {
     this.#context = createManagedRuntimeLibrariesContext(blobStore);
@@ -120,7 +121,19 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   beginDrain(): void {
-    this.#stopped = true;
+    this.#draining = true;
+    this.#jobWorker.beginDrain();
+  }
+
+  async drainAcceptedWork(): Promise<void> {
+    this.beginDrain();
+    await this.#initializePromise;
+    await this.#jobWorker.drainAcceptedWork();
+  }
+
+  #assertJobAdmission(): void {
+    if (this.#stopped) throw new Error('Managed runtime-library backend is shutting down.');
+    if (this.#draining) throw createHttpError(503, 'Runtime-library jobs are draining.');
   }
 
   async getState() {
@@ -129,7 +142,9 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async enqueueInstall(packages: RuntimeLibraryPackageSpec[]) {
+    this.#assertJobAdmission();
     await this.initialize();
+    this.#assertJobAdmission();
     const normalizedPackages = normalizeJobPackages(packages);
     if (normalizedPackages.length === 0) {
       throw createHttpError(400, 'packages array is required and must not be empty');
@@ -139,7 +154,9 @@ export class ManagedRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
   }
 
   async enqueueRemove(packageNames: string[]) {
+    this.#assertJobAdmission();
     await this.initialize();
+    this.#assertJobAdmission();
     const normalizedPackages = normalizeJobPackages(packageNames.map((name) => ({ name, version: '' })));
     if (normalizedPackages.length === 0) {
       throw createHttpError(400, 'packages array is required and must not be empty');

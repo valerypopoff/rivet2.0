@@ -109,6 +109,26 @@ instead of knowing Rivet's internal workspace order:
 These scripts intentionally do not build docs, tests, the desktop app, or the
 CLI unless that package is part of the named target.
 
+The production-cutover verification lane also runs the pod-local backend
+retirement coordinator, supervisor subprocess regressions and the real editor
+executor retirement test. The Node debugger lane tests admission racing async
+authorization and preserves authorization on accepted sockets while retiring.
+These tests do not deploy or restart a Kubernetes installation; a passing local
+retirement test is not a mixed-version zero-downtime upgrade certificate. See
+[HA acceptance gates](./studio-server/ha-rolling-upgrades.md).
+
+The image release's disposable Kind job also runs the integrated HA workload
+certificate. It fetches the candidate's exact immutable predecessor manifest,
+uses mixed-version qualification only when that predecessor has HA evidence,
+and otherwise records bootstrap-only qualification. Sustained traffic,
+two-ready-backend observations, editor resumption, debugger mesh controls,
+accepted hosted Evaluations, early-output recording completion, shared export
+downloads and exact UID-fenced replacements must all pass. The resulting
+`ha-evidence.json` is required by that job and consumed during manifest promotion;
+missing/partial evidence cannot silently enable rolling production upgrades.
+An uncommitted local image rehearsal is runtime evidence, not a source-bound
+production certificate. It never authorizes changing GCP by itself.
+
 ### `yarn bench:build-timing`
 
 Runs `node scripts/measure-build-phases.mjs`, which measures Yarn install,

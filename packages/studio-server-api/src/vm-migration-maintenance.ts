@@ -12,6 +12,7 @@ const markerName = 'vm-migration-maintenance.json';
 let activeRequests = 0;
 let controlOperation = false;
 const passiveStreams = new Set<() => void>();
+let passiveStreamsRetiring = false;
 
 /** Serializes the two UI storage workflows before either can create/remove a fence. */
 export function claimLocalStorageControl(): () => void {
@@ -33,7 +34,7 @@ export function assertNoManagedMigrationMaintenance(): void {
 /** Notification-only SSE owners opt in after their asynchronous setup is
  * complete. Do not register executions or mutating requests here. */
 export function watchVmMigrationPassiveStream(response: Response): boolean {
-  if (isVmMigrationMaintenanceActive()) {
+  if (passiveStreamsRetiring || isVmMigrationMaintenanceActive()) {
     response.end();
     return false;
   }
@@ -51,6 +52,14 @@ export function watchVmMigrationPassiveStream(response: Response): boolean {
 
 function closePassiveStreams(): void {
   for (const close of passiveStreams) close();
+}
+
+/** Terminal process admission only. It does not create a storage-maintenance
+ * marker, cancel durable jobs, or fence another replica. Late observers close
+ * too, including asynchronous subscriptions accepted before the fence. */
+export function beginPassiveStreamRetirement(): void {
+  passiveStreamsRetiring = true;
+  closePassiveStreams();
 }
 
 function markerPath(): string {

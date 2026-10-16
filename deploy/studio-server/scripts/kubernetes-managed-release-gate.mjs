@@ -247,6 +247,7 @@ spec:
       containers:
         - name: postgres
           image: postgres:16.8-alpine
+          args: ["postgres", "-c", "max_connections=250"]
           ports: [{ containerPort: 5432 }]
           env:
             - { name: POSTGRES_DB, value: rivet }
@@ -920,7 +921,7 @@ export class ManagedReleaseGate {
     );
   }
 
-  async openProxy() {
+  async openProxy(target = `service/${this.config.release}-proxy`) {
     if (this.portForward && !this.portForward.killed) {
       this.portForward.kill();
       this.portForward = null;
@@ -934,7 +935,7 @@ export class ManagedReleaseGate {
         '-n',
         this.config.namespace,
         'port-forward',
-        `service/${this.config.release}-proxy`,
+        target,
         `${port}:80`,
       ],
       {
@@ -1831,6 +1832,8 @@ export class ManagedReleaseGate {
     if (!this.config.keepNamespace) await this.deleteOwnedNamespace();
   }
 }
+
+export { run as runManagedGateCommand };
 
 async function main() {
   const config = buildManagedReleaseGateConfig({ rootDir, mode });

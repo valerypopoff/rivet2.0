@@ -126,7 +126,8 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return (this.#initializing ??= (async () => {
       if (this.#runBackgroundTasks) await this.#recordings.initialize();
       else await this.#context.initialize();
-      if (this.#phase === 'open') this.#hostedEvaluationCoordinator?.start();
+      // The server starts workers after runtime libraries are ready. Opening
+      // storage for startup, health or an HTTP request must not execute graphs.
     })());
   }
 
@@ -145,6 +146,8 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
       await this.#hostedEvaluationCoordinator?.stop();
     })());
   }
+  beginRetirement(): void { this.#hostedEvaluationCoordinator?.beginRetirement(); }
+  async drainAcceptedWork(): Promise<void> { await this.#hostedEvaluationCoordinator?.drainAcceptedWork(); }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
     await this.#context.checkHealth(context);

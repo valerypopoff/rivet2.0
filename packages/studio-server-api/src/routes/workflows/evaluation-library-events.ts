@@ -17,7 +17,7 @@ const CLIENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const HEARTBEAT_MS = 20_000;
 
 class EvaluationLibraryNotifier {
-  readonly #epoch = randomUUID();
+  #epoch = randomUUID();
   readonly #listeners = new Set<Listener>();
 
   subscribe(listener: Listener): () => void {
@@ -27,6 +27,11 @@ class EvaluationLibraryNotifier {
 
   state(revision: number): Omit<EvaluationLibraryChangeEvent, 'sourceClientId'> {
     return { epoch: this.#epoch, revision };
+  }
+
+  reset(): void {
+    this.#epoch = randomUUID();
+    this.notify(0, null);
   }
 
   notify(revision: number, sourceClientId: string | null): void {
@@ -50,6 +55,12 @@ export function getEvaluationLibraryClientId(request: Request): string | null {
 
 export function notifyEvaluationLibraryChanged(request: Request, revision: number): void {
   notifier.notify(revision, getEvaluationLibraryClientId(request));
+}
+
+/** A gap changes epoch so clients refetch even if a missed revision is unknown. */
+export function notifyExternalEvaluationLibraryChanged(revision: number | null): void {
+  if (revision === null) notifier.reset();
+  else notifier.notify(revision, null);
 }
 
 function writeEvent(response: Response, type: string, event: object): boolean {

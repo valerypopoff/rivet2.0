@@ -8,6 +8,9 @@ type JointCapacityConfig = {
   };
 };
 
+export function sharedEvaluationWorkerPod(pods: unknown[], release: string): { name: string; uid: string };
+export function isBackendRestartReadFailure(error: unknown): boolean;
+
 export function buildHostedEvaluationGateConfig(input?: { rootDir?: string; env?: NodeJS.ProcessEnv }): {
   hostedEvaluation: {
     waitSeconds: number;

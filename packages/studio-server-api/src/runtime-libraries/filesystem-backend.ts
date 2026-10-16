@@ -99,6 +99,11 @@ class FilesystemRuntimeLibrariesBackend implements RuntimeLibrariesBackend {
     await jobRunner.drain(true);
   }
 
+  async drainAcceptedWork(): Promise<void> {
+    this.beginDrain();
+    await jobRunner.drain(false);
+  }
+
   async getState(): Promise<RuntimeLibrariesState> {
     try {
       ensureDirectories();

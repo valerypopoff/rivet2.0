@@ -16,7 +16,9 @@ type RenderedResource = {
       spec: {
         containers: {
           name: string;
-          env?: { name: string; value?: string }[];
+          readinessProbe?: { httpGet: { port: string } };
+          ports?: { name: string; containerPort: number }[];
+          env?: { name: string; value?: string; valueFrom?: { secretKeyRef?: { name: string; key: string } } }[];
           volumeMounts?: { name: string; mountPath: string }[];
         }[];
         volumes: { name: string; emptyDir?: { medium?: string; sizeLimit?: string } }[];
@@ -442,8 +444,8 @@ test('rendered chart keeps control-plane and execution-plane API env contracts d
   assert.ok(unsandboxedWeb);
   assert.match(unsandboxedWeb, /readOnlyRootFilesystem: false/);
   const evaluationChart = await renderLocalKubernetesChartWithOverrides(['hostedEvaluations.enabled=true']);
-  assert.equal((evaluationChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 6);
-  assert.equal((evaluationChart.match(/- name: node-tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit: 1Gi/g) ?? []).length, 6);
+  assert.equal((evaluationChart.match(/mountPath: \/tmp\s*$/gm) ?? []).length, 5);
+  assert.equal((evaluationChart.match(/- name: node-tmp\s*\n\s*emptyDir:\s*\n\s*sizeLimit: 1Gi/g) ?? []).length, 5);
   assert.match(renderedChart, /project-managed-app-settings\.js/);
   assert.match(renderedChart, /name: RIVET_APP_SETTINGS_BACKEND\s*\n\s*value: "postgres"/);
   assert.match(
@@ -474,6 +476,12 @@ test('verified predecessor rollback can restore the older images startup setting
   assert.doesNotMatch(rendered, /- name: backend\s*\n\s*image:/);
   assert.doesNotMatch(rendered, /- name: api-runtime-config-compatibility/);
   assert.doesNotMatch(rendered, /- name: executor-runtime-config-compatibility/);
+  const legacyEvaluations = await renderLocalKubernetesChartWithOverrides([
+    'compatibility.legacyStartupSettingsFiles=true',
+    'workflowSchema.migrationJob.enabled=false',
+    'hostedEvaluations.enabled=true',
+  ]);
+  assert.match(legacyEvaluations, /app\.kubernetes\.io\/component: evaluation/);
   await renderLocalKubernetesChartWithOverrides([
     'compatibility.legacyStartupSettingsFiles=true',
     'workflowSchema.migrationJob.enabled=false',
@@ -650,29 +658,26 @@ test('chart passes the workflow prefix to bootstrap and rejects unsafe object na
   );
 });
 
-test('chart isolates hosted Evaluation workers with chart-owned quotas and a dedicated internal Service', async () => {
+test('hosted Evaluations share the editor backend without a dedicated workload, Service or database pool', async () => {
   const renderedChart = await renderLocalKubernetesChartWithOverrides([
     'hostedEvaluations.enabled=true',
     'metrics.enabled=true',
     'metrics.serviceMonitor.enabled=true',
+    'replicaCount.evaluation=0',
+    'postgres.maxConnections=78',
   ]);
-
-  assert.match(
-    renderedChart,
-    /app\.kubernetes\.io\/component: evaluation[\s\S]*?name: RIVET_API_PROFILE\s*\n\s*value: "evaluation"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN\s*\n\s*value: "2000"[\s\S]*?name: RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS\s*\n\s*value: "10000"/,
-  );
-  assert.match(
-    renderedChart,
-    /app\.kubernetes\.io\/component: evaluation[\s\S]*?name: RIVET_RUNTIME_LIBRARIES_REPLICA_TIER\s*\n\s*value: "endpoint"[\s\S]*?name: RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED\s*\n\s*value: "false"/,
-  );
-  assert.match(
-    renderedChart,
-    /kind: Service[\s\S]*?name: rivet-rivet-evaluation[\s\S]*?app\.kubernetes\.io\/component: evaluation/,
-  );
-  assert.match(
-    renderedChart,
-    /name: rivet-rivet-evaluation-metrics[\s\S]*?app\.kubernetes\.io\/component: evaluation[\s\S]*?path: \/metrics/,
-  );
+  const workloads = deploymentYaml.parseAllDocuments(renderedChart).map((document) => document.toJS());
+  const backend = workloads
+    .find((resource) => resource.kind === 'StatefulSet')!
+    .spec!.template!.spec.containers.find((container) => container.name === 'backend')!;
+  const env = new Map(backend.env!.map((entry) => [entry.name, entry.value]));
+  assert.equal(env.get('RIVET_API_PROFILE'), 'control');
+  assert.equal(env.get('RIVET_HOSTED_EVALUATIONS_ENABLED'), 'true');
+  assert.equal(env.get('RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY'), '1');
+  assert.equal(env.get('RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN'), '2000');
+  assert.equal(env.get('RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS'), '10000');
+  assert.doesNotMatch(renderedChart, /app\.kubernetes\.io\/component: evaluation|name: rivet-rivet-evaluation/);
+  assert.equal(env.has('RIVET_LEGACY_RESTORE_EVALUATION_READY_URL'), false);
   assert.doesNotMatch(
     renderedChart,
     /name: RIVET_EVALUATION_UPSTREAM_HOST/,
@@ -700,8 +705,8 @@ test('chart isolates hosted Evaluation workers with chart-owned quotas and a ded
     /env\.RIVET_HOSTED_EVALUATIONS_ENABLED is chart-owned; configure hostedEvaluations instead/,
   );
   await assertHelmTemplateFails(
-    ['hostedEvaluations.enabled=true', 'replicaCount.evaluation=0'],
-    /hostedEvaluations\.enabled requires replicaCount\.evaluation >= 1/,
+    ['hostedEvaluations.enabled=true', 'postgres.maxConnections=77'],
+    /requires 78 connections/,
   );
 });
 
@@ -844,10 +849,10 @@ test('chart makes pull-only metrics and Prometheus Operator resources explicit o
     'metrics.enabled=true',
     'metrics.serviceMonitor.enabled=true',
   ]);
-  assert.equal((evaluationMetricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 3);
+  assert.equal((evaluationMetricsChart.match(/kind: ServiceMonitor/g) ?? []).length, 2);
   assert.match(
     evaluationMetricsChart,
-    /name: rivet-rivet-evaluation-metrics[\s\S]*?app\.kubernetes\.io\/component: evaluation[\s\S]*?path: \/metrics/,
+    /name: rivet-rivet-api-metrics[\s\S]*?app\.kubernetes\.io\/component: api[\s\S]*?path: \/metrics/,
   );
   assert.match(metricsChart, /interval: "1h30m"/);
   assert.match(
@@ -1151,9 +1156,9 @@ test('chart can delegate migration execution but never lets API replicas become 
   );
 });
 
-test('chart validation keeps the supported managed singleton control-plane boundaries', () => {
+test('chart validation keeps the default singleton and explicitly guarded HA boundaries', async () => {
   const validateValuesTemplate = readRepoFile('deploy/studio-server/helm/templates/validate-values.yaml');
-  const backendStatefulSet = readRepoFile('deploy/studio-server/helm/templates/backend-statefulset.yaml');
+  const backendStatefulSet = await renderLocalKubernetesChart();
 
   assert.match(validateValuesTemplate, /workflowStorage\.backend=managed and runtimeLibraries\.backend=managed/);
   assert.match(
@@ -1168,10 +1173,36 @@ test('chart validation keeps the supported managed singleton control-plane bound
     validateValuesTemplate,
     /appSettings\.backend=postgres so settings remain consistent across replicas without a shared app-data volume/,
   );
-  assert.match(backendStatefulSet, /replicas: \{\{ \.Values\.replicaCount\.backend \}\}/);
+  assert.match(backendStatefulSet, /replicas: 1/);
   assert.match(backendStatefulSet, /podManagementPolicy: OrderedReady/);
   assert.match(backendStatefulSet, /updateStrategy:\s*\n\s*type: RollingUpdate/);
-  assert.match(backendStatefulSet, /StatefulSets do not expose Deployment's Recreate strategy/);
+  const ha = await renderLocalKubernetesChartWithOverrides([
+    'ha.enabled=true',
+    'replicaCount.backend=2',
+    'postgres.maxConnections=250',
+  ]);
+  assert.match(ha, /name: rivet-rivet-ha-backend/);
+  assert.match(ha, /name: rivet-rivet-maintenance-backend/);
+  assert.match(ha, /type: OnDelete/);
+  assert.match(ha, /kind: PodDisruptionBudget[\s\S]*?minAvailable: 2/);
+  const documents = deploymentYaml.parseAllDocuments(ha).map((d) => d.toJS());
+  const owners = documents.filter((d) => d.kind === 'StatefulSet');
+  assert.equal(owners.length, 3);
+  const executionOwner = owners.find((d) =>
+    d.spec?.template?.spec.containers[0]?.ports?.some((p) => p.name === 'exec-health'),
+  );
+  assert.ok(executionOwner, 'HA execution must expose supervisor health, separate from application admission');
+  assert.equal(executionOwner.spec!.template!.spec.containers[0]!.readinessProbe?.httpGet.port, 'exec-health');
+  for (const owner of owners)
+    for (const container of owner.spec!.template!.spec.containers)
+      for (const port of container.ports ?? [])
+        assert.ok(port.name.length <= 15, 'Kubernetes port names are limited to 15 characters');
+  const backend = owners.find((d) =>
+    d.spec?.template?.spec.containers[0]?.env?.some((e) => e.name === 'RIVET_HA_MAINTENANCE' && e.value === '0'),
+  )!;
+  assert.ok(backend);
+  assert.ok(!backend.spec!.template!.spec.volumes.some((v) => v.name === 'legacy-restore'));
+  assert.equal(owners.filter((d) => d.spec!.template!.spec.volumes.some((v) => v.name === 'legacy-restore')).length, 1);
 });
 
 test('chart budgets PostgreSQL connections against the maximum execution replica count', async () => {
@@ -1222,10 +1253,10 @@ test('legacy restore owns a separate durable claim and rejects deployment-bound 
       assert.equal(env.get('RIVET_LEGACY_RESTORE_INSTALLATION'), 'default/rivet');
       assert.equal(env.get('RIVET_DEPLOYMENT_STORAGE_BUCKET'), 'test-bucket');
       assert.equal(env.has('RIVET_LEGACY_RESTORE_EXECUTION_READY_URL'), profile === 'control');
-      assert.equal(env.has('RIVET_LEGACY_RESTORE_EVALUATION_READY_URL'), profile === 'control');
+      assert.equal(env.has('RIVET_LEGACY_RESTORE_EVALUATION_READY_URL'), false);
     }
   }
-  assert.deepEqual([...roles].sort(), ['control', 'evaluation', 'execution']);
+  assert.deepEqual([...roles].sort(), ['control', 'execution']);
   assert.match(enabled, /kind: PersistentVolumeClaim[\s\S]*?name: rivet-rivet-legacy-restore/);
   assert.match(enabled, /mountPath: \/data\/rivet-restore/);
   const stateful = readRepoFile('deploy/studio-server/helm/templates/backend-statefulset.yaml');
@@ -1319,7 +1350,6 @@ test('production overlay leaves ingress to the cluster owner and keeps managed s
 
   assert.match(prodOverlay, /gateway:\s*\n\s*mode:\s*external/);
   assert.match(prodOverlay, /ingress:\s*\n\s*enabled:\s*false/);
-  assert.match(prodOverlay, /vault:\s*\n\s*enabled:\s*true/);
   assert.match(prodOverlay, /backend:\s*1/);
   assert.match(prodOverlay, /web:\s*1/);
   assert.match(prodOverlay, /execution:\s*[2-9]\d*/);
@@ -1340,6 +1370,31 @@ test('production overlay leaves ingress to the cluster owner and keeps managed s
   assert.match(prodOverlay, /release:\s*\n\s*production:[\s\S]*?enabled:\s*true/);
 });
 
+test('shared production and test policy do not supply installation identities or enable Vault', () => {
+  for (const name of ['prod', 'test']) {
+    const values = deploymentYaml.parse(
+      readRepoFile(`deploy/studio-server/helm/overlays/${name}.yaml`),
+    ) as unknown as Record<string, Record<string, unknown>>;
+    for (const [group, keys] of Object.entries({
+      postgres: ['host', 'database', 'username', 'passwordSecretName', 'connectionStringSecretName'],
+      objectStorage: ['endpoint', 'bucket', 'region', 'accessKeySecretName', 'secretKeySecretName'],
+      auth: ['keySecretName'],
+      vault: ['enabled', 'role', 'authPath', 'secretPath', 'dotenvTemplate'],
+      ingress: ['host', 'className', 'externalDNSHostname', 'tlsSecretName', 'annotations'],
+    })) {
+      for (const key of keys) assert.equal(values[group]?.[key], undefined, `${name}: ${group}.${key}`);
+    }
+    assert.equal(values.gateway?.mode, 'external');
+    assert.equal(values.ingress?.enabled, false);
+  }
+  const defaults = deploymentYaml.parse(readRepoFile('deploy/studio-server/helm/values.yaml')) as unknown as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(defaults.vault!.enabled, false);
+  for (const key of ['bucket', 'region', 'endpoint']) assert.equal(defaults.objectStorage![key], '');
+});
+
 test('production rendering requires a fully identified digest-pinned release', async () => {
   const helmBin = await resolveHelmBin();
   const baseArgs = [
@@ -1350,6 +1405,8 @@ test('production rendering requires a fully identified digest-pinned release', a
     'rivet-prod',
     '--values',
     'deploy/studio-server/helm/overlays/prod.yaml',
+    '--values',
+    'deploy/studio-server/scripts/fixtures/kubernetes-environment.values.yaml',
     '--set',
     'images.web.repository=ghcr.io/example/web',
     '--set',
@@ -1403,6 +1460,104 @@ test('production rendering requires a fully identified digest-pinned release', a
   assert.doesNotMatch(rendered, /name: rivet-prod-rivet-proxy\b|app\.kubernetes\.io\/component: proxy/);
   assert.doesNotMatch(rendered, /^kind: Ingress$/m);
   assert.doesNotMatch(rendered, /example\.invalid\/rivet\/proxy/);
+  assert.doesNotMatch(rendered, /vault\.hashicorp\.com\//);
+
+  const renderTestOverlay = (overrides: string[] = []) =>
+    execFileSync(
+      helmBin,
+      [...baseArgs, '--values', 'deploy/studio-server/helm/overlays/test.yaml', ...identifiedReleaseArgs, ...overrides],
+      { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+    );
+  assert.doesNotMatch(renderTestOverlay(), /^kind: (Ingress|HorizontalPodAutoscaler)$/m);
+  assert.throws(
+    () => renderTestOverlay(['--set-string', 'postgres.connectionStringSecretName=']),
+    /managed storage requires either postgres.connectionStringSecretName/,
+  );
+
+  const exampleArgs = ['--values', 'deploy/studio-server/examples/external-storage.values.example.yaml'];
+  assert.throws(() => renderProduction(exampleArgs), /objectStorage.bucket and objectStorage.region must be nonempty/);
+  assert.match(
+    renderProduction([
+      ...exampleArgs,
+      '--set',
+      'objectStorage.bucket=operator-bucket',
+      '--set',
+      'objectStorage.region=eu-west-1',
+    ]),
+    /name: rivet-postgres-connection/,
+  );
+
+  // These are required operator inputs, not addresses/Secret names supplied by prod.yaml.
+  for (const [settings, message] of [
+    [['objectStorage.bucket='], /objectStorage.bucket and objectStorage.region must be nonempty/],
+    [['objectStorage.region='], /objectStorage.bucket and objectStorage.region must be nonempty/],
+    [['objectStorage.accessKeySecretName='], /managed storage requires objectStorage.accessKeySecretName/],
+    [['objectStorage.secretKeySecretName='], /managed storage requires objectStorage.accessKeySecretName/],
+    [['auth.keySecretName='], /auth.keySecretName is required/],
+    [['postgres.connectionStringSecretName='], /managed storage requires either postgres.connectionStringSecretName/],
+  ] as const) {
+    assert.throws(() => renderProduction(settings.flatMap((setting) => ['--set-string', setting])), message);
+  }
+
+  for (const [endpoint, region] of [
+    ['', 'eu-west-1'], // AWS endpoint discovery is an explicit operator choice.
+    ['https://storage.googleapis.com', 'auto'],
+    ['https://objects.example.invalid', 'operator-region'],
+  ]) {
+    const providerRendered = renderProduction([
+      '--set-string',
+      `objectStorage.endpoint=${endpoint}`,
+      '--set-string',
+      `objectStorage.region=${region}`,
+    ]);
+    const resources = deploymentYaml.parseAllDocuments(providerRendered).map((document) => document.toJS());
+    const env = resources
+      .find((resource) => resource.kind === 'StatefulSet')!
+      .spec!.template!.spec.containers.find((container) => container.name === 'backend')!.env!;
+    assert.equal(env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_STORAGE_ENDPOINT')?.value, endpoint);
+    assert.equal(env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_STORAGE_REGION')?.value, region);
+    assert.equal(env.find((entry) => entry.name === 'RIVET_KEY')?.valueFrom?.secretKeyRef?.name, 'verification-auth');
+    assert.equal(
+      env.find((entry) => entry.name === 'RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING')?.valueFrom?.secretKeyRef?.name,
+      'verification-postgres',
+    );
+  }
+
+  // Host-based PostgreSQL credentials and explicit Vault integrations remain supported.
+  assert.match(
+    renderProduction([
+      '--set-string',
+      'postgres.connectionStringSecretName=',
+      '--set',
+      'postgres.host=operator-postgres.example.invalid',
+      '--set',
+      'postgres.database=operator-db',
+      '--set',
+      'postgres.username=operator-user',
+      '--set',
+      'postgres.passwordSecretName=operator-password',
+    ]),
+    /name: operator-password/,
+  );
+  assert.match(
+    renderProduction([
+      '--set',
+      'vault.enabled=true',
+      '--set',
+      'vault.role=operator-role',
+      '--set',
+      'vault.secretPath=secret/data/operator/rivet',
+      '--set-string',
+      'vault.dotenvTemplate=RIVET_KEY=secret/data/operator/rivet',
+      '--set-string',
+      'auth.keySecretName=',
+      '--set-string',
+      'objectStorage.accessKeySecretName=',
+      '--set-string',
+      'objectStorage.secretKeySecretName=',
+    ]),
+    /vault\.hashicorp\.com\/role: "operator-role"/,
+  );
 
   assert.throws(
     () => renderProduction(['--set-string', 'resourceLimitAcknowledgements.execution.memory=']),

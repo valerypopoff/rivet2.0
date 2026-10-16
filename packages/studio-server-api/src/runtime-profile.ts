@@ -1,9 +1,8 @@
 import { badRequest } from './utils/httpError.js';
 
 /**
- * `evaluation` is an internal batch worker. It never owns HTTP control or
- * published-execution routes; it only starts the durable hosted-Evaluation
- * coordinator against managed storage.
+ * Current hosted Evaluations share `control` with the editor. `evaluation`
+ * remains an internal, route-free profile for predecessor compatibility only.
  */
 export type ApiRuntimeProfile = 'combined' | 'control' | 'evaluation' | 'execution';
 
@@ -44,9 +43,10 @@ export function isPublishedExecutionApiProfile(profile = getApiRuntimeProfile())
 }
 
 /**
- * Combined remains a supported local-development topology. Kubernetes batch
- * workers must use `evaluation`, keeping `execution` capacity public-only.
+ * Hosted trials share the control backend's CPU/memory with editor runs.
+ * The legacy evaluation profile remains readable for predecessor compatibility;
+ * published endpoint capacity must never claim evaluation jobs.
  */
 export function isHostedEvaluationWorkerApiProfile(profile = getApiRuntimeProfile()): boolean {
-  return profile === 'combined' || profile === 'evaluation';
+  return profile === 'control' || profile === 'combined' || profile === 'evaluation';
 }

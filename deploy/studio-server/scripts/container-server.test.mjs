@@ -28,6 +28,7 @@ import {
   assertContainerDeploymentEvidence,
   startContainerInstallation,
   stopContainerInstallation,
+  retireLegacyEvaluationContainers,
 } from './lib/container-server-lifecycle.mjs';
 import {
   containerDevelopmentBuildArgs,
@@ -368,7 +369,6 @@ test('all six commands share one managed application model without Kubernetes ma
       for (const [name, role] of [
         ['backend', 'control'],
         ['execution', 'execution'],
-        ['evaluation', 'evaluation'],
       ]) {
         assert.equal(m.services[name].environment.RIVET_API_PROFILE, role);
         assert.equal(m.services[name].environment.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE, 'verify');
@@ -379,6 +379,10 @@ test('all six commands share one managed application model without Kubernetes ma
         assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_STORAGE_ENDPOINT, c.objectStorage.endpoint);
         assert.equal(m.services[name].environment.RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY, c.objectStorage.secretAccessKey);
       }
+      assert.equal(m.services.evaluation, undefined);
+      assert.equal(m.services.backend.environment.RIVET_HOSTED_EVALUATIONS_ENABLED, 'true');
+      assert.equal(m.services.backend.environment.RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY, '1');
+      assert.equal(m.services.backend.environment.RIVET_LEGACY_RESTORE_EVALUATION_READY_URL, undefined);
       assert.equal(m.services.proxy.ports[0], `127.0.0.1:${c.port}:8080`);
       assert.equal(m.services.postgres?.ports, undefined);
       assert.equal(m.services.minio?.ports, undefined);
@@ -419,7 +423,7 @@ test('shared port and UI auth configure all six deployments without changing int
         assert.equal(config.port, 8081);
         assert.equal(containerStorageIdentity(config), containerStorageIdentity(base));
         assert.deepEqual(model.services.proxy.ports, ['127.0.0.1:8081:8080']);
-        for (const service of ['backend', 'execution', 'evaluation', 'migrate']) {
+        for (const service of ['backend', 'execution', 'migrate']) {
           const env = model.services[service].environment;
           assert.equal(env.RIVET_SERVER_UI_AUTH_MODE, mode);
           assert.equal(env.RIVET_REQUIRE_UI_GATE_KEY, 'true');
@@ -647,11 +651,69 @@ test('credential initialization preserves the complete dotenv after an interrupt
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+test('retiring a predecessor evaluation worker is scoped, graceful and preserves volumes', async () => {
+  const config = containerServerConfig(environment('dev'), 'dev', 'local-storage');
+  const worker = {
+    Id: 'a'.repeat(64),
+    Config: {
+      Labels: {
+        'com.docker.compose.service': 'evaluation',
+        'com.docker.compose.project': config.project,
+        'rivet.dev/container-installation': config.project,
+        'rivet.dev/storage-identity': containerStorageIdentity(config),
+        'rivet.dev/deployment-stage': 'dev',
+      },
+    },
+  };
+  const calls = [];
+  await retireLegacyEvaluationContainers(
+    config,
+    async (args) => {
+      calls.push(args);
+    },
+    [worker],
+  );
+  assert.deepEqual(calls, [
+    ['stop', '--time', '150', worker.Id],
+    ['rm', worker.Id],
+  ]);
+  for (const [key, value] of [
+    ['com.docker.compose.project', 'another-installation'],
+    ['rivet.dev/container-installation', 'another-installation'],
+    ['rivet.dev/storage-identity', 'changed'],
+    ['rivet.dev/deployment-stage', 'prod'],
+  ]) {
+    await assert.rejects(
+      retireLegacyEvaluationContainers(config, async () => assert.fail('must not mutate'), [
+        worker,
+        {
+          ...worker,
+          Config: { Labels: { ...worker.Config.Labels, [key]: value } },
+        },
+      ]),
+    );
+  }
+  const failed = [];
+  await assert.rejects(
+    retireLegacyEvaluationContainers(
+      config,
+      async (args) => {
+        failed.push(args);
+        throw new Error('drain failed');
+      },
+      [worker],
+    ),
+    /drain failed/,
+  );
+  assert.deepEqual(failed, [['stop', '--time', '150', worker.Id]]);
+});
+
 test('unexpected services and cross-stage resources block before stopping or migrating', async () => {
   const config = containerServerConfig(environment('dev'), 'dev', 'local-storage');
   const model = createManagedCompose(config, images);
   for (const [service, stage, running, failure] of [
     ['backend', 'dev', true, false],
+    ['evaluation', 'dev', true, false],
     ['removed-worker', 'dev', true, true],
     ['backend', 'prod', true, true],
     ['migrate', 'dev', true, true],

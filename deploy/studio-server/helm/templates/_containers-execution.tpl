@@ -2,14 +2,20 @@
 - name: {{ ternary "execution" "api" (eq .Values.deploymentProfile "single-machine") }}
   image: {{ include "rivet.image" (dict "root" . "image" .Values.images.api) }}
   imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+  {{- include "rivet.haRoleCommand" (dict "root" .) | nindent 2 }}
   {{- include "rivet.pod.containerSecurityContext" . | nindent 2 }}
   ports:
     - name: execution-http
       containerPort: {{ .Values.service.execution.targetPort }}
-  {{- include "rivet.pod.apiProbes" (dict "root" . "port" "execution-http") | nindent 2 }}
+    {{- if .Values.ha.enabled }}
+    - name: exec-health
+      containerPort: {{ .Values.service.backendHealth.targetPort }}
+    {{- end }}
+  {{- include "rivet.pod.apiProbes" (dict "root" . "port" (ternary "exec-health" "execution-http" .Values.ha.enabled)) | nindent 2 }}
   {{- include "rivet.pod.preStop" . | nindent 2 }}
   env:
 {{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.execution.targetPort "profile" "execution" "storageBackend" .Values.workflowStorage.backend "replicaTier" "endpoint" "jobWorkerEnabled" "false") | nindent 4 }}
+{{ include "rivet.haRoleEnv" (dict "root" . "port" .Values.service.execution.targetPort) | nindent 4 }}
     {{- if eq .Values.deploymentProfile "single-machine" }}
     - name: RIVET_POD_NAME
       valueFrom:

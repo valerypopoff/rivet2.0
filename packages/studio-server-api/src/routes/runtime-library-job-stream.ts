@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { JobStatus, RuntimeLibraryJobState } from '../../../studio-server-shared/runtime-library-types.js';
 import { pollRuntimeLibraryJob, type RuntimeLibraryJobObserver } from '../runtime-libraries/job-observation.js';
+import { watchVmMigrationPassiveStream } from '../vm-migration-maintenance.js';
 
 /** HTTP owns framing, disconnects and backpressure; subscriptions never cancel jobs. */
 export async function streamRuntimeLibraryJob(
@@ -159,6 +160,7 @@ export async function streamRuntimeLibraryJob(
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
+    if (!watchVmMigrationPassiveStream(res)) { cleanup(); return; }
     streaming = true;
     const firstState = buffered !== undefined ? buffered : current;
     buffered = undefined;

@@ -1,7 +1,30 @@
 import { containerStorageIdentity } from './container-server-config.mjs';
 import { ensurePortAvailable } from './docker-launcher.mjs';
 
-export const applicationServices = ['proxy', 'web', 'backend', 'execution', 'evaluation'];
+export const applicationServices = ['proxy', 'web', 'backend', 'execution'];
+
+/** Only an installation-owned predecessor worker may be retired. Never remove
+ * its named volumes: canonical evaluation evidence remains in PostgreSQL/S3. */
+export async function retireLegacyEvaluationContainers(config, docker, containers) {
+  const workers = containers.filter(
+    (container) => container.Config?.Labels?.['com.docker.compose.service'] === 'evaluation',
+  );
+  for (const container of workers) {
+    const labels = container.Config?.Labels ?? {};
+    if (
+      labels['com.docker.compose.project'] !== config.project ||
+      labels['rivet.dev/container-installation'] !== config.project ||
+      labels['rivet.dev/storage-identity'] !== containerStorageIdentity(config) ||
+      (labels['rivet.dev/deployment-stage'] && labels['rivet.dev/deployment-stage'] !== config.stage) ||
+      !/^[a-f0-9]{12,64}$/.test(container.Id ?? '')
+    )
+      throw new Error('Refusing to retire an unverified legacy evaluation container.');
+  }
+  for (const container of workers) {
+    await docker(['stop', '--time', '150', container.Id]);
+    await docker(['rm', container.Id]);
+  }
+}
 
 export async function stopContainerInstallation(config, compose) {
   await compose(['stop', '--timeout', '150', ...applicationServices]);
@@ -43,7 +66,10 @@ export async function assertContainerInstallationOwned(config, docker, model) {
   const containers = ids.length ? JSON.parse((await docker(['inspect', ...ids], { capture: true })).stdout) : [];
   for (const container of containers) {
     const labels = container.Config?.Labels ?? {};
-    if (!Object.hasOwn(model.services, labels['com.docker.compose.service'] ?? ''))
+    if (
+      !Object.hasOwn(model.services, labels['com.docker.compose.service'] ?? '') &&
+      labels['com.docker.compose.service'] !== 'evaluation'
+    )
       throw new Error('Compose project contains an unexpected service; refusing migration or shutdown.');
     if (['migrate', 'prepare-volumes'].includes(labels['com.docker.compose.service']) && container.State?.Running)
       throw new Error(

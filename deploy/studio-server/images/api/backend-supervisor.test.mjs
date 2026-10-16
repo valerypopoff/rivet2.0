@@ -8,10 +8,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 
 import { childEnvironments, startBackendSupervisor, runBackendSupervisor } from './backend-supervisor.mjs';
 import { acquireLocalMetadataOwnerLease } from './local-metadata-owner-lease.mjs';
 import { devBackendSupervisorOptions } from '../../scripts/dev-backend-supervisor.mjs';
+import { requestBackendRetirement, retireBackend } from './retire-backend.mjs';
 
 // test-style: fixture-read: reads only writer PID/configuration records generated in owned temporary fixtures.
 
@@ -35,6 +38,176 @@ test('development first start and legacy preparation use the same current-source
     RIVET_EXECUTOR_CHILD_NODE_OPTIONS: options.apiEnvOverrides.NODE_OPTIONS,
   });
 });
+
+test(
+  'pod-local retirement socket is private, incarnation fenced and removed on supervisor close',
+  { timeout: 15000, skip: process.platform === 'win32' },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'rivet-retirement-socket-'));
+    const socketPath = `/tmp/rivet-retirement-${randomUUID()}.sock`;
+    const apiScript = join(directory, 'api.mjs'),
+      executorScript = join(directory, 'executor.mjs');
+    const allocated = await ports();
+    let supervisor;
+    try {
+      await writeFile(
+        apiScript,
+        `
+        import {createServer} from 'node:http';
+        let operationId=null, state='serving';
+        const s=createServer(async(q,r)=>{
+          if(q.url==='/readyz'){r.end(JSON.stringify({ok:true}));return;}
+          if(q.headers['x-rivet-retirement-token']!==process.env.RIVET_ROLLING_RETIREMENT_TOKEN){r.writeHead(403).end();return;}
+          if(q.method==='POST'){let body='';for await(const c of q)body+=c;operationId=JSON.parse(body).operationId;state='drained';}
+          r.end(JSON.stringify({protocol:1,incarnation:process.env.RIVET_PROCESS_INCARNATION,operationId,state}));
+        });
+        s.listen(Number(process.env.PORT),'127.0.0.1');process.on('SIGTERM',()=>s.close(()=>process.exit(0)));
+      `,
+      );
+      await writeFile(
+        executorScript,
+        `
+        import {createServer} from 'node:net';
+        let operationId=null,state='serving';
+        process.on('message',m=>{if(m.type==='rivet-retire'){operationId=m.operationId;state='drained';}
+          process.send({type:'rivet-retirement-status',nonce:m.nonce,protocol:1,incarnation:process.env.RIVET_PROCESS_INCARNATION,operationId,state});});
+        const s=createServer(c=>c.end());s.listen(Number(process.env.PORT),'127.0.0.1',()=>process.send({type:'rivet-executor-ready'}));
+        process.on('SIGTERM',()=>s.close(()=>process.exit(0)));
+      `,
+      );
+      supervisor = await startBackendSupervisor({
+        env: {
+          ...environment(allocated),
+          RIVET_ROLLING_RETIREMENT_PROTOCOL: '1',
+          RIVET_ROLLING_RETIREMENT_SOCKET: socketPath,
+        },
+        apiCommand: [process.execPath, apiScript],
+        executorCommand: [process.execPath, executorScript],
+        executorCwd: directory,
+        signalSource: new EventEmitter(),
+        shutdownTimeoutMs: 1000,
+        apiStartupTimeoutMs: 5000,
+      });
+      await waitForReady(allocated.healthPort);
+      assert.equal((await stat(socketPath)).mode & 0o777, 0o600);
+      const before = await requestBackendRetirement(socketPath);
+      await assert.rejects(
+        requestBackendRetirement(socketPath, 'POST', {
+          protocol: 1,
+          operationId: randomUUID(),
+          incarnation: randomUUID(),
+        }),
+        /rejected/,
+      );
+      assert.equal((await requestBackendRetirement(socketPath)).state, 'serving');
+      assert.equal((await fetch(`http://127.0.0.1:${allocated.healthPort}/retirement`)).status, 404);
+      const status = await retireBackend({
+        socketPath,
+        operationId: randomUUID(),
+        incarnation: before.incarnation,
+        timeoutMs: 5000,
+      });
+      assert.equal(status.state, 'drained');
+      await supervisor.stop();
+      await assert.rejects(access(socketPath), { code: 'ENOENT' });
+    } finally {
+      await supervisor?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'planned retirement keeps real children alive beyond the forced-shutdown grace and drains executor before API',
+  { timeout: 15000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'rivet-planned-retirement-'));
+    const apiScript = join(directory, 'api.mjs'),
+      executorScript = join(directory, 'executor.mjs');
+    const allocated = await ports();
+    let supervisor;
+    try {
+      await writeFile(
+        apiScript,
+        `
+        import { createServer } from 'node:http';
+        let operationId = null, state = 'serving';
+        const status = () => ({ protocol: 1, withdrawalProtocol: 1, incarnation: process.env.RIVET_PROCESS_INCARNATION, operationId, state });
+        const server = createServer(async (req, res) => {
+          if (req.url === '/readyz') { res.end(JSON.stringify({ ok: state === 'serving' })); return; }
+          if (req.url === '/internal/process-retirement') {
+            if (req.headers['x-rivet-retirement-token'] !== process.env.RIVET_ROLLING_RETIREMENT_TOKEN) { res.writeHead(403).end(); return; }
+            if (req.method === 'POST') {
+              let body = ''; for await (const chunk of req) body += chunk;
+              const command = JSON.parse(body); operationId = command.operationId;
+              state = command.action === 'withdraw' ? 'withdrawing' : 'draining';
+            }
+            res.end(JSON.stringify(status())); return;
+          }
+          if (req.url === '/finish') { state = 'drained'; res.end('complete'); return; }
+          res.end(state);
+        });
+        server.listen(Number(process.env.PORT), '127.0.0.1');
+        process.on('SIGTERM', () => server.close(() => process.exit(0)));
+      `,
+      );
+      await writeFile(
+        executorScript,
+        `
+        import { createServer } from 'node:http';
+        if (process.env.RIVET_ROLLING_RETIREMENT_TOKEN) process.exit(9);
+        let operationId = null, state = 'serving';
+        const server = createServer((req, res) => {
+          if (req.url === '/finish') state = 'drained';
+          res.end(state);
+        });
+        process.on('message', (message) => {
+          if (message.type === 'rivet-retire') { operationId = message.operationId; state = 'draining'; }
+          if (['rivet-retire', 'rivet-retirement-query'].includes(message.type))
+            process.send({ type: 'rivet-retirement-status', nonce: message.nonce, protocol: 1,
+              incarnation: process.env.RIVET_PROCESS_INCARNATION, operationId, state });
+        });
+        server.listen(Number(process.env.PORT), '127.0.0.1', () => process.send({type:'rivet-executor-ready'}));
+        process.on('SIGTERM', () => server.close(() => process.exit(0)));
+      `,
+      );
+      supervisor = await startBackendSupervisor({
+        env: { ...environment(allocated), RIVET_ROLLING_RETIREMENT_PROTOCOL: '1' },
+        apiCommand: [process.execPath, apiScript],
+        executorCommand: [process.execPath, executorScript],
+        executorCwd: directory,
+        signalSource: new EventEmitter(),
+        shutdownTimeoutMs: 1000,
+        apiStartupTimeoutMs: 5000,
+      });
+      await waitForReady(allocated.healthPort);
+      const before = supervisor.retirement.snapshot();
+      supervisor.retirement.withdraw('a45b6a70-912f-4d7c-a4b3-7598f9a94021', before.incarnation);
+      await waitForHealthStatus(allocated.healthPort, 503);
+      assert.equal(await (await fetch(`http://127.0.0.1:${allocated.apiPort}`)).text(), 'withdrawing');
+      assert.equal(await (await fetch(`http://127.0.0.1:${allocated.executorPort}`)).text(), 'serving');
+      assert.equal(supervisor.retirement.snapshot().state, 'withdrawing');
+      supervisor.retirement.begin('a45b6a70-912f-4d7c-a4b3-7598f9a94021', before.incarnation);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      assert.equal((await fetch(`http://127.0.0.1:${allocated.healthPort}/livez`)).status, 200);
+      assert.equal(await (await fetch(`http://127.0.0.1:${allocated.apiPort}`)).text(), 'withdrawing');
+      assert.equal(await (await fetch(`http://127.0.0.1:${allocated.executorPort}`)).text(), 'draining');
+      assert.equal(supervisor.retirement.snapshot().state, 'draining');
+      await fetch(`http://127.0.0.1:${allocated.executorPort}/finish`);
+      const deadline = Date.now() + 5000;
+      while ((await (await fetch(`http://127.0.0.1:${allocated.apiPort}`)).text()) !== 'draining') {
+        assert.ok(Date.now() < deadline);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await fetch(`http://127.0.0.1:${allocated.apiPort}/finish`);
+      assert.equal((await supervisor.retirement.wait()).state, 'drained');
+      assert.equal(await supervisor.stop(), 0);
+    } finally {
+      await supervisor?.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test('failed automatic first start never launches serving children and releases its owner lease', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rivet-first-start-fence-'));
@@ -174,6 +347,15 @@ test(
       'RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN',
       'RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE',
       'RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE',
+      'RIVET_ROLLING_RETIREMENT_PROTOCOL',
+      'RIVET_ROLLING_RETIREMENT_TOKEN',
+      'RIVET_PROCESS_INCARNATION',
+      'RIVET_HA_PROTOCOL',
+      'RIVET_POD_NAME',
+      'RIVET_HA_HEADLESS_SERVICE',
+      'RIVET_HA_BACKEND_NAME',
+      'RIVET_BACKEND_API_PORT',
+      'RIVET_BACKEND_EXECUTOR_PORT',
     ];
     const selection = Object.fromEntries(names.map((name) => [name, `fixture-${name}`]));
     selection.RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE = '1';
@@ -226,11 +408,22 @@ test(
       RIVET_RELEASE_MAINTENANCE: 'true',
       RIVET_SCHEMA_MIGRATION_RELEASE: 'owned-release',
       RIVET_MANAGED_MAINTENANCE_ENABLED: 'false',
+      RIVET_ROLLING_RETIREMENT_PROTOCOL: '1',
+      RIVET_ROLLING_RETIREMENT_TOKEN: 'fixture-private-retirement-token',
+      RIVET_PROCESS_INCARNATION: 'fixture-incarnation',
+      RIVET_HA_PROTOCOL: '1',
+      RIVET_POD_NAME: 'fixture-backend-0',
+      RIVET_HA_HEADLESS_SERVICE: 'fixture-headless.example',
+      RIVET_HA_BACKEND_NAME: 'fixture-backend',
+      RIVET_BACKEND_API_PORT: '3001',
+      RIVET_BACKEND_EXECUTOR_PORT: '21888',
     };
     try {
       await writeFile(
         dotenv,
-        'RIVET_RELEASE_MAINTENANCE=false\nRIVET_SCHEMA_MIGRATION_RELEASE=other\nRIVET_MANAGED_MAINTENANCE_ENABLED=true\n',
+        'RIVET_RELEASE_MAINTENANCE=false\nRIVET_SCHEMA_MIGRATION_RELEASE=other\nRIVET_MANAGED_MAINTENANCE_ENABLED=true\n' +
+          'RIVET_ROLLING_RETIREMENT_PROTOCOL=other\nRIVET_ROLLING_RETIREMENT_TOKEN=other\nRIVET_PROCESS_INCARNATION=other\n' +
+          'RIVET_HA_PROTOCOL=other\nRIVET_POD_NAME=other\nRIVET_HA_HEADLESS_SERVICE=other\nRIVET_HA_BACKEND_NAME=other\nRIVET_BACKEND_API_PORT=9000\nRIVET_BACKEND_EXECUTOR_PORT=9001\n',
       );
       const output = execFileSync(
         'sh',

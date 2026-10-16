@@ -95,6 +95,39 @@ test('terminal job notifications do not release admission before candidate clean
   }
 });
 
+test('managed retirement rejects new installs/removals without opening storage or stopping an accepted worker', async () => {
+  await seedDeploymentStorageSettings({
+    storageMode: 'managed',
+    databaseMode: 'managed',
+    databaseConnectionString: 'postgresql://fixture@unused.example.test/rivet',
+    storageUrl: 'https://fixture.sfo3.digitaloceanspaces.com',
+    storageAccessKeyId: 'fixture',
+    storageAccessKey: 'fixture',
+  });
+  let opened = 0;
+  const backend = new ManagedRuntimeLibrariesBackend({
+    async initialize() {
+      opened++;
+    },
+    async getBuffer() {
+      assert.fail('must not read');
+    },
+    async putBuffer() {
+      assert.fail('must not write');
+    },
+  });
+  try {
+    backend.beginDrain();
+    await backend.drainAcceptedWork();
+    await assert.rejects(backend.enqueueInstall([{ name: 'fixture', version: '1' }]), { status: 503 });
+    await assert.rejects(backend.enqueueRemove(['fixture']), { status: 503 });
+    assert.equal(opened, 0);
+  } finally {
+    await backend.dispose();
+    await seedDeploymentStorageSettings({ storageMode: 'filesystem' });
+  }
+});
+
 test('managed shutdown keeps failed object-store cleanup retryable without reopening admission', async () => {
   await seedDeploymentStorageSettings({
     storageMode: 'managed',

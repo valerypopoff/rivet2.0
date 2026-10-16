@@ -144,6 +144,19 @@ export class LegacyRestoreService {
       },
     };
   }
+  /** Retirement cannot abandon local upload/preparation scratch or a pending restart. */
+  async assertMayRetire(): Promise<void> {
+    const assertIdle = () => {
+      if (this.task || this.uploadJob || this.completion || this.child || this.closing || this.restartRequested)
+        throw new Error('Restore work blocks planned retirement.');
+    };
+    assertIdle();
+    const operation = await this.control.read();
+    // Recheck after the asynchronous journal read: an accepted upload may have started meanwhile.
+    assertIdle();
+    if (operation && !['completed', 'cancelled'].includes(operation.phase))
+      throw new Error('Restore scratch ownership blocks planned retirement.');
+  }
   private async ownedRoot() {
     const stat = await fs.lstat(this.root);
     if (!stat.isDirectory() || stat.isSymbolicLink() || (await fs.realpath(this.root)) !== path.resolve(this.root))

@@ -129,6 +129,7 @@ export type ExecutorSessionRuntime = {
 export function createExecutorSessionRuntime(options: {
   datasetProvider?: AppDatasetProvider | null;
   onStateChange: StateChangeCallback;
+  resolveInternalHostedExecutorUrl?: () => Promise<string>;
 }): ExecutorSessionRuntime {
   let currentDatasetProvider: AppDatasetProvider | null = options.datasetProvider ?? null;
   let currentRemoteUploadAllowed = false;
@@ -139,6 +140,23 @@ export function createExecutorSessionRuntime(options: {
   let activeGraphRunRequestId: RemoteRunRequestId | null = null;
   let reconnectingTimeout: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = 0;
+  let resumeCapability: string | undefined;
+  let resumeSequence = 0;
+  let latestObservation = false;
+  let idleHandoff: Promise<void> | undefined;
+  const latestEventCursors = new Map<string, number>();
+  let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  function clearResumeTimeout() {
+    if (resumeTimeout) clearTimeout(resumeTimeout);
+    resumeTimeout = undefined;
+  }
+  function failResume() {
+    pendingGraphExecutions.rejectAllPendingGraphExecutions(
+      new Error('Executor session could not be resumed. Run outcome is unknown; it was not resubmitted.'),
+    );
+    disconnect({ reason: 'unexpected-disconnect' });
+  }
 
   const pendingGraphExecutions = createExecutorSessionPendingExecutions();
 
@@ -250,8 +268,18 @@ export function createExecutorSessionRuntime(options: {
     });
 
     let socket: WebSocket;
+    const resumableTarget =
+      nextTarget.type === 'internal-hosted' && /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(nextTarget.url);
     try {
-      socket = new WebSocket(nextTarget.url);
+      socket = new WebSocket(
+        nextTarget.url,
+        resumableTarget
+          ? [
+              'rivet-session-v1',
+              ...(resumeCapability ? [`rivet-cap.${resumeCapability}`, `rivet-seq.${resumeSequence}`] : []),
+            ]
+          : undefined,
+      );
     } catch (error) {
       currentTarget = null;
       currentRemoteUploadAllowed = false;
@@ -271,6 +299,8 @@ export function createExecutorSessionRuntime(options: {
 
       retryDelay = 0;
       currentTarget = socketTarget;
+      // A resuming connection becomes interactive only after ordered diagnostic replay.
+      if (resumeCapability || latestObservation) return;
       logRuntimeDebug('Executor websocket opened.', {
         target: getExecutorSessionTargetLabel(socketTarget),
       });
@@ -286,22 +316,34 @@ export function createExecutorSessionRuntime(options: {
       });
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (socketGeneration !== currentSocketGeneration) {
         return;
       }
 
       const closedTarget = socketTarget;
       currentSocket = null;
-      currentRemoteUploadAllowed = false;
+      if (resumeCapability && event?.code === 4409) {
+        failResume();
+        return;
+      }
+      const canResume = resumeCapability != null || latestObservation;
+      if (canResume) {
+        resumeTimeout ??= setTimeout(failResume, 60_000);
+      }
+      if (!canResume) currentRemoteUploadAllowed = false;
       logRuntimeDebug('Executor websocket closed.', {
         target: getExecutorSessionTargetLabel(closedTarget),
       });
 
-      pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
-      activeGraphRunRequestId = null;
+      if (!canResume) {
+        resumeCapability = undefined;
+        resumeSequence = 0;
+        pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
+        activeGraphRunRequestId = null;
+      }
 
-      if (!isInternalExecutorTarget(closedTarget)) {
+      if (!isInternalExecutorTarget(closedTarget) && !latestObservation) {
         logRuntimeDebug('External debugger websocket closed; automatic reconnect skipped.', {
           target: getExecutorSessionTargetLabel(closedTarget),
         });
@@ -336,14 +378,15 @@ export function createExecutorSessionRuntime(options: {
         void connectToTarget(reconnectTarget);
       }, nextRetryDelay);
 
-      notifyDisconnect({
-        isInternalExecutor: true,
-        reason: 'unexpected-disconnect',
-        status: currentStatus,
-        target: closedTarget,
-        type: 'disconnected',
-        url: socket.url,
-      });
+      if (!canResume)
+        notifyDisconnect({
+          isInternalExecutor: true,
+          reason: 'unexpected-disconnect',
+          status: currentStatus,
+          target: closedTarget,
+          type: 'disconnected',
+          url: socket.url,
+        });
     };
 
     socket.onerror = (event) => {
@@ -370,6 +413,74 @@ export function createExecutorSessionRuntime(options: {
         rawMessage: event.data,
         socketUrl: socket.url,
         target: socketTarget,
+        acceptEnvelope: (value) => {
+          const envelope = (typeof value === 'object' && value != null ? value : {}) as {
+            message?: string;
+            data?: { capability?: string; protocol?: number };
+            rivetSequence?: number;
+            rivetEventId?: string;
+          };
+          if (socketTarget.type === 'external-debugger' && envelope.message === 'latest-session' && envelope.data?.protocol === 1) {
+            latestObservation = true; clearResumeTimeout(); setConnectionStatus('ready'); return false;
+          }
+          if (latestObservation && typeof envelope.rivetEventId === 'string') {
+            const split = envelope.rivetEventId.lastIndexOf(':');
+            const origin = envelope.rivetEventId.slice(0, split), sequence = Number(envelope.rivetEventId.slice(split + 1));
+            if (envelope.rivetEventId.length > 200 || split < 1 || !Number.isSafeInteger(sequence) || sequence < 1 || sequence <= (latestEventCursors.get(origin) ?? 0)) return false;
+            latestEventCursors.set(origin, sequence);
+            if (latestEventCursors.size > 256) latestEventCursors.delete(latestEventCursors.keys().next().value!);
+          }
+          if (
+            resumableTarget &&
+            envelope.message === 'executor-session' &&
+            envelope.data?.protocol === 1 &&
+            /^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability ?? '')
+          ) {
+            resumeCapability = envelope.data.capability;
+            return false;
+          }
+          if (resumableTarget && envelope.message === 'executor-session-ready' && envelope.data?.protocol === 1) {
+            clearResumeTimeout();
+            setConnectionStatus('ready');
+            notifySessionStateChanged();
+            return false;
+          }
+          if (resumeCapability && envelope.rivetSequence != null) {
+            if (!Number.isSafeInteger(envelope.rivetSequence) || envelope.rivetSequence <= resumeSequence) return false;
+            if (envelope.rivetSequence !== resumeSequence + 1) {
+              failResume(); return false;
+            }
+            resumeSequence = envelope.rivetSequence;
+          }
+          if (resumableTarget && envelope.message === 'executor-owner-retiring' && envelope.data?.protocol === 1) {
+            // Only an idle, positively settled session can choose a new owner.
+            // Accepted or uncertain runs always remain pinned to the old one.
+            if (!activeGraphRunRequestId && !pendingGraphExecutions.hasPendingExecutions() && options.resolveInternalHostedExecutorUrl && !idleHandoff) {
+              const generation = currentSocketGeneration;
+              setConnectionStatus('reconnecting');
+              idleHandoff = (async () => {
+                const deadline = Date.now() + 60_000;
+                while (Date.now() < deadline) {
+                  if (generation !== currentSocketGeneration || currentTarget?.type !== 'internal-hosted' || activeGraphRunRequestId || pendingGraphExecutions.hasPendingExecutions()) return;
+                  const url = await options.resolveInternalHostedExecutorUrl!().catch(() => undefined);
+                  if (url && url !== socketTarget.url) {
+                    const old = new URL(socketTarget.url), next = new URL(url);
+                    if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/')) throw new Error('Fresh executor owner is invalid.');
+                    const target: ExecutorSessionTarget = { type: 'internal-hosted', url };
+                    replaceCurrentSession(target); await connectToTarget(target); return;
+                  }
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                }
+                throw new Error('Fresh executor owner is unavailable.');
+              })().catch(() => {
+                // No run was replayed. Keep the old owner/cursor for explicit recovery.
+                if (generation === currentSocketGeneration) setConnectionStatus('reconnecting');
+              }).finally(() => { idleHandoff = undefined; });
+            }
+            return false;
+          }
+          return true;
+        },
       });
       if (!incoming) {
         return;
@@ -410,6 +521,10 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    latestObservation = false; latestEventCursors.clear();
+    clearResumeTimeout();
+    resumeCapability = undefined;
+    resumeSequence = 0;
     const oldSocket = currentSocket;
     const oldTarget = currentTarget;
     const oldUrl = oldTarget?.url ?? oldSocket?.url ?? '';
@@ -448,6 +563,10 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    latestObservation = false; latestEventCursors.clear();
+    clearResumeTimeout();
+    resumeCapability = undefined;
+    resumeSequence = 0;
     const hadActiveSession = currentSocket != null || currentStatus !== 'idle';
     const disconnectReason = options.reason ?? 'manual-disconnect';
     const socketToClose = currentSocket;
@@ -517,6 +636,10 @@ export function createExecutorSessionRuntime(options: {
       return connectToTarget(createInternalDesktopExecutorTarget());
     },
     connectInternalHostedExecutor(url) {
+      if (currentTarget?.type === 'internal-hosted' && currentStatus === 'ready' &&
+          /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(url) &&
+          new URL(url).origin === new URL(currentTarget.url).origin && currentTarget.url.includes('/ws/executor/owner/'))
+        return connectToTarget(currentTarget);
       return connectToTarget(createInternalHostedExecutorTarget(url));
     },
     createPendingGraphExecution: pendingGraphExecutions.createPendingGraphExecution,
@@ -537,7 +660,7 @@ export function createExecutorSessionRuntime(options: {
       };
     },
     isReady() {
-      return currentSocket?.readyState === WebSocket.OPEN;
+      return currentStatus === 'ready' && currentSocket?.readyState === WebSocket.OPEN;
     },
     rejectPendingGraphExecution(requestId, reason) {
       pendingGraphExecutions.rejectPendingGraphExecution(requestId, reason);

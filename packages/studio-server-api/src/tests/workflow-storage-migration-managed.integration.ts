@@ -31,6 +31,7 @@ import { collectSourceAppSettings } from '../scripts/migrate-app-settings.js';
 import { createSourceArchive } from '../scripts/migrate-runtime-libraries.js';
 import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
+import { verifyRuntimeLibrarySchemaClaimConcurrency } from './helpers/runtime-library-schema-concurrency.js';
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import { SqliteMigrationSource } from '../scripts/sqlite-migration-source.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
@@ -159,6 +160,8 @@ fixture: try {
       await delay(100);
     }
   }
+
+  await verifyRuntimeLibrarySchemaClaimConcurrency(pool);
 
   // Two launchers aimed at one fresh catalog must not both pass the empty-owner
   // preflight and apply DDL before a deployment binding becomes durable.

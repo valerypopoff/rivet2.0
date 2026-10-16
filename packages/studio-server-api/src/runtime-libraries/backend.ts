@@ -25,6 +25,7 @@ export interface RuntimeLibrariesBackend {
   clearStaleReplicaStatuses(): Promise<RuntimeLibraryReplicaCleanupResult>;
   subscribeJob(jobId: string, observer: RuntimeLibraryJobObserver): () => void;
   beginDrain?(): void;
+  drainAcceptedWork?(): Promise<void>;
   dispose?(): Promise<void>;
 }
 
@@ -45,6 +46,11 @@ export function getRuntimeLibrariesBackend(): RuntimeLibrariesBackend {
 export function beginRuntimeLibrariesDrain(): void {
   draining = true;
   services?.beginDrain();
+}
+
+export async function drainRuntimeLibrariesAcceptedWork(): Promise<void> {
+  beginRuntimeLibrariesDrain();
+  await services?.drainAcceptedWork();
 }
 
 export async function initializeRuntimeLibrariesBackend(): Promise<void> {

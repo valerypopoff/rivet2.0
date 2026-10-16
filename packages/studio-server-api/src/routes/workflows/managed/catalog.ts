@@ -91,6 +91,9 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     queueGlobalInvalidation: options.context.executionInvalidationController.queueGlobalInvalidation.bind(
       options.context.executionInvalidationController,
     ),
+    queueCatalogInvalidation: options.context.executionInvalidationController.queueCatalogInvalidation.bind(
+      options.context.executionInvalidationController,
+    ),
     maintenance: options.context.maintenance,
     isUniqueViolation: options.context.db.isUniqueViolation,
     recordingColumns: options.context.mappers.RECORDING_COLUMNS,
@@ -131,9 +134,8 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           ),
         }));
 
-        if (movedProjectPaths.length > 0) {
-          await deps.queueGlobalInvalidation(client, hooks);
-        }
+        if (movedProjectPaths.length > 0) await deps.queueGlobalInvalidation(client, hooks);
+        else await deps.queueCatalogInvalidation(client);
 
         return {
           folder: deps.mapFolderRowToFolderItem(folderRow),
@@ -472,6 +474,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           `,
           [folderRelativePath, folderName, parentPath],
         );
+        await deps.queueCatalogInvalidation(client);
 
         return deps.mapFolderRowToFolderItem({
           relative_path: folderRelativePath,
@@ -585,6 +588,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         }
 
         await client.query('DELETE FROM workflow_folders WHERE relative_path = $1', [folderRelativePath]);
+        await deps.queueCatalogInvalidation(client);
       });
     },
 

@@ -26,7 +26,7 @@ test('hosted Evaluations are disabled unless explicitly enabled', () => {
   assert.deepEqual(getHostedEvaluationsCoordinatorConfig({}, 'combined', true), disabledConfig);
 });
 
-test('hosted Evaluations require managed storage and run workers only on the batch profile', () => {
+test('hosted Evaluations share the control backend but never claim work on published execution', () => {
   assert.throws(
     () => getHostedEvaluationsCoordinatorConfig({ RIVET_HOSTED_EVALUATIONS_ENABLED: 'true' }, 'combined', false),
     /requires managed workflow storage/,
@@ -34,7 +34,7 @@ test('hosted Evaluations require managed storage and run workers only on the bat
 
   assert.deepEqual(
     getHostedEvaluationsCoordinatorConfig({ RIVET_HOSTED_EVALUATIONS_ENABLED: 'true' }, 'control', true),
-    { ...defaultEnabledConfig, workerEnabled: false },
+    { ...defaultEnabledConfig, workerEnabled: true },
   );
   assert.deepEqual(
     getHostedEvaluationsCoordinatorConfig({ RIVET_HOSTED_EVALUATIONS_ENABLED: 'true' }, 'execution', true),
@@ -49,6 +49,14 @@ test('hosted Evaluations require managed storage and run workers only on the bat
     getHostedEvaluationsCoordinatorConfig({ RIVET_HOSTED_EVALUATIONS_ENABLED: 'true' }, 'combined', true),
     { ...defaultEnabledConfig, workerEnabled: true },
   );
+});
+
+test('maintenance and restore-validation owners do not claim evaluation trials', () => {
+  for (const env of [
+    { RIVET_HOSTED_EVALUATIONS_ENABLED: 'true', RIVET_HA_MAINTENANCE: '1' },
+    { RIVET_HOSTED_EVALUATIONS_ENABLED: 'true', RIVET_RELEASE_MAINTENANCE: 'true' },
+  ])
+    assert.equal(getHostedEvaluationsCoordinatorConfig(env, 'control', true).workerEnabled, false);
 });
 
 test('hosted Evaluation configuration bounds workers, leases, polling, and batch quotas conservatively', () => {

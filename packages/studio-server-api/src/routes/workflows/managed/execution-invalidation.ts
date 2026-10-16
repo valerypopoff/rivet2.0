@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Client, type ClientConfig, type PoolClient } from 'pg';
+import {
+  EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+  evaluationLibrarySourceInstanceId,
+} from '../../../evaluation-runs/library-invalidation.js';
 
 import type {
   ManagedExecutionInvalidationEvent,
@@ -38,6 +42,8 @@ type ManagedWorkflowExecutionInvalidationControllerOptions = {
   clearEndpointPointers(): void;
   onWorkflowChanged?(workflowId: string): void;
   onAllChanged?(): void;
+  onExternalInvalidation?(): void;
+  onEvaluationLibraryChanged?(revision: number | null): void;
   createListener?: () => ManagedExecutionInvalidationListener;
   now?: () => number;
   scheduleReconnect?: (task: () => void, delayMs: number) => ManagedExecutionReconnectTimer;
@@ -58,6 +64,8 @@ export class ManagedWorkflowExecutionInvalidationController {
   readonly #clearEndpointPointers: () => void;
   readonly #onWorkflowChanged: (workflowId: string) => void;
   readonly #onAllChanged: () => void;
+  readonly #onExternalInvalidation: () => void;
+  readonly #onEvaluationLibraryChanged?: (revision: number | null) => void;
   readonly #createListener: () => ManagedExecutionInvalidationListener;
   readonly #now: () => number;
   readonly #scheduleReconnect: (task: () => void, delayMs: number) => ManagedExecutionReconnectTimer;
@@ -81,12 +89,16 @@ export class ManagedWorkflowExecutionInvalidationController {
     this.#clearEndpointPointers = options.clearEndpointPointers;
     this.#onWorkflowChanged = options.onWorkflowChanged ?? (() => {});
     this.#onAllChanged = options.onAllChanged ?? (() => {});
+    this.#onExternalInvalidation = options.onExternalInvalidation ?? (() => {});
+    this.#onEvaluationLibraryChanged = options.onEvaluationLibraryChanged;
     this.#createListener = options.createListener ?? (() => new Client(this.#databaseConnectionConfig));
     this.#now = options.now ?? Date.now;
     this.#scheduleReconnect = options.scheduleReconnect ?? ((task, delayMs) => setTimeout(task, delayMs));
-    this.#clearReconnect = options.clearReconnect ?? ((timer) => {
-      clearTimeout(timer as NodeJS.Timeout);
-    });
+    this.#clearReconnect =
+      options.clearReconnect ??
+      ((timer) => {
+        clearTimeout(timer as NodeJS.Timeout);
+      });
   }
 
   async initialize(): Promise<void> {
@@ -104,16 +116,21 @@ export class ManagedWorkflowExecutionInvalidationController {
 
       try {
         await this.#withManagedDbRetry('managed execution invalidation listener connect', () => listener.connect());
-        await this.#withManagedDbRetry(
-          'managed execution invalidation listener listen',
-          () => listener.query(`LISTEN ${MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL}`),
+        await this.#withManagedDbRetry('managed execution invalidation listener listen', () =>
+          listener.query(`LISTEN ${MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL}`),
         );
+        if (this.#onEvaluationLibraryChanged) {
+          await this.#withManagedDbRetry('managed evaluation library listener listen', () =>
+            listener.query(`LISTEN ${EVALUATION_LIBRARY_INVALIDATION_CHANNEL}`),
+          );
+        }
       } catch (error) {
         listener.removeAllListeners();
         await listener.end().catch(() => {});
         if (!this.#disposed) {
           this.#listenerHealthy = false;
           this.markAllChanged();
+          this.#notifyEvaluationLibrary(null);
           this.#scheduleListenerReconnect();
         }
         throw error;
@@ -128,6 +145,22 @@ export class ManagedWorkflowExecutionInvalidationController {
       this.#listener = listener;
 
       listener.on('notification', (message) => {
+        if (message.channel === EVALUATION_LIBRARY_INVALIDATION_CHANNEL && this.#onEvaluationLibraryChanged) {
+          try {
+            const event = JSON.parse(message.payload ?? '') as { revision?: unknown; sourceInstanceId?: unknown };
+            if (
+              event.sourceInstanceId !== evaluationLibrarySourceInstanceId &&
+              typeof event.sourceInstanceId === 'string' &&
+              typeof event.revision === 'number' &&
+              Number.isSafeInteger(event.revision) &&
+              event.revision >= 0
+            )
+              this.#notifyEvaluationLibrary(event.revision);
+          } catch {
+            this.#notifyEvaluationLibrary(null);
+          }
+          return;
+        }
         if (message.channel !== MANAGED_WORKFLOW_EXECUTION_INVALIDATION_CHANNEL || !message.payload) {
           return;
         }
@@ -147,6 +180,8 @@ export class ManagedWorkflowExecutionInvalidationController {
       });
 
       this.#listenerHealthy = true;
+      this.#notifyExternal();
+      this.#notifyEvaluationLibrary(null);
       this.#clearListenerReconnectTimer();
     })()
       .catch((error) => {
@@ -243,9 +278,10 @@ export class ManagedWorkflowExecutionInvalidationController {
     }
 
     const workflowGenerationRecord = this.#executionPointerWorkflowGenerations.get(workflowId);
-    const sameWorkflowChangedDuringResolve = workflowGenerationRecord != null &&
-      workflowGenerationRecord.updatedAt >= snapshot.startedAtWallClock;
-    const clearAllChangedDuringResolve = this.#executionPointerGlobalGeneration !== snapshot.globalGeneration &&
+    const sameWorkflowChangedDuringResolve =
+      workflowGenerationRecord != null && workflowGenerationRecord.updatedAt >= snapshot.startedAtWallClock;
+    const clearAllChangedDuringResolve =
+      this.#executionPointerGlobalGeneration !== snapshot.globalGeneration &&
       this.#executionPointerGlobalUpdatedAt >= snapshot.startedAtWallClock;
 
     return sameWorkflowChangedDuringResolve || clearAllChangedDuringResolve;
@@ -256,8 +292,10 @@ export class ManagedWorkflowExecutionInvalidationController {
     workflowId: string,
     workflowSnapshot: ManagedExecutionWorkflowSnapshot,
   ): boolean {
-    return this.#executionPointerGlobalGeneration !== globalSnapshot.globalGeneration ||
-      this.#getWorkflowGeneration(workflowId) !== workflowSnapshot.generation;
+    return (
+      this.#executionPointerGlobalGeneration !== globalSnapshot.globalGeneration ||
+      this.#getWorkflowGeneration(workflowId) !== workflowSnapshot.generation
+    );
   }
 
   async queueWorkflowInvalidation(
@@ -290,10 +328,19 @@ export class ManagedWorkflowExecutionInvalidationController {
     });
   }
 
+  /** Catalog hints share the existing transaction/LISTEN transport, but do not
+   * evict published execution caches for an unrelated empty folder or draft. */
+  async queueCatalogInvalidation(client: Pick<PoolClient, 'query'>): Promise<void> {
+    await this.#emitInvalidationEvent(client, { eventType: 'catalog-changed', sourceInstanceId: this.#instanceId });
+  }
+
   #handleNotification(event: ManagedExecutionInvalidationEvent): void {
     if (event.sourceInstanceId === this.#instanceId) {
       return;
     }
+    this.#notifyExternal();
+
+    if (event.eventType === 'catalog-changed') return;
 
     if (event.eventType === 'clear-all') {
       this.markAllChanged();
@@ -310,10 +357,28 @@ export class ManagedWorkflowExecutionInvalidationController {
 
     this.#listenerHealthy = false;
     this.markAllChanged();
+    this.#notifyExternal();
+    this.#notifyEvaluationLibrary(null);
     this.#listener = null;
     listener.removeAllListeners();
     await listener.end().catch(() => {});
     this.#scheduleListenerReconnect();
+  }
+
+  #notifyExternal(): void {
+    try {
+      this.#onExternalInvalidation();
+    } catch {
+      console.warn('[managed-workflows] An observational invalidation callback failed.');
+    }
+  }
+
+  #notifyEvaluationLibrary(revision: number | null): void {
+    try {
+      this.#onEvaluationLibraryChanged?.(revision);
+    } catch {
+      console.warn('[managed-workflows] An evaluation library observer failed.');
+    }
   }
 
   #scheduleListenerReconnect(): void {
@@ -343,7 +408,11 @@ export class ManagedWorkflowExecutionInvalidationController {
 
   #maybePruneWorkflowGenerations(now: number): void {
     this.#executionPointerWorkflowGenerationInvalidationCount += 1;
-    if (this.#executionPointerWorkflowGenerationInvalidationCount % MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL !== 0) {
+    if (
+      this.#executionPointerWorkflowGenerationInvalidationCount %
+        MANAGED_WORKFLOW_EXECUTION_WORKFLOW_GENERATION_PRUNE_INTERVAL !==
+      0
+    ) {
       return;
     }
 

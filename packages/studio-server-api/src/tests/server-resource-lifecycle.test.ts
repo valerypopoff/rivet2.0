@@ -4,6 +4,52 @@ import { ServerResourceLifecycle, ServerStartupCancelledError } from '../server-
 import { RuntimeLibraryServices } from '../runtime-libraries/services.js';
 import type { RuntimeLibrariesBackend } from '../runtime-libraries/backend.js';
 
+test('runtime-library retirement retains its existing owner until accepted cleanup settles', async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const events: string[] = [];
+  const backend = {
+    beginDrain() {
+      events.push('fence');
+    },
+    drainAcceptedWork() {
+      events.push('wait');
+      return pending;
+    },
+    async dispose() {
+      events.push('close');
+    },
+  } as RuntimeLibrariesBackend;
+  const owner = new RuntimeLibraryServices(() => backend);
+  assert.equal(owner.get(), backend);
+  let drained = false;
+  const drain = owner.drainAcceptedWork().then(() => {
+    drained = true;
+  });
+  assert.equal(owner.get(), backend);
+  assert.deepEqual(events, ['fence', 'wait']);
+  assert.equal(drained, false);
+  finish();
+  await drain;
+  assert.equal(owner.get(), backend, 'graceful retirement is not resource disposal');
+  await owner.dispose();
+  assert.deepEqual(events, ['fence', 'wait', 'fence', 'close']);
+  assert.throws(() => owner.get(), /draining/);
+});
+
+test('retirement never allocates a lazy backend and refuses an unconfirmed drain', async () => {
+  const empty = new RuntimeLibraryServices(() => {
+    throw new Error('must not allocate');
+  });
+  await empty.drainAcceptedWork();
+  assert.throws(() => empty.get(), /draining/);
+  const unsupported = new RuntimeLibraryServices(() => ({ beginDrain() {} }) as RuntimeLibrariesBackend);
+  unsupported.get();
+  await assert.rejects(unsupported.drainAcceptedWork(), /cannot confirm/);
+});
+
 test('startup is single-flight and draining fences late acquisition before disposal', async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
