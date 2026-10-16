@@ -376,6 +376,8 @@ ha:
   enabled: false
   protocol: 1
   peerLimit: 9
+  # Private release-helper CAS guards; do not set in operator values.
+  rolloutResourceVersions: {}
 
 legacyRestore:
   enabled: true

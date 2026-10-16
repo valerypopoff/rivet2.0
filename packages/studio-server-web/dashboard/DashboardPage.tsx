@@ -38,6 +38,7 @@ import {
 import './DashboardPage.css';
 import { DevelopmentUpdates } from './DevelopmentUpdates';
 import { getDevelopmentGeneration } from './developmentRefreshGuard';
+import { editorSource } from './editorSource';
 
 const WORKFLOW_DASHBOARD_COLLAPSED_SIDEBAR_WIDTH = 30;
 const MIN_SIDEBAR_WIDTH = 240;
@@ -634,7 +635,7 @@ export const DashboardPage: FC = () => {
         ) : null}
         <iframe
           ref={iframeRef}
-          src={getDevelopmentGeneration() ? `/?editor&devBuild=${getDevelopmentGeneration()}` : '/?editor'}
+          src={editorSource(document, getDevelopmentGeneration())}
           onLoad={() => {
             // Bootstrap messages may precede load; retain this document's result.
             const state = iframeRef.current?.contentWindow?.__rivetEditorBootstrapState;

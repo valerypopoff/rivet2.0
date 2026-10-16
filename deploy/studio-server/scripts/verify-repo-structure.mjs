@@ -334,16 +334,12 @@ for (const dockerfilePath of dockerfiles) {
   assert.doesNotMatch(dockerfile, /rivet_source|rivet_dependency_metadata|\.rivet-package-links|wrapper\//);
 }
 
-for (const webDockerfilePath of [
-  'deploy/studio-server/images/web/Dockerfile',
-  'deploy/studio-server/compose/docker/Dockerfile.web',
-]) {
-  assert.match(
-    readText(webDockerfilePath),
-    /npm install -g serve@14\.2\.6/,
-    `${webDockerfilePath} must pin the tested static web server version.`,
-  );
-}
+const productionWeb = readText('deploy/studio-server/images/web/Dockerfile');
+assert.match(productionWeb, /studio-server-web\/production\/server\.mjs --bundle/,
+  'Production must bundle the source-owned, regression-tested immutable build server.');
+assert.match(productionWeb, /CMD \["node", "\/app\/web-server\.mjs"\]/);
+assert.match(readText('deploy/studio-server/compose/docker/Dockerfile.web'), /npm install -g serve@14\.2\.6/,
+  'The legacy Compose static server remains pinned until its separate runtime is migrated.');
 
 const gitignore = readText('.gitignore');
 for (const pattern of ['/.data/', '/artifacts/playwright/', '.tools/']) {

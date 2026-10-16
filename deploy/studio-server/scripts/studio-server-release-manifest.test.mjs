@@ -28,6 +28,7 @@ import {
   PRODUCTION_RELEASE_MANIFEST_REFERENCE,
 } from './release-manifest-oci.mjs';
 import { parseArgs, resolveDeploymentRelease } from './deploy-kubernetes-release.mjs';
+import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
@@ -73,6 +74,42 @@ test('release manifest reads the source-owned managed schema contract', () => {
   });
 });
 
+test('production values persist the certified browser baseline for subsequent rolling guards', () => {
+  const release = candidate();
+  release.evidence.ha = {
+    protocol: 3,
+    mode: 'bootstrap',
+    candidateSourceSha: release.source.sha,
+    candidateImages: release.images,
+    chartDigest: release.chart.contentDigest,
+    requestSamples: 100,
+    failedRequests: 0,
+    checks: HA_REQUIRED_CHECKS,
+    browserContract: { protocol: 1, baseline: { sourceSha: release.source.sha, image: release.images.web } },
+  };
+  const normalized = promoteStudioServerReleaseManifest(release, {
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  assert.deepEqual(
+    createProductionHelmValues(normalized).release.production.browserContract,
+    release.evidence.ha.browserContract,
+  );
+  assert.throws(
+    () =>
+      assertStudioServerReleaseManifest({
+        ...normalized,
+        evidence: {
+          ...normalized.evidence,
+          ha: {
+            ...normalized.evidence.ha,
+            browserContract: { protocol: 1, baseline: { sourceSha: 'bad', image: release.images.web } },
+          },
+        },
+      }),
+    /baseline/,
+  );
+});
+
 test('release manifest binds the exact current Helm chart contents', () => {
   const release = promoted();
   const chart = readHelmChartIdentity(rootDir);
@@ -93,7 +130,10 @@ test('release manifest binds the exact current Helm chart contents', () => {
 test('source and chart identity checks require promotion unless certification explicitly opts into candidates', () => {
   const manifest = candidate();
   for (const options of [undefined, {}]) {
-    assert.throws(() => assertReleaseManifestMatchesCurrentSource(manifest, manifest.source.sha, options), /promoted release/);
+    assert.throws(
+      () => assertReleaseManifestMatchesCurrentSource(manifest, manifest.source.sha, options),
+      /promoted release/,
+    );
     assert.throws(() => assertReleaseManifestMatchesCurrentChart(manifest, rootDir, options), /promoted release/);
   }
   assert.equal(

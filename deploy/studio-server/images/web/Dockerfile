@@ -87,9 +87,10 @@ ENV RIVET_WEB_APPS_BASE_PATH=$RIVET_WEB_APPS_BASE_PATH
 ENV RIVET_LATEST_WEB_APPS_BASE_PATH=$RIVET_LATEST_WEB_APPS_BASE_PATH
 RUN NODE_OPTIONS="--max-old-space-size=${RIVET_WEB_BUILD_MAX_OLD_SPACE_SIZE}" \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-web run build
-
-FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS serve-installer
-RUN npm install -g serve@14.2.6
+RUN YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-api exec esbuild \
+    ../studio-server-web/production/server.mjs --bundle --platform=node --format=esm --target=node20 \
+    '--banner:js=import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' \
+    --outfile=/app/web-server.mjs
 
 FROM --platform=$TARGETPLATFORM ${NODE_IMAGE}
 
@@ -117,8 +118,8 @@ RUN addgroup -g 10001 -S rivet && \
     chown -R 10001:10001 /app /home/rivet
 
 WORKDIR /app
-COPY --from=serve-installer /usr/local/lib/node_modules/serve /usr/local/lib/node_modules/serve
 COPY --from=builder --chown=10001:10001 /app/packages/studio-server-web/dist /app/dist
+COPY --from=builder --chown=10001:10001 /app/web-server.mjs /app/web-server.mjs
 
 ENV HOME=/home/rivet
 ENV TMPDIR=/tmp
@@ -126,4 +127,4 @@ ENV TMPDIR=/tmp
 EXPOSE 3000
 USER 10001:10001
 
-CMD ["node", "/usr/local/lib/node_modules/serve/build/main.js", "-s", "dist", "-l", "3000"]
+CMD ["node", "/app/web-server.mjs"]

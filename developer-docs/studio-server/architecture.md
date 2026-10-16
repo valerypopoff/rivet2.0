@@ -700,6 +700,16 @@ security, release requirements and regression commands.
 
 ## Development frontend modes
 
+Production HA uses a separate, immutable browser-asset boundary, owned by
+`packages/studio-server-web/production/`. A web replica publishes its compressed
+content-addressed build to installation-scoped S3 before readiness, then serves
+current HTML and any retained version's import/CSS/worker graph. The dashboard's
+iframe is pinned to its build; browser code receives no storage credentials.
+Files are never silently expired or replaced, so an old tab needs neither a
+reload nor an old pod. See the [browser continuity contract](ha-rolling-upgrades.md#production-browser-version-continuity)
+for bounds, retention policy, authentication and release certification. Ordinary
+static/non-HA and development servers keep their existing entry points.
+
 Ordinary dev uses Vite HMR. The optional `studio-server:dev:tunnel` launcher uses
 the same stack and data with a supervised Vite build watcher and independent
 HTTP/SSE server (`packages/studio-server-web/dev/`). Builds are published as

@@ -47,25 +47,29 @@ try {
   const latest = await connect(`ws://${peer}/ws/latest-debugger`, observations);
   await waitFor('mesh observer greeting', () => observations.find((e) => e.message === 'latest-session'));
   const initial = observations.length;
+  const inputMarker = `ha-latest-${marker.split('/').at(-1)}`;
   const latestCall = fetch(`${base}/workflows-latest/managed-release-workflow`, {
     method: 'POST',
     headers: { ...headers, authorization: `Bearer ${process.env.RIVET_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ input: 'ha-latest-mesh-probe' }),
+    body: JSON.stringify({ input: inputMarker }),
     signal: AbortSignal.timeout(30_000),
   });
-  await waitFor('remote latest start', () => observations.slice(initial).find((e) => e.message === 'start'));
+  const started = await waitFor('remote latest start', () => observations.slice(initial).find((e) =>
+    e.message === 'start' && e.rivetEventId?.startsWith(`${process.env.RIVET_POD_NAME}:`) &&
+    JSON.stringify(e.data?.inputs).includes(inputMarker)));
+  const startSequence = Number(started.rivetEventId.split(':').at(-1));
+  // Replay can arrive after the greeting. Count this run's owner sequence,
+  // never an earlier completed run merely because it arrived on this socket.
+  const peerEvents = () => observations.filter(e => e.rivetEventId?.startsWith(`${process.env.RIVET_POD_NAME}:`) &&
+    Number(e.rivetEventId.split(':').at(-1)) >= startSequence);
   send(latest, 'pause');
-  await waitFor('remote latest pause', () => observations.slice(initial).find((e) => e.message === 'pause'));
+  await waitFor('remote latest pause', () => peerEvents().find((e) => e.message === 'pause'));
   send(latest, 'resume');
   const latestResponse = await latestCall;
   assert.equal(latestResponse.status, 200, await latestResponse.text());
-  await waitFor('remote latest completion', () => observations.slice(initial).find((e) => e.message === 'done'));
-  const peerEvents = observations
-    .slice(initial)
-    .filter((e) => e.rivetEventId?.startsWith(`${process.env.RIVET_POD_NAME}:`));
-  assert.ok(peerEvents.length > 0, 'neighbor must observe this owner, not a different run');
-  assert.equal(peerEvents.filter((e) => e.message === 'pause').length, 1);
-  assert.equal(peerEvents.filter((e) => e.message === 'done').length, 1);
+  await waitFor('remote latest completion', () => peerEvents().find((e) => e.message === 'done'));
+  assert.equal(peerEvents().filter((e) => e.message === 'pause').length, 1);
+  assert.equal(peerEvents().filter((e) => e.message === 'done').length, 1);
   latest.close();
 
   const configResponse = await fetch(`${base}/api/config`, { headers });

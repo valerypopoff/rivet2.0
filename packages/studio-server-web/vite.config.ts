@@ -470,6 +470,7 @@ const assertBrowserSafeGoogleDependencies = (): PluginOption => ({
 });
 
 export default defineConfig({
+    base: './',
     root: __dirname,
     envDir: resolve(__dirname, '../..'),
     envPrefix: ['VITE_', 'RIVET_'],

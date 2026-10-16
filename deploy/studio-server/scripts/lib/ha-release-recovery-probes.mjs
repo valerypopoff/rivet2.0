@@ -104,10 +104,12 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         resources,
         timeoutMs: 180_000,
         artifact: (name, value) => gate.artifact(`recovery-${fault}/${name}`, value),
-        applyTemplates: () => gate.apply(values, `ha-recovery-${fault}-apply.json`),
-        restoreAutoscalers: () =>
+        applyTemplates: (_workloads, guardedValues) => gate.apply({
+          ...values, ...guardedValues, ha: { ...values.ha, ...guardedValues.ha },
+        }, `ha-recovery-${fault}-apply.json`),
+        restoreAutoscalers: (_workloads, guardedValues) =>
           gate.apply(
-            { ...values, workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } } },
+            { ...values, ...guardedValues, ha: { ...values.ha, ...guardedValues.ha }, workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } } },
             `ha-recovery-${fault}-complete.json`,
           ),
         beforeRetirement: async (pod) => {

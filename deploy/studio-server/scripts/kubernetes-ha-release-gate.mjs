@@ -17,8 +17,9 @@ import {
   assertReleaseManifestMatchesCurrentSource,
   assertStudioServerReleasePredecessor,
 } from './lib/studio-server-release-manifest.mjs';
-import { createHaReleaseEvidence } from './lib/ha-release-evidence.mjs';
+import { createHaReleaseEvidence, selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+import { startHaBrowserProbe, publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -34,8 +35,13 @@ export function validateHaCertificationManifest(manifest, { rootDir, sourceSha, 
   assertReleaseManifestMatchesCurrentChart(candidate, rootDir, { requirePromoted: false });
   if (!isDeepStrictEqual(candidate.images, images)) throw Error('HA images must match the candidate manifest');
   assertStudioServerReleasePredecessor(candidate, previous);
-  const mode = previous?.evidence?.ha && !isDeepStrictEqual(previous.images, candidate.images) ? 'mixed' : 'bootstrap';
-  return { candidate, mode };
+  const mode =
+    previous?.evidence?.ha?.protocol === 3 &&
+    previous.evidence.ha.browserContract.protocol === HA_BROWSER_CONTRACT &&
+    !isDeepStrictEqual(previous.images, candidate.images)
+      ? 'mixed'
+      : 'bootstrap';
+  return { candidate, mode, browserContract: selectHaBrowserContract(candidate, previous) };
 }
 
 /** Extends the real managed release fixture; never creates a second importer,
@@ -174,11 +180,12 @@ export class HaReleaseGate extends ManagedReleaseGate {
     );
     this.secrets = { rivetKey: Buffer.from(secret.data.RIVET_KEY, 'base64').toString('utf8') };
   }
-  async roll(baseUrl, images = this.config.images) {
+  async roll(baseUrl, images = this.config.images, browserContract = null) {
     await this.loadWorkflowKey();
     const values = {
         ...this.values(images),
         podAnnotations: {
+          web: { 'rivet.dev/ha-proof-generation': 'candidate' },
           backend: { 'rivet.dev/ha-proof-generation': 'candidate' },
           execution: { 'rivet.dev/ha-proof-generation': 'candidate' },
         },
@@ -228,6 +235,24 @@ export class HaReleaseGate extends ManagedReleaseGate {
       .filter(Boolean);
     const probes = new HaReleaseProbes(this, baseUrl, rootDir);
     await probes.prepare();
+    const baselineReference = before
+      .find((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web')
+      ?.spec.containers.find((c) => c.name === 'web')?.image;
+    const [repository, digest] = baselineReference?.split('@') ?? [];
+    const baselineImage = browserContract?.baseline.image ?? { repository, digest };
+    const baseline = await publishHaBrowserBaseline(this, baselineImage);
+    const browser = await startHaBrowserProbe(this, baseUrl, rootDir, { template: probes.template });
+    let oldestBrowser;
+    try {
+      oldestBrowser = await startHaBrowserProbe(this, baseUrl, rootDir, {
+        template: probes.template,
+        build: baseline.build,
+        label: 'oldest',
+      });
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
     let running = true,
       samples = 0;
     const failures = [],
@@ -295,29 +320,37 @@ export class HaReleaseGate extends ManagedReleaseGate {
         artifact: (name, value) => this.artifact(name, value),
         beforeRetirement: (pod) => probes.beforeRetirement(pod),
         afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
-        applyTemplates: async (workloads) => {
+        applyTemplates: async (_workloads, guardedValues) => {
           await this.apply(
             {
               ...values,
-              replicaCount: Object.fromEntries(
-                workloads.filter((w) => w.role !== 'maintenance').map((w) => [w.role, w.replicas]),
-              ),
+              ...guardedValues,
+              ha: { ...values.ha, ...guardedValues.ha },
               autoscaling: { execution: { enabled: false } },
             },
             'ha-rollout-values.json',
           );
         },
-        restoreAutoscalers: async () =>
+        restoreAutoscalers: async (_workloads, guardedValues) =>
           this.apply(
-            { ...values, workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } } },
+            {
+              ...values,
+              ...guardedValues,
+              ha: { ...values.ha, ...guardedValues.ha },
+              workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
+            },
             'ha-completed-values.json',
           ),
       });
       workloadReport = await probes.finish();
+      workloadReport.browser = await browser.finish(before);
+      workloadReport.oldestBrowser = { ...(await oldestBrowser.finish(before)), image: baselineImage };
       while (samples < 100 && !failures.length) await pause(25);
     } finally {
       running = false;
       await Promise.all([traffic, readySampler]);
+      await browser.close();
+      await oldestBrowser.close();
       await this.artifact('ha-traffic.json', JSON.stringify({ samples, failures, readiness }, null, 2));
       await this.artifact('ha-workload-probes.json', JSON.stringify(probes.snapshot(), null, 2));
     }
@@ -339,7 +372,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
         )
       ).stdout,
     ).items;
-    const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after };
+    const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after, browserContract };
     await this.artifact('ha-report.json', JSON.stringify(report, null, 2));
     return report;
   }
@@ -379,14 +412,14 @@ async function main() {
             { requirePromoted: true },
           )
         : null;
-      const { candidate, mode } = validateHaCertificationManifest(manifest, {
+      const { candidate, mode, browserContract } = validateHaCertificationManifest(manifest, {
         rootDir,
         sourceSha: sha,
         images: config.images,
         previous,
       });
       const prepared = await gate.prepare(mode === 'mixed' ? previous.images : candidate.images);
-      const report = await gate.roll(prepared.baseUrl);
+      const report = await gate.roll(prepared.baseUrl, config.images, browserContract);
       report.recovery = await verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir);
       await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
       const evidence = createHaReleaseEvidence(report, candidate, mode);

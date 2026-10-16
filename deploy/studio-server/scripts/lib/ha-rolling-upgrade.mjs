@@ -86,6 +86,8 @@ export async function runHaRollingUpgrade({
   if (record && record.phase !== 'complete') {
     if (resumeToken !== record.token || record.manifestDigest !== identity.manifestDigest)
       throw new Error(`Recover the exact HA release using --resume-ha ${record.token}.`);
+    if (identity.configurationDigest && record.configurationDigest !== identity.configurationDigest)
+      throw new Error('HA recovery configuration changed or is unconfirmed. Restore the original deployment values before recovery.');
     if (JSON.stringify(record.workloads) !== JSON.stringify(workloads))
       throw new Error('HA recovery inventory changed.');
   } else {
@@ -273,8 +275,24 @@ export async function runHaRollingUpgrade({
       }
       await checkpoint({ owner: null, completed: [...record.completed, w.name] });
     }
+    // Journal completion is historical evidence, not a readiness or identity
+    // guarantee about an owner that may have changed while another tier drained.
+    const verifyCompletedOwners = async () => {
+      for (const w of workloads)
+        for (let i = 0; i < w.replicas; i++) {
+          assertLease();
+          const pod = await observePod(`${w.name}-${i}`);
+          if (!pod?.ready || !(await isCurrentPod(pod, w)))
+            throw new Error('HA completed owner is no longer current and ready; completion is blocked.');
+          const current = assertHaRetirement(await status(pod));
+          if (current.state !== 'serving' || current.operationId)
+            throw new Error('HA completed owner is retiring; completion is blocked.');
+        }
+    };
+    await verifyCompletedOwners();
     assertLease();
     await restoreAutoscalers();
+    await verifyCompletedOwners();
     await checkpoint({ phase: 'complete' });
     return record;
   } finally {

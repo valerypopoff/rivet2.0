@@ -23,7 +23,10 @@ function checkedInventory(resources) {
 export const maintenanceValidationValues = {
   workflowSchema: { maintenanceValidation: true },
   replicaCount: { proxy: 0, web: 0, evaluation: 0 },
-  autoscaling: { proxy: { enabled: false }, execution: { enabled: false } },
+  autoscaling: {
+    proxy: { enabled: false }, web: { enabled: false },
+    backend: { enabled: false }, execution: { enabled: false },
+  },
 };
 
 export function blocksCutoverStop(pod) {

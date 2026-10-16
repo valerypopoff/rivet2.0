@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { configureStudioMetrics, getStudioMetrics, resetStudioMetricsForTests } from '../metrics.js';
-import { InMemoryManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
+import { InMemoryManagedWorkflowBlobStore, isManagedWorkflowArtifactObjectKey } from '../routes/workflows/managed/blob-store.js';
 import {
   createManagedReconciliationTask,
   getManagedReconciliationStatus,
@@ -235,6 +235,25 @@ test('managed reconciliation is bounded, reports missing and two-pass orphan evi
   );
   assert.equal(driver.states.get('workflows')?.active_object_bytes, 0);
 });
+test('retained frontend files remain in storage inventory without becoming workflow orphan candidates', async () => {
+  const driver = createReconciliationPool();
+  const listPage = driver.workflowBlobStore.listPage;
+  const key = `web-assets/${'a'.repeat(64)}/${'b'.repeat(64)}.gz`;
+  const malformed = 'web-assets/not-an-installation/not-a-hash.gz';
+  driver.workflowBlobStore.listPage = async () => ({ objects: [
+    ...(await listPage()).objects,
+    ...[key, malformed].map(key => ({ key, lastModified: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(), size: 20 })),
+  ] });
+  const task = createManagedReconciliationTask({ pageSize: 100, pool: driver.pool, workflowBlobStore: driver.workflowBlobStore });
+  const lease = { assertCurrent: async () => {}, fencingToken: 1, holderId: 'test' };
+  await task(lease); await task(lease);
+  assert.equal([...driver.findings.values()].some(finding => finding.subject === key), false);
+  assert.equal([...driver.findings.values()].some(finding => finding.subject === malformed), true);
+  assert.equal(driver.states.get('workflows')?.last_completed_object_bytes, 82);
+  assert.equal(isManagedWorkflowArtifactObjectKey(key), false, 'workflow deletion cannot own a frontend object');
+  assert.deepEqual(driver.deleted, []);
+});
+
 test('managed reconciliation status is aggregate-only and never selects raw object keys', async () => {
   const queries: string[] = [];
   const pool = {

@@ -9,7 +9,60 @@ export const HA_REQUIRED_CHECKS = [
   'maintenance-owner',
   'shared-bundle-download',
   'fenced-uid-replacement',
+  'browser-version-continuity',
+  'retained-browser-workflow',
+  'oldest-browser-compatibility',
 ];
+// Bump only for an intentional browser API/executor contract break. Such a
+// release establishes a new baseline through maintenance, never rolling HA.
+export const HA_BROWSER_CONTRACT = 1;
+const legacyChecks = (version) =>
+  HA_REQUIRED_CHECKS.filter(
+    (check) =>
+      ![
+        'retained-browser-workflow',
+        'oldest-browser-compatibility',
+        ...(version === 1 ? ['browser-version-continuity'] : []),
+      ].includes(check),
+  );
+function assertBrowserContract(value) {
+  if (
+    !Number.isSafeInteger(value?.protocol) ||
+    value.protocol < 1 ||
+    !/^[a-f0-9]{40}$/.test(value.baseline?.sourceSha ?? '') ||
+    typeof value.baseline?.image?.repository !== 'string' ||
+    !value.baseline.image.repository ||
+    !/^sha256:[a-f0-9]{64}$/.test(value.baseline.image.digest ?? '')
+  )
+    throw Error('HA browser compatibility baseline is missing or invalid.');
+  return value;
+}
+export function selectHaBrowserContract(candidate, previous) {
+  const prior = previous?.evidence?.ha;
+  if (prior?.protocol === 3 && prior.browserContract?.protocol === HA_BROWSER_CONTRACT)
+    return structuredClone(assertBrowserContract(prior.browserContract));
+  return { protocol: HA_BROWSER_CONTRACT, baseline: { sourceSha: candidate.source.sha, image: candidate.images.web } };
+}
+const browserWorkflowPassed = (value) =>
+  value?.passed === true &&
+  value.reloads === 0 &&
+  value.iframeReloads === 0 &&
+  [
+    'lazyScreen',
+    'pinnedEditor',
+    'oldWebPodsRemoved',
+    'unsavedEdit',
+    'savedByCandidate',
+    'newRun',
+    'outputs',
+    'recordingOpened',
+  ].every((k) => value[k] === true) &&
+  /^[a-f0-9]{64}$/.test(value.originalBuild ?? '') &&
+  /^[a-f0-9]{64}$/.test(value.candidateBuild ?? '') &&
+  Array.isArray(value.recordingIds) &&
+  value.recordingIds.length === 2 &&
+  value.recordingIds.every((id) => typeof id === 'string' && id.length > 0) &&
+  new Set(value.recordingIds).size === 2;
 const stable = (value) =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? Object.fromEntries(
@@ -39,6 +92,13 @@ export function createHaReleaseEvidence(report, release, mode) {
     throw Error('HA behavioral report is incomplete; no certificate was created.');
   };
   const work = report?.workloads;
+  if (
+    !browserWorkflowPassed(work?.browser) ||
+    !browserWorkflowPassed(work?.oldestBrowser) ||
+    !equal(work.oldestBrowser.image, report.browserContract?.baseline?.image)
+  )
+    fail();
+  const browserContract = assertBrowserContract(report.browserContract);
   if (
     !hasNotificationProof(work?.folderNotifications) ||
     work?.notifications?.length !== 2 ||
@@ -97,7 +157,30 @@ export function createHaReleaseEvidence(report, release, mode) {
     )
   )
     fail();
-  const baseline = mode === 'mixed' ? release.lineage?.predecessor?.images?.api : release.images.api;
+  const baselineImages = mode === 'mixed' ? release.lineage?.predecessor?.images : release.images;
+  const baseline = baselineImages?.api;
+  const originalWeb = report.before?.filter((p) => p.metadata?.labels?.['app.kubernetes.io/component'] === 'web');
+  const currentWeb = report.after?.filter((p) => p.metadata?.labels?.['app.kubernetes.io/component'] === 'web');
+  if (
+    !originalWeb?.length ||
+    !currentWeb?.length ||
+    !baselineImages?.web ||
+    originalWeb.some(
+      (p) =>
+        !p.spec?.containers.some(
+          (c) => c.name === 'web' && c.image === `${baselineImages.web.repository}@${baselineImages.web.digest}`,
+        ),
+    ) ||
+    currentWeb.some(
+      (p) =>
+        originalWeb.some((old) => old.metadata.uid === p.metadata.uid) ||
+        !p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') ||
+        !p.spec?.containers.some(
+          (c) => c.name === 'web' && c.image === `${release.images.web.repository}@${release.images.web.digest}`,
+        ),
+    )
+  )
+    fail();
   for (const pod of original) {
     const replacement = report.after?.find((p) => p.metadata.name === pod.metadata.name);
     if (
@@ -139,7 +222,8 @@ export function createHaReleaseEvidence(report, release, mode) {
   }
   return assertHaReleaseEvidence(
     {
-      protocol: 1,
+      protocol: 3,
+      browserContract,
       mode,
       candidateSourceSha: release.source.sha,
       candidateImages: release.images,
@@ -161,9 +245,12 @@ export function createHaReleaseEvidence(report, release, mode) {
 /** This evidence is part of the promoted manifest identity, not an operator
  * claim in values.yaml. The CI gate must bind the exact image/source pair. */
 export function assertHaReleaseEvidence(value, release) {
+  // Historical manifests remain readable for lineage and maintenance upgrades;
+  // Legacy receipts remain readable, but cannot authorize the stronger contract.
+  const required = value?.protocol === 3 ? HA_REQUIRED_CHECKS : legacyChecks(value?.protocol);
   if (
     !value ||
-    value.protocol !== 1 ||
+    ![1, 2, 3].includes(value.protocol) ||
     !['bootstrap', 'mixed'].includes(value.mode) ||
     value.candidateSourceSha !== release.source.sha ||
     !equal(value.candidateImages, release.images) ||
@@ -172,12 +259,13 @@ export function assertHaReleaseEvidence(value, release) {
     !Number.isSafeInteger(value.requestSamples) ||
     value.requestSamples < 100 ||
     !Array.isArray(value.checks) ||
-    new Set(value.checks).size !== HA_REQUIRED_CHECKS.length ||
-    value.checks.length !== HA_REQUIRED_CHECKS.length ||
-    !HA_REQUIRED_CHECKS.every((check) => value.checks?.includes(check))
+    new Set(value.checks).size !== required.length ||
+    value.checks.length !== required.length ||
+    !required.every((check) => value.checks?.includes(check))
   )
     throw new Error('HA compatibility evidence is incomplete or belongs to another candidate.');
   const previous = release.lineage?.predecessor;
+  const browserContract = value.protocol === 3 ? assertBrowserContract(value.browserContract) : undefined;
   if (
     value.mode === 'mixed' &&
     (!previous ||
@@ -187,22 +275,29 @@ export function assertHaReleaseEvidence(value, release) {
   )
     throw new Error('HA mixed-version evidence does not match the exact predecessor.');
   return {
-    protocol: 1,
+    protocol: value.protocol,
+    ...(browserContract ? { browserContract: structuredClone(browserContract) } : {}),
     mode: value.mode,
     candidateSourceSha: value.candidateSourceSha,
     candidateImages: release.images,
     chartDigest: value.chartDigest,
     failedRequests: 0,
     requestSamples: value.requestSamples,
-    checks: [...HA_REQUIRED_CHECKS],
+    checks: [...required],
     ...(value.mode === 'mixed' ? { predecessorSourceSha: previous.sourceSha, predecessorImages: previous.images } : {}),
   };
 }
 
 export function assertHaUpgradeEvidence(manifest, installed) {
   const evidence = assertHaReleaseEvidence(manifest.evidence?.ha, manifest);
+  if (evidence.protocol !== 3)
+    throw new Error(
+      'Browser-continuous HA requires a v3 release certificate. Use a maintenance cutover for legacy HA.',
+    );
   if (!installed) return;
   if (!installed.ha?.enabled) throw new Error('First HA conversion requires an explicit maintenance cutover.');
+  if (!equal(evidence.browserContract, installed.release?.production?.browserContract))
+    throw Error('Changing the supported browser contract or baseline requires maintenance, not rolling HA.');
   const sameSource = installed.release?.production?.sourceSha === manifest.source.sha;
   const installedMatches = (images) =>
     Object.entries(images).every(

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HaReleaseGate, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
 import { parseAllDocuments } from 'yaml';
+import { publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
@@ -45,16 +46,22 @@ test('HA candidate preflight preserves source, chart, image and exact predecesso
     /current checkout/,
   );
   assert.throws(
-    () => validateHaCertificationManifest({
-      ...manifest, chart: { ...manifest.chart, contentDigest: `sha256:${'f'.repeat(64)}` },
-    }, options),
+    () =>
+      validateHaCertificationManifest(
+        {
+          ...manifest,
+          chart: { ...manifest.chart, contentDigest: `sha256:${'f'.repeat(64)}` },
+        },
+        options,
+      ),
     /current Helm chart/,
   );
   assert.throws(
-    () => validateHaCertificationManifest(manifest, {
-      ...options,
-      images: { ...options.images, api: { ...options.images.api, digest: `sha256:${'f'.repeat(64)}` } },
-    }),
+    () =>
+      validateHaCertificationManifest(manifest, {
+        ...options,
+        images: { ...options.images, api: { ...options.images.api, digest: `sha256:${'f'.repeat(64)}` } },
+      }),
     /HA images must match/,
   );
   const previous = promoteStudioServerReleaseManifest(manifest, {
@@ -62,7 +69,10 @@ test('HA candidate preflight preserves source, chart, image and exact predecesso
   });
   const next = certificationFixture(previous);
   assert.equal(validateHaCertificationManifest(next.manifest, next.options).mode, 'bootstrap');
-  assert.throws(() => validateHaCertificationManifest(next.manifest, { ...next.options, previous: null }), /predecessor/);
+  assert.throws(
+    () => validateHaCertificationManifest(next.manifest, { ...next.options, previous: null }),
+    /predecessor/,
+  );
 });
 
 test('disposable PostgreSQL really provides the HA fixture connection budget', async () => {
@@ -105,4 +115,49 @@ test('the local proof cannot select a production context, even when allow-contex
     throw Error('must not access cluster');
   };
   await assert.rejects(gate.assertLocalContext(), /disposable local cluster/);
+});
+
+test('baseline publisher is isolated, digest-pinned and cleaned up after success or failure', async () => {
+  for (const failure of [false, true]) {
+    const calls = [];
+    const gate = {
+      config: { namespace: 'disposable', release: 'fixture' },
+      assertLocalContext: async () => {},
+      kubectl: async (args, options) => {
+        const command = args[2];
+        calls.push({ command, args, options });
+        if (command === 'get')
+          return {
+            stdout: JSON.stringify({
+              items: [
+                {
+                  status: { conditions: [{ type: 'Ready', status: 'True' }] },
+                  spec: {
+                    containers: [
+                      {
+                        name: 'web',
+                        image: 'current',
+                        env: [{ name: 'RIVET_WEB_ASSETS_INSTALLATION', value: 'disposable/fixture' }],
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          };
+        if (command === 'exec') {
+          if (failure) throw Error('publication failed');
+          return { stdout: 'a'.repeat(64) };
+        }
+        return { stdout: '' };
+      },
+    };
+    const image = { repository: 'registry/web', digest: `sha256:${'b'.repeat(64)}` };
+    if (failure) await assert.rejects(publishHaBrowserBaseline(gate, image), /publication failed/);
+    else assert.deepEqual(await publishHaBrowserBaseline(gate, image), { ...image, build: 'a'.repeat(64) });
+    const pod = JSON.parse(calls.find((c) => c.command === 'create').options.input);
+    assert.equal(pod.spec.containers[0].image, `${image.repository}@${image.digest}`);
+    assert.equal(pod.metadata.labels, undefined, 'publisher must not enter a release Service');
+    assert.equal(calls.at(-1).command, 'delete');
+  }
 });

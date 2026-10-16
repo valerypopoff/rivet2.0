@@ -572,6 +572,9 @@ jobs:
           fi
           yarn "$gate_script"
 
+      - name: Install browser for full HA upgrade verification
+        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
+
       - name: Run HA Kubernetes Gate
         shell: bash
         env:

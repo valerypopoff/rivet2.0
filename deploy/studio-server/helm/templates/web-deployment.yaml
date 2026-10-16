@@ -24,6 +24,9 @@ spec:
         {{- with .Values.podAnnotations.web }}
 {{ toYaml . | nindent 8 }}
         {{- end }}
+        {{- if .Values.ha.enabled }}
+        {{- include "rivet.vaultWebAnnotations" . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

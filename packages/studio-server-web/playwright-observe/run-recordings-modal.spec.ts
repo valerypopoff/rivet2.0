@@ -2301,6 +2301,10 @@ test.describe('Run recordings modal', () => {
     await expect.poll(() => replayProjectFetches).toEqual(['recording-b-inspector']);
 
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
+    // Loading and playing are separate actions. The HA journey must use this
+    // same control rather than expect execution results immediately on open.
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.locator('.response-inspector-button')).toHaveCount(0);
     await editorFrame.getByRole('button', { name: 'Play Recording', exact: true }).click();
     const inspectorButton = editorFrame.locator('.response-inspector-button');
     await expect(inspectorButton).toBeVisible();

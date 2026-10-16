@@ -72,6 +72,8 @@ export function parseExecutorOwnerPath(
 /** A pod-local relay preserves a signed owner route after normal readiness withdrawal. No run retry. */
 export function installExecutorOwnerRouting(server: Server, config: OwnerRoutingConfig): () => void {
   const sockets = new Set<Duplex>();
+  const pending = new Set<ReturnType<typeof httpRequest>>();
+  let disposed = false;
   const handle = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     let pathname: string;
     try {
@@ -100,6 +102,12 @@ export function installExecutorOwnerRouting(server: Server, config: OwnerRouting
       method: 'GET',
       headers: request.headers,
     });
+    pending.add(upstream);
+    sockets.add(socket);
+    const abortHandshake = () => upstream.destroy();
+    socket.on('error', abortHandshake);
+    socket.once('close', () => sockets.delete(socket));
+    upstream.once('close', () => pending.delete(upstream));
     let accepted = false;
     const deadline = setTimeout(() => upstream.destroy(new Error('Executor owner unavailable')), 5000);
     deadline.unref();
@@ -118,9 +126,11 @@ export function installExecutorOwnerRouting(server: Server, config: OwnerRouting
       socket.end(`HTTP/1.1 ${response.statusCode ?? 503} Owner unavailable\r\nConnection: close\r\n\r\n`);
     });
     upstream.once('upgrade', (response, remote, remoteHead) => {
+      pending.delete(upstream);
+      if (disposed || socket.destroyed) { remote.destroy(); return; }
       accepted = true;
       clearTimeout(deadline);
-      sockets.add(socket);
+      socket.off('error', abortHandshake);
       sockets.add(remote);
       socket.write(
         `HTTP/1.1 101 Switching Protocols\r\n${Object.entries(response.headers)
@@ -132,7 +142,6 @@ export function installExecutorOwnerRouting(server: Server, config: OwnerRouting
       socket.on('error', () => remote.destroy());
       remote.on('error', () => socket.destroy());
       socket.once('close', () => {
-        sockets.delete(socket);
         remote.destroy();
       });
       remote.once('close', () => {
@@ -146,7 +155,10 @@ export function installExecutorOwnerRouting(server: Server, config: OwnerRouting
   };
   server.on('upgrade', handle);
   return () => {
+    disposed = true;
     server.off('upgrade', handle);
+    for (const upstream of pending) upstream.destroy();
+    pending.clear();
     for (const socket of sockets) socket.destroy();
     sockets.clear();
   };

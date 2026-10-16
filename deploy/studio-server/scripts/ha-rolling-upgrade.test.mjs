@@ -6,10 +6,13 @@ import {
   resolveHaWorkloadCapacity,
   hasSameHaOwnerIdentity,
   runHaKubernetesRollout,
+  getHaConfigurationDigest,
+  hasSameHaServiceRouting,
 } from './lib/ha-kubernetes-rollout.mjs';
 import { journalForReleaseOperation, releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 
 test('API-server field ordering does not resemble a Secret identity change', () => {
+  const template = container => ({ spec: { containers: [{ name: 'backend', ...container }] } });
   const current = {
     env: [
       { name: 'RIVET_KEY', valueFrom: { secretKeyRef: { key: 'key', name: 'auth' } } },
@@ -22,10 +25,63 @@ test('API-server field ordering does not resemble a Secret identity change', () 
       { name: 'RIVET_KEY', valueFrom: { secretKeyRef: { name: 'auth', key: 'key' } } },
     ],
   };
-  assert.equal(hasSameHaOwnerIdentity(current, candidate), true);
+  assert.equal(hasSameHaOwnerIdentity(template(current), template(candidate)), true);
   candidate.env[1].valueFrom.secretKeyRef.name = 'other';
-  assert.equal(hasSameHaOwnerIdentity(current, candidate), false);
-  assert.equal(hasSameHaOwnerIdentity(current, { env: [] }), false);
+  assert.equal(hasSameHaOwnerIdentity(template(current), template(candidate)), false);
+  assert.equal(hasSameHaOwnerIdentity(template(current), template({ env: [] })), false);
+  assert.equal(hasSameHaOwnerIdentity({}, {}), false);
+});
+
+test('owner identity accepts API-omitted empty literal values without hiding missing or changed configuration', () => {
+  const template = env => ({ spec: { containers: [{ name: 'backend', env }] } });
+  const name = 'RIVET_DEPLOYMENT_STORAGE_ENDPOINT';
+  // A real server-side dry-run omits value: "" from the returned EnvVar.
+  const current = template([{ name }]);
+  assert.equal(hasSameHaOwnerIdentity(current, template([{ name, value: '' }])), true);
+  assert.equal(hasSameHaOwnerIdentity(template([{ name, value: '' }]), current), true);
+  assert.equal(hasSameHaOwnerIdentity(current, template([])), false);
+  assert.equal(hasSameHaOwnerIdentity(current, template([{ name, value: 'https://s3.example.test' }])), false);
+  assert.equal(hasSameHaOwnerIdentity(current, template([
+    { name, valueFrom: { secretKeyRef: { name: 'storage', key: 'endpoint' } } },
+  ])), false);
+});
+
+test('owner identity includes Vault wiring, injected credentials and serving ports, but not ordinary tuning', () => {
+  const current = {
+    metadata: { annotations: { 'vault.hashicorp.com/role': 'rivet', 'vault.hashicorp.com/agent-inject-secret-dotenv': 'secret/rivet', 'vault.hashicorp.com/agent-requests-mem': '64Mi' } },
+    spec: { containers: [{ name: 'backend', env: [{ name: 'PORT', value: '3001' }], envFrom: [{ secretRef: { name: 'rivet' } }] }] },
+  };
+  for (const change of [
+    value => { value.metadata.annotations['vault.hashicorp.com/role'] = 'other'; },
+    value => { value.metadata.annotations['vault.hashicorp.com/agent-inject-secret-dotenv'] = 'secret/other'; },
+    value => { value.spec.containers[0].env[0].value = '3002'; },
+    value => { value.spec.containers[0].envFrom[0].secretRef.name = 'other'; },
+    value => { value.spec.serviceAccountName = 'other'; },
+  ]) {
+    const candidate = structuredClone(current); change(candidate);
+    assert.equal(hasSameHaOwnerIdentity(current, candidate), false);
+  }
+  const tuning = structuredClone(current);
+  tuning.metadata.annotations['vault.hashicorp.com/agent-requests-mem'] = '128Mi';
+  tuning.metadata.annotations['rivet.dev/ha-proof-generation'] = 'candidate';
+  tuning.spec.serviceAccountName = 'default';
+  assert.equal(hasSameHaOwnerIdentity(current, tuning), true);
+});
+
+test('HA Service routing normalizes API defaults but rejects mixed-version route changes', () => {
+  const current = { spec: { clusterIP: '10.0.0.1', type: 'ClusterIP', selector: { component: 'api' }, ports: [{ name: 'http', port: 80, protocol: 'TCP', targetPort: 80 }] } };
+  const candidate = { spec: { selector: { component: 'api' }, ports: [{ name: 'http', port: 80 }] } };
+  assert.equal(hasSameHaServiceRouting(current, candidate), true);
+  for (const change of [
+    value => { value.spec.ports[0].port = 81; },
+    value => { value.spec.ports[0].targetPort = 3002; },
+    value => { value.spec.selector.component = 'other'; },
+    value => { value.spec.clusterIP = 'None'; },
+    value => { value.spec.publishNotReadyAddresses = true; },
+  ]) {
+    const changed = structuredClone(candidate); change(changed);
+    assert.equal(hasSameHaServiceRouting(current, changed), false);
+  }
 });
 
 function fixture() {
@@ -194,6 +250,40 @@ test('recovery retains original capacity when the recorded rollout has already c
   assert.equal(resolveHaWorkloadCapacity(candidate, existing, null), 3);
 });
 
+test('configuration identity ignores map ordering but binds pod settings, routes and autoscalers', () => {
+  const resources = [
+    { kind: 'StatefulSet', metadata: { name: 'backend' }, spec: { template: { spec: { containers: [{ image: 'same-image', resources: { limits: { memory: '1Gi' } } }] } } } },
+    { kind: 'Service', metadata: { name: 'api' }, spec: { ports: [{ port: 80 }] } },
+    { kind: 'HorizontalPodAutoscaler', metadata: { name: 'execution' }, spec: { maxReplicas: 4 } },
+  ];
+  const digest = getHaConfigurationDigest(resources);
+  const reordered = resources.toReversed().map(resource => ({ spec: resource.spec, metadata: resource.metadata, kind: resource.kind }));
+  assert.equal(getHaConfigurationDigest(reordered), digest);
+  for (const change of [
+    value => { value[0].spec.template.spec.containers[0].resources.limits.memory = '2Gi'; },
+    value => { value[1].spec.ports[0].port = 81; },
+    value => { value[2].spec.maxReplicas = 5; },
+  ]) {
+    const changed = structuredClone(resources); change(changed);
+    assert.notEqual(getHaConfigurationDigest(changed), digest);
+  }
+});
+
+test('recovery cannot apply different values at autoscaler restoration after retiring an identical image', async () => {
+  const f = fixture(), begin = f.options.begin;
+  f.options.identity.configurationDigest = 'original-values';
+  f.options.begin = async (...args) => { await begin(...args); throw Error('lost acknowledgement'); };
+  await assert.rejects(runHaRollingUpgrade(f.options), /lost acknowledgement/);
+  f.options.begin = begin;
+  const before = [...f.operations];
+  await assert.rejects(runHaRollingUpgrade({ ...f.options,
+    resumeToken: f.journal.token, identity: { ...f.options.identity, configurationDigest: 'different-values' },
+  }), /recovery configuration changed/);
+  assert.deepEqual(f.operations, before);
+  await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+  assert.equal(f.journal.phase, 'complete');
+});
+
 test('unknown initial ownership acknowledgement exposes its recovery token without touching workloads', async () => {
   const f = fixture();
   f.options.saveJournal = async () => {
@@ -358,6 +448,37 @@ test('pending surge deletion blocks completion and autoscaler restoration withou
   await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
   assert.equal(f.operations.filter((o) => o === 'scale:2').length, 1);
 });
+
+test('historically completed owners are rechecked before autoscaler restoration, including recovery', async () => {
+  for (const fault of ['image', 'readiness', 'retirement']) {
+    const f = fixture();
+    const waitForScaleDown = f.options.waitForScaleDown;
+    f.options.waitForScaleDown = async (...args) => {
+      await waitForScaleDown(...args);
+      const pod = f.pods.get('fixture-backend-0');
+      if (fault === 'image') pod.image = `api@sha256:${'c'.repeat(64)}`;
+      if (fault === 'readiness') pod.ready = false;
+      if (fault === 'retirement') { pod.state = 'withdrawing'; pod.operationId = randomUUID(); }
+    };
+    await assert.rejects(runHaRollingUpgrade(f.options), /completion is blocked/);
+    assert.deepEqual(f.journal.completed, ['fixture-backend']);
+    assert.ok(!f.operations.includes('autoscalers'));
+    const before = [...f.operations];
+    await assert.rejects(runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token }), /completion is blocked/);
+    assert.deepEqual(f.operations, before, 'completed owners must be checked without repeating retirement');
+  }
+});
+
+test('an acknowledged final Helm update is not completion proof if it changed the running template', async () => {
+  const f = fixture();
+  f.options.restoreAutoscalers = async () => {
+    f.operations.push('autoscalers');
+    f.pods.get('fixture-backend-0').image = `api@sha256:${'c'.repeat(64)}`;
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /completion is blocked/);
+  assert.equal(f.journal.phase, 'owners');
+  assert.deepEqual(f.journal.completed, ['fixture-backend']);
+});
 test('lease loss and stale incarnation stop deletion; unknown template outcomes never replay migrations', async () => {
   for (const mode of ['lease', 'incarnation', 'template']) {
     const f = fixture(),
@@ -392,6 +513,13 @@ for (const fault of [
   'changed-uid',
   'missing-readiness',
   'null-readiness',
+  'template-capacity-race',
+  'template-resource-version-race',
+  'recreated-statefulset',
+  'scale-resource-version-race',
+  'service-routing-change',
+  'recreated-statefulset-recovery',
+  'missing-final-revision',
 ])
   test(`Kubernetes surge removal is capacity/UID guarded and recoverable: ${fault}`, async () => {
     const f = fixture(),
@@ -414,6 +542,8 @@ for (const fault of [
     };
     const current = structuredClone(candidate);
     current.metadata.generation = 1;
+    current.metadata.uid = randomUUID();
+    current.metadata.resourceVersion = 'observed-version';
     current.status = { readyReplicas: 2, observedGeneration: 1, updateRevision: 'candidate' };
     let cm,
       revision = 0,
@@ -430,12 +560,19 @@ for (const fault of [
         return result(cm);
       }
       if (args[0] === 'get' && args[1] === 'statefulset') {
+        if (fault === 'missing-final-revision' && cm && JSON.parse(cm.data.record).completed.includes(name))
+          current.status.updateRevision = undefined;
+        if (fault === 'recreated-statefulset' && cm) current.metadata.uid = randomUUID();
+        if (fault === 'template-capacity-race' && cm && JSON.parse(cm.data.record).phase === 'templates')
+          current.spec.replicas = 3;
         if (cm && JSON.parse(cm.data.record).owner?.scaleDownIssued) {
           if (fault === 'changed-capacity') current.spec.replicas = 4;
           if (fault === 'changed-uid') f.pods.get(`${name}-2`).uid = 'unexpected-replacement';
         }
         return result(args.includes('-l') ? { items: [current] } : current);
       }
+      if (args[0] === 'get' && args[1] === 'service')
+        return result({ items: [{ kind: 'Service', metadata: { name: 'public' }, spec: fault === 'service-routing-change' ? { ports: [{ port: 81 }] } : {} }] });
       if (args[0] === 'get' && args[1] === 'endpointslice')
         return result({
           items: [
@@ -462,6 +599,8 @@ for (const fault of [
           spec: { containers: [{ name: 'backend', image: pod.image }] },
           status: { conditions: [{ type: 'Ready', status: pod.ready ? 'True' : 'False' }] },
         };
+        if (fault === 'missing-final-revision' && cm && JSON.parse(cm.data.record).completed.includes(name))
+          value.metadata.labels['controller-revision-hash'] = undefined;
         if (pendingRemoval && args[2] === `${name}-2`) {
           // The first read still sees the terminating pod after spec.replicas changed.
           f.pods.delete(args[2]);
@@ -484,12 +623,14 @@ for (const fault of [
       }
       if (args[0] === 'scale') {
         assert.ok(args.includes(`--current-replicas=${current.spec.replicas}`));
+        assert.ok(args.includes(`--resource-version=${current.metadata.resourceVersion}`));
+        if (fault === 'scale-resource-version-race') throw Error('Kubernetes scale resourceVersion conflict');
         const replicas = Number(args.find((a) => a.startsWith('--replicas=')).split('=')[1]);
         current.spec.replicas = replicas;
         if (replicas === 3) await f.options.scale(name, replicas);
         else {
           pendingRemoval = true;
-          if (fault === 'lost-acknowledgement') throw Error('lost scale acknowledgement');
+          if (['lost-acknowledgement', 'recreated-statefulset-recovery'].includes(fault)) throw Error('lost scale acknowledgement');
         }
         return result({});
       }
@@ -502,14 +643,37 @@ for (const fault of [
       manifestDigest: 'candidate',
       resources: [candidate, { kind: 'Service', metadata: { name: 'public' }, spec: {} }],
       timeoutMs: 1000,
-      applyTemplates: async () => {},
-      restoreAutoscalers: async () => {
+      applyTemplates: async (_workloads, guardedValues) => {
+        assert.deepEqual(guardedValues, { replicaCount: { backend: 2 }, ha: { rolloutResourceVersions: { [name]: 'observed-version' } } });
+        if (fault === 'template-resource-version-race') throw Error('Helm resourceVersion conflict');
+      },
+      restoreAutoscalers: async (_workloads, guardedValues) => {
+        assert.equal(guardedValues.ha.rolloutResourceVersions[name], current.metadata.resourceVersion);
         assert.equal(pendingRemoval, false);
         assert.equal(f.pods.has(`${name}-2`), false);
         assert.equal(current.spec.replicas, 2);
         restored = true;
       },
     };
+    if (fault === 'missing-final-revision') {
+      await assert.rejects(runHaKubernetesRollout(options), /completion is blocked/);
+      assert.equal(restored, false);
+      assert.equal(JSON.parse(cm.data.record).phase, 'owners');
+      return;
+    }
+    if (['recreated-statefulset', 'scale-resource-version-race', 'service-routing-change'].includes(fault)) {
+      await assert.rejects(runHaKubernetesRollout(options), /StatefulSet identity changed|scale resourceVersion conflict|Service routing changed/);
+      assert.equal(calls.filter(a => a.includes('--withdraw-only') || a.includes('--begin-only') || a[0] === 'delete').length, 0);
+      assert.equal(restored, false);
+      if (fault === 'service-routing-change') assert.equal(cm, undefined);
+      return;
+    }
+    if (fault.startsWith('template-')) {
+      await assert.rejects(runHaKubernetesRollout(options), /capacity changed before template update|resourceVersion conflict/);
+      assert.equal(calls.filter(a => a.includes('--withdraw-only') || a.includes('--begin-only') || a[0] === 'delete' || a[0] === 'scale').length, 0);
+      assert.equal(restored, false);
+      return;
+    }
     if (fault === 'missing-readiness' || fault === 'null-readiness') {
       await assert.rejects(runHaKubernetesRollout(options), /endpoint withdrawal/);
       assert.equal(calls.filter((a) => a.includes('--begin-only')).length, 0);
@@ -522,6 +686,15 @@ for (const fault of [
       assert.equal(calls.filter((a) => a[0] === 'scale').length, 1);
       assert.equal(restored, false);
       assert.equal(f.pods.has(`${name}-2`), true);
+      return;
+    }
+    if (fault === 'recreated-statefulset-recovery') {
+      await assert.rejects(runHaKubernetesRollout(options), /lost scale acknowledgement/);
+      current.metadata.uid = randomUUID();
+      const before = calls.length;
+      await assert.rejects(runHaKubernetesRollout({ ...options, resumeToken: JSON.parse(cm.data.record).token }), /recovery inventory changed/);
+      assert.equal(calls.slice(before).filter(a => ['create', 'replace', 'scale', 'delete', 'exec'].includes(a[0])).length, 0);
+      assert.equal(restored, false);
       return;
     }
     if (fault === 'lost-acknowledgement') {

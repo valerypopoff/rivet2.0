@@ -549,19 +549,19 @@ async function main() {
         const kube = (args, extra = {}) => run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
         const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');
         const frozenPath = path.join(generatedValuesDir, 'ha-frozen-autoscalers.json');
-        const preserve = async (workloads) => {
-          // Helm must not scale down HPA-created owners before retirement.
-          await fs.writeFile(preservePath, JSON.stringify({ replicaCount: Object.fromEntries(workloads.filter(w => w.role !== 'maintenance').map(w => [w.role, w.replicas])) }));
+        const preserve = async (guardedValues) => {
+          // Capacity and its API-server preconditions travel in the same Helm update.
+          await fs.writeFile(preservePath, JSON.stringify(guardedValues));
         };
         await fs.writeFile(frozenPath, JSON.stringify({ autoscaling: { execution: { enabled: false }, backend: { enabled: false } } }));
         await runHaKubernetesRollout({ kube, release, namespace, manifestDigest: candidateDigest, resources: renderedResources,
           resumeToken: options.get('--resume-ha'), timeoutMs: Number.parseInt(timeout, 10) * (timeout.endsWith('h') ? 3600000 : timeout.endsWith('m') ? 60000 : 1000),
           artifact: (name, value) => writeArtifact(artifactsDir, name, value),
-          applyTemplates: async workloads => {
-            await preserve(workloads);
+          applyTemplates: async (_workloads, guardedValues) => {
+            await preserve(guardedValues);
             await upgrade(['--values', preservePath, '--values', frozenPath]);
           },
-          restoreAutoscalers: async workloads => { await preserve(workloads); await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']); },
+          restoreAutoscalers: async (_workloads, guardedValues) => { await preserve(guardedValues); await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']); },
         });
       } else if (cutover) {
         const kube = async (args, extra = {}) =>

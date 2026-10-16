@@ -105,6 +105,147 @@ SIGTERM/SIGKILL, retries a lost begin acknowledgement, or rolls back data.
 
 ## Integrated HA composition
 
+### Production browser-version continuity
+
+HA web replicas publish their complete build before opening their listener. HTML
+selects a SHA-256 build identity and a `/__rivet_web/<build>/` base before any
+script, stylesheet or preload. Vite emits relative import/worker URLs. A
+dashboard pins its editor iframe to that same build with `webBuild`; direct
+openings still select the local replica's current build. No automatic reload,
+service worker or browser-side storage credential is introduced.
+
+The web process owns this publication/serving boundary, using the existing S3
+SDK and object-storage location. HA projects the S3 credential Secrets (or a
+storage-only Vault dotenv projection), never PostgreSQL, encryption or UI keys,
+into the web container. Objects are gzip-compressed but deliberately have no S3
+`Content-Encoding`, preventing GCS decompressive transcoding. Keys are derived
+only from installation identity and content hashes beneath
+`<objectStorage.prefix>web-assets/<installation SHA-256>/`. A small hashed
+manifest describes each complete build. Every replica serves retained builds
+from that namespace; immutable creation and read-back reconciliation handle
+concurrent publishers and lost acknowledgements without overwrites.
+
+Builds are limited to 4,096 files / 512 MiB total / 64 MiB per file. Publication
+has four workers, serving has 32 in-flight handlers, and each process caches at
+most 16 manifests. Old files are deduplicated by content and **not automatically
+deleted**: a suspended tab may request a lazy chunk months later. Do not apply
+an object-expiration rule to this namespace unless intentionally ending support
+for those tabs. Normal workflow/restore/retention owners do not own these keys.
+Workflow reconciliation still counts their stored bytes, but excludes the exact
+frontend-key shape from orphan findings; malformed lookalikes remain reportable
+and workflow stale-upload deletion never accepts frontend keys.
+Readiness fails closed on publication failure. Missing versioned files return
+404, never SPA HTML. Existing UI authorization remains on the proxy path.
+Non-HA static serving has no added credentials and retains its local behavior;
+development keeps its separate HMR/generation implementation.
+
+HA evidence v3 requires a real production dashboard held across replacement of
+all original web pods: start a Node execution before upgrading, retain a real
+unsaved Text-node edit, save it through the candidate API, start a second Node
+run through owner rediscovery, inspect the changed full output and open its
+durable recording through Run recordings and the existing **Play Recording**
+action. Loading a recording is not automatic playback; replay must expose the
+edited output without submitting another live run. Both runs must produce one successful
+recording each. Lazy modal, pinned editor, fresh current tab and zero reload/
+asset-error checks remain required. The gate uses the deployment controller.
+
+The supported browser window is **all releases in the current browser contract
+epoch**, not a silently sliding N-1 window. `HA_BROWSER_CONTRACT` in the release
+evidence owner declares that API/executor contract. The first v3 certificate
+pins its immutable frontend image and source as the oldest supported baseline.
+Subsequent certificates inherit that exact baseline; every release exercises
+the complete journey above in both the predecessor UI and this oldest UI against
+the candidate backend. The old publisher is a digest-pinned, Service-less Pod
+in the disposable fixture, removed before rollout; its files use the normal
+retained-asset publication path. Missing/unavailable baseline images fail the
+gate; do not silently replace them with the latest UI. Keep those registry
+images as well as S3 assets. The baseline and protocol are stored in generated
+production Helm values; a rolling command rejects either changing or missing.
+
+Within an epoch, maintain browser-facing HTTP shapes, project/revision semantics,
+recording and executor protocols backwards-compatibly. The oldest/predecessor
+journeys complement existing contracts; they are not exhaustive proof of every
+intermediate release or optional feature. If an incompatible change is necessary,
+bump the contract, establish a new bootstrap baseline and use explicit maintenance
+with an operator-coordinated save/export and browser refresh. Never force reload
+or discard unsaved work to make certification pass. Historical v1/v2 evidence
+remains readable for lineage/maintenance but cannot authorize this v3 guarantee.
+The first singleton/legacy-HA conversion also requires maintenance.
+
+The completed local retained-browser journey is recorded under
+`artifacts/browser-workflow-full-upgrade-f/ha-report.json`, with predecessor and
+oldest-baseline screenshots beside it. The real mixed-image rollout served
+1,367 requests with zero failures and kept at least two ordinary backends ready.
+Both retained tabs preserved the unsaved edit, saved it through the candidate,
+ran again, inspected the changed output and played the stored recording with
+zero dashboard/editor reloads and exactly two successful recording uploads per
+tab (playback created no third live run). Every original web pod was replaced.
+The first epoch's local baseline is also its predecessor frontend; unit coverage
+separately verifies that later release selection retains that original baseline
+rather than sliding forward. Clean source-bound CI must perform the same journey
+against the inherited immutable baseline on subsequent releases.
+
+The earlier D/E attempts remain failed receipts. Their acceptance test loaded a
+recording but omitted **Play Recording**, incorrectly expecting replay outputs
+immediately. A no-upgrade control and an isolated idle-owner handoff both retained
+completed output; the corrected F journey above passed without changing the
+application's recording/replay semantics. The focused headless recording test
+also enforces the separate load/play actions. These are local working-tree image
+receipts, not production deployment authorization or provider-edge qualification.
+
+### Production qualification boundary
+
+For an installation without staging, use the
+[isolated GCP qualification plan](./gcp-ha-staging.md). It is a preparation and
+approval document, not permission to provision or mutate the live installation.
+
+Do not substitute a local overlay receipt for clean, source-bound CI evidence.
+Before activating HA in GCP, qualify the exact promoted images through the
+protected provider gate described in [Kubernetes](./kubernetes.md#repo-local-verification)
+using a dedicated `rivet-staging-*` namespace, separate database and bucket (or
+explicitly isolated provider resources), staging Secrets and HTTPS origin. Never
+point a destructive fixture, restore or capacity gate at the production release,
+database or workflow prefix. Reuse the production Gateway/controller policy
+shape, not the production route or credentials. Verify authentication, private
+route rejection, retained asset/query routing, WebSocket/SSE reconnection, health
+withdrawal and connection draining through that real edge. Measure representative
+workload and surge peaks, database connection headroom and recording persistence;
+idle `kubectl top` is inventory, not a capacity certificate.
+
+The 2026-10-16 read-only GCP inspection found one backend, one execution replica,
+one web replica and two proxies. `rivet-web` routes the public hostname's `/`
+prefix to `rivet-rivet-proxy`; its route and proxy policies report accepted/
+attached. The proxy backend policy sets a 3,600-second request timeout; the health
+policy checks `/readyz` on port 8080. No explicit connection-draining duration was
+present in that backend policy, so actual draining still needs provider rehearsal,
+not an assumed default. No live resources or Secrets were changed. Snapshots are
+under `artifacts/browser-workflow-gcp-readonly-*.log`. This inspection does not
+authorize the first maintenance conversion or certify GCS publication permissions.
+
+Restore and unfinished bundle preparation may briefly return unavailable while
+their singleton maintenance owner is replaced. This administrative interruption
+is accepted; ordinary serving and already-published shared bundle downloads do
+not depend on that owner remaining available.
+
+Local verification on 2026-10-16 used two distinct immutable frontend images
+and a mixed API-image upgrade in the isolated `rivet-ha-proof` cluster. The
+original production dashboard remained open while every original web pod was
+replaced: its lazy Run Statistics screen and pinned old editor loaded without
+a reload, while a fresh tab selected the candidate build. The upgrade served
+1,247 requests with zero failures, kept at least two ordinary backends ready,
+and recorded zero candidate container restarts. Paused editor runs, hosted
+Evaluations, background recordings and shared bundle downloads also passed.
+The separate lost-acknowledgement/lease-conflict recovery rehearsal served
+1,653 requests with zero failures and issued the original owner's begin command
+exactly once in each case. Receipts and the browser screenshot are retained in
+`artifacts/web-continuity-full-upgrade-c/` (`ha-report.json`,
+`ha-recovery-probes.json`, `ha-browser.png`). Earlier failed attempts remain
+failed evidence, not substituted receipts. The subsequent inventory-only
+exclusion above passed focused reconciliation/retention tests and the API build.
+These are local working-tree overlay receipts, **not** a clean, source-bound
+production release certificate; CI must qualify the final committed image pair
+before deployment. No GCP resources were changed by this verification.
+
 The opt-in chart now composes 2-8 ordinary ready backends, one dedicated
 maintenance owner, and OnDelete public execution owners. The maintenance owner
 has no editor executor. Only it mounts the existing restore RWO claim and owns
@@ -217,9 +358,80 @@ operator reconciliation, not an automatic retry against a new owner.
 Current-owner detection compares the controller-observed StatefulSet revision as
 well as the image digest. A same-image configuration/resource update must not be
 silently skipped by OnDelete, and readiness must refer to the desired revision.
+The inventory and recovery journal bind the StatefulSet UID as well as the pod
+UID. Recreating a controller under the same name is not continuation of an owned
+rollout. Template guards, revision reads, surge scaling and removal observations
+all reject that replacement. `kubectl scale` carries both the current-replica and
+resource-version preconditions; a same-count concurrent update cannot slip past
+the replica check and redirect a scale command to a different controller.
 Identity comparisons are structural: API-server ordering of fields inside
-Secret references is not a credential change. Different Secret names/keys or
+Secret references is not a credential change. Kubernetes omits empty literal
+environment values in returned objects, so `value: ""` and an omitted `value`
+on the same literal EnvVar compare equally (including the default AWS S3
+endpoint). Removing that EnvVar, supplying a nonempty endpoint or replacing it
+with a Secret reference remains a configuration change. This normalization does
+not alter the exact rendered-configuration digest used for operation recovery.
+Different Secret names/keys or
 missing owner identity still block the rollout before template changes.
+This includes Vault injection identity (role/path/template/TLS and service
+account), credential `envFrom` references, application-settings wiring and owned
+serving ports/paths. Vault resource requests/limits and ordinary pod tuning may
+still change without pretending to be credential rotation. Existing release
+Services cannot disappear or change selectors, ports or headless/ready-routing
+policy during rolling replacement: old owners would still use the old contract.
+New Services are allowed. API-assigned cluster IPs and defaulted TCP/target ports
+do not count as a routing change. Use a separate maintenance cutover for actual
+authentication or serving-route changes.
+
+Recovery also binds a SHA-256 digest of the complete rendered configuration,
+including workload settings, Services and autoscalers. The same source/images
+with different values are not the same operation: final autoscaler restoration
+must not introduce an unreviewed pod template after retirement finished. Resource
+and object-key ordering does not affect this identity; ordered arrays do. Restore
+the original values for `--resume-ha`. Unfinished older journals without this
+binding require explicit operator reconciliation, not an inferred configuration.
+
+Every Helm update in the HA controller carries each StatefulSet's freshly read
+`metadata.resourceVersion` alongside the preserved replica count. A capacity
+change before that read is rejected; a scale or status update after it conflicts
+at the Kubernetes API instead of letting Helm write stale capacity over a new
+owner. The private `ha.rolloutResourceVersions` map is generated by the controller,
+not an operator configuration knob. It changes resource metadata only, not pod
+templates. Conflicts fail closed with the existing unknown-template recovery
+rules; do not retry a migration or remove an owner to clear one. Maintenance
+validation disables **all** chart autoscalers, including web, so Helm cannot
+recreate a controller that reopens a deliberately stopped tier.
+Before and after final autoscaler restoration, the controller rechecks every
+original capacity slot against its current image/revision, readiness and serving
+retirement state. Journal `completed` entries describe earlier work, not current
+health. A changed or retiring completed owner blocks completion, including on
+exact-token recovery, without replaying its retirement or deleting more pods.
+Missing controller/pod revision evidence is never treated as a match merely
+because both fields are absent. Focused regressions cover these completion
+checks before and after the final Helm acknowledgement, controller recreation
+both mid-rollout and on recovery, and route/credential preflight rejection.
+
+Owner-relay disposal covers pending handshakes as well as established tunnels.
+A late upstream acknowledgement cannot resurrect a disposed relay. Peer-debugger
+cursor gaps warn already-connected observers immediately; reconnect deduplication
+still prevents duplicate diagnostics and never replays an execution or control.
+
+The preparation audit verified a real Helm/Kubernetes stale-resource-version
+conflict in the disposable `rivet-ha-proof` cluster: the stale update failed,
+both scheduling-gated test owners remained, and a fresh guarded update succeeded.
+That isolated namespace was removed and the profile returned to its stopped
+state; the ordinary local Rivet stack and GCP were not changed. The receipt is
+`artifacts/ha-audit-cas/result.json`. Separate current-source checks passed 64
+owner/recovery/evidence tests, 116 adjacent API tests, 36 Helm contract tests and
+seven headless origin/handoff browser checks, plus API/web builds and the offline
+Kubernetes lane. These are audit regressions, **not** a fresh full mixed-version
+release certificate. Promotion must rerun the source-bound HA certification for
+the new commit/chart/images before any production rollout.
+The adjacent review then passed 61 focused rollout/cutover/evidence regressions
+and the offline Kubernetes lane. The same real local CAS fixture additionally
+proved that `kubectl scale --resource-version` rejects a stale observation even
+with an unchanged replica count, and accepts a fresh one. Its scheduling-gated
+pods execute no application work; the fixture namespace was deleted afterward.
 
 Routing withdrawal and admission fencing are distinct owned commands. A capable
 supervisor advertises `withdrawalProtocol: 1`, verifies its participants, marks

@@ -11,6 +11,7 @@ import { CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION } from '../routes/workflows/man
 
 type RenderedResource = {
   kind: string;
+  metadata?: { name: string; resourceVersion?: string };
   spec?: {
     template?: {
       spec: {
@@ -202,8 +203,11 @@ test('maintenance chart keeps validation reachable without admitting work, and g
     'replicaCount.evaluation=0',
     'autoscaling.proxy.enabled=false',
     'autoscaling.execution.enabled=false',
+    'autoscaling.web.enabled=false',
+    'autoscaling.backend.enabled=false',
   ]);
   const resources = deploymentYaml.parseAllDocuments(rendered).map((document) => document.toJS());
+  assert.equal(resources.some(resource => resource.kind === 'HorizontalPodAutoscaler'), false);
   const workloads = resources.filter((resource) => ['Deployment', 'StatefulSet'].includes(resource.kind));
   for (const workload of workloads) {
     const env = workload.spec!.template!.spec.containers.find(
@@ -1203,6 +1207,13 @@ test('chart validation keeps the default singleton and explicitly guarded HA bou
   assert.ok(backend);
   assert.ok(!backend.spec!.template!.spec.volumes.some((v) => v.name === 'legacy-restore'));
   assert.equal(owners.filter((d) => d.spec!.template!.spec.volumes.some((v) => v.name === 'legacy-restore')).length, 1);
+  const guarded = await renderLocalKubernetesChartWithOverrides([
+    'ha.enabled=true', 'replicaCount.backend=2', 'postgres.maxConnections=250',
+    ...owners.map((owner, index) => `ha.rolloutResourceVersions.${owner.metadata!.name}=${index + 100}`),
+  ]);
+  const guardedOwners = deploymentYaml.parseAllDocuments(guarded).map(d => d.toJS()).filter(d => d.kind === 'StatefulSet');
+  for (const [index, owner] of owners.entries())
+    assert.equal(guardedOwners.find(d => d.metadata?.name === owner.metadata!.name)?.metadata?.resourceVersion, String(index + 100));
 });
 
 test('chart budgets PostgreSQL connections against the maximum execution replica count', async () => {
