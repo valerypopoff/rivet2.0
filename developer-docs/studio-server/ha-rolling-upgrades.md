@@ -438,8 +438,13 @@ CI runs `yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs c
 `yaml`; bare `node` fails before certification starts. CI policy checks enforce
 the wrapper, while the offline Kubernetes lane imports and tests the real gate.
 The candidate must match the clean tracked
-checkout, chart and exact configured image set before cluster mutation. Bootstrap
-uses a same-image template revision change to exercise retirement but cannot
+checkout, chart and exact configured image set before cluster mutation.
+Certification explicitly allows a candidate state in the source/chart identity
+helpers; their default remains promoted-only for deployment. The gate's shared
+preflight validates source, chart, image identities and exact predecessor before
+fixture creation. Offline regressions exercise this preflight with real candidate
+manifests, including mismatches and rejection of promoted certification inputs.
+Bootstrap uses a same-image template revision change to exercise retirement but cannot
 authorize a mixed-source rollout. The report producer verifies real readiness
 samples, per-owner workload receipts, withdrawn UIDs, replacement UIDs and both
 baseline/candidate image identities before creating `ha-evidence.json`.

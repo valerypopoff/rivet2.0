@@ -90,6 +90,23 @@ test('release manifest binds the exact current Helm chart contents', () => {
   );
 });
 
+test('source and chart identity checks require promotion unless certification explicitly opts into candidates', () => {
+  const manifest = candidate();
+  for (const options of [undefined, {}]) {
+    assert.throws(() => assertReleaseManifestMatchesCurrentSource(manifest, manifest.source.sha, options), /promoted release/);
+    assert.throws(() => assertReleaseManifestMatchesCurrentChart(manifest, rootDir, options), /promoted release/);
+  }
+  assert.equal(
+    assertReleaseManifestMatchesCurrentSource(manifest, manifest.source.sha, { requirePromoted: false }).state,
+    'candidate',
+  );
+  assert.equal(
+    assertReleaseManifestMatchesCurrentChart(manifest, rootDir, { requirePromoted: false }).state,
+    'candidate',
+  );
+  assert.throws(() => createProductionHelmValues(manifest), /promoted release/);
+});
+
 test('release manifest digest is semantic, deterministic, and formatting independent', () => {
   const release = promoted();
   const reordered = {
