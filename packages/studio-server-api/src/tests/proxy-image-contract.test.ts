@@ -570,7 +570,11 @@ test('images and local launchers build directly from the monorepo workspace', ()
   assert.match(apiDockerfile, /yarn build:runtime/);
   assert.match(apiDockerfile, /yarn workspace @valerypopoff\/rivet-studio-server-api run build/);
   assert.match(webDockerfile, /yarn build:hosted-web-deps/);
-  assert.match(webDockerfile, /npm install -g serve@14\.2\.6/);
+  assert.match(webDockerfile, /studio-server-web\/production\/server\.mjs --bundle/);
+  assert.match(webDockerfile, /--outfile=\/app\/web-server\.mjs/);
+  assert.match(webDockerfile, /COPY --from=builder --chown=10001:10001 \/app\/web-server\.mjs \/app\/web-server\.mjs/);
+  assert.match(webDockerfile, /CMD \["node", "\/app\/web-server\.mjs"\]/);
+  assert.doesNotMatch(webDockerfile, /npm install -g serve@|\/usr\/local\/lib\/node_modules\/serve/);
   assert.match(composeWebDockerfile, /npm install -g serve@14\.2\.6/);
   assert.match(executorDockerfile, /yarn build:runtime/);
   assert.doesNotMatch(executorDockerfile, /build:executor-runtime|rivet-app-executor run build/);

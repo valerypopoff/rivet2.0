@@ -139,6 +139,15 @@ Readiness fails closed on publication failure. Missing versioned files return
 Non-HA static serving has no added credentials and retains its local behavior;
 development keeps its separate HMR/generation implementation.
 
+The image-wiring contract in `proxy-image-contract.test.ts` verifies that the
+production Dockerfile bundles this source-owned server, copies the resulting
+module into the runtime image and executes it, without the superseded global
+`serve` dependency. The legacy Compose Dockerfile still uses its separately
+pinned `serve` package. Keep these distinct: requiring that legacy package in
+the production image incorrectly rejects the version-aware server. Behavioral
+asset coverage lives in `production/*.test.mjs` in the web unit-test lane;
+image wiring alone is not proof of browser continuity.
+
 HA evidence v3 requires a real production dashboard held across replacement of
 all original web pods: start a Node execution before upgrading, retain a real
 unsaved Text-node edit, save it through the candidate API, start a second Node
