@@ -146,11 +146,19 @@ same LISTEN connection. The originating API suppresses its own echo; another API
 notifies its existing library SSE observers. Listener loss/reconnect rotates the
 observer epoch so missed revisions cause a snapshot refresh, not silent staleness.
 Singleton deployments keep their original subscription footprint.
+The hosted-editor seam contract requires both the initial executor URL and the
+bounded owner-discovery callback on the existing `RivetAppHost` executor prop.
+Discovery rejects explicit/custom overrides; the shared app session remains the
+only socket/run owner. Structural seam checks complement, rather than replace,
+the behavioral current-origin and idle-owner-handoff browser regressions.
 Catalog-only changes use a `catalog-changed` hint on that same transaction-scoped
 channel. Empty-folder create/rename/move/delete and draft-only/new project saves
 must refresh other editor backends even when no published execution pointer
 changes. Receiving these hints does not evict published execution caches or
 invalidate WebSocket access policy. No-op and rejected mutations do not emit one.
+Catalog notification tests use the controller's injected clock when comparing
+resolve snapshots: their capture timestamp is not an invalidation generation.
+They also assert that neither targeted nor global access-policy invalidation ran.
 
 A positively settled idle editor receives `executor-owner-retiring`. Only then
 may its host resolve a fresh same-origin signed URL via the existing configuration

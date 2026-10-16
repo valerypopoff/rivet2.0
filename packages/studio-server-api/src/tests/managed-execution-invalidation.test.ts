@@ -79,7 +79,9 @@ test('workflow-level invalidation increments only the targeted workflow generati
 test('catalog notifications refresh remote trees without evicting published execution caches or echoing local writes', async () => {
   const listener = new FakeListener();
   let external = 0;
-  const { controller, invalidated, cleared } = createController({
+  const { controller, invalidated, cleared, policyInvalidated, allPoliciesInvalidated } = createController({
+    // Resolve snapshots include their capture time; compare cache state under a controlled clock.
+    now: () => 1_000,
     createListener: () => listener,
     onExternalInvalidation: () => {
       external++;
@@ -101,6 +103,8 @@ test('catalog notifications refresh remote trees without evicting published exec
   assert.deepEqual(controller.captureResolveSnapshot(), before);
   assert.deepEqual(invalidated, []);
   assert.equal(cleared.count, 0);
+  assert.deepEqual(policyInvalidated, []);
+  assert.equal(allPoliciesInvalidated.count, 0);
   await controller.dispose();
 });
 
