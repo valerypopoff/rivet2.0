@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { createManagedWorkflowCatalogService } from '../routes/workflows/managed/catalog.js';
 import * as managedMappers from '../routes/workflows/managed/mappers.js';
+import { ManagedWorkflowExecutionInvalidationController } from '../routes/workflows/managed/execution-invalidation.js';
 import type { RevisionRow, WebAppPublicationRow, WorkflowRow } from '../routes/workflows/managed/types.js';
 
 function createWorkflowRow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
@@ -21,6 +22,90 @@ function createWorkflowRow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
     last_published_at: null,
     ...overrides,
   };
+}
+
+for (const operation of ['create', 'rename', 'move', 'delete', 'duplicate', 'nonempty', 'unchanged'] as const) {
+  test(`empty-folder catalog notifications are transactional: ${operation}`, async () => {
+    const events: string[] = [],
+      commitTasks: Array<() => Promise<void>> = [];
+    const row = {
+      relative_path: 'Folder',
+      name: 'Folder',
+      parent_relative_path: '',
+      updated_at: new Date(),
+      moved_relative_paths: [],
+    };
+    const client = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes('pg_notify')) {
+          assert.equal(JSON.parse(String(params?.[1])).eventType, 'catalog-changed');
+          events.push('notify');
+        } else events.push('write');
+        return { rows: [] };
+      },
+    };
+    const invalidation = new ManagedWorkflowExecutionInvalidationController({
+      databaseConnectionConfig: {},
+      withManagedDbRetry: async (_scope, run) => run(),
+      invalidateWorkflowEndpointPointers: () => {},
+      clearEndpointPointers: () => {
+        events.push('local');
+      },
+    });
+    const catalog = createManagedWorkflowCatalogService({
+      context: {
+        pool: {},
+        initialize: async () => {},
+        withTransaction: async (
+          run: (c: typeof client, h: { onCommit(task: () => Promise<void>): void }) => Promise<unknown>,
+        ) => {
+          const result = await run(client, {
+            onCommit: (task) => {
+              commitTasks.push(task);
+            },
+          });
+          events.push('commit');
+          for (const task of commitTasks) await task();
+          return result;
+        },
+        db: {
+          queryOne: async (_client: unknown, sql: string) => {
+            if (sql.includes('move_managed_workflow_folder')) {
+              events.push('write');
+              return row;
+            }
+            if (sql.includes('parent_relative_path =') || sql.includes('FROM workflows'))
+              return operation === 'nonempty' ? row : null;
+            return operation === 'create' ? null : row;
+          },
+          queryRows: async () => [],
+          isUniqueViolation: () => false,
+        },
+        queries: { assertFolderExists: async () => {} },
+        revisions: {},
+        maintenance: {},
+        mappers: managedMappers,
+        executionInvalidationController: invalidation,
+      } as never,
+      saveHostedProject: async () => {
+        throw Error('Unexpected project mutation');
+      },
+    });
+    const run = () =>
+      operation === 'create' || operation === 'duplicate'
+        ? catalog.createWorkflowFolderItem('Folder', '')
+        : operation === 'move'
+          ? catalog.moveWorkflowFolder('Folder', 'Destination')
+          : operation === 'rename' || operation === 'unchanged'
+            ? catalog.renameWorkflowFolderItem('Folder', operation === 'unchanged' ? 'Folder' : 'Renamed')
+            : catalog.deleteWorkflowFolderItem('Folder');
+    if (operation === 'duplicate' || operation === 'nonempty') await assert.rejects(run());
+    else await run();
+    assert.deepEqual(
+      events,
+      ['duplicate', 'nonempty', 'unchanged'].includes(operation) ? [] : ['write', 'notify', 'commit'],
+    );
+  });
 }
 
 function createRevisionRow(workflowId: string, revisionId: string): RevisionRow {
@@ -125,6 +210,7 @@ function createCatalogForDeleteGuard(
       },
       executionCache: {} as never,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
@@ -170,6 +256,7 @@ test('managed reference catalog and snapshots read active project revisions only
     blobStore: {},
     maintenance: {},
     executionInvalidationController: {
+      queueCatalogInvalidation: async () => {},
       queueWorkflowInvalidation: async () => {},
       queueGlobalInvalidation: async () => {},
     },
@@ -256,6 +343,7 @@ test('managed workflow tree bulk-joins revision stats without per-project querie
       },
       executionCache: {} as never,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
@@ -373,6 +461,7 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
       },
       executionCache: {} as never,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
@@ -535,6 +624,7 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
       },
       executionCache: {} as never,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },
@@ -611,6 +701,7 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
       },
       executionCache: {} as never,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async () => {},
         queueGlobalInvalidation: async () => {},
       },

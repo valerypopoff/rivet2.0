@@ -1,6 +1,6 @@
 {{- if ne .Values.deploymentProfile "single-machine" }}
 apiVersion: apps/v1
-kind: Deployment
+kind: {{ ternary "StatefulSet" "Deployment" .Values.ha.enabled }}
 metadata:
   name: {{ include "rivet.executionName" . }}
   labels:
@@ -8,11 +8,18 @@ metadata:
     app.kubernetes.io/component: execution
 spec:
   replicas: {{ .Values.replicaCount.execution }}
+  {{- if .Values.ha.enabled }}
+  serviceName: {{ include "rivet.executionName" . }}-headless
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: OnDelete
+  {{- else }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: {{ .Values.rollout.maxUnavailable }}
       maxSurge: {{ .Values.rollout.maxSurge }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 6 }}

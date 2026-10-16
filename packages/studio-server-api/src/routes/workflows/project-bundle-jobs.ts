@@ -8,6 +8,7 @@ import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowsRoot } from '../../security.js';
 import { createProjectBundleArchive } from './project-bundle-archive.js';
 import type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
+import { sharedBundleArchives, BundlePublicationUncertainError } from '../../ha-bundle-archives.js';
 
 export type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
 type Job = {
@@ -28,8 +29,10 @@ export class ProjectBundleJobs {
   #initialization?: Promise<void>;
   #cleanup?: Promise<void>;
   #disposed = false;
+  #draining = false;
   #starting = false;
   #cleanupTimer?: ReturnType<typeof setInterval>;
+  #retirementFailure?: Error;
   constructor(
     root: string,
     private readonly retentionMs = RETENTION_MS,
@@ -134,6 +137,7 @@ export class ProjectBundleJobs {
     this.#cleanup ??= (async () => {
       for (const [id, job] of this.#jobs) {
         if (!job.readers && !job.done && Date.parse(job.status.expiresAt) <= Date.now()) {
+          await sharedBundleArchives?.remove(id);
           await fs.rm(path.join(this.#root, id), { recursive: true, force: true });
           this.#jobs.delete(id);
         }
@@ -148,11 +152,13 @@ export class ProjectBundleJobs {
     rootVersion: 'latest' | 'published',
     requestId: string = randomUUID(),
   ): Promise<ProjectBundleJobStatus> {
-    if (this.#disposed) throw createHttpError(503, 'Server is shutting down. Retry the export later.');
+    if (this.#disposed || this.#draining)
+      throw createHttpError(503, 'Server is shutting down. Retry the export later.');
     await this.cleanup();
     if (!ID.test(requestId)) throw createHttpError(400, 'Invalid export request ID.');
     if (this.#jobs.has(requestId)) return this.status(requestId);
-    if (this.#disposed) throw createHttpError(503, 'Server is shutting down. Retry the export later.');
+    if (this.#disposed || this.#draining)
+      throw createHttpError(503, 'Server is shutting down. Retry the export later.');
     if (this.#starting || [...this.#jobs.values()].some((job) => job.done || job.cleanupFailed))
       throw createHttpError(409, 'Another project bundle is being prepared. Retry when it finishes.');
     this.#starting = true;
@@ -276,8 +282,10 @@ export class ProjectBundleJobs {
       await fs.rename(archive, path.join(directory, 'bundle.zip'));
       job.status.phase = 'ready';
       job.status.expiresAt = new Date(Date.now() + this.retentionMs).toISOString();
+      await sharedBundleArchives?.publish(job.status, path.join(directory, 'bundle.zip'));
       await this.#save(job);
     } catch (error) {
+      if (error instanceof BundlePublicationUncertainError) this.#retirementFailure ??= error;
       await writer?.abort(error);
       // Collection can wrap an abort as a dependency failure; preserve the writer's
       // deliberate capacity error while still redacting raw filesystem exceptions.
@@ -361,6 +369,7 @@ export class ProjectBundleJobs {
   async #cancel(job: Job) {
     job.controller.abort();
     await job.done;
+    await sharedBundleArchives?.remove(job.status.id);
     job.status.phase = 'cancelled';
     job.status.expiresAt = new Date(0).toISOString();
     // Protect the journal write from concurrent expiry, then use the single removal owner.
@@ -380,6 +389,17 @@ export class ProjectBundleJobs {
     if (this.#cleanupTimer) clearInterval(this.#cleanupTimer);
     for (const job of this.#jobs.values()) if (job.done) job.controller.abort();
     await Promise.all([...this.#jobs.values()].map((job) => job.done));
+    sharedBundleArchives?.dispose();
+  }
+  /** Called after request admission drains, so every accepted start has registered its job. */
+  async drainAcceptedWork() {
+    this.#draining = true;
+    await this.#initialization;
+    await Promise.all([...this.#jobs.values()].flatMap((job) => [job.done, job.cancelling]));
+    await this.#cleanup;
+    if (this.#retirementFailure) throw this.#retirementFailure;
+    if ([...this.#jobs.values()].some((job) => job.cleanupFailed))
+      throw new Error('Bundle export cleanup is unconfirmed.');
   }
 }
 

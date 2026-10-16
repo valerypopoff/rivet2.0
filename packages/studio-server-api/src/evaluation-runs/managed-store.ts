@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { deleteManagedEvaluationRun } from './managed-run-deletion.js';
+import { EVALUATION_LIBRARY_INVALIDATION_CHANNEL, evaluationLibrarySourceInstanceId } from './library-invalidation.js';
 import {
   assembledEvaluationRunSql,
   HOSTED_TRIAL_PROJECTION_KEY,
@@ -158,6 +159,12 @@ export class PostgresRivetEvaluationStore
     `,
       [revision, JSON.stringify(normalized)],
     );
+    // PostgreSQL delivers this only after COMMIT. A rolled-back library edit
+    // must not cause observers on another editor backend to fetch phantom state.
+    await client.query('SELECT pg_notify($1, $2)', [
+      EVALUATION_LIBRARY_INVALIDATION_CHANNEL,
+      JSON.stringify({ revision, sourceInstanceId: evaluationLibrarySourceInstanceId }),
+    ]);
     return { revision, library: structuredClone(normalized) };
   }
 

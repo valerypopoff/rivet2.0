@@ -114,7 +114,7 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
   ];
   const profileArgs = singleMachineValuesPath
     ? ['-f', './deploy/studio-server/helm/overlays/single-machine.yaml', '-f', singleMachineValuesPath]
-    : [];
+    : ['-f', './deploy/studio-server/scripts/fixtures/kubernetes-environment.values.yaml'];
 
   await spawnProgram(helmBin, [
     'lint',
@@ -135,6 +135,23 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
     ...profileArgs,
     ...prodImageArgs,
   ]);
+  if (!singleMachineValuesPath) {
+    console.log(`[${launcherName}] Linting the HA backend and maintenance-owner documents...`);
+    await spawnProgram(helmBin, [
+      'lint',
+      './deploy/studio-server/helm',
+      '-f',
+      './deploy/studio-server/helm/overlays/prod.yaml',
+      ...profileArgs,
+      ...prodImageArgs,
+      '--set',
+      'ha.enabled=true',
+      '--set',
+      'replicaCount.backend=2',
+      '--set',
+      'autoscaling.execution.enabled=false',
+    ]);
+  }
 }
 
 async function main() {
@@ -147,6 +164,9 @@ async function main() {
       '--test',
       'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
+      'deploy/studio-server/scripts/ha-release-evidence.test.mjs',
+      'deploy/studio-server/scripts/ha-release-gate.test.mjs',
+      'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',
       'deploy/studio-server/scripts/container-server.test.mjs',

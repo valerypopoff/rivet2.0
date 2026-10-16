@@ -11,6 +11,7 @@ import { importProjectBundleWithBackend } from './storage-backend.js';
 import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 import { notifyWorkflowTreeChanged } from './workflow-tree-events.js';
 import { PROJECT_BUNDLE_UPLOAD_MAX_FILES } from '../../../../studio-server-shared/project-bundle-types.js';
+import { routeMaintenanceOwner } from '../../ha-maintenance-routing.js';
 
 export const projectBundleRouter = Router();
 projectBundleRouter.use(requireAuth, (_req, res, next) => {
@@ -18,6 +19,7 @@ projectBundleRouter.use(requireAuth, (_req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   next();
 });
+projectBundleRouter.use(routeMaintenanceOwner);
 const input = z
   .object({
     relativePath: z.string().min(1).max(4096),

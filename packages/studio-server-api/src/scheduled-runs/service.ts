@@ -7,11 +7,13 @@ import { settleBeforeDeadline } from '../shutdown-deadline.js';
 export class ScheduledRunService {
   readonly owner = randomUUID();
   private stopping = false;
+  private draining = false;
   private started = false;
   private timer?: ReturnType<typeof setTimeout>;
   private polling?: Promise<void>;
   private active = new Map<string, { controller: AbortController; task: Promise<void> }>();
   private shutdown?: Promise<void>;
+  private retirementFailure?: Error;
   get activeCount() {
     return this.active.size;
   }
@@ -26,14 +28,14 @@ export class ScheduledRunService {
     private readonly maxConcurrent = 2,
   ) {}
   start() {
-    if (this.started || this.stopping) return;
+    if (this.started || this.stopping || this.draining) return;
     this.started = true;
     const poll = async () => {
-      if (this.stopping) return;
+      if (this.stopping || this.draining) return;
       await this.tick().catch(() => {
         console.error('[scheduled-runs] Scheduler storage unavailable; no work was acknowledged.');
       });
-      if (!this.stopping) this.timer = setTimeout(() => void poll(), 2000);
+      if (!this.stopping && !this.draining) this.timer = setTimeout(() => void poll(), 2000);
     };
     void poll();
   }
@@ -49,7 +51,7 @@ export class ScheduledRunService {
     return operation;
   }
   private async pollOnce() {
-    if (this.stopping || !this.mayStart()) return;
+    if (this.stopping || this.draining || !this.mayStart()) return;
     const releaseActivity = beginScheduledActivity();
     let job: ClaimedRun | undefined;
     try {
@@ -58,6 +60,7 @@ export class ScheduledRunService {
       // unwinding execution's durable lease has already expired.
       job = await this.store.tick(this.owner, this.active.size >= this.maxConcurrent ? 0 : this.maxConcurrent);
     } catch (error) {
+      this.retirementFailure ??= new Error('Scheduled claim ownership is unconfirmed.');
       releaseActivity();
       throw error;
     }
@@ -71,11 +74,10 @@ export class ScheduledRunService {
       () => controller.abort(new Error('Execution time limit exceeded.')),
       job.draft.timeoutMinutes * 60_000,
     );
-    let heartbeatPending = false;
+    let heartbeatPending: Promise<void> | undefined;
     const heartbeat = setInterval(() => {
       if (heartbeatPending) return;
-      heartbeatPending = true;
-      void this.store
+      heartbeatPending = this.store
         .heartbeat(job.occurrence.id, this.owner)
         .then(
           (valid) => {
@@ -84,7 +86,7 @@ export class ScheduledRunService {
           () => controller.abort(new Error('Execution ownership could not be renewed.')),
         )
         .finally(() => {
-          heartbeatPending = false;
+          heartbeatPending = undefined;
         });
     }, 5000);
     const task = (async () => {
@@ -105,18 +107,35 @@ export class ScheduledRunService {
         // A failed acknowledgement is not a graph failure. Leave durable lease
         // recovery to report an uncertain outcome, never overwrite success with
         // a fabricated failure or invoke the graph again.
-        await this.store.finish(job.occurrence.id, this.owner, result);
+        if (!(await this.store.finish(job.occurrence.id, this.owner, result)))
+          this.retirementFailure ??= new Error('Scheduled outcome persistence is unconfirmed.');
       } finally {
         clearTimeout(timeout);
         clearInterval(heartbeat);
+        await heartbeatPending;
         this.active.delete(claimed.occurrence.id);
         releaseActivity();
       }
     })().catch(() => {
+      this.retirementFailure ??= new Error('Scheduled outcome persistence is unconfirmed.');
       console.error('[scheduled-runs] Outcome could not be committed; interruption recovery will reconcile it.');
     });
     this.active.set(job.occurrence.id, { controller, task });
   }
+  beginDrain(): void {
+    this.draining = true;
+    clearTimeout(this.timer);
+  }
+
+  async drainAcceptedWork(): Promise<void> {
+    this.beginDrain();
+    // A claim already in flight may create another accepted run. Wait for it
+    // before taking the execution snapshot, retaining heartbeats and stores.
+    await this.polling;
+    await Promise.all([...this.active.values()].map((a) => a.task));
+    if (this.retirementFailure) throw this.retirementFailure;
+  }
+
   stop(graceMs = 30_000): Promise<void> {
     return (this.shutdown ??= this.stopOnce(Date.now() + Math.max(0, graceMs)));
   }

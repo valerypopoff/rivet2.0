@@ -1,0 +1,17 @@
+{{- if .Values.ha.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rivet.fullname" . }}-maintenance
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+spec:
+  selector:
+    {{- include "rivet.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+  ports:
+    - name: api
+      port: {{ .Values.service.api.targetPort }}
+      targetPort: api-http
+{{- end }}

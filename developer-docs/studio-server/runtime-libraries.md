@@ -38,12 +38,32 @@ serialized events. Terminal delivery also waits for drain without duplicating
 disconnect and completion remove the stall timer and listeners.
 Pending reads and observer failures cannot update a closed connection.
 
-Managed shutdown fences new claims, terminates both existing and late-registered
+Managed forced disposal fences new claims, terminates both existing and late-registered
 install processes, and awaits the worker's accepted job and outstanding heartbeat
 before releasing its database lease. Heartbeat writes are single-flight. On
 Windows, cancellation terminates the owned command process tree rather than
 only `cmd.exe`; otherwise npm retains the output pipes and the job cannot finish.
 Process-tree termination failures are logged, not treated as confirmed exit.
+
+Graceful retirement is separate from forced disposal. `beginDrain()` fences new
+job submission and claims, but a managed worker continues heartbeating an accepted
+job, including a claim already in flight. `drainAcceptedWork()` awaits initialization,
+accepted work, outstanding heartbeat writes and outcome persistence without killing
+the installer or closing its store. Read/observation paths and accepted execution
+preparation retain the existing managed owner. The API shutdown path now includes
+this drain in its existing grace period before disposal; an ordinary SIGTERM still
+has a finite deadline and is **not** a no-loss rolling-upgrade guarantee. A planned
+retirement must await the acknowledgement before terminating the pod. See the
+[HA implementation status](./ha-rolling-upgrades.md).
+
+Planned worker retirement also rejects unresolved claim, activation or failure-
+handling evidence after its process promise settles. An empty active-work count
+is not an outcome acknowledgement. Forced disposal retains its existing resource-
+closure behavior and never invents or retries the unknown result; operators must
+reconcile uncertain work before certifying a planned replacement.
+If a claim transaction cannot roll back, its connection is discarded rather than
+returned to the pool, while the original claim error is preserved. A lost claim
+acknowledgement never invokes the installer and cannot produce a drained result.
 
 Native log notifications advance an observation cursor and read only the new
 tail. They must not rescan retained history on every append; otherwise long
@@ -89,6 +109,16 @@ That managed facade keeps the supported runtime modes visible instead of hiding 
 - `managed/process-registry.ts` owns in-flight child-process tracking and termination
 - `managed/replica-status.ts` owns stale-replica cleanup helpers
 - `managed/cleanup.ts` remains the separate audit/prune orchestrator for historical releases, jobs, and orphaned artifacts
+
+Managed schema initialization retains its existing session advisory lock to
+serialize initializers. Inside the DDL transaction it takes the jobs table's
+strongest required lock before creating indexes or applying idempotent ALTERs.
+The advisory lock alone does not serialize ordinary job claims: taking a weaker
+index lock first can deadlock against a claim upgrading RowShare to RowExclusive
+while startup upgrades to AccessExclusive. Claims remain owned by `job-store.ts`;
+there is no second queue or automatic replay. A real PostgreSQL lock-upgrade
+regression runs in the existing managed migration integration lane, inside a
+unique temporary schema, and never modifies installation jobs.
 
 Canonical managed config lives in App Settings -> `Storage`:
 

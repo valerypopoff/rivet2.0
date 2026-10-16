@@ -1,4 +1,5 @@
-{{- if and .Values.hostedEvaluations.enabled (ne .Values.deploymentProfile "single-machine") }}
+{{- /* Predecessor images cannot claim trials on control; current images share the backend. */ -}}
+{{- if and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled (ne .Values.deploymentProfile "single-machine") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

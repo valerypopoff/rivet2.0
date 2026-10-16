@@ -4,9 +4,11 @@ import { requireVmMigrationOperatorAuth } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { createJsonBodyParser } from '../middleware/body-parsers.js';
 import { getLegacyRestoreService } from './service.js';
+import { routeMaintenanceOwner } from '../ha-maintenance-routing.js';
 
 export const legacyRestoreRouter = Router();
 legacyRestoreRouter.use(requireVmMigrationOperatorAuth);
+legacyRestoreRouter.use(routeMaintenanceOwner);
 legacyRestoreRouter.get(
   '/',
   asyncHandler(async (_req, res) => {

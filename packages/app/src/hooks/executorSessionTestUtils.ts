@@ -10,6 +10,7 @@ export class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
 
   readonly url: string;
+  readonly protocols?: string | string[];
   readyState = FakeWebSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onclose: (() => void) | null = null;
@@ -17,8 +18,9 @@ export class FakeWebSocket {
   onmessage: ((event: MessageEvent<string>) => void) | null = null;
   sent: string[] = [];
 
-  constructor(url: string) {
+  constructor(url: string, protocols?: string | string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
 
@@ -35,9 +37,9 @@ export class FakeWebSocket {
     this.sent.push(data);
   }
 
-  emitClose() {
+  emitClose(code = 1006) {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    (this.onclose as ((event: { code: number }) => void) | null)?.({ code });
   }
 
   emitMessage(data: unknown) {

@@ -4,6 +4,7 @@ export * from './native/NodeNativeApi.js';
 export * from './api.js';
 export * from './projectBundle.js';
 export * from './debugger.js';
+export * from './debuggerSessions.js';
 export * from './native/NodeDatasetProvider.js';
 export * from './native/DebuggerDatasetProvider.js';
 export * from './native/NodeProjectReferenceLoader.js';

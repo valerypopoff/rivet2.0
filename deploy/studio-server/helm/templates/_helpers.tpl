@@ -43,7 +43,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "rivet.componentLabels" -}}
 {{ include "rivet.selectorLabels" .root }}
-app.kubernetes.io/component: {{ .component }}
+app.kubernetes.io/component: {{ if and (eq .component "backend") (default false .root.haMaintenance) }}maintenance{{ else }}{{ .component }}{{ end }}
 {{- end -}}
 
 {{- define "rivet.proxyServiceName" -}}
@@ -86,11 +86,19 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "rivet.backendName" -}}
-{{- printf "%s-backend" (include "rivet.fullname" .) -}}
+{{- if and .Values.ha.enabled (default false .haMaintenance) -}}
+{{- printf "%s-maintenance-backend" (include "rivet.fullname" .) -}}
+{{- else if .Values.ha.enabled -}}
+{{- printf "%s-ha-backend" (include "rivet.fullname" .) -}}
+{{- else -}}{{- printf "%s-backend" (include "rivet.fullname" .) -}}{{- end -}}
 {{- end -}}
 
 {{- define "rivet.executionName" -}}
+{{- if .Values.ha.enabled -}}
+{{- printf "%s-ha-execution" (include "rivet.fullname" .) -}}
+{{- else -}}
 {{- printf "%s-execution" (include "rivet.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "rivet.evaluationName" -}}

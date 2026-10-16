@@ -469,7 +469,7 @@ export class ScheduledRunStore {
       return true;
     });
   }
-  finish(id: string, owner: string, result: Partial<ScheduledOccurrence>): Promise<void> {
+  finish(id: string, owner: string, result: Partial<ScheduledOccurrence>): Promise<boolean> {
     return this.transaction(async (q, now) => {
       const row = (
         await q(
@@ -477,7 +477,7 @@ export class ScheduledRunStore {
           [id, owner, now],
         )
       )[0];
-      if (!row) return; // A retired worker cannot overwrite interruption evidence.
+      if (!row) return false; // A retired worker cannot overwrite interruption evidence.
       if (!result.status || !['succeeded', 'failed', 'interrupted', 'cancelled'].includes(result.status))
         throw new Error('Invalid execution outcome.');
       await this.writeRun(
@@ -487,6 +487,7 @@ export class ScheduledRunStore {
         null,
         null,
       );
+      return true;
     });
   }
 }

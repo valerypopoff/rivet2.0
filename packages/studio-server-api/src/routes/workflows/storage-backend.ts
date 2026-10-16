@@ -744,6 +744,12 @@ export async function disposeWorkflowStorage(): Promise<void> {
   await disposeWorkflowStorageServices();
 }
 
+export async function drainWorkflowStorageAcceptedWork(): Promise<void> {
+  await peekWorkflowStorageServices()?.drainAcceptedWork();
+  await peekWorkflowStorageServices()?.drain();
+}
+export function beginWorkflowStorageRetirement(): void { peekWorkflowStorageServices()?.beginRetirement(); }
+
 export async function readWorkflowRecordingArtifactWithBackend(
   recordingId: string,
   artifact: 'recording' | 'replay-project' | 'replay-dataset',

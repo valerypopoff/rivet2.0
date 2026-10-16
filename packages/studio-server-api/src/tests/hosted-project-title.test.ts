@@ -432,6 +432,7 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
   });
   let savedRevisionContents = '';
   let inTransaction = false;
+  let catalogNotifications = 0;
 
   const revisionService = createManagedWorkflowRevisionService({
     context: {
@@ -482,7 +483,13 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
       },
       mappers: managedMappers,
       executionInvalidationController: {
-        queueWorkflowInvalidation: async () => {},
+        queueCatalogInvalidation: async () => {
+          assert.equal(inTransaction, true, 'catalog hints must commit with the draft');
+          catalogNotifications++;
+        },
+        queueWorkflowInvalidation: async () => {
+          throw Error('An unpublished draft must not evict execution caches');
+        },
       },
     } as never,
   });
@@ -495,6 +502,7 @@ test('managed saveHostedProject stores revisions with the YAML title matching th
   });
 
   const persistedContents = savedRevisionContents;
+  assert.equal(catalogNotifications, 1);
   await assert.rejects(
     revisionService.saveHostedProject({
       projectPath: getManagedWorkflowProjectVirtualPath(workflow.relative_path),
@@ -572,7 +580,10 @@ test('managed in-place save follows a remotely renamed project by immutable id a
       },
       endpointSync: { syncWorkflowEndpointRows: async () => {} },
       mappers: managedMappers,
-      executionInvalidationController: { queueWorkflowInvalidation: async () => {} },
+      executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
+        queueWorkflowInvalidation: async () => {},
+      },
     } as never,
   });
 
@@ -648,6 +659,7 @@ test('managed saveHostedProject invalidates latest web app caches when only web 
       },
       mappers: managedMappers,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async (_client: unknown, _hooks: TransactionHooks, workflowId: string) => {
           invalidatedWorkflowId = workflowId;
         },
@@ -727,6 +739,7 @@ test('managed project rename changes catalog identity without creating a draft r
       },
       mappers: managedMappers,
       executionInvalidationController: {
+        queueCatalogInvalidation: async () => {},
         queueWorkflowInvalidation: async (_client: unknown, _hooks: TransactionHooks, workflowId: string) => {
           invalidatedWorkflowId = workflowId;
         },

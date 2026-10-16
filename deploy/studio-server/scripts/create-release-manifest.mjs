@@ -29,7 +29,7 @@ function parseArgs(argv) {
           '--predecessor',
         ])
       : command === 'promote'
-        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current'])
+        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current', '--ha-evidence'])
         : command === 'digest'
           ? new Set(['--input'])
           : null;
@@ -172,7 +172,10 @@ function main() {
   if (command === 'promote') {
     const inputPath = repositoryPath(options, '--input');
     const currentPath = optionalRepositoryPath(options, '--current');
-    const candidate = readManifest(inputPath);
+    let candidate = readManifest(inputPath);
+    const haEvidencePath = optionalRepositoryPath(options, '--ha-evidence');
+    if (haEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
+      evidence: { ...candidate.evidence, ha: JSON.parse(fs.readFileSync(haEvidencePath, 'utf8')) } });
     assertStudioServerReleasePredecessor(
       candidate,
       currentPath ? readManifest(currentPath, { requirePromoted: true }) : null,

@@ -7,12 +7,21 @@ import { isServerUiAuthRequestAllowed } from './server-ui-auth.js';
 import { watchAuthorization } from './watch-authorization.js';
 import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 import { isLegacyRestorePaused } from './legacy-restore/service.js';
+import { readOwnerRoutingConfig } from './ha-owner-routing.js';
+import { LatestDebuggerRelay } from './ha-latest-relay.js';
 
 export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 
 type RivetDebuggerServerOptions = NonNullable<Parameters<typeof startDebuggerServer>[0]>;
 
 let latestWorkflowRemoteDebugger: RivetDebuggerServer | null = null;
+let retiring = false;
+let relay: LatestDebuggerRelay | undefined;
+export function isLatestDebuggerRelayReady(): boolean { return !relay || relay.ready; }
+
+export function beginLatestWorkflowRemoteDebuggerDrain(): void {
+  retiring = true;
+}
 let latestWorkflowRemoteDebuggerHttpServer: HttpServer | null = null;
 let latestWorkflowRemoteDebuggerUpgradeHandler:
   | ((request: IncomingMessage, socket: Duplex, head: Buffer) => void)
@@ -40,6 +49,8 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
   }
 
   const webSocketServer = debuggerEnabled ? new WebSocketServer({ noServer: true }) : null;
+  const owner = readOwnerRoutingConfig();
+  if (owner && webSocketServer) relay = new LatestDebuggerRelay(owner, webSocketServer, Number(process.env.RIVET_HA_PEER_LIMIT));
 
   if (!latestWorkflowRemoteDebuggerUpgradeHandler) {
     latestWorkflowRemoteDebuggerUpgradeHandler = (request, socket, head) => {
@@ -51,11 +62,16 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
         return;
       }
 
+      if (url.pathname === '/internal/ha/latest' && relay && webSocketServer) {
+        if (!relay.authorize(request)) { rejectWebSocketUpgrade(socket, 401, 'Unauthorized'); return; }
+        webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
+        return;
+      }
       if (url.pathname !== LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH) {
         return;
       }
 
-      if (isVmMigrationMaintenanceActive() || isLegacyRestorePaused()) {
+      if (retiring || isVmMigrationMaintenanceActive() || isLegacyRestorePaused()) {
         rejectWebSocketUpgrade(socket, 503, 'Service Unavailable');
         return;
       }
@@ -100,6 +116,8 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
 
   latestWorkflowRemoteDebugger = startDebuggerServer({
     server: webSocketServer as RivetDebuggerServerOptions['server'],
+    transformBroadcast: relay?.transformBroadcast,
+    onControl: relay?.onControl,
   });
 
   return latestWorkflowRemoteDebugger;
@@ -128,6 +146,7 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
 }
 
 export async function disposeLatestWorkflowRemoteDebugger(): Promise<void> {
+  relay?.dispose(); relay = undefined;
   const debuggerServer = latestWorkflowRemoteDebugger;
   const httpServer = latestWorkflowRemoteDebuggerHttpServer;
   const upgradeHandler = latestWorkflowRemoteDebuggerUpgradeHandler;
@@ -147,4 +166,5 @@ export async function disposeLatestWorkflowRemoteDebugger(): Promise<void> {
 // Test-only reset seam for the module-scoped debugger singleton.
 export async function resetLatestWorkflowRemoteDebuggerForTests(): Promise<void> {
   await disposeLatestWorkflowRemoteDebugger();
+  retiring = false;
 }

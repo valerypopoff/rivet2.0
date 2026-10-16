@@ -16,10 +16,6 @@
 - name: RIVET_LEGACY_RESTORE_EXECUTION_READY_URL
   value: {{ printf "http://%s:%v/readyz" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.executionServiceName" $root))) $root.Values.service.execution.port | quote }}
 {{- end }}
-{{- if $root.Values.hostedEvaluations.enabled }}
-- name: RIVET_LEGACY_RESTORE_EVALUATION_READY_URL
-  value: {{ printf "http://%s:%v/readyz" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.evaluationServiceName" $root))) $root.Values.service.evaluation.port | quote }}
-{{- end }}
 {{- end }}
 {{- end -}}
 
@@ -186,7 +182,7 @@
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" $root "profile" .profile) }}
 {{- if eq .profile "control" }}
 - name: RIVET_PROJECT_BUNDLE_SCRATCH_ROOT
-  value: /data/project-bundles
+  value: {{ ternary "/data/rivet-restore/bundles" "/data/project-bundles" (default false $root.haMaintenance) | quote }}
 - name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL
   value: {{ printf "http://%s:%v/internal/workflows" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.executionServiceName" $root))) $root.Values.service.execution.port | quote }}
 - name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL

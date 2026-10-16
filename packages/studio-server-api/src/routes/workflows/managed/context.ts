@@ -19,6 +19,8 @@ import {
 import { createManagedWorkflowEndpointSync } from './endpoint-sync.js';
 import { ManagedWorkflowExecutionCache } from './execution-cache.js';
 import { ManagedWorkflowExecutionInvalidationController } from './execution-invalidation.js';
+import { notifyExternalWorkflowTreeChanged } from '../workflow-tree-events.js';
+import { notifyExternalEvaluationLibraryChanged } from '../evaluation-library-events.js';
 import {
   notifyAllWebAppSocketPolicyInvalidations,
   notifyWebAppSocketPolicyInvalidation,
@@ -162,6 +164,8 @@ export function createManagedWorkflowContext(
       notifyWebAppSocketPolicyInvalidation(`managed:${workflowId}`);
     },
     onAllChanged: notifyAllWebAppSocketPolicyInvalidations,
+    onExternalInvalidation: process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalWorkflowTreeChanged : undefined,
+    onEvaluationLibraryChanged: process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalEvaluationLibraryChanged : undefined,
   });
 
   const initialize = async (): Promise<void> => {

@@ -29,8 +29,8 @@ function readBoolean(name: string, env: NodeJS.ProcessEnv): boolean {
 
 /**
  * The coordinator is deliberately opt-in. It requires managed storage for
- * durable claims and is never allowed to execute jobs on a control-plane pod.
- * A combined local-development process may run workers for parity.
+ * durable claims. Workers share the editor/control backend, never the published
+ * execution tier. The API-only HA maintenance owner must not claim user work.
  */
 export function getHostedEvaluationsCoordinatorConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -67,7 +67,7 @@ export function getHostedEvaluationsCoordinatorConfig(
   const pollMs = Math.max(250, Math.min(30_000, parsePositiveInt(env[HOSTED_EVALUATIONS_POLL_MS_ENV], 1_000)));
   return {
     enabled: true,
-    workerEnabled: isHostedEvaluationWorkerApiProfile(profile),
+    workerEnabled: isHostedEvaluationWorkerApiProfile(profile) && env.RIVET_HA_MAINTENANCE !== '1',
     workerConcurrency,
     leaseMs,
     maxJobsPerRun,

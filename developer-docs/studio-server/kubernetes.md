@@ -9,6 +9,51 @@ never change the current kubeconfig context.
 For a complete external PostgreSQL/S3 values example and first-install Secret
 commands, see [External storage deployment handoff](./external-storage-deployment.md).
 
+### Configuration ownership
+
+`helm/values.yaml` and the shared `helm/overlays/prod.yaml` and `test.yaml`
+describe application behavior, not a particular installation. They must not
+name a provider endpoint, bucket, database host/user, deployment Secret, Vault
+role/path, public hostname, or ingress controller. Production retains release
+verification, TLS policy, admission, lifecycle and provisional capacity settings;
+these are adjustable policies, not claims about the operator's provider capacity.
+
+The release command merges chart defaults, production policy, the operator's
+`--values` (or values generated from `--env-file`), then immutable release values.
+Supply actual PostgreSQL wiring, bucket, region and credential references in that
+operator-owned configuration. Helm refuses missing required storage/auth inputs
+during lint/template, before the command creates Secrets or changes workloads.
+An empty object-storage endpoint is supported for AWS regional discovery, but a
+region must be explicitly supplied; GCS/other compatible services supply their
+own endpoint. Vault is disabled unless the operator opts in and supplies its role,
+secret path and dotenv template. Explicit existing integrations remain supported.
+
+Copy the commented example under `deploy/studio-server/examples/` into an ignored
+environment file; do not customize the tracked production/test policy per cluster.
+Reuse existing Secret names, encryption keys and storage locations on upgrade.
+Previously inherited example identities must be made explicit before upgrading;
+missing configuration must not silently select a different destination. This
+cleanup does not move existing data or change a running installation by itself.
+
+Offline verification uses explicit dummy settings in
+`scripts/fixtures/kubernetes-environment.values.yaml`, outside the chart and never
+selected by a deployment launcher. `studio-server:verify:kubernetes` covers both
+missing-input failures and rendering with Secret-backed, Vault, AWS, GCS and
+custom endpoint inputs. Local MinIO/release-gate overlays are deliberate disposable
+fixtures, not universal cloud defaults, and retain their explicit local settings.
+
+Backend HA is opt-in and requires immutable release evidence described in the
+[HA rolling-upgrade contract and acceptance gates](./ha-rolling-upgrades.md).
+The default remains a singleton. First conversion uses an explicitly owned
+maintenance cutover; subsequent HA upgrades require the exact installed
+predecessor image/source certificate. Never replace OnDelete owners with a raw
+Helm upgrade or manual scale-down. Local runtime proof is not a provider-gateway
+certificate, nor authorization to change an existing GCP installation.
+The opt-in executor owner path `/ws/executor/owner/*` must route to the API, not
+directly to the executor. The embedded proxy preserves its signed path and existing
+UI/proxy authentication gate. External gateways must implement that route before
+future HA activation; current non-HA `/ws/executor/internal` routing is unchanged.
+
 Development frontend watching is confined to the Docker dev launcher, which
 explicitly selects the web Dockerfile's `development` target. The Kubernetes
 release command and image CI use the default final target: static assets on
@@ -258,26 +303,47 @@ Do not treat that as a forced ratio. The application and cluster-owned gateway s
 
 ## Hosted Evaluations
 
-Managed hosted Evaluations are an opt-in, server-owned batch scheduler. They are not a browser-executor feature and they do **not** use published workflow capacity. Enable them only with managed workflow storage and an approved batch budget:
+Managed hosted Evaluations are an opt-in durable scheduler running on the editor
+backend. They share that backend container's CPU/memory budget with interactive
+editor runs, not the published `execution` tier. Enabling them creates no extra
+pod, container, Service, or PostgreSQL pool. Start conservatively because a large
+evaluation batch can slow interactive work:
 
 ```yaml
 hostedEvaluations:
   enabled: false # set true only for an approved managed deployment
-  workerConcurrency: 1 # per Evaluation-worker pod; 1..8
+  workerConcurrency: 1 # concurrent trial jobs per editor backend; 1..8
   leaseMs: 60000 # 15,000..600,000
   pollMs: 1000 # 250..30,000
   maxJobsPerRun: 2000 # 1..100,000
   maxOutstandingJobs: 10000 # maxJobsPerRun..1,000,000
-  scheduling:
-    # Use a dedicated batch node pool in production when one exists.
-    nodeSelector: {}
-    # Otherwise use a class below the public execution tier's priority.
-    priorityClassName: ''
 ```
 
-When enabled, Helm renders a dedicated internal `evaluation` Deployment and ClusterIP Service. The control-profile/backend API accepts authenticated submissions; the `evaluation` profile is the only Kubernetes worker profile that claims trials. It exposes health and (when explicitly enabled) metrics, but no `/api/*`, latest-editor, published `/workflows/*`, or web-app routes. The `execution` Deployment remains reserved for product-facing published workflows and web-app actions. A `combined` process may still run workers for local-development parity only.
+The `control` API both accepts submissions and claims durable trial jobs. Its
+existing `GraphProcessor` adapter runs trials inside the same backend container
+that supervises the interactive editor executor; this shares resources, not
+interactive debugger sessions or mutable graph state. There is no second queue,
+executor transport or scheduler. Browser/desktop and ordinary remote evaluation
+execution are unchanged. The `execution` API never claims trial jobs.
 
-The worker Deployment has no proxy upstream or public Service. It uses the same managed PostgreSQL, object storage, and runtime-library cache as the other API workloads, reading App Settings directly from PostgreSQL, so it executes the same Node `GraphProcessor` contract without routing through the public execution tier. It deliberately has no HPA: batch concurrency is bounded first by `replicaCount.evaluation × workerConcurrency`, then by the two global job quotas. Production chart rendering requires at least one Evaluation replica and either a batch `nodeSelector` or an explicitly lower-priority `priorityClassName`, preventing an unreviewed batch tier from competing for public capacity.
+Workers start only after storage and runtime-library synchronization are ready.
+Storage initialization/health reads alone cannot start graphs. Release-validation,
+restore standby and the API-only HA maintenance owner do not claim trials.
+Shutdown/retirement uses the existing coordinator drain before closing its pool;
+accepted worker loss still becomes interruption evidence, never an automatic
+replay. Metrics are scraped through the backend API ServiceMonitor.
+
+`workerConcurrency` limits concurrent evaluation jobs per backend; it is not a
+global limit on interactive runs, nor a promise that the editor stays fast under
+batch load. Size `resources.backend` for both workloads and retain the global
+submission quotas. Increasing `replicaCount.execution` adds no Evaluation capacity.
+
+The old `evaluation` profile, `replicaCount.evaluation`, `resources.evaluation` and
+`hostedEvaluations.scheduling` remain only for verified predecessor-image rollback.
+Normal charts do not render that worker or require its scheduling/resource budget.
+Docker upgrades recognize only a labelled, installation/storage-bound predecessor
+evaluation container, stop it gracefully and remove that exact container without
+removing volumes. Other unknown services remain a hard ownership failure.
 
 Submission creates the immutable project snapshot, normal `.rivet-data` sidecar snapshot, visible run projection, content-addressed dataset snapshot, scheduler parent, and deterministic trial rows in one PostgreSQL transaction. Before any row is written, the coordinator rejects a suite that exceeds `maxJobsPerRun`. Inside the same transaction it takes a transaction-scoped PostgreSQL advisory lock, counts queued, claimed, and accepted jobs through a partial outstanding-job index, and rejects a submission that would exceed `maxOutstandingJobs`. This is an installation-wide decision, not a best-effort process-local check, and it does not scan terminal job history as retained Evaluation runs grow. Capacity rejection returns `429 evaluation_batch_capacity_exceeded` with `Retry-After: 5`; it creates no partial run and the hosted editor does not silently fall back to browser execution. Retrying interrupted trials takes the same advisory lock and reserves the same outstanding-job budget before it requeues anything, so recovery work cannot bypass the batch ceiling. A caller-supplied run ID is accepted only by the transaction-owned run-projection insert, so a concurrent duplicate produces a conflict and rolls back every related write.
 
@@ -301,15 +367,33 @@ In enforce mode, the task holds the current lease and rechecks it immediately be
 
 The Runs tab makes temporary expiry explicit and offers **Keep replay recordings** and **Release replay recordings**. Keeping converts only still-live temporary recordings to `retained`; releasing `retained` recordings starts a fresh 24-hour temporary window. Every operator-initiated retention update confirms that its artifact still exists: if cleanup won a race, the UI leaves that item unchanged and asks the operator to refresh. Hosted terminal projection instead updates replay retention in the same PostgreSQL transaction as the final run state; if an artifact is already missing, that transaction rolls back and the worker records explicit interruption evidence rather than publishing a final reference it cannot fulfill. Deleting a run remains an explicit destructive action: it removes its replay artifacts, while an already saved compact baseline remains comparable but no longer has those replays.
 
-This source-level isolation does not substitute for operational evidence. Keep the feature disabled in high-volume production until the worker-loss/cancellation and concurrent batch-versus-public capacity scenarios have passed with the immutable release images. See the [managed-mode audit](./audits/kubernetes-managed-mode.md) for those gates.
+Endpoint-tier isolation does not guarantee editor responsiveness. Keep the feature
+disabled in high-volume production until shared-backend resource use, worker-loss,
+cancellation and concurrent batch/public capacity scenarios have been measured
+with immutable release images. The editor may pause during backend replacement.
 
 ### Hosted Evaluation disruption certificate
 
-`yarn studio-server:verify:kubernetes:managed-evaluations` is the protected staging certificate for the durable hosted-Evaluation path. In GitHub **Build Images**, enable `run_managed_kubernetes_evaluation_gate`; it first deploys the current immutable candidate through the existing provider gate, then runs this certificate in the same protected `rivet-managed-staging` environment. It requires `RIVET_K8S_EVALUATION_GATE_CONFIRM=disrupt-staging-evaluations`, the exact allowlisted staging context, and exactly one Evaluation worker replica so that the worker-loss transition is unambiguous. If the same manual dispatch also requests the published-capacity certificate, that certificate completes first; the destructive worker-loss certificate never runs concurrently with it. Provider deployment, capacity, and Evaluation certificate jobs share one non-canceling staging lock across workflow runs, so another manual dispatch cannot mutate the release at the same time.
+`yarn studio-server:verify:kubernetes:managed-evaluations` is the protected staging
+certificate for the durable hosted-Evaluation path. The Build Images manual
+`run_managed_kubernetes_evaluation_gate` selection first deploys the immutable
+candidate through the provider gate. It requires the exact allowlisted staging
+context, `RIVET_K8S_EVALUATION_GATE_CONFIRM=disrupt-staging-editor-backend`, and
+exactly one shared editor backend. This explicitly authorizes editor/API downtime
+in the disposable staging installation. When both certificates are selected,
+published-capacity verification finishes before backend disruption. All provider,
+capacity and Evaluation mutations share the existing non-canceling staging lock.
 
 For the deliberate joint scenario, select both `run_managed_kubernetes_evaluation_gate` and `run_managed_kubernetes_evaluation_joint_capacity_gate`, **without** either separate capacity input. The provider job rejects any other joint selection before it deploys staging. The protected provider configuration must supply the ordinary `capacity` block and `hostedEvaluationGate.jointCapacity.trialDelayMs`. The runner rejects a trial delay shorter than `capacity.jobTimeoutSeconds + 60 seconds` and a capacity timeout above 14 minutes. It verifies the dedicated Evaluation trial immediately before the public-load Job is created and again at the Job-completion boundary, before report collection or cleanup can consume the trial's duration. It then cancels only that generated joint run before the independent worker-loss/retry/cancellation scenarios begin. This preserves the single-worker certificate precondition. It reuses the exact capacity runner, temporary endpoints, scoped credential, cleanup, and sanitized evidence contract; it does not introduce another load engine or a batch request path. The Evaluation artifact retains both `hosted-evaluations/` and `published-capacity/`, including the sanitized capacity report and calibration review, so the joint lifecycle and load evidence cannot be separated.
 
-After durable acceptance, the runner force-deletes only that selected Evaluation worker (`--grace-period=0 --force`). It does not delete the backend, execution, proxy, web, database, or object-store workloads. The protected confirmation and one-worker precondition make this a deliberate, bounded worker-loss test rather than an ordinary rollout action.
+After durable acceptance, the runner deliberately deletes the identified shared
+editor backend with UID preconditions and zero grace. This interrupts editor/API
+availability as well as the selected trial. The explicit confirmation is
+`RIVET_K8S_EVALUATION_GATE_CONFIRM=disrupt-staging-editor-backend`; the certificate
+requires exactly one backend and never selects execution, maintenance, proxy,
+web, database or object-store pods. Only read polling after this planned loss may
+wait through temporary gateway unavailability; writes are never replayed. This
+is a protected staging disruption test, never an ordinary production operation.
 
 Add this bounded non-secret block to the protected provider-gate JSON:
 
@@ -1016,7 +1100,7 @@ Do not deploy this app with a generic one-Deployment chart unless that chart can
 - dashboard/editor assets come from `web`
 - `/api/*`, latest workflow execution, and `/ws/latest-debugger` go to singleton `backend`
 - published workflow endpoint traffic goes to scalable `execution`
-- the internal editor Node executor websocket goes to the executor sidecar in the singleton `backend`
+- the internal editor Node executor websocket goes to the co-located executor process in the singleton `backend`
 
 If company delivery requires a root `.gitlab-ci.yml`, treat the current GitHub workflow as the image-publish reference and the Helm values in this document as the deploy reference. The GitLab pipeline must either:
 
@@ -1053,9 +1137,10 @@ The pods need outbound network access to Postgres, object storage, Vault, and GH
 
 The production starting point is [deploy/studio-server/helm/overlays/prod.yaml](../../deploy/studio-server/helm/overlays/prod.yaml).
 
-Before DevOps installs it, they must replace or confirm:
+Keep that shared policy provider-neutral. In an operator-owned values file,
+DevOps must supply or confirm:
 
-- `images.*.repository` and `images.*.tag`
+- exact `images.*.repository` and digests (supplied by the release command, not hand-selected tags)
 - `clusterDomain` if the cluster does not use `cluster.local`
 - the external gateway host, TLS, UI gate, route mapping, and trusted-header handling described above (owned outside this chart)
 - Vault role, secret path, and dotenv template if Vault is used
@@ -1100,7 +1185,11 @@ Run the production chart on `linux/amd64` nodes unless the API and executor imag
 
 ### Environment values skeleton
 
-Use this as the shape for an environment override file, whether your pipeline stores it as `deploy/studio-server/helm/overlays/prod.yaml`, `deploy/studio-server/helm/overlays/test.yaml`, or a company-standard `deploy/overlays/<env>.yaml` wrapper:
+The complete Secret-based example is under `deploy/studio-server/examples/`.
+The following is an alternative **explicit Vault integration**, not a default.
+Keep the filled-in environment file outside shared chart policy, for example in
+ignored `artifacts/deployment/environment-values.yaml` or a private infrastructure
+repository. The release command supplies images and release identity last:
 
 ```yaml
 fullnameOverride: rivet
@@ -1108,17 +1197,6 @@ fullnameOverride: rivet
 imagePullSecrets:
   # Required only when the GHCR packages are private.
   # - name: ghcr-pull-secret
-
-images:
-  web:
-    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/web
-    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
-  api:
-    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/api
-    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
-  executor:
-    repository: ghcr.io/valerypopoff/rivet2.0-studio-server/executor
-    tag: <published-tag> # Or set digest: sha256:<immutable-manifest>.
 
 gateway:
   mode: external

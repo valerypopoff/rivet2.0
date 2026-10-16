@@ -1,3 +1,4 @@
+import { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
 import {
   startDebuggerServer,
   createProcessor,
@@ -6,6 +7,7 @@ import {
   DebuggerDatasetProvider,
   NodeProjectReferenceLoader,
   loadProjectBundle,
+  DebuggerSessions,
 } from '@valerypopoff/rivet2-node';
 import * as Rivet from '@valerypopoff/rivet2-core';
 import {
@@ -111,6 +113,20 @@ function getAppDataLocalPath() {
 }
 
 const executorArgs = process.argv.slice(2);
+const editorAcceptedWork = new AcceptedWork();
+const resumableSessions = process.env.RIVET_HA_PROTOCOL === '1' ? new DebuggerSessions() : undefined;
+const retirement =
+  process.env.RIVET_ROLLING_RETIREMENT_PROTOCOL === '1'
+    ? new ProcessRetirement(
+        process.env.RIVET_PROCESS_INCARNATION ?? '',
+        () => {
+          editorAcceptedWork.beginDrain();
+          resumableSessions?.beginRetirement();
+          executorWebSocketReady = false;
+        },
+        () => editorAcceptedWork.drain(),
+      )
+    : undefined;
 const port = parseExecutorPortFromArgs(executorArgs);
 const host = parseExecutorHostFromArgs(executorArgs);
 const executorReadyMessage = `Rivet app executor websocket listening on ${host}:${port}`;
@@ -122,6 +138,30 @@ let restoreEditorActivity = 0;
   globalThis as typeof globalThis & { __rivetLegacyRestoreEditorActivity?: () => number }
 ).__rivetLegacyRestoreEditorActivity = () => restoreEditorActivity;
 function acquireVmMigrationEditorLease(): (() => void) | null {
+  const releaseWork = editorAcceptedWork.acquire();
+  if (!releaseWork) return null;
+  try {
+    const releaseLease = acquireMigrationLease();
+    if (!releaseLease) {
+      releaseWork();
+      return null;
+    }
+    return () => {
+      try {
+        releaseLease();
+      } catch (error) {
+        if (retirement) editorAcceptedWork.fail(getError(error));
+        throw error;
+      } finally {
+        releaseWork();
+      }
+    };
+  } catch (error) {
+    releaseWork();
+    throw error;
+  }
+}
+function acquireMigrationLease(): (() => void) | null {
   if ((globalThis as typeof globalThis & { __rivetLegacyRestorePaused?: boolean }).__rivetLegacyRestorePaused)
     return null;
   const controlRoot = process.env.RIVET_VM_MIGRATION_CONTROL_ROOT?.trim();
@@ -186,7 +226,10 @@ function handleTopLevelSidecarError(message: string, error: unknown) {
 
 function sendGraphRunError(client: { send(data: string): void }, requestId: Rivet.RemoteRunRequestId, error: unknown) {
   try {
-    client.send(
+    const send = resumableSessions
+      ? (payload: string) => resumableSessions.send(client as AppExecutorClient, payload)
+      : (payload: string) => client.send(payload);
+    send(
       JSON.stringify({
         message: 'error',
         data: {
@@ -267,6 +310,12 @@ function createClientScopedDebugger(client: AppExecutorClient): AppExecutorDebug
 
 const rivetDebugger = startDebuggerServer({
   authorizeClient: getAppExecutorHostOptions().authorizeClient,
+  sessions: resumableSessions,
+  isAcceptingConnections: resumableSessions
+    ? (request) => resumableSessions.canAccept(request, editorAcceptedWork.isAccepting)
+    : retirement
+      ? () => editorAcceptedWork.isAccepting
+      : undefined,
   port,
   host,
   allowGraphUpload: true,
@@ -333,9 +382,18 @@ const rivetDebugger = startDebuggerServer({
       return;
     }
     if (!releaseMigrationLease) {
-      sendGraphRunError(client, requestId, new Error('Rivet Server is paused for storage migration.'));
+      sendGraphRunError(
+        client,
+        requestId,
+        new Error(
+          editorAcceptedWork.isAccepting
+            ? 'Rivet Server is paused for storage migration.'
+            : 'Rivet Server executor is retiring.',
+        ),
+      );
       return;
     }
+    const releaseSession = resumableSessions?.retain(client);
 
     let processorForConsole: ReturnType<typeof createProcessor>['processor'] | undefined;
     const bundlePreparation = projectBundle ? new AbortController() : undefined;
@@ -535,10 +593,20 @@ const rivetDebugger = startDebuggerServer({
     } finally {
       client.off('message', onBundleControl);
       client.off('close', abortBundlePreparation);
-      releaseMigrationLease();
-      if (processorForConsole) {
-        rivetDebugger.detach(processorForConsole);
-        untrackClientProcessor(processorForConsole);
+      try {
+        if (processorForConsole) {
+          rivetDebugger.detach(processorForConsole);
+          untrackClientProcessor(processorForConsole);
+        }
+      } catch (error) {
+        if (retirement) editorAcceptedWork.fail(getError(error));
+        throw error;
+      } finally {
+        try {
+          releaseMigrationLease();
+        } finally {
+          releaseSession?.();
+        }
       }
     }
   },
@@ -551,11 +619,33 @@ process.on('SIGTERM', () => {
 
 async function announceExecutorReady() {
   await sharedCodeWorkerPoolReady;
+  if (!editorAcceptedWork.isAccepting) return;
   executorWebSocketReady = true;
   if (process.env.RIVET_RUNTIME_PROCESS_ROLE === 'executor') {
     process.send?.({ type: 'rivet-executor-ready' });
   }
   logRuntimeInfo(executorReadyMessage);
+}
+
+if (retirement) {
+  process.on('message', (message: unknown) => {
+    if (!message || typeof message !== 'object') return;
+    const request = message as {
+      type?: string;
+      protocol?: unknown;
+      operationId?: unknown;
+      incarnation?: unknown;
+      nonce?: unknown;
+    };
+    if (!['rivet-retire', 'rivet-retirement-query'].includes(request.type ?? '')) return;
+    if (request.protocol !== 1 || request.incarnation !== retirement.incarnation) return;
+    try {
+      if (request.type === 'rivet-retire') retirement.begin(request.operationId, request.incarnation);
+      process.send?.({ type: 'rivet-retirement-status', nonce: request.nonce, ...retirement.snapshot() });
+    } catch {
+      /* Malformed or conflicting commands cannot replace the retirement owner. */
+    }
+  });
 }
 
 if (rivetDebugger.webSocketServer.address()) {

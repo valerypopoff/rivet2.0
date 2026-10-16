@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/component: backend
 spec:
   clusterIP: None
+  {{- if .Values.ha.enabled }}
+  publishNotReadyAddresses: true
+  {{- end }}
   selector:
     {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
   ports:

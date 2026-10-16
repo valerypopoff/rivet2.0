@@ -25,6 +25,7 @@ import {
 } from './debuggerHeartbeat.js';
 import { emitDebuggerError, sendDebuggerMessage, stringifyDebuggerMessage } from './debuggerTransport.js';
 import { createDebuggerProcessorAttachments } from './debuggerProcessorAttachments.js';
+import type { DebuggerSessions } from './debuggerSessions.js';
 
 export { DEBUGGER_HEARTBEAT_INTERVAL_MS, DEBUGGER_HEARTBEAT_TIMEOUT_MS } from './debuggerHeartbeat.js';
 
@@ -51,10 +52,7 @@ export const currentDebuggerState = {
 
 export type DebuggerClientState = typeof currentDebuggerState;
 
-export type DynamicGraphRunOptions = Omit<
-  OutgoingMessageMap['run'],
-  'frozenNodeOutputs' | 'projectPath'
-> & {
+export type DynamicGraphRunOptions = Omit<OutgoingMessageMap['run'], 'frozenNodeOutputs' | 'projectPath'> & {
   client: WebSocket;
   frozenNodeOutputs?: FrozenNodeOutputsByGraph;
   projectPath: string | undefined;
@@ -72,6 +70,12 @@ export function startDebuggerServer(
     server?: WebSocketServer;
     /** Upgrade and periodic authorization. The host must bound async work and supply its own deadline. */
     authorizeClient?: (request: IncomingMessage) => Promise<boolean>;
+    /** Admission only. Existing connections continue fresh authorization and run controls while draining. */
+    isAcceptingConnections?: (request: IncomingMessage) => boolean;
+    sessions?: DebuggerSessions;
+    /** Hosting adapters can relay observations/controls without owning processors. */
+    transformBroadcast?: (payload: string) => string;
+    onControl?: (client: WebSocket, payload: string) => void;
     port?: number;
     dynamicGraphRun?: DynamicGraphRun;
     allowGraphUpload?: boolean;
@@ -92,34 +96,53 @@ export function startDebuggerServer(
       : DEBUGGER_HEARTBEAT_TIMEOUT_MS;
 
   const authorize = options.authorizeClient;
-  if (options.server && authorize) throw new Error('An externally owned debugger server must authorize its own upgrades.');
-  const server = options.server ?? new WebSocketServer({
-    port,
-    host,
-    ...(authorize ? {
-      verifyClient: (info: { req: IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
-        void Promise.resolve().then(() => authorize(info.req)).then(
-          (allowed) => done(allowed, allowed ? undefined : 403),
-          () => done(false, 403),
-        );
-      },
-    } : {}),
-  });
+  if (options.server && (authorize || options.isAcceptingConnections))
+    throw new Error('An externally owned debugger server must authorize its own upgrades.');
+  const server =
+    options.server ??
+    new WebSocketServer({
+      port,
+      host,
+      ...(options.sessions ? { handleProtocols: () => 'rivet-session-v1' } : {}),
+      ...(authorize || options.isAcceptingConnections
+        ? {
+            verifyClient: (info: { req: IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
+              void Promise.resolve()
+                .then(async () => {
+                  if (options.isAcceptingConnections?.(info.req) === false) return false;
+                  const authorized = (await authorize?.(info.req)) ?? true;
+                  return authorized && options.isAcceptingConnections?.(info.req) !== false;
+                })
+                .then(
+                  (allowed) => done(allowed, allowed ? undefined : 403),
+                  () => done(false, 403),
+                );
+            },
+          }
+        : {}),
+    });
 
-  if (authorize) server.on('connection', (client, request) => {
-    let checking = false;
-    const timer = setInterval(() => {
-      if (checking) return;
-      checking = true;
-      void Promise.resolve().then(() => authorize(request)).then(
-        (allowed) => { if (!allowed) client.terminate(); },
-        () => client.terminate(),
-      )
-        .finally(() => { checking = false; });
-    }, 5_000);
-    timer.unref();
-    client.once('close', () => clearInterval(timer));
-  });
+  if (authorize)
+    server.on('connection', (client, request) => {
+      let checking = false;
+      const timer = setInterval(() => {
+        if (checking) return;
+        checking = true;
+        void Promise.resolve()
+          .then(() => authorize(request))
+          .then(
+            (allowed) => {
+              if (!allowed) client.terminate();
+            },
+            () => client.terminate(),
+          )
+          .finally(() => {
+            checking = false;
+          });
+      }, 5_000);
+      timer.unref();
+      client.once('close', () => clearInterval(timer));
+    });
 
   const emitter = new Emittery<DebuggerEvents>();
 
@@ -138,16 +161,27 @@ export function startDebuggerServer(
   ) {
     const clients = options.getClientsForProcessor?.(processor, [...server.clients]) ?? [...server.clients];
     const resolvedRequestId = requestId ?? processorAttachments.getRequestId(processor);
-    const payload = stringifyDebuggerMessage({ message, data, requestId: resolvedRequestId }, emitter);
+    const serialized = stringifyDebuggerMessage({ message, data, requestId: resolvedRequestId }, emitter);
+    const payload = serialized && (options.transformBroadcast?.(serialized) ?? serialized);
 
     if (!payload) {
       return;
     }
 
-    clients.forEach((client) => sendDebuggerMessage(client, payload, emitter, socketHeartbeats.get(client)));
+    clients.forEach((client) => {
+      if (options.sessions) options.sessions.send(client, payload);
+      else sendDebuggerMessage(client, payload, emitter, socketHeartbeats.get(client));
+    });
   }
 
-  server.on('connection', (socket) => {
+  server.on('connection', (socket, request) => {
+    let logicalClient: WebSocket;
+    try {
+      logicalClient = options.sessions?.bind(socket, request) ?? socket;
+    } catch {
+      socket.close(4409, 'Debugger session unavailable');
+      return;
+    }
     const heartbeat = startDebuggerSocketHeartbeat(socket, {
       intervalMs: heartbeatIntervalMs,
       timeoutMs: heartbeatTimeoutMs,
@@ -158,7 +192,7 @@ export function startDebuggerServer(
       socketHeartbeats.delete(socket);
     });
 
-    const datasetProvider = getDatasetProviderForClient(socket, options);
+    const datasetProvider = getDatasetProviderForClient(logicalClient, options);
     if (datasetProvider) {
       datasetProvider.onrequest = (type, data) => {
         const payload = stringifyDebuggerMessage(
@@ -169,18 +203,20 @@ export function startDebuggerServer(
           emitter,
         );
         if (payload) {
-          sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
+          if (options.sessions) options.sessions.send(logicalClient, payload);
+          else sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
         }
       };
     }
 
     const handleMessage = async (data: RawData) => {
       try {
+        if (options.sessions && !options.sessions.isCurrent(socket)) return;
         const stringData = data.toString();
 
         if (stringData.startsWith('set-static-data:')) {
           const [, id, value] = stringData.split(':');
-          const debuggerState = getDebuggerStateForClient(socket, options);
+          const debuggerState = getDebuggerStateForClient(logicalClient, options);
 
           if (debuggerState.uploadedProject) {
             debuggerState.uploadedProject.data ??= {};
@@ -190,10 +226,27 @@ export function startDebuggerServer(
         }
 
         const message = JSON.parse(data.toString()) as { type: string; data: unknown };
+        if (['abort', 'pause', 'resume', 'user-input', 'preload'].includes(message.type))
+          options.onControl?.(socket, stringData);
 
         await match(message)
           .with({ type: 'run' }, async () => {
             const runData = message.data as OutgoingMessageMap['run'];
+            if (options.sessions) {
+              try {
+                if (!options.sessions.acceptRun(logicalClient, runData.requestId)) return;
+              } catch {
+                options.sessions.send(
+                  logicalClient,
+                  JSON.stringify({
+                    message: 'error',
+                    requestId: typeof runData.requestId === 'string' ? runData.requestId : undefined,
+                    data: { error: 'Executor session run identity or capacity is unavailable. Open a new session.' },
+                  }),
+                );
+                return;
+              }
+            }
             const { frozenNodeOutputs, projectPath, ...forwardedRunData } = runData;
             const decodedFrozenNodeOutputs = frozenNodeOutputs
               ? decodeDebuggerTransportSentinels(frozenNodeOutputs)
@@ -201,7 +254,7 @@ export function startDebuggerServer(
 
             await options.dynamicGraphRun?.({
               ...forwardedRunData,
-              client: socket,
+              client: logicalClient,
               frozenNodeOutputs: decodedFrozenNodeOutputs,
               projectPath: projectPath ?? undefined,
             });
@@ -217,18 +270,18 @@ export function startDebuggerServer(
               // serialized YAML. Normalize here before the sidecar resolves
               // project plugins so legacy Jev graphs work without TypeSafe.
               normalizeClassifierProject(project);
-              const debuggerState = getDebuggerStateForClient(socket, options);
+              const debuggerState = getDebuggerStateForClient(logicalClient, options);
               debuggerState.uploadedProject = project;
               debuggerState.settings = settings;
             }
           })
           .with({ type: 'datasets:response' }, async () => {
-            getDatasetProviderForClient(socket, options)?.handleResponse(message.type, message.data);
+            getDatasetProviderForClient(logicalClient, options)?.handleResponse(message.type, message.data);
           })
           .otherwise(async () => {
             const attachedProcessors = processorAttachments.getAttachedProcessors();
             const processorsForClient =
-              options.getProcessorsForClient?.(socket, attachedProcessors) ?? attachedProcessors;
+              options.getProcessorsForClient?.(logicalClient, attachedProcessors) ?? attachedProcessors;
             const requestId = getRequestIdForControlMessage(message.data);
             const processors = requestId
               ? processorsForClient.filter((processor) => processorAttachments.getRequestId(processor) === requestId)
@@ -279,7 +332,8 @@ export function startDebuggerServer(
         emitter,
       );
       if (payload) {
-        sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
+        if (options.sessions) options.sessions.send(logicalClient, payload);
+        else sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
       }
     }
   });

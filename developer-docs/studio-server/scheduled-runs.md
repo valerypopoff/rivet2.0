@@ -223,6 +223,20 @@ free a slot. Subsequent worker-loss recovery is durable.
 Scheduler startup is idempotent and polling is single-flight, including explicit
 ticks. Shutdown tracks an in-flight claim even when it was not started by the
 poll timer, and storage errors do not skip shutdown cleanup.
+
+Planned retirement is a separate, non-interrupting path. `beginDrain()` stops new
+polls/claims synchronously; `drainAcceptedWork()` awaits initialization, a claim
+already in flight, preparation/execution, recording cleanup and any outstanding
+heartbeat before acknowledging completion. It leaves stores open and does not
+abort accepted runs. `ScheduledRunStore.finish()` returns whether the current
+owner persisted the terminal result; a lost/refused outcome or uncertain claim
+blocks planned retirement, even with zero active tasks. It never relabels graph
+success, overwrites interruption evidence, or retries execution. Failure evidence
+is retained for operator reconciliation; a later successful poll cannot certify
+an earlier unknown result. Ordinary forced shutdown retains its grace deadline.
+The [HA implementation status](./ha-rolling-upgrades.md) distinguishes these
+prerequisites from a verified multi-replica rolling upgrade.
+
 Full local worker capacity does not stop due-time/lease housekeeping. A full
 worker calls the store with zero claim capacity; reconciliation continues, but
 no extra graph is claimed even if an old local execution is still unwinding

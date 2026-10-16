@@ -23,6 +23,20 @@ load_optional_dotenv_preserving_deployment_storage() {
   # Preserve only an explicitly mounted export root. Standalone dotenv remains
   # configurable, and older deployments without this mount keep their fallback.
   deployment_bundle_scratch_root="${RIVET_PROJECT_BUNDLE_SCRATCH_ROOT:-}"
+  retirement_protocol="${RIVET_ROLLING_RETIREMENT_PROTOCOL:-}"
+  retirement_token="${RIVET_ROLLING_RETIREMENT_TOKEN:-}"
+  retirement_incarnation="${RIVET_PROCESS_INCARNATION:-}"
+  ha_protocol="${RIVET_HA_PROTOCOL:-}"
+  ha_pod_name="${RIVET_POD_NAME:-}"
+  ha_headless_service="${RIVET_HA_HEADLESS_SERVICE:-}"
+  ha_backend_name="${RIVET_HA_BACKEND_NAME:-}"
+  ha_api_port="${RIVET_BACKEND_API_PORT:-}"
+  ha_executor_port="${RIVET_BACKEND_EXECUTOR_PORT:-}"
+  ha_deployment="${RIVET_HA_DEPLOYMENT:-}"
+  ha_maintenance="${RIVET_HA_MAINTENANCE:-}"
+  ha_api_only="${RIVET_HA_API_ONLY:-}"
+  ha_peer_limit="${RIVET_HA_PEER_LIMIT:-}"
+  ha_maintenance_url="${RIVET_HA_MAINTENANCE_URL:-}"
   if [ "${RIVET_DEPLOYMENT_TOPOLOGY:-}" != "replicated" ]; then
     deployment_topology="${RIVET_DEPLOYMENT_TOPOLOGY:-}"
     # The combined supervisor owns this selection and private capability. A
@@ -38,6 +52,17 @@ load_optional_dotenv_preserving_deployment_storage() {
     local_prepare_available="${RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE:-}"
     local_restart_available="${RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE:-}"
     load_optional_dotenv "$@"
+    export RIVET_ROLLING_RETIREMENT_PROTOCOL="$retirement_protocol"
+    export RIVET_ROLLING_RETIREMENT_TOKEN="$retirement_token"
+    export RIVET_PROCESS_INCARNATION="$retirement_incarnation"
+    export RIVET_HA_PROTOCOL="$ha_protocol"
+    export RIVET_POD_NAME="$ha_pod_name"
+    export RIVET_HA_HEADLESS_SERVICE="$ha_headless_service"
+    export RIVET_HA_BACKEND_NAME="$ha_backend_name"
+    export RIVET_BACKEND_API_PORT="$ha_api_port"
+    export RIVET_BACKEND_EXECUTOR_PORT="$ha_executor_port"
+    export RIVET_HA_DEPLOYMENT="$ha_deployment" RIVET_HA_MAINTENANCE="$ha_maintenance" RIVET_HA_API_ONLY="$ha_api_only"
+    export RIVET_HA_PEER_LIMIT="$ha_peer_limit" RIVET_HA_MAINTENANCE_URL="$ha_maintenance_url"
     if [ "$deployment_topology" = "single-host" ]; then
       export RIVET_DEPLOYMENT_TOPOLOGY=single-host
       if [ -n "$deployment_bundle_scratch_root" ]; then
@@ -90,6 +115,18 @@ load_optional_dotenv_preserving_deployment_storage() {
   deployment_restore_evaluation_ready="${RIVET_LEGACY_RESTORE_EVALUATION_READY_URL:-}"
 
   load_optional_dotenv "$@"
+
+  export RIVET_ROLLING_RETIREMENT_PROTOCOL="$retirement_protocol"
+  export RIVET_ROLLING_RETIREMENT_TOKEN="$retirement_token"
+  export RIVET_PROCESS_INCARNATION="$retirement_incarnation"
+  export RIVET_HA_PROTOCOL="$ha_protocol"
+  export RIVET_POD_NAME="$ha_pod_name"
+  export RIVET_HA_HEADLESS_SERVICE="$ha_headless_service"
+  export RIVET_HA_BACKEND_NAME="$ha_backend_name"
+  export RIVET_BACKEND_API_PORT="$ha_api_port"
+  export RIVET_BACKEND_EXECUTOR_PORT="$ha_executor_port"
+  export RIVET_HA_DEPLOYMENT="$ha_deployment" RIVET_HA_MAINTENANCE="$ha_maintenance" RIVET_HA_API_ONLY="$ha_api_only"
+  export RIVET_HA_PEER_LIMIT="$ha_peer_limit" RIVET_HA_MAINTENANCE_URL="$ha_maintenance_url"
 
   export RIVET_DEPLOYMENT_TOPOLOGY=replicated
   export RIVET_DEPLOYMENT_STORAGE_MODE="$deployment_storage_mode"

@@ -1,5 +1,20 @@
 # Evaluations
 
+## Studio Server execution placement
+
+Server-hosted trials share the editor backend's CPU and memory rather than
+starting a dedicated Evaluation container. The control API owns durable job
+claims and graph execution; the co-located editor executor continues owning
+interactive sessions. Published endpoint workers never claim evaluation jobs.
+This is shared capacity, not shared mutable graph state or debugger sessions.
+The existing queue, quotas, cancellation, recording/result persistence and
+interrupted-trial retry rules are unchanged. Workers start after runtime-library
+readiness and drain before storage shutdown. Trial concurrency defaults to one
+per backend; larger batches can affect editor responsiveness. Browser, desktop,
+CLI and ordinary remote Evaluation adapters are unchanged. See
+[Hosted Evaluations](./studio-server/kubernetes.md#hosted-evaluations) for deployment
+and predecessor-rollback details.
+
 `@valerypopoff/rivet2-evaluations` is the single evaluation engine for the Rivet app, CLI, and host integrations. It replaces the retired Trivet package. Public user-facing behavior is documented under `packages/docs/docs/evaluations.md` and `packages/docs/docs/user-guide/`; this file owns implementation and host-integration invariants.
 
 ## Ownership boundaries

@@ -1,4 +1,8 @@
 import { performance } from 'node:perf_hooks';
+import type { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
+import { createRequestWorkBarrier } from './request-work.js';
+import { createProcessRetirementRouter } from './process-retirement-http.js';
+import { isLatestDebuggerRelayReady } from './latestWorkflowRemoteDebugger.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { localUpgradeFailure } from './local-metadata/upgrade-diagnostics.js';
 
@@ -74,6 +78,8 @@ type RuntimeExpressRouter = {
 type ApiAppOptions = {
   health?: RuntimeHealthReader;
   metrics?: StudioMetrics;
+  requestWork?: AcceptedWork;
+  retirement?: { owner: ProcessRetirement; token: string };
 };
 
 function matchesPath(pathname: string, basePath: string): boolean {
@@ -417,10 +423,17 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
       }
       return;
     }
+    if (!isLatestDebuggerRelayReady()) { res.status(503).json({ ok: false, code: 'ha_debugger_peers_unavailable' }); return; }
     sendHealth(health.getReadiness(), res);
   });
 
   // Do not count platform probes or Prometheus scrapes as application traffic.
+  if (options.retirement)
+    app.use(
+      '/internal/process-retirement',
+      createProcessRetirementRouter(options.retirement.owner, options.retirement.token),
+    );
+  if (options.requestWork) app.use(createRequestWorkBarrier(options.requestWork));
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(vmMigrationRequestBarrier);

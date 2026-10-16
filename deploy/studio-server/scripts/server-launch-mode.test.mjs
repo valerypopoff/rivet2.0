@@ -243,16 +243,16 @@ test('one-pod chart preserves roles, distinct ports, private caches, restore rea
     const workloads = documents.filter((doc) => ['Deployment', 'StatefulSet'].includes(doc.kind));
     assert.equal(workloads.length, 1);
     const pod = workloads[0].spec.template.spec;
-    assert.deepEqual(pod.containers.map((item) => item.name).sort(), [
-      'backend',
-      'evaluation',
-      'execution',
-      'proxy',
-      'web',
-    ]);
+    assert.deepEqual(pod.containers.map((item) => item.name).sort(), ['backend', 'execution', 'proxy', 'web']);
     const ports = pod.containers.flatMap((container) => container.ports.map((port) => port.containerPort));
     assert.equal(new Set(ports).size, ports.length);
-    for (const role of ['execution', 'evaluation']) {
+    const backendEnv = new Map(
+      pod.containers.find((item) => item.name === 'backend').env.map((item) => [item.name, item.value]),
+    );
+    assert.equal(backendEnv.get('RIVET_HOSTED_EVALUATIONS_ENABLED'), 'true');
+    assert.equal(backendEnv.get('RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY'), '1');
+    assert.equal(backendEnv.has('RIVET_LEGACY_RESTORE_EVALUATION_READY_URL'), false);
+    for (const role of ['execution']) {
       const container = pod.containers.find((item) => item.name === role);
       assert.equal(
         container.env.find((item) => item.name === 'RIVET_RUNNER_SLOT_ID').value,

@@ -9,10 +9,17 @@ metadata:
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
-    kind: Deployment
+    kind: {{ ternary "StatefulSet" "Deployment" .Values.ha.enabled }}
     name: {{ include "rivet.executionName" . }}
   minReplicas: {{ .Values.autoscaling.execution.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.execution.maxReplicas }}
+  {{- if .Values.ha.enabled }}
+  # Automatic scale-down would terminate an accepted owner without its handshake.
+  # Add capacity automatically; remove capacity only through owned retirement.
+  behavior:
+    scaleDown:
+      selectPolicy: Disabled
+  {{- end }}
   metrics:
     - type: Resource
       resource:

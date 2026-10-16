@@ -1,3 +1,6 @@
+# Shared production policy, not an installation configuration. Supply database,
+# object storage, Secret references and optional Vault wiring in --values or
+# --env-file. See examples/external-storage.values.example.yaml (outside helm/).
 gateway:
   mode: external
 
@@ -13,18 +16,6 @@ release:
     # in this file.
     enabled: true
 
-vault:
-  enabled: true
-  annotations: {}
-  role: rivet-prod
-  secretPath: secret/data/rivet/prod/dotenv
-  dotenvTemplate: |
-    {{- with secret "secret/data/rivet/prod/dotenv" -}}
-    {{- range $key, $value := .Data.data }}
-    {{ $key }}={{ $value | toJSON }}
-    {{- end }}
-    {{- end }}
-
 workflowStorage:
   backend: managed
 
@@ -38,24 +29,7 @@ postgres:
   maxConnections: 200
   reservedConnections: 30
   poolMaxPerApiPod: 10
-  host: postgres-prod.example.internal
-  port: 5432
-  database: rivet
-  username: rivet
-  passwordSecretName: rivet-postgres
   sslMode: require
-
-objectStorage:
-  endpoint: https://s3.amazonaws.com
-  bucket: rivet-prod
-  region: us-east-1
-  prefix: workflows/
-  accessKeySecretName: rivet-object-storage
-  secretKeySecretName: rivet-object-storage
-  forcePathStyle: false
-
-auth:
-  keySecretName: rivet-shared-key
 
 replicaCount:
   web: 1

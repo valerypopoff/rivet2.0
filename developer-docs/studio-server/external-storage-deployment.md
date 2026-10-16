@@ -7,6 +7,15 @@ applies those defaults first and promoted manifest values last. Namespace-local
 Kubernetes Secrets hold credentials; Vault is explicitly disabled. No cloud database,
 bucket, public gateway or TLS certificate is provisioned.
 
+Shared chart/production/test policy contains no installation endpoints, buckets,
+database identities or Secret names. Vault is opt-in, not implicitly enabled by
+production. The example intentionally leaves bucket and region empty so copying
+it without filling them in fails preflight. An empty endpoint selects AWS regional
+discovery only with an explicit region; GCS and other compatible providers set
+their own HTTPS endpoint. Secret names in the example are suggestions, not chart
+defaults. On upgrade retain the existing installation's names and keys rather
+than creating the suggested new ones. See [configuration ownership](./kubernetes.md#configuration-ownership).
+
 ## Prerequisites
 
 - Node/Yarn, kubectl access to the selected context, and Helm (or

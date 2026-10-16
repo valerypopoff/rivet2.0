@@ -24,6 +24,8 @@ export interface ManagedWorkflowResources extends WorkflowDataBackend, Disposabl
   importProjectBundle(parent: string, bundle: PreparedProjectBundleImport): Promise<ProjectBundleImportResult>;
   initialize(): Promise<void>;
   drain(): Promise<void>;
+  beginRetirement?(): void;
+  drainAcceptedWork?(): Promise<void>;
   checkHealth(context?: RuntimeHealthCheckContext): Promise<void>;
   getLLMProfileHealthStore(): Promise<RivetStudioLLMProfileHealthStore>;
   getEvaluationStore(): Promise<RivetStudioEvaluationStore>;
@@ -50,6 +52,7 @@ export type WorkflowStorageServiceDependencies = {
  * New resources cannot be created during drain; accepted recording tasks may
  * still use existing resources until persistence and evidence updates settle. */
 export class WorkflowStorageServices {
+  #retiring = false;
   #phase: 'open' | 'draining' | 'closed' = 'open';
   #managed?: Promise<ManagedWorkflowResources>;
   #managedInstance?: ManagedWorkflowResources;
@@ -68,6 +71,14 @@ export class WorkflowStorageServices {
   }
   get phase() {
     return this.#phase;
+  }
+  beginRetirement(): void { this.#retiring = true; this.#managedInstance?.beginRetirement?.(); }
+  async drainAcceptedWork(): Promise<void> {
+    this.beginRetirement(); await this.#initializing; await this.#managed;
+    if (this.#managedInstance) {
+      if (!this.#managedInstance.drainAcceptedWork) throw new Error('Managed accepted-work drain is unavailable');
+      await this.#managedInstance.drainAcceptedWork();
+    }
   }
   #allow(existing: unknown): void {
     if (this.#phase === 'closed' || (this.#phase === 'draining' && !existing))
@@ -106,7 +117,9 @@ export class WorkflowStorageServices {
     if (this.mode !== 'managed') throw new Error('Managed workflow services are not selected.');
     return (this.#managed ??= this.#open(
       () => {
-        return (this.#managedInstance = this.dependencies.createManaged());
+        this.#managedInstance = this.dependencies.createManaged();
+        if (this.#retiring) this.#managedInstance.beginRetirement?.();
+        return this.#managedInstance;
       },
       () => {
         this.#managed = undefined;

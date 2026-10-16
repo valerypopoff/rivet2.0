@@ -1,5 +1,16 @@
 # Execution Data Flow and Graph View Identity
 
+The opt-in HA executor observer protocol retains one logical session on its
+original process across socket replacement. `DebuggerSessions` owns capabilities,
+ordered bounded replay, stale-socket fencing and duplicate-run tombstones.
+`executorSession` retains pending results only when this protocol is negotiated;
+standalone disconnect behavior is unchanged. Reconnection sends a capability and
+cursor, never another run command. Missing owner/cursor evidence is an unknown
+outcome, not authorization to replay. Installation/pod/incarnation routing belongs
+to the Studio Server API, not GraphProcessor. See the
+[HA implementation gates](./studio-server/ha-rolling-upgrades.md); these component
+tests are not a mixed-version deployment certificate.
+
 This is the detailed event/storage reference. The shorter canonical ownership guide
 is [Execution Identity And Snapshots](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md).
 
@@ -40,6 +51,24 @@ using their existing helpers. Core invocation/shared/boundary state extraction
 does not change execution IDs or event ordering. See the
 [ownership and inheritance matrix](./EXECUTION-REFACTOR-ACCEPTANCE.md) for current
 reset rules and acceptance checks.
+
+## Supervised editor retirement
+
+The hosted executor's optional process-retirement protocol counts each accepted
+invocation from before asynchronous preparation through full run completion and
+debugger cleanup. An early graph-output response does not release that lifetime.
+Paused runs and pending user input keep retirement pending; their existing socket
+can still resume, abort or supply input. New runs/upgrades are fenced. The Node
+debugger's optional `isAcceptingConnections` hook controls upgrade admission only,
+not periodic authorization: revocation still closes an established socket, while
+retirement alone does not. Admission is rechecked after asynchronous authorization
+to prevent a late upgrade escaping the fence. Externally owned WebSocket servers
+must enforce their own upgrade admission, as before.
+
+This protocol is a prerequisite, not a backend-replica or Kubernetes availability
+claim. See the [HA implementation status](./studio-server/ha-rolling-upgrades.md)
+for verified seams and remaining rollout/ownership gates. Standalone desktop
+execution does not opt into supervised retirement.
 
 ## Terminal execution error notifications
 
@@ -2134,6 +2163,16 @@ output, and legacy recordings without it remain honestly incomplete.
 | [`RecordingPlayer.ts`](../packages/core/src/model/RecordingPlayer.ts)                                    | `replayExecutionRecording` - replays recorded events through the same emitter/handler pipeline                                                                       |
 
 ## Debugging Checklist
+
+Hosted HA sessions may resume diagnostics on their original signed owner route;
+they never replay a run request on another executor. The optional host capability
+`resolveInternalHostedExecutorUrl` is used only after an ordered
+`executor-owner-retiring` notification and only when no pending/active execution
+remains. Discovery must return another signed route on the same public origin.
+The hosted wrapper reuses `fetchHostedConfig`; standalone/custom URLs and Tauri
+do not participate. Latest-debugger observations keep per-origin cursors across
+reconnect, while an explicitly replaced session resets those cursors. Terminal
+process retirement closes passive SSE observers but does not cancel their jobs.
 
 When execution data is not showing up for a graph:
 

@@ -96,6 +96,7 @@ export function createExecutorSessionPendingExecutions() {
   }
 
   return {
+    hasPendingExecutions: () => pendingExecutions.size > 0,
     createPendingGraphExecution,
     createRemoteExecutionRequest,
     rejectAllPendingGraphExecutions,

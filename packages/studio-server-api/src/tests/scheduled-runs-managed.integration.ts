@@ -96,7 +96,7 @@ try {
   // Simulate loss without a one-minute sleep or the process wall clock.
   await pool.query('UPDATE rivet_schedule_runs SET lease_until=0 WHERE id=$1', [occurrence.id]);
   await b.tick('successor', 1);
-  await a.finish(occurrence.id, owner, { status: 'succeeded' });
+  assert.equal(await a.finish(occurrence.id, owner, { status: 'succeeded' }), false);
   assert.equal((await a.list()).history.find((r) => r.id === occurrence.id)?.status, 'interrupted');
   const retryKey = randomUUID();
   const retries = await Promise.all([a.retry(occurrence.id, retryKey), b.retry(occurrence.id, retryKey)]);

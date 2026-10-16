@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertHaReleaseEvidence } from './ha-release-evidence.mjs';
 
 export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 2;
 export const STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION = 1;
@@ -261,6 +262,7 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
         : {}),
     },
   };
+  if (evidence.ha) normalized.evidence.ha = assertHaReleaseEvidence(evidence.ha, normalized);
   return normalized;
 }
 
@@ -365,6 +367,7 @@ export function createStudioServerReleaseManifest({
   source,
   images,
   candidateEvidence,
+  haEvidence,
   predecessorRelease = null,
   createdAt = new Date().toISOString(),
 }) {
@@ -381,7 +384,7 @@ export function createStudioServerReleaseManifest({
     lineage: {
       predecessor: predecessorRelease === null ? null : predecessorReferenceFor(predecessorRelease),
     },
-    evidence: { candidate: candidateEvidence },
+    evidence: { candidate: candidateEvidence, ...(haEvidence ? { ha: haEvidence } : {}) },
   });
 }
 

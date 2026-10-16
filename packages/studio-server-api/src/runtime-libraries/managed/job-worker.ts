@@ -28,6 +28,8 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
 }) {
   let workerStarted = false;
   let worker: Promise<void> | undefined;
+  let retiring = false;
+  let retirementFailure: Error | undefined;
 
   const withJobHeartbeat = async <T>(jobId: string, run: () => Promise<T>): Promise<T> => {
     let pendingHeartbeat: Promise<void> | undefined;
@@ -81,6 +83,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
 
   const claimNextJob = async (): Promise<RuntimeLibraryJobRow | null> => {
     const client = await options.context.pool.connect();
+    let releaseError: Error | undefined;
     try {
       await client.query('BEGIN');
       const row = await queryOne<RuntimeLibraryJobRow>(
@@ -108,21 +111,26 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
       await client.query('COMMIT');
       return row;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        releaseError =
+          rollbackError instanceof Error ? rollbackError : new Error('Runtime-library claim rollback failed.');
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(releaseError);
     }
   };
 
   const workerLoop = async (): Promise<void> => {
-    while (!options.isStopped()) {
+    while (!options.isStopped() && !retiring) {
       try {
         await recoverStaleJobs();
         if (!options.getProcessManagedSync()) {
           await options.syncForLocalUse(false);
         }
-        if (options.isStopped()) break;
+        if (options.isStopped() || retiring) break;
         const job = await claimNextJob();
         if (!job) {
           await wait(1_000);
@@ -139,6 +147,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
           } else if (outcome === 'failed') {
             recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
           } else {
+            retirementFailure ??= new Error('Managed runtime-library activation outcome is unconfirmed.');
             console.warn(
               `[runtime-libraries] Job ${job.job_id} has an unresolved activation outcome; preserving durable state for recovery.`,
             );
@@ -148,6 +157,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
           if (failed) {
             recordStudioMetrics((metrics) => metrics.recordRuntimeLibraryJob('failed'));
           } else {
+            retirementFailure ??= new Error('Managed runtime-library failure handling is unconfirmed.');
             console.warn(
               `[runtime-libraries] Job ${job.job_id} reached a terminal or unresolved state before worker failure handling completed.`,
             );
@@ -156,7 +166,8 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
           recordStudioMetrics((metrics) => metrics.setRuntimeLibraryJobActive(0));
         }
       } catch (error) {
-        if (options.isStopped()) {
+        retirementFailure ??= new Error('Managed runtime-library worker ownership is unconfirmed.');
+        if (options.isStopped() || retiring) {
           break;
         }
 
@@ -168,7 +179,7 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
 
   return {
     startWorkerLoop(): void {
-      if (workerStarted || options.isStopped()) {
+      if (workerStarted || options.isStopped() || retiring) {
         return;
       }
 
@@ -177,10 +188,20 @@ export function createManagedRuntimeLibrariesJobWorker(options: {
       worker = workerLoop();
     },
 
+    beginDrain(): void {
+      // Stop acquiring work without abandoning a claimed job's heartbeat.
+      // The claim already in flight remains owned until its outcome settles.
+      retiring = true;
+    },
+
     async drain(): Promise<void> {
       // The backend fences new claims first. Finish any already-claimed job,
       // its heartbeat and outcome persistence before releasing the DB lease.
       await worker;
+    },
+    async drainAcceptedWork(): Promise<void> {
+      await worker;
+      if (retirementFailure) throw retirementFailure;
     },
   };
 }

@@ -139,13 +139,14 @@ export function productionEnvironment(env, { release, namespace, context }) {
   return config;
 }
 
-export async function prepareProductionSecrets(config, run) {
+export async function prepareProductionSecrets(config, run, { verifyOnly = false } = {}) {
   // Never silently overwrite an operator's or another installation's credentials.
   const owner = `${config.namespace}/${config.release}`;
   const namespace = await run(['get', 'namespace', config.namespace, '--ignore-not-found', '-o', 'json'], {
     capture: true,
   });
   if (!namespace.stdout.trim()) {
+    if (verifyOnly) throw new Error('HA namespace is missing; no credentials were changed.');
     await run(['create', '-f', '-'], {
       capture: true,
       input: JSON.stringify({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: config.namespace } }),
@@ -170,6 +171,11 @@ export async function prepareProductionSecrets(config, run) {
     const existing = result.stdout.trim() ? JSON.parse(result.stdout) : null;
     if (existing && existing.metadata?.annotations?.['rivet.dev/server-launcher-owner'] !== owner)
       throw new Error(`Secret ${name} is not owned by this installation; refusing to overwrite it.`);
+    if (verifyOnly) {
+      if (!existing || Object.entries(stringData).some(([key, value]) => existing.data?.[key] !== Buffer.from(value).toString('base64')))
+        throw new Error(`Secret ${name} differs from the installed HA credentials. Rotate it separately; no credentials were changed.`);
+      continue;
+    }
     prepared.push({
       existing,
       resource: {

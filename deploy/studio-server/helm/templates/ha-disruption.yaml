@@ -1,0 +1,24 @@
+{{- if .Values.ha.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rivet.backendName" . }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rivet.executionName" . }}-headless
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ .Values.service.execution.targetPort }}
+  selector:
+    {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 4 }}
+{{- end }}

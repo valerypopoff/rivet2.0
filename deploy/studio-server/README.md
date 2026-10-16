@@ -137,6 +137,13 @@ the staging/production Compose commands above still require their explicit pins.
 See [Kubernetes](../../developer-docs/studio-server/kubernetes.md) for gateways,
 capacity, isolated local PostgreSQL/MinIO rehearsal and production qualification.
 
+The shared production/test Helm overlays contain application policy only, not
+cloud addresses, database identities or credential Secret names. Supply those
+through the environment values file (or `--env-file`); Vault is opt-in. Copy
+`examples/external-storage.values.example.yaml` outside tracked chart policy and
+fill in its required bucket/region and existing credential references. Missing
+required inputs fail preflight; examples are not deployment defaults.
+
 ## Monorepo map
 
 - `packages/studio-server-api/`: API roles, storage and execution services.

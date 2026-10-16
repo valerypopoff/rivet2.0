@@ -16,7 +16,7 @@ gateway:
 ingress:
   enabled: false
 
-# Override production's Vault default. All Secrets below must already exist in
+# Vault is opt-in. All Secrets below must already exist in
 # the release namespace and are operator-owned, not created by this chart.
 vault:
   enabled: false
@@ -38,18 +38,19 @@ postgres:
   connectionStringSecretKey: connectionString
   # Secret: postgresql://USER:URL_ENCODED_PASSWORD@HOST:5432/DATABASE.
   # Use an existing installation-owned database and an account with migration
-  # and runtime privileges. This supersedes production host/user defaults.
+  # and runtime privileges. No database identity is inherited from production.
   sslMode: require # TLS; use verify-full when provider CA/hostname trust is configured.
   maxConnections: 200 # REPLACE with actual provider max_connections capacity.
   reservedConnections: 30 # Migrations, administration and other clients.
   poolMaxPerApiPod: 10 # Plus 3 dedicated LISTEN connections per API process.
 
 objectStorage:
-  bucket: your-rivet-bucket # REPLACE: existing private bucket.
-  region: us-east-1 # REPLACE with the bucket's actual region.
+  bucket: '' # REQUIRED: existing private bucket. No bucket default is provided.
+  region: '' # REQUIRED: region accepted by the provider, e.g. eu-west-1 for AWS.
   # Empty selects AWS regional S3. Other providers: HTTPS origin only, e.g.
-  # https://s3.example.com (no bucket path, credentials, query or fragment).
-  endpoint: ""
+  # https://storage.googleapis.com for Google Cloud Storage or https://s3.example.com
+  # for another compatible provider (no bucket path, credentials, query or fragment).
+  endpoint: ''
   # Scope read/write/list/delete permissions to Rivet artifacts. Prefer a dedicated
   # bucket: fixed runtime-libraries/ is separate from this workflow prefix.
   # Never share these roots between Rivet installations.
@@ -72,7 +73,7 @@ appSettings:
 legacyRestore:
   enabled: true
   size: 64Gi
-  storageClassName: "" # REPLACE if the cluster has no default StorageClass.
+  storageClassName: '' # REPLACE if the cluster has no default StorageClass.
 
 replicaCount:
   web: 1
@@ -89,15 +90,17 @@ autoscaling:
     maxReplicas: 10 # Tune with PostgreSQL capacity and representative workloads.
     targetCPUUtilizationPercentage: 75
 
-# Optional batch workers require explicit scheduling/capacity configuration.
+# Optional server-hosted trials share backend CPU/memory with editor runs.
+# No separate evaluation replica is created; keep trial concurrency conservative.
 hostedEvaluations:
   enabled: false
+  workerConcurrency: 1
 
 env:
   RIVET_SERVER_UI_AUTH_MODE: key
-  RIVET_REQUIRE_UI_GATE_KEY: "true"
-  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: "false"
-  RIVET_RECORDINGS_ENABLED: "true"
+  RIVET_REQUIRE_UI_GATE_KEY: 'true'
+  RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'false'
+  RIVET_RECORDINGS_ENABLED: 'true'
   # Keep default workflow/app route bases aligned with the external gateway.
 
 # Private registries: create an image-pull Secret, then reference its name here.

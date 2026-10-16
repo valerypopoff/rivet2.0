@@ -31,6 +31,53 @@ import { withEnvOverride } from './helpers/workflow-api-harness.js';
 import { getExpectedProxyAuthToken } from '../auth.js';
 import { verifyProjectBundleDownload } from './helpers/project-bundle-download-contract.js';
 
+test('bundle retirement fences new exports and waits for accepted packaging without cancelling it', async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-retirement-'));
+  const jobs = new ProjectBundleJobs(temporary);
+  const fixture = projectBundleFixture();
+  let release!: () => void, entered!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reading = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let first = true;
+  try {
+    const job = await jobs.start(
+      {
+        ...fixture.source,
+        root: async () => {
+          if (first) {
+            first = false;
+            entered();
+            await pending;
+          }
+          return fixture.source.root();
+        },
+      },
+      'latest',
+    );
+    await reading;
+    let drained = false;
+    const drain = jobs.drainAcceptedWork().then(() => {
+      drained = true;
+    });
+    await assert.rejects(jobs.start(fixture.source, 'latest'), { status: 503 });
+    assert.equal(drained, false);
+    release();
+    await drain;
+    assert.equal((await jobs.status(job.id)).phase, 'ready');
+    const download = await jobs.download(job.id);
+    assert.equal((await fs.stat(download.archive)).isFile(), true);
+    download.release();
+  } finally {
+    release();
+    await jobs.dispose();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test('export closure packages actual bytes and produces a relocatable locally runnable ZIP', async (t) => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-export-test-'));
   const jobs = new ProjectBundleJobs(path.join(temporary, 'jobs'));

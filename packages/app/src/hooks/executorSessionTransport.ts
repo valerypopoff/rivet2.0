@@ -35,6 +35,8 @@ export function parseExecutorSessionIncomingMessage(options: {
   rawMessage: string;
   socketUrl: string;
   target: ExecutorSessionTarget;
+  /** Session control/cursor admission happens before decoding large event payloads. */
+  acceptEnvelope?: (envelope: unknown) => boolean;
 }): ExecutorSessionIncomingTransportMessage | undefined {
   const { rawMessage, socketUrl, target } = options;
 
@@ -53,6 +55,7 @@ export function parseExecutorSessionIncomingMessage(options: {
     return undefined;
   }
 
+  if (options.acceptEnvelope && !options.acceptEnvelope(parsed)) return undefined;
   const decodedParsed = decodeDebuggerTransportSentinels(parsed);
 
   if (!isExecutorIncomingMessage(decodedParsed)) {

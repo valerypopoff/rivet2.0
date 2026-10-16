@@ -572,6 +572,37 @@ jobs:
           fi
           yarn "$gate_script"
 
+      - name: Run HA Kubernetes Gate
+        shell: bash
+        env:
+          RIVET_K8S_RELEASE_GATE_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT: kind-rivet-managed-release
+          RIVET_K8S_RELEASE_GATE_NAMESPACE: rivet-ha-release
+          RIVET_K8S_RELEASE_GATE_RELEASE: rivet-ha-release
+          RIVET_K8S_RELEASE_GATE_ARTIFACTS_DIR: artifacts/kubernetes-ha-release-gate
+          RIVET_K8S_RELEASE_GATE_REGISTRY_SERVER: ghcr.io
+          RIVET_K8S_RELEASE_GATE_REGISTRY_USERNAME: ${{ github.actor }}
+          RIVET_K8S_RELEASE_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RIVET_HA_CANDIDATE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+        run: |
+          set -euo pipefail
+          if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
+            digest="$(jq -er '.lineage.predecessor.manifestDigest' "$CANDIDATE_RELEASE_MANIFEST")"
+            export RIVET_HA_PREDECESSOR_MANIFEST=artifacts/studio-server-release-manifest/ha-predecessor.json
+            node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+              --reference "${IMAGE_NAMESPACE}/release-manifest:manifest-${digest#sha256:}" \
+              --output "$RIVET_HA_PREDECESSOR_MANIFEST"
+          fi
+          node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify
+
+      - name: Upload HA Release Evidence
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: studio-server-ha-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/kubernetes-ha-release-gate/ha-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload Managed Kubernetes Gate Artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
@@ -579,7 +610,9 @@ jobs:
           # Keep diagnostics from every workflow attempt. Candidate image tags
           # already include run_attempt for the same reason.
           name: managed-kubernetes-release-gate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/kubernetes-managed-release-gate
+          path: |
+            artifacts/kubernetes-managed-release-gate
+            artifacts/kubernetes-ha-release-gate
           if-no-files-found: warn
           retention-days: 14
 
@@ -844,7 +877,7 @@ jobs:
       RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER: ghcr.io
       RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: ${{ github.actor }}
       RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-      RIVET_K8S_EVALUATION_GATE_CONFIRM: disrupt-staging-evaluations
+      RIVET_K8S_EVALUATION_GATE_CONFIRM: disrupt-staging-editor-backend
       RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM: ${{ inputs.run_managed_kubernetes_evaluation_joint_capacity_gate == true && 'certify-joint-public-evaluation-capacity' || '' }}
     steps:
       - name: Check Out Repository
@@ -991,6 +1024,13 @@ jobs:
           fi
           echo "::warning::Skipping mutable branch image aliases: this run built $GITHUB_SHA, but $GITHUB_REF now points to $current_sha."
 
+      - name: Download HA Release Evidence
+        if: needs.managed-kubernetes-release-gate.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-ha-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-ha-evidence
+
       - name: Attest promoted release manifest
         if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}
         shell: bash
@@ -1004,13 +1044,17 @@ jobs:
           if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
             current_args=(--current "$CURRENT_PRODUCTION_MANIFEST")
           fi
+          ha_args=()
+          if [[ '${{ needs.managed-kubernetes-release-gate.result }}' == 'success' ]]; then
+            ha_args=(--ha-evidence artifacts/studio-server-ha-evidence/ha-evidence.json)
+          fi
           node deploy/studio-server/scripts/create-release-manifest.mjs promote \
             --input "$CANDIDATE_RELEASE_MANIFEST" \
             --output "$PROMOTED_RELEASE_MANIFEST" \
             --workflow "$GITHUB_WORKFLOW" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            "${current_args[@]}"
+            "${current_args[@]}" "${ha_args[@]}"
 
       - name: Publish immutable release manifest
         if: ${{ github.ref_type != 'branch' || steps.branch_freshness.outputs.current == 'true' }}

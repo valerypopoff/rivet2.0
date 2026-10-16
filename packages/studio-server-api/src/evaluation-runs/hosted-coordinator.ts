@@ -295,6 +295,8 @@ export class HostedEvaluationCoordinator {
   #loopPromise: Promise<void> | undefined;
   #metricsRefreshPromise: Promise<void> | undefined;
   #stopping = false;
+  #retiring = false;
+  #retirementFailure: Error | undefined;
   #wake: (() => void) | undefined;
 
   constructor(input: {
@@ -704,6 +706,7 @@ export class HostedEvaluationCoordinator {
     }
   }
   start(): void {
+    if (this.#retiring) return;
     if (!this.#config.workerEnabled || this.#loopPromise) return;
     this.#stopping = false;
     this.#loopPromise = this.#runLoop().finally(() => {
@@ -739,6 +742,13 @@ export class HostedEvaluationCoordinator {
       );
     }
   }
+  beginRetirement(): void { this.#retiring = true; this.#notify(); }
+  async drainAcceptedWork(): Promise<void> {
+    this.beginRetirement();
+    await this.#loopPromise;
+    await Promise.all([...this.#activeTasks]);
+    if (this.#retirementFailure) throw this.#retirementFailure;
+  }
 
   #refreshMetrics(): void {
     if (this.#metricsRefreshPromise) return;
@@ -770,14 +780,14 @@ export class HostedEvaluationCoordinator {
   }
 
   async #runLoop(): Promise<void> {
-    while (!this.#stopping) {
+    while (!this.#stopping && !this.#retiring) {
       try {
         void this.#refreshMetrics();
         await this.#recoverExpiredLeases();
-        while (!this.#stopping && this.#active.size < this.#config.workerConcurrency) {
+        while (!this.#stopping && !this.#retiring && this.#active.size < this.#config.workerConcurrency) {
           const claim = await this.#claimNext();
           if (!claim) break;
-          if (this.#stopping) {
+          if (this.#stopping || this.#retiring) {
             await this.#releaseUnacceptedClaim(claim.job);
             break;
           }
@@ -785,7 +795,12 @@ export class HostedEvaluationCoordinator {
           const key = activeJobKey(claim.job.project_id, claim.job.job_id);
           this.#active.set(key, { projectId: claim.job.project_id, runId: claim.job.run_id, controller });
           let task: Promise<void>;
-          task = this.#executeClaim(claim, controller).finally(() => {
+          task = this.#executeClaim(claim, controller).catch((error) => {
+            // Includes acceptance and failure-reporting awaits outside execution's try.
+            // Never let a lost acknowledgement become a successful empty drain.
+            this.#retirementFailure ??= new Error('Hosted Evaluation acceptance/cleanup outcome is unconfirmed.');
+            console.error('[hosted-evaluations] Worker ownership failed:', error);
+          }).finally(() => {
             this.#active.delete(key);
             this.#activeTasks.delete(task);
             void this.#refreshMetrics();
@@ -795,6 +810,7 @@ export class HostedEvaluationCoordinator {
           void task;
         }
       } catch (error) {
+        this.#retirementFailure ??= new Error('Hosted Evaluation claim/cleanup outcome is unconfirmed.');
         console.error('[hosted-evaluations] Scheduler tick failed:', error);
       }
       await this.#waitForWake();
@@ -802,7 +818,7 @@ export class HostedEvaluationCoordinator {
   }
 
   async #waitForWake(): Promise<void> {
-    if (this.#stopping) return;
+    if (this.#stopping || this.#retiring) return;
     await new Promise<void>((resolve) => {
       const wake = () => {
         clearTimeout(timeout);
@@ -967,14 +983,19 @@ export class HostedEvaluationCoordinator {
 
   async #executeClaim(claim: { run: HostedRunRow; job: HostedJobRow }, controller: AbortController): Promise<void> {
     if (!(await this.#accept(claim.job))) return;
+    let heartbeatWork: Promise<void> | undefined;
     const heartbeat = setInterval(
       () => {
-        void this.#heartbeat(claim.job)
+        if (heartbeatWork) return;
+        heartbeatWork = this.#heartbeat(claim.job)
           .then((active) => {
             if (!active)
               controller.abort(new DOMException('Hosted evaluation claim is no longer active.', 'AbortError'));
           })
-          .catch(() => controller.abort(new DOMException('Hosted evaluation lease heartbeat failed.', 'AbortError')));
+          .catch(() => {
+            this.#retirementFailure ??= new Error('Hosted Evaluation heartbeat outcome is unconfirmed.');
+            controller.abort(new DOMException('Hosted evaluation lease heartbeat failed.', 'AbortError'));
+          }).finally(() => { heartbeatWork = undefined; });
       },
       Math.max(1_000, Math.floor(this.#config.leaseMs / 3)),
     );
@@ -1051,10 +1072,12 @@ export class HostedEvaluationCoordinator {
       );
       const persist = cancellationRequested ? this.#settle(claim.job, fallback) : this.#interrupt(claim.job, fallback);
       await persist.catch((settleError) => {
+        this.#retirementFailure ??= new Error('Hosted Evaluation terminal persistence is unconfirmed.');
         console.error('[hosted-evaluations] Failed to persist terminal worker failure:', settleError);
       });
     } finally {
       clearInterval(heartbeat);
+      await heartbeatWork;
     }
   }
 
@@ -1081,6 +1104,7 @@ export class HostedEvaluationCoordinator {
       const interrupted = result.rows[0];
       if (!interrupted) {
         await client.query('ROLLBACK');
+        this.#retirementFailure ??= new Error('Hosted Evaluation interruption persistence was not acknowledged.');
         return;
       }
       await client.query(
@@ -1119,6 +1143,7 @@ export class HostedEvaluationCoordinator {
       const settled = result.rows[0];
       if (!settled) {
         await client.query('ROLLBACK');
+        this.#retirementFailure ??= new Error('Hosted Evaluation terminal persistence was not acknowledged.');
         return;
       }
       const event = trial.executionStatus === 'canceled' ? 'canceled' : 'settled';

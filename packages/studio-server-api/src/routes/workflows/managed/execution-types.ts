@@ -34,6 +34,7 @@ export type ManagedExecutionPointerLookupResult = {
 };
 
 export type ManagedExecutionInvalidationEvent =
+  | { eventType: 'catalog-changed'; sourceInstanceId?: string }
   | {
       eventType: 'workflow-changed';
       workflowId: string;

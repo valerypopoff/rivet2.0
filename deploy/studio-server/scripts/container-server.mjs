@@ -17,6 +17,7 @@ import {
   assertContainerDeploymentEvidence,
   startContainerInstallation,
   stopContainerInstallation,
+  retireLegacyEvaluationContainers,
 } from './lib/container-server-lifecycle.mjs';
 import {
   assertStudioServerReleaseManifest,
@@ -219,7 +220,10 @@ async function main() {
     if (options['--stop']) {
       if (containers.length && readContainerState(composePath) === null)
         throw new Error('The installation configuration is missing; restore it before shutdown.');
-      if (containers.length) await stopContainerInstallation(config, compose);
+      if (containers.length) {
+        await retireLegacyEvaluationContainers(config, docker, containers);
+        await stopContainerInstallation(config, compose);
+      }
       return;
     }
     if (stage === 'dev') ensureContainerDevelopmentMountPoints(root);
@@ -233,11 +237,12 @@ async function main() {
       for (const name of ['api', 'web', 'proxy'])
         await withLauncherProgress('container-server', `Pulling ${name}`, () => docker(['pull', images[name]]));
     // Builds/pulls can take minutes; never drain or migrate from a stale inventory.
-    await verifyInstallation();
+    const verifiedContainers = await verifyInstallation();
     writeContainerState(
       pendingPath,
       JSON.stringify({ project: config.project, storageIdentity: containerStorageIdentity(config), digest }),
     );
+    await retireLegacyEvaluationContainers(config, docker, verifiedContainers);
     const startup = await startContainerInstallation(config, compose);
     if (manifest) writeContainerState(statePath, JSON.stringify(manifest));
     fs.unlinkSync(pendingPath);

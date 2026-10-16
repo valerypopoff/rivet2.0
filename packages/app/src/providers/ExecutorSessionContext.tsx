@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, type FC, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useBundleExecutionRouting } from '../hooks/useBundleExecutionRouting.js';
 import { type ProcessEventMessageMap, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
@@ -59,6 +59,7 @@ export type ExecutorSessionHostConfig = {
    * the desktop app.
    */
   internalExecutorUrl?: string;
+  resolveInternalHostedExecutorUrl?: () => Promise<string>;
 };
 
 export function useExecutorSessionRegistry(): ExecutorSessionRegistry {
@@ -82,7 +83,7 @@ export function useExecutorSessionHostConfig(): ExecutorSessionHostConfig | unde
   return useContext(ExecutorSessionHostConfigContext);
 }
 
-export function createExecutorSessionRegistry(options: { onStateChange: () => void }): ExecutorSessionRegistry {
+export function createExecutorSessionRegistry(options: { onStateChange: () => void; resolveInternalHostedExecutorUrl?: () => Promise<string> }): ExecutorSessionRegistry {
   const runtimes = new Map<ProjectId, ExecutorSessionRuntime>();
   const disconnectSubscribers = new Set<ProjectExecutorDisconnectHandler>();
   const messageSubscribers = new Set<ProjectExecutorMessageHandler>();
@@ -91,6 +92,7 @@ export function createExecutorSessionRegistry(options: { onStateChange: () => vo
   function createRuntime(projectId: ProjectId) {
     const runtime = createExecutorSessionRuntime({
       onStateChange: options.onStateChange,
+      resolveInternalHostedExecutorUrl: options.resolveInternalHostedExecutorUrl,
     });
     runtime.setDatasetProvider(currentDatasetProvider);
     runtime.subscribeMessages((message, data, requestId) => {
@@ -156,10 +158,17 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
   const store = useStore();
   const routeBundleExecution = useBundleExecutionRouting();
   const bumpExecutorSessionRevision = useSetAtom(executorSessionRevisionState);
+  const hostConfigRef = useRef(hostConfig);
+  hostConfigRef.current = hostConfig;
 
   const registry = useMemo(
     () =>
       createExecutorSessionRegistry({
+        resolveInternalHostedExecutorUrl: async () => {
+          const resolve = hostConfigRef.current?.resolveInternalHostedExecutorUrl;
+          if (!resolve) throw new Error('Fresh hosted executor discovery is unavailable.');
+          return resolve();
+        },
         onStateChange: () => {
           bumpExecutorSessionRevision((revision) => revision + 1);
         },

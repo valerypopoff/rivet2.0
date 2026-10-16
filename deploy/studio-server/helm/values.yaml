@@ -343,9 +343,11 @@ postgres:
   connectionStringSecretKey: connectionString
 
 objectStorage:
+  # Installation-owned. Empty endpoint selects AWS's regional endpoint only
+  # when the operator supplies a region; other S3-compatible providers set it.
   endpoint: ''
   bucket: ''
-  region: us-east-1
+  region: ''
   prefix: workflows/
   accessKeySecretName: ''
   accessKeySecretKey: accessKeyId
@@ -370,6 +372,11 @@ compatibility:
   legacyStartupSettingsFiles: false
 
 # Durable upload/extraction scratch for the single control backend; not a new controller or Job.
+ha:
+  enabled: false
+  protocol: 1
+  peerLimit: 9
+
 legacyRestore:
   enabled: true
   size: 64Gi

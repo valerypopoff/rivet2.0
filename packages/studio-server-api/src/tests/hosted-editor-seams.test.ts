@@ -19,7 +19,10 @@ test('hosted editor shell mounts RivetAppHost with wrapper providers, executor U
   assert.match(bootstrapApp, /await import\('\.\/dashboard\/HostedEditorApp'\)/);
   assert.doesNotMatch(bootstrapApp, /index\.css|colors\.css/);
   assert.match(hostedEditorApp, /<RivetAppHost/);
-  assert.match(hostedEditorApp, /executor=\{\{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL \}\}/);
+  assert.match(
+    hostedEditorApp,
+    /executor=\{\{\s*internalExecutorUrl:\s*RIVET_EXECUTOR_WS_URL,\s*resolveInternalHostedExecutorUrl\s*\}\}/,
+  );
   assert.match(hostedEditorApp, /providers=\{hostedRivetProviders\}/);
   assert.match(hostedEditorApp, /ui=\{HOSTED_RIVET_UI\}/);
   assert.match(hostedEditorApp, /onWorkspaceHostReady=\{handleWorkspaceHostReady\}/);
@@ -179,7 +182,10 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   const clipboardHotkeys = readRepoFile('packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts');
   const packageJson = readRepoFile('package.json');
 
-  assert.match(hostedEditorApp, /executor=\{\{ internalExecutorUrl: RIVET_EXECUTOR_WS_URL \}\}/);
+  assert.match(hostedEditorApp, /const resolveInternalHostedExecutorUrl = useCallback/);
+  assert.match(hostedEditorApp, /await fetchHostedConfig\(\{ signal: AbortSignal\.timeout\(10_000\) \}\)/);
+  assert.match(hostedEditorApp, /config\.executorWsUrlIsOverride !== false \|\| !config\.executorWsUrl/);
+  assert.match(hostedEditorApp, /return config\.executorWsUrl;/);
   assert.doesNotMatch(
     viteAliases,
     /useExecutorSession|useRemoteDebugger|useGraphExecutor|useRemoteExecutor|useSaveProject|useMenuCommands/,

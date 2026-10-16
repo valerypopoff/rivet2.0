@@ -7,7 +7,7 @@
 {{- fail "single-machine requires current images, direct Secrets and the embedded gateway" -}}
 {{- end -}}
 {{- $ports := list -}}
-{{- range $role := list "proxy" "web" "api" "execution" "evaluation" "executor" "backendHealth" -}}
+{{- range $role := list "proxy" "web" "api" "execution" "executor" "backendHealth" -}}
 {{- $port := toString (index $.Values.service $role "targetPort") -}}
 {{- if has $port $ports -}}
 {{- fail "single-machine application containers require distinct target ports" -}}
@@ -22,8 +22,8 @@
 {{- fail "single-machine deployment permits at most one replica per application role" -}}
 {{- end -}}
 {{- end -}}
-{{- if or (gt (int .Values.replicaCount.evaluation) 1) (gt (int .Values.hostedEvaluations.workerConcurrency) 1) -}}
-{{- fail "single-machine Evaluation capacity is limited to one worker and one concurrent trial" -}}
+{{- if gt (int .Values.hostedEvaluations.workerConcurrency) 1 -}}
+{{- fail "single-machine Evaluation capacity is limited to one concurrent trial" -}}
 {{- end -}}
 {{- end -}}
 {{- if not (kindIs "bool" .Values.workflowSchema.maintenanceValidation) -}}
@@ -37,7 +37,7 @@
 {{- fail "managed-schema-reader-version is chart-owned; podAnnotations cannot override it" -}}
 {{- end -}}
 {{- end -}}
-{{- if and .Values.workflowSchema.maintenanceValidation (or .Values.autoscaling.execution.enabled .Values.autoscaling.proxy.enabled (ne (int .Values.replicaCount.proxy) 0) (ne (int .Values.replicaCount.web) 0) (ne (int .Values.replicaCount.evaluation) 0)) -}}
+{{- if and .Values.workflowSchema.maintenanceValidation (or .Values.autoscaling.execution.enabled .Values.autoscaling.proxy.enabled (ne (int .Values.replicaCount.proxy) 0) (ne (int .Values.replicaCount.web) 0) (and .Values.compatibility.legacyStartupSettingsFiles (ne (int .Values.replicaCount.evaluation) 0))) -}}
 {{- fail "maintenance validation requires traffic and Evaluation replicas zero and autoscaling disabled" -}}
 {{- end -}}
 {{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
@@ -205,10 +205,10 @@
 {{- if not (kindIs "string" .Values.hostedEvaluations.scheduling.priorityClassName) -}}
 {{- fail "hostedEvaluations.scheduling.priorityClassName must be a string" -}}
 {{- end -}}
-{{- if and .Values.hostedEvaluations.enabled (not .Values.workflowSchema.maintenanceValidation) (lt (int .Values.replicaCount.evaluation) 1) -}}
+{{- if and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled (not .Values.workflowSchema.maintenanceValidation) (lt (int .Values.replicaCount.evaluation) 1) -}}
 {{- fail "hostedEvaluations.enabled requires replicaCount.evaluation >= 1" -}}
 {{- end -}}
-{{- if and (eq .Values.deploymentProfile "cluster") .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
+{{- if and .Values.compatibility.legacyStartupSettingsFiles (eq .Values.deploymentProfile "cluster") .Values.hostedEvaluations.enabled .Values.release.production.enabled (empty .Values.hostedEvaluations.scheduling.priorityClassName) (eq (len .Values.hostedEvaluations.scheduling.nodeSelector) 0) -}}
 {{- fail "production hostedEvaluations require scheduling.nodeSelector or a lower-priority scheduling.priorityClassName so batch pods cannot consume reserved public capacity" -}}
 {{- end -}}
 
@@ -279,7 +279,7 @@
 {{- if eq .Values.gateway.mode "embedded" -}}
 {{- $resourceComponents = append $resourceComponents "proxy" -}}
 {{- end -}}
-{{- if .Values.hostedEvaluations.enabled -}}
+{{- if and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled -}}
 {{- $resourceComponents = append $resourceComponents "evaluation" -}}
 {{- end -}}
 {{- range $component := $resourceComponents -}}
@@ -517,13 +517,20 @@
 {{- if .Values.autoscaling.execution.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
 {{- end -}}
-{{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 .Values.hostedEvaluations.enabled -}}
+{{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 (and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled) -}}
 {{- $evaluationCapacityDetail := "" -}}
-{{- if .Values.hostedEvaluations.enabled -}}
+{{- if gt $evaluationReplicas 0 -}}
 {{- $evaluationCapacityDetail = printf ", including %d Evaluation worker pod(s)" $evaluationReplicas -}}
 {{- end -}}
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
 {{- $apiPods := add $backendReplicas $executionReplicas $evaluationReplicas -}}
+{{- if .Values.ha.enabled -}}
+{{- if gt (len (include "rivet.fullname" .)) 40 -}}
+{{- fail "HA fullname must be at most 40 characters so every owner pod has a valid DNS identity" -}}
+{{- end -}}
+{{- /* One maintenance owner and one surge owner; tiers are replaced serially. */ -}}
+{{- $apiPods = add $apiPods 2 -}}
+{{- end -}}
 {{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
 {{- $restoreConnections := 0 -}}
 {{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) -}}
@@ -741,8 +748,24 @@
   {{- end -}}
 {{- end -}}
 
-{{- if ne (int .Values.replicaCount.backend) 1 -}}
+{{- if .Values.ha.enabled -}}
+{{- range $field := list (dict "path" "ha.protocol" "value" .Values.ha.protocol) (dict "path" "ha.peerLimit" "value" .Values.ha.peerLimit) -}}
+{{- include "rivet.assertNonNegativeWholeNumber" $field -}}
+{{- end -}}
+{{- if or (lt (int .Values.replicaCount.backend) 2) (gt (int .Values.replicaCount.backend) 8) (ne (int .Values.ha.protocol) 1) (ne .Values.deploymentProfile "cluster") .Values.compatibility.legacyStartupSettingsFiles (not .Values.legacyRestore.enabled) .Values.runtimeLibraries.cache.existingClaimName -}}
+{{- fail "HA requires 2-8 ready backends, protocol 1, current cluster profile, dedicated restore storage and per-pod runtime caches" -}}
+{{- end -}}
+{{- if or (le (int .Values.ha.peerLimit) (int .Values.replicaCount.backend)) (gt (int .Values.ha.peerLimit) 33) -}}
+{{- fail "ha.peerLimit must include the surge ordinal and be at most 33" -}}
+{{- end -}}
+{{- else if ne (int .Values.replicaCount.backend) 1 -}}
 {{- fail "replicaCount.backend=1 is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
+{{- end -}}
+
+{{- range $key := list "RIVET_HA_DEPLOYMENT" "RIVET_HA_MAINTENANCE" "RIVET_HA_API_ONLY" "RIVET_HA_PROTOCOL" "RIVET_HA_PEER_LIMIT" "RIVET_HA_BACKEND_NAME" "RIVET_HA_HEADLESS_SERVICE" "RIVET_HA_MAINTENANCE_URL" "RIVET_ROLLING_RETIREMENT_PROTOCOL" "RIVET_ROLLING_RETIREMENT_TOKEN" "RIVET_ROLLING_RETIREMENT_SOCKET" "RIVET_PROCESS_INCARNATION" -}}
+{{- if hasKey $.Values.env $key -}}
+{{- fail (printf "env.%s is reserved for deployment ownership" $key) -}}
+{{- end -}}
 {{- end -}}
 
 {{- if .Values.autoscaling.backend.enabled -}}

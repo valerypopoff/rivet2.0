@@ -17,6 +17,7 @@ import { readDeploymentStorageRuntimeSettingsSync } from '../deployment-storage-
 import { readExecutorUrlOverrideSettingsSync } from '../executor-url-override-settings.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { getLegacyRestoreWorkspaceEpoch, isLegacyRestorePaused } from '../legacy-restore/service.js';
+import { readOwnerRoutingConfig, executorOwnerPath } from '../ha-owner-routing.js';
 
 export const configRouter = Router();
 
@@ -43,13 +44,16 @@ configRouter.get('/config', (req, res) => {
   const publicWsOrigin = toWebSocketOrigin(publicOrigin);
   const deploymentStorageSettings = readDeploymentStorageRuntimeSettingsSync();
   const executorUrlOverrides = readExecutorUrlOverrideSettingsSync();
+  const ownerRouting = readOwnerRoutingConfig();
 
   res.set('Cache-Control', 'no-store').json({
     ...(process.env.RIVET_LEGACY_RESTORE_ENABLED === '1'
       ? { legacyRestoreEpoch: getLegacyRestoreWorkspaceEpoch(), legacyRestoreMaintenance: isLegacyRestorePaused() }
       : {}),
     hostedMode: true,
-    executorWsUrl: executorUrlOverrides.executorWsUrl || `${publicWsOrigin}/ws/executor/internal`,
+    executorWsUrl:
+      executorUrlOverrides.executorWsUrl ||
+      `${publicWsOrigin}${ownerRouting ? executorOwnerPath(ownerRouting) : '/ws/executor/internal'}`,
     executorWsUrlIsOverride: Boolean(executorUrlOverrides.executorWsUrl),
     remoteDebuggerDefaultWs: isLatestWorkflowRemoteDebuggerEnabled()
       ? executorUrlOverrides.remoteDebuggerDefaultWs || `${publicWsOrigin}${LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH}`

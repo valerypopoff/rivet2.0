@@ -62,6 +62,11 @@ export function getWorkflowTreeClientId(request: Request): string | null {
 export function notifyWorkflowTreeChanged(request: Request): WorkflowTreeChangeEvent {
   return notifier.notify(getWorkflowTreeClientId(request));
 }
+/** Existing managed-store invalidations trigger a refetch on a different API
+ * owner or after reconnect. They are hints, not another catalog representation. */
+export function notifyExternalWorkflowTreeChanged(): void {
+  notifier.notify(null);
+}
 
 function writeSseEvent(
   response: Response,

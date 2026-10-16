@@ -89,6 +89,48 @@ test('closed migration recovery is read-only and restricted to the accepted rest
   }
 });
 
+test('planned retirement blocks every unfinished restore journal and late preparation ownership', async () => {
+  for (const phase of [
+    null,
+    'completed',
+    'cancelled',
+    'uploading',
+    'validating',
+    'awaiting-confirmation',
+    'failed',
+    'restarting',
+  ]) {
+    const service = new LegacyRestoreService(
+      { read: async () => (phase ? { phase } : null) } as unknown as LegacyRestoreControl,
+      {} as never,
+      '',
+      { drain: async () => {}, restart: async () => {} },
+    );
+    if (phase === null || ['completed', 'cancelled'].includes(phase)) await service.assertMayRetire();
+    else await assert.rejects(service.assertMayRetire(), /blocks planned retirement/);
+  }
+  let release!: () => void;
+  const journal = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const service = new LegacyRestoreService(
+    {
+      read: async () => {
+        await journal;
+        return null;
+      },
+    } as unknown as LegacyRestoreControl,
+    {} as never,
+    '',
+    { drain: async () => {}, restart: async () => {} },
+  );
+  const checking = assert.rejects(service.assertMayRetire(), /blocks planned retirement/);
+  // The durable journal can lag an accepted validator. The lifecycle owner remains authoritative.
+  (service as unknown as { task: Promise<void> }).task = Promise.resolve();
+  release();
+  await checking;
+});
+
 test('schema preparation checks existing installation ownership without changing DDL', async () => {
   for (const state of ['empty', 'owned', 'foreign', 'partial']) {
     const control = new LegacyRestoreControl({}, 'fixture');

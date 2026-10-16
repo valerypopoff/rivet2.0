@@ -301,6 +301,7 @@ function createPublicationHarness(
     },
     mappers: managedMappers,
     executionInvalidationController: {
+      queueCatalogInvalidation: async () => {},
       queueWorkflowInvalidation: async (
         _client: ManagedWorkflowDbClient,
         transactionHooks: TransactionHooks,

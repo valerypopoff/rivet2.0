@@ -12,6 +12,7 @@ import {
 } from '@valerypopoff/rivet2-evaluations';
 import { HostedEvaluationCoordinator } from '../../evaluation-runs/hosted-coordinator.js';
 import { PostgresRivetEvaluationStore } from '../../evaluation-runs/managed-store.js';
+import { getHostedEvaluationsCoordinatorConfig } from '../../hosted-evaluations-config.js';
 
 /** Runs the real scheduler against only the integration runner's owned database. */
 export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
@@ -76,15 +77,18 @@ export async function verifyHostedEvaluationProjectionContract(pool: Pool) {
   const coordinator = new HostedEvaluationCoordinator({
     pool: schedulerPool,
     runStore: store,
-    config: {
-      enabled: true,
-      workerEnabled: true,
-      workerConcurrency: 1,
-      leaseMs: 15000,
-      maxJobsPerRun: 100,
-      maxOutstandingJobs: 100,
-      pollMs: 250,
-    },
+    config: getHostedEvaluationsCoordinatorConfig(
+      {
+        RIVET_HOSTED_EVALUATIONS_ENABLED: 'true',
+        RIVET_HOSTED_EVALUATIONS_WORKER_CONCURRENCY: '1',
+        RIVET_HOSTED_EVALUATIONS_LEASE_MS: '15000',
+        RIVET_HOSTED_EVALUATIONS_MAX_JOBS_PER_RUN: '100',
+        RIVET_HOSTED_EVALUATIONS_MAX_OUTSTANDING_JOBS: '100',
+        RIVET_HOSTED_EVALUATIONS_POLL_MS: '250',
+      },
+      'control',
+      true,
+    ),
     runGraph: async ({ inputs, metadata, signal }) => {
       if (metadata.caseId === 'case-2' && block)
         await new Promise<void>((resolve, reject) => {

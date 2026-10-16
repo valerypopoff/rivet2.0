@@ -285,6 +285,37 @@ assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
+const executorRetirement = findStep(
+  studioJobs['editor-regression'],
+  'Verify accepted executor retirement',
+  'Editor regressions',
+);
+const serverScripts = JSON.parse(read('package.json')).scripts;
+assert.equal(
+  serverScripts['studio-server:verify:executor-retirement'],
+  'tsx --test packages/app-executor/bin/executor.retirement.test.mts',
+);
+assert.doesNotMatch(
+  serverScripts['studio-server:verify:production-cutover'],
+  /executor\.retirement|verify:executor-retirement/,
+  'Source-only repository contracts must not import compiled runtime packages.',
+);
+assert.match(
+  serverScripts['studio-server:test'],
+  /studio-server:build && yarn studio-server:verify:executor-retirement/,
+);
+assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.ok(
+  studioJobs['editor-regression'].steps.indexOf(executorRetirement) >
+    studioJobs['editor-regression'].steps.indexOf(
+      findStep(
+        studioJobs['editor-regression'],
+        'Verify restored compiled workspace dependencies',
+        'Editor regressions',
+      ),
+    ),
+  'Real executor retirement requires verified same-commit Core/Node builds, not source-only contracts.',
+);
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
@@ -603,6 +634,28 @@ assert.doesNotMatch(
   /api:latest/,
   'A mutable API alias must not authorize predecessor compatibility.',
 );
+const haGate = findStep(
+  imageJobs['managed-kubernetes-release-gate'],
+  'Run HA Kubernetes Gate',
+  'Managed Kubernetes release gate',
+);
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, 'kind-rivet-managed-release');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, 'kind-rivet-managed-release');
+assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
+assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs certify/);
+assert.doesNotMatch(haGate.run, /:production|allow-missing/);
+assert.equal(
+  findStep(
+    imageJobs['managed-kubernetes-release-gate'],
+    'Upload HA Release Evidence',
+    'Managed Kubernetes release gate',
+  ).with['if-no-files-found'],
+  'error',
+);
+assert.match(
+  findStep(imageJobs['promote-images'], 'Attest promoted release manifest', 'Image promotion job').run,
+  /--ha-evidence artifacts\/studio-server-ha-evidence\/ha-evidence\.json/,
+);
 const promotionSteps = imageJobs['promote-images'].steps.map((step) => step.name);
 assert.ok(
   promotionSteps.indexOf('Attest promoted release manifest') <
@@ -810,8 +863,8 @@ for (const jobName of [
 }
 assert.equal(
   imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_GATE_CONFIRM,
-  'disrupt-staging-evaluations',
-  'The hosted-Evaluation certificate must supply its exact disruption acknowledgement.',
+  'disrupt-staging-editor-backend',
+  'The co-located hosted-Evaluation certificate must explicitly acknowledge editor-backend disruption.',
 );
 assert.match(
   String(imageJobs['managed-kubernetes-evaluation-gate'].env?.RIVET_K8S_EVALUATION_JOINT_CAPACITY_CONFIRM),
