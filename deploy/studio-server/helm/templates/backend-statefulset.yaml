@@ -1,8 +1,8 @@
 {{ include "rivet.backendWorkload" . }}
 {{- if .Values.ha.enabled }}
+{{- $maintenance := deepCopy . }}
+{{- $_ := set $maintenance "haMaintenance" true }}
+{{- $_ := set $maintenance.Values.replicaCount "backend" 1 }}
 ---
-{{- $maintenance := deepCopy . -}}
-{{- $_ := set $maintenance "haMaintenance" true -}}
-{{- $_ := set $maintenance.Values.replicaCount "backend" 1 -}}
 {{ include "rivet.backendWorkload" $maintenance }}
 {{- end }}

@@ -177,6 +177,10 @@ requires HA evidence inside the promoted immutable manifest. Mixed-version
 evidence binds the exact predecessor source/images, candidate source/images,
 chart, required behavioral checks and successful sustained request samples.
 Bootstrap evidence never authorizes an ordinary rolling singleton conversion.
+The offline Kubernetes lane lints the HA composition as well as the singleton
+production profile. Helm's renderer can split a malformed multi-document
+separator that its stricter linter rejects; keep the backend/maintenance YAML
+separator on its own line, outside whitespace-trimming template assignments.
 The old deployment must first use an explicitly owned maintenance cutover.
 An image rebuild of the same source commit is not an exemption: different
 immutable artifact sets still require actual predecessor-to-candidate

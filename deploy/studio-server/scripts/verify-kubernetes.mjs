@@ -135,6 +135,23 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
     ...profileArgs,
     ...prodImageArgs,
   ]);
+  if (!singleMachineValuesPath) {
+    console.log(`[${launcherName}] Linting the HA backend and maintenance-owner documents...`);
+    await spawnProgram(helmBin, [
+      'lint',
+      './deploy/studio-server/helm',
+      '-f',
+      './deploy/studio-server/helm/overlays/prod.yaml',
+      ...profileArgs,
+      ...prodImageArgs,
+      '--set',
+      'ha.enabled=true',
+      '--set',
+      'replicaCount.backend=2',
+      '--set',
+      'autoscaling.execution.enabled=false',
+    ]);
+  }
 }
 
 async function main() {
