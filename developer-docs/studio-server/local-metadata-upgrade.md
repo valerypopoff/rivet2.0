@@ -173,7 +173,8 @@ progress record does not replace the transition journal or backup certificates.
 Publishing a terminal preparation record does not release its worker's admission
 ownership: durable-file cleanup may still be settling. The existing `operation`
 signal keeps UI actions locked until that owner exits. Runtime tests must wait
-for both the expected terminal phase and no active operation before changing
+for both the expected terminal phase and no active operation, including successful
+inspection and capacity refusals, before changing
 authority or submitting a new request. A controlled cleanup regression verifies
 that another request still receives 409 while a failed result is already visible.
 
