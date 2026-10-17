@@ -1,5 +1,6 @@
 import { S3Client, HeadObjectCommand, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Readable } from 'node:stream';
+import { signGoogleXmlPrecondition } from '../../studio-server-shared/gcs-xml-signing.ts';
 import { hash, validId, maxFileBytes } from './assets.mjs';
 
 export function createAssetStore(env = process.env) {
@@ -12,11 +13,20 @@ export function createAssetStore(env = process.env) {
   const prefix = env.RIVET_DEPLOYMENT_STORAGE_PREFIX || 'workflows/';
   if (prefix.startsWith('/') || prefix.includes('\\') || !prefix.endsWith('/') ||
       prefix.slice(0, -1).split('/').some(part => !part || part === '.' || part === '..')) throw Error('Invalid frontend storage prefix');
+  const google = !!endpoint && /(^|\.)storage\.googleapis\.com$/.test(new URL(endpoint).hostname);
+  if (google && !secretAccessKey) throw Error('GCS frontend publication requires explicit HMAC credentials');
   const client = new S3Client({ region, endpoint, forcePathStyle: env.RIVET_DEPLOYMENT_STORAGE_FORCE_PATH_STYLE === 'true',
     ...(accessKeyId ? { credentials: { accessKeyId, secretAccessKey } } : {}), maxAttempts: 1,
     requestHandler: { connectionTimeout: 5000, requestTimeout: 30_000 } });
+  if (google) {
+    const handler = client.config.requestHandler;
+    client.config.requestHandler = {
+      handle(request, options) { signGoogleXmlPrecondition(request, secretAccessKey); return handler.handle(request, options); },
+      destroy() { handler.destroy(); },
+    };
+  }
   return new S3Assets(client, { bucket, prefix: `${prefix}web-assets/${hash(installation)}/`,
-    google: !!endpoint && /(^|\.)storage\.googleapis\.com$/.test(new URL(endpoint).hostname) });
+    google });
 }
 
 /** Content-addressed, create-only compressed objects. No object ever carries

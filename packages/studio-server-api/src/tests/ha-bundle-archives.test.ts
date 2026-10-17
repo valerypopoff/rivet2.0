@@ -9,6 +9,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SharedBundleArchives, BundlePublicationUncertainError, createSharedBundleArchiveClient } from '../ha-bundle-archives.js';
+import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed/blob-store.js';
 
 test('the production export client never lets SDK retry an uncertain multipart allocation', async () => {
   let requests = 0;
@@ -134,7 +135,8 @@ test('Google XML export publication, exact-generation reads and deletes use sign
       res.setHeader('Content-Length', String(bytes.length)); res.setHeader('x-amz-meta-sha256', hash); res.end();
     } else if (req.method === 'PUT' && isManifest) {
       assert.equal(req.headers['x-goog-if-generation-match'], '0');
-      assert.match(String(req.headers.authorization), /x-goog-if-generation-match/);
+      assert.match(String(req.headers.authorization), /^GOOG4-HMAC-SHA256 .*x-goog-if-generation-match/);
+      assert.equal(Object.keys(req.headers).some(name => name.startsWith('x-amz-')), false);
       manifest = body.toString(); assert.equal(JSON.parse(manifest).archive.generation, '33'); res.end();
     } else if (req.method === 'GET') {
       const payload = isManifest ? Buffer.from(manifest!) : bytes;
@@ -143,13 +145,17 @@ test('Google XML export publication, exact-generation reads and deletes use sign
       res.end(payload);
     } else if (req.method === 'DELETE') {
       assert.equal(req.headers['x-goog-if-generation-match'], isManifest ? '44' : '33');
-      assert.match(String(req.headers.authorization), /x-goog-if-generation-match/);
+      assert.match(String(req.headers.authorization), /^GOOG4-HMAC-SHA256 .*x-goog-if-generation-match/);
+      assert.equal(Object.keys(req.headers).some(name => name.startsWith('x-amz-')), false);
       res.statusCode = 204; res.end();
     } else { res.statusCode = 400; res.end(); }
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert.ok(address && typeof address !== 'string');
-  const client = new S3Client({ endpoint: `http://127.0.0.1:${address.port}`, region: 'fixture',
+  const client = new S3Client({ ...createManagedWorkflowS3ClientConfig({ objectStorageBucket: 'owned', objectStoragePrefix: '',
+    objectStorageEndpoint: 'https://storage.googleapis.com', objectStorageRegion: 'fixture',
+    objectStorageForcePathStyle: true, objectStorageAccessKeyId: 'fixture', objectStorageSecretAccessKey: 'fixture' }),
+    endpoint: `http://127.0.0.1:${address.port}`, region: 'fixture',
     credentials: { accessKeyId: 'fixture', secretAccessKey: 'fixture' }, forcePathStyle: true, maxAttempts: 1 });
   const exports = new SharedBundleArchives({ client, googleStorage: true, epoch: () => 'a',
     location: key => ({ Bucket: 'owned', Key: `${key}/` }) });

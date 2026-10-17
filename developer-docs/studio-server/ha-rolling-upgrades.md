@@ -139,6 +139,21 @@ Readiness fails closed on publication failure. Missing versioned files return
 Non-HA static serving has no added credentials and retains its local behavior;
 development keeps its separate HMR/generation implementation.
 
+GCS conditional XML requests use the Node-only shared
+`gcs-xml-signing.ts` transport adapter. The AWS SDK still serializes requests,
+hashes payloads and owns HTTP; immediately before sending a generation-guarded
+request, the adapter normalizes extension headers and re-signs using Google's
+[GOOG4 HMAC dialect](https://docs.cloud.google.com/storage/docs/authentication/signatures).
+GCS rejects mixed `x-amz-*` and `x-goog-*` headers. Do not replace the real
+`x-goog-if-generation-match` precondition with an `x-amz-*` lookalike: the isolated
+live probe accepted a duplicate write with that lookalike, proving it was ignored.
+This adapter serves both frontend publication and the API's shared-export guards;
+ordinary S3/MinIO requests keep their original signing path and retry policy.
+Loopback HTTP/XML regressions require a single header dialect and preserve gzip
+bytes, signed generation guards, immutable metadata, and exact-generation reads.
+Real GCS verification additionally requires successful first creation and a 412
+for a second guarded write; a stub accepting any headers is insufficient evidence.
+
 The image-wiring contract in `proxy-image-contract.test.ts` verifies that the
 production Dockerfile bundles this source-owned server, copies the resulting
 module into the runtime image and executes it, without the superseded global
