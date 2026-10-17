@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { parseAllDocuments } from 'yaml';
 import { ManagedReleaseGate, runManagedGateCommand as run } from './kubernetes-managed-release-gate.mjs';
 import {
@@ -188,18 +189,29 @@ export class HaReleaseGate extends ManagedReleaseGate {
   }
 }
 
+/** Force actual template replacement even when a bootstrap proof reuses images.
+ * Preserve operator annotations; this marker belongs only to disposable proofs. */
+export function withHaProofGeneration(values) {
+  const generation = randomUUID();
+  return {
+    ...values,
+    podAnnotations: {
+      ...values.podAnnotations,
+      ...Object.fromEntries(
+        ['web', 'proxy', 'backend', 'execution'].map((role) => [
+          role,
+          { ...values.podAnnotations?.[role], 'rivet.dev/ha-proof-generation': generation },
+        ]),
+      ),
+    },
+  };
+}
+
 /** The same rollout observations for local and explicitly protected provider fixtures. */
 export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.images, browserContract = null) {
   await gate.assertProofContext();
   await gate.loadWorkflowKey();
-  const values = {
-      ...gate.values(images),
-      podAnnotations: {
-        web: { 'rivet.dev/ha-proof-generation': 'candidate' },
-        backend: { 'rivet.dev/ha-proof-generation': 'candidate' },
-        execution: { 'rivet.dev/ha-proof-generation': 'candidate' },
-      },
-    },
+  const values = withHaProofGeneration(gate.values(images)),
     file = path.join(gate.config.artifactsDir, 'ha-candidate.json');
   const before = JSON.parse(
     (

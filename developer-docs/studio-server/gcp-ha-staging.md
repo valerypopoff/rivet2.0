@@ -33,7 +33,12 @@ zero workflow failures and at least two ready backends, but stopped safely on
 an uncertain journal PUT after an operator-to-GKE TLS handshake timeout. It is
 also **not** complete qualification. Read retries never replay that write. A
 trusted Cloud Shell operator connection is being prepared to avoid the unstable
-local control-plane path; production remains untouched. The project ID and numeric identity are
+local control-plane path. The subsequent `8ee6840c3` image run `39030159548`
+failed the strengthened frontend-UID check: bootstrap reused the proxy image,
+but the fixture did not mark its proxy template for replacement. The fresh
+web/proxy generation markers described below repair that fixture gap without
+weakening the actual replacement or zero-failed-request requirements. This
+candidate is not qualified, and production remains untouched. The project ID and numeric identity are
 unchanged. Post-restore
 inventory found no buckets, BigQuery datasets, Firestore databases, default
 Datastore database, API keys or Dataform repositories. One pre-existing service
@@ -168,6 +173,13 @@ playback and lazy statistics view afterward. This closes the timing loophole in
 the earlier 20-second run, which could finish before GKE's readiness stabilization
 window. Failed probes attempt to resume their own paused fixture before closing
 the browser; they never relax production drain or force-delete an accepted owner.
+Each proof uses a fresh template-generation annotation on both web and proxy,
+as well as the execution owners, while preserving operator annotations. This
+forces real frontend replacement even when bootstrap certification reuses the
+same image digests or consecutive candidates share an unchanged proxy image.
+The proof still requires the old frontend UIDs to disappear; an unchanged proxy
+must not be mistaken for a successful replacement, nor cause an artificial
+timeout because the fixture forgot to request its replacement.
 
 The in-pod cross-owner fixtures carry both proxy authentication and a key-mode
 UI session, just like an authenticated operator. Proxy identity alone must not

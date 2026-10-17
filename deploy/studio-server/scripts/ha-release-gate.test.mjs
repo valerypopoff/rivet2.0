@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
+import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest, withHaProofGeneration } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
@@ -19,6 +19,26 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('each disposable HA proof changes both frontend templates even when images are unchanged', () => {
+  const base = {
+    images: { web: { repository: 'registry/web', digest: `sha256:${'a'.repeat(64)}` } },
+    podAnnotations: { web: { 'operator/web': 'keep' }, proxy: { 'operator/proxy': 'keep' },
+      backend: { 'operator/backend': 'keep' }, execution: { 'operator/execution': 'keep' },
+      evaluation: { 'operator/evaluation': 'keep' } },
+  };
+  const snapshot = structuredClone(base);
+  const first = withHaProofGeneration(base);
+  const second = withHaProofGeneration(base);
+  assert.deepEqual(base, snapshot);
+  assert.deepEqual(first.images, base.images, 'do not fabricate a different workload image');
+  for (const role of ['web', 'proxy', 'backend', 'execution']) {
+    assert.equal(first.podAnnotations[role][`operator/${role}`], 'keep');
+    assert.match(first.podAnnotations[role]['rivet.dev/ha-proof-generation'], /^[a-f0-9-]{36}$/);
+    assert.notEqual(first.podAnnotations[role]['rivet.dev/ha-proof-generation'], second.podAnnotations[role]['rivet.dev/ha-proof-generation']);
+  }
+  assert.deepEqual(first.podAnnotations.evaluation, base.podAnnotations.evaluation);
+});
 
 test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {
   const pod = (uid, component, extra = {}) => ({ metadata: { uid, labels: { 'app.kubernetes.io/component': component }, ...extra } });
