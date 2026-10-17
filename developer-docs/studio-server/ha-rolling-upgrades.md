@@ -9,6 +9,152 @@ uncertain execution. A long-running or paused execution may block retirement.
 This is not a guarantee against simultaneous provider failure or arbitrary pod
 termination. Legacy restore remains an explicitly destructive maintenance task.
 
+### Latest exact-pair qualification
+
+The 2026-10-17 disposable local `0704d0181` to `d9ea8dd17` upgrade passed after
+the candidate's complete image CI (`39049988451`). Primary traffic recorded
+2,591 successes/zero failures, recovery traffic 1,988 successes/zero failures,
+and primary readiness never fell below two ordinary backends. Both retained
+browser journeys used different old/new build identities and passed save,
+execution, output, recording and lazy-screen checks without reload. Both real
+lost-acknowledgement and controller-lease-conflict recovery probes passed.
+These are exact-source local compatibility receipts, not permission to rewrite
+canonical release lineage. The subsequent isolated GKE/PostgreSQL/GCS/trusted
+HTTPS upgrade also passed: 6,261 primary workflow requests, 9,136 recovery
+workflow requests and 5,300 separate public web-app checks, all with zero
+failures. Both retained-browser journeys, lost-begin-acknowledgement recovery
+and real controller-lease-conflict recovery passed; each original begin command
+was issued once. At least two ordinary backends remained ready. The primary
+and recovery streams' slowest observed workflow requests were 758 ms and
+929 ms respectively; these are continuity observations, not capacity claims.
+The full private export was hash-verified locally and sanitized evidence saved.
+Staging teardown verified no remaining rehearsal billable resources and the
+expiry monitor was paused. Only an unused dedicated VPC/private-service
+connection/internal range awaits Google's four-day Cloud SQL producer-retention
+hold; see [the provider residual inventory](gcp-ha-staging.md#provider-retained-networking).
+The restored project and its pre-existing identity/key, default network and
+billing association were preserved. Production has not been accessed, and its
+first singleton/older-browser-contract conversion still requires a separately
+approved maintenance transition. These receipts do not replace the canonical
+source/image-bound production promotion safeguards.
+
+### Post-qualification session hardening
+
+The 2026-10-18 review reproduced a delayed executor-owner discovery race: a
+lookup started by an idle retiring session could return after a manual disconnect,
+an explicit executor replacement, newly accepted work or its recovery deadline.
+Discovery now checks the original socket/generation, idle work state and deadline
+both before and after the asynchronous lookup. A stale answer cannot reconnect
+Node, replace a user-selected executor or reject a run belonging to the session.
+The same predicate owns both checks; no extra session owner, retry mechanism or
+wire-protocol change was introduced. Five controlled unit regressions cover these
+races; the hosted observer also switches to Browser while the lookup is pending.
+The browser fixture matches only root `/api/` requests, so it cannot intercept
+Vite source imports from `src/api/`. The nine headless hosted-origin checks pass
+against the freshly built production frontend, including the delayed lookup and
+recording-reconnect journeys. Session/coordinator/registry tests (122), focused
+retirement/rollout/evidence tests (87), API owner/relay/export tests (18), Node
+session tests (6) and retained-asset tests (7) pass, as do the offline Kubernetes
+lane, app TypeScript/lint checks and frontend build. These are bounded audit
+checks, not a capacity measurement or a repeat of the provider rehearsal.
+The optional host-compatibility shell scan was not counted as passed on this
+Windows host: WSL Bash refused access and Git Bash could not reliably fork its
+utilities. A read-only fallback confirmed all seven provider-seam markers are
+present; the normal Linux CI scanner remains required.
+
+The qualification receipts above remain evidence for `0704d0181` to `d9ea8dd17`,
+not this later source change. Commit/build and qualify the final immutable image
+pair through the existing release gates before production rollout. Offline tests
+and a mocked-transport browser check are not a new mixed-version certificate.
+
+The adjacent review then reproduced premature readiness on reused open sockets,
+discovery attempts blocking replacement sessions, and dropped dataset responses
+after a physical reconnect. Reusing a socket now preserves its protocol state;
+only the existing replay-ready acknowledgement enables commands. A small
+session-local discovery token is invalidated on disconnect, replacement and
+transport loss. Its late completion cannot clear a newer attempt.
+
+Dataset operations still execute once through the existing provider bridge.
+Only their completed responses survive an HA transport gap, bound to the logical
+resume capability. They flush after replay-ready on that same owner, never to a
+replacement session. The disconnected response budget is 64 responses / 8 MiB;
+overflow or a failed send fails the session with an unknown run outcome rather
+than repeating a dataset mutation. Connected large responses retain their
+existing behavior. Manual disconnect, replacement and resume expiry discard
+retained responses. Legacy hosted, desktop and external debugger dataset bridges
+keep their physical-socket behavior; no server wire format or retry was added.
+Unit tests verify the existing dataset response contract and one write invocation
+across reconnect, with late-result isolation, bounded retention and unchanged
+connected large-payload support. The real-browser recording fixture also performs
+an IndexedDB dataset write across replacement and waits for its acknowledgement
+before declaring the run complete.
+The final adjacent-source verification passed 135 session/coordinator/registry
+tests, six Node-session tests and all nine headless hosted-origin checks against
+a fresh production frontend build, plus TypeScript, focused lint, test-style and
+documentation-link checks. No chart, cluster or production resource was changed.
+These checks still do not authorize deployment of an unqualified image pair.
+
+The next bounded review verified the resume acknowledgement itself. Each
+physical HA socket must acknowledge protocol 1 and the original logical
+capability before it can dispatch dataset work, replay diagnostics or release
+retained results. A missing, malformed or changed identity fails with the
+existing unknown-outcome result and discards retained responses; it never adopts
+a new session under an old run. The replay-ready message is not identity proof.
+Seven controlled regressions cover invalid acknowledgements, pre-acknowledgement
+dataset writes and reconnect timing. Failed connection attempts now retain the
+existing increasing retry delay (capped at two seconds), instead of resetting
+to 150 ms on each attempt. A successful transport or explicit replacement resets
+the delay. The 60-second HA recovery deadline and no-replay policy are unchanged.
+This removes an erroneous reset and adds socket-local validation, not another
+session owner or a new handshake protocol.
+That review passed 142 session/coordinator/registry tests, six Node-session
+tests and all nine headless hosted-origin checks, along with a fresh
+frontend build, TypeScript, focused lint, test-style and documentation checks.
+Production and the isolated GCP resource inventory were not accessed.
+
+The whole-session reassessment reproduced one remaining initial-connect gap:
+a newly opened HA socket exposed run/recording readiness before the identity and
+ready acknowledgements, and could remain apparently ready when negotiation
+stalled. Fresh owned sessions now use the same ready gate as resumes. The first
+logical connect notification follows ready exactly once, including when the
+transport is lost after identity acknowledgement but before its first ready.
+Initial negotiation uses the existing 60-second deadline without extending it
+on reconnect, then fails closed if negotiation never completes. No new timer
+owner or wire message was added; legacy hosted, desktop and external debugger
+readiness remains unchanged. Seven controlled regressions cover readiness,
+notification lifetime, stalled negotiation and timer disposal. A separate
+headless browser check holds both handshake stages and verifies that Run stays
+disabled until ready.
+Current verification: all 149 session/coordinator/registry tests, six Node-session
+tests and ten headless hosted-origin checks pass, together with the production
+frontend build, app TypeScript, focused lint, test-style and documentation-link
+checks. Only a task-owned local preview was started and stopped. These source
+checks do not replace the final immutable image-pair qualification before GCP.
+
+### Final-candidate delivery
+
+Commit the complete reviewed session hardening before selecting its immutable
+candidate. A push to `develop` runs Build and Verify Studio Server, but Build
+Images requires an explicit dispatch on that same branch. Leave all protected
+provider, capacity, Evaluation and lineage-bootstrap inputs disabled for this
+local qualification step. Do not advance the source until the complete image
+run and its validated manifests have been harvested.
+
+Qualify the final candidate against the retained browser-contract baseline and
+an exact previous HA image set; a same-image bootstrap certificate is not a
+mixed-version upgrade result. The existing local `prepare`, `roll` and `recovery`
+phases retain their normal traffic, readiness and browser assertions. Never
+rewrite canonical release lineage to substitute an ad-hoc predecessor. Save
+additional exact-pair receipts separately when its predecessor differs from the
+candidate's canonical production lineage.
+
+The previous isolated provider resources were removed. Recreating paid staging
+resources requires a new approved allowance and expiry inventory. Neither CI
+dispatch nor local qualification authorizes a production merge, promotion,
+singleton-to-HA maintenance conversion or live deployment. Stop before those
+actions, obtain the applicable approval and qualify the final provider image
+pair before activating HA in GCP.
+
 ### Traffic failure evidence
 
 Primary and recovery probes send each workflow POST once, with the same 15-second
@@ -531,11 +677,14 @@ The local proof runner extends the existing managed PostgreSQL/MinIO release
 fixture and uses only explicitly allowed disposable local contexts. It now checks
 for at least 20 GiB free before cluster mutation. Its `prepare` and `roll` phases
 retain diagnostic artifacts and never substitute a same-image rollout for a
-mixed-version certificate. Normal deployment remains singleton by default until
-the complete HA proof is available. No production/GCP zero-downtime upgrade is
-certified by the focused tests below.
+mixed-version certificate. Normal deployment remains singleton by default;
+enabling HA requires explicit operator values and the applicable certificate.
+No production/GCP zero-downtime upgrade is certified by the focused tests below.
 
-## Local completion and production qualification
+## Historical local completion and production qualification
+
+These working-tree receipts predate the exact-source qualification at the top
+of this guide. They document the progression, not the current acceptance status.
 
 The final reviewed controller and H runtime candidate completed a fresh mixed-image
 upgrade with **1,188 public requests, zero failures, at least two ready backends
@@ -546,7 +695,7 @@ The run includes both old/new project/library notifications and a separate final
 candidate-to-candidate empty-folder/library notification check. Paused editor
 sessions, hosted Evaluations, background recordings and shared bundle reads passed.
 
-Current receipts are under `artifacts/ha-final-rehearsal-h/`, including
+Those historical receipts are under `artifacts/ha-final-rehearsal-h/`, including
 `ha-report-final.json`, `ha-workload-probes.json` and `ha-recovery-probes.json`.
 The immutable API pair is
 `sha256:4fbc4e26663383eb95a09f078448b3b9d0ad9df6bc12d94a67b01ca788dca71a`
@@ -616,8 +765,8 @@ Those were corrected and the complete H rehearsal above reran the revised
 controller and runtime. The committed release must still pass the source-bound
 mandatory CI gate before promotion; local image receipts cannot replace it.
 
-Before any GCP change, separately review the actual Gateway routing/readiness
-configuration and first singleton-to-HA maintenance transition. The existing
+Before any production GCP change, separately review the actual Gateway
+routing/readiness configuration and first singleton-to-HA maintenance transition. The existing
 singleton cannot retroactively provide resumable owners. Keep its database,
 bucket, keys, gateway and unrelated apps unchanged until that operator step has
 explicit approval. A local certificate does not authorize a production rollout.
@@ -662,7 +811,7 @@ headless repository Playwright runner, disposable mixed-version Kubernetes gate,
 and protected provider-ingress rehearsal. Do not report those gates as passed
 based only on these focused lifecycle tests.
 
-Current-source focused verification after co-located Evaluation integration:
+Earlier focused verification after co-located Evaluation integration:
 91 API/Evaluation/chart/invalidation/export tests and 25 HA/cutover/evidence tests
 passed. Seven immutable-build headless executor-origin checks passed, including
 idle-owner handoff. These receipts do not close the interrupted cluster gate.
@@ -684,7 +833,8 @@ so streamed output is not parsed twice. Custom/legacy URLs do not negotiate the
 new protocol. An isolated local `rivet-ha-proof` minikube profile was provisioned;
 cluster creation alone is **not** mixed-version application rehearsal evidence.
 Do not assume the isolated profile is stopped merely because its API is unreachable.
-No production/GCP resources were modified. The chart guard is still in place.
+Those local steps did not modify production or GCP resources. The chart guard
+remains in place.
 
 ### Local workload probes
 

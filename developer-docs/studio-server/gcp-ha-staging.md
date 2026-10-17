@@ -1,6 +1,56 @@
 # Isolated GCP HA qualification plan
 
-## Current qualification blocker (2026-10-17)
+## Current qualification result (2026-10-17)
+
+Candidate `d9ea8dd17` completed image workflow `39049988451` successfully;
+its exact promoted manifest was validated and saved before continuing. The
+actual `0704d0181` to `d9ea8dd17` disposable local mixed-version proof then
+passed: 2,591 primary workflow requests and 1,988 recovery requests, with zero
+failures in either stream and at least two ready ordinary backends throughout
+the primary rollout. Both retained browser journeys passed with genuinely
+different original/candidate build identities, no dashboard/editor reload,
+saved edits, new executions, output viewing and recording playback. Lost-begin-
+acknowledgement and real controller-lease-conflict recovery both passed.
+
+Those local receipts are preserved separately from the earlier failed attempts.
+The isolated GKE baseline setup completed after the namespace-scoped operator
+read repair described below. The actual `0704d0181` to `d9ea8dd17` primary
+upgrade through real PostgreSQL, GCS and trusted HTTPS then passed with 6,261
+workflow requests/zero failures and both retained-browser journeys passed.
+The full provider recovery then passed: 9,136 additional workflow requests with
+zero failures, both lost-acknowledgement and controller-lease-conflict recovery
+passed, and each original begin command was issued once. The separate public
+web-app observation finished with 5,300 successes and zero failures under normal
+TLS verification. Primary readiness never fell below two ordinary backends;
+the slowest observed workflow request was 758 ms during primary rollout and
+929 ms during recovery. These finite continuity probes are not a production
+capacity benchmark or a guarantee against arbitrary provider failure.
+
+The complete private evidence archive was downloaded and SHA-256 verified
+(`4bd5850dfde4442cdb88b3b210642044df467cba8b4f1f2bfe1a47254f2d4430`),
+and a sanitized summary was exported. Exact-inventory teardown verified zero
+remaining rehearsal billable resources, including all 27,028 bucket-object
+generations, the cluster, SQL instance, operator VM/disks and load balancer. The
+expiry monitor was then paused and its saved state verified. The restored
+project, billing association, default network and pre-existing service account
+and key were preserved; production was not accessed.
+
+Only the dedicated VPC `rivet-ha-20261017`, private-service connection and internal
+range `rivet-ha-psa-20261017` remain. Google rejected normal connection deletion
+because Cloud SQL retains producer resources for four days after instance
+deletion. Revisit these non-billable network artifacts after
+2026-10-21 20:00 UTC, checking the original numeric identities and known failed
+operation before issuing a new cleanup attempt. Do not force peering removal,
+recreate services, extend the billable window or delete the restored project.
+See [provider-retained networking](#provider-retained-networking).
+
+Qualification does not authorize a production change. The `d9ea8dd17` candidate
+follow-up changed only the local test edge and browser observation readiness,
+not application runtime, chart or wire protocol. Later browser-session hardening
+requires a new source-bound candidate and final image-pair qualification; see
+[final-candidate delivery](ha-rolling-upgrades.md#final-candidate-delivery).
+Recreating the removed paid staging resources is outside the expired allowance
+and requires fresh approval before provisioning.
 
 The owner approved a temporary private operator VM after Cloud Shell restarted
 twice and discarded its temporary checkout/local cluster, including during an
@@ -20,6 +70,16 @@ Verify the actual GKE subject: a VM metadata-token service account can authentic
 as its immutable numeric ID rather than its email. Bind only that new identity,
 then prove both allowed staging operations and denied unrelated namespace or
 cluster-wide operations before starting a rehearsal.
+Include `get`, `list` and `watch` for `endpointslices` in API group
+`discovery.k8s.io` in the namespace-scoped Role: retirement verifies actual
+EndpointSlice withdrawal, not only Pod readiness. The first baseline continuation
+exposed this missing read permission after template installation. Fixing the exact
+Role does not require a broader Google IAM role. Check the required reads before
+mutation, and verify that EndpointSlice deletion, foreign-namespace Pod listing,
+namespace deletion and cluster-wide writes remain denied. A CLI usage error is
+not evidence of denied access. Recover an interrupted baseline only with its
+original token and matching rendered configuration; never replay setup/seeding or
+turn that interruption into a passed provider certificate.
 Check client/server version skew too: the operator's `kubectl` must be within one
 minor of each tested cluster. This rehearsal uses a 1.35 client to bridge local
 1.34 and GKE 1.36, with its exact patch version and official binary checksum
@@ -53,7 +113,8 @@ and do not change runtime protocols based only on a test transport failure.
 Do not use the failed `956bcb5ba` or `5d7a51a2e` CI runs as a promoted baseline or advance a source branch
 until its complete image run and validated manifest have been harvested.
 
-The next release pair must be frozen only after those qualifications succeed.
+Freeze the baseline and candidate identities before testing the pair. Harvest
+their complete CI manifests before advancing either source.
 Re-use the existing staging installation and original synthetic seed; do not
 provision another project or replay seeding. Keep private operation artifacts in
 persistent operator storage, independent of the SSH session. A provider proof
@@ -63,7 +124,10 @@ inventory-fenced cleanup. Production is outside this operation.
 
 ## Rehearsal history and boundaries
 
-Status: the owner approved the isolated rehearsal's USD 50 allowance for at
+The following history predates the latest qualification summary above; partial
+or failed receipts below are not the current acceptance status.
+
+The owner approved the isolated rehearsal's USD 50 allowance for at
 most 24 hours. This is not a hard billing cap and does not authorize a production
 upgrade. The retained-browser local journey and source-bound CI qualification
 for `98f2b3c82cdbda2bca3fda477a1dd5fd8938ef33` have passed. The attempted fresh
@@ -79,8 +143,8 @@ now been provisioned. The rehearsal's recorded billable window runs from
 and project-scoped USD 50 budget alert are configured. Neither is a hard billing
 cap. Baseline application deployment, normally trusted HTTPS, key authentication,
 synthetic workflow/web-app publication and a headless Node-editor observation
-have passed. Mixed-version provider qualification is not complete: the first
-attempt failed on operator-session probe authentication and public-edge 503s,
+had passed. Mixed-version provider qualification was not complete at that point:
+the first attempt failed on operator-session probe authentication and public-edge 503s,
 as detailed below. The first cloud baseline exposed GCS rejecting
 AWS-signed generation-guard requests with mixed `x-amz`/`x-goog` headers. Repair
 `eb5a900fa0aaca34dcb47496a610c5afade688f4` uses one GOOG4 HMAC dialect for guarded
@@ -406,7 +470,7 @@ approval before extending them. Never disable shared billing as a cleanup method
 
 ## Cleanup safety
 
-Export sanitized diagnostics before cleanup. A later cleanup implementation must
+Export sanitized diagnostics before cleanup. Teardown must
 operate from the recorded new-project inventory, check project ID **and numeric
 project number**, ownership labels and exact resource identities, and print a
 reviewable deletion plan. Reject all protected identities above and refuse empty
@@ -419,3 +483,22 @@ HMAC keys without altering production credentials. Verify that disks, database
 backups, reserved addresses, load balancers, log sinks and bucket versions are
 accounted for so teardown does not leave unnoticed recurring charges. Never
 delete a project, database, bucket or cluster inferred from the current context.
+
+### Provider-retained networking
+
+Cloud SQL can acknowledge instance deletion while retaining its producer-side
+resources for four days. During that period normal private-connection deletion
+fails with `FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`; this is a known
+failed operation, not an uncertain acknowledgement to replay. Google explicitly
+warns against deleting the underlying VPC peering directly. Preserve the exact
+connection, internal range and dedicated VPC until the hold clears, then
+revalidate their recorded IDs/ownership and delete in dependency order. See
+[Google's private-services cleanup guidance](https://docs.cloud.google.com/vpc/docs/configure-private-services-access#deleting-connection).
+
+The unused connection has no hourly/data charge of its own, and internal IP
+addresses have no charge; provisioned producer resources and traffic are separate
+charges. Therefore verify the SQL delete operation completed, all compute,
+storage, public addresses and NAT are gone, and no live producer instances remain
+before classifying these network-only residuals as non-billable. Keep this residual
+inventory distinct from the completed billable teardown, and never claim every
+network artifact was deleted. See [Google's VPC pricing](https://cloud.google.com/vpc/pricing).
