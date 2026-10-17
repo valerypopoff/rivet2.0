@@ -57,7 +57,8 @@ receipts, not proof of a deployed or qualified staging installation.
 Record the first billable activation and derive the 24-hour expiry from it,
 rather than from the earlier approval conversation.
 
-The repaired hosted web package is patch-versioned as `1.26.1`. Its existing
+The five private Studio Server packages are patch-versioned together as
+`1.26.1`; the repository contract rejects a web-only bump. The web package's existing
 `VITE_APP_VERSION` stamp makes the second contract-2 candidate's browser bundle
 distinct from the repaired `1.26.0` baseline, without changing the executor wire
 protocol or mutating previously published assets. Both exact revisions still

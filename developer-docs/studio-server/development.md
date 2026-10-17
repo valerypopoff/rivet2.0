@@ -1296,8 +1296,11 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.26.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.26.1`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
+This patch includes resumable hosted-editor recording capture. Bump all five
+manifests together even when only one workspace has runtime changes; run the
+repository-structure check before building a release candidate.
 
 These private package versions are release metadata, not npm publication or
 container selectors. Studio Server images are built together from one Git
