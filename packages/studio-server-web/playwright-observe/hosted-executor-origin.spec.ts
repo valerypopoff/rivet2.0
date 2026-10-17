@@ -12,6 +12,9 @@ test('HA reconnect persists one complete editor recording without resubmitting t
     projectPath: '/workflows/ha-recording.rivet-project',
   });
   await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })));
+  // This fixture owns its API responses; optional background requests must not
+  // reach an unrelated server behind the preview's development proxy.
+  await page.route('**/api/**', route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
   await mockHostedEditorBootstrap(page);
   await page.route('**/api/config', route => route.fulfill({ json: {
     executorWsUrl: 'ws://rivet-internal/ws/executor/owner/recording-owner', executorWsUrlIsOverride: false,

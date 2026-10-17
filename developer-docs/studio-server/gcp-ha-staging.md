@@ -57,6 +57,15 @@ receipts, not proof of a deployed or qualified staging installation.
 Record the first billable activation and derive the 24-hour expiry from it,
 rather than from the earlier approval conversation.
 
+The repaired hosted web package is patch-versioned as `1.26.1`. Its existing
+`VITE_APP_VERSION` stamp makes the second contract-2 candidate's browser bundle
+distinct from the repaired `1.26.0` baseline, without changing the executor wire
+protocol or mutating previously published assets. Both exact revisions still
+need successful normal image qualification and the provider rollout proof;
+a package version or different image digest alone is not continuity evidence.
+The isolated reconnect browser regression also refuses unowned API requests,
+so optional background subscriptions cannot contact an ambient local server.
+
 Read-only preflight confirmed access to the existing open billing account and
 the deployment account. Use
 that billing account only for the selected staging project: do not alter
