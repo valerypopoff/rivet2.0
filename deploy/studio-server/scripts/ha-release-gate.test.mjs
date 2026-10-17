@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
-import { ProviderHaReleaseGate } from './kubernetes-ha-provider-gate.mjs';
+import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { parseAllDocuments } from 'yaml';
 import { publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
@@ -19,6 +19,35 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('provider transport retries only read-only TLS handshakes, never uncertain mutations', async () => {
+  const timeout = Error('Unable to connect to the server: net/http: TLS handshake timeout');
+  for (const args of [['get', 'pods'], ['-n', 'staging', '--request-timeout=30s', 'get', 'namespace'], ['config', 'view']]) {
+    let calls = 0;
+    const waits = [];
+    assert.equal(await withProviderReadRetry(args, async () => {
+      if (++calls < 3) throw timeout;
+      return 'fresh observation';
+    }, async ms => { waits.push(ms); }), 'fresh observation');
+    assert.equal(calls, 3);
+    assert.deepEqual(waits, [1000, 2000]);
+  }
+  for (const args of [['exec', 'pod', '--', 'retire'], ['scale', 'statefulset/owner'], ['replace', '-f', '-'],
+    ['delete', '--raw', '/pod'], ['create', '-f', '-'], ['apply', '-f', '-'], ['config', 'set-context', 'get'],
+    ['--unknown-option', 'get', 'pods']]) {
+    let calls = 0;
+    await assert.rejects(withProviderReadRetry(args, async () => { calls++; throw timeout; }, async () => {
+      throw Error('must not wait before replaying a mutation');
+    }), error => error === timeout);
+    assert.equal(calls, 1);
+  }
+  for (const error of [timeout, Error('Forbidden'), Error('namespace identity changed')]) {
+    let calls = 0;
+    await assert.rejects(withProviderReadRetry(['get', 'pods'], async () => { calls++; throw error; }, async () => {}),
+      caught => caught === error);
+    assert.equal(calls, error === timeout ? 3 : 1);
+  }
+});
 
 test('HA rollout and recovery observations honor the configured provider deadline', () => {
   assert.equal(haProofTimeoutMs({}), 600_000);

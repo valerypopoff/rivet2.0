@@ -125,6 +125,13 @@ Failed phases retain Kubernetes diagnostics and leave accepted work intact; ther
 is no automatic uninstall, rollback or replay. Closing any provider phase always
 retains the operator-owned namespace, regardless of local fixture cleanup options;
 only the separate identity-checked operation inventory owns infrastructure teardown.
+The provider transport retries an operator-side TLS handshake timeout at most
+twice (one- and two-second delays) for explicit Kubernetes `get` and read-only
+`config` observations. It never retries `exec`, retirement, scaling, journal
+writes, apply or deletion. Other errors and identity mismatches fail immediately;
+exhausted reads still stop safely. This addresses observed local-to-GKE TLS
+timeouts, not failed application requests: public traffic probes retain their
+zero-failure criterion with no success-only retries.
 Preparation failure must be reviewed
 before an operator removes that exact disposable release and starts again.
 

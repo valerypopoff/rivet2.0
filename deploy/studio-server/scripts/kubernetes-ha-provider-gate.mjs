@@ -19,6 +19,26 @@ import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
 
+/** A flaky operator connection may retry observations, never uncertain writes. */
+export async function withProviderReadRetry(args, operation, wait = (ms) => new Promise(r => setTimeout(r, ms))) {
+  let index = 0;
+  while (index < args.length) {
+    if (['-n', '--namespace'].includes(args[index])) index += 2;
+    else if (args[index].startsWith('--request-timeout=')) index++;
+    else break;
+  }
+  const readOnly = args[index] === 'get' ||
+    (args[index] === 'config' && ['view', 'current-context'].includes(args[index + 1]));
+  for (let attempt = 0; ; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      if (!readOnly || attempt === 2 || !/Unable to connect to the server: net\/http: TLS handshake timeout/.test(String(error)))
+        throw error;
+      await wait((attempt + 1) * 1000);
+    }
+  }
+}
+
 /** Provider observations are supplementary exact-pair evidence. They do not
  * replace or rewrite the production manifest's predecessor or certificate. */
 export function assertProviderHaPair(baseline, candidate) {
@@ -52,6 +72,9 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
     this.identity = identity;
     this.providerValues = values;
     this.config.proofValuesFiles = [config.valuesFile];
+  }
+  kubectl(args, options) {
+    return withProviderReadRetry(args, () => super.kubectl(args, options));
   }
   async assertProofContext() {
     assert.ok(Date.now() < Date.parse(this.identity.expiresAt), 'provider rehearsal has expired');
