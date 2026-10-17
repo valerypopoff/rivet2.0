@@ -132,6 +132,12 @@ upstream path, not an edge login URL. The HTTP regression verifies the public
 login request against a loopback HTTP server and preserves the issued session
 cookie without following redirects. It does not inspect nginx source text;
 the real HTTPS rehearsal verifies that the deployed proxy exposes that route.
+For repository UI observations against this installation, set `RIVET_ENV_FILE`
+to an isolated rehearsal file, not the developer's root `.env`; the observe runner
+loads file values over process values. Keep the staging key only in the process
+environment. Node recording observations must use the real `/api/config` response
+so the executor gets the current HA owner incarnation, rather than the browser-only
+bootstrap fixture's unowned `/ws/executor/internal` URL.
 Provider reports bind both exact manifests but are supplementary observations:
 they never rewrite canonical production lineage or become a deployment-authorizing
 manifest when the tested baseline differs from that manifest's predecessor.
