@@ -352,6 +352,7 @@ test('baseline publisher is isolated, digest-pinned and cleaned up after success
                       {
                         name: 'web',
                         image: 'current',
+                        lifecycle: { preStop: { exec: { command: ['sleep', '120'] } } },
                         env: [{ name: 'RIVET_WEB_ASSETS_INSTALLATION', value: 'disposable/fixture' }],
                       },
                     ],
@@ -372,6 +373,7 @@ test('baseline publisher is isolated, digest-pinned and cleaned up after success
     else assert.deepEqual(await publishHaBrowserBaseline(gate, image), { ...image, build: 'a'.repeat(64) });
     const pod = JSON.parse(calls.find((c) => c.command === 'create').options.input);
     assert.equal(pod.spec.containers[0].image, `${image.repository}@${image.digest}`);
+    assert.equal(pod.spec.containers[0].lifecycle, undefined, 'non-serving publisher needs no edge-drain hook');
     assert.equal(pod.metadata.labels, undefined, 'publisher must not enter a release Service');
     assert.equal(calls.at(-1).command, 'delete');
   }

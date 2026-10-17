@@ -26,6 +26,9 @@ export async function publishHaBrowserBaseline(gate, image) {
   assert.ok(template, 'a ready web template is required for baseline publication');
   const name = `browser-baseline-${randomUUID().slice(0, 8)}`;
   const container = template.spec.containers.find((c) => c.name === 'web');
+  // This publisher never joins a Service or receives user work. Do not inherit
+  // serving-pod edge-drain hooks, which can outlast its bounded cleanup wait.
+  const { lifecycle: _servingLifecycle, ...publisherContainer } = container;
   const pod = {
     apiVersion: 'v1',
     kind: 'Pod',
@@ -35,7 +38,7 @@ export async function publishHaBrowserBaseline(gate, image) {
       securityContext: template.spec.securityContext,
       imagePullSecrets: template.spec.imagePullSecrets,
       volumes: template.spec.volumes,
-      containers: [{ ...container, image: `${image.repository}@${image.digest}` }],
+      containers: [{ ...publisherContainer, image: `${image.repository}@${image.digest}` }],
     },
   };
   try {

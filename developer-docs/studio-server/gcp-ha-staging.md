@@ -145,6 +145,9 @@ latency](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/lo
 These are rehearsal settings, not a universal timing guarantee; preserve the
 zero-failed-request check and measure real withdrawal. A short local-cluster
 pre-stop default is not provider-edge qualification.
+The temporary retained-UI publisher never joins a Service and omits the serving
+container's lifecycle hook, so its cleanup does not wait for an irrelevant edge
+drain. Normal web/backend/execution pods retain their configured drain protection.
 
 Keep operation inventory writes serialized. Overlapping provider operations can
 finish in another order than they started; an old in-memory inventory snapshot
