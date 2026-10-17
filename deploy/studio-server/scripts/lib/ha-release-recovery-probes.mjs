@@ -7,6 +7,7 @@ import { runHaKubernetesRollout } from './ha-kubernetes-rollout.mjs';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { runManagedGateCommand as run } from '../kubernetes-managed-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './ha-release-probes.mjs';
+import { startHaWorkflowTraffic } from './ha-workflow-traffic.mjs';
 
 /** Faults are injected at the transport acknowledgement/CAS boundary of the
  * real disposable Kubernetes API. The production rollout implementation is not
@@ -17,25 +18,12 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
     gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
   const journalName = releaseOperationJournalName(gate.config.release);
   const journal = async () => JSON.parse((await kube(['get', 'configmap', journalName, '-o', 'json'])).stdout);
-  const report = { lostAcknowledgement: null, leaseLoss: null, samples: 0, failures: [] };
-  let running = true;
-  const traffic = (async () => {
-    while (running) {
-      try {
-        await gate.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
-          method: 'POST',
-          body: '{}',
-          timeoutMs: 15_000,
-        });
-        report.samples++;
-      } catch (error) {
-        report.failures.push(String(error));
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-  })();
+  let phase = 'starting';
+  const traffic = startHaWorkflowTraffic(gate, baseUrl, () => phase);
+  const report = { lostAcknowledgement: null, leaseLoss: null, ...traffic.report };
   try {
     for (const fault of ['lostAcknowledgement', 'leaseLoss']) {
+      phase = `${fault}:preparing`;
       const values = {
         ...gate.values(),
         podAnnotations: {
@@ -135,6 +123,7 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         },
       };
       let error;
+      phase = `${fault}:injecting`;
       try {
         await runHaKubernetesRollout(options);
       } catch (caught) {
@@ -150,7 +139,9 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
       assert.equal(record.owner.beginIssued, true);
       const pod = JSON.parse((await kube(['get', 'pod', original, '-o', 'json'])).stdout);
       assert.equal(pod.metadata.uid, record.owner.uid, 'unconfirmed runner must not delete the accepted owner');
+      phase = `${fault}:resuming`;
       await runHaKubernetesRollout({ ...options, beforeRetirement: undefined, resumeToken: record.token });
+      phase = `${fault}:settling`;
       await Promise.all(accepted.editors.map((p) => p.completed));
       for (const p of accepted.editors) {
         if (p.error) throw p.error;
@@ -166,11 +157,10 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         ...(fault === 'leaseLoss' ? { conflictObserved } : {}),
       };
     }
-    assert.equal(report.failures.length, 0, report.failures[0]);
-    return report;
   } finally {
-    running = false;
-    await traffic;
+    Object.assign(report, await traffic.stop());
     await gate.artifact('ha-recovery-probes.json', JSON.stringify(report, null, 2));
   }
+  assert.equal(report.failures.length, 0, report.failures[0]);
+  return report;
 }

@@ -426,10 +426,13 @@ async function requestJson(baseUrl, route, options = {}) {
   } catch {
     body = text;
   }
-  if (!response.ok)
-    throw new Error(
+  if (!response.ok) {
+    const error = new Error(
       `${options.method ?? 'GET'} ${route} returned ${response.status}: ${typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body)}`,
     );
+    error.status = response.status;
+    throw error;
+  }
   return body;
 }
 

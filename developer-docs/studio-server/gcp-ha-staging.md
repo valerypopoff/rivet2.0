@@ -1,5 +1,27 @@
 # Isolated GCP HA qualification plan
 
+## Current qualification blocker (2026-10-17)
+
+The `956bcb5ba` and `5d7a51a2e` image attempts are not qualified: their primary
+browser/rollout journeys passed, but recovery traffic observed a timeout and
+Service connection refusals respectively. The local HA runner inherited the
+managed-disruption overlay's immediate nginx shutdown. Its HA-specific values
+now restore normal lifecycle grace rather than weakening the zero-failure
+criterion. Traffic observations also await the final request and retain safe
+request/phase/timing evidence. These changes still require live qualification.
+Do not use either failed run as a promoted baseline or advance a source branch
+until its complete image run and validated manifest have been harvested.
+
+The next release pair must be frozen only after those qualifications succeed.
+Re-use the existing staging installation and original synthetic seed; do not
+provision another project or replay seeding. Keep private operation artifacts in
+persistent Cloud Shell home storage, independent of disposable source/browser
+caches. A provider proof remains incomplete until its full mixed-version,
+retained-browser and recovery reports pass, followed by sanitized export and
+inventory-fenced cleanup. Production is outside this operation.
+
+## Rehearsal history and boundaries
+
 Status: the owner approved the isolated rehearsal's USD 50 allowance for at
 most 24 hours. This is not a hard billing cap and does not authorize a production
 upgrade. The retained-browser local journey and source-bound CI qualification

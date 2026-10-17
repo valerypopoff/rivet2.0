@@ -4,6 +4,7 @@ import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest, wi
 import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { parseAllDocuments } from 'yaml';
 import { publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,54 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('HA traffic stop includes a late in-flight failure without retrying or retaining secrets', async () => {
+  let rejectRequest, calls = 0, phase = 'leaseLoss:injecting';
+  const gate = { requestWorkflow: (url, route, options) => {
+    calls++;
+    assert.equal(url, 'https://staging.example.test');
+    assert.equal(route, '/workflows/managed-release-workflow');
+    assert.equal(options.timeoutMs, 15_000);
+    assert.match(options.headers['x-rivet-ha-probe-id'], /^[a-f0-9-]{36}$/);
+    return new Promise((_resolve, reject) => { rejectRequest = reject; });
+  } };
+  const traffic = startHaWorkflowTraffic(gate, 'https://staging.example.test', () => phase);
+  let settled = false;
+  const stop = traffic.stop().then(report => { settled = true; return report; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'shutdown waits for the actual request');
+  phase = 'leaseLoss:settling';
+  rejectRequest(Object.assign(Error('secret response body'), {
+    name: 'TimeoutError', cause: { code: 'UND_ERR_SOCKET', token: 'secret-key' }, status: 504,
+  }));
+  const report = await stop;
+  assert.equal(calls, 1, 'failed POST is never replayed');
+  assert.equal(report.samples, 0);
+  assert.equal(report.failures.length, 1);
+  const failure = report.failedRequests[0];
+  assert.equal(failure.phase, 'leaseLoss:injecting', 'capture phase at dispatch, not settlement');
+  assert.deepEqual(failure.error, { name: 'TimeoutError', code: 'UND_ERR_SOCKET', status: 504 });
+  assert.ok(Number.isFinite(Date.parse(failure.startedAt)));
+  assert.ok(Number.isFinite(Date.parse(failure.finishedAt)));
+  assert.ok(failure.elapsedMs >= 0);
+  assert.equal(report.slowestRequest, failure);
+  assert.doesNotMatch(JSON.stringify(report), /secret|authorization|https:/i);
+  assert.equal(await traffic.stop(), report, 'repeated stop is observational');
+});
+
+test('HA traffic counts successful terminal requests and rejects empty execution responses', async () => {
+  for (const result of [{ outputs: {} }, null]) {
+    let resolveRequest;
+    const traffic = startHaWorkflowTraffic({ requestWorkflow: () => new Promise(resolve => { resolveRequest = resolve; }) },
+      'https://staging.example.test');
+    const stop = traffic.stop();
+    resolveRequest(result);
+    const report = await stop;
+    assert.equal(report.samples, result ? 1 : 0);
+    assert.equal(report.failures.length, result ? 0 : 1);
+    assert.equal(report.slowestRequest.phase, 'rollout');
+  }
+});
 
 test('each disposable HA proof changes both frontend templates even when images are unchanged', () => {
   const base = {
@@ -38,6 +87,16 @@ test('each disposable HA proof changes both frontend templates even when images 
     assert.notEqual(first.podAnnotations[role]['rivet.dev/ha-proof-generation'], second.podAnnotations[role]['rivet.dev/ha-proof-generation']);
   }
   assert.deepEqual(first.podAnnotations.evaluation, base.podAnnotations.evaluation);
+});
+
+test('HA proof overrides the disruptive managed fixture with production lifecycle grace', () => {
+  const images = Object.fromEntries(['api', 'web', 'proxy', 'executor'].map(role =>
+    [role, { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` }]));
+  const gate = new HaReleaseGate({ images, registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: { version: 1 } }, 'unused', 'unused');
+  const values = gate.values();
+  assert.deepEqual(values.lifecycle, {
+    preStopDelaySeconds: 5, shutdownGraceSeconds: 120, terminationGracePeriodSeconds: 150,
+  });
 });
 
 test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {

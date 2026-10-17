@@ -9,6 +9,30 @@ uncertain execution. A long-running or paused execution may block retirement.
 This is not a guarantee against simultaneous provider failure or arbitrary pod
 termination. Legacy restore remains an explicitly destructive maintenance task.
 
+### Traffic failure evidence
+
+Primary and recovery probes send each workflow POST once, with the same 15-second
+deadline and 25-millisecond cadence. They stop admission and await the last
+in-flight request **before** asserting zero failures. A late timeout during probe
+shutdown must fail qualification too. Reports retain request IDs, dispatch phase,
+UTC start/end, elapsed time, HTTP status and transport error code, plus the slowest
+request; they do not retain authorization, bodies or error stacks. The disposable
+local edge access records contain only correlated probe IDs, status and upstream
+timings (no URL, query, headers or bodies), so pod replacement cannot erase the
+edge evidence. Ordinary nginx error logs remain private diagnostic material.
+The recovery-only `recovery` command reuses a prepared disposable local fixture
+and immutable images; it is not a production deployment or a substitute for the
+full mixed-version/browser qualification. Never retry a failed workflow POST or
+raise its deadline to make qualification pass.
+
+The local HA fixture overrides the shared managed-disruption overlay's zero
+pre-stop delay and shortened shutdown settings with the chart's normal lifecycle
+grace (5-second endpoint withdrawal, 120-second shutdown, 150-second termination).
+The disruption fixture intentionally interrupts sockets; inheriting its immediate
+nginx exit caused real Service connection refusals during the recovery rollout.
+Provider rehearsals continue to use their independently qualified provider values,
+including the longer GKE edge propagation and drain windows.
+
 ## Implemented prerequisites
 
 - An opt-in hosted executor session now has one process-local logical owner,

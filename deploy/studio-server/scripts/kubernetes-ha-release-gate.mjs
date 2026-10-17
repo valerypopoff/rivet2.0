@@ -20,6 +20,7 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 import { createHaReleaseEvidence, selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { startHaBrowserProbe, publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -66,6 +67,9 @@ export class HaReleaseGate extends ManagedReleaseGate {
       ha: { enabled: true, protocol: 1, peerLimit: 4 },
       replicaCount: { backend: 2, execution: 2 },
       hostedEvaluations: { enabled: true, workerConcurrency: 1 },
+      // The shared managed gate deliberately uses preStop=0 to interrupt a
+      // socket. HA must allow Service endpoint withdrawal before nginx exits.
+      lifecycle: { preStopDelaySeconds: 5, shutdownGraceSeconds: 120, terminationGracePeriodSeconds: 150 },
       postgres: { ...renderManagedReleaseGateValues(config).postgres, maxConnections: 250 },
       availability: { topologySpread: { whenUnsatisfiable: 'ScheduleAnyway' } },
       legacyRestore: { enabled: true, size: '8Gi' },
@@ -127,7 +131,10 @@ export class HaReleaseGate extends ManagedReleaseGate {
     const name = `${this.config.release}-ha-edge`;
     const labels = { 'rivet-ha-test-edge': name };
     const config =
-      'pid /tmp/nginx.pid; events {} http { client_body_temp_path /tmp/client; proxy_temp_path /tmp/proxy; fastcgi_temp_path /tmp/fastcgi; uwsgi_temp_path /tmp/uwsgi; scgi_temp_path /tmp/scgi; access_log off; error_log /dev/stderr; server { listen 8080; location / { proxy_pass http://' +
+      'pid /tmp/nginx.pid; events {} http { client_body_temp_path /tmp/client; proxy_temp_path /tmp/proxy; fastcgi_temp_path /tmp/fastcgi; uwsgi_temp_path /tmp/uwsgi; scgi_temp_path /tmp/scgi; ' +
+      'map $http_x_rivet_ha_probe_id $ha_probe { "" 0; default 1; } ' +
+      'log_format ha_probe escape=json \'{"at":"$time_iso8601","requestId":"$http_x_rivet_ha_probe_id","status":"$status","elapsed":"$request_time","upstream":"$upstream_addr","upstreamStatus":"$upstream_status","connect":"$upstream_connect_time","headers":"$upstream_header_time","response":"$upstream_response_time"}\'; ' +
+      'access_log /dev/stdout ha_probe if=$ha_probe; error_log /dev/stderr; server { listen 8080; location / { proxy_pass http://' +
       this.config.release +
       '-proxy:80; proxy_http_version 1.1; proxy_set_header Host $http_host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 600s; } } }';
     const resources = [
@@ -274,10 +281,10 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     await browser.close();
     throw error;
   }
-  let running = true,
-    samples = 0;
-  const failures = [],
-    readiness = [];
+  let running = true;
+  const traffic = startHaWorkflowTraffic(gate, baseUrl);
+  const { failures } = traffic.report;
+  const readiness = [];
   const readySampler = (async () => {
     while (running) {
       try {
@@ -309,22 +316,6 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
         failures.push(`Readiness observation failed: ${error}`);
       }
       await pause(1000);
-    }
-  })();
-  const traffic = (async () => {
-    while (running) {
-      try {
-        const result = await gate.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
-          method: 'POST',
-          body: JSON.stringify({ input: `ha-sample-${samples}` }),
-          timeoutMs: 15_000,
-        });
-        if (!result) throw Error('Empty execution');
-        samples++;
-      } catch (error) {
-        failures.push(String(error));
-      }
-      await pause(25);
     }
   })();
   let rollout, workloadReport;
@@ -375,13 +366,13 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     workloadReport = await probes.finish();
     workloadReport.browser = await browser.finish(before);
     workloadReport.oldestBrowser = { ...(await oldestBrowser.finish(before)), image: baselineImage };
-    while (samples < 100 && !failures.length) await pause(25);
+    while (traffic.report.samples < 100 && !failures.length) await pause(25);
   } finally {
     running = false;
-    await Promise.all([traffic, readySampler]);
+    await Promise.all([traffic.stop(), readySampler]);
     await browser.close();
     await oldestBrowser.close();
-    await gate.artifact('ha-traffic.json', JSON.stringify({ samples, failures, readiness }, null, 2));
+    await gate.artifact('ha-traffic.json', JSON.stringify({ ...traffic.report, readiness }, null, 2));
     await gate.artifact('ha-workload-probes.json', JSON.stringify(probes.snapshot(), null, 2));
   }
   if (failures.length) throw new Error(`HA traffic had ${failures.length} failures: ${failures[0]}`);
@@ -402,7 +393,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       )
     ).stdout,
   ).items;
-  const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after, browserContract };
+  const report = { ...traffic.report, readiness, workloads: workloadReport, rollout, before, after, browserContract };
   await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
   return report;
 }
