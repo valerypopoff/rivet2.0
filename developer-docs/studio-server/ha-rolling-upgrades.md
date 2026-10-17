@@ -921,6 +921,10 @@ injection. An unknown begin acknowledgement never arms the lease-loss fault in
 runner cleanup. The original failure remains chained if the expected conflict is
 absent.
 Explicit exact-token recovery must observe the command, never issue it twice.
+The paused-editor fixture measures its hold with a monotonic clock and rechecks
+the minimum duration after timer wakeups. It does not infer elapsed time from a
+VM wall clock or weaken the 45-second observation. Individual editor receipts are
+saved before validation, including on a failed recovery observation.
 Public requests continue during both fault/recovery sequences. Their receipts
 and zero-failure traffic report are required before certificate generation.
 The standalone `recovery` phase can exercise these faults after a successful

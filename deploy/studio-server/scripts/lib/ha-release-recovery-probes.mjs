@@ -155,10 +155,13 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
       await runHaKubernetesRollout({ ...options, beforeRetirement: undefined, resumeToken: record.token });
       phase = `${fault}:settling`;
       await Promise.all(accepted.editors.map((p) => p.completed));
+      await gate.artifact(`recovery-${fault}/editor-receipts.json`, JSON.stringify(
+        accepted.editors.map((p) => ({ pod: p.pod, uid: p.uid, receipt: p.receipt, error: p.error?.name ?? null })), null, 2,
+      ));
       for (const p of accepted.editors) {
         if (p.error) throw p.error;
         assert.equal(p.receipt?.phase, 'passed');
-        assert.ok(p.receipt.heldMs >= 45_000);
+        assert.ok(p.receipt.heldMs >= 45_000, `accepted editor hold was ${p.receipt.heldMs}ms; at least 45000ms is required`);
       }
       assert.equal(state.begins, 1, 'exact-token recovery must observe, not replay, the original begin');
       report[fault] = {

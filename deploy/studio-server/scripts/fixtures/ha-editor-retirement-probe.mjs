@@ -111,8 +111,11 @@ try {
     const value = await status();
     return value.state === 'draining' ? value : null;
   });
-  const heldFrom = Date.now();
-  await delay(Number(hold)); // Exceeds forced shutdown; recovery also crosses the journal heartbeat.
+  const heldFrom = performance.now();
+  // Timers may wake early and VM wall clocks may be adjusted. Preserve the
+  // actual minimum observation rather than padding or weakening its receipt.
+  while (performance.now() - heldFrom < Number(hold))
+    await delay(Math.max(1, Number(hold) - (performance.now() - heldFrom)));
   const stillOwned = await status();
   assert.equal(stillOwned.incarnation, retiring.incarnation);
   assert.notEqual(stillOwned.state, 'drained');
@@ -144,7 +147,7 @@ try {
     phase: 'passed',
     pod: process.env.RIVET_POD_NAME,
     neighbor,
-    heldMs: Date.now() - heldFrom,
+    heldMs: performance.now() - heldFrom,
     editorResumed: true,
     starts: 1,
     completions: 1,
