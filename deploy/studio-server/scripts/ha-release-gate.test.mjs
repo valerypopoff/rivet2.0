@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest, withHaProofGeneration } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
-import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { parseAllDocuments } from 'yaml';
 import { publishHaBrowserBaseline, waitForHaFrontendReplacement, hasHaBrowserReadyTransport } from './lib/ha-browser-probe.mjs';
@@ -23,6 +23,91 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+function recoveryCasFixture() {
+  let version = 7;
+  const record = { token: 'operation', runner: 'controller', owner: { name: 'owner-0', uid: 'original', beginIssued: true } };
+  let current = { metadata: { name: 'journal', resourceVersion: String(version) }, data: { record: JSON.stringify(record) } };
+  const calls = [];
+  const kube = async (args, extra) => {
+    calls.push(args[0]);
+    if (args[0] === 'exec') return { stdout: 'accepted' };
+    const next = JSON.parse(extra.input);
+    if (next.metadata.resourceVersion !== current.metadata.resourceVersion)
+      throw Error('Error from server (Conflict): configmap has been modified');
+    current = { ...next, metadata: { ...next.metadata, resourceVersion: String(++version) } };
+    return { stdout: JSON.stringify(current) };
+  };
+  return { kube, calls, journal: async () => structuredClone(current), heartbeat: () => {
+    current.metadata.resourceVersion = String(++version);
+  } };
+}
+
+test('lease-loss injection fences the serialized runner write, not a heartbeat racing the injector', async () => {
+  const f = recoveryCasFixture();
+  const fault = createHaRecoveryFaultTransport('leaseLoss', f.kube, f.journal, 'journal');
+  await fault.send(['exec', 'owner-0', '--begin-only']);
+  assert.deepEqual(f.calls, ['exec'], 'begin acceptance must not race another controller heartbeat with an injector write');
+  assert.equal(fault.state.injected, false);
+  f.heartbeat(); // A real heartbeat may advance the API version before the next serialized write.
+  const next = await f.journal();
+  await assert.rejects(fault.send(['replace', '-f', '-'], { input: JSON.stringify(next) }), /Error from server \(Conflict\)/);
+  assert.deepEqual(f.calls, ['exec', 'replace', 'replace']);
+  assert.equal(fault.state.injected, true);
+  assert.equal(fault.state.conflictObserved, true);
+  assert.equal(fault.state.begins, 1);
+  assert.notEqual(JSON.parse((await f.journal()).data.record).runner, 'controller');
+  assert.ok(JSON.parse((await f.journal()).data.record).leaseExpiresAt < Date.now());
+  const recovered = await f.journal();
+  await fault.send(['replace', '-f', '-'], { input: JSON.stringify(recovered) });
+  assert.equal(f.calls.filter(value => value === 'exec').length, 1, 'recovery does not replay begin or reinject');
+});
+
+test('lease fault neither mutates a foreign journal nor treats unrelated failures as a confirmed API conflict', async () => {
+  for (const mode of ['foreign', 'unavailable', 'injector-unknown']) {
+    const f = recoveryCasFixture();
+    let replacements = 0;
+    const kube = async (args, extra) => {
+      if (args[0] === 'replace') {
+        replacements++;
+        if (mode === 'injector-unknown' || (mode === 'unavailable' && replacements === 2))
+          throw Error('connection lost; outcome unknown');
+      }
+      return f.kube(args, extra);
+    };
+    const fault = createHaRecoveryFaultTransport('leaseLoss', kube, f.journal, 'journal');
+    await fault.send(['exec', 'owner-0', '--begin-only']);
+    const next = await f.journal();
+    if (mode === 'foreign') next.data.record = JSON.stringify({ ...JSON.parse(next.data.record), token: 'another operation' });
+    await assert.rejects(fault.send(['replace', '-f', '-'], { input: JSON.stringify(next) }));
+    assert.equal(fault.state.conflictObserved, false);
+    assert.equal(fault.state.injected, mode === 'unavailable');
+    assert.equal(replacements, mode === 'foreign' ? 0 : mode === 'unavailable' ? 2 : 1,
+      'unknown writes and foreign journal state are never retried');
+  }
+});
+
+test('lost-acknowledgement probe sends the accepted begin once and does not modify its journal', async () => {
+  const f = recoveryCasFixture();
+  const fault = createHaRecoveryFaultTransport('lostAcknowledgement', f.kube, f.journal, 'journal');
+  await assert.rejects(fault.send(['exec', 'owner-0', '--begin-only']), /Injected lost begin acknowledgement/);
+  assert.equal(fault.state.injected, true);
+  assert.equal(fault.state.begins, 1);
+  assert.deepEqual(f.calls, ['exec']);
+});
+
+test('an unacknowledged begin cannot arm the lease-loss fault during runner cleanup', async () => {
+  const f = recoveryCasFixture();
+  const fault = createHaRecoveryFaultTransport('leaseLoss', async (args, extra) => {
+    if (args[0] === 'exec') throw Error('begin outcome unknown');
+    return f.kube(args, extra);
+  }, f.journal, 'journal');
+  await assert.rejects(fault.send(['exec', 'owner-0', '--begin-only']), /begin outcome unknown/);
+  await fault.send(['replace', '-f', '-'], { input: JSON.stringify(await f.journal()) });
+  assert.equal(fault.state.beginAccepted, false);
+  assert.equal(fault.state.injected, false);
+  assert.deepEqual(f.calls, ['replace'], 'cleanup records its original outcome without injecting another fault');
+});
 
 test('retained browser waits for all old sockets to close and all replacement sessions to finish replay', () => {
   const first = { closed: false, ready: true, resumed: false };

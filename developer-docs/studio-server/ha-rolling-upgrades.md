@@ -909,8 +909,18 @@ automatic change to an operator's production database capacity.
 Certification additionally injects a lost begin acknowledgement and a real
 ConfigMap resource-version conflict into that same disposable Kubernetes API.
 The latter holds an accepted editor paused beyond the 30-second journal
-heartbeat. Both interrupted runners must retain their exact original pod UID;
-explicit exact-token recovery must observe the command, never issue it twice.
+heartbeat. Both interrupted runners must retain their exact original pod UID.
+
+Lease-loss injection is placed immediately before the serialized runner's next
+journal replacement, after begin is accepted. The injector commits through the
+real API, then the original stale-version write must receive an explicit API
+`Conflict`. Injecting immediately after begin can instead race the heartbeat and
+make the injector lose the CAS; that is not controller-fencing evidence. Unknown
+injection outcomes are never retried, and a different operation/runner blocks
+injection. An unknown begin acknowledgement never arms the lease-loss fault in
+runner cleanup. The original failure remains chained if the expected conflict is
+absent.
+Explicit exact-token recovery must observe the command, never issue it twice.
 Public requests continue during both fault/recovery sequences. Their receipts
 and zero-failure traffic report are required before certificate generation.
 The standalone `recovery` phase can exercise these faults after a successful
