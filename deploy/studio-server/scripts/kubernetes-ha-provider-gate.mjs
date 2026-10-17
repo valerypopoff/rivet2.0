@@ -92,6 +92,7 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
       this.identity.operation,
       'provider namespace is not owned by this rehearsal',
     );
+    assert.ok(Date.now() < Date.parse(this.identity.expiresAt), 'provider rehearsal expired during identity checks');
   }
   values(images = this.config.images) {
     return {

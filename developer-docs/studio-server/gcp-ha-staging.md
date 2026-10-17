@@ -132,6 +132,8 @@ writes, apply or deletion. Other errors and identity mismatches fail immediately
 exhausted reads still stop safely. This addresses observed local-to-GKE TLS
 timeouts, not failed application requests: public traffic probes retain their
 zero-failure criterion with no success-only retries.
+Expiry is rechecked after identity observations, so a read retry cannot carry a
+new mutation across the approved end of the rehearsal window.
 Preparation failure must be reviewed
 before an operator removes that exact disposable release and starts again.
 

@@ -272,6 +272,21 @@ test('expired provider rehearsal refuses work before contacting the cluster or r
   await assert.rejects(gate.seed(), /expired/);
 });
 
+test('provider expiry during a read retry or identity check still fences the next mutation', async (t) => {
+  const gate = providerFixture();
+  const expiry = Date.parse(gate.identity.expiresAt);
+  let now = expiry - 1;
+  t.mock.method(Date, 'now', () => now);
+  gate.assertContext = async () => {};
+  gate.kubectl = async (args) => {
+    if (args[0] === 'config') return { stdout: JSON.stringify({ clusters: [{ cluster: { server: gate.identity.clusterServer } }] }) };
+    now = expiry;
+    return { stdout: JSON.stringify({ metadata: { uid: gate.identity.namespaceUid,
+      labels: { 'rivet.dev/ha-rehearsal': gate.identity.operation } } }) };
+  };
+  await assert.rejects(gate.assertProofContext(), /expired during identity checks/);
+});
+
 test('uncertain provider seed cannot replay any application mutation', async () => {
   const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-provider-seed-'));
   try {
