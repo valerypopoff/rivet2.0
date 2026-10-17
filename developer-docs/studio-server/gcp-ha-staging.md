@@ -2,12 +2,38 @@
 
 ## Current qualification blocker (2026-10-17)
 
+The owner approved a temporary private operator VM after Cloud Shell restarted
+twice and discarded its temporary checkout/local cluster, including during an
+active keepalive. Lost sessions are incomplete evidence, not successful proofs.
+Operator source, caches, browser binaries and private receipts now belong on its
+persistent boot disk. Run long phases detached with separate PID, log and exit
+receipts; reconnect to inspect them rather than replaying an uncertain phase.
+Use a new keyless identity with cluster-metadata access and namespace-limited
+Kubernetes RBAC, IAP-only SSH and an authenticated host-key pin. Do not grant
+production access or reuse pre-existing service-account keys. Record the VM,
+auto-delete disk, firewall, identity and bindings in the same exact-identity
+cleanup inventory. This does not extend the original allowance or expiry.
+Delete the operator and verify disk reclamation after exporting evidence and
+before removing the rehearsal network. Cloud Shell remains optional transport,
+not the lifetime owner of a running proof.
+Verify the actual GKE subject: a VM metadata-token service account can authenticate
+as its immutable numeric ID rather than its email. Bind only that new identity,
+then prove both allowed staging operations and denied unrelated namespace or
+cluster-wide operations before starting a rehearsal.
+
 The `956bcb5ba` and `5d7a51a2e` image attempts are not qualified: their primary
 browser/rollout journeys passed, but recovery traffic observed a timeout and
 Service connection refusals respectively. The local HA runner inherited the
 managed-disruption overlay's immediate nginx shutdown. Its HA-specific values
-now restore normal lifecycle grace rather than weakening the zero-failure
-criterion. Traffic observations also await the final request and retain safe
+now allow endpoint withdrawal without weakening the zero-failure criterion.
+Qualified baseline `0704d0181` completed image workflow
+`39040608728` successfully, including the full primary/browser and recovery gate
+(the optional provider/capacity/Evaluation jobs were not requested). Its validated
+promoted manifest was harvested before advancing `develop`. Its follow-up narrows
+the local-only lifecycle values to pre-stop 5, inherited shutdown 15 and termination
+45 seconds (the chart's minimum finalization margin), rather than unnecessarily
+copying production's long shutdown deadlines. This is covered by an actual Helm
+render regression. Traffic observations also await the final request and retain safe
 request/phase/timing evidence. These changes still require live qualification.
 Do not use either failed run as a promoted baseline or advance a source branch
 until its complete image run and validated manifest have been harvested.
@@ -15,8 +41,8 @@ until its complete image run and validated manifest have been harvested.
 The next release pair must be frozen only after those qualifications succeed.
 Re-use the existing staging installation and original synthetic seed; do not
 provision another project or replay seeding. Keep private operation artifacts in
-persistent Cloud Shell home storage, independent of disposable source/browser
-caches. A provider proof remains incomplete until its full mixed-version,
+persistent operator storage, independent of the SSH session. A provider proof
+remains incomplete until its full mixed-version,
 retained-browser and recovery reports pass, followed by sanitized export and
 inventory-fenced cleanup. Production is outside this operation.
 
@@ -80,9 +106,9 @@ Record the first billable activation and derive the 24-hour expiry from it,
 rather than from the earlier approval conversation.
 
 The five private Studio Server packages are patch-versioned together as
-`1.26.1`; the repository contract rejects a web-only bump. The web package's existing
+`1.26.2`; the repository contract rejects a web-only bump. The web package's existing
 `VITE_APP_VERSION` stamp makes the second contract-2 candidate's browser bundle
-distinct from the repaired `1.26.0` baseline, without changing the executor wire
+distinct from the qualified `0704d0181` / `1.26.1` baseline, without changing the executor wire
 protocol or mutating previously published assets. Both exact revisions still
 need successful normal image qualification and the provider rollout proof;
 a package version or different image digest alone is not continuity evidence.

@@ -13,10 +13,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
+  readManagedWorkflowSchemaReleaseContract,
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
@@ -89,14 +91,34 @@ test('each disposable HA proof changes both frontend templates even when images 
   assert.deepEqual(first.podAnnotations.evaluation, base.podAnnotations.evaluation);
 });
 
-test('HA proof overrides the disruptive managed fixture with production lifecycle grace', () => {
+test('rendered HA proof preserves endpoint withdrawal and the short shutdown challenge', async () => {
   const images = Object.fromEntries(['api', 'web', 'proxy', 'executor'].map(role =>
     [role, { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` }]));
-  const gate = new HaReleaseGate({ images, registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: { version: 1 } }, 'unused', 'unused');
+  const gate = new HaReleaseGate({ images, release: 'ha-fixture', imagePullPolicy: 'IfNotPresent',
+    registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir) }, 'unused', 'unused');
   const values = gate.values();
   assert.deepEqual(values.lifecycle, {
-    preStopDelaySeconds: 5, shutdownGraceSeconds: 120, terminationGracePeriodSeconds: 150,
+    preStopDelaySeconds: 5, terminationGracePeriodSeconds: 45,
   });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ha-render-'));
+  try {
+    const file = path.join(dir, 'values.json');
+    await fs.writeFile(file, JSON.stringify(values));
+    const rendered = execFileSync(resolveHelmBinOrThrow(rootDir), ['template', 'ha-fixture',
+      path.join(rootDir, 'deploy/studio-server/helm'), '-n', 'ha-fixture', '-f',
+      path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'), '-f', file], { encoding: 'utf8' });
+    const workloads = parseAllDocuments(rendered).map(doc => {
+      assert.equal(doc.errors.length, 0);
+      return doc.toJSON();
+    }).filter(value => ['Deployment', 'StatefulSet'].includes(value?.kind));
+    const proxy = workloads.find(value => value.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+    assert.deepEqual(proxy.spec.template.spec.containers[0].lifecycle.preStop.exec.command, ['/bin/sh', '-c', 'sleep 5']);
+    for (const workload of workloads) assert.equal(workload.spec.template.spec.terminationGracePeriodSeconds, 45);
+    const backend = workloads.find(value => value.metadata.labels['app.kubernetes.io/component'] === 'backend');
+    const env = backend.spec.template.spec.containers.find(value => value.name === 'backend').env;
+    assert.equal(env.find(value => value.name === 'RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS').value, '15');
+    assert.equal(env.find(value => value.name === 'RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS').value, '25000');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {

@@ -69,7 +69,9 @@ export class HaReleaseGate extends ManagedReleaseGate {
       hostedEvaluations: { enabled: true, workerConcurrency: 1 },
       // The shared managed gate deliberately uses preStop=0 to interrupt a
       // socket. HA must allow Service endpoint withdrawal before nginx exits.
-      lifecycle: { preStopDelaySeconds: 5, shutdownGraceSeconds: 120, terminationGracePeriodSeconds: 150 },
+      // Retain the fixture's short application shutdown deadline. The chart
+      // also requires a 25-second finalization margin: 5 + 15 + 25 = 45.
+      lifecycle: { preStopDelaySeconds: 5, terminationGracePeriodSeconds: 45 },
       postgres: { ...renderManagedReleaseGateValues(config).postgres, maxConnections: 250 },
       availability: { topologySpread: { whenUnsatisfiable: 'ScheduleAnyway' } },
       legacyRestore: { enabled: true, size: '8Gi' },

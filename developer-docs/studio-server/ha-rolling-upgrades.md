@@ -26,8 +26,14 @@ full mixed-version/browser qualification. Never retry a failed workflow POST or
 raise its deadline to make qualification pass.
 
 The local HA fixture overrides the shared managed-disruption overlay's zero
-pre-stop delay and shortened shutdown settings with the chart's normal lifecycle
-grace (5-second endpoint withdrawal, 120-second shutdown, 150-second termination).
+pre-stop delay with 5 seconds for endpoint withdrawal, while retaining its short
+15-second application shutdown challenge. Its termination grace is 45 seconds,
+the minimum allowing pre-stop + shutdown + the chart's 25-second finalization
+margin. A rendered-Helm regression checks the effective merged values, not just
+the override object. Accepted editor work (25 seconds) and the longer recovery,
+background and Evaluation probes (45 seconds) exceed the application shutdown
+deadline; the separate paused-browser probe stays paused until old frontend UIDs
+are actually removed. Do not lengthen shutdown to make these proofs pass.
 The disruption fixture intentionally interrupts sockets; inheriting its immediate
 nginx exit caused real Service connection refusals during the recovery rollout.
 Provider rehearsals continue to use their independently qualified provider values,
