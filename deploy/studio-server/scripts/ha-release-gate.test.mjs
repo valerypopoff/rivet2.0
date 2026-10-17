@@ -199,11 +199,6 @@ test('provider browser uses the ordinary authenticated session without following
 });
 
 test('provider HTTP login uses the public proxy contract and retains only its session cookie', async () => {
-  const proxy = await fs.readFile(
-    path.join(rootDir, 'deploy/studio-server/images/proxy/default.conf.template'),
-    'utf8',
-  );
-  assert.match(proxy, /location = \/__rivet_auth \{/);
   const server = createServer(async (req, res) => {
     if (req.url !== '/__rivet_auth') {
       res.writeHead(404).end();

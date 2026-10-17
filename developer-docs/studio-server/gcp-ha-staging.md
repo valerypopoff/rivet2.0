@@ -126,7 +126,9 @@ SELECTs through the installed API's actual managed PostgreSQL connection, not a
 local fixture. The shared bundle download retains that UI session as well.
 The public key-login route is `/__rivet_auth`; `/ui-auth` is the API's internal
 upstream path, not an edge login URL. The HTTP regression verifies the public
-proxy contract and preserves the issued session cookie without following redirects.
+login request against a loopback HTTP server and preserves the issued session
+cookie without following redirects. It does not inspect nginx source text;
+the real HTTPS rehearsal verifies that the deployed proxy exposes that route.
 Provider reports bind both exact manifests but are supplementary observations:
 they never rewrite canonical production lineage or become a deployment-authorizing
 manifest when the tested baseline differs from that manifest's predecessor.
