@@ -2,15 +2,39 @@
 
 Status: the owner approved the isolated rehearsal's USD 50 allowance for at
 most 24 hours. This is not a hard billing cap and does not authorize a production
-upgrade. The retained-browser local journey has passed. Cloud provisioning is
-still gated on publishing the reviewed sources and obtaining a clean
-source-bound candidate certificate; do not consume the paid window while waiting
-for that prerequisite. Record the first billable activation and derive the
-24-hour expiry from it, rather than from the earlier approval conversation.
+upgrade. The retained-browser local journey and source-bound CI qualification
+for `98f2b3c82cdbda2bca3fda477a1dd5fd8938ef33` have passed. The attempted fresh
+project creation was blocked by account project quota. The owner then explicitly
+approved restoring and repurposing `unstructured-448515` (project number
+`601520844163`) for staging. It is restored and named **Rivet HA Staging**.
+On 2026-10-17 the owner explicitly approved unlinking `convio-test-7fec7` from
+`019402-7112FC-E5BA0A` and linking staging to that account. Both associations
+were verified; production's billing association is unchanged. The isolated
+Autopilot cluster, private PostgreSQL 18 instance and private GCS bucket have
+now been provisioned. The rehearsal's recorded billable window runs from
+2026-10-17 08:20 UTC to 2026-10-18 08:20 UTC; an hourly expiry-review heartbeat
+and project-scoped USD 50 budget alert are configured. Neither is a hard billing
+cap. Baseline application deployment and HTTPS qualification are in progress,
+not completed mixed-version proof. The first cloud baseline exposed GCS rejecting
+AWS-signed generation-guard requests with mixed `x-amz`/`x-goog` headers. Repair
+`eb5a900fa0aaca34dcb47496a610c5afade688f4` uses one GOOG4 HMAC dialect for guarded
+requests; real GCS create/duplicate rejection, compressed frontend assets and
+multipart bundle publication/read/cleanup passed. Its normal CI images must pass
+before it becomes the working baseline; a second published source revision is
+still required for the provider mixed-version rehearsal. The project ID and numeric identity are
+unchanged. Post-restore
+inventory found no buckets, BigQuery datasets, Firestore databases, default
+Datastore database, API keys or Dataform repositories. One pre-existing service
+account and its user-managed key are preserved, not staging runtime credentials.
+The project IAM policy retains the existing sole owner. Firestore's API was
+temporarily enabled for inventory and then disabled again. These are inventory
+receipts, not proof of a deployed or qualified staging installation.
+Record the first billable activation and derive the 24-hour expiry from it,
+rather than from the earlier approval conversation.
 
 Read-only preflight confirmed access to the existing open billing account and
-the deployment account. No staging project or billable resources have been
-created. Use that billing account only for the new staging project: do not alter
+the deployment account. Use
+that billing account only for the selected staging project: do not alter
 the existing production project's billing association, IAM or resources. The
 owner separately approved reviewing, committing and pushing the prepared HA
 changes to `develop` and building the exact revision through normal CI. This
@@ -41,16 +65,85 @@ Kubernetes context and namespace; never change the ambient production context.
 Do not grant project-wide permissions to the production runtime identities or
 create cross-project network peering to production.
 
+### Explicitly approved restored-project exception
+
+Only `unstructured-448515` / `601520844163` may be reused under the owner's
+explicit approval; this is not permission to adopt another existing project.
+Check the numeric identity on every provisioning/cleanup operation, preserve
+the existing owner grant, and inventory resources and credential identities
+before enabling billing. A newly restored project can report `ACTIVE` before
+service APIs recognize it. `NOT_FOUND`, `CONSUMER_INVALID` or permission errors
+are incomplete inventory, never evidence of an empty project. Wait for service
+recovery rather than widening IAM grants to work around these errors.
+
+Create new staging-only names, accounts and credentials; do not reuse an
+unreviewed old credential. Record anything already present separately from
+resources created by the rehearsal. Cleanup owns only the latter and must
+retain the restored project and pre-existing IAM/resources unless the owner
+separately approves their removal. Project-level deletion is not the default
+teardown for this exception. Billing activation and all created resources remain
+subject to the original USD 50 / 24-hour envelope.
+
+## Protected provider HA runner
+
+`deploy/studio-server/scripts/kubernetes-ha-provider-gate.mjs` reuses the local
+gate's `runHaReleaseRollout` observations and the production retirement controller;
+it does not override the local runner's cloud-context refusal. It takes the
+existing protected provider gate environment/configuration, operator-owned values,
+and an additional `haProof` object containing `clusterServer`, `namespaceUid`,
+`operation` (the namespace's `rivet.dev/ha-rehearsal` label) and `expiresAt`.
+Every apply checks the exact current context, cluster endpoint, namespace UID,
+ownership label and expiry. Provision infrastructure, Secrets, namespace and
+HTTPS edge separately; this runner never creates a cloud account or namespace.
+Its operator values own `imagePullSecrets`; public images need no unused registry
+token. The original provider deployment runner still requires registry credentials.
+
+Use Yarn's Node wrapper and explicit phases:
+
+```bash
+yarn node deploy/studio-server/scripts/kubernetes-ha-provider-gate.mjs prepare
+# Wait for normally trusted HTTPS and verify anonymous access is rejected.
+yarn node deploy/studio-server/scripts/kubernetes-ha-provider-gate.mjs seed
+yarn node deploy/studio-server/scripts/kubernetes-ha-provider-gate.mjs roll
+```
+
+`RIVET_HA_PROVIDER_BASELINE_MANIFEST` pins an existing promoted v3 release.
+`RIVET_HA_PROVIDER_CANDIDATE_MANIFEST` pins the different promoted candidate for
+`roll`; configured image digests must match. The roll requires its exact clean
+checkout/chart and distinct source/image identities in the same browser contract.
+It verifies the installed Helm manifest uses the baseline image set before
+starting. `prepare` refuses an existing release. `seed` writes an exclusive
+started marker before application mutations, so an uncertain or partial seed
+cannot be automatically replayed. Inspect its accepted writes before any manual
+recovery; do not remove the marker merely to retry.
+Failed phases retain Kubernetes diagnostics and leave accepted work intact; there
+is no automatic uninstall, rollback or replay. Preparation failure must be reviewed
+before an operator removes that exact disposable release and starts again.
+
+Private HTTP and browser probes sign in through the ordinary UI key gate; do not
+turn authentication off for testing. Database observations execute read-only
+SELECTs through the installed API's actual managed PostgreSQL connection, not a
+local fixture. The shared bundle download retains that UI session as well.
+Provider reports bind both exact manifests but are supplementary observations:
+they never rewrite canonical production lineage or become a deployment-authorizing
+manifest when the tested baseline differs from that manifest's predecessor.
+
+Keep operation inventory writes serialized. Overlapping provider operations can
+finish in another order than they started; an old in-memory inventory snapshot
+must not overwrite newer creation receipts. The local provisioning scripts hold
+an exclusive process-lifetime inventory file lease. Teardown must use recorded
+creation IDs/UIDs, not reconstruct a deletion list by discovering similar names.
+
 ## Proposed resources
 
-| Resource | Rehearsal purpose |
-| --- | --- |
-| Separate Autopilot cluster | Same controller behavior with independently scheduled old/new Rivet pods |
-| Dedicated PostgreSQL 18 instance and database | Real managed PostgreSQL without production connection/CPU contention |
-| Private regional Standard GCS bucket | Real XML/S3 interoperability and compressed retained assets |
-| Staging-only service accounts and Secrets | No production credential copies or permission changes |
+| Resource                                            | Rehearsal purpose                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------- |
+| Separate Autopilot cluster                          | Same controller behavior with independently scheduled old/new Rivet pods    |
+| Dedicated PostgreSQL 18 instance and database       | Real managed PostgreSQL without production connection/CPU contention        |
+| Private regional Standard GCS bucket                | Real XML/S3 interoperability and compressed retained assets                 |
+| Staging-only service accounts and Secrets           | No production credential copies or permission changes                       |
 | Independent Gateway, HTTPS frontend and certificate | Real health withdrawal, connection draining, TLS and WebSocket/SSE behavior |
-| `rivet-staging-ha` namespace/release | Existing protected-provider gate's staging-only boundary |
+| `rivet-staging-ha` namespace/release                | Existing protected-provider gate's staging-only boundary                    |
 
 Provide a temporary HTTPS hostname through its DNS owner, adding a new record
 only; do not repoint an existing hostname. If no hostname/certificate can be

@@ -180,202 +180,210 @@ export class HaReleaseGate extends ManagedReleaseGate {
     );
     this.secrets = { rivetKey: Buffer.from(secret.data.RIVET_KEY, 'base64').toString('utf8') };
   }
-  async roll(baseUrl, images = this.config.images, browserContract = null) {
-    await this.loadWorkflowKey();
-    const values = {
-        ...this.values(images),
-        podAnnotations: {
-          web: { 'rivet.dev/ha-proof-generation': 'candidate' },
-          backend: { 'rivet.dev/ha-proof-generation': 'candidate' },
-          execution: { 'rivet.dev/ha-proof-generation': 'candidate' },
-        },
-      },
-      file = path.join(this.config.artifactsDir, 'ha-candidate.json');
-    const before = JSON.parse(
-      (
-        await this.kubectl(
-          [
-            '-n',
-            this.config.namespace,
-            'get',
-            'pods',
-            '-l',
-            `app.kubernetes.io/instance=${this.config.release}`,
-            '-o',
-            'json',
-          ],
-          { capture: true },
-        )
-      ).stdout,
-    ).items;
-    await this.artifact('ha-original-pods.json', JSON.stringify(before, null, 2));
-    await fs.writeFile(file, JSON.stringify(values));
-    const rendered = await run(
-      this.helmBin,
-      [
-        '--kube-context',
-        this.config.context,
-        'template',
-        this.config.release,
-        chart,
-        '-n',
-        this.config.namespace,
-        '-f',
-        overlay,
-        '-f',
-        file,
-      ],
-      { capture: true },
-    );
-    const resources = parseAllDocuments(rendered.stdout)
-      .map((d) => {
-        if (d.errors.length) throw d.errors[0];
-        return d.toJSON();
-      })
-      .filter(Boolean);
-    const probes = new HaReleaseProbes(this, baseUrl, rootDir);
-    await probes.prepare();
-    const baselineReference = before
-      .find((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web')
-      ?.spec.containers.find((c) => c.name === 'web')?.image;
-    const [repository, digest] = baselineReference?.split('@') ?? [];
-    const baselineImage = browserContract?.baseline.image ?? { repository, digest };
-    const baseline = await publishHaBrowserBaseline(this, baselineImage);
-    const browser = await startHaBrowserProbe(this, baseUrl, rootDir, { template: probes.template });
-    let oldestBrowser;
-    try {
-      oldestBrowser = await startHaBrowserProbe(this, baseUrl, rootDir, {
-        template: probes.template,
-        build: baseline.build,
-        label: 'oldest',
-      });
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-    let running = true,
-      samples = 0;
-    const failures = [],
-      readiness = [];
-    const readySampler = (async () => {
-      while (running) {
-        try {
-          const pods = JSON.parse(
-            (
-              await this.kubectl(
-                [
-                  '-n',
-                  this.config.namespace,
-                  'get',
-                  'pods',
-                  '-l',
-                  `app.kubernetes.io/instance=${this.config.release},app.kubernetes.io/component=backend`,
-                  '-o',
-                  'json',
-                ],
-                { capture: true },
-              )
-            ).stdout,
-          ).items;
-          const count = pods.filter(
-            (p) =>
-              !p.metadata.deletionTimestamp &&
-              p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
-          ).length;
-          readiness.push({ at: new Date().toISOString(), ready: count });
-          if (count < 2) failures.push(`Only ${count} ordinary backends ready`);
-        } catch (error) {
-          failures.push(`Readiness observation failed: ${error}`);
-        }
-        await pause(1000);
-      }
-    })();
-    const traffic = (async () => {
-      while (running) {
-        try {
-          const result = await this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
-            method: 'POST',
-            body: JSON.stringify({ input: `ha-sample-${samples}` }),
-            timeoutMs: 15_000,
-          });
-          if (!result) throw Error('Empty execution');
-          samples++;
-        } catch (error) {
-          failures.push(String(error));
-        }
-        await pause(25);
-      }
-    })();
-    let rollout, workloadReport;
-    try {
-      const kubectl = (args, extra = {}) =>
-        this.kubectl(['-n', this.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
-      rollout = await runHaKubernetesRollout({
-        kube: kubectl,
-        release: this.config.release,
-        namespace: this.config.namespace,
-        manifestDigest: images.api.digest,
-        resources,
-        timeoutMs: 600_000,
-        artifact: (name, value) => this.artifact(name, value),
-        beforeRetirement: (pod) => probes.beforeRetirement(pod),
-        afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
-        applyTemplates: async (_workloads, guardedValues) => {
-          await this.apply(
-            {
-              ...values,
-              ...guardedValues,
-              ha: { ...values.ha, ...guardedValues.ha },
-              autoscaling: { execution: { enabled: false } },
-            },
-            'ha-rollout-values.json',
-          );
-        },
-        restoreAutoscalers: async (_workloads, guardedValues) =>
-          this.apply(
-            {
-              ...values,
-              ...guardedValues,
-              ha: { ...values.ha, ...guardedValues.ha },
-              workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
-            },
-            'ha-completed-values.json',
-          ),
-      });
-      workloadReport = await probes.finish();
-      workloadReport.browser = await browser.finish(before);
-      workloadReport.oldestBrowser = { ...(await oldestBrowser.finish(before)), image: baselineImage };
-      while (samples < 100 && !failures.length) await pause(25);
-    } finally {
-      running = false;
-      await Promise.all([traffic, readySampler]);
-      await browser.close();
-      await oldestBrowser.close();
-      await this.artifact('ha-traffic.json', JSON.stringify({ samples, failures, readiness }, null, 2));
-      await this.artifact('ha-workload-probes.json', JSON.stringify(probes.snapshot(), null, 2));
-    }
-    if (failures.length) throw new Error(`HA traffic had ${failures.length} failures: ${failures[0]}`);
-    const after = JSON.parse(
-      (
-        await this.kubectl(
-          [
-            '-n',
-            this.config.namespace,
-            'get',
-            'pods',
-            '-l',
-            `app.kubernetes.io/instance=${this.config.release}`,
-            '-o',
-            'json',
-          ],
-          { capture: true },
-        )
-      ).stdout,
-    ).items;
-    const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after, browserContract };
-    await this.artifact('ha-report.json', JSON.stringify(report, null, 2));
-    return report;
+  async assertProofContext() {
+    await this.assertLocalContext();
   }
+  async roll(baseUrl, images = this.config.images, browserContract = null) {
+    return runHaReleaseRollout(this, baseUrl, images, browserContract);
+  }
+}
+
+/** The same rollout observations for local and explicitly protected provider fixtures. */
+export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.images, browserContract = null) {
+  await gate.assertProofContext();
+  await gate.loadWorkflowKey();
+  const values = {
+      ...gate.values(images),
+      podAnnotations: {
+        web: { 'rivet.dev/ha-proof-generation': 'candidate' },
+        backend: { 'rivet.dev/ha-proof-generation': 'candidate' },
+        execution: { 'rivet.dev/ha-proof-generation': 'candidate' },
+      },
+    },
+    file = path.join(gate.config.artifactsDir, 'ha-candidate.json');
+  const before = JSON.parse(
+    (
+      await gate.kubectl(
+        [
+          '-n',
+          gate.config.namespace,
+          'get',
+          'pods',
+          '-l',
+          `app.kubernetes.io/instance=${gate.config.release}`,
+          '-o',
+          'json',
+        ],
+        { capture: true },
+      )
+    ).stdout,
+  ).items;
+  await gate.artifact('ha-original-pods.json', JSON.stringify(before, null, 2));
+  await fs.writeFile(file, JSON.stringify(values));
+  const rendered = await run(
+    gate.helmBin,
+    [
+      '--kube-context',
+      gate.config.context,
+      'template',
+      gate.config.release,
+      chart,
+      '-n',
+      gate.config.namespace,
+      ...(gate.config.proofValuesFiles ?? [overlay]).flatMap((file) => ['-f', file]),
+      '-f',
+      file,
+    ],
+    { capture: true },
+  );
+  const resources = parseAllDocuments(rendered.stdout)
+    .map((d) => {
+      if (d.errors.length) throw d.errors[0];
+      return d.toJSON();
+    })
+    .filter(Boolean);
+  const probes = new HaReleaseProbes(gate, baseUrl, rootDir);
+  await probes.prepare();
+  const baselineReference = before
+    .find((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web')
+    ?.spec.containers.find((c) => c.name === 'web')?.image;
+  const [repository, digest] = baselineReference?.split('@') ?? [];
+  const baselineImage = browserContract?.baseline.image ?? { repository, digest };
+  const baseline = await publishHaBrowserBaseline(gate, baselineImage);
+  const browser = await startHaBrowserProbe(gate, baseUrl, rootDir, { template: probes.template });
+  let oldestBrowser;
+  try {
+    oldestBrowser = await startHaBrowserProbe(gate, baseUrl, rootDir, {
+      template: probes.template,
+      build: baseline.build,
+      label: 'oldest',
+    });
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+  let running = true,
+    samples = 0;
+  const failures = [],
+    readiness = [];
+  const readySampler = (async () => {
+    while (running) {
+      try {
+        const pods = JSON.parse(
+          (
+            await gate.kubectl(
+              [
+                '-n',
+                gate.config.namespace,
+                'get',
+                'pods',
+                '-l',
+                `app.kubernetes.io/instance=${gate.config.release},app.kubernetes.io/component=backend`,
+                '-o',
+                'json',
+              ],
+              { capture: true },
+            )
+          ).stdout,
+        ).items;
+        const count = pods.filter(
+          (p) =>
+            !p.metadata.deletionTimestamp &&
+            p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
+        ).length;
+        readiness.push({ at: new Date().toISOString(), ready: count });
+        if (count < 2) failures.push(`Only ${count} ordinary backends ready`);
+      } catch (error) {
+        failures.push(`Readiness observation failed: ${error}`);
+      }
+      await pause(1000);
+    }
+  })();
+  const traffic = (async () => {
+    while (running) {
+      try {
+        const result = await gate.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
+          method: 'POST',
+          body: JSON.stringify({ input: `ha-sample-${samples}` }),
+          timeoutMs: 15_000,
+        });
+        if (!result) throw Error('Empty execution');
+        samples++;
+      } catch (error) {
+        failures.push(String(error));
+      }
+      await pause(25);
+    }
+  })();
+  let rollout, workloadReport;
+  try {
+    const kubectl = (args, extra = {}) =>
+      gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+    rollout = await runHaKubernetesRollout({
+      kube: kubectl,
+      release: gate.config.release,
+      namespace: gate.config.namespace,
+      manifestDigest: images.api.digest,
+      resources,
+      timeoutMs: 600_000,
+      artifact: (name, value) => gate.artifact(name, value),
+      beforeRetirement: (pod) => probes.beforeRetirement(pod),
+      afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
+      applyTemplates: async (_workloads, guardedValues) => {
+        await gate.apply(
+          {
+            ...values,
+            ...guardedValues,
+            ha: { ...values.ha, ...guardedValues.ha },
+            autoscaling: { execution: { enabled: false } },
+          },
+          'ha-rollout-values.json',
+        );
+      },
+      restoreAutoscalers: async (_workloads, guardedValues) =>
+        gate.apply(
+          {
+            ...values,
+            ...guardedValues,
+            ha: { ...values.ha, ...guardedValues.ha },
+            workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
+          },
+          'ha-completed-values.json',
+        ),
+    });
+    workloadReport = await probes.finish();
+    workloadReport.browser = await browser.finish(before);
+    workloadReport.oldestBrowser = { ...(await oldestBrowser.finish(before)), image: baselineImage };
+    while (samples < 100 && !failures.length) await pause(25);
+  } finally {
+    running = false;
+    await Promise.all([traffic, readySampler]);
+    await browser.close();
+    await oldestBrowser.close();
+    await gate.artifact('ha-traffic.json', JSON.stringify({ samples, failures, readiness }, null, 2));
+    await gate.artifact('ha-workload-probes.json', JSON.stringify(probes.snapshot(), null, 2));
+  }
+  if (failures.length) throw new Error(`HA traffic had ${failures.length} failures: ${failures[0]}`);
+  const after = JSON.parse(
+    (
+      await gate.kubectl(
+        [
+          '-n',
+          gate.config.namespace,
+          'get',
+          'pods',
+          '-l',
+          `app.kubernetes.io/instance=${gate.config.release}`,
+          '-o',
+          'json',
+        ],
+        { capture: true },
+      )
+    ).stdout,
+  ).items;
+  const report = { samples, failures, readiness, workloads: workloadReport, rollout, before, after, browserContract };
+  await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
+  return report;
 }
 
 async function main() {

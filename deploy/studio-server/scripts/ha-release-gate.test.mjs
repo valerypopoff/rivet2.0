@@ -1,15 +1,179 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HaReleaseGate, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
+import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
+import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import { ProviderHaReleaseGate } from './kubernetes-ha-provider-gate.mjs';
 import { parseAllDocuments } from 'yaml';
 import { publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('shared HA rollout refuses an unapproved proof context before reading keys or changing resources', async () => {
+  let touched = false;
+  await assert.rejects(
+    runHaReleaseRollout(
+      {
+        config: { images: {} },
+        assertProofContext: async () => {
+          throw Error('unapproved provider context');
+        },
+        loadWorkflowKey: async () => {
+          touched = true;
+        },
+      },
+      'https://staging.example.test',
+    ),
+    /unapproved provider context/,
+  );
+  assert.equal(touched, false);
+});
+
+test('provider proof reads the real managed database without creating a local PostgreSQL fixture', async () => {
+  const queries = [];
+  const probes = new HaReleaseProbes(
+    {
+      config: { namespace: 'rivet-staging-proof' },
+      readProofSql: async (query) => {
+        queries.push(query);
+        return [{ accepted: true }];
+      },
+      kubectl: async () => {
+        throw Error('local database must not be used');
+      },
+    },
+    'https://staging.example.test',
+    rootDir,
+  );
+  assert.deepEqual(await probes.sql('SELECT accepted'), [{ accepted: true }]);
+  assert.deepEqual(queries, ['SELECT accepted']);
+});
+
+test('provider proof refuses a changed cluster endpoint, namespace UID or ownership label before mutation', async () => {
+  for (const changed of ['endpoint', 'uid', 'label']) {
+    const identity = {
+      clusterServer: 'https://staging.gke.goog',
+      namespaceUid: '11111111-1111-4111-8111-111111111111',
+      operation: 'staging-proof',
+      expiresAt: '2099-01-01T00:00:00Z',
+    };
+    const gate = new ProviderHaReleaseGate({ namespace: 'rivet-staging-proof' }, 'unused', 'unused', {
+      values: {},
+      identity,
+    });
+    gate.assertContext = async () => {};
+    gate.kubectl = async (args) => ({
+      stdout: JSON.stringify(
+        args[0] === 'config'
+          ? {
+              clusters: [
+                { cluster: { server: changed === 'endpoint' ? 'https://other.gke.goog' : identity.clusterServer } },
+              ],
+            }
+          : {
+              metadata: {
+                uid: changed === 'uid' ? 'replacement' : identity.namespaceUid,
+                labels: { 'rivet.dev/ha-rehearsal': changed === 'label' ? 'someone-else' : identity.operation },
+              },
+            },
+      ),
+    });
+    await assert.rejects(gate.assertProofContext(), /changed|replaced|not owned/);
+  }
+});
+
+test('provider proof cannot send its UI credentials to a different origin or execute SQL writes', async () => {
+  const gate = new ProviderHaReleaseGate(
+    { namespace: 'rivet-staging-proof', baseUrl: 'https://staging.example.test' },
+    'unused',
+    'unused',
+    {
+      values: {},
+      identity: {
+        clusterServer: 'https://staging.gke.goog',
+        namespaceUid: '11111111-1111-4111-8111-111111111111',
+        operation: 'staging-proof',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    },
+  );
+  assert.throws(() => gate.requestWorkflow('https://production.example.test', '/api/config'), /staging origin/);
+  await assert.rejects(gate.readProofSql('DELETE FROM workflows'), /read-only/);
+});
+
+function providerFixture(config = {}, expiresAt = '2099-01-01T00:00:00Z') {
+  return new ProviderHaReleaseGate({ namespace: 'rivet-staging-proof', ...config }, 'unused', 'unused', {
+    values: {},
+    identity: {
+      clusterServer: 'https://staging.gke.goog',
+      namespaceUid: '11111111-1111-4111-8111-111111111111',
+      operation: 'staging-proof',
+      expiresAt,
+    },
+  });
+}
+
+test('expired provider rehearsal refuses work before contacting the cluster or reading credentials', async () => {
+  const gate = providerFixture({}, '2000-01-01T00:00:00Z');
+  gate.assertContext = gate.loadWorkflowKey = async () => {
+    throw Error('must not contact resources');
+  };
+  await assert.rejects(gate.seed(), /expired/);
+});
+
+test('uncertain provider seed cannot replay any application mutation', async () => {
+  const artifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-provider-seed-'));
+  try {
+    const gate = providerFixture({ artifactsDir });
+    gate.assertProofContext = gate.loadWorkflowKey = async () => {};
+    let writes = 0;
+    gate.requestWorkflow = async () => {
+      writes++;
+      throw Error('lost response after acceptance');
+    };
+    await assert.rejects(gate.seed(), /lost response/);
+    await assert.rejects(gate.seed(), { code: 'EEXIST' });
+    assert.equal(writes, 1);
+  } finally {
+    await fs.rm(artifactsDir, { recursive: true, force: true });
+  }
+});
+
+test('provider observations run inside a database read-only transaction even for SELECT with side effects', async () => {
+  const gate = providerFixture({ release: 'rivet-staging-proof' });
+  gate.kubectl = async (args) => {
+    assert.ok(args.includes('rivet-staging-proof-ha-backend-0'));
+    assert.match(args[args.indexOf('-e') + 1], /BEGIN READ ONLY/);
+    assert.equal(args.at(-1), 'SELECT destructive_function()');
+    return { stdout: '7' };
+  };
+  assert.equal(await gate.readProofSql('SELECT destructive_function()'), 7);
+});
+
+test('provider browser uses the ordinary authenticated session without following redirects', async () => {
+  const gate = providerFixture({ baseUrl: 'https://staging.example.test' });
+  gate.secrets = { rivetKey: 'test-only-key' };
+  await gate.authenticateBrowser({
+    request: {
+      post: async (url, options) => {
+        assert.equal(url, 'https://staging.example.test/ui-auth');
+        assert.deepEqual(options, { data: { key: 'test-only-key' }, maxRedirects: 0 });
+        return { status: () => 204 };
+      },
+    },
+  });
+  await assert.rejects(
+    gate.authenticateBrowser({ request: { post: async () => ({ status: () => 302 }) } }),
+    /real authenticated/,
+  );
+});
 function certificationFixture(predecessorRelease = null) {
   const images = Object.fromEntries(
     ['proxy', 'web', 'api', 'executor'].map((key, index) => [

@@ -7,7 +7,7 @@ import { parse, stringify } from 'yaml';
 /** Publish an older certified UI into this disposable installation's retained
  * asset namespace. The publisher has no Service and is removed before rollout. */
 export async function publishHaBrowserBaseline(gate, image) {
-  await gate.assertLocalContext();
+  await (gate.assertProofContext ?? gate.assertLocalContext).call(gate);
   assert.ok(image?.repository && /^sha256:[a-f0-9]{64}$/.test(image.digest), 'baseline must be an immutable image');
   const kube = (args, extra = {}) => gate.kubectl(['-n', gate.config.namespace, ...args], { capture: true, ...extra });
   const pods = JSON.parse(
@@ -104,6 +104,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       failedAssets.push(`${response.status()} ${new URL(response.url()).pathname}`);
   });
   try {
+    if (gate.authenticateBrowser) await gate.authenticateBrowser(context);
     const project = parse(template);
     const marker = `browser-${label}-${randomUUID()}`;
     project.data.metadata.id = randomUUID();
