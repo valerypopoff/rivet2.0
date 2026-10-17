@@ -156,6 +156,12 @@ The `roll` phase also reuses the local recovery probes for lost retirement
 acknowledgement and runner-lease loss against the same staging cluster. Rendering
 uses the operator's provider values, not local fixture connection/auth defaults;
 the recovery path checks the same identity and expiry guard before injecting faults.
+Both the primary rollout and injected-fault recovery use the configured
+`RIVET_K8S_PROVIDER_GATE_DEPLOYMENT_TIMEOUT_SECONDS` for owner observations (900
+seconds in this rehearsal), not a separate three-minute local-fixture deadline.
+GKE termination grace plus replacement scheduling/pull can exceed that shorter
+deadline. This is only an observation budget: expiry, retirement fences, unknown
+outcomes and the prohibition on force deletion remain unchanged.
 
 The isolated GKE values pair a 60-second `GCPBackendPolicy` connection-draining
 timeout with `lifecycle.preStopDelaySeconds: 120`, `shutdownGraceSeconds: 120`

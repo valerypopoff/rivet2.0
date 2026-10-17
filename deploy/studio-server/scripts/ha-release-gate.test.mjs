@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
-import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate } from './kubernetes-ha-provider-gate.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { parseAllDocuments } from 'yaml';
@@ -19,6 +19,14 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('HA rollout and recovery observations honor the configured provider deadline', () => {
+  assert.equal(haProofTimeoutMs({}), 600_000);
+  assert.equal(haProofTimeoutMs({ deploymentTimeoutSeconds: 900 }), 900_000);
+  assert.equal(haProofTimeoutMs({ deploymentTimeoutSeconds: 180 }), 180_000);
+  for (const deploymentTimeoutSeconds of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER])
+    assert.throws(() => haProofTimeoutMs({ deploymentTimeoutSeconds }), /positive whole-second/);
+});
 
 test('cross-owner notification fixture authenticates its streams and mutations as a UI operator', async () => {
   const key = 'disposable-notification-test-key';

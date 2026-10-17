@@ -10,7 +10,7 @@ import {
 } from './lib/kubernetes-managed-release-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
-import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import {
   assertStudioServerReleaseManifest,
   assertReleaseManifestMatchesCurrentChart,
@@ -325,7 +325,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       namespace: gate.config.namespace,
       manifestDigest: images.api.digest,
       resources,
-      timeoutMs: 600_000,
+      timeoutMs: haProofTimeoutMs(gate.config),
       artifact: (name, value) => gate.artifact(name, value),
       beforeRetirement: (pod) => probes.beforeRetirement(pod),
       afterWithdrawal: (pod) => probes.afterWithdrawal(pod),

@@ -6,7 +6,7 @@ import { parseAllDocuments } from 'yaml';
 import { runHaKubernetesRollout } from './ha-kubernetes-rollout.mjs';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { runManagedGateCommand as run } from '../kubernetes-managed-release-gate.mjs';
-import { HaReleaseProbes } from './ha-release-probes.mjs';
+import { HaReleaseProbes, haProofTimeoutMs } from './ha-release-probes.mjs';
 
 /** Faults are injected at the transport acknowledgement/CAS boundary of the
  * real disposable Kubernetes API. The production rollout implementation is not
@@ -106,7 +106,7 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         namespace: gate.config.namespace,
         manifestDigest: gate.config.images.api.digest,
         resources,
-        timeoutMs: 180_000,
+        timeoutMs: haProofTimeoutMs(gate.config),
         artifact: (name, value) => gate.artifact(`recovery-${fault}/${name}`, value),
         applyTemplates: (_workloads, guardedValues) =>
           gate.apply(

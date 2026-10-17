@@ -9,6 +9,11 @@ import {
 } from '../kubernetes-hosted-evaluation-gate.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export function haProofTimeoutMs({ deploymentTimeoutSeconds = 600 }) {
+  assert.ok(Number.isSafeInteger(deploymentTimeoutSeconds) && deploymentTimeoutSeconds > 0 &&
+    Number.isSafeInteger(deploymentTimeoutSeconds * 1000), 'HA proof requires a positive whole-second deployment timeout');
+  return deploymentTimeoutSeconds * 1000;
+}
 async function until(description, check, timeout = 180_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
