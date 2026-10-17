@@ -124,6 +124,9 @@ Private HTTP and browser probes sign in through the ordinary UI key gate; do not
 turn authentication off for testing. Database observations execute read-only
 SELECTs through the installed API's actual managed PostgreSQL connection, not a
 local fixture. The shared bundle download retains that UI session as well.
+The public key-login route is `/__rivet_auth`; `/ui-auth` is the API's internal
+upstream path, not an edge login URL. The HTTP regression verifies the public
+proxy contract and preserves the issued session cookie without following redirects.
 Provider reports bind both exact manifests but are supplementary observations:
 they never rewrite canonical production lineage or become a deployment-authorizing
 manifest when the tested baseline differs from that manifest's predecessor.
@@ -131,6 +134,15 @@ The `roll` phase also reuses the local recovery probes for lost retirement
 acknowledgement and runner-lease loss against the same staging cluster. Rendering
 uses the operator's provider values, not local fixture connection/auth defaults;
 the recovery path checks the same identity and expiry guard before injecting faults.
+
+The isolated GKE values pair a 60-second `GCPBackendPolicy` connection-draining
+timeout with `lifecycle.preStopDelaySeconds: 120`, `shutdownGraceSeconds: 120`
+and `terminationGracePeriodSeconds: 270`. The pre-stop includes a 60-second
+propagation allowance: [GKE requires it to cover drain timeout plus NEG removal
+latency](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing).
+These are rehearsal settings, not a universal timing guarantee; preserve the
+zero-failed-request check and measure real withdrawal. A short local-cluster
+pre-stop default is not provider-edge qualification.
 
 Keep operation inventory writes serialized. Overlapping provider operations can
 finish in another order than they started; an old in-memory inventory snapshot

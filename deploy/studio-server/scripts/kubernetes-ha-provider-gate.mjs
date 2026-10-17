@@ -111,7 +111,7 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
       ).stdout,
     );
     this.secrets = { rivetKey: Buffer.from(secret.data[auth.keySecretKey ?? 'RIVET_KEY'], 'base64').toString('utf8') };
-    const response = await fetch(new URL('/ui-auth', this.config.baseUrl), {
+    const response = await fetch(new URL('/__rivet_auth', this.config.baseUrl), {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/json' },
@@ -137,7 +137,7 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
     });
   }
   async authenticateBrowser(context) {
-    const response = await context.request.post(new URL('/ui-auth', this.config.baseUrl).href, {
+    const response = await context.request.post(new URL('/__rivet_auth', this.config.baseUrl).href, {
       data: { key: this.secrets.rivetKey },
       maxRedirects: 0,
     });

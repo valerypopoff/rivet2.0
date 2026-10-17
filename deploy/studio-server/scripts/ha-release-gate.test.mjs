@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
@@ -185,7 +186,7 @@ test('provider browser uses the ordinary authenticated session without following
   await gate.authenticateBrowser({
     request: {
       post: async (url, options) => {
-        assert.equal(url, 'https://staging.example.test/ui-auth');
+        assert.equal(url, 'https://staging.example.test/__rivet_auth');
         assert.deepEqual(options, { data: { key: 'test-only-key' }, maxRedirects: 0 });
         return { status: () => 204 };
       },
@@ -195,6 +196,39 @@ test('provider browser uses the ordinary authenticated session without following
     gate.authenticateBrowser({ request: { post: async () => ({ status: () => 302 }) } }),
     /real authenticated/,
   );
+});
+
+test('provider HTTP login uses the public proxy contract and retains only its session cookie', async () => {
+  const proxy = await fs.readFile(
+    path.join(rootDir, 'deploy/studio-server/images/proxy/default.conf.template'),
+    'utf8',
+  );
+  assert.match(proxy, /location = \/__rivet_auth \{/);
+  const server = createServer(async (req, res) => {
+    if (req.url !== '/__rivet_auth') {
+      res.writeHead(404).end();
+      return;
+    }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    assert.equal(req.method, 'POST');
+    assert.deepEqual(JSON.parse(body), { key: 'test-only-key' });
+    res
+      .writeHead(204, { 'set-cookie': 'rivet_ui_token=test-only-session; Path=/; HttpOnly; Secure; SameSite=Lax' })
+      .end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const gate = providerFixture({ baseUrl: `http://127.0.0.1:${server.address().port}` });
+    gate.providerValues.auth = { keySecretName: 'fixture' };
+    gate.kubectl = async () => ({
+      stdout: JSON.stringify({ data: { RIVET_KEY: Buffer.from('test-only-key').toString('base64') } }),
+    });
+    await gate.loadWorkflowKey();
+    assert.deepEqual(gate.probeHeaders, { cookie: 'rivet_ui_token=test-only-session' });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 function certificationFixture(predecessorRelease = null) {
   const images = Object.fromEntries(
