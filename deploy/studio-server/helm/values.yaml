@@ -290,6 +290,9 @@ lifecycle:
 rollout:
   maxUnavailable: 0
   maxSurge: 1
+  # Provider load-balancer programming can lag Pod readiness. Tune and qualify
+  # this stabilization window alongside provider health checks and drain time.
+  minReadySeconds: 0
 
 availability:
   disruptionBudget:

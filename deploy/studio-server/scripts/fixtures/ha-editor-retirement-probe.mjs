@@ -18,6 +18,7 @@ const deadline = Date.now() + 180_000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const headers = {
   'x-rivet-proxy-auth': createHash('sha256').update(`${process.env.RIVET_KEY}:proxy-auth`).digest('hex'),
+  cookie: `rivet_ui_token=${createHash('sha256').update(`${process.env.RIVET_KEY}:ui-session`).digest('hex')}`,
 };
 const base = `http://127.0.0.1:${process.env.PORT}`;
 const sockets = [];

@@ -14,14 +14,19 @@ Autopilot cluster, private PostgreSQL 18 instance and private GCS bucket have
 now been provisioned. The rehearsal's recorded billable window runs from
 2026-10-17 08:20 UTC to 2026-10-18 08:20 UTC; an hourly expiry-review heartbeat
 and project-scoped USD 50 budget alert are configured. Neither is a hard billing
-cap. Baseline application deployment and HTTPS qualification are in progress,
-not completed mixed-version proof. The first cloud baseline exposed GCS rejecting
+cap. Baseline application deployment, normally trusted HTTPS, key authentication,
+synthetic workflow/web-app publication and a headless Node-editor observation
+have passed. Mixed-version provider qualification is not complete: the first
+attempt failed on operator-session probe authentication and public-edge 503s,
+as detailed below. The first cloud baseline exposed GCS rejecting
 AWS-signed generation-guard requests with mixed `x-amz`/`x-goog` headers. Repair
 `eb5a900fa0aaca34dcb47496a610c5afade688f4` uses one GOOG4 HMAC dialect for guarded
 requests; real GCS create/duplicate rejection, compressed frontend assets and
-multipart bundle publication/read/cleanup passed. Its normal CI images must pass
-before it becomes the working baseline; a second published source revision is
-still required for the provider mixed-version rehearsal. The project ID and numeric identity are
+multipart bundle publication/read/cleanup passed. Its normal CI image build
+`39019193862` passed and it became the working baseline. Candidate
+`f33b99f0b19774ea6dc8d566709bea7159bbd1fc` also passed all server image gates in
+`39022749961`, but its provider attempt failed; CI qualification alone is not
+GCP zero-downtime evidence. The project ID and numeric identity are
 unchanged. Post-restore
 inventory found no buckets, BigQuery datasets, Firestore databases, default
 Datastore database, API keys or Dataform repositories. One pre-existing service
@@ -138,6 +143,12 @@ loads file values over process values. Keep the staging key only in the process
 environment. Node recording observations must use the real `/api/config` response
 so the executor gets the current HA owner incarnation, rather than the browser-only
 bootstrap fixture's unowned `/ws/executor/internal` URL.
+The in-pod cross-owner fixtures carry both proxy authentication and a key-mode
+UI session, just like an authenticated operator. Proxy identity alone must not
+bypass the operator middleware. The notification regression executes the real
+fixture against a session-enforcing HTTP/SSE server, including mutations in both
+directions; it does not inspect fixture source text.
+
 Provider reports bind both exact manifests but are supplementary observations:
 they never rewrite canonical production lineage or become a deployment-authorizing
 manifest when the tested baseline differs from that manifest's predecessor.
@@ -154,6 +165,17 @@ latency](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/lo
 These are rehearsal settings, not a universal timing guarantee; preserve the
 zero-failed-request check and measure real withdrawal. A short local-cluster
 pre-stop default is not provider-edge qualification.
+The first real mixed-version attempt exposed GKE's
+`LoadBalancerNegWithoutHealthCheck` readiness false positive: both replacements
+became Kubernetes-ready before the new zone's NEG was attached to the load
+balancer, and the public workflow/web-app probes received 503. That attempt is
+failed evidence, not a qualified upgrade. `rollout.minReadySeconds` now controls
+the web/proxy Deployment availability stabilization window (default zero for
+compatibility); the provider rehearsal uses 120 seconds before old pods may be
+retired. This is distinct from pre-stop withdrawal protection. Qualify the chosen
+window with continuous external traffic; it is not proof that arbitrary provider
+propagation delays are bounded. GKE documents this
+[NEG readiness race](https://docs.cloud.google.com/kubernetes-engine/networking/docs/known-issues).
 The temporary retained-UI publisher never joins a Service and omits the serving
 container's lifecycle hook, so its cleanup does not wait for an irrelevant edge
 drain. Normal web/backend/execution pods retain their configured drain protection.

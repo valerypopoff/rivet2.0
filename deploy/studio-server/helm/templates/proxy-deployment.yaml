@@ -1,4 +1,5 @@
 {{- if and (eq .Values.gateway.mode "embedded") (ne .Values.deploymentProfile "single-machine") }}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "rollout.minReadySeconds" "value" .Values.rollout.minReadySeconds) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +9,7 @@ metadata:
     app.kubernetes.io/component: proxy
 spec:
   replicas: {{ .Values.replicaCount.proxy }}
+  minReadySeconds: {{ .Values.rollout.minReadySeconds }}
   strategy:
     type: RollingUpdate
     rollingUpdate:

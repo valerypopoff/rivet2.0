@@ -11,12 +11,77 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('cross-owner notification fixture authenticates its streams and mutations as a UI operator', async () => {
+  const key = 'disposable-notification-test-key';
+  const hash = (suffix) => createHash('sha256').update(`${key}:${suffix}`).digest('hex');
+  const streams = new Set();
+  let revision = 1;
+  let library = { migratedLegacyProjectIds: [] };
+  let authenticated = 0;
+  const server = createServer(async (req, res) => {
+    if (req.headers['x-rivet-proxy-auth'] !== hash('proxy-auth') ||
+        req.headers.cookie !== `rivet_ui_token=${hash('ui-session')}`) {
+      res.writeHead(403).end();
+      return;
+    }
+    authenticated++;
+    const emit = (stream, event) => stream.write(`event: ${event}\ndata: ${JSON.stringify({ revision })}\n\n`);
+    if (req.url.endsWith('/events')) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      streams.add(res);
+      res.on('close', () => streams.delete(res));
+      emit(res, 'snapshot');
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
+    let result;
+    if (req.url.endsWith('/library')) {
+      if (req.method === 'PUT') {
+        library = body.library;
+        revision++;
+        for (const stream of streams) emit(stream, 'library-changed');
+      }
+      result = { revision, library };
+    } else {
+      revision++;
+      for (const stream of streams) emit(stream, 'tree-changed');
+      result = { project: { relativePath: 'synthetic.rivet-project' } };
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  try {
+    const child = spawn(process.execPath, [
+      path.join(rootDir, 'deploy/studio-server/scripts/fixtures/ha-notification-probe.mjs'), 'localhost',
+    ], {
+      env: { ...process.env, PORT: String(server.address().port), RIVET_KEY: key, RIVET_HA_HEADLESS_SERVICE: '' },
+      windowsHide: true,
+      timeout: 20_000,
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+    assert.equal(code, 0, stderr);
+    assert.equal(JSON.parse(stdout).directions.length, 2);
+    assert.equal(authenticated, 14);
+  } finally {
+    for (const stream of streams) stream.end();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 
 test('recovery faults require the same approved context before traffic or cluster access', async () => {
   await assert.rejects(
