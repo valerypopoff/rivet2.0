@@ -1,6 +1,68 @@
 import { expect, test } from '@playwright/test';
 import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
+
+test('HA reconnect persists one complete editor recording without resubmitting the run', async ({ page }) => {
+  const projectId = 'ha-recording-project';
+  const graph = { metadata: { id: 'ha-recording-graph', name: 'Main Graph' }, nodes: [], connections: [] };
+  const project = { metadata: { id: projectId, title: 'HA recording' }, graphs: { [graph.metadata.id]: graph }, plugins: [], references: [] };
+  await seedHostedEditorProject(page, {
+    projectId, graphId: graph.metadata.id, title: 'HA recording', loaded: true,
+    projectPath: '/workflows/ha-recording.rivet-project',
+  });
+  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })));
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/config', route => route.fulfill({ json: {
+    executorWsUrl: 'ws://rivet-internal/ws/executor/owner/recording-owner', executorWsUrlIsOverride: false,
+    remoteDebuggerDefaultWs: '',
+  } }));
+  const uploads: Array<{ recordingSerialized: string; status: string }> = [];
+  const unavailable: unknown[] = [];
+  await page.route('**/api/workflows/local-editor-recordings**', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { supported: true } });
+    if (new URL(route.request().url()).pathname.endsWith('/outcome')) {
+      unavailable.push(route.request().postDataJSON());
+      return route.fulfill({ status: 204 });
+    }
+    uploads.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { availability: 'available', recordingId: 'reconnected-recording' } });
+  });
+  let connections = 0, runCommands = 0, requestId: string | undefined;
+  const start = () => ({ message: 'start', requestId, rivetSequence: 1,
+    data: { project, startGraph: graph, contextValues: {}, inputs: {} } });
+  await page.routeWebSocket('**/ws/executor/owner/**', socket => {
+    connections++;
+    socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: 'r'.repeat(43), resumed: connections > 1 } }));
+    if (connections > 1) socket.send(JSON.stringify(start()));
+    socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 1, resumed: connections > 1 } }));
+    if (connections > 1) {
+      socket.send(JSON.stringify({ message: 'done', requestId, rivetSequence: 2, data: { results: {} } }));
+      return;
+    }
+    socket.onMessage(message => {
+      if (typeof message !== 'string' || !message.startsWith('{')) return;
+      const payload = JSON.parse(message);
+      if (payload.type !== 'run') return;
+      runCommands++;
+      requestId = payload.data.requestId;
+      socket.send(JSON.stringify(start()));
+      socket.close({ code: 1012, reason: 'simulated proxy replacement' });
+    });
+  });
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.node-canvas').first()).toBeVisible();
+  await expect(page.locator('.run-button button').first()).toBeEnabled();
+  await page.locator('.run-button button').first().click();
+  await expect.poll(() => uploads.length).toBe(1);
+  expect(connections).toBe(2);
+  expect(runCommands).toBe(1);
+  expect(unavailable).toEqual([]);
+  expect(uploads[0]!.status).toBe('succeeded');
+  const recorder = ExecutionRecorder.deserializeFromString(uploads[0]!.recordingSerialized);
+  expect(recorder.events.map(event => event.type)).toEqual(['start', 'done']);
+  await page.goto('about:blank');
+});
 
 const cases = [
   {

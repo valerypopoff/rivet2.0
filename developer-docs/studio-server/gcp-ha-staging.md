@@ -32,13 +32,21 @@ GCP zero-downtime evidence. The next candidate,
 zero workflow failures and at least two ready backends, but stopped safely on
 an uncertain journal PUT after an operator-to-GKE TLS handshake timeout. It is
 also **not** complete qualification. Read retries never replay that write. A
-trusted Cloud Shell operator connection is being prepared to avoid the unstable
-local control-plane path. The subsequent `8ee6840c3` image run `39030159548`
+trusted Cloud Shell operator connection now runs with its own temporary checkout
+and Kubernetes configuration to avoid the unstable local control-plane path.
+The subsequent `8ee6840c3` image run `39030159548`
 failed the strengthened frontend-UID check: bootstrap reused the proxy image,
 but the fixture did not mark its proxy template for replacement. The fresh
 web/proxy generation markers described below repair that fixture gap without
 weakening the actual replacement or zero-failed-request requirements. This
-candidate is not qualified, and production remains untouched. The project ID and numeric identity are
+candidate is not qualified. Its successor `1b63ee21a` passed frontend replacement
+but failed recording persistence after reconnect: the recorder was bound to the
+old physical socket and reported an unavailable outcome. The logical-session
+recording repair establishes browser-continuity contract 2; old contract-1
+browser code cannot be repaired by changing its backend. Establish the repaired
+staging baseline before a fresh distinct-version proof, rather than relaxing the
+recording checks or silently reloading retained tabs. Production remains
+untouched. The project ID and numeric identity are
 unchanged. Post-restore
 inventory found no buckets, BigQuery datasets, Firestore databases, default
 Datastore database, API keys or Dataform repositories. One pre-existing service

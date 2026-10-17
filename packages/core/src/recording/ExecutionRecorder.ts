@@ -263,6 +263,11 @@ export type SocketRecordingOptions = {
   signal?: AbortSignal;
 };
 
+/** Recording needs an event source, not ownership of a physical WebSocket. */
+export type SocketRecordingChannel = Pick<EventTarget, 'addEventListener' | 'removeEventListener'> & {
+  readonly readyState: number;
+};
+
 function isRecordableProcessEvent(message: string): message is keyof ProcessEvents {
   return message in toRecordedEventMap || isPrefix(message, 'globalSet:') || isPrefix(message, 'userEvent:');
 }
@@ -378,7 +383,7 @@ export class ExecutionRecorder {
   off: Emittery<ExecutionRecorderEvents>['off'] = undefined!;
   once: Emittery<ExecutionRecorderEvents>['once'] = undefined!;
 
-  recordSocket(channel: WebSocket, options: SocketRecordingOptions = {}) {
+  recordSocket(channel: SocketRecordingChannel, options: SocketRecordingOptions = {}) {
     return new Promise<void>((resolve) => {
       this.recordingId = nanoid() as RecordingId;
 
@@ -400,10 +405,10 @@ export class ExecutionRecorder {
       const onClose = () => finish(false);
       const onOwnerDisposed = () => finish(false);
 
-      const listener = (event: MessageEvent) => {
+      const listener = (event: Event) => {
         let payload: { message?: unknown; data?: unknown; requestId?: unknown };
         try {
-          payload = JSON.parse(event.data) as { message?: unknown; data?: unknown; requestId?: unknown };
+          payload = JSON.parse((event as MessageEvent).data) as { message?: unknown; data?: unknown; requestId?: unknown };
         } catch {
           // A debugger socket can carry control-plane payloads alongside graph
           // events. They are not part of a replayable graph recording.

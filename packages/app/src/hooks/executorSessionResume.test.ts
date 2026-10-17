@@ -2,8 +2,65 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeWebSocket, installExecutorSessionTestHooks, runtime } from './executorSessionTestUtils.js';
 import { createExecutorSessionRuntime } from './executorSession.js';
+import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
 
 installExecutorSessionTestHooks();
+
+const graphStart = { graph: { metadata: { id: 'recorded-graph' } }, inputs: {} };
+
+test('a real recording survives socket replacement and captures replayed events exactly once', async () => {
+  await runtime.connectInternalHostedExecutor('wss://rivet.example/ws/executor/owner/recording-owner');
+  const first = FakeWebSocket.instances.at(-1)!;
+  first.open();
+  first.emitMessage({ message: 'executor-session', data: { protocol: 1, capability: 'r'.repeat(43) } });
+  first.emitMessage({ message: 'executor-session-ready', data: { protocol: 1 } });
+  const recorder = new ExecutionRecorder();
+  let finalized = 0;
+  const recording = runtime.recordSocketEvents(channel => recorder.recordSocket(channel, { requestId: 'owned-run' }))!
+    .then(() => { finalized++; });
+  first.emitMessage({ message: 'graphStart', data: graphStart, requestId: 'owned-run', rivetSequence: 1 });
+  first.emitClose();
+  await Promise.resolve();
+  assert.equal(finalized, 0, 'physical disconnect is not logical recording completion');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const second = FakeWebSocket.instances.at(-1)!;
+  second.open();
+  second.emitMessage({ message: 'executor-session', data: { protocol: 1, capability: 'r'.repeat(43), resumed: true } });
+  second.emitMessage({ message: 'graphStart', data: graphStart, requestId: 'owned-run', rivetSequence: 1 });
+  second.emitMessage({ message: 'executor-session-ready', data: { protocol: 1, resumed: true } });
+  second.emitMessage({ message: 'done', data: { results: {} }, requestId: 'another-run', rivetSequence: 2 });
+  assert.equal(finalized, 0);
+  second.emitMessage({ message: 'done', data: { results: { result: { type: 'string', value: 'recorded' } } }, requestId: 'owned-run', rivetSequence: 3 });
+  await recording;
+  second.emitMessage({ message: 'done', data: { results: {} }, requestId: 'owned-run', rivetSequence: 3 });
+  assert.equal(finalized, 1);
+  assert.deepEqual(recorder.events.map(event => event.type), ['graphStart', 'done']);
+  assert.deepEqual(second.sent, [], 'reconnect must not replay execution');
+});
+
+for (const ending of ['manual disconnect', 'session replacement', 'cursor gap', 'resume expiry'] as const) {
+  test(`recording stops incompletely on ${ending} without accepting another session's events`, async (t) => {
+    if (ending === 'resume expiry') t.mock.timers.enable({ apis: ['setTimeout'] });
+    await runtime.connectInternalHostedExecutor('wss://rivet.example/ws/executor/owner/recording-owner');
+    const first = FakeWebSocket.instances.at(-1)!;
+    first.open();
+    first.emitMessage({ message: 'executor-session', data: { protocol: 1, capability: 's'.repeat(43) } });
+    const recorder = new ExecutionRecorder();
+    const recording = runtime.recordSocketEvents(channel => recorder.recordSocket(channel, { requestId: 'owned-run' }))!;
+    first.emitMessage({ message: 'graphStart', data: graphStart, requestId: 'owned-run', rivetSequence: 1 });
+    if (ending === 'manual disconnect') runtime.disconnect();
+    else if (ending === 'session replacement') await runtime.connectExternalDebugger('wss://debugger.example/replacement');
+    else if (ending === 'cursor gap') first.emitMessage({ message: 'done', data: { results: {} }, requestId: 'owned-run', rivetSequence: 3 });
+    else {
+      first.emitClose();
+      t.mock.timers.tick(60_000);
+    }
+    await recording;
+    first.emitMessage({ message: 'done', data: { results: {} }, requestId: 'owned-run', rivetSequence: 2 });
+    assert.deepEqual(recorder.events.map(event => event.type), ['graphStart']);
+    assert.equal(FakeWebSocket.instances.flatMap(socket => socket.sent).length, 0);
+  });
+}
 test('only positively idle retired owners discover a new executor, without replaying run commands', async () => {
   let discoveries = 0;
   const session = createExecutorSessionRuntime({ onStateChange: () => {}, resolveInternalHostedExecutorUrl: async () => {

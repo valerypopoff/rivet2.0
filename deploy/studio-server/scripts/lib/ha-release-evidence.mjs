@@ -13,9 +13,10 @@ export const HA_REQUIRED_CHECKS = [
   'retained-browser-workflow',
   'oldest-browser-compatibility',
 ];
-// Bump only for an intentional browser API/executor contract break. Such a
-// release establishes a new baseline through maintenance, never rolling HA.
-export const HA_BROWSER_CONTRACT = 1;
+// Reset when old browser code cannot meet the required lifetime guarantee,
+// even if wire messages remain compatible. Establish through maintenance.
+// Contract 2 keeps recording capture alive across resumable socket replacement.
+export const HA_BROWSER_CONTRACT = 2;
 const legacyChecks = (version) =>
   HA_REQUIRED_CHECKS.filter(
     (check) =>

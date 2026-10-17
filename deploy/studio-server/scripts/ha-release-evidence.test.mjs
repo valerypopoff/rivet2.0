@@ -5,6 +5,7 @@ import {
   assertHaUpgradeEvidence,
   createHaReleaseEvidence,
   HA_REQUIRED_CHECKS,
+  HA_BROWSER_CONTRACT,
   selectHaBrowserContract,
 } from './lib/ha-release-evidence.mjs';
 const images = (x) =>
@@ -23,7 +24,7 @@ function fixture() {
   };
   const evidence = {
     protocol: 3,
-    browserContract: { protocol: 1, baseline: { sourceSha: 'a'.repeat(40), image: images('a').web } },
+    browserContract: { protocol: HA_BROWSER_CONTRACT, baseline: { sourceSha: 'a'.repeat(40), image: images('a').web } },
     mode: 'mixed',
     candidateSourceSha: release.source.sha,
     candidateImages: release.images,
@@ -374,4 +375,17 @@ test('browser support baseline is sticky across multiple releases and may only c
     sourceSha: next.source.sha,
     image: next.images.web,
   });
+});
+
+test('pre-recording-continuity browsers cannot become the supported rolling baseline', () => {
+  const f = fixture();
+  const previous = structuredClone(f.release);
+  previous.evidence.ha.browserContract.protocol = 1;
+  const selected = selectHaBrowserContract(f.release, previous);
+  assert.equal(selected.protocol, 2);
+  assert.deepEqual(selected.baseline, { sourceSha: f.release.source.sha, image: f.release.images.web });
+  assert.throws(() => assertHaUpgradeEvidence(f.release, {
+    ...f.installed,
+    release: { production: { ...f.installed.release.production, browserContract: previous.evidence.ha.browserContract } },
+  }), /browser|maintenance/i);
 });

@@ -4,6 +4,7 @@ import type {
   GraphOutputs,
   GraphProgress,
   RemoteRunRequestId,
+  SocketRecordingChannel,
 } from '@valerypopoff/rivet2-core';
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
@@ -116,7 +117,7 @@ export type ExecutorSessionRuntime = {
   isReady(): boolean;
   rejectPendingGraphExecution(requestId: RemoteRunRequestId | undefined, reason: unknown): void;
   reportPendingGraphProgress(requestId: RemoteRunRequestId | undefined, progress: GraphProgress): void;
-  recordSocketEvents(recordSocket: (socket: WebSocket) => Promise<void>): Promise<void> | undefined;
+  recordSocketEvents(recordSocket: (socket: SocketRecordingChannel) => Promise<void>): Promise<void> | undefined;
   resolvePendingGraphExecution(requestId: RemoteRunRequestId | undefined, outputs: GraphOutputs): void;
   sendMessage<T extends keyof OutgoingMessageMap>(type: T, data: OutgoingMessageMap[T]): boolean;
   sendRaw(data: string): boolean;
@@ -146,6 +147,20 @@ export function createExecutorSessionRuntime(options: {
   let idleHandoff: Promise<void> | undefined;
   const latestEventCursors = new Map<string, number>();
   let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
+  let recordingChannel: (EventTarget & { readyState: number }) | undefined;
+
+  function closeRecordingChannel() {
+    const channel = recordingChannel;
+    recordingChannel = undefined;
+    if (channel) {
+      channel.readyState = WebSocket.CLOSED;
+      channel.dispatchEvent(new Event('close'));
+    }
+  }
+
+  function isResumableTarget(target: ExecutorSessionTarget | null) {
+    return target?.type === 'internal-hosted' && /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(target.url);
+  }
 
   function clearResumeTimeout() {
     if (resumeTimeout) clearTimeout(resumeTimeout);
@@ -268,8 +283,7 @@ export function createExecutorSessionRuntime(options: {
     });
 
     let socket: WebSocket;
-    const resumableTarget =
-      nextTarget.type === 'internal-hosted' && /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(nextTarget.url);
+    const resumableTarget = isResumableTarget(nextTarget);
     try {
       socket = new WebSocket(
         nextTarget.url,
@@ -337,6 +351,7 @@ export function createExecutorSessionRuntime(options: {
       });
 
       if (!canResume) {
+        closeRecordingChannel();
         resumeCapability = undefined;
         resumeSequence = 0;
         pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
@@ -516,11 +531,15 @@ export function createExecutorSessionRuntime(options: {
             },
           );
         }
+        // Capture only admitted events, after terminal handlers update their
+        // owners. A transport reconnect must neither end nor duplicate capture.
+        if (resumableTarget) recordingChannel?.dispatchEvent(new MessageEvent('message', { data: event.data }));
       }
     };
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    closeRecordingChannel();
     latestObservation = false; latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
@@ -563,6 +582,7 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    closeRecordingChannel();
     latestObservation = false; latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
@@ -677,7 +697,9 @@ export function createExecutorSessionRuntime(options: {
         return undefined;
       }
 
-      return recordSocket(currentSocket);
+      if (!isResumableTarget(currentTarget)) return recordSocket(currentSocket);
+      recordingChannel ??= Object.assign(new EventTarget(), { readyState: WebSocket.OPEN });
+      return recordSocket(recordingChannel);
     },
     resolvePendingGraphExecution(requestId, outputs) {
       pendingGraphExecutions.resolvePendingGraphExecution(requestId, outputs);

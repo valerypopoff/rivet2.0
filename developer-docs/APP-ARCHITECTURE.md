@@ -1475,6 +1475,12 @@ Current architectural detail:
 Session disposal owns recording finalization as well as processor/request
 cleanup. Terminal transport callbacks observe cleanup failures instead of leaving
 unhandled promises. A recorder failure cannot prevent the other cleanup actions.
+For resumable hosted executors, `executorSession` owns a recording event channel
+across physical WebSocket replacements. It forwards only admitted sequence events,
+after display/terminal subscribers run, so replay duplicates are not recorded and
+the terminal owner is updated before capture finalizes. Only logical disconnect,
+replacement or unrecoverable resume closes that channel. Non-resumable sockets
+keep their existing direct recording behavior.
 Evaluation graph-input conversion is shared in `preparedEditorRun`, so Browser
 and Node apply the same target-port types and unknown-input validation.
 Authored capture is one detached project snapshot, not a clone of the entire

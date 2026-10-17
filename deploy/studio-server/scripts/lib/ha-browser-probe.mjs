@@ -274,7 +274,12 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       capture,
       async resumeAfterFrontendReplacement() {
         assert.equal(resumedAfterFrontend, false);
-        await resume();
+        try {
+          await resume();
+        } catch (error) {
+          await capture('resume-failed').catch(() => {});
+          throw error;
+        }
         resumedAfterFrontend = true;
       },
       async finish(before) {

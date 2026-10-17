@@ -29,6 +29,19 @@ termination. Legacy restore remains an explicitly destructive maintenance task.
   cursor gaps and stops after 60 seconds of unsuccessful recovery with an unknown
   outcome; it never resends run commands. Standalone/desktop sessions keep their
   original non-resuming lifecycle.
+- Resumable editor recording capture belongs to the logical executor session,
+  not its current physical socket. Recorders receive the same admitted, ordered,
+  duplicate-free events as display subscribers, after terminal ownership is
+  updated. A proxy reconnect does not finalize capture. Manual disconnect,
+  session replacement, cursor loss or recovery expiry closes incomplete capture;
+  it cannot become a successful recording. Legacy/desktop recorders retain
+  their physical-socket lifetime. Core's recording channel requires only event
+  subscription and ready state, not WebSocket transport ownership.
+  Browser-continuity contract **2** establishes this guarantee. Contract 1
+  browser code can terminate recording on reconnect; a backend update cannot
+  repair code already loaded in that tab. The supported browser baseline must
+  therefore reset through maintenance, not a falsely certified rolling upgrade.
+  This is release evidence metadata, not a change to the socket's wire protocol.
 - A private opt-in API owner relay signs the installation, pod and random process
   incarnation. The public path remains on the current browser origin, preserving
   tunnel and Kubernetes TLS behavior. Any ready API can forward to the addressed
