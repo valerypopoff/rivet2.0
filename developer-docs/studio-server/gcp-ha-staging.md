@@ -127,6 +127,10 @@ local fixture. The shared bundle download retains that UI session as well.
 Provider reports bind both exact manifests but are supplementary observations:
 they never rewrite canonical production lineage or become a deployment-authorizing
 manifest when the tested baseline differs from that manifest's predecessor.
+The `roll` phase also reuses the local recovery probes for lost retirement
+acknowledgement and runner-lease loss against the same staging cluster. Rendering
+uses the operator's provider values, not local fixture connection/auth defaults;
+the recovery path checks the same identity and expiry guard before injecting faults.
 
 Keep operation inventory writes serialized. Overlapping provider operations can
 finish in another order than they started; an old in-memory inventory snapshot

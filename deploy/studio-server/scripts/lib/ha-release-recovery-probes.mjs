@@ -12,6 +12,7 @@ import { HaReleaseProbes } from './ha-release-probes.mjs';
  * real disposable Kubernetes API. The production rollout implementation is not
  * replaced, and accepted application work is never force-terminated. */
 export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
+  await gate.assertProofContext();
   const kube = (args, extra = {}) =>
     gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
   const journalName = releaseOperationJournalName(gate.config.release);
@@ -52,8 +53,11 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         path.join(rootDir, 'deploy/studio-server/helm'),
         '-n',
         gate.config.namespace,
-        '-f',
-        path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'),
+        ...(
+          gate.config.proofValuesFiles ?? [
+            path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'),
+          ]
+        ).flatMap((file) => ['-f', file]),
         '-f',
         file,
       ];
@@ -104,12 +108,23 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
         resources,
         timeoutMs: 180_000,
         artifact: (name, value) => gate.artifact(`recovery-${fault}/${name}`, value),
-        applyTemplates: (_workloads, guardedValues) => gate.apply({
-          ...values, ...guardedValues, ha: { ...values.ha, ...guardedValues.ha },
-        }, `ha-recovery-${fault}-apply.json`),
+        applyTemplates: (_workloads, guardedValues) =>
+          gate.apply(
+            {
+              ...values,
+              ...guardedValues,
+              ha: { ...values.ha, ...guardedValues.ha },
+            },
+            `ha-recovery-${fault}-apply.json`,
+          ),
         restoreAutoscalers: (_workloads, guardedValues) =>
           gate.apply(
-            { ...values, ...guardedValues, ha: { ...values.ha, ...guardedValues.ha }, workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } } },
+            {
+              ...values,
+              ...guardedValues,
+              ha: { ...values.ha, ...guardedValues.ha },
+              workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
+            },
             `ha-recovery-${fault}-complete.json`,
           ),
         beforeRetirement: async (pod) => {

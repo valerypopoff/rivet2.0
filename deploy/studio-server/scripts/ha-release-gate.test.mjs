@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate } from './kubernetes-ha-provider-gate.mjs';
+import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { parseAllDocuments } from 'yaml';
 import { publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,27 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('recovery faults require the same approved context before traffic or cluster access', async () => {
+  await assert.rejects(
+    verifyHaReleaseRecovery(
+      {
+        assertProofContext: async () => {
+          throw Error('unapproved recovery context');
+        },
+        requestWorkflow: async () => {
+          throw Error('must not send traffic');
+        },
+        kubectl: async () => {
+          throw Error('must not access cluster');
+        },
+      },
+      'https://staging.example.test',
+      rootDir,
+    ),
+    /unapproved recovery context/,
+  );
+});
 
 test('shared HA rollout refuses an unapproved proof context before reading keys or changing resources', async () => {
   let touched = false;

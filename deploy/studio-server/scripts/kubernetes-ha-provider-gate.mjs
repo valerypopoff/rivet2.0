@@ -14,6 +14,7 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
+import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -288,6 +289,7 @@ async function main() {
         candidate.images,
         baseline.evidence.ha.browserContract,
       );
+      report.recovery = await verifyHaReleaseRecovery(gate, config.baseUrl, rootDir);
       await gate.artifact('provider-ha-report.json', JSON.stringify({ baseline, candidate, report }, null, 2));
     }
   } catch (error) {
