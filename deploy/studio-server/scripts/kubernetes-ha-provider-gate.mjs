@@ -41,7 +41,9 @@ export function assertProviderHaPair(baseline, candidate) {
 
 export class ProviderHaReleaseGate extends ManagedReleaseGate {
   constructor(config, kubectlBin, helmBin, { values, identity }) {
-    super(config, kubectlBin, helmBin);
+    // Provider infrastructure belongs to the operation inventory, not the
+    // local fixture's automatic namespace cleanup (including on failures).
+    super({ ...config, keepNamespace: true }, kubectlBin, helmBin);
     assert.match(config.namespace, /^rivet-staging-[a-z0-9-]+$/);
     assert.match(identity?.namespaceUid ?? '', /^[a-f0-9-]{36}$/);
     assert.match(identity?.operation ?? '', /^[a-z0-9-]+$/);

@@ -143,6 +143,25 @@ function providerFixture(config = {}, expiresAt = '2099-01-01T00:00:00Z') {
   });
 }
 
+test('provider close retains its operator namespace even when local cleanup is requested', async () => {
+  const gate = providerFixture({ keepNamespace: false });
+  gate.kubectl = async () => {
+    throw Error('provider close must not access or delete infrastructure');
+  };
+  let stopped = 0;
+  gate.portForward = {
+    killed: false,
+    kill() {
+      this.killed = true;
+      stopped++;
+    },
+  };
+  await gate.close();
+  await gate.close();
+  assert.equal(stopped, 1);
+  assert.equal(gate.config.keepNamespace, true);
+});
+
 test('expired provider rehearsal refuses work before contacting the cluster or reading credentials', async () => {
   const gate = providerFixture({}, '2000-01-01T00:00:00Z');
   gate.assertContext = gate.loadWorkflowKey = async () => {

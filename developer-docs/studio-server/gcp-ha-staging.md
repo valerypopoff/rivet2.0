@@ -117,7 +117,10 @@ started marker before application mutations, so an uncertain or partial seed
 cannot be automatically replayed. Inspect its accepted writes before any manual
 recovery; do not remove the marker merely to retry.
 Failed phases retain Kubernetes diagnostics and leave accepted work intact; there
-is no automatic uninstall, rollback or replay. Preparation failure must be reviewed
+is no automatic uninstall, rollback or replay. Closing any provider phase always
+retains the operator-owned namespace, regardless of local fixture cleanup options;
+only the separate identity-checked operation inventory owns infrastructure teardown.
+Preparation failure must be reviewed
 before an operator removes that exact disposable release and starts again.
 
 Private HTTP and browser probes sign in through the ordinary UI key gate; do not
