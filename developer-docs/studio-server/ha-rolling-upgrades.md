@@ -925,6 +925,8 @@ The paused-editor fixture measures its hold with a monotonic clock and rechecks
 the minimum duration after timer wakeups. It does not infer elapsed time from a
 VM wall clock or weaken the 45-second observation. Individual editor receipts are
 saved before validation, including on a failed recovery observation.
+Elapsed holds are rounded down to whole milliseconds only after the monotonic
+minimum-duration check; the evidence schema still rejects fractional values.
 Public requests continue during both fault/recovery sequences. Their receipts
 and zero-failure traffic report are required before certificate generation.
 The standalone `recovery` phase can exercise these faults after a successful

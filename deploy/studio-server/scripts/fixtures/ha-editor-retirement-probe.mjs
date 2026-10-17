@@ -147,7 +147,7 @@ try {
     phase: 'passed',
     pod: process.env.RIVET_POD_NAME,
     neighbor,
-    heldMs: performance.now() - heldFrom,
+    heldMs: Math.floor(performance.now() - heldFrom),
     editorResumed: true,
     starts: 1,
     completions: 1,

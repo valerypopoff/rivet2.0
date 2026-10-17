@@ -252,6 +252,10 @@ test('certificate production requires actual workload receipts, readiness and ex
   };
   report.workloads.oldestBrowser = { ...report.workloads.browser, image: f.evidence.browserContract.baseline.image };
   assert.equal(createHaReleaseEvidence(report, f.release, 'mixed').mode, 'mixed');
+  const monotonic = structuredClone(report);
+  monotonic.workloads.editors[0].receipt.heldMs = Math.floor(25_085.306396);
+  assert.equal(createHaReleaseEvidence(monotonic, f.release, 'mixed').mode, 'mixed',
+    'monotonic observations must retain the existing whole-millisecond evidence format');
   for (const corrupt of [
     (r) => {
       r.after.find((p) => p.metadata.name === 'web').spec.containers[0].image = 'wrong@sha256:' + 'c'.repeat(64);
@@ -303,6 +307,9 @@ test('certificate production requires actual workload receipts, readiness and ex
     },
     (r) => {
       r.workloads.editors[0].receipt.heldMs = NaN;
+    },
+    (r) => {
+      r.workloads.editors[0].receipt.heldMs = 25_085.306396;
     },
     (r) => {
       r.workloads.evaluations[0].preserved = 'false';
