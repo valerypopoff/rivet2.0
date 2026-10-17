@@ -4,6 +4,15 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 
+// Pod removal is not proof that a browser has observed its socket closing.
+// Wait for every original observer to leave and for ordered session replay on
+// its replacements before sending a control once. Never retry an uncertain send.
+export function hasHaBrowserReadyTransport(sockets, originals = []) {
+  const live = [...sockets].filter(socket => !socket.closed);
+  return originals.every(socket => socket.closed) &&
+    live.length > 0 && live.every(socket => socket.ready && (!originals.length || socket.resumed));
+}
+
 export async function waitForHaFrontendReplacement(gate, before, timeoutMs, wait = (ms) => new Promise(r => setTimeout(r, ms))) {
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
   const originals = before.filter(p => ['web', 'proxy'].includes(p.metadata.labels?.['app.kubernetes.io/component']));
@@ -97,19 +106,47 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
   const page = await context.newPage();
   const owners = [],
     events = [];
+  const sockets = new Map();
+  const record = event => {
+    events.push({ at: Date.now(), ...event });
+    if (events.length > 100) events.shift();
+  };
   page.on('websocket', (socket) => {
     const parts = new URL(socket.url()).pathname.split('/');
-    if (parts.slice(0, 4).join('/') === '/ws/executor/owner') owners.push(parts[4]);
+    if (parts.slice(0, 4).join('/') !== '/ws/executor/owner') return;
+    owners.push(parts[4]);
+    if (owners.length > 100) owners.shift();
+    const state = { closed: false, ready: false, resumed: false };
+    sockets.set(socket, state);
+    record({ direction: 'connected', owner: parts[4] });
+    socket.on('close', () => {
+      state.closed = true;
+      sockets.delete(socket);
+      record({ direction: 'closed', owner: parts[4] });
+    });
+    socket.on('framesent', frame => {
+      try {
+        const message = JSON.parse(String(frame.payload));
+        if (['run', 'pause', 'resume', 'abort'].includes(message.type))
+          record({ direction: 'sent', message: message.type, requestId: message.data?.requestId });
+      } catch { /* Static-data frames are not control diagnostics. */ }
+    });
     socket.on('framereceived', (frame) => {
       try {
         const message = JSON.parse(String(frame.payload));
-        if (['start', 'done', 'error', 'executor-owner-retiring', 'executor-session-ready'].includes(message.message)) {
-          events.push({
+        if (message.message === 'executor-session-ready') {
+          state.ready = true;
+          state.resumed = message.data?.resumed === true;
+        }
+        if (['start', 'done', 'error', 'pause', 'resume', 'executor-owner-retiring', 'executor-session-ready'].includes(message.message)) {
+          record({
+            direction: 'received',
             message: message.message,
             requestId: message.requestId,
             projectId: message.data?.project?.metadata?.id,
+            sequence: message.rivetSequence,
+            resumed: message.data?.resumed,
           });
-          if (events.length > 100) events.shift();
         }
       } catch {
         /* Binary recordings are not protocol diagnostics. */
@@ -119,6 +156,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
   const errors = [],
     failedAssets = [];
   let cleanupPausedRun = async () => {};
+  let resumeAttempted = false;
   const close = async () => {
     try {
       await cleanupPausedRun();
@@ -220,7 +258,9 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     await expect(iframe.locator('.run-button')).toContainText('Abort', { timeout: 30_000 });
     await expect(value).toHaveClass(/success/, { timeout: 30_000 });
     cleanupPausedRun = async () => {
-      if (await iframe.locator('.pause-button.paused').isVisible()) {
+      if (!resumeAttempted && await iframe.locator('.pause-button.paused').isVisible()) {
+        await expect.poll(() => hasHaBrowserReadyTransport(sockets.values()), { timeout: 60_000 }).toBe(true);
+        resumeAttempted = true;
         await iframe.locator('.pause-button button').click();
         await expect(iframe.locator('.pause-button.paused')).toHaveCount(0, { timeout: 30_000 });
       }
@@ -236,6 +276,8 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     await page.keyboard.insertText(edited);
     await input.press('Escape');
     await expect(page.locator('.active-project-save-button')).toBeVisible({ timeout: 30_000 });
+    const originalSockets = [...sockets.values()].filter(socket => !socket.closed);
+    assert.ok(originalSockets.length > 0, 'the accepted Node run must have a physical executor observer');
     const capture = async (stage) => {
       const state = {
         stage,
@@ -243,6 +285,8 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
         failedAssets,
         owners,
         events,
+        sockets: [...sockets.values()],
+        originalSockets,
         reloads,
         iframeReloads,
         nodeStates: await result.evaluate((node) => node.ownerDocument.defaultView.__haNodeStates),
@@ -261,10 +305,17 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       return state;
     };
     let resumedAfterFrontend = false;
-    const resume = async () => {
+    const resume = async (replacedProxy) => {
+      await expect.poll(() => hasHaBrowserReadyTransport(sockets.values(), replacedProxy ? originalSockets : []), {
+        timeout: 60_000,
+        message: replacedProxy
+          ? 'Original browser sockets must close and their retained sessions must finish replay before Resume'
+          : 'Retained API session must be ready before Resume',
+      }).toBe(true);
       await expect(iframe.locator('.run-button')).toContainText('Abort');
       await expect(iframe.locator('.pause-button')).toHaveClass(/paused/);
       assert.equal(recordings.length, 0, 'the initial browser run must still be accepted and paused');
+      resumeAttempted = true;
       await iframe.locator('.pause-button button').click();
       await expect(iframe.locator('.pause-button.paused')).toHaveCount(0, { timeout: 30_000 });
       await expect.poll(() => recordings.length, { timeout: 90_000 }).toBe(1);
@@ -272,10 +323,13 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     };
     return {
       capture,
-      async resumeAfterFrontendReplacement() {
+      async resumeAfterFrontendReplacement(before) {
         assert.equal(resumedAfterFrontend, false);
+        assert.ok(Array.isArray(before), 'frontend replacement requires the original workload inventory');
         try {
-          await resume();
+          // An external gateway may keep the API socket unchanged when only
+          // web pods are replaced. Never force a healthy observer to reconnect.
+          await resume(before.some(p => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy'));
         } catch (error) {
           await capture('resume-failed').catch(() => {});
           throw error;

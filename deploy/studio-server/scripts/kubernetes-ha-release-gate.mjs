@@ -130,13 +130,22 @@ export class HaReleaseGate extends ManagedReleaseGate {
     // A kubectl Service forward is pinned to one chosen pod. Keep that test
     // transport separate from chart-owned proxies so replacing a proxy really
     // tests Service availability, not the lifetime of a port-forward subprocess.
-    const name = `${this.config.release}-ha-edge`;
+    // Older prepared fixtures used a long socket timeout. A versioned test
+    // transport lets a new runner select this policy before opening browsers,
+    // without restarting an edge or replaying application preparation.
+    const name = `${this.config.release}-ha-edge-v2`;
     const labels = { 'rivet-ha-test-edge': name };
     const config =
       'pid /tmp/nginx.pid; events {} http { client_body_temp_path /tmp/client; proxy_temp_path /tmp/proxy; fastcgi_temp_path /tmp/fastcgi; uwsgi_temp_path /tmp/uwsgi; scgi_temp_path /tmp/scgi; ' +
       'map $http_x_rivet_ha_probe_id $ha_probe { "" 0; default 1; } ' +
       'log_format ha_probe escape=json \'{"at":"$time_iso8601","requestId":"$http_x_rivet_ha_probe_id","status":"$status","elapsed":"$request_time","upstream":"$upstream_addr","upstreamStatus":"$upstream_status","connect":"$upstream_connect_time","headers":"$upstream_header_time","response":"$upstream_response_time"}\'; ' +
-      'access_log /dev/stdout ha_probe if=$ha_probe; error_log /dev/stderr; server { listen 8080; location / { proxy_pass http://' +
+      // Node's 30-second WebSocket pings keep healthy paused sessions alive.
+      // A killed proxy can leave the Service TCP flow blackholed, without FIN.
+      // Bound that test-edge silence rather than keeping a zombie observer for
+      // ten minutes. This neither retries controls nor changes HTTP deadlines.
+      'access_log /dev/stdout ha_probe if=$ha_probe; error_log /dev/stderr; server { listen 8080; location /ws/ { proxy_pass http://' +
+      this.config.release +
+      '-proxy:80; proxy_http_version 1.1; proxy_set_header Host $http_host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 45s; } location / { proxy_pass http://' +
       this.config.release +
       '-proxy:80; proxy_http_version 1.1; proxy_set_header Host $http_host; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_read_timeout 600s; } } }';
     const resources = [
@@ -336,8 +345,8 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       beforeRetirement: async (pod) => {
         if (!frontendReplaced) {
           await waitForHaFrontendReplacement(gate, before, haProofTimeoutMs(gate.config));
-          await browser.resumeAfterFrontendReplacement();
-          await oldestBrowser.resumeAfterFrontendReplacement();
+          await browser.resumeAfterFrontendReplacement(before);
+          await oldestBrowser.resumeAfterFrontendReplacement(before);
           frontendReplaced = true;
         }
         await probes.beforeRetirement(pod);

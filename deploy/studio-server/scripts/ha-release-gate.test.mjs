@@ -6,7 +6,8 @@ import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-pr
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { parseAllDocuments } from 'yaml';
-import { publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
+import { publishHaBrowserBaseline, waitForHaFrontendReplacement, hasHaBrowserReadyTransport } from './lib/ha-browser-probe.mjs';
+import { ManagedReleaseGate } from './kubernetes-managed-release-gate.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -22,6 +23,58 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('retained browser waits for all old sockets to close and all replacement sessions to finish replay', () => {
+  const first = { closed: false, ready: true, resumed: false };
+  const second = { closed: false, ready: true, resumed: false };
+  const originals = [first, second];
+  const replacement = { closed: false, ready: false, resumed: false };
+  const sockets = new Set([first, second]);
+  assert.equal(hasHaBrowserReadyTransport(sockets.values(), originals), false, 'removed pods can still leave half-open browser sockets');
+  first.closed = true; sockets.delete(first); sockets.add(replacement);
+  replacement.ready = true; replacement.resumed = true;
+  assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'another browser socket has not noticed the lost proxy');
+  second.closed = true; sockets.delete(second);
+  const replaying = { closed: false, ready: false, resumed: true };
+  sockets.add(replaying);
+  assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'TCP open is not ordered session readiness');
+  replaying.ready = true;
+  assert.equal(hasHaBrowserReadyTransport(sockets, originals), true);
+  replaying.resumed = false;
+  assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'a new unrelated session cannot replace an accepted run');
+  assert.equal(hasHaBrowserReadyTransport([], originals), false);
+});
+
+test('external gateway with only web replacement can retain a healthy unchanged API socket', () => {
+  const socket = { closed: false, ready: true, resumed: false };
+  assert.equal(hasHaBrowserReadyTransport([socket]), true);
+  socket.ready = false;
+  assert.equal(hasHaBrowserReadyTransport([socket]), false);
+  socket.ready = true; socket.closed = true;
+  assert.equal(hasHaBrowserReadyTransport([socket]), false);
+  assert.equal(hasHaBrowserReadyTransport([]), false);
+});
+
+test('local test edge bounds stale WebSockets without changing the long HTTP observation timeout', async t => {
+  let resources;
+  t.mock.method(ManagedReleaseGate.prototype, 'openProxy', async function (target) {
+    assert.equal(target, 'service/proof-ha-edge-v2');
+    return 'http://test-edge';
+  });
+  const gate = new HaReleaseGate({ release: 'proof', namespace: 'fixture', images: {
+    proxy: { repository: 'fixture/proxy', digest: `sha256:${'a'.repeat(64)}` },
+  } }, 'unused', 'unused');
+  gate.kubectl = async (args, options) => {
+    if (args.includes('apply')) resources = JSON.parse(options.input).items;
+    return { stdout: '' };
+  };
+  assert.equal(await gate.openProxy(), 'http://test-edge');
+  const config = resources.find(resource => resource.kind === 'ConfigMap').data['nginx.conf'];
+  assert.equal(resources.find(resource => resource.kind === 'Pod').metadata.name, 'proof-ha-edge-v2');
+  assert.match(config, /location \/ws\/ \{[^}]*proxy_read_timeout 45s;/);
+  assert.match(config, /location \/ \{[^}]*proxy_read_timeout 600s;/);
+  assert.equal(resources.find(resource => resource.kind === 'Pod').metadata.labels['app.kubernetes.io/instance'], undefined);
+});
 
 test('HA traffic stop includes a late in-flight failure without retrying or retaining secrets', async () => {
   let rejectRequest, calls = 0, phase = 'leaseLoss:injecting';

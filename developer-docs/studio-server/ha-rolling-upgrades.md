@@ -714,6 +714,22 @@ that edge reaches the actual proxy Service; otherwise a proxy image upgrade
 would merely terminate kubectl's chosen pod and incorrectly look like a serving
 outage. The edge has no release workload labels, stores no application data and
 is removed with its disposable namespace. Normal deployment charts are unchanged.
+Its WebSocket upstream read timeout is 45 seconds: Node's existing 30-second
+protocol pings keep healthy paused sockets alive, while a deleted proxy's
+blackholed TCP flow must not remain apparently connected for ten minutes.
+Ordinary HTTP observation retains its 600-second timeout; workflow probes still
+use their independent 15-second deadline. There is no request/control retry.
+The runner selects `ha-edge-v2` before opening its browsers, so a fixture prepared
+by an older release cannot silently reuse the old timeout. The old disposable
+edge remains untouched until namespace teardown; application seeding is not replayed.
+After old proxy UIDs disappear, the retained-browser probe separately waits for
+every original socket to close and replacement logical sessions to finish ordered
+replay before clicking Resume once. Pod disappearance alone does not prove
+browser reconnection. With an external gateway and only web-pod replacement, a
+healthy unchanged API socket remains valid; the probe does not force reconnects.
+An uncertain Resume is not sent again by cleanup.
+Bounded control/event traces retain owner names, timings, request IDs and replay
+readiness, never signed owner paths, capabilities or request/response bodies.
 
 CI runs `yarn node deploy/studio-server/scripts/kubernetes-ha-release-gate.mjs certify` with
 `RIVET_HA_CANDIDATE_MANIFEST` and, when lineage exists,

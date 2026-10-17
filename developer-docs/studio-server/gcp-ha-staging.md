@@ -20,6 +20,10 @@ Verify the actual GKE subject: a VM metadata-token service account can authentic
 as its immutable numeric ID rather than its email. Bind only that new identity,
 then prove both allowed staging operations and denied unrelated namespace or
 cluster-wide operations before starting a rehearsal.
+Check client/server version skew too: the operator's `kubectl` must be within one
+minor of each tested cluster. This rehearsal uses a 1.35 client to bridge local
+1.34 and GKE 1.36, with its exact patch version and official binary checksum
+recorded privately. Do not infer compatibility from a successful metadata GET.
 
 The `956bcb5ba` and `5d7a51a2e` image attempts are not qualified: their primary
 browser/rollout journeys passed, but recovery traffic observed a timeout and
@@ -34,8 +38,19 @@ the local-only lifecycle values to pre-stop 5, inherited shutdown 15 and termina
 45 seconds (the chart's minimum finalization margin), rather than unnecessarily
 copying production's long shutdown deadlines. This is covered by an actual Helm
 render regression. Traffic observations also await the final request and retain safe
-request/phase/timing evidence. These changes still require live qualification.
-Do not use either failed run as a promoted baseline or advance a source branch
+request/phase/timing evidence. Candidate `e4baec121` completed normal image workflow
+`39044504747`, including primary/browser and recovery qualification. The subsequent
+actual `0704d0181` to `e4baec121` local mixed-version attempt failed at the retained
+browser's Resume after old frontend removal, before owner withdrawal. Its 610
+successful HTTP requests and zero reloads are partial observations, not a passing
+upgrade. A focused two-browser long-proxy-drain reproduction exposed an apparently
+open observer socket after its upstream proxy disappeared. The local test edge
+now bounds WebSocket silence and the probe waits for ordered session resumption
+before sending Resume once. That reproduction passes with unchanged application
+images; it does not replace the full mixed-version and recovery proof. Long idle
+pause and single-browser replacement controls also passed. Preserve failed receipts
+and do not change runtime protocols based only on a test transport failure.
+Do not use the failed `956bcb5ba` or `5d7a51a2e` CI runs as a promoted baseline or advance a source branch
 until its complete image run and validated manifest have been harvested.
 
 The next release pair must be frozen only after those qualifications succeed.
@@ -109,8 +124,8 @@ The five private Studio Server packages are patch-versioned together as
 `1.26.2`; the repository contract rejects a web-only bump. The web package's existing
 `VITE_APP_VERSION` stamp makes the second contract-2 candidate's browser bundle
 distinct from the qualified `0704d0181` / `1.26.1` baseline, without changing the executor wire
-protocol or mutating previously published assets. Both exact revisions still
-need successful normal image qualification and the provider rollout proof;
+protocol or mutating previously published assets. Both exact revisions passed
+normal image qualification; actual mixed-version local and provider proofs remain required;
 a package version or different image digest alone is not continuity evidence.
 The isolated reconnect browser regression also refuses unowned API requests,
 so optional background subscriptions cannot contact an ambient local server.
