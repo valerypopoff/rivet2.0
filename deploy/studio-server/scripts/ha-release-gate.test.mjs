@@ -5,7 +5,7 @@ import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { parseAllDocuments } from 'yaml';
-import { publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
+import { publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -19,6 +19,37 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {
+  const pod = (uid, component, extra = {}) => ({ metadata: { uid, labels: { 'app.kubernetes.io/component': component }, ...extra } });
+  const before = [pod('old-web', 'web'), pod('old-proxy', 'proxy'), pod('unchanged-owner', 'backend')];
+  const snapshots = [before, [pod('old-proxy', 'proxy', { deletionTimestamp: '2026-10-17T12:00:00Z' })],
+    [pod('new-web', 'web'), pod('new-proxy', 'proxy'), before[2]]];
+  let reads = 0, waits = 0;
+  const gate = {
+    config: { namespace: 'rivet-staging-proof', release: 'rivet-staging-proof' },
+    kubectl: async (args) => {
+      assert.deepEqual(args.slice(0, 4), ['-n', 'rivet-staging-proof', 'get', 'pods']);
+      return { stdout: JSON.stringify({ items: snapshots[reads++] }) };
+    },
+  };
+  await waitForHaFrontendReplacement(gate, before, 30_000, async () => { waits++; });
+  assert.equal(reads, 3);
+  assert.equal(waits, 2);
+});
+
+test('frontend replacement observation times out without mutating or fabricating browser continuity', async (t) => {
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const before = [{ metadata: { uid: 'old-web', labels: { 'app.kubernetes.io/component': 'web' } } }];
+  let reads = 0;
+  const gate = { config: { namespace: 'rivet-staging-proof', release: 'rivet-staging-proof' },
+    kubectl: async () => { reads++; return { stdout: JSON.stringify({ items: before }) }; } };
+  await assert.rejects(waitForHaFrontendReplacement(gate, before, 1000, async ms => { now += ms; }), /Original frontend pods remain/);
+  assert.equal(reads, 2);
+  await assert.rejects(waitForHaFrontendReplacement(gate, [], 1000));
+  assert.equal(reads, 2);
+});
 
 test('provider transport retries only read-only TLS handshakes, never uncertain mutations', async () => {
   const timeout = Error('Unable to connect to the server: net/http: TLS handshake timeout');

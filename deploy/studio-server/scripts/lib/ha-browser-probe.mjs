@@ -4,6 +4,23 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 
+export async function waitForHaFrontendReplacement(gate, before, timeoutMs, wait = (ms) => new Promise(r => setTimeout(r, ms))) {
+  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
+  const originals = before.filter(p => ['web', 'proxy'].includes(p.metadata.labels?.['app.kubernetes.io/component']));
+  assert.ok(originals.some(p => p.metadata.labels['app.kubernetes.io/component'] === 'web'));
+  assert.ok(originals.every(p => typeof p.metadata.uid === 'string' && p.metadata.uid));
+  const uids = new Set(originals.map(p => p.metadata.uid));
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const pods = JSON.parse((await gate.kubectl([
+      '-n', gate.config.namespace, 'get', 'pods', '-l', `app.kubernetes.io/instance=${gate.config.release}`, '-o', 'json',
+    ], { capture: true })).stdout).items;
+    if (pods.every(p => !uids.has(p.metadata.uid))) return;
+    if (Date.now() >= deadline) throw Error('Original frontend pods remain; paused browser proof was not released');
+    await wait(1000);
+  }
+}
+
 /** Publish an older certified UI into this disposable installation's retained
  * asset namespace. The publisher has no Service and is removed before rollout. */
 export async function publishHaBrowserBaseline(gate, image) {
@@ -101,6 +118,16 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
   });
   const errors = [],
     failedAssets = [];
+  let cleanupPausedRun = async () => {};
+  const close = async () => {
+    try {
+      await cleanupPausedRun();
+    } catch (error) {
+      await gate.artifact(`ha-browser-${label}-cleanup.json`, JSON.stringify({ error: String(error) })).catch(() => {});
+    } finally {
+      await browser.close();
+    }
+  };
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('response', (response) => {
     if (response.url().includes('/__rivet_web/') && response.status() >= 400)
@@ -191,6 +218,15 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     await iframe.locator('.run-button button').first().click();
     // The real Node execution starts before the upgrade, not a synthetic UI sentinel.
     await expect(iframe.locator('.run-button')).toContainText('Abort', { timeout: 30_000 });
+    await expect(value).toHaveClass(/success/, { timeout: 30_000 });
+    cleanupPausedRun = async () => {
+      if (await iframe.locator('.pause-button.paused').isVisible()) {
+        await iframe.locator('.pause-button button').click();
+        await expect(iframe.locator('.pause-button.paused')).toHaveCount(0, { timeout: 30_000 });
+      }
+    };
+    await iframe.locator('.pause-button button').click();
+    await expect(iframe.locator('.pause-button')).toHaveClass(/paused/, { timeout: 30_000 });
     await value.locator('.edit-button').dispatchEvent('click');
     const input = iframe.locator('.monaco-editor textarea').first();
     await input.focus();
@@ -224,9 +260,25 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       await page.screenshot({ path: path.join(gate.config.artifactsDir, `ha-browser-${label}-${stage}.png`) });
       return state;
     };
+    let resumedAfterFrontend = false;
+    const resume = async () => {
+      await expect(iframe.locator('.run-button')).toContainText('Abort');
+      await expect(iframe.locator('.pause-button')).toHaveClass(/paused/);
+      assert.equal(recordings.length, 0, 'the initial browser run must still be accepted and paused');
+      await iframe.locator('.pause-button button').click();
+      await expect(iframe.locator('.pause-button.paused')).toHaveCount(0, { timeout: 30_000 });
+      await expect.poll(() => recordings.length, { timeout: 90_000 }).toBe(1);
+      await expect(result).toHaveClass(/success/);
+    };
     return {
       capture,
+      async resumeAfterFrontendReplacement() {
+        assert.equal(resumedAfterFrontend, false);
+        await resume();
+        resumedAfterFrontend = true;
+      },
       async finish(before) {
+        assert.equal(resumedAfterFrontend, true, 'a completed pre-upgrade run cannot stand in for public-edge continuity');
         await capture('after-upgrade');
         await expect(result).toHaveClass(/success/, { timeout: 90_000 });
         await expect.poll(() => recordings.length, { timeout: 90_000 }).toBe(1);
@@ -329,12 +381,13 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
           outputs: true,
           recordingOpened: true,
           recordingIds: ids,
+          pausedAcrossFrontendReplacement: true,
         };
       },
-      close: () => browser.close(),
+      close,
     };
   } catch (error) {
-    await browser.close();
+    await close();
     throw error;
   }
 }

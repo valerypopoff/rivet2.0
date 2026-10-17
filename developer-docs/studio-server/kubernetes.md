@@ -1652,7 +1652,7 @@ lifecycle:
 
 Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Short values can flap readiness during normal provider latency. The provider transport bounds are deliberately independent from the shorter readiness wait: a dependency implementation that ignores cancellation remains deduplicated until its bounded transport operation settles instead of accumulating retries. A provider-wide outage may make every execution pod unready because PostgreSQL/object storage are required to execute published work; liveness deliberately stays healthy so Kubernetes does not create a restart storm.
 
-The rendered probe contract is:
+The non-HA composition's rendered probe contract is:
 
 | Workload               | Container | Startup                  | Liveness                | Readiness                |
 | ---------------------- | --------- | ------------------------ | ----------------------- | ------------------------ |
@@ -1678,7 +1678,20 @@ Tune shutdown and pod termination values together. Longer drain windows improve 
 
 Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Execution defaults to `maxUnavailable: 0` and `maxSurge: 1`; the embedded proxy uses the same strategy when present. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; production external mode protects execution, while embedded mode can also protect proxy. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
 
-The backend remains a validated singleton. Managed web-app action run history/replay/cancellation is replica-safe, and execution replicas scale normally. The remaining control-plane blockers are process-local latest-debugger ownership and the co-located editor executor: their related Services could choose different backend pods if backend replicas were increased. Do not disable the singleton validation until those sessions have distributed ownership or stable fenced routing and are tested with owner loss.
+`rollout.minReadySeconds` controls how long replacement web/proxy Deployment
+pods must remain ready before becoming available to the rolling controller. Its
+default is `0` for compatibility. Provider health-check/NEG programming can lag
+Pod readiness; the isolated GKE rehearsal uses `120` seconds alongside its
+separate pre-stop/drain settings. Tune and qualify both windows through the real
+edge, rather than treating Kubernetes readiness alone as load-balancer health.
+
+The non-HA backend remains a validated singleton. Do not raise that composition's
+backend replica count or bypass its validation. The opt-in `ha.enabled` composition
+uses separate OnDelete owners, signed incarnation-fenced editor routing and shared
+coordination; see [HA rolling upgrades](ha-rolling-upgrades.md). It requires its
+guarded release path and qualification, not simply more replicas on the singleton
+Service. Existing singleton-to-HA conversion still needs a separately reviewed
+maintenance transition.
 
 ### Vault dotenv contract
 

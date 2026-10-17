@@ -19,7 +19,7 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 import { createHaReleaseEvidence, selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
-import { startHaBrowserProbe, publishHaBrowserBaseline } from './lib/ha-browser-probe.mjs';
+import { startHaBrowserProbe, publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -316,6 +316,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     }
   })();
   let rollout, workloadReport;
+  let frontendReplaced = false;
   try {
     const kubectl = (args, extra = {}) =>
       gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
@@ -327,7 +328,15 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       resources,
       timeoutMs: haProofTimeoutMs(gate.config),
       artifact: (name, value) => gate.artifact(name, value),
-      beforeRetirement: (pod) => probes.beforeRetirement(pod),
+      beforeRetirement: async (pod) => {
+        if (!frontendReplaced) {
+          await waitForHaFrontendReplacement(gate, before, haProofTimeoutMs(gate.config));
+          await browser.resumeAfterFrontendReplacement();
+          await oldestBrowser.resumeAfterFrontendReplacement();
+          frontendReplaced = true;
+        }
+        await probes.beforeRetirement(pod);
+      },
       afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
       applyTemplates: async (_workloads, guardedValues) => {
         await gate.apply(

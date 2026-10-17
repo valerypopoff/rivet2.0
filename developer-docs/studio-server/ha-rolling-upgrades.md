@@ -164,13 +164,17 @@ asset coverage lives in `production/*.test.mjs` in the web unit-test lane;
 image wiring alone is not proof of browser continuity.
 
 HA evidence v3 requires a real production dashboard held across replacement of
-all original web pods: start a Node execution before upgrading, retain a real
+all original web/proxy pods: start and pause an accepted Node execution before
+upgrading, retain a real
 unsaved Text-node edit, save it through the candidate API, start a second Node
 run through owner rediscovery, inspect the changed full output and open its
 durable recording through Run recordings and the existing **Play Recording**
 action. Loading a recording is not automatic playback; replay must expose the
 edited output without submitting another live run. Both runs must produce one successful
-recording each. Lazy modal, pinned editor, fresh current tab and zero reload/
+recording each. The first run remains paused until every original frontend Pod
+UID is absent, then resumes through the public endpoint before API-owner
+retirement. A short run that finishes during warm-up is not continuity evidence.
+Lazy modal, pinned editor, fresh current tab and zero reload/
 asset-error checks remain required. The gate uses the deployment controller.
 
 The supported browser window is **all releases in the current browser contract

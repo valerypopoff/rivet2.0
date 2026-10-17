@@ -26,7 +26,14 @@ multipart bundle publication/read/cleanup passed. Its normal CI image build
 `39019193862` passed and it became the working baseline. Candidate
 `f33b99f0b19774ea6dc8d566709bea7159bbd1fc` also passed all server image gates in
 `39022749961`, but its provider attempt failed; CI qualification alone is not
-GCP zero-downtime evidence. The project ID and numeric identity are
+GCP zero-downtime evidence. The next candidate,
+`b24376234e90ff532239c8ae24dc6b64d7a0b07b`, passed all 25 image jobs in
+`39026971409`. Its provider attempt observed 523 successful workflow requests,
+zero workflow failures and at least two ready backends, but stopped safely on
+an uncertain journal PUT after an operator-to-GKE TLS handshake timeout. It is
+also **not** complete qualification. Read retries never replay that write. A
+trusted Cloud Shell operator connection is being prepared to avoid the unstable
+local control-plane path; production remains untouched. The project ID and numeric identity are
 unchanged. Post-restore
 inventory found no buckets, BigQuery datasets, Firestore databases, default
 Datastore database, API keys or Dataform repositories. One pre-existing service
@@ -152,6 +159,16 @@ loads file values over process values. Keep the staging key only in the process
 environment. Node recording observations must use the real `/api/config` response
 so the executor gets the current HA owner incarnation, rather than the browser-only
 bootstrap fixture's unowned `/ws/executor/internal` URL.
+The real browser probe pauses its accepted Node run before template changes and
+keeps it paused until **all original web and proxy Pod UIDs are absent**. Merely
+being unready or terminating is insufficient. It then resumes through the public
+endpoint, requires successful completion and one recording, retains the unsaved
+edit through API replacement, and verifies a second run, output modal, recording
+playback and lazy statistics view afterward. This closes the timing loophole in
+the earlier 20-second run, which could finish before GKE's readiness stabilization
+window. Failed probes attempt to resume their own paused fixture before closing
+the browser; they never relax production drain or force-delete an accepted owner.
+
 The in-pod cross-owner fixtures carry both proxy authentication and a key-mode
 UI session, just like an authenticated operator. Proxy identity alone must not
 bypass the operator middleware. The notification regression executes the real
